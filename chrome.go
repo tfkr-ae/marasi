@@ -12,7 +12,7 @@ import (
 //
 // Returns:
 //   - string: Path to Chrome executable, or empty string if not found
-func getChromePath() string {
+func getChromePath(customPaths []ChromePathConfig) string {
 	var paths []string
 	switch runtime.GOOS {
 	case "darwin":
@@ -22,11 +22,21 @@ func getChromePath() string {
 			`/usr/local/bin/chrome`,   // Alternative common symlink
 			`/usr/local/bin/chromium`, // Alternative common symlink for Chromium
 		}
+		for _, path := range customPaths {
+			if path.OS == "darwin" {
+				paths = append(paths, path.Path)
+			}
+		}
 	case "windows":
 		paths = []string{
 			`C:\Program Files\Google\Chrome\Application\chrome.exe`,
 			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
 			`C:\Program Files\Chromium\Application\chrome.exe`,
+		}
+		for _, path := range customPaths {
+			if path.OS == "windows" {
+				paths = append(paths, path.Path)
+			}
 		}
 	case "linux":
 		paths = []string{
@@ -34,6 +44,11 @@ func getChromePath() string {
 			`/usr/bin/chromium-browser`,
 			`/usr/bin/chromium`,
 			`/snap/bin/chromium`,
+		}
+		for _, path := range customPaths {
+			if path.OS == "linux" {
+				paths = append(paths, path.Path)
+			}
 		}
 	default:
 		return ""
@@ -56,7 +71,7 @@ func getChromePath() string {
 //   - error: Chrome launch error if executable not found or process fails to start
 func (proxy *Proxy) StartChrome() error {
 	// Determine Chrome path based on OS
-	chromePath := getChromePath()
+	chromePath := getChromePath(proxy.Config.ChromeDirs)
 	if chromePath == "" {
 		return fmt.Errorf("unsupported operating system")
 	}
