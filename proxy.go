@@ -485,6 +485,7 @@ func decodeGzipContent(res *http.Response) error {
 	}
 	return nil
 }
+
 // ModifyResponse processes HTTP responses through the proxy pipeline.
 // It handles content decoding (gzip, brotli), runs extension processors, manages interception,
 // and stores the processed response in the database.
@@ -711,27 +712,27 @@ func (r RawField) Value() (driver.Value, error) {
 // ProxyRequest represents an HTTP request processed by the proxy, containing all relevant
 // request data and metadata for storage and analysis.
 type ProxyRequest struct {
-	ID          uuid.UUID `db:"request_id"`  // Unique identifier for the request
-	Scheme      string    `db:"scheme"`      // URL scheme (http or https)
-	Method      string    `db:"method"`      // HTTP method (GET, POST, etc.)
-	Host        string    `db:"host"`        // Request host
-	Path        string    `db:"path"`        // Request path including query parameters
-	Raw         RawField  `db:"request_raw"` // Complete raw HTTP request
-	Metadata    Metadata  `db:"metadata"`    // Additional metadata and extension data
+	ID          uuid.UUID `db:"request_id"`   // Unique identifier for the request
+	Scheme      string    `db:"scheme"`       // URL scheme (http or https)
+	Method      string    `db:"method"`       // HTTP method (GET, POST, etc.)
+	Host        string    `db:"host"`         // Request host
+	Path        string    `db:"path"`         // Request path including query parameters
+	Raw         RawField  `db:"request_raw"`  // Complete raw HTTP request
+	Metadata    Metadata  `db:"metadata"`     // Additional metadata and extension data
 	RequestedAt time.Time `db:"requested_at"` // Timestamp when request was made
 }
 
 // ProxyResponse represents an HTTP response processed by the proxy, containing all relevant
 // response data and metadata for storage and analysis.
 type ProxyResponse struct {
-	ID          uuid.UUID `db:"response_id"`   // Unique identifier matching the associated request
-	Status      string    `db:"status"`        // HTTP status text (e.g., "200 OK")
-	StatusCode  int       `db:"status_code"`   // HTTP status code (e.g., 200, 404)
-	ContentType string    `db:"content_type"`  // Response content type
-	Length      string    `db:"length"`        // Content length
-	Raw         RawField  `db:"response_raw"`  // Complete raw HTTP response
-	Metadata    Metadata  `db:"metadata"`      // Additional metadata and extension data
-	RespondedAt time.Time `db:"responded_at"`  // Timestamp when response was received
+	ID          uuid.UUID `db:"response_id"`  // Unique identifier matching the associated request
+	Status      string    `db:"status"`       // HTTP status text (e.g., "200 OK")
+	StatusCode  int       `db:"status_code"`  // HTTP status code (e.g., 200, 404)
+	ContentType string    `db:"content_type"` // Response content type
+	Length      string    `db:"length"`       // Content length
+	Raw         RawField  `db:"response_raw"` // Complete raw HTTP response
+	Metadata    Metadata  `db:"metadata"`     // Additional metadata and extension data
+	RespondedAt time.Time `db:"responded_at"` // Timestamp when response was received
 }
 
 // Log represents a log entry in the system, capturing events, errors, and information
@@ -749,9 +750,9 @@ type Log struct {
 // Row represents a complete request-response pair with associated metadata,
 // typically used when retrieving data from the database.
 type Row struct {
-	Request  ProxyRequest // The HTTP request
+	Request  ProxyRequest  // The HTTP request
 	Response ProxyResponse // The corresponding HTTP response
-	Metadata Metadata     // Combined metadata from request and response
+	Metadata Metadata      // Combined metadata from request and response
 }
 
 // InterceptionTuple contains the user's decision when an intercepted item is resumed,
@@ -764,10 +765,10 @@ type InterceptionTuple struct {
 // Intercepted represents a request or response that has been intercepted for manual inspection
 // and modification before being allowed to continue.
 type Intercepted struct {
-	Type     string                   // "request" or "response"
-	Original ProxyItem               // The original request or response
-	Raw      string                   // Raw HTTP data that can be modified
-	Channel  chan InterceptionTuple   // Channel for receiving user decisions
+	Type     string                 // "request" or "response"
+	Original ProxyItem              // The original request or response
+	Raw      string                 // Raw HTTP data that can be modified
+	Channel  chan InterceptionTuple // Channel for receiving user decisions
 }
 
 // Waypoint represents a hostname override mapping, allowing requests to specific hosts

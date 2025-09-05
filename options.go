@@ -59,21 +59,18 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 		}
 		// At this point, the directory exists or was created successfully
 		proxy.ConfigDir = appConfigDir
-
 		// VIPER
-		viper.SetConfigName("config")
-		viper.SetConfigType("yaml")
-		viper.AddConfigPath(appConfigDir)
-		viper.SetDefault("first_run", true)
-		viper.SetDefault("vim_enabled", true)
-		viper.SetDefault("default_address", "127.0.0.1")
-		viper.SetDefault("default_port", "8080")
-		err = viper.ReadInConfig()
+		viperInstance := viper.New()
+		viperInstance.SetConfigName("marasi_config")
+		viperInstance.SetConfigType("yaml")
+		viperInstance.AddConfigPath(appConfigDir)
+		viperInstance.SetDefault("chrome_dirs", []ChromePathConfig{})
+		err = viperInstance.ReadInConfig()
 		if err != nil {
 			// need to check if the error is config file doesn't exist
 			if _, ok := err.(viper.ConfigFileNotFoundError); ok {
 				// Config file is not found
-				err = viper.SafeWriteConfig()
+				err = viperInstance.SafeWriteConfig()
 				if err != nil {
 					return fmt.Errorf("writing config file : %w", err)
 				}
@@ -81,18 +78,19 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 				return fmt.Errorf("reading config file : %w", err)
 			}
 		}
-		if err := viper.Unmarshal(&proxy.Config); err != nil {
+		if err := viperInstance.Unmarshal(&proxy.Config); err != nil {
 			return fmt.Errorf("unmarshalling config to struct : %w", err)
 		}
+		proxy.Config.viper = viperInstance
 
 		proxy.Config.DesktopOS = runtime.GOOS
+		log.Print(proxy.Config.ChromeDirs)
 		// Rewrite entire file from struct
-		err = viper.WriteConfig()
+		err = viperInstance.WriteConfig()
 		if err != nil {
 			return fmt.Errorf("writing config after unmarshalling : %w", err)
 		}
 		return nil
-
 	}
 }
 
