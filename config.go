@@ -5,64 +5,54 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"path"
+	"slices"
 
 	"github.com/spf13/viper"
 )
 
-// Config represents the application configuration stored in YAML format.
-// It contains settings for the proxy server and user preferences.
+type ChromePathConfig struct {
+	OS   string `mapstructure:"os"`   // OS for the given path
+	Path string `mapstructure:"path"` // Custom chrome path
+
+}
 type Config struct {
-	DesktopOS      string `mapstructure:"desktop_os"`      // Operating system identifier
-	FirstRun       bool   `mapstructure:"first_run"`       // Whether this is the first run of the application
-	VimEnabled     bool   `mapstructure:"vim_enabled"`     // Whether vim-style keybindings are enabled
-	DefaultAddress string `mapstructure:"default_address"` // Default proxy server address
-	DefaultPort    string `mapstructure:"default_port"`    // Default proxy server port
+	viper      *viper.Viper
+	ConfigDir  string             `mapstructure:"config_dir"` // Current config dir
+	DesktopOS  string             `mapstructure:"desktop_os"` // Operating system identifier
+	ChromeDirs []ChromePathConfig `mapstructure:"chrome_dirs"`
 }
 
-// ToggleFlag toggles a boolean configuration flag and saves the configuration to disk.
-//
-// Parameters:
-//   - name: The name of the configuration flag to toggle
-//
-// Returns:
-//   - error: Configuration error if the flag doesn't exist or save fails
-func (cfg *Config) ToggleFlag(name string) error {
-	if !viper.IsSet(name) {
-		// Key doesn't exist
-		return fmt.Errorf("checking if %s exists", name)
-	}
-	flag := viper.GetBool(name)
-	viper.Set(name, !flag)
-	if err := viper.WriteConfig(); err != nil {
-		return fmt.Errorf("failed to save configuration: %w", err)
-	}
-	if err := viper.Unmarshal(&cfg); err != nil {
-		return fmt.Errorf("unmarshalling config to struct : %w", err)
+func (cfg *Config) AddChromePath(path, os string) error {
+	switch os {
+	case "darwin", "linux", "windows":
+		cfg.ChromeDirs = append(cfg.ChromeDirs, ChromePathConfig{OS: os, Path: path})
+		cfg.viper.Set("chrome_dirs", cfg.ChromeDirs)
+		if err := cfg.viper.WriteConfig(); err != nil {
+			return fmt.Errorf("failed to save configuration: %w", err)
+		}
+		if err := cfg.viper.Unmarshal(&cfg); err != nil {
+			return fmt.Errorf("unmarshalling config to struct : %w", err)
+		}
+	default:
+		return errors.New("invalid os string")
 	}
 	return nil
 }
 
-// SetFlag sets a configuration flag to a specific value and saves the configuration to disk.
-//
-// Parameters:
-//   - name: The name of the configuration flag to set
-//   - value: The string value to set
-//
-// Returns:
-//   - error: Configuration error if the flag doesn't exist or save fails
-func (cfg *Config) SetFlag(name string, value string) error {
-	if !viper.IsSet(name) {
-		// Key doesn't exist
-		return fmt.Errorf("checking if %s exists", name)
-	}
-	viper.Set(name, value)
-	if err := viper.WriteConfig(); err != nil {
+func (cfg *Config) DeleteChromePath(path, os string) error {
+	chromePath := ChromePathConfig{OS: os, Path: path}
+	cfg.ChromeDirs = slices.DeleteFunc(cfg.ChromeDirs, func(c ChromePathConfig) bool {
+		return c.OS == chromePath.OS && c.Path == chromePath.Path
+	})
+	cfg.viper.Set("chrome_dirs", cfg.ChromeDirs)
+	if err := cfg.viper.WriteConfig(); err != nil {
 		return fmt.Errorf("failed to save configuration: %w", err)
 	}
-	if err := viper.Unmarshal(&cfg); err != nil {
+	if err := cfg.viper.Unmarshal(&cfg); err != nil {
 		return fmt.Errorf("unmarshalling config to struct : %w", err)
 	}
 	return nil
