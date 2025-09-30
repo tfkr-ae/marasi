@@ -21,7 +21,6 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"database/sql/driver"
-	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -387,7 +386,7 @@ func (proxy *Proxy) ModifyRequest(req *http.Request) error {
 				*req = *addInterceptFlag(req, true)
 			}
 			// Now we need to rebuild the request
-			rebuilt, err := RebuildRequestWithCtx(intercepted.Raw, req)
+			rebuilt, err := RebuildRequestWithCtx([]byte(intercepted.Raw), req)
 			if err != nil {
 				return fmt.Errorf("rebuilding new request with old ctx : %w", err)
 			}
@@ -567,7 +566,7 @@ func (proxy *Proxy) ModifyResponse(res *http.Response) error {
 				return fmt.Errorf("response dropped")
 			}
 			// Now we need to rebuild the response
-			rebuilt, err := RebuildResponse(intercepted.Raw, res.Request)
+			rebuilt, err := RebuildResponse([]byte(intercepted.Raw), res.Request)
 			if err != nil {
 				return fmt.Errorf("rebuilding response : %w", err)
 			}
@@ -647,15 +646,15 @@ func (proxy *Proxy) InstallExtension(url string, direct bool) error {
 	return nil
 }
 
-// RawField represents raw HTTP request or response data stored as base64 encoded string in the database.
-type RawField string
+// RawField represents the raw HTTP request / response data stored as bytes in the DB
+type RawField []byte
 
 // Metadata represents a flexible key-value store for additional data associated with requests, responses, and extensions.
 type Metadata map[string]any
 
 // ToString returns the string representation of the raw field.
-func (r *RawField) ToString() string {
-	return string(*r)
+func (r RawField) ToString() string {
+	return string(r)
 }
 
 func (m *Metadata) Scan(value interface{}) error {
@@ -683,31 +682,25 @@ func (m Metadata) Value() (driver.Value, error) {
 	return json.Marshal(m)
 }
 func (r *RawField) Scan(value interface{}) error {
-	var rawBytes []byte
-	var err error
-	switch v := value.(type) {
-	case string:
-		rawBytes, err = base64.StdEncoding.DecodeString(v)
-		if err != nil {
-			return fmt.Errorf("scanning rawfield as string : %w", err)
-		}
-	case []byte:
-		rawBytes, err = base64.StdEncoding.DecodeString(string(v))
-		if err != nil {
-			return fmt.Errorf("scanning rawfield as string : %w", err)
-		}
-	default:
-		return fmt.Errorf("unsupported type: %T", v)
+	if value == nil {
+		*r = nil
+		return nil
 	}
 
-	// Your custom logic here, for example, converting email to lowercase
-	*r = RawField(string(rawBytes))
-	return nil
+	if v, ok := value.([]byte); ok {
+		*r = v
+		return nil
+	}
+
+	return fmt.Errorf("unsupported type for RawField: %T", value)
 }
 
 func (r RawField) Value() (driver.Value, error) {
-	// Your custom logic here, for example, converting email to uppercase before storing in DB
-	return base64.StdEncoding.EncodeToString([]byte(r)), nil
+	return []byte(r), nil
+}
+
+func (r RawField) MarshalJSON() ([]byte, error) {
+	return json.Marshal(string(r))
 }
 
 // ProxyRequest represents an HTTP request processed by the proxy, containing all relevant
@@ -941,58 +934,56 @@ func Prettify(bodyBytes []byte) (string, error) {
 	}
 }
 
-func DumpResponse(res *http.Response) (string, string, error) {
+func DumpResponse(res *http.Response) ([]byte, string, error) {
 	responseDump, err := httputil.DumpResponse(res, false)
 	if err != nil {
-		return "", "", fmt.Errorf("dumping response : %w", err)
+		return []byte{}, "", fmt.Errorf("dumping response : %w", err)
 	}
 
 	bodyBytes, err := io.ReadAll(res.Body)
 	if err != nil {
-		return "", "", fmt.Errorf("reading response body: %w", err)
+		return []byte{}, "", fmt.Errorf("reading response body: %w", err)
 	}
 	res.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 	// Combine the dumped headers and the read body for a complete dump equivalent.
-	headerStr := string(responseDump)
-	fullDump := headerStr + string(bodyBytes)
+	fullDump := append(responseDump, bodyBytes...)
 
 	prettified, err := Prettify(bodyBytes)
 	if prettified == "" {
 		return fullDump, "", nil
 	}
 
-	prettifiedDump := headerStr + prettified
+	prettifiedDump := string(responseDump) + prettified
 	return fullDump, prettifiedDump, nil
 }
-func DumpRequest(req *http.Request) (string, string, error) {
+func DumpRequest(req *http.Request) ([]byte, string, error) {
 	requestDump, err := httputil.DumpRequest(req, false)
 	if err != nil {
-		return "", "", fmt.Errorf("dumping request : %w", err)
+		return []byte{}, "", fmt.Errorf("dumping request : %w", err)
 	}
 	bodyBytes, err := io.ReadAll(req.Body)
 	if err != nil {
-		return "", "", fmt.Errorf("reading request body: %w", err)
+		return []byte{}, "", fmt.Errorf("reading request body: %w", err)
 	}
 	req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 	// Combine the dumped headers and the read body for a complete dump equivalent.
-	headerStr := string(requestDump)
-	fullDump := headerStr + string(bodyBytes)
+	fullDump := append(requestDump, bodyBytes...)
 	prettified, err := Prettify(bodyBytes)
 	if prettified == "" {
 		return fullDump, "", nil
 	}
-	prettifiedDump := headerStr + prettified
+	prettifiedDump := string(requestDump) + prettified
 	return fullDump, prettifiedDump, nil
 }
 
-func RebuildRequestWithCtx(raw string, originalRequest *http.Request) (req *http.Request, err error) {
+func RebuildRequestWithCtx(raw []byte, originalRequest *http.Request) (req *http.Request, err error) {
 	updated, err := RecalculateContentLength(raw)
 	if err != nil {
 		return nil, fmt.Errorf("recalculating content length : %w", err)
 	}
-	req, err = http.ReadRequest(bufio.NewReader(strings.NewReader(updated)))
+	req, err = http.ReadRequest(bufio.NewReader(bytes.NewReader(updated)))
 	if err != nil {
 		return nil, fmt.Errorf("reading raw request %s : %w", raw, err)
 	}
@@ -1002,12 +993,12 @@ func RebuildRequestWithCtx(raw string, originalRequest *http.Request) (req *http
 	return req, nil
 }
 
-func RebuildResponse(raw string, req *http.Request) (res *http.Response, err error) {
+func RebuildResponse(raw []byte, req *http.Request) (res *http.Response, err error) {
 	updated, err := RecalculateContentLength(raw)
 	if err != nil {
 		return nil, fmt.Errorf("recalculating content length : %w", err)
 	}
-	res, err = http.ReadResponse(bufio.NewReader(strings.NewReader(updated)), req)
+	res, err = http.ReadResponse(bufio.NewReader(bytes.NewReader(updated)), req)
 	if err != nil {
 		return nil, fmt.Errorf("reading raw response %s : %w", raw, err)
 	}
@@ -1245,35 +1236,38 @@ func (proxy *Proxy) Close() {
 }
 
 // Takes a raw request / response and returns the fixed string with updated content length
-func RecalculateContentLength(raw string) (updated string, err error) {
-	normalized := strings.ReplaceAll(raw, "\r\n", "\n")
-	parts := strings.SplitN(normalized, "\n\n", 2)
+func RecalculateContentLength(raw []byte) (updated []byte, err error) {
+	normalized := bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
+	parts := bytes.SplitN(normalized, []byte("\n\n"), 2)
 	if len(parts) == 2 {
 		headers := parts[0]
 		body := parts[1]
 
-		headerLines := strings.Split(headers, "\n")
-		newHeaders := []string{}
+		headerLines := bytes.Split(headers, []byte("\n"))
+		newHeaders := make([][]byte, 0, len(headerLines)+1)
 		for _, line := range headerLines {
-			if !strings.HasPrefix(strings.ToLower(line), "content-length:") {
+			if !bytes.HasPrefix(bytes.ToLower(line), []byte("content-length:")) {
 				newHeaders = append(newHeaders, line)
 			}
 		}
-		newHeaders = append(newHeaders, fmt.Sprintf("Content-Length: %d", len(body)))
+		newContentLength := fmt.Sprintf("Content-Length: %d", len(body))
+		newHeaders = append(newHeaders, []byte(newContentLength))
 
+		updatedHeaders := bytes.Join(newHeaders, []byte("\r\n"))
 		// Reconstruct request with correct Content-Length
-		updated = strings.Join(newHeaders, "\r\n") + "\r\n\r\n" + body
+		updated := append(updatedHeaders, []byte("\r\n\r\n")...)
+		updated = append(updated, body...)
 		return updated, nil
 	}
-	return "", fmt.Errorf("malformed string : %s", normalized)
+	return []byte{}, fmt.Errorf("malformed string : %s", normalized)
 }
 
 func (proxy *Proxy) Launch(raw string, launchpadId string, useHttps bool) error {
-	updated, err := RecalculateContentLength(raw)
+	updated, err := RecalculateContentLength([]byte(raw))
 	if err != nil {
 		return fmt.Errorf("recalculating content length : %w", err)
 	}
-	req, err := http.ReadRequest(bufio.NewReader(strings.NewReader(updated)))
+	req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(updated)))
 	if err != nil {
 		return fmt.Errorf("reading http request : %w", err)
 	}

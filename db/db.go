@@ -8,6 +8,7 @@ import (
 	"time"
 
 	marasi "github.com/tfkr-ae/marasi"
+	_ "github.com/tfkr-ae/marasi/db/migrations"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -15,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-//go:embed migrations/*.sql
+//go:embed migrations/*.sql migrations/*.go
 var embedMigrations embed.FS
 
 // Repository implements the marasi.Repository interface using SQLite as the backend.
