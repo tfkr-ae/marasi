@@ -21,13 +21,13 @@ import (
 // RequestBuilder provides a fluent interface for constructing and sending HTTP requests
 // from within Lua extensions. It allows step-by-step configuration of request parameters.
 type RequestBuilder struct {
-	client      *http.Client          // HTTP client for sending requests
-	method      string                // HTTP method (GET, POST, etc.)
-	url         string                // Request URL
-	body        string                // Request body content
-	headers     http.Header           // HTTP headers
-	cookies     map[string]string     // Cookies to include
-	contentType string                // Content type header value
+	client      *http.Client      // HTTP client for sending requests
+	method      string            // HTTP method (GET, POST, etc.)
+	url         string            // Request URL
+	body        string            // Request body content
+	headers     http.Header       // HTTP headers
+	cookies     map[string]string // Cookies to include
+	contentType string            // Content type header value
 }
 
 // NewRequestBuilder creates a new RequestBuilder instance with the specified HTTP client.
@@ -961,10 +961,7 @@ func RegisterProxyRequest(extension *Extension) {
 	funcs["set_raw"] = func(l *lua.State) int {
 		if proxyRequest, ok := l.ToUserData(1).(*ProxyRequest); ok {
 			if raw, ok := l.ToString(2); ok {
-				err := proxyRequest.Raw.Scan(raw)
-				if err != nil {
-					log.Print(err)
-				}
+				proxyRequest.Raw = RawField([]byte(raw))
 			}
 		}
 		return 0
@@ -1050,10 +1047,7 @@ func RegisterProxyResponse(extension *Extension) {
 	funcs["set_raw"] = func(l *lua.State) int {
 		if proxyResponse, ok := l.ToUserData(1).(*ProxyResponse); ok {
 			if raw, ok := l.ToString(2); ok {
-				err := proxyResponse.Raw.Scan(raw)
-				if err != nil {
-					log.Print(err)
-				}
+				proxyResponse.Raw = RawField([]byte(raw))
 			}
 		}
 		return 0
