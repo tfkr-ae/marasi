@@ -68,6 +68,7 @@ type Repository interface {
 	InsertRequest(req ProxyRequest) error
 	InsertResponse(res ProxyResponse) error
 	GetItems() (map[uuid.UUID]Row, error)
+	GetRaw(id uuid.UUID) (Row, error)
 	GetResponse(id uuid.UUID) (ProxyResponse, error)
 	UpdateMetadata(metadata Metadata, ids ...uuid.UUID) error
 	GetMetadata(id uuid.UUID) (metadata Metadata, err error)

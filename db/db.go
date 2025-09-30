@@ -112,13 +112,12 @@ func (repo *Repository) GetItems() (map[uuid.UUID]marasi.Row, error) {
 		method,
 		host,
 		path,
-		request_raw,
 		id AS response_id,
 		status,
 		status_code,
 		content_type,
 		length,
-		metadata
+		json_remove(metadata, '$.prettified-request', '$.prettifed-response') AS metadata
 	FROM request;
 	`
 	var items []Item
@@ -148,6 +147,25 @@ func (repo *Repository) GetItems() (map[uuid.UUID]marasi.Row, error) {
 }
 
 // Get the response data for a given uuid
+func (repo *Repository) GetRaw(id uuid.UUID) (marasi.Row, error) {
+	type Item struct {
+		marasi.ProxyRequest
+		marasi.ProxyResponse
+		Metadata marasi.Metadata
+	}
+
+	var row Item
+	err := repo.dbConn.Get(&row, "SELECT id AS request_id, request_raw, response_raw, id AS response_id, metadata FROM request WHERE id = ?", id)
+	if err != nil {
+		return marasi.Row{}, fmt.Errorf("fetching raw details for %s : %w", id, err)
+	}
+	return marasi.Row{
+		Request:  row.ProxyRequest,
+		Response: row.ProxyResponse,
+		Metadata: row.Metadata,
+	}, nil
+}
+
 func (repo *Repository) GetResponse(id uuid.UUID) (response marasi.ProxyResponse, err error) {
 	err = repo.dbConn.Get(&response, "SELECT id as response_id, status, status_code, content_type, length, response_raw FROM request WHERE id = ?", id)
 	if err != nil {
@@ -204,8 +222,8 @@ func (repo *Repository) GetLaunchpads() (launchpads []marasi.Launchpad, err erro
 func (repo *Repository) GetLaunchpadRequests(id uuid.UUID) (launchpadRequests []marasi.ProxyRequest, err error) {
 	query := `
 		SELECT id as request_id, scheme, method, host, path, request_raw, metadata
-		FROM request 
-		JOIN launchpad_request rr ON request.id = rr.request_id 
+		FROM request
+		JOIN launchpad_request rr ON request.id = rr.request_id
 		WHERE rr.launchpad_id = ?
     `
 
@@ -335,8 +353,8 @@ func (repo *Repository) CreateExtension(name string, sourceUrl string, author st
 	query := `
 	INSERT INTO extensions (id, name, source_url, author, lua_content, update_at, enabled, description)
 		VALUES (?,?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(name) 
-		DO UPDATE SET 
+		ON CONFLICT(name)
+		DO UPDATE SET
 			source_url = excluded.source_url,
 			author = excluded.author,
 			lua_content = excluded.lua_content,
@@ -611,8 +629,8 @@ CREATE TABLE IF NOT EXISTS request (
 	content_type TEXT DEFAULT '',
 	length TEXT DEFAULT '0',
 	metadata JSON DEFAULT '{}',
-	requested_at DATETIME NOT NULL,     
-	responded_at DATETIME            
+	requested_at DATETIME NOT NULL,
+	responded_at DATETIME
 );
 CREATE TABLE IF NOT EXISTS launchpad_request (
     request_id TEXT,
@@ -634,7 +652,7 @@ CREATE TABLE IF NOT EXISTS extensions (
 	author TEXT NOT NULL,
     lua_content TEXT NOT NULL,                  -- Lua script content for proxy extension
 	update_at TIMESTAMP NOT NULL,
-	enabled BOOLEAN DEFAULT false, 
+	enabled BOOLEAN DEFAULT false,
 	description TEXT NOT NULL,
 	settings JSON DEFAULT '{}'
 );
@@ -661,11 +679,11 @@ SELECT '1.0.0'
 WHERE NOT EXISTS (SELECT 1 FROM app);
 
 INSERT INTO extensions (id, name, source_url, author, lua_content, update_at, enabled, description, settings)
-SELECT 
-    '01937d13-9632-72aa-83b9-c10ea1abbdd6', 
-    'compass', 
-    'marasi-internal', 
-    'Steris', 
+SELECT
+    '01937d13-9632-72aa-83b9-c10ea1abbdd6',
+    'compass',
+    'marasi-internal',
+    'Steris',
     'local scope = marasi:scope()
 scope:clear_rules()
 scope:add_rule("-.*\\.gstatic\\.com", "host")
@@ -761,15 +779,15 @@ scope:set_default_allow(false)
 
 Happy Scoping!
 ]]--',
-    CURRENT_TIMESTAMP, 
-    true, 
-    'Scope Management Extension', 
+    CURRENT_TIMESTAMP,
+    true,
+    'Scope Management Extension',
     '{}'
 WHERE NOT EXISTS (SELECT 1 FROM extensions WHERE name = 'compass');
 
 -- Insert the "checkpoint" extension with formatted Lua content
 INSERT INTO extensions (id, name, source_url, author, lua_content, update_at, enabled, description, settings)
-SELECT '01937d13-9632-75b1-9e73-c5129b06fa8c', 'checkpoint', 'marasi-internal', 'Colms', 
+SELECT '01937d13-9632-75b1-9e73-c5129b06fa8c', 'checkpoint', 'marasi-internal', 'Colms',
 '-- Intercept Code
 function interceptRequest(request)
 	return 1~=1
@@ -778,19 +796,19 @@ end
 function interceptResponse(response)
 	return 1~=1
 end
-', 
+',
 CURRENT_TIMESTAMP, true, 'Intercept Requests / Responses', "{}"
 WHERE NOT EXISTS (SELECT 1 FROM extensions WHERE name = 'checkpoint');
 
 INSERT INTO extensions (id, name, source_url, author, lua_content, update_at, enabled, description, settings)
-SELECT '01937d13-9632-7f84-add5-14ec2c2c7f43', 'workshop', 'marasi-internal', 'TenSoon', 
+SELECT '01937d13-9632-7f84-add5-14ec2c2c7f43', 'workshop', 'marasi-internal', 'TenSoon',
 '--[[
 Welcome to the Marasi Workshop
 
 You have access to two global objects: marasi and extension.
 
 - marasi
-	- config: marasi:config() 
+	- config: marasi:config()
 		- Description: Returns the configuration directory path.
 		- Usage: local configDir = marasi:config()
 
@@ -902,7 +920,7 @@ Notes:
 
 Happy coding!
 ]]--
-', 
+',
 CURRENT_TIMESTAMP, true, 'Lua Workshop', "{}"
 WHERE NOT EXISTS (SELECT 1 FROM extensions WHERE name = 'workshop');
 
