@@ -39,6 +39,7 @@ import (
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/google/martian"
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/listener"
 	"github.com/yosssi/gohtml"
 )
 
@@ -1068,113 +1069,14 @@ func (proxy *Proxy) WriteLog(level string, message string, options ...func(log *
 	return nil
 }
 
-type MarasiListener struct {
-	net.Listener
-	TLSConfig *tls.Config
-	proxy     *Proxy // temp workaround
-}
-
-// connWrapper wraps a net.Conn and uses io.MultiReader to prepend the first byte
-type connWrapper struct {
-	net.Conn
-	io.Reader
-}
-
-// Read calls the Reader's Read method
-func (cw *connWrapper) Read(b []byte) (int, error) {
-	return cw.Reader.Read(b)
-}
-
-func (l *MarasiListener) Accept() (net.Conn, error) {
-	for {
-		rawConn, err := l.Listener.Accept()
-		if err != nil {
-			if rawConn != nil {
-				_ = rawConn.Close()
-			}
-			l.proxy.WriteLog("ERROR", fmt.Sprintf("Connection error: %v", err))
-			return nil, fmt.Errorf("accepting connection: %w", err)
-		}
-
-		// Wrap in a buffered reader
-		br := bufio.NewReader(rawConn)
-
-		// Optional: Set a short deadline for peeking (to avoid hanging forever)
-		deadline := time.Now().Add(10 * time.Second)
-		_ = rawConn.SetReadDeadline(deadline)
-
-		// Try to peek at the first 5 bytes
-		peekSize := 5
-		peeked, err := br.Peek(peekSize)
-		// Clear the deadline after peek
-		_ = rawConn.SetReadDeadline(time.Time{})
-
-		if err != nil && err != bufio.ErrBufferFull {
-			// If the error is anything other than needing a bigger buffer, bail out
-			_ = rawConn.Close()
-			l.proxy.WriteLog("ERROR", fmt.Sprintf("Failed to peek initial bytes: %v", err))
-			continue
-			//return nil, fmt.Errorf("reading initial bytes: %w", err)
-		}
-
-		// Possibly fewer than 5 bytes are available, so check length
-		n := len(peeked)
-		log.Printf("Initial peek (hex): % x", peeked)
-
-		// Basic TLS detection:
-		//   Byte 0: 0x16 (Handshake),
-		//   Byte 1: 0x03 (TLS version)
-		isTLS := (n >= 2 && peeked[0] == 0x16 && peeked[1] == 0x03)
-
-		if isTLS {
-			log.Printf("it's TLS")
-			//	l.proxy.WriteLog("INFO", "TLS connection detected")
-
-			// Wrap the raw connection in a TLS server,
-			// but remember we still have 'br' as our buffered reader.
-			// We can pass a wrapper that first reads from 'br'
-			// to feed any peeked bytes to the TLS handshake.
-			tlsConn := tls.Server(&connWrapper{
-				Conn:   rawConn,
-				Reader: br, // The handshake will read from br, which still has the peeked data.
-			}, l.TLSConfig)
-
-			rawConn.SetDeadline(time.Now().Add(10 * time.Second))
-			err = tlsConn.Handshake()
-			rawConn.SetDeadline(time.Time{}) // clear deadline after handshake
-
-			if err != nil {
-				_ = tlsConn.Close()
-				l.proxy.WriteLog("ERROR", fmt.Sprintf("TLS handshake failed: %v", err))
-				continue
-				//	return nil, fmt.Errorf("TLS handshake failed: %w", err)
-			}
-
-			// Return the TLS-wrapped connection
-			return tlsConn, nil
-		}
-
-		// Otherwise, treat it as a plain (non-TLS) connection
-		//l.proxy.WriteLog("INFO", "Non-TLS connection detected")
-		return &connWrapper{
-			Conn:   rawConn,
-			Reader: br,
-		}, nil
-	}
-}
-
 // Accept waits for and returns the next connection to the listener.
 func (proxy *Proxy) GetListener(address string, port string) (net.Listener, error) {
-	//listener, err := tls.Listen("tcp", fmt.Sprintf("%s:%s", address, port), proxy.TLSConfig)
-	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%s", address, port))
-	marasiListener := &MarasiListener{
-		Listener:  listener,
-		TLSConfig: proxy.TLSConfig,
-		proxy:     proxy,
-	}
+	rawListener, err := net.Listen("tcp", fmt.Sprintf("%s:%s", address, port))
 	if err != nil {
-		return listener, fmt.Errorf("setting up listener on address:port %s:%s", address, port)
+		return rawListener, fmt.Errorf("setting up listener on address:port %s:%s", address, port)
 	}
+	muxListener := listener.NewProtocolMuxListener(rawListener, proxy.TLSConfig)
+	marasiListener := listener.NewMarasiListener(muxListener)
 	proxy.Addr = address
 	proxy.Port = port
 	proxy.WriteLog("INFO", fmt.Sprintf("Marasi Service Started on %s:%s", address, port))
