@@ -17,6 +17,7 @@ require (
 )
 
 require (
+	github.com/beevik/etree v1.6.0 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect

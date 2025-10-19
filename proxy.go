@@ -22,7 +22,6 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -30,17 +29,15 @@ import (
 	"mime"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/andybalholm/brotli"
-	"github.com/gabriel-vasile/mimetype"
 	"github.com/google/martian"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/listener"
-	"github.com/yosssi/gohtml"
+	"github.com/tfkr-ae/marasi/rawhttp"
 )
 
 type contextKey string
@@ -387,7 +384,7 @@ func (proxy *Proxy) ModifyRequest(req *http.Request) error {
 				*req = *addInterceptFlag(req, true)
 			}
 			// Now we need to rebuild the request
-			rebuilt, err := RebuildRequestWithCtx([]byte(intercepted.Raw), req)
+			rebuilt, err := rawhttp.RebuildRequest([]byte(intercepted.Raw), req)
 			if err != nil {
 				return fmt.Errorf("rebuilding new request with old ctx : %w", err)
 			}
@@ -567,7 +564,7 @@ func (proxy *Proxy) ModifyResponse(res *http.Response) error {
 				return fmt.Errorf("response dropped")
 			}
 			// Now we need to rebuild the response
-			rebuilt, err := RebuildResponse([]byte(intercepted.Raw), res.Request)
+			rebuilt, err := rawhttp.RebuildResponse([]byte(intercepted.Raw), res.Request)
 			if err != nil {
 				return fmt.Errorf("rebuilding response : %w", err)
 			}
@@ -806,7 +803,7 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*ProxyRequest, err
 			RequestedAt: requestTime,
 		}
 		// TODO Check prettified error
-		rawReq, prettified, err := DumpRequest(req)
+		rawReq, prettified, err := rawhttp.DumpRequest(req)
 		if err != nil {
 			return nil, fmt.Errorf("dumping request %d body : %w", requestId, err)
 		}
@@ -844,7 +841,7 @@ func NewProxyResponse(res *http.Response) (*ProxyResponse, error) {
 		return nil, fmt.Errorf("timestamp not found for this context")
 	}
 
-	rawRes, prettified, err := DumpResponse(res)
+	rawRes, prettified, err := rawhttp.DumpResponse(res)
 	if err != nil {
 		return nil, fmt.Errorf("dumping response %s: %w", requestId, err)
 	}
@@ -887,124 +884,6 @@ func NewProxyResponse(res *http.Response) (*ProxyResponse, error) {
 	return proxyResponse, nil
 }
 
-// Prettify attempts to format the body of either an *http.Request or *http.Response
-// based on its detected content type. It returns the prettified string or an error.
-func Prettify(bodyBytes []byte) (string, error) {
-	if len(bodyBytes) == 0 {
-		return "", nil
-	}
-	contentType := mimetype.Detect(bodyBytes).String()
-	// Prettify based on the content type.
-	switch {
-	case strings.Contains(contentType, "application/json"):
-		// Unmarshal to ensure valid JSON.
-		var data interface{}
-		if err := json.Unmarshal(bodyBytes, &data); err != nil {
-			return "", fmt.Errorf("failed to unmarshal JSON: %w", err)
-		}
-		// MarshalIndent to create pretty-printed JSON.
-		prettyBytes, err := json.MarshalIndent(data, "", "  ")
-		log.Print("Len Original Bytes: ", len(bodyBytes))
-		log.Print("Len Pretty Bytes: ", len(prettyBytes))
-		if err != nil {
-			return "", fmt.Errorf("failed to marshal JSON with indent: %w", err)
-		}
-		return string(prettyBytes), nil
-
-	case strings.Contains(contentType, "application/xml"),
-		strings.Contains(contentType, "text/xml"):
-		// Use xml.Indent to prettify XML.
-		var data interface{}
-		if err := xml.Unmarshal(bodyBytes, &data); err != nil {
-			return "", fmt.Errorf("failed to unmarshal XML: %w", err)
-		}
-		prettyBytes, err := xml.MarshalIndent(data, "", " ")
-		if err != nil {
-			return "", fmt.Errorf("failed to marshal XML with indent: %w", err)
-		}
-		return string(prettyBytes), nil
-
-	case strings.Contains(contentType, "text/html"):
-		// Use the gohtml package to prettify HTML.
-		pretty := gohtml.Format(string(bodyBytes))
-		return pretty, nil
-
-	default:
-		// For other types (or if detection fails), return the body as a plain string.
-		return "", nil
-	}
-}
-
-func DumpResponse(res *http.Response) ([]byte, string, error) {
-	responseDump, err := httputil.DumpResponse(res, false)
-	if err != nil {
-		return []byte{}, "", fmt.Errorf("dumping response : %w", err)
-	}
-
-	bodyBytes, err := io.ReadAll(res.Body)
-	if err != nil {
-		return []byte{}, "", fmt.Errorf("reading response body: %w", err)
-	}
-	res.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-
-	// Combine the dumped headers and the read body for a complete dump equivalent.
-	fullDump := append(responseDump, bodyBytes...)
-
-	prettified, err := Prettify(bodyBytes)
-	if prettified == "" {
-		return fullDump, "", nil
-	}
-
-	prettifiedDump := string(responseDump) + prettified
-	return fullDump, prettifiedDump, nil
-}
-func DumpRequest(req *http.Request) ([]byte, string, error) {
-	requestDump, err := httputil.DumpRequest(req, false)
-	if err != nil {
-		return []byte{}, "", fmt.Errorf("dumping request : %w", err)
-	}
-	bodyBytes, err := io.ReadAll(req.Body)
-	if err != nil {
-		return []byte{}, "", fmt.Errorf("reading request body: %w", err)
-	}
-	req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-
-	// Combine the dumped headers and the read body for a complete dump equivalent.
-	fullDump := append(requestDump, bodyBytes...)
-	prettified, err := Prettify(bodyBytes)
-	if prettified == "" {
-		return fullDump, "", nil
-	}
-	prettifiedDump := string(requestDump) + prettified
-	return fullDump, prettifiedDump, nil
-}
-
-func RebuildRequestWithCtx(raw []byte, originalRequest *http.Request) (req *http.Request, err error) {
-	updated, err := RecalculateContentLength(raw)
-	if err != nil {
-		return nil, fmt.Errorf("recalculating content length : %w", err)
-	}
-	req, err = http.ReadRequest(bufio.NewReader(bytes.NewReader(updated)))
-	if err != nil {
-		return nil, fmt.Errorf("reading raw request %s : %w", raw, err)
-	}
-	req = req.WithContext(originalRequest.Context())
-	req.URL.Host = req.Host
-	req.URL.Scheme = originalRequest.URL.Scheme
-	return req, nil
-}
-
-func RebuildResponse(raw []byte, req *http.Request) (res *http.Response, err error) {
-	updated, err := RecalculateContentLength(raw)
-	if err != nil {
-		return nil, fmt.Errorf("recalculating content length : %w", err)
-	}
-	res, err = http.ReadResponse(bufio.NewReader(bytes.NewReader(updated)), req)
-	if err != nil {
-		return nil, fmt.Errorf("reading raw response %s : %w", raw, err)
-	}
-	return res, nil
-}
 func (proxy *Proxy) WriteToDB() {
 	for proxyItem := range proxy.DBWriteChannel {
 		switch castItem := proxyItem.(type) {
@@ -1137,35 +1016,8 @@ func (proxy *Proxy) Close() {
 	proxy.martianProxy.Close()
 }
 
-// Takes a raw request / response and returns the fixed string with updated content length
-func RecalculateContentLength(raw []byte) (updated []byte, err error) {
-	normalized := bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
-	parts := bytes.SplitN(normalized, []byte("\n\n"), 2)
-	if len(parts) == 2 {
-		headers := parts[0]
-		body := parts[1]
-
-		headerLines := bytes.Split(headers, []byte("\n"))
-		newHeaders := make([][]byte, 0, len(headerLines)+1)
-		for _, line := range headerLines {
-			if !bytes.HasPrefix(bytes.ToLower(line), []byte("content-length:")) {
-				newHeaders = append(newHeaders, line)
-			}
-		}
-		newContentLength := fmt.Sprintf("Content-Length: %d", len(body))
-		newHeaders = append(newHeaders, []byte(newContentLength))
-
-		updatedHeaders := bytes.Join(newHeaders, []byte("\r\n"))
-		// Reconstruct request with correct Content-Length
-		updated := append(updatedHeaders, []byte("\r\n\r\n")...)
-		updated = append(updated, body...)
-		return updated, nil
-	}
-	return []byte{}, fmt.Errorf("malformed string : %s", normalized)
-}
-
 func (proxy *Proxy) Launch(raw string, launchpadId string, useHttps bool) error {
-	updated, err := RecalculateContentLength([]byte(raw))
+	updated, err := rawhttp.RecalculateContentLength([]byte(raw))
 	if err != nil {
 		return fmt.Errorf("recalculating content length : %w", err)
 	}
