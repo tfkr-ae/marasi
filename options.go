@@ -6,15 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path"
 	"runtime"
 	"time"
 
 	"github.com/google/martian/mitm"
-	"github.com/google/martian/parse"
 	"github.com/google/uuid"
 	"github.com/spf13/viper"
+)
+
+var (
+	// ErrSessionContext is returned when the session could not be fetch from context
+	ErrSessionContext = errors.New("failed to get session from context")
 )
 
 // WithOptions applies a series of configuration functions to the proxy instance.
@@ -95,38 +100,38 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 }
 
 // WithExtensions will get all the extensions from the project and load each extension if enabled
-
 func WithExtension(extension *Extension, options ...func(*Extension) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		// Check if the map is nil and create if it is
 		if proxy.Extensions == nil {
-			proxy.Extensions = make(map[string]*Extension)
+			proxy.Extensions = make([]*Extension, 0)
 		}
 		// Check if the extension doesn't exist
-		if _, ok := proxy.Extensions[extension.Name]; !ok {
+		if _, ok := proxy.GetExtension(extension.Name); !ok {
 			err := extension.PrepareState(proxy, options)
 			if err != nil {
 				return fmt.Errorf("preparing extension %s : %w", extension.Name, err)
 			}
-			proxy.Extensions[extension.Name] = extension
+			proxy.Extensions = append(proxy.Extensions, extension)
 		}
 		return nil
 	}
 }
 func WithExtensions(extensions []*Extension, options ...func(*Extension) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
-		// TODO LOOK INTO THIS
-		proxy.Extensions = make(map[string]*Extension)
+		if proxy.Extensions == nil {
+			proxy.Extensions = make([]*Extension, 0)
+		}
 		// extensions, err := proxy.Repo.GetExtensions()
 		// if err != nil {
 		// 	return fmt.Errorf("getting all extensions : %w", err)
 		// }
 		for _, extension := range extensions {
-			if _, ok := proxy.Extensions[extension.Name]; !ok {
+			if _, ok := proxy.GetExtension(extension.Name); !ok {
 				// Extension does not exist
 				// if it is enabled add it, if not keep it disabled
 				extension.PrepareState(proxy, options)
-				proxy.Extensions[extension.Name] = extension
+				proxy.Extensions = append(proxy.Extensions, extension)
 			}
 		}
 		return nil
@@ -177,21 +182,6 @@ func WithLogHandler(handler func(log Log) error) func(*Proxy) error {
 	}
 }
 
-// WithLogModifer sets both the request and response modifiers for the proxy
-func WithLogModifer() func(*Proxy) error {
-	return func(proxy *Proxy) error {
-		if proxy.martianProxy == nil {
-			return errors.New("proxy has no martianProxy")
-		}
-		proxy.martianProxy.SetRequestModifier(proxy)
-		proxy.martianProxy.SetResponseModifier(proxy)
-		parse.Register("logModifier", func(b []byte) (*parse.Result, error) {
-			return parse.NewResult(new(any), []parse.ModifierType{parse.Request, parse.Response})
-		})
-		return nil
-	}
-}
-
 // WithTLS will configure the proxy CA based on the proxy.ConfigDir
 // It will also configure the http.Client that is used for the launchpad requests
 // TODO - Check if the certificate expired
@@ -222,7 +212,6 @@ func WithTLS() func(*Proxy) error {
 			}
 		}
 
-		log.Print(getSPKIHash(x509c))
 		proxy.SPKIHash = getSPKIHash(x509c)
 		proxy.Cert = x509c
 		err = proxy.Repo.UpdateSPKI(proxy.SPKIHash)
@@ -265,6 +254,84 @@ func WithRepo(repo Repository) func(*Proxy) error {
 		}
 		return nil
 	}
+}
+
+// WithBasePipeline will setup the base modifier pipeline for marasi
+// It will define the main Request & Response modifiers that will execute the
+// attached modifiers and hande `ErrDropped` and `ErrSkipPipeline`.
+// If a response is dropped the `martian.Session` is read from the context and hijacked to
+// close the `conn`
+func WithBasePipeline() func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		proxy.martianProxy.SetRequestModifier(
+			martianReqModifierFunc(func(req *http.Request) error {
+				err := proxy.Modifiers.ModifyRequest(req)
+				if err == nil || errors.Is(err, ErrDropped) || errors.Is(err, ErrSkipPipeline) {
+					return nil
+				}
+				// TODO this should be handled through logging
+				log.Printf("request pipeline: %v", err)
+				return err
+			}),
+		)
+		proxy.martianProxy.SetResponseModifier(
+			martianResModifierFunc(func(res *http.Response) error {
+				err := proxy.Modifiers.ModifyResponse(res)
+				if err == nil || errors.Is(err, ErrSkipPipeline) {
+					return nil
+				}
+				if errors.Is(err, ErrDropped) {
+					if session, ok := SessionFromContext(res.Request.Context()); ok {
+						conn, _, err := session.Hijack()
+						if err != nil {
+							return fmt.Errorf("hijacking session : %w", err)
+						}
+						err = conn.Close()
+						if err != nil {
+							return fmt.Errorf("closing connection : %w", err)
+						}
+					} else {
+						return ErrSessionContext
+					}
+				}
+				// TODO this should be handled through logging
+				log.Printf("response pipeline: %v", err)
+				return err
+			}),
+		)
+		return nil
+	}
+}
+
+// WithDefaultPipeline will apply the default modifier pipelines
+// The default processing order is: waypoint overrides → extensions → interception → database storage.
+// WithDefaultModifierPipeline will apply the default modifier pipelines for Requests & Responses.
+// The processing order is:
+// (Request): Compass -> Waypoint -> Extensions -> Checkpoint -> Database Write
+// (Response): Buffer Streaming -> Decompress -> Compass -> Extensions -> Checkpoint -> Database Write
+func WithDefaultModifierPipeline() func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		// Request Modifiers
+		proxy.AddRequestModifier(PreventLoopModifier)
+		proxy.AddRequestModifier(SkipConnectRequestModifier)
+		proxy.AddRequestModifier(CompassRequestModifier)
+		proxy.AddRequestModifier(SetupRequestModifier)
+		proxy.AddRequestModifier(OverrideWaypointsModifier)
+		proxy.AddRequestModifier(ExtensionsRequestModifier)
+		proxy.AddRequestModifier(CheckpointRequestModifier)
+		proxy.AddRequestModifier(WriteRequestModifier)
+
+		// Response Modifiers
+		proxy.AddResponseModifier(ResponseFilterModifier)
+		proxy.AddResponseModifier(BufferStreamingBodyModifier)
+		proxy.AddResponseModifier(CompressedResponseModifier)
+		proxy.AddResponseModifier(CompassResponseModifier)
+		proxy.AddResponseModifier(ExtensionsResponseModifier)
+		proxy.AddResponseModifier(CheckpointResponseModifier)
+		proxy.AddResponseModifier(WriteResponseModifier)
+		return nil
+	}
+
 }
 
 // LOG OPTIONS
