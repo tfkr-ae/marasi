@@ -15,14 +15,12 @@ package marasi
 import (
 	"bufio"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -33,28 +31,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/andybalholm/brotli"
 	"github.com/google/martian"
+	"github.com/google/martian/fifo"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/listener"
 	"github.com/tfkr-ae/marasi/rawhttp"
 )
 
-type contextKey string
-
 const (
-	certFile                      = "marasi_cert.pem" // Certificate File Name
-	keyFile                       = "marasi_key.pem"  // Private Key File Name
-	RequestIDKey       contextKey = "RequestID"       // Context key for the request ID so that it can be passed to the http.response
-	LaunchpadIDKey     contextKey = "LaunchpadID"     // Context key for the repeater ID so that the repeater ID for a request can be used to link the request with a repeater entry
-	MetadataKey        contextKey = "Metadata"        // Context key to store the metadata of a request
-	ExtensionKey       contextKey = "ExtensionID"
-	DropRequestKey     contextKey = "Drop"
-	DropResponseKey    contextKey = "Drop"
-	DoNotLogKey        contextKey = "DoNotLog"
-	ShouldInterceptKey contextKey = "ShouldIntercept"
-	RequestTimeKey     contextKey = "RequestTime"
-	ResponseTimeKey    contextKey = "ResponseTime"
+	certFile = "marasi_cert.pem" // Certificate File Name
+	keyFile  = "marasi_key.pem"  // Private Key File Name
 )
 
 // Repository defines the methods consumed by the proxy to interact with the SQLite backend.
@@ -110,26 +96,27 @@ type ProxyItem interface {
 // extension management, database operations, and TLS handling. It serves as the central coordinator
 // for the Marasi proxy server.
 type Proxy struct {
-	martianProxy     *martian.Proxy // The underlying martian.Proxy
-	ConfigDir        string         // The configuration directory (defaults to the marasi folder under the user configuration directory)
-	Config           *Config
+	martianProxy     *martian.Proxy                       // The underlying martian.Proxy
+	ConfigDir        string                               // The configuration directory (defaults to the marasi folder under the user configuration directory)
+	Config           *Config                              // The marasi proxy configuration (separate from the GUI config)
 	Repo             Repository                           // DB Repository Interface
+	Modifiers        *fifo.Group                          // Modifier group pipeline
 	DBWriteChannel   chan ProxyItem                       // DB Write Channel
 	InterceptedQueue []*Intercepted                       // Queue of intercepted requests / responses
 	OnRequest        func(req ProxyRequest) error         // Function to be ran on each request - used by the GUI application to handle the new requests
 	OnResponse       func(res ProxyResponse) error        // Function to be ran on each response - used by the GUI application to handle the new responses
 	OnIntercept      func(intercepted *Intercepted) error // Function to be ran on each intercept - used by the GUI application to handle the new intercepted items
 	OnLog            func(log Log) error
-	Addr             string                // IP Address of the proxy
-	Port             string                // Port of the proxy
-	Client           *http.Client          // HTTP Client that is used by the repeater functionality (autoconfigured to use the proxy)
-	Extensions       map[string]*Extension // Map of the loaded extensions
-	SPKIHash         string
+	Addr             string       // IP Address of the proxy
+	Port             string       // Port of the proxy
+	Client           *http.Client // HTTP Client that is used by the repeater functionality (autoconfigured to use the proxy)
+	Extensions       []*Extension // Slice of loaded extensions
+	SPKIHash         string       // SPKI Hash of the current certificate
 	Cert             *x509.Certificate
 	TLSConfig        *tls.Config
-	Scope            *Scope
-	Waypoints        map[string]string
-	InterceptFlag    bool
+	Scope            *Scope            // Proxy scope configuration through Compass
+	Waypoints        map[string]string // Map of host:port overrides
+	InterceptFlag    bool              // Global intercept flag
 }
 
 // New creates a new Proxy instance with default configuration and applies any provided options.
@@ -145,61 +132,31 @@ type Proxy struct {
 func New(options ...func(*Proxy) error) (*Proxy, error) {
 	proxy := &Proxy{
 		martianProxy:   martian.NewProxy(),
+		Modifiers:      fifo.NewGroup(),
 		DBWriteChannel: make(chan ProxyItem, 10),
-		Extensions:     make(map[string]*Extension),
+		Extensions:     make([]*Extension, 0),
 		Client:         &http.Client{},
 		Scope:          NewScope(true),
 		Waypoints:      make(map[string]string),
 		InterceptFlag:  false,
 	}
-	// TODO This can be loaded from the GUI implementation ?
-	err := proxy.WithOptions(WithLogModifer())
-	if err != nil {
-		return nil, err
-	}
-	err = proxy.WithOptions(options...)
+	err := proxy.WithOptions(options...)
 	if err != nil {
 		return nil, err
 	}
 	return proxy, nil
 }
 
-// addRequestId takes a *http.Request and the ID of the request. It returns an *http.Request with the requestId set in the context
-func addRequestId(req *http.Request, requestId uuid.UUID) *http.Request {
-	ctx := context.WithValue(req.Context(), RequestIDKey, requestId)
-	return req.WithContext(ctx)
+// AddRequestModifier accepts RequestModifierFunc and wraps it in a reqAdapter
+func (proxy *Proxy) AddRequestModifier(modifier RequestModifierFunc) {
+	adapter := &reqAdapter{proxy: proxy, modifier: modifier}
+	proxy.Modifiers.AddRequestModifier(adapter)
 }
 
-// addLaunchpadId takes a *http.Request and the ID of the Repeater entry that it is linked to. It returns an *http.Request with the repeaterID set in the context
-func addLaunchpadId(req *http.Request, launchpadId uuid.UUID) *http.Request {
-	ctx := context.WithValue(req.Context(), LaunchpadIDKey, launchpadId)
-	return req.WithContext(ctx)
-}
-
-// addMetadata takes a *http.Request and the Metadata. It returns an *http.Request with the metadata set in the context
-func addMetadata(req *http.Request, metadata Metadata) *http.Request {
-	ctx := context.WithValue(req.Context(), MetadataKey, metadata)
-	return req.WithContext(ctx)
-}
-
-func addExtensionId(req *http.Request, extensionId string) *http.Request {
-	ctx := context.WithValue(req.Context(), ExtensionKey, extensionId)
-	return req.WithContext(ctx)
-}
-
-func addInterceptFlag(req *http.Request, shouldIntercept bool) *http.Request {
-	ctx := context.WithValue(req.Context(), ShouldInterceptKey, shouldIntercept)
-	return req.WithContext(ctx)
-}
-
-func addRequestTime(req *http.Request) *http.Request {
-	ctx := context.WithValue(req.Context(), RequestTimeKey, time.Now())
-	return req.WithContext(ctx)
-}
-
-func addResponseTime(req *http.Request) *http.Request {
-	ctx := context.WithValue(req.Context(), ResponseTimeKey, time.Now())
-	return req.WithContext(ctx)
+// AddResponseModifier accepts ResponseModifierFunc and wraps it in a resAdapter
+func (proxy *Proxy) AddResponseModifier(modifier ResponseModifierFunc) {
+	adapter := &resAdapter{proxy: proxy, modifier: modifier}
+	proxy.Modifiers.AddResponseModifier(adapter)
 }
 
 type customRoundTripper struct {
@@ -260,389 +217,63 @@ func (proxy *Proxy) SyncWaypoints() error {
 	return nil
 }
 
-// ModifyRequest processes incoming HTTP requests through the proxy pipeline.
-// The processing order is: waypoint overrides → extensions → interception → database storage.
-// It assigns unique IDs, applies metadata, runs extension processors, handles interception,
-// and stores the processed request in the database.
-//
-// Parameters:
-//   - req: The HTTP request to process
-//
-// Returns:
-//   - error: Processing error if any step fails
-func (proxy *Proxy) ModifyRequest(req *http.Request) error {
-	// Not the cleanest implementation tbh, but does the job for now - prevents looping infintely when the client requests the proxy URL
-	if req.Host == (proxy.Addr + ":" + proxy.Port) {
-		martian.NewContext(req).SkipRoundTrip()
-		return nil
-	}
-	if proxy.Addr == "127.0.0.1" {
-		if req.Host == ("localhost" + ":" + proxy.Port) {
-			martian.NewContext(req).SkipRoundTrip()
-			return nil
+//	func (proxy *Proxy) CheckExtensionUpdates() map[string]bool {
+//		updateMap := make(map[string]bool)
+//		for _, extension := range proxy.Extensions {
+//			if extension.Name != "checkpoint" && extension.Name != "workshop" && extension.Name != "compass" {
+//				release, _, err := GetLatestRelease(extension.SourceURL)
+//				if err != nil {
+//					log.Print(err)
+//					return updateMap
+//				}
+//				if release.PublishedAt.After(extension.UpdatedAt) {
+//					log.Printf("%s has an update", extension.Name)
+//					log.Printf("%v", release.PublishedAt)
+//					log.Printf("%v", extension.UpdatedAt)
+//					updateMap[extension.Name] = true
+//				}
+//			}
+//		}
+//		return updateMap
+//	}
+func (proxy *Proxy) GetExtension(name string) (*Extension, bool) {
+	for _, ext := range proxy.Extensions {
+		if ext.Name == name {
+			return ext, true
 		}
 	}
-	// Connect methods are skipped
-	if req.Method != http.MethodConnect {
-		// The ID for this request - response is incremented and a new metadata map is created
-		uuid, err := uuid.NewV7()
-		if err != nil {
-			proxy.WriteLog("ERROR", fmt.Sprintf("Generating uuid for request : %s", err.Error()))
-			return fmt.Errorf("generating uuid for request : %w", err)
-		}
-		metadata := make(Metadata)
-
-		if override, ok := proxy.Waypoints[GetHostPort(req)]; ok {
-			log.Print("Overriding ", req.Host, " with ", override)
-			metadata["original_host"] = req.Host
-			metadata["override_host"] = override
-			*req = *addMetadata(req, metadata)
-		}
-
-		// The RequestID is set in the context
-		*req = *addRequestId(req, uuid)
-
-		// Add Request Time
-		*req = *addRequestTime(req)
-
-		// The request is checked if it is initiated by the repeater functionality
-		isRepeater, launchpadId := IsLaunchpad(req)
-		if isRepeater {
-			log.Print("Detected repeater request")
-			log.Printf("Repeater ID: %s", launchpadId)
-			metadata["launchpad"] = true
-			metadata["launchpad_id"] = launchpadId
-			*req = *addLaunchpadId(req, launchpadId)
-			// Removing the header
-			req.Header.Del("x-launchpad-id")
-		}
-
-		// Metadata is updated in the context as it may be consumed in the extensions
-		*req = *addMetadata(req, metadata)
-
-		// Extensions
-		extensionId := req.Header.Get("x-extension-id") // This is the extension header
-		*req = *addExtensionId(req, extensionId)
-		for name, ext := range proxy.Extensions {
-			if name != "checkpoint" {
-				if extensionId != ext.ID.String() {
-					ext.mu.Lock()
-					if ext.CheckGlobalFunction("processRequest") {
-						err := ext.CallRequestHandler(req)
-						if err != nil {
-							proxy.WriteLog("ERROR", fmt.Sprintf("Running processRequest : %s", err.Error()), LogWithExtensionID(ext.ID))
-							log.Print(err)
-						}
-						if doNotLog, ok := req.Context().Value(DoNotLogKey).(bool); ok && doNotLog {
-							ext.mu.Unlock()
-							log.Println("Request marked as DoNotLog by extension:", name)
-							return nil // Skip further processing and logging
-						}
-						if dropped, ok := req.Context().Value(DropRequestKey).(bool); ok && dropped {
-							ext.mu.Unlock()
-							martian.NewContext(req).SkipRoundTrip()
-							return fmt.Errorf("request dropped by extension %s", name)
-						}
-					}
-					ext.mu.Unlock()
-				}
-				req.Header.Del("x-extension-id")
-			}
-		}
-
-		// This I can 100 % push past the intercept but the intercept logic has to be updated to handle req directly
-		proxyRequest, err := NewProxyRequest(req, uuid)
-		if err != nil {
-			proxy.WriteLog("ERROR", fmt.Sprintf("Creating new proxy request : %s", err.Error()), LogWithReqResID(uuid))
-			return fmt.Errorf("creating new proxy request %d : %w", uuid, err)
-		}
-
-		// Intercept
-		intercept, err := proxy.Extensions["checkpoint"].ShouldInterceptRequest(req)
-		if err != nil {
-			proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptRequest : %s", err.Error()), LogWithReqResID(uuid))
-			log.Print(err)
-		}
-		if intercept || proxy.InterceptFlag {
-			original := proxyRequest.Raw.ToString()
-			intercepted := Intercepted{
-				Type:     "request",
-				Original: proxyRequest,
-				Raw:      proxyRequest.Raw.ToString(),
-				Channel:  make(chan InterceptionTuple),
-			}
-			proxy.InterceptedQueue = append(proxy.InterceptedQueue, &intercepted)
-			proxy.OnIntercept(&intercepted)
-			// Wait for the user to resume the request
-			action := <-intercepted.Channel
-			if !action.Resume {
-				martian.NewContext(req).SkipRoundTrip()
-				return fmt.Errorf("request dropped")
-			}
-			if action.ShouldInterceptResponse {
-				// Need to set context
-				*req = *addInterceptFlag(req, true)
-			}
-			// Now we need to rebuild the request
-			rebuilt, err := rawhttp.RebuildRequest([]byte(intercepted.Raw), req)
-			if err != nil {
-				return fmt.Errorf("rebuilding new request with old ctx : %w", err)
-			}
-			// Need to set the modifier request to the rebuilt one
-			*req = *rebuilt
-
-			// TODO Metadata is updated here, need to recreated the request with the original metadata
-			proxyRequest.Metadata["intercepted"] = true
-			proxyRequest.Metadata["original-request"] = original
-			metadata := proxyRequest.Metadata
-			proxyRequest, err = NewProxyRequest(req, uuid)
-			proxyRequest.Metadata = metadata
-			if err != nil {
-				return fmt.Errorf("recreating proxy request %d : %w", uuid, err)
-			}
-		}
-		proxy.DBWriteChannel <- proxyRequest
-		if isRepeater {
-			repeaterRequest := LaunchpadRequest{
-				LaunchpadID: launchpadId,
-				RequestID:   proxyRequest.ID,
-			}
-			proxy.DBWriteChannel <- repeaterRequest
-		}
-		*req = *addMetadata(req, proxyRequest.Metadata)
-		proxy.OnRequest(*proxyRequest)
-	}
-	return nil
+	return nil, false
 }
 
-func handleChunkedEncoding(res *http.Response) error {
-	if res.TransferEncoding != nil && res.TransferEncoding[0] == "chunked" {
-		defer res.Body.Close()
-
-		// Read the entire chunked response body
-		body, err := io.ReadAll(res.Body)
-		if err != nil {
-			return fmt.Errorf("reading chunked response body: %w", err)
-		}
-
-		// Replace the original body with the full response body
-		res.Body = io.NopCloser(bytes.NewReader(body))
-		res.ContentLength = int64(len(body))
-		res.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
-		res.TransferEncoding = nil
-	}
-	return nil
-}
-func decodeGzipContent(res *http.Response) error {
-	if res.Header.Get("Content-Encoding") == "gzip" {
-		defer res.Body.Close()
-
-		// Check if the body is empty
-		if res.ContentLength == 0 || res.Body == nil {
-			return nil // Nothing to decode
-		}
-
-		gzipReader, err := gzip.NewReader(res.Body)
-		if err != nil {
-			return fmt.Errorf("creating gzip reader: %w", err)
-		}
-		defer gzipReader.Close()
-
-		decodedBody, err := io.ReadAll(gzipReader)
-		if err != nil {
-			if errors.Is(err, io.ErrUnexpectedEOF) {
-				// Handle partial content if necessary
-				return fmt.Errorf("partial gzip content: %w", err)
-			}
-			return fmt.Errorf("reading gzip content: %w", err)
-		}
-
-		// Replace the original body with the decoded body
-		res.Body = io.NopCloser(bytes.NewReader(decodedBody))
-		res.ContentLength = int64(len(decodedBody))
-		res.Header.Set("Content-Length", fmt.Sprintf("%d", len(decodedBody)))
-		res.Header.Del("Content-Encoding")
-	}
-	if res.Header.Get("Content-Encoding") == "br" {
-		defer res.Body.Close()
-
-		// Create a Brotli reader
-		brReader := brotli.NewReader(res.Body)
-
-		// Read and decode the Brotli content
-		decodedBody, err := io.ReadAll(brReader)
-		if err != nil {
-			return fmt.Errorf("error decoding Brotli content: %w", err)
-		}
-
-		// Replace the original body with the decoded content
-		res.Body = io.NopCloser(bytes.NewReader(decodedBody))
-		res.ContentLength = int64(len(decodedBody))
-		res.Header.Del("Content-Encoding")
-		res.Header.Set("Content-Length", fmt.Sprintf("%d", len(decodedBody)))
-	}
-	return nil
-}
-
-// ModifyResponse processes HTTP responses through the proxy pipeline.
-// It handles content decoding (gzip, brotli), runs extension processors, manages interception,
-// and stores the processed response in the database.
-//
-// Parameters:
-//   - res: The HTTP response to process
-//
-// Returns:
-//   - error: Processing error if any step fails
-func (proxy *Proxy) ModifyResponse(res *http.Response) error {
-	if res.Request.Method != http.MethodConnect && !martian.NewContext(res.Request).SkippingRoundTrip() {
-		if doNotLog, ok := res.Request.Context().Value(DoNotLogKey).(bool); ok && doNotLog {
-			return nil // Skip further processing and logging
-		}
-		if err := decodeGzipContent(res); err != nil {
-			proxy.WriteLog("ERROR", fmt.Sprintf("Decoding GZIP Content : %s", err.Error()))
-			return fmt.Errorf("decoding gzip content: %w", err)
-		}
-		// Handle chunked transfer encoding
-		if err := handleChunkedEncoding(res); err != nil {
-			proxy.WriteLog("ERROR", fmt.Sprintf("Handling chunked encoding : %s", err.Error()))
-			return fmt.Errorf("handling chunked encoding: %w", err)
-		}
-
-		// Should I do this?
-		res.Request = addResponseTime(res.Request)
-		// Extensions
-		for name, ext := range proxy.Extensions {
-			if name != "checkpoint" {
-				extensionId, _ := res.Request.Context().Value(ExtensionKey).(string)
-				if extensionId != ext.ID.String() {
-					ext.mu.Lock()
-					if ext.CheckGlobalFunction("processResponse") {
-						err := ext.CallResponseHandler(res)
-						if err != nil {
-							proxy.WriteLog("ERROR", fmt.Sprintf("Running processResponse : %s", err.Error()), LogWithExtensionID(ext.ID))
-							log.Print(err)
-						}
-						if doNotLog, ok := res.Request.Context().Value(DoNotLogKey).(bool); ok && doNotLog {
-							ext.mu.Unlock()
-							log.Println("Response marked as DoNotLog by extension:", name)
-							return nil // Skip further processing and logging
-						}
-						if dropped, ok := res.Request.Context().Value(DropResponseKey).(bool); ok && dropped {
-							ext.mu.Unlock()
-							return fmt.Errorf("response dropped by extension %s", name)
-						}
-					}
-					ext.mu.Unlock()
-				}
-			}
-		}
-		proxyResponse, err := NewProxyResponse(res)
-		if err != nil {
-			proxy.WriteLog("ERROR", fmt.Sprintf("Creating new proxy response : %s", err.Error())) // TODO add the uuid
-			return fmt.Errorf("creating new proxy response : %w", err)
-		}
-		// Intercept
-		intercept, err := proxy.Extensions["checkpoint"].ShouldInterceptResponse(res)
-		if err != nil {
-			proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptResponse : %s", err.Error()))
-			log.Print(err)
-		}
-		if shouldIntercept, ok := res.Request.Context().Value(ShouldInterceptKey).(bool); (ok && shouldIntercept) || intercept || proxy.InterceptFlag {
-			original := proxyResponse.Raw.ToString()
-			intercepted := Intercepted{
-				Type:     "response",
-				Original: proxyResponse,
-				Raw:      proxyResponse.Raw.ToString(),
-				Channel:  make(chan InterceptionTuple),
-			}
-			proxy.InterceptedQueue = append(proxy.InterceptedQueue, &intercepted)
-			proxy.OnIntercept(&intercepted)
-			// Wait for the user to resume the request
-			action := <-intercepted.Channel
-			if !action.Resume {
-				//martian.NewContext(res).SkipRoundTrip()
-				return fmt.Errorf("response dropped")
-			}
-			// Now we need to rebuild the response
-			rebuilt, err := rawhttp.RebuildResponse([]byte(intercepted.Raw), res.Request)
-			if err != nil {
-				return fmt.Errorf("rebuilding response : %w", err)
-			}
-			// Need to set the modifier request to the rebuilt one
-			*res = *rebuilt
-			//TODO METADATA
-			metadata := proxyResponse.Metadata
-			proxyResponse, err = NewProxyResponse(res)
-			proxyResponse.Metadata = metadata
-			proxyResponse.Metadata["intercepted"] = true
-			proxyResponse.Metadata["original-response"] = original
-			if err != nil {
-				return fmt.Errorf("recreating proxy request : %w", err)
-			}
-		}
-		proxy.DBWriteChannel <- proxyResponse
-		proxy.OnResponse(*proxyResponse)
-	}
-	return nil
-}
-
-// Should be updatd
-func (proxy *Proxy) CheckExtensionUpdates() map[string]bool {
-	updateMap := make(map[string]bool)
-	for _, extension := range proxy.Extensions {
-		if extension.Name != "checkpoint" && extension.Name != "workshop" && extension.Name != "compass" {
-			release, _, err := GetLatestRelease(extension.SourceURL)
-			if err != nil {
-				log.Print(err)
-				return updateMap
-			}
-			if release.PublishedAt.After(extension.UpdatedAt) {
-				log.Printf("%s has an update", extension.Name)
-				log.Printf("%v", release.PublishedAt)
-				log.Printf("%v", extension.UpdatedAt)
-				updateMap[extension.Name] = true
-			}
-		}
-	}
-	return updateMap
-}
-func (proxy *Proxy) RemoveExtension(name string) error {
-	err := proxy.Repo.RemoveExtension(name)
-	if err != nil {
-		return fmt.Errorf("removing extension : %w", err)
-	}
-	delete(proxy.Extensions, name)
-	return nil
-}
-func (proxy *Proxy) InstallExtension(url string, direct bool) error {
-	if !direct {
-		release, config, err := GetLatestRelease(url)
-		if err != nil {
-			return fmt.Errorf("getting latest release %s : %w", url, err)
-		}
-		luaAsset, err := getAsset(release.Assets, "extension.lua")
-		if err != nil {
-			return fmt.Errorf("getting lua asset: %w", err)
-		}
-		luaCode, err := Get(luaAsset.BrowserDownloadURL)
-		if err != nil {
-			return fmt.Errorf("getting extension.lua : %w", err)
-		}
-		err = proxy.Repo.CreateExtension(config.Name, config.SourceURL, config.Author, luaCode, release.PublishedAt, config.Description)
-		if err != nil {
-			return fmt.Errorf("creating extension : %w", err)
-		}
-		/*
-			extension, err := proxy.Repo.GetExtension(config.Name)
-			if err != nil {
-			return fmt.Errorf("getting new extension %s : %w", config.Name, err)
-			}
-			delete(proxy.Extensions, config.Name)
-			WithExtension(extension)(proxy)
-		*/
-	}
-	return nil
-}
+// func (proxy *Proxy) InstallExtension(url string, direct bool) error {
+// 	if !direct {
+// 		release, config, err := GetLatestRelease(url)
+// 		if err != nil {
+// 			return fmt.Errorf("getting latest release %s : %w", url, err)
+// 		}
+// 		luaAsset, err := getAsset(release.Assets, "extension.lua")
+// 		if err != nil {
+// 			return fmt.Errorf("getting lua asset: %w", err)
+// 		}
+// 		luaCode, err := Get(luaAsset.BrowserDownloadURL)
+// 		if err != nil {
+// 			return fmt.Errorf("getting extension.lua : %w", err)
+// 		}
+// 		err = proxy.Repo.CreateExtension(config.Name, config.SourceURL, config.Author, luaCode, release.PublishedAt, config.Description)
+// 		if err != nil {
+// 			return fmt.Errorf("creating extension : %w", err)
+// 		}
+// 		/*
+// 			extension, err := proxy.Repo.GetExtension(config.Name)
+// 			if err != nil {
+// 			return fmt.Errorf("getting new extension %s : %w", config.Name, err)
+// 			}
+// 			delete(proxy.Extensions, config.Name)
+// 			WithExtension(extension)(proxy)
+// 		*/
+// 	}
+// 	return nil
+// }
 
 // RawField represents the raw HTTP request / response data stored as bytes in the DB
 type RawField []byte
@@ -669,11 +300,10 @@ func (m *Metadata) Scan(value interface{}) error {
 		json.Unmarshal([]byte(v), &m)
 		return nil
 	default:
-		return fmt.Errorf(fmt.Sprintf("unsupported type %T", v))
+		return fmt.Errorf("unsupported type %T", v)
 	}
 }
 func (m Metadata) Value() (driver.Value, error) {
-	// Your custom logic here, for example, converting email to uppercase before storing in DB
 	if len(m) == 0 {
 		return "{}", nil
 	}
@@ -757,10 +387,9 @@ type InterceptionTuple struct {
 // Intercepted represents a request or response that has been intercepted for manual inspection
 // and modification before being allowed to continue.
 type Intercepted struct {
-	Type     string                 // "request" or "response"
-	Original ProxyItem              // The original request or response
-	Raw      string                 // Raw HTTP data that can be modified
-	Channel  chan InterceptionTuple // Channel for receiving user decisions
+	Type    string                 // "request" or "response"
+	Raw     string                 // Raw HTTP data that can be modified
+	Channel chan InterceptionTuple // Channel for receiving user decisions
 }
 
 // Waypoint represents a hostname override mapping, allowing requests to specific hosts
@@ -995,7 +624,6 @@ func (proxy *Proxy) Serve(listener net.Listener) error {
 	transport.TLSClientConfig = upstreamTLS
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		if metadata, ok := ctx.Value(MetadataKey).(Metadata); ok {
-			log.Print("Metadata ", metadata)
 			if override, ok := metadata["override_host"].(string); ok {
 				log.Print("Overriding ", address, " with ", override)
 				address = override

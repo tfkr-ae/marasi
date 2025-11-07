@@ -524,6 +524,36 @@ func TestDumpResponse(t *testing.T) {
 			t.Errorf("expected error message to contain %s but got: %v", wantedContext, err)
 		}
 	})
+
+	t.Run("DumpResponse with nil body", func(t *testing.T) {
+		res := &http.Response{
+			StatusCode: http.StatusNoContent,
+			Proto:      "HTTP/1.1",
+			ProtoMajor: 1,
+			ProtoMinor: 1,
+			Header:     make(http.Header),
+			Body:       nil,
+		}
+
+		headers, err := httputil.DumpResponse(res, false)
+		if err != nil {
+			t.Fatalf("dumping response (httputil): %v", err)
+		}
+
+		rawDump, prettyDump, err := DumpResponse(res)
+		if err != nil {
+			t.Fatalf("dumping response (rawhttp): %v", err)
+		}
+
+		if prettyDump != "" {
+			t.Errorf("expected prettyDump to be empty but got : %q", prettyDump)
+		}
+
+		if !bytes.Equal(rawDump, headers) {
+			t.Errorf("expected\n%q\nbut got\n%q", headers, rawDump)
+		}
+	})
+
 }
 func TestRebuildRequest(t *testing.T) {
 	t.Run("RebuildRequest (Success with POST Body)", func(t *testing.T) {
