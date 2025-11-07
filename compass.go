@@ -2,7 +2,6 @@ package marasi
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -140,7 +139,6 @@ func (s *Scope) Matches(input interface{}) bool {
 	case *http.Request:
 		host = v.Host
 		url = v.URL.String()
-		log.Println(url)
 	case *http.Response:
 		if v.Request != nil {
 			host = v.Request.Host
