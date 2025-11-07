@@ -74,6 +74,9 @@ func DumpResponse(res *http.Response) (rawDump []byte, prettyDump string, error 
 		return []byte{}, "", fmt.Errorf("dumping response : %w", err)
 	}
 
+	if res.Body == nil {
+		return responseDump, "", nil
+	}
 	bodyBytes, err := io.ReadAll(res.Body)
 	if err != nil {
 		return []byte{}, "", fmt.Errorf("reading response body: %w", err)
