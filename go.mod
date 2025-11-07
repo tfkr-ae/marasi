@@ -7,6 +7,7 @@ toolchain go1.24.2
 require (
 	github.com/Shopify/go-lua v0.0.0-20240527182111-9ab1540f3f5f
 	github.com/Shopify/goluago v0.0.0-20240527182001-ec4ec6c26eab
+	github.com/beevik/etree v1.6.0
 	github.com/gabriel-vasile/mimetype v1.4.8
 	github.com/google/martian v2.1.0+incompatible
 	github.com/google/uuid v1.6.0

@@ -173,13 +173,13 @@ scope:add_rule("-.*\\/log.*", "url")
 
 function processRequest(request)
   if not scope:matches(request) then
-      request:DoNotLog()
+      request:Skip()
   end
 end
 
 function processResponse(response)
   if not scope:matches(response) then
-      response:DoNotLog()
+      response:Skip()
   end
 end
 --[[
