@@ -15,14 +15,12 @@ package marasi
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"mime"
 	"net"
@@ -96,27 +94,28 @@ type ProxyItem interface {
 // extension management, database operations, and TLS handling. It serves as the central coordinator
 // for the Marasi proxy server.
 type Proxy struct {
-	martianProxy     *martian.Proxy                       // The underlying martian.Proxy
-	ConfigDir        string                               // The configuration directory (defaults to the marasi folder under the user configuration directory)
-	Config           *Config                              // The marasi proxy configuration (separate from the GUI config)
-	Repo             Repository                           // DB Repository Interface
-	Modifiers        *fifo.Group                          // Modifier group pipeline
-	DBWriteChannel   chan ProxyItem                       // DB Write Channel
-	InterceptedQueue []*Intercepted                       // Queue of intercepted requests / responses
-	OnRequest        func(req ProxyRequest) error         // Function to be ran on each request - used by the GUI application to handle the new requests
-	OnResponse       func(res ProxyResponse) error        // Function to be ran on each response - used by the GUI application to handle the new responses
-	OnIntercept      func(intercepted *Intercepted) error // Function to be ran on each intercept - used by the GUI application to handle the new intercepted items
-	OnLog            func(log Log) error
-	Addr             string       // IP Address of the proxy
-	Port             string       // Port of the proxy
-	Client           *http.Client // HTTP Client that is used by the repeater functionality (autoconfigured to use the proxy)
-	Extensions       []*Extension // Slice of loaded extensions
-	SPKIHash         string       // SPKI Hash of the current certificate
-	Cert             *x509.Certificate
-	TLSConfig        *tls.Config
-	Scope            *Scope            // Proxy scope configuration through Compass
-	Waypoints        map[string]string // Map of host:port overrides
-	InterceptFlag    bool              // Global intercept flag
+	martianProxy          *martian.Proxy                       // The underlying martian.Proxy
+	ConfigDir             string                               // The configuration directory (defaults to the marasi folder under the user configuration directory)
+	Config                *Config                              // The marasi proxy configuration (separate from the GUI config)
+	Repo                  Repository                           // DB Repository Interface
+	Modifiers             *fifo.Group                          // Modifier group pipeline
+	DBWriteChannel        chan ProxyItem                       // DB Write Channel
+	InterceptedQueue      []*Intercepted                       // Queue of intercepted requests / responses
+	OnRequest             func(req ProxyRequest) error         // Function to be ran on each request - used by the GUI application to handle the new requests
+	OnResponse            func(res ProxyResponse) error        // Function to be ran on each response - used by the GUI application to handle the new responses
+	OnIntercept           func(intercepted *Intercepted) error // Function to be ran on each intercept - used by the GUI application to handle the new intercepted items
+	OnLog                 func(log Log) error
+	Addr                  string       // IP Address of the proxy
+	Port                  string       // Port of the proxy
+	Client                *http.Client // HTTP Client that is used by the repeater functionality (autoconfigured to use the proxy)
+	Extensions            []*Extension // Slice of loaded extensions
+	SPKIHash              string       // SPKI Hash of the current certificate
+	Cert                  *x509.Certificate
+	mitmConfig            *tls.Config       // Martian Proxy MITM config
+	MarasiClientTLSConfig *tls.Config       // TLSConfig for the proxy.Client
+	Scope                 *Scope            // Proxy scope configuration through Compass
+	Waypoints             map[string]string // Map of host:port overrides
+	InterceptFlag         bool              // Global intercept flag
 }
 
 // New creates a new Proxy instance with default configuration and applies any provided options.
@@ -157,55 +156,6 @@ func (proxy *Proxy) AddRequestModifier(modifier RequestModifierFunc) {
 func (proxy *Proxy) AddResponseModifier(modifier ResponseModifierFunc) {
 	adapter := &resAdapter{proxy: proxy, modifier: modifier}
 	proxy.Modifiers.AddResponseModifier(adapter)
-}
-
-type customRoundTripper struct {
-	cert *x509.Certificate
-	base http.RoundTripper
-}
-
-func (c *customRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	// For requests to "http://marasi.cert/", return a custom response immediately
-	if req.URL.String() == "http://marasi.cert/" {
-		body := c.cert.Raw
-		resp := &http.Response{
-			Status:        "200 OK",
-			StatusCode:    http.StatusOK,
-			Proto:         "HTTP/1.1",
-			ProtoMajor:    1,
-			ProtoMinor:    1,
-			Request:       req,
-			Header:        make(http.Header),
-			Body:          io.NopCloser(bytes.NewReader(body)),
-			ContentLength: int64(len(body)),
-		}
-		resp.Header.Set("Content-Type", "application/x-x509-ca-cert")
-		resp.Header.Set("Content-Disposition", "attachment; filename=\"marasi-cert.der\"")
-		return resp, nil
-	}
-
-	// Otherwise, let the default/base RoundTripper handle the request normally
-	return c.base.RoundTrip(req)
-}
-
-func GetHostPort(req *http.Request) string {
-	hostPort := req.URL.Host
-	if hostPort == "" {
-		hostPort = req.Host
-	}
-
-	host, port, err := net.SplitHostPort(hostPort)
-	if err != nil {
-		// If port is missing, use default
-		host = hostPort
-		if req.URL.Scheme == "https" || req.TLS != nil {
-			port = "443"
-		} else {
-			port = "80"
-		}
-	}
-
-	return net.JoinHostPort(host, port)
 }
 
 func (proxy *Proxy) SyncWaypoints() error {
@@ -583,7 +533,7 @@ func (proxy *Proxy) GetListener(address string, port string) (net.Listener, erro
 	if err != nil {
 		return rawListener, fmt.Errorf("setting up listener on address:port %s:%s", address, port)
 	}
-	muxListener := listener.NewProtocolMuxListener(rawListener, proxy.TLSConfig)
+	muxListener := listener.NewProtocolMuxListener(rawListener, proxy.mitmConfig)
 	marasiListener := listener.NewMarasiListener(muxListener)
 	proxy.Addr = address
 	proxy.Port = port
@@ -596,47 +546,15 @@ func (proxy *Proxy) GetListener(address string, port string) (net.Listener, erro
 	}
 	transport := &http.Transport{
 		Proxy:           http.ProxyURL(parsedURL),
-		TLSClientConfig: proxy.TLSConfig,
+		TLSClientConfig: proxy.MarasiClientTLSConfig,
 	}
 	proxy.Client.Transport = transport
 	return marasiListener, nil
 }
 func (proxy *Proxy) Serve(listener net.Listener) error {
-	//defer proxy.martianProxy.Close()
 	go proxy.WriteToDB()
-	upstreamTLS := &tls.Config{
-		MinVersion: tls.VersionTLS10,
-		NextProtos: []string{"http/1.1"},
-		CipherSuites: []uint16{
-			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-			tls.TLS_RSA_WITH_AES_128_GCM_SHA256, // Included for broader compatibility, but less preferred
-			tls.TLS_RSA_WITH_AES_256_GCM_SHA384, // Included for broader compatibility, but less preferred
-			tls.TLS_RSA_WITH_AES_128_CBC_SHA,    // Included for older clients, avoid if possible
-			tls.TLS_RSA_WITH_AES_256_CBC_SHA,    // Included for older clients, avoid if possible
-		},
-	}
-	transport := &http.Transport{}
-	transport.TLSClientConfig = upstreamTLS
-	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		if metadata, ok := ctx.Value(MetadataKey).(Metadata); ok {
-			if override, ok := metadata["override_host"].(string); ok {
-				log.Print("Overriding ", address, " with ", override)
-				address = override
-			}
-		}
-		return net.Dial(network, address)
-	}
-	proxy.martianProxy.SetRoundTripper(
-		&customRoundTripper{
-			cert: proxy.Cert,
-			base: transport,
-		},
-	)
+	roundTripper := newMarasiTransport(proxy.Cert)
+	proxy.martianProxy.SetRoundTripper(roundTripper)
 	return proxy.martianProxy.Serve(listener)
 }
 
