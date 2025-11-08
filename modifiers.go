@@ -103,6 +103,28 @@ func (f martianResModifierFunc) ModifyResponse(res *http.Response) error {
 	return f(res)
 }
 
+// getHostPort will return a host:port string based on the request
+// It will fall back to 443 or 80 depending on the scheme or req.TLS
+func getHostPort(req *http.Request) string {
+	hostPort := req.URL.Host
+	if hostPort == "" {
+		hostPort = req.Host
+	}
+
+	host, port, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		// If port is missing, use default
+		host = hostPort
+		if req.URL.Scheme == "https" || req.TLS != nil {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+
+	return net.JoinHostPort(host, port)
+}
+
 // PreventLoopModifier skips processing a request if it is made to marasi's active listener address and port, preventing an infinite loop
 // It will normalize localhost & 127.0.0.1 when checking the host and port
 func PreventLoopModifier(proxy *Proxy, req *http.Request) error {
@@ -177,12 +199,16 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 // If a waypoint exists it will write the "original_host" and "override_host" to the metadata.
 // These values are used later in the `DialContext` function. If the metadata is not found
 // the modifier will return `ErrMetadataNotFound`
+// TODO should allow TLS -> Non TLS override
 func OverrideWaypointsModifier(proxy *Proxy, req *http.Request) error {
 	if metadata, ok := MetadataFromContext(req.Context()); ok {
-		if override, ok := proxy.Waypoints[GetHostPort(req)]; ok {
-			metadata["original_host"] = GetHostPort(req)
+		if override, ok := proxy.Waypoints[getHostPort(req)]; ok {
+			metadata["original_host"] = getHostPort(req)
 			metadata["override_host"] = override
 			*req = *ContextWithMetadata(req, metadata)
+
+			req.URL.Host = override
+			req.Host = override
 		}
 		return nil
 	}
