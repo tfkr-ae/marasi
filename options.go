@@ -1,6 +1,7 @@
 package marasi
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
 	"errors"
@@ -223,16 +224,17 @@ func WithTLS() func(*Proxy) error {
 			return fmt.Errorf("creating new mitm config : %w", err)
 		}
 		proxy.martianProxy.SetMITM(tlsc)
-		tlsConfig := tlsc.TLS()
+		proxy.mitmConfig = tlsc.TLS()
 
 		// Add system certificates + marasi cert
 		systemPool, err := x509.SystemCertPool()
 		if err != nil {
 			return fmt.Errorf("fetching system cert pool : %w", err)
 		}
-		tlsConfig.RootCAs = systemPool
-		tlsConfig.RootCAs.AddCert(x509c)
-		proxy.TLSConfig = tlsConfig
+		systemPool.AddCert(x509c)
+		proxy.MarasiClientTLSConfig = &tls.Config{
+			RootCAs: systemPool,
+		}
 		return nil
 	}
 }
