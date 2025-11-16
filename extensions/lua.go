@@ -1,4 +1,4 @@
-package marasi
+package extensions
 
 import (
 	"bytes"
@@ -15,27 +15,25 @@ import (
 	"github.com/Shopify/go-lua"
 	"github.com/Shopify/goluago/util"
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/compass"
+	"github.com/tfkr-ae/marasi/core"
 )
 
 // RequestBuilder provides a fluent interface for constructing and sending HTTP requests
-// from within Lua extensions. It allows step-by-step configuration of request parameters.
+// from within a Lua environment. It allows for method, URL, body, headers, and cookies
+// to be set before sending the request.
 type RequestBuilder struct {
-	client      *http.Client      // HTTP client for sending requests
-	method      string            // HTTP method (GET, POST, etc.)
-	url         string            // Request URL
-	body        string            // Request body content
-	headers     http.Header       // HTTP headers
-	cookies     map[string]string // Cookies to include
-	contentType string            // Content type header value
+	client      *http.Client      // client is the HTTP client used to send the request.
+	method      string            // method is the HTTP method (e.g., "GET", "POST").
+	url         string            // url is the request URL.
+	body        string            // body is the request body.
+	headers     http.Header       // headers are the HTTP headers for the request.
+	cookies     map[string]string // cookies are the cookies to be sent with the request.
+	contentType string            // contentType is the value of the "Content-Type" header.
 }
 
-// NewRequestBuilder creates a new RequestBuilder instance with the specified HTTP client.
-//
-// Parameters:
-//   - client: HTTP client to use for sending requests
-//
-// Returns:
-//   - *RequestBuilder: New request builder instance
+// NewRequestBuilder creates and returns a new RequestBuilder instance.
+// It is initialized with an HTTP client that will be used to send the request.
 func NewRequestBuilder(client *http.Client) *RequestBuilder {
 	return &RequestBuilder{
 		client:  client,
@@ -44,14 +42,9 @@ func NewRequestBuilder(client *http.Client) *RequestBuilder {
 	}
 }
 
-// RegisterType registers a new user-defined type in the Lua state with associated methods and toString function.
-// This enables Lua scripts to work with Go types through method calls.
-//
-// Parameters:
-//   - l: Lua state to register the type in
-//   - name: Name of the type for Lua metatable
-//   - functions: Map of method names to their implementations
-//   - toString: Function to convert the type to string representation
+// RegisterType creates a new metatable in the Lua state and associates it with a name.
+// It registers a set of functions as methods for the type and a `__tostring` metamethod.
+// This is a generic helper for exposing Go types to Lua.
 func RegisterType(l *lua.State, name string, functions map[string]lua.Function, toString func(l *lua.State) int) {
 	lua.NewMetaTable(l, name)
 	l.PushGoFunction(FunctionIndex(functions))
@@ -61,7 +54,9 @@ func RegisterType(l *lua.State, name string, functions map[string]lua.Function, 
 	l.Pop(1)
 }
 
-// FunctionIndex will will check the field / method accessed and map it to the correct function
+// FunctionIndex returns a Lua function that acts as an `__index` metamethod.
+// It looks up a field name in the provided functions map and pushes the corresponding
+// function onto the stack if found.
 func FunctionIndex(functions map[string]lua.Function) func(l *lua.State) int {
 	return func(l *lua.State) int {
 		field := lua.CheckString(l, 2)
@@ -74,10 +69,12 @@ func FunctionIndex(functions map[string]lua.Function) func(l *lua.State) int {
 	}
 }
 
-func RegisterScopeType(extension *Extension) {
+// RegisterScopeType registers the `compass.Scope` type and its methods with the Lua state.
+// This allows Lua scripts to interact with the proxy's scope, adding, removing, and checking rules.
+func RegisterScopeType(extension *LuaExtension) {
 	funcs := map[string]lua.Function{
 		"add_rule": func(l *lua.State) int {
-			scope, ok := l.ToUserData(1).(*Scope)
+			scope, ok := l.ToUserData(1).(*compass.Scope)
 			if !ok {
 				l.PushString("Invalid scope")
 				return 1
@@ -97,7 +94,7 @@ func RegisterScopeType(extension *Extension) {
 			return 1
 		},
 		"remove_rule": func(l *lua.State) int {
-			scope, ok := l.ToUserData(1).(*Scope)
+			scope, ok := l.ToUserData(1).(*compass.Scope)
 			if !ok {
 				l.PushString("Invalid scope")
 				return 1
@@ -117,7 +114,7 @@ func RegisterScopeType(extension *Extension) {
 			return 1
 		},
 		"matches": func(l *lua.State) int {
-			scope, ok := l.ToUserData(1).(*Scope)
+			scope, ok := l.ToUserData(1).(*compass.Scope)
 			if !ok {
 				l.PushString("Invalid scope")
 				return 1
@@ -136,7 +133,7 @@ func RegisterScopeType(extension *Extension) {
 			return 1
 		},
 		"set_default_allow": func(l *lua.State) int {
-			scope, ok := l.ToUserData(1).(*Scope)
+			scope, ok := l.ToUserData(1).(*compass.Scope)
 			if !ok {
 				l.PushString("Invalid scope")
 				return 1
@@ -148,7 +145,7 @@ func RegisterScopeType(extension *Extension) {
 			return 1
 		},
 		"matches_string": func(l *lua.State) int {
-			scope, ok := l.ToUserData(1).(*Scope)
+			scope, ok := l.ToUserData(1).(*compass.Scope)
 			if !ok {
 				l.PushString("Invalid scope")
 				return 1
@@ -168,7 +165,7 @@ func RegisterScopeType(extension *Extension) {
 			return 1
 		},
 		"clear_rules": func(l *lua.State) int {
-			scope, ok := l.ToUserData(1).(*Scope)
+			scope, ok := l.ToUserData(1).(*compass.Scope)
 			if !ok {
 				l.PushString("Invalid scope")
 				return 1
@@ -180,7 +177,7 @@ func RegisterScopeType(extension *Extension) {
 	}
 
 	RegisterType(extension.LuaState, "scope", funcs, func(l *lua.State) int {
-		scope, ok := l.ToUserData(1).(*Scope)
+		scope, ok := l.ToUserData(1).(*compass.Scope)
 		if !ok {
 			l.PushString("Invalid Scope")
 			return 1
@@ -196,9 +193,9 @@ func RegisterScopeType(extension *Extension) {
 	})
 }
 
-// Registering Types
-// Regex
-func RegisterRegexType(extension *Extension) {
+// RegisterRegexType registers the `regexp.Regexp` type and its methods with the Lua state.
+// This allows Lua scripts to perform regular expression matching, searching, and replacement.
+func RegisterRegexType(extension *LuaExtension) {
 	funcs := make(map[string]lua.Function)
 
 	// Function to match a string
@@ -354,7 +351,10 @@ func RegisterRegexType(extension *Extension) {
 		return 1
 	})
 }
-func RegisterCookieType(extension *Extension) {
+
+// RegisterCookieType registers the `http.Cookie` type and its methods with the Lua state.
+// This allows Lua scripts to read and modify HTTP cookies.
+func RegisterCookieType(extension *LuaExtension) {
 	funcs := make(map[string]lua.Function)
 
 	// Function to get the cookie's name
@@ -476,7 +476,10 @@ func RegisterCookieType(extension *Extension) {
 		return 1 // Returning 1 since we are pushing 1 value onto the Lua stack
 	})
 }
-func RegisterHeaderType(extension *Extension) {
+
+// RegisterHeaderType registers the `http.Header` type and its methods with the Lua state.
+// This allows Lua scripts to read and modify HTTP headers.
+func RegisterHeaderType(extension *LuaExtension) {
 	funcs := make(map[string]lua.Function)
 
 	// Function to get a header value
@@ -543,11 +546,13 @@ func RegisterHeaderType(extension *Extension) {
 		return 1
 	})
 }
-func RegisterRequestType(extension *Extension) {
+// RegisterRequestType registers the `http.Request` type and its methods with the Lua state.
+// This allows Lua scripts to read and modify incoming HTTP requests.
+func RegisterRequestType(extension *LuaExtension) {
 	funcs := make(map[string]lua.Function)
 	funcs["ID"] = func(l *lua.State) int {
 		if req, ok := l.ToUserData(1).(*http.Request); ok {
-			if requestId, ok := RequestIDFromContext(req.Context()); ok {
+			if requestId, ok := core.RequestIDFromContext(req.Context()); ok {
 				l.PushString(requestId.String())
 				return 1
 			}
@@ -628,7 +633,7 @@ func RegisterRequestType(extension *Extension) {
 	}
 	funcs["Metadata"] = func(l *lua.State) int {
 		if req, ok := l.ToUserData(1).(*http.Request); ok {
-			if metadata, ok := MetadataFromContext(req.Context()); ok {
+			if metadata, ok := core.MetadataFromContext(req.Context()); ok {
 				util.DeepPush(l, metadata)
 				return 1
 			}
@@ -664,10 +669,10 @@ func RegisterRequestType(extension *Extension) {
 	}
 	funcs["set_metadata"] = func(l *lua.State) int {
 		if req, ok := l.ToUserData(1).(*http.Request); ok {
-			if metadata, ok := MetadataFromContext(req.Context()); ok {
+			if metadata, ok := core.MetadataFromContext(req.Context()); ok {
 				if extensionMetadata, err := util.PullTable(l, 2); err == nil {
-					metadata[extension.Name] = extensionMetadata
-					*req = *ContextWithMetadata(req, metadata)
+					metadata[extension.Data.Name] = extensionMetadata
+					*req = *core.ContextWithMetadata(req, metadata)
 				} else {
 					log.Print(err)
 				}
@@ -686,13 +691,13 @@ func RegisterRequestType(extension *Extension) {
 	}
 	funcs["Drop"] = func(l *lua.State) int {
 		if req, ok := l.ToUserData(1).(*http.Request); ok {
-			*req = *ContextWithDropFlag(req, true)
+			*req = *core.ContextWithDropFlag(req, true)
 		}
 		return 0
 	}
 	funcs["Skip"] = func(l *lua.State) int {
 		if req, ok := l.ToUserData(1).(*http.Request); ok {
-			*req = *ContextWithSkipFlag(req, true)
+			*req = *core.ContextWithSkipFlag(req, true)
 			l.PushBoolean(true)
 			return 1
 		}
@@ -707,7 +712,7 @@ func RegisterRequestType(extension *Extension) {
 			return 1
 		}
 		result := fmt.Sprintf("Request { ID: %s, Method: %s, Host: %s, Path: %s}",
-			req.Context().Value(RequestIDKey).(uuid.UUID).String(), req.Method, req.Host, req.URL.Path)
+			req.Context().Value(core.RequestIDKey).(uuid.UUID).String(), req.Method, req.Host, req.URL.Path)
 
 		// Push the result string onto the Lua stack
 		l.PushString(result)
@@ -715,11 +720,13 @@ func RegisterRequestType(extension *Extension) {
 	})
 }
 
-func RegisterResponseType(extension *Extension) {
+// RegisterResponseType registers the `http.Response` type and its methods with the Lua state.
+// This allows Lua scripts to read and modify outgoing HTTP responses.
+func RegisterResponseType(extension *LuaExtension) {
 	funcs := make(map[string]lua.Function)
 	funcs["ID"] = func(l *lua.State) int {
 		if res, ok := l.ToUserData(1).(*http.Response); ok {
-			if requestId, ok := RequestIDFromContext(res.Request.Context()); ok {
+			if requestId, ok := core.RequestIDFromContext(res.Request.Context()); ok {
 				l.PushString(requestId.String())
 				return 1
 			}
@@ -792,7 +799,7 @@ func RegisterResponseType(extension *Extension) {
 	}
 	funcs["Metadata"] = func(l *lua.State) int {
 		if res, ok := l.ToUserData(1).(*http.Response); ok {
-			if metadata, ok := MetadataFromContext(res.Request.Context()); ok {
+			if metadata, ok := core.MetadataFromContext(res.Request.Context()); ok {
 				util.DeepPush(l, metadata)
 				return 1
 			}
@@ -828,10 +835,10 @@ func RegisterResponseType(extension *Extension) {
 	}
 	funcs["set_metadata"] = func(l *lua.State) int {
 		if res, ok := l.ToUserData(1).(*http.Response); ok {
-			if metadata, ok := MetadataFromContext(res.Request.Context()); ok {
+			if metadata, ok := core.MetadataFromContext(res.Request.Context()); ok {
 				if extensionMetadata, err := util.PullTable(l, 2); err == nil {
-					metadata[extension.Name] = extensionMetadata
-					*res.Request = *ContextWithMetadata(res.Request, metadata)
+					metadata[extension.Data.Name] = extensionMetadata
+					*res.Request = *core.ContextWithMetadata(res.Request, metadata)
 				} else {
 					log.Print(err)
 				}
@@ -850,13 +857,13 @@ func RegisterResponseType(extension *Extension) {
 	}
 	funcs["Drop"] = func(l *lua.State) int {
 		if res, ok := l.ToUserData(1).(*http.Response); ok {
-			res.Request = ContextWithDropFlag(res.Request, true)
+			res.Request = core.ContextWithDropFlag(res.Request, true)
 		}
 		return 0
 	}
 	funcs["Skip"] = func(l *lua.State) int {
 		if res, ok := l.ToUserData(1).(*http.Response); ok {
-			res.Request = ContextWithSkipFlag(res.Request, true)
+			res.Request = core.ContextWithSkipFlag(res.Request, true)
 			l.PushBoolean(true) // Indicate success
 			return 1
 		}
@@ -871,7 +878,7 @@ func RegisterResponseType(extension *Extension) {
 			return 1
 		}
 		result := fmt.Sprintf("Response { ID: %s, Status: %s, Code: %d}",
-			res.Request.Context().Value(RequestIDKey).(uuid.UUID).String(), res.Status, res.StatusCode)
+			res.Request.Context().Value(core.RequestIDKey).(uuid.UUID).String(), res.Status, res.StatusCode)
 
 		// Push the result string onto the Lua stack
 		l.PushString(result)
@@ -880,240 +887,9 @@ func RegisterResponseType(extension *Extension) {
 
 }
 
-func RegisterMapType(extension *Extension) {
-	funcs := make(map[string]lua.Function)
-
-	funcs["length"] = func(l *lua.State) int {
-		if row, ok := l.ToUserData(1).(map[int32]Row); ok {
-			l.PushInteger(len(row))
-			return 1
-		}
-		l.PushInteger(0)
-		return 0
-	}
-	funcs["get_request"] = func(l *lua.State) int {
-		if row, ok := l.ToUserData(1).(map[int32]Row); ok {
-			if key, ok := l.ToInteger(2); ok {
-				request := row[int32(key)].Request
-				l.PushUserData(&request)
-				lua.SetMetaTableNamed(l, "proxyRequest")
-				return 1
-			}
-		}
-		return 0
-	}
-
-	funcs["get_response"] = func(l *lua.State) int {
-		if row, ok := l.ToUserData(1).(map[int32]Row); ok {
-			if key, ok := l.ToInteger(2); ok {
-				response := row[int32(key)].Response
-				l.PushUserData(&response)
-				lua.SetMetaTableNamed(l, "proxyResponse")
-				return 1
-			}
-		}
-		return 0
-	}
-
-	funcs["get_metadata"] = func(l *lua.State) int {
-		if row, ok := l.ToUserData(1).(map[int32]Row); ok {
-			if key, ok := l.ToInteger(2); ok {
-				metadata := row[int32(key)].Metadata
-				util.DeepPush(l, metadata)
-				return 1
-			}
-		}
-		return 0
-	}
-
-	RegisterType(extension.LuaState, "map", funcs, func(l *lua.State) int {
-		if row, ok := l.ToUserData(1).(map[int32]Row); ok {
-			str := fmt.Sprintf("map{length: %d}", len(row))
-			l.PushString(str)
-			return 1
-		}
-		return 0
-	})
-}
-
-func RegisterProxyRequest(extension *Extension) {
-	funcs := make(map[string]lua.Function)
-	funcs["set_metadata"] = func(l *lua.State) int {
-		if proxyRequest, ok := l.ToUserData(1).(*ProxyRequest); ok {
-			if metadata, err := util.PullTable(l, 2); err == nil {
-				proxyRequest.Metadata[extension.Name] = metadata
-			} else {
-				log.Print(err)
-			}
-		}
-		return 0
-	}
-	funcs["set_raw"] = func(l *lua.State) int {
-		if proxyRequest, ok := l.ToUserData(1).(*ProxyRequest); ok {
-			if raw, ok := l.ToString(2); ok {
-				proxyRequest.Raw = RawField([]byte(raw))
-			}
-		}
-		return 0
-	}
-	funcs["ID"] = func(l *lua.State) int {
-		if proxyRequest, ok := l.ToUserData(1).(*ProxyRequest); ok {
-			l.PushString(proxyRequest.ID.String())
-			return 1
-		}
-		return 0
-	}
-	funcs["Scheme"] = func(l *lua.State) int {
-		if proxyRequest, ok := l.ToUserData(1).(*ProxyRequest); ok {
-			l.PushString(proxyRequest.Scheme)
-			return 1
-		}
-		return 0
-	}
-	funcs["Method"] = func(l *lua.State) int {
-		if proxyRequest, ok := l.ToUserData(1).(*ProxyRequest); ok {
-			l.PushString(proxyRequest.Method)
-			return 1
-		}
-		return 0
-	}
-	funcs["Host"] = func(l *lua.State) int {
-		if proxyRequest, ok := l.ToUserData(1).(*ProxyRequest); ok {
-			l.PushString(proxyRequest.Host)
-			return 1
-		}
-		return 0
-	}
-	funcs["Path"] = func(l *lua.State) int {
-		if proxyRequest, ok := l.ToUserData(1).(*ProxyRequest); ok {
-			l.PushString(proxyRequest.Path)
-			return 1
-		}
-		return 0
-	}
-	funcs["Metadata"] = func(l *lua.State) int {
-		if proxyRequest, ok := l.ToUserData(1).(*ProxyRequest); ok {
-			util.DeepPush(l, proxyRequest.Metadata)
-			return 1
-		}
-		return 0
-	}
-	funcs["Raw"] = func(l *lua.State) int {
-		if proxyRequest, ok := l.ToUserData(1).(*ProxyRequest); ok {
-			l.PushString(proxyRequest.Raw.ToString())
-			return 1
-		}
-		return 0
-	}
-
-	RegisterType(extension.LuaState, "proxyRequest", funcs, func(l *lua.State) int {
-		// Retrieve the user data and cast it to *ProxyRequest
-		proxyRequest, ok := l.ToUserData(1).(*ProxyRequest)
-		if !ok {
-			l.PushString("Invalid ProxyRequest")
-			return 1
-		}
-		result := fmt.Sprintf("Request { ID: %d, Method: %s, Host: %s, Path: %s}",
-			proxyRequest.ID, proxyRequest.Method, proxyRequest.Host, proxyRequest.Path)
-
-		// Push the result string onto the Lua stack
-		l.PushString(result)
-		return 1 // Returning 1 since we are pushing 1 value onto the Lua stack
-	})
-}
-
-func RegisterProxyResponse(extension *Extension) {
-	funcs := make(map[string]lua.Function)
-	funcs["set_metadata"] = func(l *lua.State) int {
-		if proxyResponse, ok := l.ToUserData(1).(*ProxyResponse); ok {
-			if metadata, err := util.PullTable(l, 2); err == nil {
-				proxyResponse.Metadata[extension.Name] = metadata
-			} else {
-				log.Print(err)
-			}
-		}
-		return 0
-	}
-	funcs["set_raw"] = func(l *lua.State) int {
-		if proxyResponse, ok := l.ToUserData(1).(*ProxyResponse); ok {
-			if raw, ok := l.ToString(2); ok {
-				proxyResponse.Raw = RawField([]byte(raw))
-			}
-		}
-		return 0
-	}
-	funcs["ID"] = func(l *lua.State) int {
-		if proxyResponse, ok := l.ToUserData(1).(*ProxyResponse); ok {
-			l.PushString(proxyResponse.ID.String())
-			return 1
-		}
-		return 0
-	}
-
-	funcs["Status"] = func(l *lua.State) int {
-		if proxyResponse, ok := l.ToUserData(1).(*ProxyResponse); ok {
-			l.PushString(proxyResponse.Status)
-			return 1
-		}
-		return 0
-	}
-
-	funcs["StatusCode"] = func(l *lua.State) int {
-		if proxyResponse, ok := l.ToUserData(1).(*ProxyResponse); ok {
-			l.PushInteger(proxyResponse.StatusCode)
-			return 1
-		}
-		return 0
-	}
-
-	funcs["ContentType"] = func(l *lua.State) int {
-		if proxyResponse, ok := l.ToUserData(1).(*ProxyResponse); ok {
-			l.PushString(proxyResponse.ContentType)
-			return 1
-		}
-		return 0
-	}
-
-	funcs["Length"] = func(l *lua.State) int {
-		if proxyResponse, ok := l.ToUserData(1).(*ProxyResponse); ok {
-			l.PushString(proxyResponse.Length)
-			return 1
-		}
-		return 0
-	}
-	funcs["Metadata"] = func(l *lua.State) int {
-		if proxyResponse, ok := l.ToUserData(1).(*ProxyResponse); ok {
-			util.DeepPush(l, proxyResponse.Metadata)
-			return 1
-		}
-		return 0
-	}
-	funcs["Raw"] = func(l *lua.State) int {
-		if proxyResponse, ok := l.ToUserData(1).(*ProxyResponse); ok {
-			l.PushString(proxyResponse.Raw.ToString())
-			return 1
-		}
-		return 0
-	}
-
-	RegisterType(extension.LuaState, "proxyResponse", funcs, func(l *lua.State) int {
-		// Retrieve the user data and cast it to *ProxyRequest
-		proxyResponse, ok := l.ToUserData(1).(*ProxyResponse)
-		if !ok {
-			l.PushString("Invalid ProxyRequest")
-			return 1
-		}
-		result := fmt.Sprintf("Response { ID: %d, Status: %s, Code: %d}",
-			proxyResponse.ID, proxyResponse.Status, proxyResponse.StatusCode)
-
-		// Push the result string onto the Lua stack
-		l.PushString(result)
-		return 1 // Returning 1 since we are pushing 1 value onto the Lua stack
-	})
-}
-
-// RegisterRequestBuilderType registers the RequestBuilder type and its methods in Lua
-func RegisterRequestBuilderType(extension *Extension) {
+// RegisterRequestBuilderType registers the `RequestBuilder` type and its methods with the Lua state.
+// This allows Lua scripts to construct and send new HTTP requests from within an extension.
+func RegisterRequestBuilderType(extension *LuaExtension) {
 	funcs := map[string]lua.Function{
 		"Method": func(l *lua.State) int {
 			builder, ok := l.ToUserData(1).(*RequestBuilder)
@@ -1270,7 +1046,7 @@ func RegisterRequestBuilderType(extension *Extension) {
 			fmt.Println("Sending request...")
 
 			// Send the request using the builder's client
-			req.Header.Set("x-extension-id", extension.ID.String())
+			req.Header.Set("x-extension-id", extension.Data.ID.String())
 			resp, err := builder.client.Do(req)
 			if err != nil {
 				l.PushString(fmt.Sprintf("Error sending request: %v", err))
@@ -1309,81 +1085,88 @@ func RegisterRequestBuilderType(extension *Extension) {
 		return 1
 	})
 }
-func MarasiLibrary(l *lua.State, proxy *Proxy, extensionID uuid.UUID) []lua.RegistryFunction {
+
+// MarasiLibrary returns a list of Lua registry functions that form the `marasi` global library.
+// This library provides core functionalities like scope access, request building, and utility functions.
+func MarasiLibrary(l *lua.State, proxy ProxyService, extensionID uuid.UUID) []lua.RegistryFunction {
 	return []lua.RegistryFunction{
 		{Name: "config", Function: func(l *lua.State) int {
-			l.PushString(proxy.ConfigDir)
-			return 1
+			config, err := proxy.GetConfigDir()
+			if err != nil {
+				l.PushString(config)
+				return 1
+			}
+			return 0
 		}},
 		{Name: "scope", Function: func(l *lua.State) int {
-			l.PushUserData(proxy.Scope)
-			lua.SetMetaTableNamed(l, "scope")
-			return 1
-		}},
-		{Name: "get_map", Function: func(l *lua.State) int {
-			requests, err := proxy.Repo.GetItems()
-			if err != nil {
-				log.Print(err)
+			scope, err := proxy.GetScope()
+			if err == nil {
+				l.PushUserData(scope)
+				lua.SetMetaTableNamed(l, "scope")
+				return 1
 			}
-			l.PushUserData(requests)
-			lua.SetMetaTableNamed(l, "map")
-			return 1
+			return 0
 		}},
 		{Name: "request_builder", Function: func(l *lua.State) int {
 			// Check number of arguments (including the implicit self)
 			nargs := l.Top()
 
 			// Create a new builder
-			builder := NewRequestBuilder(proxy.Client)
+			client, err := proxy.GetClient()
+			if err == nil {
+				builder := NewRequestBuilder(client)
 
-			// If a request was provided, populate the builder with its values
-			if nargs >= 2 {
-				// Get the request parameter
-				if l.IsUserData(2) {
-					if req, ok := l.ToUserData(2).(*http.Request); ok {
-						// Populate builder with request values
-						builder.method = req.Method
-						builder.url = req.URL.String()
+				// If a request was provided, populate the builder with its values
+				if nargs >= 2 {
+					// Get the request parameter
+					if l.IsUserData(2) {
+						if req, ok := l.ToUserData(2).(*http.Request); ok {
+							// Populate builder with request values
+							builder.method = req.Method
+							builder.url = req.URL.String()
 
-						// Copy headers
-						for name, values := range req.Header {
-							builder.headers[name] = values
-							if strings.ToLower(name) == "content-type" {
-								builder.contentType = values[0]
+							// Copy headers
+							for name, values := range req.Header {
+								builder.headers[name] = values
+								if strings.ToLower(name) == "content-type" {
+									builder.contentType = values[0]
+								}
 							}
-						}
 
-						// Copy cookies
-						for _, cookie := range req.Cookies() {
-							builder.cookies[cookie.Name] = cookie.Value
-						}
-
-						// Copy body if present
-						if req.Body != nil {
-							// Read the body - note this will consume the body
-							bodyBytes, err := io.ReadAll(req.Body)
-							if err == nil {
-								builder.body = string(bodyBytes)
-								// Reset the body for future use
-								req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+							// Copy cookies
+							for _, cookie := range req.Cookies() {
+								builder.cookies[cookie.Name] = cookie.Value
 							}
+
+							// Copy body if present
+							if req.Body != nil {
+								// Read the body - note this will consume the body
+								bodyBytes, err := io.ReadAll(req.Body)
+								if err == nil {
+									builder.body = string(bodyBytes)
+									// Reset the body for future use
+									req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+								}
+							}
+						} else {
+							// If it's a different user data type, it might be your custom request structure
+							// Adjust as needed based on your actual request structure
+							l.PushString("Error: Provided argument is not a valid request")
+							return 1
 						}
 					} else {
-						// If it's a different user data type, it might be your custom request structure
-						// Adjust as needed based on your actual request structure
-						l.PushString("Error: Provided argument is not a valid request")
+						l.PushString("Error: Expected request object")
 						return 1
 					}
-				} else {
-					l.PushString("Error: Expected request object")
-					return 1
 				}
-			}
 
-			// Return the builder
-			l.PushUserData(builder)
-			lua.SetMetaTableNamed(l, "RequestBuilder")
-			return 1
+				// Return the builder
+				l.PushUserData(builder)
+				lua.SetMetaTableNamed(l, "RequestBuilder")
+				return 1
+
+			}
+			return 0
 		}},
 		{Name: "sha256", Function: func(l *lua.State) int {
 			message := lua.CheckString(l, 2)
@@ -1443,12 +1226,15 @@ func MarasiLibrary(l *lua.State, proxy *Proxy, extensionID uuid.UUID) []lua.Regi
 	}
 }
 
-func ExtensionLibrary(l *lua.State, proxy *Proxy, extensionID uuid.UUID) []lua.RegistryFunction {
+// ExtensionLibrary returns a list of Lua registry functions for the `extension` global library.
+// This library provides functions specific to the currently running extension, such as logging
+// and managing settings.
+func ExtensionLibrary(l *lua.State, proxy ProxyService, extensionID uuid.UUID) []lua.RegistryFunction {
 	return []lua.RegistryFunction{
 		{Name: "log", Function: func(l *lua.State) int {
 			if message, ok := l.ToString(2); ok {
 				if level, ok := l.ToString(3); ok {
-					err := proxy.WriteLog(level, message, LogWithExtensionID(extensionID))
+					err := proxy.WriteLog(level, message, core.LogWithExtensionID(extensionID))
 					if err != nil {
 						l.PushString(err.Error())
 						return 1
@@ -1461,22 +1247,29 @@ func ExtensionLibrary(l *lua.State, proxy *Proxy, extensionID uuid.UUID) []lua.R
 			return 1
 		}},
 		{Name: "settings", Function: func(l *lua.State) int {
-			settings, err := proxy.Repo.GetExtensionSettings(extensionID)
-			if err != nil {
-				log.Print(err)
-				util.DeepPush(l, make(Metadata))
-				return 0
+			if repo, err := proxy.GetExtensionRepo(); err != nil {
+				settings, err := repo.GetExtensionSettingsByUUID(extensionID)
+				if err != nil {
+					log.Print(err)
+					util.DeepPush(l, make(map[string]any))
+					return 0
+				}
+				util.DeepPush(l, settings)
+				return 1
 			}
-			util.DeepPush(l, settings)
-			return 1
+			return 0
 		}},
 		{Name: "set_settings", Function: func(l *lua.State) int {
+			// TODO: look into this
 			if luaTable, err := util.PullTable(l, 2); err == nil {
 				if metadata, ok := luaTable.(map[string]any); ok {
-					// Call SetExtensionSettings with the metadata map
-					err := proxy.Repo.SetExtensionSettings(extensionID, metadata)
-					if err != nil {
-						log.Print(err)
+					if repo, err := proxy.GetExtensionRepo(); err != nil {
+						// Call SetExtensionSettings with the metadata map
+						err := repo.SetExtensionSettingsByUUID(extensionID, metadata)
+						if err != nil {
+							log.Print(err)
+							return 0
+						}
 						return 0
 					}
 					return 0
@@ -1492,7 +1285,10 @@ func ExtensionLibrary(l *lua.State, proxy *Proxy, extensionID uuid.UUID) []lua.R
 	}
 }
 
-func RegisterCustomPrint(extension *Extension) {
+// RegisterCustomPrint overrides the default Lua `print` function.
+// The new function captures the output and sends it to the extension's log,
+// making it visible in the Marasi UI.
+func RegisterCustomPrint(extension *LuaExtension) {
 	printFunc := func(l *lua.State) int {
 		n := l.Top()
 		parts := make([]string, 0, n)

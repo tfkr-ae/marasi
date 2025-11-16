@@ -17,10 +17,9 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
-	"database/sql"
-	"database/sql/driver"
-	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"mime"
 	"net"
@@ -32,63 +31,29 @@ import (
 	"github.com/google/martian"
 	"github.com/google/martian/fifo"
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/compass"
+	"github.com/tfkr-ae/marasi/core"
+	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/extensions"
 	"github.com/tfkr-ae/marasi/listener"
 	"github.com/tfkr-ae/marasi/rawhttp"
+)
+
+var (
+	// ErrConfigDirNotSet is returned when the configuration directory is not set.
+	ErrConfigDirNotSet = errors.New("config dir not set")
+	// ErrScopeNotFound is returned when the scope is not found in the proxy.
+	ErrScopeNotFound = errors.New("scope field is not found")
+	// ErrClientNotFound is returned when the HTTP client is not found in the proxy.
+	ErrClientNotFound = errors.New("http client field not found")
+	// ErrExtensionRepoNotFound is returned when the extension repository is not found.
+	ErrExtensionRepoNotFound = errors.New("extension repo not found")
 )
 
 const (
 	certFile = "marasi_cert.pem" // Certificate File Name
 	keyFile  = "marasi_key.pem"  // Private Key File Name
 )
-
-// Repository defines the methods consumed by the proxy to interact with the SQLite backend.
-// It provides an abstraction layer for all database operations including request/response storage,
-// extension management, logging, and configuration.
-type Repository interface {
-	InsertLog(log Log) error
-	InsertRequest(req ProxyRequest) error
-	InsertResponse(res ProxyResponse) error
-	GetItems() (map[uuid.UUID]Row, error)
-	GetRaw(id uuid.UUID) (Row, error)
-	GetResponse(id uuid.UUID) (ProxyResponse, error)
-	UpdateMetadata(metadata Metadata, ids ...uuid.UUID) error
-	GetMetadata(id uuid.UUID) (metadata Metadata, err error)
-	CountRows() (int32, error)
-	GetLaunchpads() ([]Launchpad, error)
-	GetLaunchpadRequests(id uuid.UUID) ([]ProxyRequest, error)
-	CreateLaunchpad(name string, description string) (id uuid.UUID, err error)
-	LinkRequestToLaunchpad(requestID uuid.UUID, laucnpadID uuid.UUID) error
-	DeleteLaunchpad(launchpadID uuid.UUID) error
-	UpdateLaunchpad(laucnpadID uuid.UUID, name, description string) error
-	GetExtensionLuaCode(extensionName string) (code string, err error)
-	UpdateLuaCode(extensionName string, code string) error
-	GetNote(id uuid.UUID) (note string, err error)
-	UpdateNote(id uuid.UUID, note string) (err error)
-	CreateExtension(name string, sourceUrl string, author string, luaContent string, publishedDate time.Time, description string) error
-	GetExtensions() ([]*Extension, error)
-	GetExtension(name string) (extension *Extension, err error)
-	RemoveExtension(name string) error
-	GetLogs() ([]Log, error)
-	CountNotes() (count int32, err error)
-	CountLaunchpads() (count int32, err error)
-	CountIntercepted() (count int32, err error)
-	GetExtensionSettings(uuid.UUID) (Metadata, error)
-	SetExtensionSettings(id uuid.UUID, settings Metadata) error
-	UpdateSPKI(spki string) error
-	GetFilters() (results []string, err error)
-	SetFilters(filters []string) error
-	GetWaypoints() (map[string]string, error)
-	CreateOrUpdateWaypoint(hostname string, override string) error
-	DeleteWaypoint(hostname string) error
-	Close() error
-}
-
-// ProxyItem is an interface for items that can be written to the database through the DBWriteChannel.
-// This interface is implemented by ProxyRequest, ProxyResponse, LaunchpadRequest, and Log types.
-type ProxyItem interface {
-	// GetType returns a string identifier for the type of proxy item.
-	GetType() string
-}
 
 // Proxy is the main struct that orchestrates all proxy functionality including request/response processing,
 // extension management, database operations, and TLS handling. It serves as the central coordinator
@@ -97,25 +62,69 @@ type Proxy struct {
 	martianProxy          *martian.Proxy                       // The underlying martian.Proxy
 	ConfigDir             string                               // The configuration directory (defaults to the marasi folder under the user configuration directory)
 	Config                *Config                              // The marasi proxy configuration (separate from the GUI config)
-	Repo                  Repository                           // DB Repository Interface
 	Modifiers             *fifo.Group                          // Modifier group pipeline
-	DBWriteChannel        chan ProxyItem                       // DB Write Channel
+	DBWriteChannel        chan any                             // DB Write Channel
 	InterceptedQueue      []*Intercepted                       // Queue of intercepted requests / responses
-	OnRequest             func(req ProxyRequest) error         // Function to be ran on each request - used by the GUI application to handle the new requests
-	OnResponse            func(res ProxyResponse) error        // Function to be ran on each response - used by the GUI application to handle the new responses
+	OnRequest             func(req domain.ProxyRequest) error  // Function to be ran on each request - used by the GUI application to handle the new requests
+	OnResponse            func(res domain.ProxyResponse) error // Function to be ran on each response - used by the GUI application to handle the new responses
 	OnIntercept           func(intercepted *Intercepted) error // Function to be ran on each intercept - used by the GUI application to handle the new intercepted items
-	OnLog                 func(log Log) error
-	Addr                  string       // IP Address of the proxy
-	Port                  string       // Port of the proxy
-	Client                *http.Client // HTTP Client that is used by the repeater functionality (autoconfigured to use the proxy)
-	Extensions            []*Extension // Slice of loaded extensions
-	SPKIHash              string       // SPKI Hash of the current certificate
-	Cert                  *x509.Certificate
-	mitmConfig            *tls.Config       // Martian Proxy MITM config
-	MarasiClientTLSConfig *tls.Config       // TLSConfig for the proxy.Client
-	Scope                 *Scope            // Proxy scope configuration through Compass
-	Waypoints             map[string]string // Map of host:port overrides
-	InterceptFlag         bool              // Global intercept flag
+	OnLog                 func(log domain.Log) error           // Function to be ran on each log event - used by the GUI application to handle new log entries
+	Addr                  string                               // IP Address of the proxy
+	Port                  string                               // Port of the proxy
+	Client                *http.Client                         // HTTP Client that is used by the repeater functionality (autoconfigured to use the proxy)
+	Extensions            []*extensions.LuaExtension           // Slice of loaded extensions
+	SPKIHash              string                               // SPKI Hash of the current certificate
+	Cert                  *x509.Certificate                    // The proxy's TLS certificate.
+	mitmConfig            *tls.Config                          // Martian Proxy MITM config
+	MarasiClientTLSConfig *tls.Config                          // TLSConfig for the proxy.Client
+	Scope                 *compass.Scope                       // Proxy scope configuration through Compass
+	Waypoints             map[string]string                    // Map of host:port overrides
+	InterceptFlag         bool                                 // Global intercept flag
+
+	TrafficRepo   domain.TrafficRepository   // Repository for traffic data.
+	LaunchpadRepo domain.LaunchpadRepository // Repository for launchpad data.
+	WaypointRepo  domain.WaypointRepository  // Repository for waypoint data.
+	StatsRepo     domain.StatsRepository     // Repository for statistics data.
+	ConfigRepo    domain.ConfigRepository    // Repository for configuration data.
+	LogRepo       domain.LogRepository       // Repository for log data.
+	ExtensionRepo domain.ExtensionRepository // Repository for extension data.
+	DBCloser      io.Closer                  // Closer for the database connection.
+}
+
+// GetConfigDir returns the configuration directory path.
+// It returns an error if the configuration directory is not set.
+func (proxy *Proxy) GetConfigDir() (string, error) {
+	if proxy.ConfigDir == "" {
+		return "", ErrConfigDirNotSet
+	}
+	return proxy.ConfigDir, nil
+}
+
+// GetScope returns the current scope configuration.
+// It returns an error if the scope is not set.
+func (proxy *Proxy) GetScope() (*compass.Scope, error) {
+	if proxy.Scope == nil {
+		return nil, ErrScopeNotFound
+	}
+	return proxy.Scope, nil
+}
+
+// GetClient returns the proxy's HTTP client.
+// It returns an error if the client is not set.
+func (proxy *Proxy) GetClient() (*http.Client, error) {
+	if proxy.Client == nil {
+		return nil, ErrClientNotFound
+	}
+	return proxy.Client, nil
+}
+
+// GetExtensionRepo returns the extension repository.
+// It returns an error if the repository is not set.
+func (proxy *Proxy) GetExtensionRepo() (domain.ExtensionRepository, error) {
+	if proxy.ExtensionRepo == nil {
+		return nil, ErrExtensionRepoNotFound
+	}
+	return proxy.ExtensionRepo, nil
 }
 
 // New creates a new Proxy instance with default configuration and applies any provided options.
@@ -132,10 +141,10 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 	proxy := &Proxy{
 		martianProxy:   martian.NewProxy(),
 		Modifiers:      fifo.NewGroup(),
-		DBWriteChannel: make(chan ProxyItem, 10),
-		Extensions:     make([]*Extension, 0),
+		DBWriteChannel: make(chan any, 10),
+		Extensions:     make([]*extensions.LuaExtension, 0),
 		Client:         &http.Client{},
-		Scope:          NewScope(true),
+		Scope:          compass.NewScope(true),
 		Waypoints:      make(map[string]string),
 		InterceptFlag:  false,
 	}
@@ -158,173 +167,36 @@ func (proxy *Proxy) AddResponseModifier(modifier ResponseModifierFunc) {
 	proxy.Modifiers.AddResponseModifier(adapter)
 }
 
+// SyncWaypoints fetches the latest waypoints from the repository and updates the proxy's in-memory map.
 func (proxy *Proxy) SyncWaypoints() error {
-	waypoints, err := proxy.Repo.GetWaypoints()
-	if err != nil {
-		proxy.WriteLog("INFO", err.Error())
+	if proxy.WaypointRepo == nil {
+		return fmt.Errorf("WaypointRepository not set")
 	}
-	proxy.Waypoints = waypoints
+	waypointSlice, err := proxy.WaypointRepo.GetWaypoints()
+	if err != nil {
+		log.Printf("syncing waypoints: %v", err)
+		return err
+	}
+
+	waypointsMap := make(map[string]string)
+	for _, waypoint := range waypointSlice {
+		waypointsMap[waypoint.Hostname] = waypoint.Override
+	}
+
+	proxy.Waypoints = waypointsMap
 	return nil
+
 }
 
-//	func (proxy *Proxy) CheckExtensionUpdates() map[string]bool {
-//		updateMap := make(map[string]bool)
-//		for _, extension := range proxy.Extensions {
-//			if extension.Name != "checkpoint" && extension.Name != "workshop" && extension.Name != "compass" {
-//				release, _, err := GetLatestRelease(extension.SourceURL)
-//				if err != nil {
-//					log.Print(err)
-//					return updateMap
-//				}
-//				if release.PublishedAt.After(extension.UpdatedAt) {
-//					log.Printf("%s has an update", extension.Name)
-//					log.Printf("%v", release.PublishedAt)
-//					log.Printf("%v", extension.UpdatedAt)
-//					updateMap[extension.Name] = true
-//				}
-//			}
-//		}
-//		return updateMap
-//	}
-func (proxy *Proxy) GetExtension(name string) (*Extension, bool) {
+// GetExtension retrieves a loaded extension by its name.
+// It returns the extension and true if found, otherwise nil and false.
+func (proxy *Proxy) GetExtension(name string) (*extensions.LuaExtension, bool) {
 	for _, ext := range proxy.Extensions {
-		if ext.Name == name {
+		if ext.Data.Name == name {
 			return ext, true
 		}
 	}
 	return nil, false
-}
-
-// func (proxy *Proxy) InstallExtension(url string, direct bool) error {
-// 	if !direct {
-// 		release, config, err := GetLatestRelease(url)
-// 		if err != nil {
-// 			return fmt.Errorf("getting latest release %s : %w", url, err)
-// 		}
-// 		luaAsset, err := getAsset(release.Assets, "extension.lua")
-// 		if err != nil {
-// 			return fmt.Errorf("getting lua asset: %w", err)
-// 		}
-// 		luaCode, err := Get(luaAsset.BrowserDownloadURL)
-// 		if err != nil {
-// 			return fmt.Errorf("getting extension.lua : %w", err)
-// 		}
-// 		err = proxy.Repo.CreateExtension(config.Name, config.SourceURL, config.Author, luaCode, release.PublishedAt, config.Description)
-// 		if err != nil {
-// 			return fmt.Errorf("creating extension : %w", err)
-// 		}
-// 		/*
-// 			extension, err := proxy.Repo.GetExtension(config.Name)
-// 			if err != nil {
-// 			return fmt.Errorf("getting new extension %s : %w", config.Name, err)
-// 			}
-// 			delete(proxy.Extensions, config.Name)
-// 			WithExtension(extension)(proxy)
-// 		*/
-// 	}
-// 	return nil
-// }
-
-// RawField represents the raw HTTP request / response data stored as bytes in the DB
-type RawField []byte
-
-// Metadata represents a flexible key-value store for additional data associated with requests, responses, and extensions.
-type Metadata map[string]any
-
-// ToString returns the string representation of the raw field.
-func (r RawField) ToString() string {
-	return string(r)
-}
-
-func (m *Metadata) Scan(value interface{}) error {
-	if value == nil {
-		*m = make(Metadata)
-		return nil
-	}
-
-	switch v := value.(type) {
-	case []byte:
-		json.Unmarshal(v, &m)
-		return nil
-	case string:
-		json.Unmarshal([]byte(v), &m)
-		return nil
-	default:
-		return fmt.Errorf("unsupported type %T", v)
-	}
-}
-func (m Metadata) Value() (driver.Value, error) {
-	if len(m) == 0 {
-		return "{}", nil
-	}
-	return json.Marshal(m)
-}
-func (r *RawField) Scan(value interface{}) error {
-	if value == nil {
-		*r = nil
-		return nil
-	}
-
-	if v, ok := value.([]byte); ok {
-		*r = v
-		return nil
-	}
-
-	return fmt.Errorf("unsupported type for RawField: %T", value)
-}
-
-func (r RawField) Value() (driver.Value, error) {
-	return []byte(r), nil
-}
-
-func (r RawField) MarshalJSON() ([]byte, error) {
-	return json.Marshal(string(r))
-}
-
-// ProxyRequest represents an HTTP request processed by the proxy, containing all relevant
-// request data and metadata for storage and analysis.
-type ProxyRequest struct {
-	ID          uuid.UUID `db:"request_id"`   // Unique identifier for the request
-	Scheme      string    `db:"scheme"`       // URL scheme (http or https)
-	Method      string    `db:"method"`       // HTTP method (GET, POST, etc.)
-	Host        string    `db:"host"`         // Request host
-	Path        string    `db:"path"`         // Request path including query parameters
-	Raw         RawField  `db:"request_raw"`  // Complete raw HTTP request
-	Metadata    Metadata  `db:"metadata"`     // Additional metadata and extension data
-	RequestedAt time.Time `db:"requested_at"` // Timestamp when request was made
-}
-
-// ProxyResponse represents an HTTP response processed by the proxy, containing all relevant
-// response data and metadata for storage and analysis.
-type ProxyResponse struct {
-	ID          uuid.UUID `db:"response_id"`  // Unique identifier matching the associated request
-	Status      string    `db:"status"`       // HTTP status text (e.g., "200 OK")
-	StatusCode  int       `db:"status_code"`  // HTTP status code (e.g., 200, 404)
-	ContentType string    `db:"content_type"` // Response content type
-	Length      string    `db:"length"`       // Content length
-	Raw         RawField  `db:"response_raw"` // Complete raw HTTP response
-	Metadata    Metadata  `db:"metadata"`     // Additional metadata and extension data
-	RespondedAt time.Time `db:"responded_at"` // Timestamp when response was received
-}
-
-// Log represents a log entry in the system, capturing events, errors, and information
-// from the proxy and extensions.
-type Log struct {
-	ID          uuid.UUID      `db:"id"`           // Unique identifier for the log entry
-	Timestamp   time.Time      `db:"timestamp"`    // When the log entry was created
-	Level       string         `db:"level"`        // Log level (DEBUG, INFO, WARN, ERROR, FATAL)
-	Message     string         `db:"message"`      // Log message content
-	Context     Metadata       `db:"context"`      // Additional context data
-	RequestID   sql.NullString `db:"request_id"`   // Associated request ID if applicable
-	ExtensionID sql.NullString `db:"extension_id"` // Associated extension ID if applicable
-}
-
-// Row represents a complete request-response pair with associated metadata,
-// typically used when retrieving data from the database.
-type Row struct {
-	Request  ProxyRequest  // The HTTP request
-	Response ProxyResponse // The corresponding HTTP response
-	Metadata Metadata      // Combined metadata from request and response
 }
 
 // InterceptionTuple contains the user's decision when an intercepted item is resumed,
@@ -349,21 +221,11 @@ type Waypoint struct {
 	Override string // The destination to redirect to
 }
 
-func (request ProxyRequest) GetType() string {
-	return "request"
-}
-
-func (response ProxyResponse) GetType() string {
-	return "response"
-}
-
-func (log Log) GetType() string {
-	return "log"
-}
-
-func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*ProxyRequest, error) {
-	if metadata, ok := req.Context().Value(MetadataKey).(Metadata); ok {
-		requestTime, ok := req.Context().Value(RequestTimeKey).(time.Time)
+// NewProxyRequest creates a new domain.ProxyRequest from an http.Request.
+// It extracts metadata from the request context and dumps the raw request.
+func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyRequest, error) {
+	if metadata, ok := core.MetadataFromContext(req.Context()); ok {
+		requestTime, ok := core.RequestTimeFromContext(req.Context())
 		if !ok {
 			return nil, fmt.Errorf("timestamp not found for this context")
 		}
@@ -372,7 +234,7 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*ProxyRequest, err
 		if req.URL.RawQuery != "" {
 			path = fmt.Sprintf("%s?%s", path, req.URL.RawQuery)
 		}
-		proxyRequest := &ProxyRequest{
+		proxyRequest := &domain.ProxyRequest{
 			ID:          requestId,
 			Scheme:      req.URL.Scheme,
 			Method:      req.Method,
@@ -386,7 +248,7 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*ProxyRequest, err
 		if err != nil {
 			return nil, fmt.Errorf("dumping request %d body : %w", requestId, err)
 		}
-		proxyRequest.Raw = RawField(rawReq)
+		proxyRequest.Raw = domain.RawField(rawReq)
 		if prettified != "" {
 			proxyRequest.Metadata["prettified-request"] = prettified
 		}
@@ -409,13 +271,15 @@ func parseContentType(header string) (string, error) {
 	return strings.ToLower(mediaType), nil
 }
 
-func NewProxyResponse(res *http.Response) (*ProxyResponse, error) {
-	requestId, ok := res.Request.Context().Value(RequestIDKey).(uuid.UUID)
+// NewProxyResponse creates a new domain.ProxyResponse from an http.Response.
+// It extracts metadata from the response context and dumps the raw response.
+func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
+	requestId, ok := core.RequestIDFromContext(res.Request.Context())
 	if !ok {
 		return nil, fmt.Errorf("request id not found in context")
 	}
 
-	responseTime, ok := res.Request.Context().Value(ResponseTimeKey).(time.Time)
+	responseTime, ok := core.ResponseTimeFromContext(res.Request.Context())
 	if !ok {
 		return nil, fmt.Errorf("timestamp not found for this context")
 	}
@@ -441,18 +305,18 @@ func NewProxyResponse(res *http.Response) (*ProxyResponse, error) {
 		}
 	}
 
-	metadata, ok := res.Request.Context().Value(MetadataKey).(Metadata)
+	metadata, ok := core.MetadataFromContext(res.Request.Context())
 	if !ok {
-		metadata = make(Metadata)
+		metadata = make(map[string]any)
 	}
 
-	proxyResponse := &ProxyResponse{
+	proxyResponse := &domain.ProxyResponse{
 		ID:          requestId,
 		Status:      res.Status,
 		StatusCode:  res.StatusCode,
 		ContentType: contentType,
 		Length:      res.Header.Get("Content-Length"),
-		Raw:         RawField(rawRes),
+		Raw:         domain.RawField(rawRes),
 		Metadata:    metadata,
 		RespondedAt: responseTime,
 	}
@@ -463,41 +327,42 @@ func NewProxyResponse(res *http.Response) (*ProxyResponse, error) {
 	return proxyResponse, nil
 }
 
+// WriteToDB reads from the DBWriteChannel and writes items to their respective repositories.
+// It handles ProxyRequest, ProxyResponse, LaunchpadRequest, and Log items.
 func (proxy *Proxy) WriteToDB() {
 	for proxyItem := range proxy.DBWriteChannel {
 		switch castItem := proxyItem.(type) {
-		case *ProxyRequest:
-			// castItem.RequestedAt = time.Now()
-			err := proxy.Repo.InsertRequest(*castItem)
+		case *domain.ProxyRequest:
+			err := proxy.TrafficRepo.InsertRequest(castItem)
 			if err != nil {
 				log.Println(err)
 			}
-		case *ProxyResponse:
-			// castItem.RespondedAt = time.Now()
-			err := proxy.Repo.InsertResponse(*castItem)
+		case *domain.ProxyResponse:
+			err := proxy.TrafficRepo.InsertResponse(castItem)
 			if err != nil {
 				log.Println(err)
 			}
-		case LaunchpadRequest:
-			log.Print("Linking to Repeater")
-			err := proxy.Repo.LinkRequestToLaunchpad(castItem.RequestID, castItem.LaunchpadID)
+		case *domain.LaunchpadRequest:
+			err := proxy.LaunchpadRepo.LinkRequestToLaunchpad(castItem.RequestID, castItem.LaunchpadID)
 			if err != nil {
 				log.Println(err)
 			}
-		case Log:
-			log.Print("Log Detected")
+		case *domain.Log:
 			log.Print(castItem)
-			err := proxy.Repo.InsertLog(castItem)
+			err := proxy.LogRepo.InsertLog(castItem)
 			if err != nil {
 				log.Print(err)
 			}
-			proxy.OnLog(castItem)
+			proxy.OnLog(*castItem)
 		default:
 			log.Print(castItem)
 		}
 	}
 }
-func (proxy *Proxy) WriteLog(level string, message string, options ...func(log *Log) error) error {
+
+// WriteLog creates a new log entry and sends it to the DBWriteChannel.
+// It accepts a level, a message, and optional functions to modify the log entry.
+func (proxy *Proxy) WriteLog(level string, message string, options ...func(log *domain.Log) error) error {
 	switch level {
 	case "DEBUG":
 	case "INFO":
@@ -511,7 +376,7 @@ func (proxy *Proxy) WriteLog(level string, message string, options ...func(log *
 	if err != nil {
 		return fmt.Errorf("generating new uuid : %w", err)
 	}
-	log := Log{
+	log := domain.Log{
 		ID:        uuid,
 		Level:     level,
 		Message:   message,
@@ -523,7 +388,7 @@ func (proxy *Proxy) WriteLog(level string, message string, options ...func(log *
 			return fmt.Errorf("applying log option : %w", err)
 		}
 	}
-	proxy.DBWriteChannel <- log
+	proxy.DBWriteChannel <- &log
 	return nil
 }
 
@@ -551,6 +416,9 @@ func (proxy *Proxy) GetListener(address string, port string) (net.Listener, erro
 	proxy.Client.Transport = transport
 	return marasiListener, nil
 }
+
+// Serve starts the proxy and begins accepting connections on the provided listener.
+// It also starts the database writer goroutine.
 func (proxy *Proxy) Serve(listener net.Listener) error {
 	go proxy.WriteToDB()
 	roundTripper := newMarasiTransport(proxy.Cert)
@@ -558,10 +426,18 @@ func (proxy *Proxy) Serve(listener net.Listener) error {
 	return proxy.martianProxy.Serve(listener)
 }
 
+// Close shuts down the proxy and closes the database connection.
 func (proxy *Proxy) Close() {
 	proxy.martianProxy.Close()
+	if proxy.DBCloser != nil {
+		log.Println("Closing database connection...")
+		proxy.DBCloser.Close()
+	}
+
 }
 
+// Launch sends a raw HTTP request through the proxy client.
+// It is used for the launchpad functionality to replay and test requests.
 func (proxy *Proxy) Launch(raw string, launchpadId string, useHttps bool) error {
 	updated, err := rawhttp.RecalculateContentLength([]byte(raw))
 	if err != nil {
