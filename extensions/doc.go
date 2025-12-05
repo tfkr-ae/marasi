@@ -1,5 +1,4 @@
-// Package extensions provides the Lua-based extension system for Marasi.
-// It includes the runtime for executing Lua scripts and defines the Go functions
-// and types that are exposed to the Lua environment, allowing extensions to
-// interact with and modify HTTP traffic.
+// Package extensions provides a sandboxed Lua scripting environment for
+// extending the functionality of the proxy. It allows for the interception
+// and modification of HTTP/S traffic.
 package extensions

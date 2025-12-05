@@ -117,15 +117,15 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 
 // WithExtension loads a single extension into the proxy.
 // It prepares the extension's Lua state and adds it to the proxy's extension list.
-func WithExtension(extension *domain.Extension, options ...func(*extensions.LuaExtension) error) func(*Proxy) error {
+func WithExtension(extension *domain.Extension, options ...func(*extensions.Runtime) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		// Check if the map is nil and create if it is
 		if proxy.Extensions == nil {
-			proxy.Extensions = make([]*extensions.LuaExtension, 0)
+			proxy.Extensions = make([]*extensions.Runtime, 0)
 		}
 		// Check if the extension doesn't exist
 		if _, ok := proxy.GetExtension(extension.Name); !ok {
-			ext := &extensions.LuaExtension{Data: extension}
+			ext := &extensions.Runtime{Data: extension}
 			err := ext.PrepareState(proxy, options)
 			if err != nil {
 				return fmt.Errorf("preparing extension %s : %w", extension.Name, err)
@@ -139,14 +139,14 @@ func WithExtension(extension *domain.Extension, options ...func(*extensions.LuaE
 
 // WithExtensions loads multiple extensions into the proxy.
 // It iterates through the provided extensions and prepares each one.
-func WithExtensions(exts []*domain.Extension, options ...func(*extensions.LuaExtension) error) func(*Proxy) error {
+func WithExtensions(exts []*domain.Extension, options ...func(*extensions.Runtime) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		if proxy.Extensions == nil {
-			proxy.Extensions = make([]*extensions.LuaExtension, 0)
+			proxy.Extensions = make([]*extensions.Runtime, 0)
 		}
 		for _, extension := range exts {
 			if _, ok := proxy.GetExtension(extension.Name); !ok {
-				ext := &extensions.LuaExtension{Data: extension}
+				ext := &extensions.Runtime{Data: extension}
 				// Extension does not exist
 				// if it is enabled add it, if not keep it disabled
 				ext.PrepareState(proxy, options)

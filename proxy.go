@@ -72,7 +72,7 @@ type Proxy struct {
 	Addr                  string                               // IP Address of the proxy
 	Port                  string                               // Port of the proxy
 	Client                *http.Client                         // HTTP Client that is used by the repeater functionality (autoconfigured to use the proxy)
-	Extensions            []*extensions.LuaExtension           // Slice of loaded extensions
+	Extensions            []*extensions.Runtime                // Slice of loaded extensions
 	SPKIHash              string                               // SPKI Hash of the current certificate
 	Cert                  *x509.Certificate                    // The proxy's TLS certificate.
 	mitmConfig            *tls.Config                          // Martian Proxy MITM config
@@ -142,7 +142,7 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 		martianProxy:   martian.NewProxy(),
 		Modifiers:      fifo.NewGroup(),
 		DBWriteChannel: make(chan any, 10),
-		Extensions:     make([]*extensions.LuaExtension, 0),
+		Extensions:     make([]*extensions.Runtime, 0),
 		Client:         &http.Client{},
 		Scope:          compass.NewScope(true),
 		Waypoints:      make(map[string]string),
@@ -190,7 +190,7 @@ func (proxy *Proxy) SyncWaypoints() error {
 
 // GetExtension retrieves a loaded extension by its name.
 // It returns the extension and true if found, otherwise nil and false.
-func (proxy *Proxy) GetExtension(name string) (*extensions.LuaExtension, bool) {
+func (proxy *Proxy) GetExtension(name string) (*extensions.Runtime, bool) {
 	for _, ext := range proxy.Extensions {
 		if ext.Data.Name == name {
 			return ext, true
@@ -234,6 +234,26 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyReque
 		if req.URL.RawQuery != "" {
 			path = fmt.Sprintf("%s?%s", path, req.URL.RawQuery)
 		}
+
+		currentHost := req.Host
+		currentURLHost := req.URL.Host
+		originalHost := ""
+
+		if host, ok := metadata["original_host"].(string); ok && host != "" { // Lua heading override
+			originalHost = host
+		} else if host, ok := metadata["original_host_header"].(string); ok && host != "" { // Waypoint redirect
+			originalHost = host
+		}
+
+		if originalHost != "" {
+			if originalHost != currentHost {
+				req.Host = originalHost
+			}
+			if currentURLHost != "" && currentURLHost != originalHost {
+				req.URL.Host = originalHost
+			}
+		}
+
 		proxyRequest := &domain.ProxyRequest{
 			ID:          requestId,
 			Scheme:      req.URL.Scheme,
@@ -243,11 +263,17 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyReque
 			Metadata:    metadata,
 			RequestedAt: requestTime,
 		}
+
 		// TODO Check prettified error
 		rawReq, prettified, err := rawhttp.DumpRequest(req)
+
+		req.Host = currentHost
+		req.URL.Host = currentURLHost
+
 		if err != nil {
 			return nil, fmt.Errorf("dumping request %d body : %w", requestId, err)
 		}
+
 		proxyRequest.Raw = domain.RawField(rawReq)
 		if prettified != "" {
 			proxyRequest.Metadata["prettified-request"] = prettified
