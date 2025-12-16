@@ -227,10 +227,12 @@ func jsonLibrary() []lua.RegistryFunction {
 			l.PushString(string(jsonBytes))
 			return 1
 		}},
-		// decode decodes a JSON string to a Lua value.
+		// decode decodes a JSON string to a Lua value. It also recursively
+		// decodes any nested JSON objects or arrays found within the string
+		// values of the initial JSON structure.
 		//
 		// @param input string The JSON string to decode.
-		// @return any The decoded Lua value.
+		// @return any The fully decoded Lua value.
 		{Name: "decode", Function: func(l *lua.State) int {
 			inputString := lua.CheckString(l, 2)
 			var decoded any
