@@ -89,6 +89,54 @@ func TestJSONLibrary(t *testing.T) {
 			},
 		},
 		{
+			name:    "encoding.json:decode should recursively expand nested json strings",
+			luaCode: `return marasi.encoding.json:decode('{"meta": "{\\"nested\\": true, \\"array\\": \\"[1, 2]\\"}"}')`,
+			validatorFunc: func(t *testing.T, got any) {
+				m, ok := got.(map[string]any)
+				if !ok {
+					t.Fatalf("\nwanted:\nmap\ngot:\n%T", got)
+				}
+				meta, ok := m["meta"].(map[string]any)
+				if !ok {
+					t.Fatalf("\nwanted:\nmap (for meta)\ngot:\n%T", m["meta"])
+				}
+				if meta["nested"] != true {
+					t.Errorf("\nwanted:\ntrue\ngot:\n%v", meta["nested"])
+				}
+				arr, ok := meta["array"].([]any)
+				if !ok {
+					t.Fatalf("\nwanted:\nslice (for array)\ngot:\n%T", meta["array"])
+				}
+				if len(arr) != 2 {
+					t.Errorf("\nwanted:\nlength 2\ngot:\n%d", len(arr))
+				}
+			},
+		},
+		{
+			name:    "encoding.json:decode should strictly preserve non-JSON strings",
+			luaCode: `return marasi.encoding.json:decode('{"id": "12345", "malformed": "{abc", "not_obj": "true"}')`,
+			validatorFunc: func(t *testing.T, got any) {
+				m, ok := got.(map[string]any)
+				if !ok {
+					t.Fatalf("\nwanted:\nmap\ngot:\n%T", got)
+				}
+				id, ok := m["id"].(string)
+				if !ok {
+					t.Errorf("\nwanted:\nstring (for id)\ngot:\n%T", m["id"])
+				}
+				if id != "12345" {
+					t.Errorf("\nwanted:\n'12345'\ngot:\n%v", id)
+				}
+				mal, ok := m["malformed"].(string)
+				if !ok {
+					t.Errorf("\nwanted:\nstring (for malformed)\ngot:\n%T", m["malformed"])
+				}
+				if mal != "{abc" {
+					t.Errorf("\nwanted:\n'{abc'\ngot:\n%v", mal)
+				}
+			},
+		},
+		{
 			name: "encoding.json:decode should return error on invalid json",
 			luaCode: `
 				local ok, res = pcall(marasi.encoding.json.decode, marasi.encoding.json, '{"bad": json}')

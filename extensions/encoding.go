@@ -12,6 +12,41 @@ import (
 	"github.com/Shopify/goluago/util"
 )
 
+// deepExpand recursively walks a value. If it finds a string that looks like
+// a JSON object or array, it attempts to unmarshal it. If unmarshalling succeeds,
+// it returns the expanded data; otherwise, it returns the original string.
+func deepExpand(v any) any {
+	switch val := v.(type) {
+	case string:
+		trimmed := strings.TrimSpace(val)
+		if (strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}")) ||
+			(strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")) {
+			var nested any
+			err := json.Unmarshal([]byte(val), &nested)
+			if err != nil {
+				return val
+			}
+			return deepExpand(nested)
+		}
+		return val
+
+	case map[string]any:
+		for k, v := range val {
+			val[k] = deepExpand(v)
+		}
+		return val
+
+	case []any:
+		for i, v := range val {
+			val[i] = deepExpand(v)
+		}
+		return val
+
+	default:
+		return val
+	}
+}
+
 func registerEncodingLibrary(l *lua.State) {
 	l.Global("marasi")
 
@@ -205,6 +240,8 @@ func jsonLibrary() []lua.RegistryFunction {
 				lua.Errorf(l, "unmarshalling json: %s", err.Error())
 				return 0
 			}
+
+			decoded = deepExpand(decoded)
 
 			util.DeepPush(l, decoded)
 			return 1
