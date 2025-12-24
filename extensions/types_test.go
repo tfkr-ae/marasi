@@ -513,7 +513,7 @@ func TestScopeType(t *testing.T) {
 				t.Fatalf("executing lua code %s : %v", tt.luaCode, err)
 			}
 
-			got := goValue(extension.LuaState, -1)
+			got := GoValue(extension.LuaState, -1)
 			if tt.validatorFunc != nil {
 				tt.validatorFunc(t, scope, extension, got)
 			}
@@ -570,7 +570,7 @@ func TestRegexType(t *testing.T) {
 			},
 			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
 				matchPartial := got.(bool)
-				matchExact := goValue(ext.LuaState, -2).(bool)
+				matchExact := GoValue(ext.LuaState, -2).(bool)
 
 				if matchExact != true {
 					t.Errorf("\nwanted:\ntrue (full match)\ngot:\nfalse")
@@ -802,7 +802,7 @@ func TestRegexType(t *testing.T) {
 				t.Fatalf("executing lua code %s : %v", tt.luaCode, err)
 			}
 
-			got := goValue(extension.LuaState, -1)
+			got := GoValue(extension.LuaState, -1)
 			if tt.validatorFunc != nil {
 				tt.validatorFunc(t, extension, got)
 			}
@@ -1126,7 +1126,7 @@ func TestCookieType(t *testing.T) {
 				t.Fatalf("executing lua code %s : %v", tt.luaCode, err)
 			}
 
-			got := goValue(extension.LuaState, -1)
+			got := GoValue(extension.LuaState, -1)
 			if tt.validatorFunc != nil {
 				tt.validatorFunc(t, extension, got)
 			}
@@ -1354,7 +1354,7 @@ func TestHeaderType(t *testing.T) {
 				t.Fatalf("executing lua code %s : %v", tt.luaCode, err)
 			}
 
-			got := goValue(extension.LuaState, -1)
+			got := GoValue(extension.LuaState, -1)
 			if tt.validatorFunc != nil {
 				tt.validatorFunc(t, extension, got)
 			}
@@ -1561,7 +1561,7 @@ func TestURLType(t *testing.T) {
 				t.Fatalf("executing lua code %s : %v", tt.luaCode, err)
 			}
 
-			got := goValue(extension.LuaState, -1)
+			got := GoValue(extension.LuaState, -1)
 			if tt.validatorFunc != nil {
 				tt.validatorFunc(t, extension, got)
 			}
@@ -1853,7 +1853,7 @@ func TestRequestType(t *testing.T) {
 			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
 				val2 := got.(string)
 				ext.LuaState.Pop(1)
-				val1 := goValue(ext.LuaState, -1).(string)
+				val1 := GoValue(ext.LuaState, -1).(string)
 
 				if val1 != "v1" || val2 != "v2" {
 					t.Errorf("\nwanted:\nv1, v2\ngot:\n%s, %s", val1, val2)
@@ -2009,7 +2009,7 @@ func TestRequestType(t *testing.T) {
 				t.Fatalf("executing lua code %s : %v", tt.luaCode, err)
 			}
 
-			got := goValue(extension.LuaState, -1)
+			got := GoValue(extension.LuaState, -1)
 			if tt.validatorFunc != nil {
 				tt.validatorFunc(t, extension, got)
 			}
@@ -2133,7 +2133,7 @@ func TestResponseType(t *testing.T) {
 			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
 				code := got.(float64)
 				ext.LuaState.Pop(1)
-				status := goValue(ext.LuaState, -1).(string)
+				status := GoValue(ext.LuaState, -1).(string)
 
 				if code != 404.0 {
 					t.Errorf("\nwanted:\n404\ngot:\n%v", code)
@@ -2289,7 +2289,7 @@ func TestResponseType(t *testing.T) {
 			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
 				val2 := got.(string)
 				ext.LuaState.Pop(1)
-				val1 := goValue(ext.LuaState, -1).(string)
+				val1 := GoValue(ext.LuaState, -1).(string)
 
 				if val1 != "v1" || val2 != "v2" {
 					t.Errorf("\nwanted:\nv1, v2\ngot:\n%s, %s", val1, val2)
@@ -2439,7 +2439,7 @@ func TestResponseType(t *testing.T) {
 				t.Fatalf("executing lua code %s : %v", tt.luaCode, err)
 			}
 
-			got := goValue(extension.LuaState, -1)
+			got := GoValue(extension.LuaState, -1)
 			if tt.validatorFunc != nil {
 				tt.validatorFunc(t, extension, got)
 			}
@@ -2639,10 +2639,10 @@ func TestRequestBuilderType(t *testing.T) {
 				}
 
 				ext.LuaState.Pop(1)
-				val1 := goValue(ext.LuaState, -1).(string)
+				val1 := GoValue(ext.LuaState, -1).(string)
 
 				ext.LuaState.Pop(1)
-				count := goValue(ext.LuaState, -1).(float64)
+				count := GoValue(ext.LuaState, -1).(float64)
 
 				if count != 2 {
 					t.Errorf("\nwanted:\n2\ngot:\n%v", count)
@@ -2684,7 +2684,7 @@ func TestRequestBuilderType(t *testing.T) {
 			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
 				method := got.(string)
 				ext.LuaState.Pop(1)
-				body := goValue(ext.LuaState, -1).(string)
+				body := GoValue(ext.LuaState, -1).(string)
 
 				if body != "server response" {
 					t.Errorf("\nwanted:\nserver response\ngot:\n%s", body)
@@ -2776,7 +2776,7 @@ func TestRequestBuilderType(t *testing.T) {
 				t.Fatalf("executing lua code %s : %v", tt.luaCode, err)
 			}
 
-			got := goValue(extension.LuaState, -1)
+			got := GoValue(extension.LuaState, -1)
 			if tt.validatorFunc != nil {
 				tt.validatorFunc(t, extension, got)
 			}

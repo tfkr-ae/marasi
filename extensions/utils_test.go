@@ -131,7 +131,7 @@ func TestUtilsLibrary(t *testing.T) {
 				t.Fatalf("executing lua code %s : %v", tt.luaCode, err)
 			}
 
-			got := goValue(extension.LuaState, -1)
+			got := GoValue(extension.LuaState, -1)
 
 			if tt.validatorFunc != nil {
 				tt.validatorFunc(t, got)

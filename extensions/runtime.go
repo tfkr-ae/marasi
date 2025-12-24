@@ -109,6 +109,10 @@ func (extension *Runtime) PrepareState(proxy ProxyService, options []func(*Runti
 	if err := lua.DoString(extension.LuaState, extension.Data.LuaContent); err != nil {
 		return fmt.Errorf("preparing state for extension %s : %w", extension.Data.Name, err)
 	}
+
+	if err := extension.CallFunction("startup"); err != nil {
+		return fmt.Errorf("running startup for %s : %w", extension.Data.Name, err)
+	}
 	return nil
 }
 
@@ -120,7 +124,7 @@ func (extension *Runtime) GetGlobal(name string) any {
 	extension.LuaState.Global(name)
 	defer extension.LuaState.Pop(1)
 
-	return goValue(extension.LuaState, -1)
+	return GoValue(extension.LuaState, -1)
 }
 
 // CheckGlobalFlag checks for the existence and value of a boolean global variable in the Lua state.
@@ -263,6 +267,29 @@ func (extension *Runtime) CallRequestHandler(req *http.Request) error {
 	return nil
 }
 
+// CallFunction executes a global Lua function by name without arguments or return values.
+// It is used for lifecycle events or simple triggers. If the function does not exist,
+// it returns nil. If the function execution fails, it returns a formatted error.
+func (extension *Runtime) CallFunction(name string) error {
+	extension.Mu.Lock()
+	defer extension.Mu.Unlock()
+
+	extension.LuaState.Global(name)
+
+	if !extension.LuaState.IsFunction(-1) {
+		extension.LuaState.Pop(1)
+		return nil
+	}
+
+	err := extension.LuaState.ProtectedCall(0, 0, 0)
+	if err != nil {
+		extension.LuaState.Pop(1)
+		return fmt.Errorf("calling %s : %w", name, err)
+	}
+	return nil
+
+}
+
 // ExtensionWithLogHandler returns an option function to set a log handler on a LuaExtension.
 // This handler is called whenever the extension's custom `print` function is used.
 func ExtensionWithLogHandler(handler func(log ExtensionLog) error) func(*Runtime) error {
@@ -284,7 +311,7 @@ func RegisterCustomPrint(extension *Runtime) {
 		parts := make([]string, 0, n)
 
 		for i := 1; i <= n; i++ {
-			val := printValue(l, i)
+			val := PrintValue(l, i)
 			if val == nil {
 				parts = append(parts, "nil")
 			} else {
@@ -302,7 +329,7 @@ func RegisterCustomPrint(extension *Runtime) {
 	})
 }
 
-func printValue(l *lua.State, index int) any {
+func PrintValue(l *lua.State, index int) any {
 	absIdx := index
 	if index < 0 {
 		absIdx = l.Top() + index + 1
@@ -318,10 +345,10 @@ func printValue(l *lua.State, index int) any {
 		return str
 
 	case lua.TypeTable:
-		return parseTable(l, absIdx, printValue)
+		return ParseTable(l, absIdx, PrintValue)
 
 	default:
-		val := goValue(l, absIdx)
+		val := GoValue(l, absIdx)
 		if val == nil && l.TypeOf(absIdx) != lua.TypeNil {
 			return fmt.Sprintf("<%s>", l.TypeOf(absIdx).String())
 		}
@@ -329,7 +356,10 @@ func printValue(l *lua.State, index int) any {
 	}
 }
 
-func getExtensionID(l *lua.State) uuid.UUID {
+// GetExtensionID retrieves and parses the "extension_id" global variable from the Lua state.
+// It returns the parsed UUID if the global exists and is a valid UUID string.
+// Returns uuid.Nil if the global is missing, not a string, or an invalid UUID.
+func GetExtensionID(l *lua.State) uuid.UUID {
 	l.Global("extension_id")
 	defer l.Pop(1)
 
@@ -356,7 +386,10 @@ func asMap(v any) map[string]any {
 	return nil
 }
 
-func goValue(l *lua.State, index int) any {
+// GoValue converts a value at a specific stack index in the Lua state to its Go equivalent.
+// It handles primitives (nil, boolean, number, string), tables (recursively via ParseTable),
+// and UserData. For unsupported types (like functions or threads), it returns nil.
+func GoValue(l *lua.State, index int) any {
 	switch l.TypeOf(index) {
 	case lua.TypeNil:
 		return nil
@@ -369,7 +402,7 @@ func goValue(l *lua.State, index int) any {
 		s, _ := l.ToString(index)
 		return s
 	case lua.TypeTable:
-		return parseTable(l, index, goValue)
+		return ParseTable(l, index, GoValue)
 	case lua.TypeUserData:
 		return l.ToUserData(index)
 	default:
@@ -377,7 +410,15 @@ func goValue(l *lua.State, index int) any {
 	}
 }
 
-func parseTable(l *lua.State, index int, converter func(*lua.State, int) any) any {
+// ParseTable converts a Lua table at the given index into a Go slice or map.
+// If the table is a sequence (integer keys 1..N), it returns []any.
+// Otherwise, it returns map[string]any, converting all keys to strings.
+// The converter function allows custom value transformation; if nil, GoValue is used.
+func ParseTable(l *lua.State, index int, converter func(*lua.State, int) any) any {
+	if converter == nil {
+		converter = GoValue
+	}
+
 	absIdx := index
 	if index < 0 {
 		absIdx = l.Top() + index + 1

@@ -137,7 +137,7 @@ func TestStringsLibrary(t *testing.T) {
 				t.Fatalf("executing lua code %s : %v", tt.luaCode, err)
 			}
 
-			got := goValue(extension.LuaState, -1)
+			got := GoValue(extension.LuaState, -1)
 
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("\nwanted:\n%v (%T)\ngot:\n%v (%T)", tt.want, tt.want, got, got)

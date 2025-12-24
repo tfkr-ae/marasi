@@ -99,7 +99,7 @@ func TestMarasiLog(t *testing.T) {
 			t.Fatalf("executing lua: %v", err)
 		}
 
-		result := goValue(ext.LuaState, -1)
+		result := GoValue(ext.LuaState, -1)
 		errStr, ok := result.(string)
 		if !ok {
 			t.Fatalf("wanted:\nstring error\ngot:\n%T", result)
@@ -125,7 +125,7 @@ func TestMarasiConfig(t *testing.T) {
 			t.Fatalf("executing lua: %v", err)
 		}
 
-		got := goValue(ext.LuaState, -1)
+		got := GoValue(ext.LuaState, -1)
 		if got != want {
 			t.Errorf("wanted:\n%q\ngot:\n%v", want, got)
 		}
@@ -143,7 +143,7 @@ func TestMarasiConfig(t *testing.T) {
 			t.Fatalf("executing lua: %v", err)
 		}
 
-		got := goValue(ext.LuaState, -1)
+		got := GoValue(ext.LuaState, -1)
 		if got != "" {
 			t.Errorf("wanted:\nempty string\ngot:\n%v", got)
 		}
@@ -159,7 +159,7 @@ func TestMarasiBuilder(t *testing.T) {
 			t.Fatalf("executing lua: %v", err)
 		}
 
-		got := goValue(ext.LuaState, -1)
+		got := GoValue(ext.LuaState, -1)
 		builder, ok := got.(*RequestBuilder)
 		if !ok {
 			t.Fatalf("\nwanted:\n*RequestBuilder\ngot:\n%T", got)
@@ -203,7 +203,7 @@ func TestMarasiBuilder(t *testing.T) {
 			t.Fatalf("executing lua: %v", err)
 		}
 
-		got := goValue(ext.LuaState, -1)
+		got := GoValue(ext.LuaState, -1)
 		builder, ok := got.(*RequestBuilder)
 		if !ok {
 			t.Fatalf("\nwanted:\n*RequestBuilder\ngot:\n%T", got)
@@ -249,7 +249,7 @@ func TestMarasiBuilder(t *testing.T) {
 			t.Fatalf("executing lua: %v", err)
 		}
 
-		result := goValue(ext.LuaState, -1)
+		result := GoValue(ext.LuaState, -1)
 		errStr, ok := result.(string)
 		if !ok {
 			t.Fatalf("\nwanted:\nstring error\ngot:\n%T", result)
@@ -278,7 +278,7 @@ func TestMarasiScope(t *testing.T) {
 			t.Fatalf("executing lua: %v", err)
 		}
 
-		got := goValue(ext.LuaState, -1)
+		got := GoValue(ext.LuaState, -1)
 		if got == nil {
 			t.Errorf("wanted:\nscope object\ngot:\nnil")
 		}
@@ -307,7 +307,7 @@ func TestMarasiScope(t *testing.T) {
 			t.Fatalf("executing lua: %v", err)
 		}
 
-		result := goValue(ext.LuaState, -1)
+		result := GoValue(ext.LuaState, -1)
 
 		errStr, ok := result.(string)
 		if !ok {

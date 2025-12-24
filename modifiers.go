@@ -17,7 +17,6 @@ import (
 	"github.com/google/martian"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/core"
-	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/rawhttp"
 )
 
@@ -203,7 +202,7 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 		metadata["launchpad_id"] = launchpadId
 		*req = *core.ContextWithLaunchpadID(req, launchpadId)
 
-		// Header is removed after processign
+		// Header is removed after processing
 		req.Header.Del("x-launchpad-id")
 	}
 
@@ -389,13 +388,6 @@ func WriteRequestModifier(proxy *Proxy, req *http.Request) error {
 			return fmt.Errorf("%w : %w", ErrProxyRequest, err)
 		}
 		proxy.DBWriteChannel <- proxyRequest
-		if launchpadID, ok := core.LaunchpadIDFromContext(req.Context()); ok {
-			launchpadRequest := &domain.LaunchpadRequest{
-				LaunchpadID: launchpadID,
-				RequestID:   proxyRequest.ID,
-			}
-			proxy.DBWriteChannel <- launchpadRequest
-		}
 		if proxy.OnRequest == nil {
 			return ErrRequestHandlerUndefined
 		} else {

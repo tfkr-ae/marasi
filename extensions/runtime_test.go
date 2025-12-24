@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/Shopify/go-lua"
+	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 func TestRuntime_Sandbox(t *testing.T) {
@@ -40,7 +42,7 @@ func TestRuntime_Sandbox(t *testing.T) {
 				t.Fatalf("executing lua code %s : %v", luaCode, err)
 			}
 
-			val := goValue(ext.LuaState, -1)
+			val := GoValue(ext.LuaState, -1)
 			if val != "nil" {
 				t.Errorf("\nwanted:\nnil\ngot:\n%v", val)
 			}
@@ -80,7 +82,7 @@ func TestRuntime_LuaStandardLibraries(t *testing.T) {
 				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 			}
 
-			got := goValue(ext.LuaState, -1)
+			got := GoValue(ext.LuaState, -1)
 			if got != tt.want {
 				t.Errorf("\nwanted:\n%v\ngot:\n%v", tt.want, got)
 			}
@@ -406,7 +408,7 @@ func TestRuntime_MarasiModules(t *testing.T) {
 				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 			}
 
-			val := goValue(ext.LuaState, -1)
+			val := GoValue(ext.LuaState, -1)
 			if val != "exists" {
 				t.Errorf("\nwanted:\nexists\ngot:\n%v", val)
 			}
@@ -544,19 +546,19 @@ func TestRuntime_HelperFunctions(t *testing.T) {
 			return 0
 		})
 
-		if val := goValue(ext.LuaState, -5); val != "marasi" {
+		if val := GoValue(ext.LuaState, -5); val != "marasi" {
 			t.Errorf("\nwanted:\nmarasi\ngot:\n%v", val)
 		}
-		if val := goValue(ext.LuaState, -4); val != 123.45 {
+		if val := GoValue(ext.LuaState, -4); val != 123.45 {
 			t.Errorf("\nwanted:\n123.45\ngot:\n%v", val)
 		}
-		if val := goValue(ext.LuaState, -3); val != true {
+		if val := GoValue(ext.LuaState, -3); val != true {
 			t.Errorf("\nwanted:\ntrue\ngot:\n%v", val)
 		}
-		if val := goValue(ext.LuaState, -2); val != nil {
+		if val := GoValue(ext.LuaState, -2); val != nil {
 			t.Errorf("\nwanted:\nnil\ngot:\n%v", val)
 		}
-		if val := goValue(ext.LuaState, -1); val != nil {
+		if val := GoValue(ext.LuaState, -1); val != nil {
 			t.Errorf("\nwanted:\nnil\ngot:\n%v", val)
 		}
 	})
@@ -570,7 +572,7 @@ func TestRuntime_HelperFunctions(t *testing.T) {
 		want := &marasiTestStruct{Data: "test-data"}
 		ext.LuaState.PushUserData(want)
 
-		got := goValue(ext.LuaState, -1)
+		got := GoValue(ext.LuaState, -1)
 		if want != got {
 			t.Errorf("\nwanted:\n%v\ngot:\n%v", want, got)
 		}
@@ -584,7 +586,7 @@ func TestRuntime_HelperFunctions(t *testing.T) {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
-		got := goValue(ext.LuaState, -1)
+		got := GoValue(ext.LuaState, -1)
 		want := []any{10.0, 20.0, 30.0}
 
 		if !reflect.DeepEqual(want, got) {
@@ -600,7 +602,7 @@ func TestRuntime_HelperFunctions(t *testing.T) {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
-		got := goValue(ext.LuaState, -1)
+		got := GoValue(ext.LuaState, -1)
 		want := map[string]any{
 			"key": "marasi",
 			"ver": 1.0,
@@ -619,7 +621,7 @@ func TestRuntime_HelperFunctions(t *testing.T) {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
-		got := goValue(ext.LuaState, -1)
+		got := GoValue(ext.LuaState, -1)
 		want := map[string]any{
 			"1":   10.0,
 			"key": "marasi",
@@ -676,7 +678,7 @@ func TestRuntime_HelperFunctions(t *testing.T) {
 		ext, _ := setupTestExtension(t, "")
 		want := ext.Data.ID
 
-		got := getExtensionID(ext.LuaState)
+		got := GetExtensionID(ext.LuaState)
 
 		if want != got {
 			t.Errorf("\nwanted:\n%v\ngot:\n%v", want, got)
@@ -711,6 +713,322 @@ func TestExtensionWithLogHandler(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "already has a log handler") {
 			t.Errorf("\nwanted:\nerror containing 'already has a log handler'\ngot:\n%v", err)
+		}
+	})
+}
+
+func TestRuntime_CallFunction(t *testing.T) {
+	t.Run("should execute global function successfully", func(t *testing.T) {
+		luaCode := `
+			function myTestFunc()
+				print("function called")
+			end
+		`
+		ext, _ := setupTestExtension(t, luaCode)
+
+		err := ext.CallFunction("myTestFunc")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if len(ext.Logs) != 1 || ext.Logs[0].Text != "function called" {
+			t.Errorf("\nwanted:\nlog 'function called'\ngot:\n%v", ext.Logs)
+		}
+	})
+
+	t.Run("should return nil if function does not exist", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "")
+
+		err := ext.CallFunction("nonExistent")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should return error if function execution fails", func(t *testing.T) {
+		luaCode := `
+			function failingFunc()
+				error("runtime error")
+			end
+		`
+		ext, _ := setupTestExtension(t, luaCode)
+
+		err := ext.CallFunction("failingFunc")
+		if err == nil {
+			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !strings.Contains(err.Error(), "calling failingFunc") {
+			t.Errorf("\nwanted error containing:\ncalling failingFunc\ngot:\n%v", err)
+		}
+	})
+}
+
+func TestRuntime_PrepareState_Startup(t *testing.T) {
+	t.Run("should call startup function exactly once during PrepareState", func(t *testing.T) {
+		luaCode := `
+			startup_count = 0
+			function startup()
+				startup_count = startup_count + 1
+				print("startup_called_" .. startup_count)
+			end
+		`
+		ext := &Runtime{
+			Data: &domain.Extension{
+				ID:         uuid.New(),
+				Name:       "StartupTest",
+				LuaContent: luaCode,
+			},
+		}
+
+		var mockProxy ProxyService
+
+		err := ext.PrepareState(mockProxy, nil)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		count := 0
+		for _, log := range ext.Logs {
+			if strings.Contains(log.Text, "startup_called_") {
+				count++
+			}
+		}
+
+		if count != 1 {
+			t.Errorf("\nwanted:\nstartup called once\ngot:\ncalled %d times", count)
+		}
+	})
+
+	t.Run("should not error if startup function is not defined", func(t *testing.T) {
+		luaCode := `print("no startup here")`
+
+		ext := &Runtime{
+			Data: &domain.Extension{
+				ID:         uuid.New(),
+				Name:       "MissingStartupTest",
+				LuaContent: luaCode,
+			},
+		}
+
+		var mockProxy ProxyService
+
+		err := ext.PrepareState(mockProxy, nil)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil (no error if startup is missing)\ngot:\n%v", err)
+		}
+	})
+}
+
+func TestGoValue(t *testing.T) {
+	t.Run("should convert all supported types correctly", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "")
+
+		ext.LuaState.PushNil()
+		ext.LuaState.PushBoolean(true)
+		ext.LuaState.PushNumber(42.5)
+		ext.LuaState.PushString("test_string")
+
+		ext.LuaState.NewTable()
+		ext.LuaState.PushString("key")
+		ext.LuaState.PushString("value")
+		ext.LuaState.SetTable(-3)
+
+		type testStruct struct{ Data string }
+		uData := &testStruct{Data: "custom_data"}
+		ext.LuaState.PushUserData(uData)
+
+		ext.LuaState.PushGoFunction(func(l *lua.State) int { return 0 })
+
+		if val := GoValue(ext.LuaState, -1); val != nil {
+			t.Errorf("\nwanted:\nnil (for function)\ngot:\n%v", val)
+		}
+
+		if val := GoValue(ext.LuaState, -2); val != uData {
+			t.Errorf("\nwanted:\n%v\ngot:\n%v", uData, val)
+		}
+
+		mapVal := GoValue(ext.LuaState, -3)
+		m, ok := mapVal.(map[string]any)
+		if !ok || m["key"] != "value" {
+			t.Errorf("\nwanted:\nmap[key:value]\ngot:\n%v", mapVal)
+		}
+
+		if val := GoValue(ext.LuaState, -4); val != "test_string" {
+			t.Errorf("\nwanted:\ntest_string\ngot:\n%v", val)
+		}
+
+		if val := GoValue(ext.LuaState, -5); val != 42.5 {
+			t.Errorf("\nwanted:\n42.5\ngot:\n%v", val)
+		}
+
+		if val := GoValue(ext.LuaState, -6); val != true {
+			t.Errorf("\nwanted:\ntrue\ngot:\n%v", val)
+		}
+
+		if val := GoValue(ext.LuaState, -7); val != nil {
+			t.Errorf("\nwanted:\nnil\ngot:\n%v", val)
+		}
+	})
+}
+
+func TestParseTable(t *testing.T) {
+	t.Run("should parse sequential array as slice", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "")
+		err := ext.ExecuteLua(`return {10, 20, 30}`)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		got := ParseTable(ext.LuaState, -1, nil)
+		want := []any{10.0, 20.0, 30.0}
+
+		if !reflect.DeepEqual(want, got) {
+			t.Errorf("\nwanted:\n%v\ngot:\n%v", want, got)
+		}
+	})
+
+	t.Run("should parse map as map[string]any", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "")
+		err := ext.ExecuteLua(`return {name="marasi", ver=1}`)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		got := ParseTable(ext.LuaState, -1, nil)
+		gotMap := got.(map[string]any)
+
+		if gotMap["name"] != "marasi" || gotMap["ver"] != 1.0 {
+			t.Errorf("\nwanted:\nmap[name:marasi ver:1]\ngot:\n%v", got)
+		}
+	})
+
+	t.Run("should parse sparse array as map", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "")
+		err := ext.ExecuteLua(`
+			local t = {}
+			t[1] = "first"
+			t[3] = "third"
+			return t
+		`)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		got := ParseTable(ext.LuaState, -1, nil)
+		gotMap, ok := got.(map[string]any)
+		if !ok {
+			t.Fatalf("\nwanted:\nmap[string]any\ngot:\n%T", got)
+		}
+
+		if gotMap["1"] != "first" || gotMap["3"] != "third" {
+			t.Errorf("\nwanted:\nmap[1:first 3:third]\ngot:\n%v", gotMap)
+		}
+	})
+
+	t.Run("should parse mixed keys as map", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "")
+		err := ext.ExecuteLua(`return {100, key="val"}`)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		got := ParseTable(ext.LuaState, -1, nil)
+		gotMap, ok := got.(map[string]any)
+		if !ok {
+			t.Fatalf("\nwanted:\nmap[string]any\ngot:\n%T", got)
+		}
+
+		if gotMap["1"] != 100.0 || gotMap["key"] != "val" {
+			t.Errorf("\nwanted:\nmap[1:100 key:val]\ngot:\n%v", gotMap)
+		}
+	})
+
+	t.Run("should use custom converter if provided", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "")
+		err := ext.ExecuteLua(`return {1, 2}`)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		converter := func(l *lua.State, idx int) any {
+			val, _ := l.ToNumber(idx)
+			return val * 2
+		}
+
+		got := ParseTable(ext.LuaState, -1, converter)
+		want := []any{2.0, 4.0}
+
+		if !reflect.DeepEqual(want, got) {
+			t.Errorf("\nwanted:\n%v\ngot:\n%v", want, got)
+		}
+	})
+
+	t.Run("should handle empty table as empty slice", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "")
+		err := ext.ExecuteLua(`return {}`)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		got := ParseTable(ext.LuaState, -1, nil)
+		// Empty Lua tables default to empty slices []any{}
+		slice, ok := got.([]any)
+		if !ok {
+			t.Fatalf("\nwanted:\n[]any\ngot:\n%T", got)
+		}
+		if len(slice) != 0 {
+			t.Errorf("\nwanted:\nempty slice\ngot:\n%v", slice)
+		}
+	})
+}
+
+func TestGetExtensionID(t *testing.T) {
+	t.Run("should return valid UUID when global is set correctly", func(t *testing.T) {
+		id := uuid.New()
+		ext, _ := setupTestExtension(t, "")
+
+		ext.LuaState.PushString(id.String())
+		ext.LuaState.SetGlobal("extension_id")
+
+		got := GetExtensionID(ext.LuaState)
+		if got != id {
+			t.Errorf("\nwanted:\n%v\ngot:\n%v", id, got)
+		}
+	})
+
+	t.Run("should return nil UUID when global is invalid string", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "")
+
+		ext.LuaState.PushString("not-a-uuid")
+		ext.LuaState.SetGlobal("extension_id")
+
+		got := GetExtensionID(ext.LuaState)
+		if got != uuid.Nil {
+			t.Errorf("\nwanted:\n%v\ngot:\n%v", uuid.Nil, got)
+		}
+	})
+
+	t.Run("should return nil UUID when global is not set", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "")
+
+		ext.LuaState.PushNil()
+		ext.LuaState.SetGlobal("extension_id")
+
+		got := GetExtensionID(ext.LuaState)
+		if got != uuid.Nil {
+			t.Errorf("\nwanted:\n%v\ngot:\n%v", uuid.Nil, got)
+		}
+	})
+
+	t.Run("should return nil UUID when global is not a string", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "")
+
+		ext.LuaState.PushNumber(123)
+		ext.LuaState.SetGlobal("extension_id")
+
+		got := GetExtensionID(ext.LuaState)
+		if got != uuid.Nil {
+			t.Errorf("\nwanted:\n%v\ngot:\n%v", uuid.Nil, got)
 		}
 	})
 }

@@ -321,7 +321,7 @@ func TestTrafficRepo_GetRequestResponseSummary(t *testing.T) {
 		}
 	})
 
-	t.Run("should return summary for all requests, ordered DESC by ID", func(t *testing.T) {
+	t.Run("should return summary for all requests, ordered ASC by ID", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 
@@ -345,26 +345,26 @@ func TestTrafficRepo_GetRequestResponseSummary(t *testing.T) {
 			t.Fatalf("\nwanted:\n3\ngot:\n%d", len(summary))
 		}
 
-		if summary[0].ID != reqID3 {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", reqID3, summary[0].ID)
+		if summary[0].ID != reqID1 {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", reqID1, summary[0].ID)
 		}
 
 		if summary[1].ID != reqID2 {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", reqID2, summary[1].ID)
 		}
 
-		if summary[2].ID != reqID1 {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", reqID1, summary[2].ID)
+		if summary[2].ID != reqID3 {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", reqID3, summary[2].ID)
 		}
 
 		wantMeta := map[string]any{"foo": "bar"}
-		if !reflect.DeepEqual(summary[0].Metadata, wantMeta) {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", wantMeta, summary[0].Metadata)
+		if !reflect.DeepEqual(summary[2].Metadata, wantMeta) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", wantMeta, summary[2].Metadata)
 		}
 
 		wantMeta = map[string]any{}
-		if !reflect.DeepEqual(summary[2].Metadata, wantMeta) {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", wantMeta, summary[2].Metadata)
+		if !reflect.DeepEqual(summary[0].Metadata, wantMeta) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", wantMeta, summary[0].Metadata)
 		}
 	})
 }

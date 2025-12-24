@@ -362,19 +362,23 @@ func (proxy *Proxy) WriteToDB() {
 			err := proxy.TrafficRepo.InsertRequest(castItem)
 			if err != nil {
 				log.Println(err)
+				continue
+			}
+
+			if val, ok := castItem.Metadata["launchpad_id"]; ok {
+				if launchpadID, ok := val.(uuid.UUID); ok {
+					err := proxy.LaunchpadRepo.LinkRequestToLaunchpad(castItem.ID, launchpadID)
+					if err != nil {
+						log.Printf("linking request to launchpad: %v", err)
+					}
+				}
 			}
 		case *domain.ProxyResponse:
 			err := proxy.TrafficRepo.InsertResponse(castItem)
 			if err != nil {
 				log.Println(err)
 			}
-		case *domain.LaunchpadRequest:
-			err := proxy.LaunchpadRepo.LinkRequestToLaunchpad(castItem.RequestID, castItem.LaunchpadID)
-			if err != nil {
-				log.Println(err)
-			}
 		case *domain.Log:
-			log.Print(castItem)
 			err := proxy.LogRepo.InsertLog(castItem)
 			if err != nil {
 				log.Print(err)
@@ -431,10 +435,13 @@ func (proxy *Proxy) GetListener(address string, port string) (net.Listener, erro
 	proxy.WriteLog("INFO", fmt.Sprintf("Marasi Service Started on %s:%s", address, port))
 
 	// Setup client
-	parsedURL, err := url.Parse(fmt.Sprintf("http://%s:%s", proxy.Addr, proxy.Port))
+	hostPort := net.JoinHostPort(proxy.Addr, proxy.Port)
+	parsedURL, err := url.Parse(fmt.Sprintf("http://%s", hostPort))
 	if err != nil {
 		log.Fatal(fmt.Errorf("error parsing proxy URL: %w", err))
 	}
+	log.Print(parsedURL)
+
 	transport := &http.Transport{
 		Proxy:           http.ProxyURL(parsedURL),
 		TLSClientConfig: proxy.MarasiClientTLSConfig,
