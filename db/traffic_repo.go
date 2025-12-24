@@ -292,7 +292,7 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 			  status, status_code, content_type, length, responded_at,
 			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
 			  FROM request
-			  ORDER BY id DESC`
+			  ORDER BY id ASC`
 
 	err := repo.dbConn.Select(&dbSummary, query)
 	if err != nil {

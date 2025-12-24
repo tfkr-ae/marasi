@@ -207,7 +207,7 @@ func jsonLibrary() []lua.RegistryFunction {
 		// @param indent number (optional) The number of spaces to use for indentation.
 		// @return string The JSON encoded string.
 		{Name: "encode", Function: func(l *lua.State) int {
-			val := goValue(l, 2)
+			val := GoValue(l, 2)
 			indent := lua.OptInteger(l, 3, 0)
 
 			var jsonBytes []byte

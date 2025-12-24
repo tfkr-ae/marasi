@@ -1159,7 +1159,7 @@ func RegisterRequestType(extension *Runtime) {
 			return 0
 		}
 
-		val := parseTable(l, 2, goValue)
+		val := ParseTable(l, 2, GoValue)
 
 		extensionMetadata, ok := val.(map[string]any)
 		if !ok {
@@ -1462,7 +1462,7 @@ func RegisterResponseType(extension *Runtime) {
 			return 0
 		}
 
-		val := parseTable(l, 2, goValue)
+		val := ParseTable(l, 2, GoValue)
 
 		extensionMetadata, ok := val.(map[string]any)
 		if !ok {
@@ -1733,7 +1733,7 @@ func RegisterRequestBuilderType(extension *Runtime) {
 	funcs["set_metadata"] = func(l *lua.State) int {
 		builder := lua.CheckUserData(l, 1, "RequestBuilder").(*RequestBuilder)
 
-		val := parseTable(l, 2, goValue)
+		val := ParseTable(l, 2, GoValue)
 
 		metadataMap, ok := val.(map[string]any)
 		if !ok {

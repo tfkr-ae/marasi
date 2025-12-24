@@ -1563,7 +1563,7 @@ func TestWriteRequestModifier(t *testing.T) {
 
 	})
 
-	t.Run("requests coming from launchpad should write a LaunchpadRequest to the DBWriteChannel", func(t *testing.T) {
+	t.Run("requests coming from launchpad should include launchpad_id in metadata", func(t *testing.T) {
 		wantRequestID, err := uuid.NewV7()
 		if err != nil {
 			t.Fatalf("generating uuid : %v", err)
@@ -1574,20 +1574,19 @@ func TestWriteRequestModifier(t *testing.T) {
 			t.Fatalf("generating uuid : %v", err)
 		}
 
-		want := &domain.LaunchpadRequest{
-			LaunchpadID: wantLaunchpadID,
-			RequestID:   wantRequestID,
-		}
-
 		proxy := newTestProxy(t)
 		proxy.OnRequest = func(req domain.ProxyRequest) error {
 			return nil
 		}
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app/blog", nil)
 
+		metadata := map[string]any{
+			"launchpad_id": wantLaunchpadID,
+		}
+
 		*req = *core.ContextWithRequestID(req, wantRequestID)
 		*req = *core.ContextWithRequestTime(req, time.Now())
-		*req = *core.ContextWithMetadata(req, make(map[string]any))
+		*req = *core.ContextWithMetadata(req, metadata)
 		*req = *core.ContextWithLaunchpadID(req, wantLaunchpadID)
 
 		err = WriteRequestModifier(proxy, req)
@@ -1595,16 +1594,18 @@ func TestWriteRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		// DBWriteChannel should now hold the proxyRequest and then the launchpadRequest
-		if len(proxy.DBWriteChannel) != 2 {
-			t.Fatalf("wanted: 2\ngot: %d", len(proxy.DBWriteChannel))
+		if len(proxy.DBWriteChannel) != 1 {
+			t.Fatalf("wanted: 1\ngot: %d", len(proxy.DBWriteChannel))
 		}
 
-		// first Read off the proxy request and discard it
-		_ = <-proxy.DBWriteChannel
 		got := <-proxy.DBWriteChannel
-		if !reflect.DeepEqual(want, got) {
-			t.Fatalf("wanted: %v\ngot: %v", want, got)
+		castItem, ok := got.(*domain.ProxyRequest)
+		if !ok {
+			t.Fatalf("wanted: *domain.ProxyRequest\ngot: %T", got)
+		}
+
+		if val, ok := castItem.Metadata["launchpad_id"]; !ok || val != wantLaunchpadID {
+			t.Fatalf("wanted metadata['launchpad_id']: %v\ngot: %v", wantLaunchpadID, val)
 		}
 	})
 

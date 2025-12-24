@@ -115,6 +115,7 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 	}
 }
 
+// TODO: Need to fix this, currently if the extension exists it does not overrite it, this breaks opening new projects
 // WithExtension loads a single extension into the proxy.
 // It prepares the extension's Lua state and adds it to the proxy's extension list.
 func WithExtension(extension *domain.Extension, options ...func(*extensions.Runtime) error) func(*Proxy) error {
@@ -141,9 +142,7 @@ func WithExtension(extension *domain.Extension, options ...func(*extensions.Runt
 // It iterates through the provided extensions and prepares each one.
 func WithExtensions(exts []*domain.Extension, options ...func(*extensions.Runtime) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
-		if proxy.Extensions == nil {
-			proxy.Extensions = make([]*extensions.Runtime, 0)
-		}
+		proxy.Extensions = make([]*extensions.Runtime, 0)
 		for _, extension := range exts {
 			if _, ok := proxy.GetExtension(extension.Name); !ok {
 				ext := &extensions.Runtime{Data: extension}

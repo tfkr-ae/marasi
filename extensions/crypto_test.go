@@ -108,7 +108,7 @@ func TestCryptoLibrary(t *testing.T) {
 				t.Fatalf("executing lua code %s : %v", tt.luaCode, err)
 			}
 
-			got := goValue(extension.LuaState, -1)
+			got := GoValue(extension.LuaState, -1)
 
 			if tt.validatorFunc != nil {
 				tt.validatorFunc(t, got)
@@ -359,7 +359,7 @@ func TestAESLibrary(t *testing.T) {
 			if err := extension.ExecuteLua(tt.luaCode); err != nil {
 				t.Fatalf("executing lua code %s : %v", tt.luaCode, err)
 			}
-			got := goValue(extension.LuaState, -1)
+			got := GoValue(extension.LuaState, -1)
 			if tt.validatorFunc != nil {
 				tt.validatorFunc(t, got)
 			}
@@ -502,7 +502,7 @@ func TestRSALibrary(t *testing.T) {
 			if err := extension.ExecuteLua(tt.luaCode); err != nil {
 				t.Fatalf("executing lua code %s : %v", tt.luaCode, err)
 			}
-			got := goValue(extension.LuaState, -1)
+			got := GoValue(extension.LuaState, -1)
 			if tt.validatorFunc != nil {
 				tt.validatorFunc(t, got)
 			}
@@ -647,7 +647,7 @@ func TestEd25519Library(t *testing.T) {
 			if err := extension.ExecuteLua(tt.luaCode); err != nil {
 				t.Fatalf("executing lua code %s : %v", tt.luaCode, err)
 			}
-			got := goValue(extension.LuaState, -1)
+			got := GoValue(extension.LuaState, -1)
 			if tt.validatorFunc != nil {
 				tt.validatorFunc(t, got)
 			}

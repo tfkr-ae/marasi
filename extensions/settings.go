@@ -38,7 +38,7 @@ func settingsLibrary(proxy ProxyService) []lua.RegistryFunction {
 				return 0
 			}
 
-			extID := getExtensionID(l)
+			extID := GetExtensionID(l)
 			if extID == uuid.Nil {
 				lua.Errorf(l, "extension ID is nil")
 				return 0
@@ -59,7 +59,7 @@ func settingsLibrary(proxy ProxyService) []lua.RegistryFunction {
 		// @return boolean True if the settings were updated successfully.
 		{Name: "set", Function: func(l *lua.State) int {
 			// util.PullTable cannot handle mixed keys
-			val := goValue(l, 2)
+			val := GoValue(l, 2)
 
 			// empty tables in lua are cast as []any, need to convert this to map
 			settingsMap := asMap(val)
@@ -76,7 +76,7 @@ func settingsLibrary(proxy ProxyService) []lua.RegistryFunction {
 				return 0
 			}
 
-			extID := getExtensionID(l)
+			extID := GetExtensionID(l)
 			if extID == uuid.Nil {
 				lua.Errorf(l, "extension ID is nil")
 				return 0

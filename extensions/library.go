@@ -26,7 +26,7 @@ func registerMarasiLibrary(l *lua.State, proxy ProxyService) {
 		{Name: "log", Function: func(l *lua.State) int {
 			message := lua.CheckString(l, 2)
 			level := lua.OptString(l, 3, "INFO")
-			if extID := getExtensionID(l); extID != uuid.Nil {
+			if extID := GetExtensionID(l); extID != uuid.Nil {
 				err := proxy.WriteLog(level, message, core.LogWithExtensionID(extID))
 				if err != nil {
 					lua.Errorf(l, fmt.Sprintf("writing log : %s", err.Error()))
