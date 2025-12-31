@@ -3,9 +3,11 @@ package marasi
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -15,7 +17,6 @@ import (
 	"github.com/google/martian"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/core"
-	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/rawhttp"
 )
 
@@ -105,6 +106,23 @@ func (f martianResModifierFunc) ModifyResponse(res *http.Response) error {
 	return f(res)
 }
 
+// isLaunchpad checks if the request contains a launchpad ID header, indicating
+// it was sent from a launchpad replay operation.
+//
+// Parameters:
+//   - req: The HTTP request to check
+//
+// Returns:
+//   - bool: Whether the request is from a launchpad
+//   - uuid.UUID: The launchpad ID, or uuid.Nil if not a launchpad request
+func isLaunchpad(req *http.Request) (bool, uuid.UUID) {
+	launchpadId := req.Header.Get("x-launchpad-id")
+	if launchpadId, err := uuid.Parse(launchpadId); err == nil {
+		return true, launchpadId
+	}
+	return false, uuid.Nil
+}
+
 // getHostPort will return a host:port string based on the request
 // It will fall back to 443 or 80 depending on the scheme or req.TLS
 func getHostPort(req *http.Request) string {
@@ -179,13 +197,22 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 	}
 
 	// Requests coming from launchpad will have x-launchpad-id set as a header
-	if isLaunchpad, launchpadId := IsLaunchpad(req); isLaunchpad {
+	if isLaunchpad, launchpadId := isLaunchpad(req); isLaunchpad {
 		metadata["launchpad"] = true
 		metadata["launchpad_id"] = launchpadId
 		*req = *core.ContextWithLaunchpadID(req, launchpadId)
 
-		// Header is removed after processign
+		// Header is removed after processing
 		req.Header.Del("x-launchpad-id")
+	}
+
+	if metadataString := req.Header.Get("x-marasi-metadata"); metadataString != "" {
+		var headerMetadata map[string]any
+
+		if err := json.Unmarshal([]byte(metadataString), &headerMetadata); err == nil {
+			maps.Copy(metadata, headerMetadata)
+		}
+		req.Header.Del("x-marasi-metadata")
 	}
 
 	*req = *core.ContextWithRequestID(req, uuid)
@@ -222,22 +249,18 @@ func OverrideWaypointsModifier(proxy *Proxy, req *http.Request) error {
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
 func CompassRequestModifier(proxy *Proxy, req *http.Request) error {
 	if compassExt, ok := proxy.GetExtension("compass"); ok {
-		compassExt.Mu.Lock()
-		defer compassExt.Mu.Unlock()
-		if compassExt.CheckGlobalFunction("processRequest") {
-			err := compassExt.CallRequestHandler(req)
-			if err != nil {
-				proxy.WriteLog("ERROR", fmt.Sprintf("Running processRequest : %s", err.Error()), core.LogWithExtensionID(compassExt.Data.ID))
-				// Continue as a err in Lua should not bring down the proxy
-			}
-			if skip, ok := core.SkipFlagFromContext(req.Context()); ok && skip {
-				return ErrSkipPipeline
-			}
+		err := compassExt.CallRequestHandler(req)
+		if err != nil {
+			proxy.WriteLog("ERROR", fmt.Sprintf("Running processRequest : %s", err.Error()), core.LogWithExtensionID(compassExt.Data.ID))
+			// Continue as a err in Lua should not bring down the proxy
+		}
+		if skip, ok := core.SkipFlagFromContext(req.Context()); ok && skip {
+			return ErrSkipPipeline
+		}
 
-			if dropped, ok := core.DroppedFlagFromContext(req.Context()); ok && dropped {
-				martian.NewContext(req).SkipRoundTrip()
-				return ErrDropped
-			}
+		if dropped, ok := core.DroppedFlagFromContext(req.Context()); ok && dropped {
+			martian.NewContext(req).SkipRoundTrip()
+			return ErrDropped
 		}
 		return nil
 	}
@@ -258,25 +281,21 @@ func ExtensionsRequestModifier(proxy *Proxy, req *http.Request) error {
 	for _, ext := range proxy.Extensions {
 		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" {
 			if extensionID != ext.Data.ID.String() {
-				ext.Mu.Lock()
-				defer ext.Mu.Unlock()
-				if ext.CheckGlobalFunction("processRequest") {
-					err := ext.CallRequestHandler(req)
-					if err != nil {
-						proxy.WriteLog("ERROR", fmt.Sprintf("Running processRequest : %s", err.Error()), core.LogWithExtensionID(ext.Data.ID))
-						// Continue as a err in Lua should not bring down the proxy
-					}
-
-					if skip, ok := core.SkipFlagFromContext(req.Context()); ok && skip {
-						return ErrSkipPipeline
-					}
-
-					if dropped, ok := core.DroppedFlagFromContext(req.Context()); ok && dropped {
-						martian.NewContext(req).SkipRoundTrip()
-						return ErrDropped
-					}
-
+				err := ext.CallRequestHandler(req)
+				if err != nil {
+					proxy.WriteLog("ERROR", fmt.Sprintf("Running processRequest : %s", err.Error()), core.LogWithExtensionID(ext.Data.ID))
+					// Continue as a err in Lua should not bring down the proxy
 				}
+
+				if skip, ok := core.SkipFlagFromContext(req.Context()); ok && skip {
+					return ErrSkipPipeline
+				}
+
+				if dropped, ok := core.DroppedFlagFromContext(req.Context()); ok && dropped {
+					martian.NewContext(req).SkipRoundTrip()
+					return ErrDropped
+				}
+
 			}
 		}
 	}
@@ -369,13 +388,6 @@ func WriteRequestModifier(proxy *Proxy, req *http.Request) error {
 			return fmt.Errorf("%w : %w", ErrProxyRequest, err)
 		}
 		proxy.DBWriteChannel <- proxyRequest
-		if launchpadID, ok := core.LaunchpadIDFromContext(req.Context()); ok {
-			launchpadRequest := &domain.LaunchpadRequest{
-				LaunchpadID: launchpadID,
-				RequestID:   proxyRequest.ID,
-			}
-			proxy.DBWriteChannel <- launchpadRequest
-		}
 		if proxy.OnRequest == nil {
 			return ErrRequestHandlerUndefined
 		} else {
@@ -469,21 +481,17 @@ func CompressedResponseModifier(proxy *Proxy, res *http.Response) error {
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
 func CompassResponseModifier(proxy *Proxy, res *http.Response) error {
 	if compassExt, ok := proxy.GetExtension("compass"); ok {
-		compassExt.Mu.Lock()
-		defer compassExt.Mu.Unlock()
-		if compassExt.CheckGlobalFunction("processResponse") {
-			err := compassExt.CallResponseHandler(res)
-			if err != nil {
-				proxy.WriteLog("ERROR", fmt.Sprintf("Running processResponse : %s", err.Error()), core.LogWithExtensionID(compassExt.Data.ID))
-				// Continue as a err in Lua should not bring down the proxy
-			}
-			if skip, ok := core.SkipFlagFromContext(res.Request.Context()); ok && skip {
-				return ErrSkipPipeline
-			}
+		err := compassExt.CallResponseHandler(res)
+		if err != nil {
+			proxy.WriteLog("ERROR", fmt.Sprintf("Running processResponse : %s", err.Error()), core.LogWithExtensionID(compassExt.Data.ID))
+			// Continue as a err in Lua should not bring down the proxy
+		}
+		if skip, ok := core.SkipFlagFromContext(res.Request.Context()); ok && skip {
+			return ErrSkipPipeline
+		}
 
-			if dropped, ok := core.DroppedFlagFromContext(res.Request.Context()); ok && dropped {
-				return ErrDropped
-			}
+		if dropped, ok := core.DroppedFlagFromContext(res.Request.Context()); ok && dropped {
+			return ErrDropped
 		}
 		return nil
 	}
@@ -497,24 +505,20 @@ func ExtensionsResponseModifier(proxy *Proxy, res *http.Response) error {
 	for _, ext := range proxy.Extensions {
 		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" {
 			if extensionID, ok := core.ExtensionIDFromContext(res.Request.Context()); !ok || extensionID != ext.Data.ID.String() {
-				ext.Mu.Lock()
-				defer ext.Mu.Unlock()
-				if ext.CheckGlobalFunction("processResponse") {
-					err := ext.CallResponseHandler(res)
-					if err != nil {
-						proxy.WriteLog("ERROR", fmt.Sprintf("Running processResponse : %s", err.Error()), core.LogWithExtensionID(ext.Data.ID))
-						// Continue as a err in Lua should not bring down the proxy
-					}
-
-					if skip, ok := core.SkipFlagFromContext(res.Request.Context()); ok && skip {
-						return ErrSkipPipeline
-					}
-
-					if dropped, ok := core.DroppedFlagFromContext(res.Request.Context()); ok && dropped {
-						return ErrDropped
-					}
-
+				err := ext.CallResponseHandler(res)
+				if err != nil {
+					proxy.WriteLog("ERROR", fmt.Sprintf("Running processResponse : %s", err.Error()), core.LogWithExtensionID(ext.Data.ID))
+					// Continue as a err in Lua should not bring down the proxy
 				}
+
+				if skip, ok := core.SkipFlagFromContext(res.Request.Context()); ok && skip {
+					return ErrSkipPipeline
+				}
+
+				if dropped, ok := core.DroppedFlagFromContext(res.Request.Context()); ok && dropped {
+					return ErrDropped
+				}
+
 			}
 		}
 	}

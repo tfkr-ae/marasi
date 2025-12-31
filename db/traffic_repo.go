@@ -292,7 +292,7 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 			  status, status_code, content_type, length, responded_at,
 			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
 			  FROM request
-			  ORDER BY id DESC`
+			  ORDER BY id ASC`
 
 	err := repo.dbConn.Select(&dbSummary, query)
 	if err != nil {
@@ -364,4 +364,27 @@ func (repo *Repository) UpdateNote(requestID uuid.UUID, note string) error {
 	}
 
 	return nil
+}
+
+// SearchByMetadata retrieves requests where the value at the specified JSON path matches the provided value.
+func (repo *Repository) SearchByMetadata(path string, value any) ([]*domain.RequestResponseSummary, error) {
+	var dbSummary []*dbRequestResponseSummary
+	query := `SELECT
+			  id, scheme, method, host, path, requested_at,
+			  status, status_code, content_type, length, responded_at,
+			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
+			  FROM request
+			  WHERE json_extract(metadata, ?) = ?
+			  ORDER BY id ASC`
+
+	err := repo.dbConn.Select(&dbSummary, query, path, value)
+	if err != nil {
+		return nil, fmt.Errorf("searching metadata with path %s: %w", path, err)
+	}
+
+	reqResSummary := make([]*domain.RequestResponseSummary, len(dbSummary))
+	for i, row := range dbSummary {
+		reqResSummary[i] = toDomainRequestResponseSummary(row)
+	}
+	return reqResSummary, nil
 }

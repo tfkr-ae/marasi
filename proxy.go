@@ -72,7 +72,7 @@ type Proxy struct {
 	Addr                  string                               // IP Address of the proxy
 	Port                  string                               // Port of the proxy
 	Client                *http.Client                         // HTTP Client that is used by the repeater functionality (autoconfigured to use the proxy)
-	Extensions            []*extensions.LuaExtension           // Slice of loaded extensions
+	Extensions            []*extensions.Runtime                // Slice of loaded extensions
 	SPKIHash              string                               // SPKI Hash of the current certificate
 	Cert                  *x509.Certificate                    // The proxy's TLS certificate.
 	mitmConfig            *tls.Config                          // Martian Proxy MITM config
@@ -127,6 +127,15 @@ func (proxy *Proxy) GetExtensionRepo() (domain.ExtensionRepository, error) {
 	return proxy.ExtensionRepo, nil
 }
 
+// GetTrafficRepo returns the traffic repository.
+// It returns an error if the repository is not set.
+func (proxy *Proxy) GetTrafficRepo() (domain.TrafficRepository, error) {
+	if proxy.TrafficRepo == nil {
+		return nil, ErrExtensionRepoNotFound
+	}
+	return proxy.TrafficRepo, nil
+}
+
 // New creates a new Proxy instance with default configuration and applies any provided options.
 // It initializes the underlying martian proxy, database write channel, extensions map, HTTP client,
 // scope, waypoints, and sets up default log modifiers.
@@ -142,7 +151,7 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 		martianProxy:   martian.NewProxy(),
 		Modifiers:      fifo.NewGroup(),
 		DBWriteChannel: make(chan any, 10),
-		Extensions:     make([]*extensions.LuaExtension, 0),
+		Extensions:     make([]*extensions.Runtime, 0),
 		Client:         &http.Client{},
 		Scope:          compass.NewScope(true),
 		Waypoints:      make(map[string]string),
@@ -190,7 +199,7 @@ func (proxy *Proxy) SyncWaypoints() error {
 
 // GetExtension retrieves a loaded extension by its name.
 // It returns the extension and true if found, otherwise nil and false.
-func (proxy *Proxy) GetExtension(name string) (*extensions.LuaExtension, bool) {
+func (proxy *Proxy) GetExtension(name string) (*extensions.Runtime, bool) {
 	for _, ext := range proxy.Extensions {
 		if ext.Data.Name == name {
 			return ext, true
@@ -234,6 +243,26 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyReque
 		if req.URL.RawQuery != "" {
 			path = fmt.Sprintf("%s?%s", path, req.URL.RawQuery)
 		}
+
+		currentHost := req.Host
+		currentURLHost := req.URL.Host
+		originalHost := ""
+
+		if host, ok := metadata["original_host"].(string); ok && host != "" { // Lua heading override
+			originalHost = host
+		} else if host, ok := metadata["original_host_header"].(string); ok && host != "" { // Waypoint redirect
+			originalHost = host
+		}
+
+		if originalHost != "" {
+			if originalHost != currentHost {
+				req.Host = originalHost
+			}
+			if currentURLHost != "" && currentURLHost != originalHost {
+				req.URL.Host = originalHost
+			}
+		}
+
 		proxyRequest := &domain.ProxyRequest{
 			ID:          requestId,
 			Scheme:      req.URL.Scheme,
@@ -243,11 +272,17 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyReque
 			Metadata:    metadata,
 			RequestedAt: requestTime,
 		}
+
 		// TODO Check prettified error
 		rawReq, prettified, err := rawhttp.DumpRequest(req)
+
+		req.Host = currentHost
+		req.URL.Host = currentURLHost
+
 		if err != nil {
 			return nil, fmt.Errorf("dumping request %d body : %w", requestId, err)
 		}
+
 		proxyRequest.Raw = domain.RawField(rawReq)
 		if prettified != "" {
 			proxyRequest.Metadata["prettified-request"] = prettified
@@ -336,19 +371,23 @@ func (proxy *Proxy) WriteToDB() {
 			err := proxy.TrafficRepo.InsertRequest(castItem)
 			if err != nil {
 				log.Println(err)
+				continue
+			}
+
+			if val, ok := castItem.Metadata["launchpad_id"]; ok {
+				if launchpadID, ok := val.(uuid.UUID); ok {
+					err := proxy.LaunchpadRepo.LinkRequestToLaunchpad(castItem.ID, launchpadID)
+					if err != nil {
+						log.Printf("linking request to launchpad: %v", err)
+					}
+				}
 			}
 		case *domain.ProxyResponse:
 			err := proxy.TrafficRepo.InsertResponse(castItem)
 			if err != nil {
 				log.Println(err)
 			}
-		case *domain.LaunchpadRequest:
-			err := proxy.LaunchpadRepo.LinkRequestToLaunchpad(castItem.RequestID, castItem.LaunchpadID)
-			if err != nil {
-				log.Println(err)
-			}
 		case *domain.Log:
-			log.Print(castItem)
 			err := proxy.LogRepo.InsertLog(castItem)
 			if err != nil {
 				log.Print(err)
@@ -392,23 +431,33 @@ func (proxy *Proxy) WriteLog(level string, message string, options ...func(log *
 	return nil
 }
 
-// Accept waits for and returns the next connection to the listener.
 func (proxy *Proxy) GetListener(address string, port string) (net.Listener, error) {
 	rawListener, err := net.Listen("tcp", fmt.Sprintf("%s:%s", address, port))
 	if err != nil {
 		return rawListener, fmt.Errorf("setting up listener on address:port %s:%s", address, port)
 	}
+	addr := rawListener.Addr().(*net.TCPAddr)
+
+	if addr.IP.IsUnspecified() {
+		proxy.Addr = "127.0.0.1"
+	} else {
+		proxy.Addr = addr.IP.String()
+	}
+	proxy.Port = fmt.Sprintf("%d", addr.Port)
+
 	muxListener := listener.NewProtocolMuxListener(rawListener, proxy.mitmConfig)
 	marasiListener := listener.NewMarasiListener(muxListener)
-	proxy.Addr = address
-	proxy.Port = port
-	proxy.WriteLog("INFO", fmt.Sprintf("Marasi Service Started on %s:%s", address, port))
 
-	// Setup client
-	parsedURL, err := url.Parse(fmt.Sprintf("http://%s:%s", proxy.Addr, proxy.Port))
+	proxy.WriteLog("INFO", fmt.Sprintf("Marasi Service Started on %s", rawListener.Addr().String()))
+
+	hostPort := net.JoinHostPort(proxy.Addr, proxy.Port)
+	parsedURL, err := url.Parse(fmt.Sprintf("http://%s", hostPort))
 	if err != nil {
 		log.Fatal(fmt.Errorf("error parsing proxy URL: %w", err))
 	}
+
+	log.Printf("Proxy Client Configured: %s", parsedURL.String())
+
 	transport := &http.Transport{
 		Proxy:           http.ProxyURL(parsedURL),
 		TLSClientConfig: proxy.MarasiClientTLSConfig,
@@ -452,7 +501,6 @@ func (proxy *Proxy) Launch(raw string, launchpadId string, useHttps bool) error 
 	if req.TLS != nil {
 		scheme = "https"
 	}
-	// Construct Full URL
 	if useHttps {
 		scheme = "https"
 	}
