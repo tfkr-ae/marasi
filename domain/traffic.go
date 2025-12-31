@@ -67,6 +67,9 @@ type TrafficRepository interface {
 
 	// UpdateNote creates or updates the user-created note for a specific request ID.
 	UpdateNote(requestID uuid.UUID, note string) error
+
+	// SearchByMetadata retrieves requests where the value at the specified JSON path matches the provided value.
+	SearchByMetadata(path string, value any) ([]*RequestResponseSummary, error)
 }
 
 // ProxyRequest represents the data captured from an HTTP request.

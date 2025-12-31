@@ -321,7 +321,7 @@ func TestTrafficRepo_GetRequestResponseSummary(t *testing.T) {
 		}
 	})
 
-	t.Run("should return summary for all requests, ordered DESC by ID", func(t *testing.T) {
+	t.Run("should return summary for all requests, ordered ASC by ID", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 
@@ -345,26 +345,26 @@ func TestTrafficRepo_GetRequestResponseSummary(t *testing.T) {
 			t.Fatalf("\nwanted:\n3\ngot:\n%d", len(summary))
 		}
 
-		if summary[0].ID != reqID3 {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", reqID3, summary[0].ID)
+		if summary[0].ID != reqID1 {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", reqID1, summary[0].ID)
 		}
 
 		if summary[1].ID != reqID2 {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", reqID2, summary[1].ID)
 		}
 
-		if summary[2].ID != reqID1 {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", reqID1, summary[2].ID)
+		if summary[2].ID != reqID3 {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", reqID3, summary[2].ID)
 		}
 
 		wantMeta := map[string]any{"foo": "bar"}
-		if !reflect.DeepEqual(summary[0].Metadata, wantMeta) {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", wantMeta, summary[0].Metadata)
+		if !reflect.DeepEqual(summary[2].Metadata, wantMeta) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", wantMeta, summary[2].Metadata)
 		}
 
 		wantMeta = map[string]any{}
-		if !reflect.DeepEqual(summary[2].Metadata, wantMeta) {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", wantMeta, summary[2].Metadata)
+		if !reflect.DeepEqual(summary[0].Metadata, wantMeta) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", wantMeta, summary[0].Metadata)
 		}
 	})
 }
@@ -595,6 +595,80 @@ func TestTrafficRepo_NoteTriggers(t *testing.T) {
 
 		if _, ok := meta["has_note"]; ok {
 			t.Fatalf("\nwanted:\n'has_note' key to be removed\ngot:\nkey still exists")
+		}
+	})
+}
+
+func TestTrafficRepo_SearchByMetadata(t *testing.T) {
+	t.Run("should return matching requests", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		targetValue := "frontend"
+		otherValue := "backend"
+		path := "$.service"
+
+		reqID1 := testRequest(t, repo, map[string]any{"service": targetValue, "id": 1.0})
+		_ = testRequest(t, repo, map[string]any{"service": otherValue, "id": 2.0})
+		reqID3 := testRequest(t, repo, map[string]any{"service": targetValue, "id": 3.0})
+
+		allSummaries, err := repo.GetRequestResponseSummary()
+		if err != nil {
+			t.Fatalf("getting summaries for setup: %v", err)
+		}
+
+		want := []*domain.RequestResponseSummary{allSummaries[0], allSummaries[2]}
+
+		got, err := repo.SearchByMetadata(path, targetValue)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if len(got) != 2 {
+			t.Fatalf("\nwanted:\n2\ngot:\n%d", len(got))
+		}
+
+		if got[0].ID != reqID1 {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", reqID1, got[0].ID)
+		}
+		if got[1].ID != reqID3 {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", reqID3, got[1].ID)
+		}
+
+		if !reflect.DeepEqual(want, got) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
+		}
+	})
+
+	t.Run("should return empty slice if no matches found", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		testRequest(t, repo, map[string]any{"key": "value"})
+
+		got, err := repo.SearchByMetadata("$.non_existent", "value")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if len(got) != 0 {
+			t.Fatalf("\nwanted:\n0\ngot:\n%d", len(got))
+		}
+	})
+
+	t.Run("should return empty slice for invalid json path", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		invalidPath := ".badpath"
+
+		got, err := repo.SearchByMetadata(invalidPath, "value")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if len(got) != 0 {
+			t.Fatalf("\nwanted:\n0\ngot:\n%d", len(got))
 		}
 	})
 }

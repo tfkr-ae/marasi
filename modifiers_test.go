@@ -82,13 +82,13 @@ var testExtensions = map[string]*domain.Extension{
 
 			function processRequest(request)
 			  if not scope:matches(request) then
-				  request:Skip()
+				  request:skip()
 			  end
 			end
 
 			function processResponse(response)
 			  if not scope:matches(response) then
-				  response:Skip()
+				  response:skip()
 			  end
 			end 
 		`,
@@ -98,11 +98,11 @@ var testExtensions = map[string]*domain.Extension{
 		ID:   uuid.MustParse("01937d13-9632-7f84-add5-14ec2c2c7f43"),
 		LuaContent: `
 			function processRequest(request)
-				request:Headers():Set("x-workshop-ran", "true")
+				request:headers():set("x-workshop-ran", "true")
 			end
 
 			function processResponse(response)
-				response:Headers():Set("x-workshop-ran-response", "true")
+				response:headers():set("x-workshop-ran-response", "true")
 			end
 		`,
 	},
@@ -123,11 +123,11 @@ var testExtensions = map[string]*domain.Extension{
 		Name: "testExtension", ID: uuid.MustParse("00000000-0000-0000-0000-000000000001"),
 		LuaContent: `
 			function processRequest(request)
-			  request:Headers():Set("x-testExtension-ran", "true")
+			  request:headers():set("x-testExtension-ran", "true")
 			end
 
 			function processResponse(response)
-			  response:Headers():Set("x-testExtension-ran-response", "true")
+			  response:headers():set("x-testExtension-ran-response", "true")
 			end
 		`,
 	},
@@ -138,7 +138,7 @@ func newTestProxy(t *testing.T, exts ...*domain.Extension) *Proxy {
 
 	proxy := &Proxy{
 		Scope:          compass.NewScope(true),
-		Extensions:     make([]*extensions.LuaExtension, 0),
+		Extensions:     make([]*extensions.Runtime, 0),
 		DBWriteChannel: make(chan any, 10),
 	}
 
@@ -509,7 +509,7 @@ func TestCompassRequestModifier(t *testing.T) {
 		}
 	})
 
-	t.Run("request that matches blocked rule should be dropped when :Drop() method is used", func(t *testing.T) {
+	t.Run("request that matches blocked rule should be dropped when :drop() method is used", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["compass"])
 		updateExtension(t, proxy, "compass", `
 			local scope = marasi:scope()
@@ -518,7 +518,7 @@ func TestCompassRequestModifier(t *testing.T) {
 
 			function processRequest(request)
 			  if not scope:matches(request) then
-				  request:Drop()
+				  request:drop()
 			  end
 			end
 		`)
@@ -631,6 +631,44 @@ func TestSetupRequestModifier(t *testing.T) {
 			t.Fatalf("expected x-launchpad-id to be removed")
 		}
 
+	})
+
+	t.Run("requests with x-marasi-metadata header should preload metadata into context", func(t *testing.T) {
+		proxy := &Proxy{}
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+
+		metaJSON := `{"source": "builder", "is_test": true, "id": 123}`
+		req.Header.Set("x-marasi-metadata", metaJSON)
+
+		want := map[string]any{
+			"source":  "builder",
+			"is_test": true,
+			"id":      123.0,
+		}
+
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context: %v", err)
+		}
+		defer remove()
+
+		err = SetupRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+
+		got, ok := core.MetadataFromContext(req.Context())
+		if !ok {
+			t.Fatalf("expected metadata to be set in context")
+		}
+
+		if !reflect.DeepEqual(want, got) {
+			t.Errorf("wanted:\n%v\ngot:\n%v", want, got)
+		}
+
+		if req.Header.Get("x-marasi-metadata") != "" {
+			t.Errorf("expected x-marasi-metadata header to be removed")
+		}
 	})
 }
 
@@ -753,7 +791,7 @@ func TestExtensionsRequestModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "compass", `
 			function processRequest(request)
-				request:Drop()
+				request:drop()
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -776,8 +814,8 @@ func TestExtensionsRequestModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "workshop", `
 			function processRequest(request)
-				request:Headers():Set("x-workshop-ran", "true")
-				request:Skip()
+				request:headers():set("x-workshop-ran", "true")
+				request:skip()
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -804,8 +842,8 @@ func TestExtensionsRequestModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "workshop", `
 			function processRequest(request)
-				request:Headers():Set("x-workshop-ran", "true")
-				request:Drop()
+				request:headers():set("x-workshop-ran", "true")
+				request:drop()
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -895,7 +933,7 @@ func TestExtensionsRequestModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "workshop", `
 			function processRequest(request)
-				request:Headers():St("x-workshop-ran", "true")
+				request:headers():st("x-workshop-ran", "true")
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -918,7 +956,7 @@ func TestExtensionsRequestModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "testExtension", `
 			function processRequest(request)
-				request:Headers():Set("x-workshop-ran", "overwritten")
+				request:headers():set("x-workshop-ran", "overwritten")
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -1525,7 +1563,7 @@ func TestWriteRequestModifier(t *testing.T) {
 
 	})
 
-	t.Run("requests coming from launchpad should write a LaunchpadRequest to the DBWriteChannel", func(t *testing.T) {
+	t.Run("requests coming from launchpad should include launchpad_id in metadata", func(t *testing.T) {
 		wantRequestID, err := uuid.NewV7()
 		if err != nil {
 			t.Fatalf("generating uuid : %v", err)
@@ -1536,20 +1574,19 @@ func TestWriteRequestModifier(t *testing.T) {
 			t.Fatalf("generating uuid : %v", err)
 		}
 
-		want := &domain.LaunchpadRequest{
-			LaunchpadID: wantLaunchpadID,
-			RequestID:   wantRequestID,
-		}
-
 		proxy := newTestProxy(t)
 		proxy.OnRequest = func(req domain.ProxyRequest) error {
 			return nil
 		}
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app/blog", nil)
 
+		metadata := map[string]any{
+			"launchpad_id": wantLaunchpadID,
+		}
+
 		*req = *core.ContextWithRequestID(req, wantRequestID)
 		*req = *core.ContextWithRequestTime(req, time.Now())
-		*req = *core.ContextWithMetadata(req, make(map[string]any))
+		*req = *core.ContextWithMetadata(req, metadata)
 		*req = *core.ContextWithLaunchpadID(req, wantLaunchpadID)
 
 		err = WriteRequestModifier(proxy, req)
@@ -1557,16 +1594,18 @@ func TestWriteRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		// DBWriteChannel should now hold the proxyRequest and then the launchpadRequest
-		if len(proxy.DBWriteChannel) != 2 {
-			t.Fatalf("wanted: 2\ngot: %d", len(proxy.DBWriteChannel))
+		if len(proxy.DBWriteChannel) != 1 {
+			t.Fatalf("wanted: 1\ngot: %d", len(proxy.DBWriteChannel))
 		}
 
-		// first Read off the proxy request and discard it
-		_ = <-proxy.DBWriteChannel
 		got := <-proxy.DBWriteChannel
-		if !reflect.DeepEqual(want, got) {
-			t.Fatalf("wanted: %v\ngot: %v", want, got)
+		castItem, ok := got.(*domain.ProxyRequest)
+		if !ok {
+			t.Fatalf("wanted: *domain.ProxyRequest\ngot: %T", got)
+		}
+
+		if val, ok := castItem.Metadata["launchpad_id"]; !ok || val != wantLaunchpadID {
+			t.Fatalf("wanted metadata['launchpad_id']: %v\ngot: %v", wantLaunchpadID, val)
 		}
 	})
 
@@ -2029,7 +2068,7 @@ func TestCompassResponseModifier(t *testing.T) {
 		}
 	})
 
-	t.Run("responses matching rule should be dropped if :Drop() is used", func(t *testing.T) {
+	t.Run("responses matching rule should be dropped if :drop() is used", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["compass"])
 		updateExtension(t, proxy, "compass", `
 			local scope = marasi:scope()
@@ -2038,7 +2077,7 @@ func TestCompassResponseModifier(t *testing.T) {
 
 			function processResponse(response)
 			  if not scope:matches(response) then
-				  response:Drop()
+				  response:drop()
 			  end
 			end
 		`)
@@ -2158,7 +2197,7 @@ func TestExtensionsResponseModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "testExtension", `
 			function processResponse(response)
-				response:Headers():Set("x-workshop-ran-response", "overwritten")
+				response:headers():set("x-workshop-ran-response", "overwritten")
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -2197,8 +2236,8 @@ func TestExtensionsResponseModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "workshop", `
 			function processResponse(response)
-				response:Headers():Set("x-workshop-ran-response", "true")
-				response:Skip()
+				response:headers():set("x-workshop-ran-response", "true")
+				response:skip()
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -2237,8 +2276,8 @@ func TestExtensionsResponseModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "workshop", `
 			function processResponse(response)
-				response:Headers():Set("x-workshop-ran-response", "true")
-				response:Drop()
+				response:headers():set("x-workshop-ran-response", "true")
+				response:drop()
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -2341,7 +2380,7 @@ func TestExtensionsResponseModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "workshop", `
 			function processResponse(response)
-				response:Headers():St("x-workshop-ran", "true")
+				response:headers():set("x-workshop-ran", "true")
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
