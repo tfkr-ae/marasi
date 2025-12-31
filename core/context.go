@@ -1,4 +1,4 @@
-package marasi
+package core
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// contextKey is a custom type for context keys to avoid collisions.
 type contextKey string
 
 const (
@@ -34,121 +35,121 @@ const (
 	MartianSessionKey contextKey = "SessionKey"
 )
 
-// ContextWithSession returns a new request with a martian session in the context
+// ContextWithSession returns a new request with a martian session in the context.
 func ContextWithSession(req *http.Request, session *martian.Session) *http.Request {
 	ctx := context.WithValue(req.Context(), MartianSessionKey, session)
 	return req.WithContext(ctx)
 }
 
-// SessionFromContext returns the martian session from the context if it exists
+// SessionFromContext returns the martian session from the context if it exists.
 func SessionFromContext(ctx context.Context) (*martian.Session, bool) {
 	session, ok := ctx.Value(MartianSessionKey).(*martian.Session)
 	return session, ok
 }
 
-// ContextWithRequestID returns a new request with a request ID in the context
+// ContextWithRequestID returns a new request with a request ID in the context.
 func ContextWithRequestID(req *http.Request, requestId uuid.UUID) *http.Request {
 	ctx := context.WithValue(req.Context(), RequestIDKey, requestId)
 	return req.WithContext(ctx)
 }
 
-// RequestIDFromContext returns the request ID from the context if it exists
+// RequestIDFromContext returns the request ID from the context if it exists.
 func RequestIDFromContext(ctx context.Context) (uuid.UUID, bool) {
 	id, ok := ctx.Value(RequestIDKey).(uuid.UUID)
 	return id, ok
 }
 
-// ContextWithLaunchpadID returns a new request with the launchpad ID in the context
+// ContextWithLaunchpadID returns a new request with the launchpad ID in the context.
 func ContextWithLaunchpadID(req *http.Request, launchpadId uuid.UUID) *http.Request {
 	ctx := context.WithValue(req.Context(), LaunchpadIDKey, launchpadId)
 	return req.WithContext(ctx)
 }
 
-// LaunchpadIDFromContext returns the launchpad ID from the context if it exists
+// LaunchpadIDFromContext returns the launchpad ID from the context if it exists.
 func LaunchpadIDFromContext(ctx context.Context) (uuid.UUID, bool) {
 	id, ok := ctx.Value(LaunchpadIDKey).(uuid.UUID)
 	return id, ok
 }
 
-// ContextWithMetadata returns a new request with metadata in the context
-func ContextWithMetadata(req *http.Request, metadata Metadata) *http.Request {
+// ContextWithMetadata returns a new request with metadata in the context.
+func ContextWithMetadata(req *http.Request, metadata map[string]any) *http.Request {
 	ctx := context.WithValue(req.Context(), MetadataKey, metadata)
 	return req.WithContext(ctx)
 }
 
-// MetadataFromContext returns the metadata from the context if it exists
-func MetadataFromContext(ctx context.Context) (Metadata, bool) {
-	metadata, ok := ctx.Value(MetadataKey).(Metadata)
+// MetadataFromContext returns the metadata from the context if it exists.
+func MetadataFromContext(ctx context.Context) (map[string]any, bool) {
+	metadata, ok := ctx.Value(MetadataKey).(map[string]any)
 	return metadata, ok
 }
 
-// ContextWithExtensionID returns a new request with the extension ID in the context
+// ContextWithExtensionID returns a new request with the extension ID in the context.
 func ContextWithExtensionID(req *http.Request, extensionId string) *http.Request {
 	ctx := context.WithValue(req.Context(), ExtensionKey, extensionId)
 	return req.WithContext(ctx)
 }
 
-// ExtensionIDFromContext returns the extension ID from the context if it exists
+// ExtensionIDFromContext returns the extension ID from the context if it exists.
 func ExtensionIDFromContext(ctx context.Context) (string, bool) {
 	id, ok := ctx.Value(ExtensionKey).(string)
 	return id, ok
 }
 
-// ContextWithInterceptFlag returns a new request with the intercept flag in the context
+// ContextWithInterceptFlag returns a new request with the intercept flag in the context.
 func ContextWithInterceptFlag(req *http.Request, shouldIntercept bool) *http.Request {
 	ctx := context.WithValue(req.Context(), ShouldInterceptKey, shouldIntercept)
 	return req.WithContext(ctx)
 }
 
-// InterceptFlagFromContext returns the intercept flag value from the context if it exists
+// InterceptFlagFromContext returns the intercept flag value from the context if it exists.
 func InterceptFlagFromContext(ctx context.Context) (bool, bool) {
 	interceptFlag, ok := ctx.Value(ShouldInterceptKey).(bool)
 	return interceptFlag, ok
 }
 
-// ContextWithRequestTime returns a new request with the request time in the context
+// ContextWithRequestTime returns a new request with the request time in the context.
 func ContextWithRequestTime(req *http.Request, requestTime time.Time) *http.Request {
 	ctx := context.WithValue(req.Context(), RequestTimeKey, requestTime)
 	return req.WithContext(ctx)
 }
 
-// RequestTimeFromContext returns the request time from the context if it exists
+// RequestTimeFromContext returns the request time from the context if it exists.
 func RequestTimeFromContext(ctx context.Context) (time.Time, bool) {
 	timestamp, ok := ctx.Value(RequestTimeKey).(time.Time)
 	return timestamp, ok
 }
 
-// ContextWithResponseTime returns a new request with the response time in the context
+// ContextWithResponseTime returns a new request with the response time in the context.
 func ContextWithResponseTime(req *http.Request, responseTime time.Time) *http.Request {
 	ctx := context.WithValue(req.Context(), ResponseTimeKey, responseTime)
 	return req.WithContext(ctx)
 }
 
-// ResponseTimeFromContext returns the response time from the context if it exists
+// ResponseTimeFromContext returns the response time from the context if it exists.
 func ResponseTimeFromContext(ctx context.Context) (time.Time, bool) {
 	timestamp, ok := ctx.Value(ResponseTimeKey).(time.Time)
 	return timestamp, ok
 }
 
-// ContextWithSkipFlag returns a new request with the skipped flag in the context
+// ContextWithSkipFlag returns a new request with the skipped flag in the context.
 func ContextWithSkipFlag(req *http.Request, skip bool) *http.Request {
 	ctx := context.WithValue(req.Context(), SkipKey, skip)
 	return req.WithContext(ctx)
 }
 
-// SkipFlagFromContext returns the value of the skipped flag from the context if it exists
+// SkipFlagFromContext returns the value of the skipped flag from the context if it exists.
 func SkipFlagFromContext(ctx context.Context) (bool, bool) {
 	skip, ok := ctx.Value(SkipKey).(bool)
 	return skip, ok
 }
 
-// ContextWithDropFlag returns a new request with the dropped flag in the context
+// ContextWithDropFlag returns a new request with the dropped flag in the context.
 func ContextWithDropFlag(req *http.Request, drop bool) *http.Request {
 	ctx := context.WithValue(req.Context(), DropKey, drop)
 	return req.WithContext(ctx)
 }
 
-// DroppedFlagFromContext returns the value of the dropped flag from the context if it exists
+// DroppedFlagFromContext returns the value of the dropped flag from the context if it exists.
 func DroppedFlagFromContext(ctx context.Context) (bool, bool) {
 	dropped, ok := ctx.Value(DropKey).(bool)
 	return dropped, ok

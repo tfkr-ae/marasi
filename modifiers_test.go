@@ -17,6 +17,10 @@ import (
 	"github.com/andybalholm/brotli"
 	"github.com/google/martian"
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/compass"
+	"github.com/tfkr-ae/marasi/core"
+	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/extensions"
 	"github.com/tfkr-ae/marasi/rawhttp"
 )
 
@@ -67,7 +71,7 @@ func (er *erroringReader) Close() error {
 	return nil
 }
 
-var testExtensions = map[string]*Extension{
+var testExtensions = map[string]*domain.Extension{
 	"compass": {
 		Name: "compass",
 		ID:   uuid.MustParse("01937d13-9632-72aa-83b9-c10ea1abbdd6"),
@@ -78,13 +82,13 @@ var testExtensions = map[string]*Extension{
 
 			function processRequest(request)
 			  if not scope:matches(request) then
-				  request:Skip()
+				  request:skip()
 			  end
 			end
 
 			function processResponse(response)
 			  if not scope:matches(response) then
-				  response:Skip()
+				  response:skip()
 			  end
 			end 
 		`,
@@ -94,11 +98,11 @@ var testExtensions = map[string]*Extension{
 		ID:   uuid.MustParse("01937d13-9632-7f84-add5-14ec2c2c7f43"),
 		LuaContent: `
 			function processRequest(request)
-				request:Headers():Set("x-workshop-ran", "true")
+				request:headers():set("x-workshop-ran", "true")
 			end
 
 			function processResponse(response)
-				response:Headers():Set("x-workshop-ran-response", "true")
+				response:headers():set("x-workshop-ran-response", "true")
 			end
 		`,
 	},
@@ -119,34 +123,34 @@ var testExtensions = map[string]*Extension{
 		Name: "testExtension", ID: uuid.MustParse("00000000-0000-0000-0000-000000000001"),
 		LuaContent: `
 			function processRequest(request)
-			  request:Headers():Set("x-testExtension-ran", "true")
+			  request:headers():set("x-testExtension-ran", "true")
 			end
 
 			function processResponse(response)
-			  response:Headers():Set("x-testExtension-ran-response", "true")
+			  response:headers():set("x-testExtension-ran-response", "true")
 			end
 		`,
 	},
 }
 
-func newTestProxy(t *testing.T, extensions ...*Extension) *Proxy {
+func newTestProxy(t *testing.T, exts ...*domain.Extension) *Proxy {
 	t.Helper()
 
 	proxy := &Proxy{
-		Scope:          NewScope(true),
-		Extensions:     make([]*Extension, 0),
-		DBWriteChannel: make(chan ProxyItem, 10),
+		Scope:          compass.NewScope(true),
+		Extensions:     make([]*extensions.Runtime, 0),
+		DBWriteChannel: make(chan any, 10),
 	}
 
-	onLogHandler := func(log ExtensionLog) error { return nil }
+	onLogHandler := func(log extensions.ExtensionLog) error { return nil }
 
-	for _, ext := range extensions {
-		ext := &Extension{
+	for _, ext := range exts {
+		ext := &domain.Extension{
 			ID:         ext.ID,
 			Name:       ext.Name,
 			LuaContent: ext.LuaContent,
 		}
-		err := proxy.WithOptions(WithExtension(ext, ExtensionWithLogHandler(onLogHandler)))
+		err := proxy.WithOptions(WithExtension(ext, extensions.ExtensionWithLogHandler(onLogHandler)))
 		if err != nil {
 			t.Fatalf("setting up %s : %v", ext.Name, err)
 		}
@@ -453,7 +457,7 @@ func TestCompassRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
 		}
 
-		if skip, ok := SkipFlagFromContext(req.Context()); !ok || !skip {
+		if skip, ok := core.SkipFlagFromContext(req.Context()); !ok || !skip {
 			t.Errorf("expected skipped flag to be set in context and true")
 		}
 	})
@@ -474,7 +478,7 @@ func TestCompassRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if skip, ok := SkipFlagFromContext(req.Context()); ok && skip {
+		if skip, ok := core.SkipFlagFromContext(req.Context()); ok && skip {
 			t.Errorf("expected skipflag to not be set and should not be true")
 		}
 	})
@@ -500,12 +504,12 @@ func TestCompassRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
 		}
 
-		if skip, ok := SkipFlagFromContext(req.Context()); !ok || !skip {
+		if skip, ok := core.SkipFlagFromContext(req.Context()); !ok || !skip {
 			t.Errorf("expected skipflag to be set in context and to be equal to true")
 		}
 	})
 
-	t.Run("request that matches blocked rule should be dropped when :Drop() method is used", func(t *testing.T) {
+	t.Run("request that matches blocked rule should be dropped when :drop() method is used", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["compass"])
 		updateExtension(t, proxy, "compass", `
 			local scope = marasi:scope()
@@ -514,7 +518,7 @@ func TestCompassRequestModifier(t *testing.T) {
 
 			function processRequest(request)
 			  if not scope:matches(request) then
-				  request:Drop()
+				  request:drop()
 			  end
 			end
 		`)
@@ -535,7 +539,7 @@ func TestCompassRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: %q\ngot: %v", ErrDropped, err)
 		}
 
-		if drop, ok := DroppedFlagFromContext(req.Context()); !ok || !drop {
+		if drop, ok := core.DroppedFlagFromContext(req.Context()); !ok || !drop {
 			t.Errorf("expected dropped flag to be set in context and to be true")
 		}
 	})
@@ -572,25 +576,25 @@ func TestSetupRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if _, ok := RequestIDFromContext(req.Context()); !ok {
+		if _, ok := core.RequestIDFromContext(req.Context()); !ok {
 			t.Errorf("expected RequestIDKey to be set in context")
 		}
 
-		if _, ok := RequestTimeFromContext(req.Context()); !ok {
+		if _, ok := core.RequestTimeFromContext(req.Context()); !ok {
 			t.Errorf("expected RequestTimeKey to be set in context")
 		}
 
-		if metadata, ok := MetadataFromContext(req.Context()); !ok {
+		if metadata, ok := core.MetadataFromContext(req.Context()); !ok {
 			t.Errorf("expected Metadatakey to be set ")
 		} else if len(metadata) != 0 {
 			t.Errorf("expected metadata to be {} with length 0, but got length %d", len(metadata))
 		}
 
-		if _, ok := SessionFromContext(req.Context()); !ok {
+		if _, ok := core.SessionFromContext(req.Context()); !ok {
 			t.Errorf("expected MartianSessionKey to be set in context")
 		}
 
-		if _, ok := LaunchpadIDFromContext(req.Context()); ok {
+		if _, ok := core.LaunchpadIDFromContext(req.Context()); ok {
 			t.Errorf("expected LaunchpadIDKey to not be set in context")
 		}
 	})
@@ -615,11 +619,11 @@ func TestSetupRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if got, ok := LaunchpadIDFromContext(req.Context()); !ok || got != want {
+		if got, ok := core.LaunchpadIDFromContext(req.Context()); !ok || got != want {
 			t.Fatalf("wanted: %q\ngot: %q", want, got)
 		}
 
-		if metadata, ok := MetadataFromContext(req.Context()); !ok || metadata["launchpad"] != true || metadata["launchpad_id"] != want {
+		if metadata, ok := core.MetadataFromContext(req.Context()); !ok || metadata["launchpad"] != true || metadata["launchpad_id"] != want {
 			t.Fatalf("wanted: %v\ngot: %v", want, metadata)
 		}
 
@@ -627,6 +631,44 @@ func TestSetupRequestModifier(t *testing.T) {
 			t.Fatalf("expected x-launchpad-id to be removed")
 		}
 
+	})
+
+	t.Run("requests with x-marasi-metadata header should preload metadata into context", func(t *testing.T) {
+		proxy := &Proxy{}
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+
+		metaJSON := `{"source": "builder", "is_test": true, "id": 123}`
+		req.Header.Set("x-marasi-metadata", metaJSON)
+
+		want := map[string]any{
+			"source":  "builder",
+			"is_test": true,
+			"id":      123.0,
+		}
+
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context: %v", err)
+		}
+		defer remove()
+
+		err = SetupRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+
+		got, ok := core.MetadataFromContext(req.Context())
+		if !ok {
+			t.Fatalf("expected metadata to be set in context")
+		}
+
+		if !reflect.DeepEqual(want, got) {
+			t.Errorf("wanted:\n%v\ngot:\n%v", want, got)
+		}
+
+		if req.Header.Get("x-marasi-metadata") != "" {
+			t.Errorf("expected x-marasi-metadata header to be removed")
+		}
 	})
 }
 
@@ -657,7 +699,7 @@ func TestOverrideWaypointsModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if metadata, ok := MetadataFromContext(req.Context()); !ok {
+		if metadata, ok := core.MetadataFromContext(req.Context()); !ok {
 			t.Fatalf("expected metadata to be set on request")
 		} else if metadata["original_host"] != "marasi.app:80" || metadata["override_host"] != "127.0.0.1:9000" {
 			t.Fatalf("wanted:\noriginal_host: %q\noverride_host: %q\ngot:\noriginal_host: %q\noverride_host: %q", "marasi.app:80", "127.0.0.1:9000", metadata["original_host"], metadata["override_host"])
@@ -682,7 +724,7 @@ func TestOverrideWaypointsModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if metadata, ok := MetadataFromContext(req.Context()); !ok {
+		if metadata, ok := core.MetadataFromContext(req.Context()); !ok {
 			t.Fatalf("expected metadata to be set on request")
 		} else if metadata["original_host"] != "marasi.app:443" || metadata["override_host"] != "127.0.0.1:8000" {
 			t.Fatalf("wanted:\noriginal_host: %q\noverride_host: %q\ngot:\noriginal_host: %q\noverride_host: %q", "marasi.app:443", "127.0.0.1:8000", metadata["original_host"], metadata["override_host"])
@@ -707,7 +749,7 @@ func TestOverrideWaypointsModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if metadata, ok := MetadataFromContext(req.Context()); !ok {
+		if metadata, ok := core.MetadataFromContext(req.Context()); !ok {
 			t.Fatalf("expected metadata to be set on request")
 		} else if metadata["original_host"] != "marasi.app:8000" || metadata["override_host"] != "127.0.0.1:7000" {
 			t.Fatalf("wanted:\noriginal_host: %q\noverride_host: %q\ngot:\noriginal_host: %q\noverride_host: %q", "marasi.app:8000", "127.0.0.1:7000", metadata["original_host"], metadata["override_host"])
@@ -732,7 +774,7 @@ func TestOverrideWaypointsModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if metadata, ok := MetadataFromContext(req.Context()); !ok {
+		if metadata, ok := core.MetadataFromContext(req.Context()); !ok {
 			t.Fatalf("expected metadata to be set on request")
 		} else {
 			host, originalHost := metadata["original_host"]
@@ -749,7 +791,7 @@ func TestExtensionsRequestModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "compass", `
 			function processRequest(request)
-				request:Drop()
+				request:drop()
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -772,8 +814,8 @@ func TestExtensionsRequestModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "workshop", `
 			function processRequest(request)
-				request:Headers():Set("x-workshop-ran", "true")
-				request:Skip()
+				request:headers():set("x-workshop-ran", "true")
+				request:skip()
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -800,8 +842,8 @@ func TestExtensionsRequestModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "workshop", `
 			function processRequest(request)
-				request:Headers():Set("x-workshop-ran", "true")
-				request:Drop()
+				request:headers():set("x-workshop-ran", "true")
+				request:drop()
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -891,7 +933,7 @@ func TestExtensionsRequestModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "workshop", `
 			function processRequest(request)
-				request:Headers():St("x-workshop-ran", "true")
+				request:headers():st("x-workshop-ran", "true")
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -914,7 +956,7 @@ func TestExtensionsRequestModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "testExtension", `
 			function processRequest(request)
-				request:Headers():Set("x-workshop-ran", "overwritten")
+				request:headers():set("x-workshop-ran", "overwritten")
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -975,7 +1017,7 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			t.Fatalf("expected intercept queue to be empty, but got length %d", len(proxy.InterceptedQueue))
 		}
 
-		if metadata, _ := MetadataFromContext(req.Context()); metadata["intercepted"] == true {
+		if metadata, _ := core.MetadataFromContext(req.Context()); metadata["intercepted"] == true {
 			t.Fatalf("wanted: nil\ngot: %v", metadata["intercepted"])
 		}
 	})
@@ -1051,7 +1093,7 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: True\ngot: %t", ctx.SkippingRoundTrip())
 		}
 
-		if metadata, ok := MetadataFromContext(req.Context()); ok {
+		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
 			if metadata["intercepted"] != true {
 				t.Fatalf("wanted: true\ngot: %v", metadata["intercepted"])
 			}
@@ -1106,7 +1148,7 @@ func TestCheckpointRequestModifier(t *testing.T) {
 		if !ctx.SkippingRoundTrip() {
 			t.Fatalf("wanted: True\ngot: %t", ctx.SkippingRoundTrip())
 		}
-		if metadata, ok := MetadataFromContext(req.Context()); ok {
+		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
 			if metadata["intercepted"] != true {
 				t.Fatalf("wanted: true\ngot: %v", metadata["intercepted"])
 			}
@@ -1164,7 +1206,7 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
 		}
 
-		if metadata, ok := MetadataFromContext(req.Context()); ok {
+		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
 			if metadata["intercepted"] != true {
 				t.Fatalf("wanted: true\ngot: %v", metadata["intercepted"])
 			}
@@ -1219,7 +1261,7 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
 		}
 
-		if metadata, ok := MetadataFromContext(req.Context()); ok {
+		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
 			if metadata["intercepted"] != true {
 				t.Fatalf("wanted: true\ngot: %v", metadata["intercepted"])
 			}
@@ -1233,7 +1275,7 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			}
 		}
 
-		if flag, ok := InterceptFlagFromContext(req.Context()); ok && flag {
+		if flag, ok := core.InterceptFlagFromContext(req.Context()); ok && flag {
 			t.Fatalf("wanted: false\ngot: %v", flag)
 		}
 
@@ -1279,7 +1321,7 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
 		}
 
-		if metadata, ok := MetadataFromContext(req.Context()); ok {
+		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
 			if metadata["intercepted"] != true {
 				t.Fatalf("wanted: true\ngot: %v", metadata["intercepted"])
 			}
@@ -1293,7 +1335,7 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			}
 		}
 
-		if flag, ok := InterceptFlagFromContext(req.Context()); !ok || !flag {
+		if flag, ok := core.InterceptFlagFromContext(req.Context()); !ok || !flag {
 			t.Fatalf("wanted: true\ngot: %v", flag)
 		}
 
@@ -1341,7 +1383,7 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
 		}
 
-		if metadata, ok := MetadataFromContext(req.Context()); ok {
+		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
 			if metadata["intercepted"] != true {
 				t.Fatalf("wanted: true\ngot: %v", metadata["intercepted"])
 			}
@@ -1355,7 +1397,7 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			}
 		}
 
-		if flag, ok := InterceptFlagFromContext(req.Context()); ok || flag {
+		if flag, ok := core.InterceptFlagFromContext(req.Context()); ok || flag {
 			t.Fatalf("wanted: false\ngot: %v", flag)
 		}
 
@@ -1456,13 +1498,13 @@ func TestWriteRequestModifier(t *testing.T) {
 			t.Fatalf("generating uuid : %v", err)
 		}
 		proxy := newTestProxy(t)
-		proxy.OnRequest = func(req ProxyRequest) error {
+		proxy.OnRequest = func(req domain.ProxyRequest) error {
 			return nil
 		}
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app/blog", nil)
 
-		*req = *ContextWithRequestID(req, wantID)
-		*req = *ContextWithMetadata(req, make(Metadata))
+		*req = *core.ContextWithRequestID(req, wantID)
+		*req = *core.ContextWithMetadata(req, make(map[string]any))
 
 		err = WriteRequestModifier(proxy, req)
 		if !errors.Is(err, ErrProxyRequest) {
@@ -1480,17 +1522,17 @@ func TestWriteRequestModifier(t *testing.T) {
 			t.Fatalf("generating uuid : %v", err)
 		}
 		wantTime := time.Now()
-		want := &ProxyRequest{
+		want := &domain.ProxyRequest{
 			ID:          wantID,
 			Scheme:      "https",
 			Method:      "GET",
 			Host:        "marasi.app",
 			Path:        "/blog",
-			Metadata:    make(Metadata),
+			Metadata:    make(map[string]any),
 			RequestedAt: wantTime,
 		}
 		proxy := newTestProxy(t)
-		proxy.OnRequest = func(req ProxyRequest) error {
+		proxy.OnRequest = func(req domain.ProxyRequest) error {
 			return nil
 		}
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app/blog", nil)
@@ -1501,9 +1543,9 @@ func TestWriteRequestModifier(t *testing.T) {
 		}
 		want.Raw = raw
 
-		*req = *ContextWithRequestID(req, wantID)
-		*req = *ContextWithRequestTime(req, wantTime)
-		*req = *ContextWithMetadata(req, make(Metadata))
+		*req = *core.ContextWithRequestID(req, wantID)
+		*req = *core.ContextWithRequestTime(req, wantTime)
+		*req = *core.ContextWithMetadata(req, make(map[string]any))
 
 		err = WriteRequestModifier(proxy, req)
 		if err != nil {
@@ -1521,7 +1563,7 @@ func TestWriteRequestModifier(t *testing.T) {
 
 	})
 
-	t.Run("requests coming from launchpad should write a LaunchpadRequest to the DBWriteChannel", func(t *testing.T) {
+	t.Run("requests coming from launchpad should include launchpad_id in metadata", func(t *testing.T) {
 		wantRequestID, err := uuid.NewV7()
 		if err != nil {
 			t.Fatalf("generating uuid : %v", err)
@@ -1532,58 +1574,59 @@ func TestWriteRequestModifier(t *testing.T) {
 			t.Fatalf("generating uuid : %v", err)
 		}
 
-		want := LaunchpadRequest{
-			LaunchpadID: wantLaunchpadID,
-			RequestID:   wantRequestID,
-		}
-
 		proxy := newTestProxy(t)
-		proxy.OnRequest = func(req ProxyRequest) error {
+		proxy.OnRequest = func(req domain.ProxyRequest) error {
 			return nil
 		}
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app/blog", nil)
 
-		*req = *ContextWithRequestID(req, wantRequestID)
-		*req = *ContextWithRequestTime(req, time.Now())
-		*req = *ContextWithMetadata(req, make(Metadata))
-		*req = *ContextWithLaunchpadID(req, wantLaunchpadID)
+		metadata := map[string]any{
+			"launchpad_id": wantLaunchpadID,
+		}
+
+		*req = *core.ContextWithRequestID(req, wantRequestID)
+		*req = *core.ContextWithRequestTime(req, time.Now())
+		*req = *core.ContextWithMetadata(req, metadata)
+		*req = *core.ContextWithLaunchpadID(req, wantLaunchpadID)
 
 		err = WriteRequestModifier(proxy, req)
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		// DBWriteChannel should now hold the proxyRequest and then the launchpadRequest
-		if len(proxy.DBWriteChannel) != 2 {
-			t.Fatalf("wanted: 2\ngot: %d", len(proxy.DBWriteChannel))
+		if len(proxy.DBWriteChannel) != 1 {
+			t.Fatalf("wanted: 1\ngot: %d", len(proxy.DBWriteChannel))
 		}
 
-		// first Read off the proxy request and discard it
-		_ = <-proxy.DBWriteChannel
 		got := <-proxy.DBWriteChannel
-		if !reflect.DeepEqual(want, got) {
-			t.Fatalf("wanted: %v\ngot: %v", want, got)
+		castItem, ok := got.(*domain.ProxyRequest)
+		if !ok {
+			t.Fatalf("wanted: *domain.ProxyRequest\ngot: %T", got)
+		}
+
+		if val, ok := castItem.Metadata["launchpad_id"]; !ok || val != wantLaunchpadID {
+			t.Fatalf("wanted metadata['launchpad_id']: %v\ngot: %v", wantLaunchpadID, val)
 		}
 	})
 
 	t.Run("modifier should return nil when OnRequest is defined and a standard request comes in", func(t *testing.T) {
-		requestChannel := make(chan ProxyRequest, 1)
+		requestChannel := make(chan domain.ProxyRequest, 1)
 		wantID, err := uuid.NewV7()
 		if err != nil {
 			t.Fatalf("generating uuid : %v", err)
 		}
 		wantTime := time.Now()
-		want := &ProxyRequest{
+		want := &domain.ProxyRequest{
 			ID:          wantID,
 			Scheme:      "https",
 			Method:      "GET",
 			Host:        "marasi.app",
 			Path:        "/blog",
-			Metadata:    make(Metadata),
+			Metadata:    make(map[string]any),
 			RequestedAt: wantTime,
 		}
 		proxy := newTestProxy(t)
-		proxy.OnRequest = func(req ProxyRequest) error {
+		proxy.OnRequest = func(req domain.ProxyRequest) error {
 			requestChannel <- req
 			return nil
 		}
@@ -1595,9 +1638,9 @@ func TestWriteRequestModifier(t *testing.T) {
 		}
 		want.Raw = raw
 
-		*req = *ContextWithRequestID(req, wantID)
-		*req = *ContextWithRequestTime(req, wantTime)
-		*req = *ContextWithMetadata(req, make(Metadata))
+		*req = *core.ContextWithRequestID(req, wantID)
+		*req = *core.ContextWithRequestTime(req, wantTime)
+		*req = *core.ContextWithMetadata(req, make(map[string]any))
 
 		err = WriteRequestModifier(proxy, req)
 		if err != nil {
@@ -1673,7 +1716,7 @@ func TestResponseFilterModifier(t *testing.T) {
 			t.Fatalf("applying martian context : %v", err)
 		}
 		defer remove()
-		*req = *ContextWithSkipFlag(req, true)
+		*req = *core.ContextWithSkipFlag(req, true)
 		res := &http.Response{Request: req}
 
 		err = ResponseFilterModifier(proxy, res)
@@ -1701,7 +1744,7 @@ func TestResponseFilterModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if _, ok := ResponseTimeFromContext(res.Request.Context()); !ok {
+		if _, ok := core.ResponseTimeFromContext(res.Request.Context()); !ok {
 			t.Fatalf("wanted response time to be set on ResponseTimeKey in context")
 		}
 	})
@@ -2020,12 +2063,12 @@ func TestCompassResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
 		}
 
-		if skip, ok := SkipFlagFromContext(res.Request.Context()); !ok || !skip {
+		if skip, ok := core.SkipFlagFromContext(res.Request.Context()); !ok || !skip {
 			t.Errorf("expected skipped flag to be set in context and true")
 		}
 	})
 
-	t.Run("responses matching rule should be dropped if :Drop() is used", func(t *testing.T) {
+	t.Run("responses matching rule should be dropped if :drop() is used", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["compass"])
 		updateExtension(t, proxy, "compass", `
 			local scope = marasi:scope()
@@ -2034,7 +2077,7 @@ func TestCompassResponseModifier(t *testing.T) {
 
 			function processResponse(response)
 			  if not scope:matches(response) then
-				  response:Drop()
+				  response:drop()
 			  end
 			end
 		`)
@@ -2059,7 +2102,7 @@ func TestCompassResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: %q\ngot: %v", ErrDropped, err)
 		}
 
-		if drop, ok := DroppedFlagFromContext(res.Request.Context()); !ok || !drop {
+		if drop, ok := core.DroppedFlagFromContext(res.Request.Context()); !ok || !drop {
 			t.Errorf("expected dropped flag to be set in context and to be true")
 		}
 	})
@@ -2084,7 +2127,7 @@ func TestCompassResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if skip, ok := SkipFlagFromContext(res.Request.Context()); ok && skip {
+		if skip, ok := core.SkipFlagFromContext(res.Request.Context()); ok && skip {
 			t.Errorf("expected skipflag to not be set and should not be true")
 		}
 	})
@@ -2114,7 +2157,7 @@ func TestCompassResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
 		}
 
-		if skip, ok := SkipFlagFromContext(res.Request.Context()); !ok || !skip {
+		if skip, ok := core.SkipFlagFromContext(res.Request.Context()); !ok || !skip {
 			t.Errorf("expected skipflag to be set in context and to be equal to true")
 		}
 	})
@@ -2124,7 +2167,7 @@ func TestExtensionsResponseModifier(t *testing.T) {
 	t.Run("multiple extensions should run on and modify responses", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"])
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *ContextWithExtensionID(req, "")
+		*req = *core.ContextWithExtensionID(req, "")
 
 		_, remove, err := martian.TestContext(req, nil, nil)
 		if err != nil {
@@ -2154,11 +2197,11 @@ func TestExtensionsResponseModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "testExtension", `
 			function processResponse(response)
-				response:Headers():Set("x-workshop-ran-response", "overwritten")
+				response:headers():set("x-workshop-ran-response", "overwritten")
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *ContextWithExtensionID(req, "")
+		*req = *core.ContextWithExtensionID(req, "")
 
 		_, remove, err := martian.TestContext(req, nil, nil)
 		if err != nil {
@@ -2193,12 +2236,12 @@ func TestExtensionsResponseModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "workshop", `
 			function processResponse(response)
-				response:Headers():Set("x-workshop-ran-response", "true")
-				response:Skip()
+				response:headers():set("x-workshop-ran-response", "true")
+				response:skip()
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *ContextWithExtensionID(req, "")
+		*req = *core.ContextWithExtensionID(req, "")
 
 		_, remove, err := martian.TestContext(req, nil, nil)
 		if err != nil {
@@ -2233,12 +2276,12 @@ func TestExtensionsResponseModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "workshop", `
 			function processResponse(response)
-				response:Headers():Set("x-workshop-ran-response", "true")
-				response:Drop()
+				response:headers():set("x-workshop-ran-response", "true")
+				response:drop()
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *ContextWithExtensionID(req, "")
+		*req = *core.ContextWithExtensionID(req, "")
 
 		_, remove, err := martian.TestContext(req, nil, nil)
 		if err != nil {
@@ -2272,7 +2315,7 @@ func TestExtensionsResponseModifier(t *testing.T) {
 	t.Run("if response x-extension-id matches extensionID it should skip execution", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *ContextWithExtensionID(req, testExtensions["workshop"].ID.String())
+		*req = *core.ContextWithExtensionID(req, testExtensions["workshop"].ID.String())
 
 		_, remove, err := martian.TestContext(req, nil, nil)
 		if err != nil {
@@ -2304,7 +2347,7 @@ func TestExtensionsResponseModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "workshop", "processResponse = nil")
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *ContextWithExtensionID(req, "")
+		*req = *core.ContextWithExtensionID(req, "")
 
 		_, remove, err := martian.TestContext(req, nil, nil)
 		if err != nil {
@@ -2337,11 +2380,11 @@ func TestExtensionsResponseModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "workshop", `
 			function processResponse(response)
-				response:Headers():St("x-workshop-ran", "true")
+				response:headers():set("x-workshop-ran", "true")
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *ContextWithExtensionID(req, "")
+		*req = *core.ContextWithExtensionID(req, "")
 
 		_, remove, err := martian.TestContext(req, nil, nil)
 		if err != nil {
@@ -2424,7 +2467,7 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("expected intercept queue to be empty, but got length %d", len(proxy.InterceptedQueue))
 		}
 
-		if metadata, _ := MetadataFromContext(res.Request.Context()); metadata["intercepted"] == true {
+		if metadata, _ := core.MetadataFromContext(res.Request.Context()); metadata["intercepted"] == true {
 			t.Fatalf("wanted: nil\ngot: %v", metadata["intercepted"])
 		}
 	})
@@ -2503,7 +2546,7 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
 		}
 
-		if metadata, ok := MetadataFromContext(res.Request.Context()); ok {
+		if metadata, ok := core.MetadataFromContext(res.Request.Context()); ok {
 			if metadata["intercepted"] != true {
 				t.Fatalf("wanted: true\ngot: %v", metadata["intercepted"])
 			}
@@ -2560,7 +2603,7 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
 		}
 
-		if metadata, ok := MetadataFromContext(res.Request.Context()); ok {
+		if metadata, ok := core.MetadataFromContext(res.Request.Context()); ok {
 			if metadata["intercepted"] != true {
 				t.Fatalf("wanted: true\ngot: %v", metadata["intercepted"])
 			}
@@ -2619,7 +2662,7 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
 		}
 
-		if metadata, ok := MetadataFromContext(res.Request.Context()); ok {
+		if metadata, ok := core.MetadataFromContext(res.Request.Context()); ok {
 			if metadata["intercepted"] != true {
 				t.Fatalf("wanted: true\ngot: %v", metadata["intercepted"])
 			}
@@ -2690,7 +2733,7 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
 		}
 
-		if metadata, ok := MetadataFromContext(req.Context()); ok {
+		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
 			if metadata["intercepted"] != true {
 				t.Fatalf("wanted: true\ngot: %v", metadata["intercepted"])
 			}
@@ -2805,7 +2848,7 @@ func TestWriteResponseModifier(t *testing.T) {
 		if err != nil {
 			t.Fatalf("running SetupRequestModifier : %v", err)
 		}
-		res.Request = ContextWithResponseTime(res.Request, time.Now())
+		res.Request = core.ContextWithResponseTime(res.Request, time.Now())
 
 		err = WriteResponseModifier(proxy, res)
 
@@ -2825,17 +2868,17 @@ func TestWriteResponseModifier(t *testing.T) {
 			t.Fatalf("generating uuid : %v", err)
 		}
 		wantTime := time.Now()
-		want := &ProxyResponse{
+		want := &domain.ProxyResponse{
 			ID:          wantID,
 			Status:      "200 OK",
 			StatusCode:  200,
 			ContentType: "text/plain",
 			Length:      "12",
-			Metadata:    make(Metadata),
+			Metadata:    make(map[string]any),
 			RespondedAt: wantTime,
 		}
 		proxy := newTestProxy(t)
-		proxy.OnResponse = func(res ProxyResponse) error {
+		proxy.OnResponse = func(res domain.ProxyResponse) error {
 			return nil
 		}
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app/blog", nil)
@@ -2857,10 +2900,10 @@ func TestWriteResponseModifier(t *testing.T) {
 		}
 		want.Raw = raw
 
-		*req = *ContextWithRequestID(req, wantID)
-		*req = *ContextWithRequestTime(req, wantTime)
-		*req = *ContextWithMetadata(req, make(Metadata))
-		*req = *ContextWithResponseTime(req, wantTime)
+		*req = *core.ContextWithRequestID(req, wantID)
+		*req = *core.ContextWithRequestTime(req, wantTime)
+		*req = *core.ContextWithMetadata(req, make(map[string]any))
+		*req = *core.ContextWithResponseTime(req, wantTime)
 
 		err = WriteResponseModifier(proxy, res)
 		if err != nil {
@@ -2879,23 +2922,23 @@ func TestWriteResponseModifier(t *testing.T) {
 	})
 
 	t.Run("modifier should return nil when OnResponse is defined and a standard response comes in", func(t *testing.T) {
-		responseChannel := make(chan ProxyResponse, 1)
+		responseChannel := make(chan domain.ProxyResponse, 1)
 		wantID, err := uuid.NewV7()
 		if err != nil {
 			t.Fatalf("generating uuid : %v", err)
 		}
 		wantTime := time.Now()
-		want := &ProxyResponse{
+		want := &domain.ProxyResponse{
 			ID:          wantID,
 			Status:      "200 OK",
 			StatusCode:  200,
 			ContentType: "text/plain",
 			Length:      "12",
-			Metadata:    make(Metadata),
+			Metadata:    make(map[string]any),
 			RespondedAt: wantTime,
 		}
 		proxy := newTestProxy(t)
-		proxy.OnResponse = func(res ProxyResponse) error {
+		proxy.OnResponse = func(res domain.ProxyResponse) error {
 			responseChannel <- res
 			return nil
 		}
@@ -2918,10 +2961,10 @@ func TestWriteResponseModifier(t *testing.T) {
 		}
 		want.Raw = raw
 
-		*req = *ContextWithRequestID(req, wantID)
-		*req = *ContextWithRequestTime(req, wantTime)
-		*req = *ContextWithMetadata(req, make(Metadata))
-		*req = *ContextWithResponseTime(req, wantTime)
+		*req = *core.ContextWithRequestID(req, wantID)
+		*req = *core.ContextWithRequestTime(req, wantTime)
+		*req = *core.ContextWithMetadata(req, make(map[string]any))
+		*req = *core.ContextWithResponseTime(req, wantTime)
 
 		err = WriteResponseModifier(proxy, res)
 		if err != nil {

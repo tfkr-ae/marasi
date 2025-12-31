@@ -1,4 +1,4 @@
-package marasi
+package compass
 
 import (
 	"fmt"
