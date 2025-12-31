@@ -761,6 +761,25 @@ func TestRuntime_CallFunction(t *testing.T) {
 			t.Errorf("\nwanted error containing:\ncalling failingFunc\ngot:\n%v", err)
 		}
 	})
+
+	t.Run("should pass arguments to lua function", func(t *testing.T) {
+		luaCode := `
+			function argTest(s, n, tbl)
+				print(s .. "_" .. n .. "_" .. tbl.key)
+			end
+		`
+		ext, _ := setupTestExtension(t, luaCode)
+
+		err := ext.CallFunction("argTest", "hello", 123.45, map[string]any{"key": "val"})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		want := "hello_123.45_val"
+		if len(ext.Logs) != 1 || ext.Logs[0].Text != want {
+			t.Errorf("\nwanted log:\n%q\ngot:\n%v", want, ext.Logs)
+		}
+	})
 }
 
 func TestRuntime_PrepareState_Startup(t *testing.T) {

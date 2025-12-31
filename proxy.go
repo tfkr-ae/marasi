@@ -127,6 +127,15 @@ func (proxy *Proxy) GetExtensionRepo() (domain.ExtensionRepository, error) {
 	return proxy.ExtensionRepo, nil
 }
 
+// GetTrafficRepo returns the traffic repository.
+// It returns an error if the repository is not set.
+func (proxy *Proxy) GetTrafficRepo() (domain.TrafficRepository, error) {
+	if proxy.TrafficRepo == nil {
+		return nil, ErrExtensionRepoNotFound
+	}
+	return proxy.TrafficRepo, nil
+}
+
 // New creates a new Proxy instance with default configuration and applies any provided options.
 // It initializes the underlying martian proxy, database write channel, extensions map, HTTP client,
 // scope, waypoints, and sets up default log modifiers.
@@ -422,25 +431,32 @@ func (proxy *Proxy) WriteLog(level string, message string, options ...func(log *
 	return nil
 }
 
-// Accept waits for and returns the next connection to the listener.
 func (proxy *Proxy) GetListener(address string, port string) (net.Listener, error) {
 	rawListener, err := net.Listen("tcp", fmt.Sprintf("%s:%s", address, port))
 	if err != nil {
 		return rawListener, fmt.Errorf("setting up listener on address:port %s:%s", address, port)
 	}
+	addr := rawListener.Addr().(*net.TCPAddr)
+
+	if addr.IP.IsUnspecified() {
+		proxy.Addr = "127.0.0.1"
+	} else {
+		proxy.Addr = addr.IP.String()
+	}
+	proxy.Port = fmt.Sprintf("%d", addr.Port)
+
 	muxListener := listener.NewProtocolMuxListener(rawListener, proxy.mitmConfig)
 	marasiListener := listener.NewMarasiListener(muxListener)
-	proxy.Addr = address
-	proxy.Port = port
-	proxy.WriteLog("INFO", fmt.Sprintf("Marasi Service Started on %s:%s", address, port))
 
-	// Setup client
+	proxy.WriteLog("INFO", fmt.Sprintf("Marasi Service Started on %s", rawListener.Addr().String()))
+
 	hostPort := net.JoinHostPort(proxy.Addr, proxy.Port)
 	parsedURL, err := url.Parse(fmt.Sprintf("http://%s", hostPort))
 	if err != nil {
 		log.Fatal(fmt.Errorf("error parsing proxy URL: %w", err))
 	}
-	log.Print(parsedURL)
+
+	log.Printf("Proxy Client Configured: %s", parsedURL.String())
 
 	transport := &http.Transport{
 		Proxy:           http.ProxyURL(parsedURL),
@@ -485,7 +501,6 @@ func (proxy *Proxy) Launch(raw string, launchpadId string, useHttps bool) error 
 	if req.TLS != nil {
 		scheme = "https"
 	}
-	// Construct Full URL
 	if useHttps {
 		scheme = "https"
 	}
