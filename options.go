@@ -1,10 +1,11 @@
 package marasi
 
 import (
+	"crypto/tls"
 	"crypto/x509"
-	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -13,9 +14,24 @@ import (
 	"time"
 
 	"github.com/google/martian/mitm"
-	"github.com/google/uuid"
 	"github.com/spf13/viper"
+	"github.com/tfkr-ae/marasi/core"
+	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/extensions"
 )
+
+// RepositoryProvider defines the interface for a provider of all data repositories
+// used by the proxy. This allows for easy injection of a database implementation.
+type RepositoryProvider interface {
+	domain.TrafficRepository
+	domain.ExtensionRepository
+	domain.LaunchpadRepository
+	domain.WaypointRepository
+	domain.StatsRepository
+	domain.ConfigRepository
+	domain.LogRepository
+	io.Closer
+}
 
 var (
 	// ErrSessionContext is returned when the session could not be fetch from context
@@ -99,41 +115,44 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 	}
 }
 
-// WithExtensions will get all the extensions from the project and load each extension if enabled
-func WithExtension(extension *Extension, options ...func(*Extension) error) func(*Proxy) error {
+// TODO: Need to fix this, currently if the extension exists it does not overrite it, this breaks opening new projects
+// WithExtension loads a single extension into the proxy.
+// It prepares the extension's Lua state and adds it to the proxy's extension list.
+func WithExtension(extension *domain.Extension, options ...func(*extensions.Runtime) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		// Check if the map is nil and create if it is
 		if proxy.Extensions == nil {
-			proxy.Extensions = make([]*Extension, 0)
+			proxy.Extensions = make([]*extensions.Runtime, 0)
 		}
 		// Check if the extension doesn't exist
 		if _, ok := proxy.GetExtension(extension.Name); !ok {
-			err := extension.PrepareState(proxy, options)
+			ext := &extensions.Runtime{Data: extension}
+			err := ext.PrepareState(proxy, options)
 			if err != nil {
 				return fmt.Errorf("preparing extension %s : %w", extension.Name, err)
 			}
-			proxy.Extensions = append(proxy.Extensions, extension)
+			proxy.Extensions = append(proxy.Extensions, ext)
 		}
+
 		return nil
 	}
 }
-func WithExtensions(extensions []*Extension, options ...func(*Extension) error) func(*Proxy) error {
+
+// WithExtensions loads multiple extensions into the proxy.
+// It iterates through the provided extensions and prepares each one.
+func WithExtensions(exts []*domain.Extension, options ...func(*extensions.Runtime) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
-		if proxy.Extensions == nil {
-			proxy.Extensions = make([]*Extension, 0)
-		}
-		// extensions, err := proxy.Repo.GetExtensions()
-		// if err != nil {
-		// 	return fmt.Errorf("getting all extensions : %w", err)
-		// }
-		for _, extension := range extensions {
+		proxy.Extensions = make([]*extensions.Runtime, 0)
+		for _, extension := range exts {
 			if _, ok := proxy.GetExtension(extension.Name); !ok {
+				ext := &extensions.Runtime{Data: extension}
 				// Extension does not exist
 				// if it is enabled add it, if not keep it disabled
-				extension.PrepareState(proxy, options)
-				proxy.Extensions = append(proxy.Extensions, extension)
+				ext.PrepareState(proxy, options)
+				proxy.Extensions = append(proxy.Extensions, ext)
 			}
 		}
+
 		return nil
 	}
 }
@@ -150,7 +169,7 @@ func WithInterceptHandler(handler func(intercepted *Intercepted) error) func(*Pr
 }
 
 // WithResponseHandler takes a handler function that will be executed on each response
-func WithResponseHandler(handler func(res ProxyResponse) error) func(*Proxy) error {
+func WithResponseHandler(handler func(res domain.ProxyResponse) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		if proxy.OnResponse != nil {
 			return errors.New("proxy already has a response handler defined")
@@ -161,7 +180,7 @@ func WithResponseHandler(handler func(res ProxyResponse) error) func(*Proxy) err
 }
 
 // WithRequestHandler takes a handler function that will be executed on each Request
-func WithRequestHandler(handler func(req ProxyRequest) error) func(*Proxy) error {
+func WithRequestHandler(handler func(req domain.ProxyRequest) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		if proxy.OnRequest != nil {
 			return errors.New("proxy already has a request handler defined")
@@ -172,7 +191,7 @@ func WithRequestHandler(handler func(req ProxyRequest) error) func(*Proxy) error
 }
 
 // WithLogHandler takes a handler function that will be executed on each Log
-func WithLogHandler(handler func(log Log) error) func(*Proxy) error {
+func WithLogHandler(handler func(log domain.Log) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		if proxy.OnLog != nil {
 			return errors.New("proxy already has a log handler defined")
@@ -188,7 +207,7 @@ func WithLogHandler(handler func(log Log) error) func(*Proxy) error {
 func WithTLS() func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		var x509c *x509.Certificate
-		var priv interface{}
+		var priv any
 		var err error
 		certPath := path.Join(proxy.ConfigDir, certFile)
 		if _, err = os.Stat(certPath); os.IsNotExist(err) {
@@ -214,7 +233,7 @@ func WithTLS() func(*Proxy) error {
 
 		proxy.SPKIHash = getSPKIHash(x509c)
 		proxy.Cert = x509c
-		err = proxy.Repo.UpdateSPKI(proxy.SPKIHash)
+		err = proxy.ConfigRepo.UpdateSPKI(proxy.SPKIHash)
 		if err != nil {
 			return fmt.Errorf("setting spki hash %s : %w", proxy.SPKIHash, err)
 		}
@@ -223,35 +242,102 @@ func WithTLS() func(*Proxy) error {
 			return fmt.Errorf("creating new mitm config : %w", err)
 		}
 		proxy.martianProxy.SetMITM(tlsc)
-		tlsConfig := tlsc.TLS()
+		proxy.mitmConfig = tlsc.TLS()
 
 		// Add system certificates + marasi cert
 		systemPool, err := x509.SystemCertPool()
 		if err != nil {
 			return fmt.Errorf("fetching system cert pool : %w", err)
 		}
-		tlsConfig.RootCAs = systemPool
-		tlsConfig.RootCAs.AddCert(x509c)
-		proxy.TLSConfig = tlsConfig
+		systemPool.AddCert(x509c)
+		proxy.MarasiClientTLSConfig = &tls.Config{
+			RootCAs: systemPool,
+		}
 		return nil
 	}
 }
 
-// WithRepo will take the ProxyRepository interface, set the index value and load the extensions
-func WithRepo(repo Repository) func(*Proxy) error {
+// WithDefaultRepositories is a convenience option to apply all repository implementations
+// from a single provider.
+func WithDefaultRepositories(repo RepositoryProvider) func(*Proxy) error {
 	return func(proxy *Proxy) error {
-		// First we need to check if there is a repo
-		if proxy.Repo != nil {
-			if err := proxy.Repo.Close(); err != nil {
-				return err
-			}
-			proxy.Repo = nil
-		}
-		proxy.Repo = repo
+		return proxy.WithOptions(
+			WithLogRepository(repo),
+			WithTrafficRepository(repo),
+			WithConfigRepository(repo),
+			WithStatsRepository(repo),
+			WithExtensionRepository(repo),
+			WithLaunchpadRepository(repo),
+			WithWaypointRepository(repo),
+			WithDBCloser(repo),
+		)
+	}
+}
+
+// WithDBCloser injects the database closer.
+func WithDBCloser(closer io.Closer) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		proxy.DBCloser = closer
+		return nil
+	}
+}
+
+// WithExtensionRepository injects the extension repository implementation.
+func WithExtensionRepository(repo domain.ExtensionRepository) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		proxy.ExtensionRepo = repo
+		return nil
+	}
+}
+
+// WithTrafficRepository injects the traffic repository implementation.
+func WithTrafficRepository(repo domain.TrafficRepository) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		proxy.TrafficRepo = repo
+		return nil
+	}
+}
+
+// WithLaunchpadRepository injects the launchpad repository implementation.
+func WithLaunchpadRepository(repo domain.LaunchpadRepository) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		proxy.LaunchpadRepo = repo
+		return nil
+	}
+}
+
+// WithWaypointRepository injects the waypoint repository implementation.
+func WithWaypointRepository(repo domain.WaypointRepository) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		proxy.WaypointRepo = repo
 		err := proxy.SyncWaypoints()
 		if err != nil {
 			proxy.WriteLog("INFO", err.Error())
 		}
+		return nil
+	}
+}
+
+// WithStatsRepository injects the stats repository implementation.
+func WithStatsRepository(repo domain.StatsRepository) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		proxy.StatsRepo = repo
+		return nil
+	}
+}
+
+// WithConfigRepository injects the config repository implementation.
+func WithConfigRepository(repo domain.ConfigRepository) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		proxy.ConfigRepo = repo
+		return nil
+	}
+}
+
+// WithLogRepository injects the log repository implementation.
+func WithLogRepository(repo domain.LogRepository) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		proxy.LogRepo = repo
 		return nil
 	}
 }
@@ -281,7 +367,7 @@ func WithBasePipeline() func(*Proxy) error {
 					return nil
 				}
 				if errors.Is(err, ErrDropped) {
-					if session, ok := SessionFromContext(res.Request.Context()); ok {
+					if session, ok := core.SessionFromContext(res.Request.Context()); ok {
 						conn, _, err := session.Hijack()
 						if err != nil {
 							return fmt.Errorf("hijacking session : %w", err)
@@ -332,26 +418,4 @@ func WithDefaultModifierPipeline() func(*Proxy) error {
 		return nil
 	}
 
-}
-
-// LOG OPTIONS
-func LogWithContext(context Metadata) func(log *Log) error {
-	return func(log *Log) error {
-		log.Context = context
-		return nil
-	}
-}
-
-// LOG OPTIONS
-func LogWithReqResID(id uuid.UUID) func(log *Log) error {
-	return func(log *Log) error {
-		log.RequestID = sql.NullString{Valid: true, String: id.String()}
-		return nil
-	}
-}
-func LogWithExtensionID(id uuid.UUID) func(log *Log) error {
-	return func(log *Log) error {
-		log.ExtensionID = sql.NullString{Valid: true, String: id.String()}
-		return nil
-	}
 }
