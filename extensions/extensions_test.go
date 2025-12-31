@@ -26,6 +26,7 @@ type mockProxyService struct {
 	GetClientFunc        func() (*http.Client, error)
 	WriteLogFunc         func(level string, message string, options ...func(log *domain.Log) error) error
 	GetExtensionRepoFunc func() (domain.ExtensionRepository, error)
+	GetTrafficRepoFunc   func() (domain.TrafficRepository, error)
 }
 
 func (m *mockProxyService) GetConfigDir() (string, error) {
@@ -63,6 +64,13 @@ func (m *mockProxyService) GetExtensionRepo() (domain.ExtensionRepository, error
 	return nil, nil
 }
 
+func (m *mockProxyService) GetTrafficRepo() (domain.TrafficRepository, error) {
+	if m.GetTrafficRepoFunc != nil {
+		return m.GetTrafficRepoFunc()
+	}
+	return nil, nil
+}
+
 type mockExtensionRepo struct {
 	settingsStore map[uuid.UUID]map[string]any
 	forceSetError bool
@@ -91,6 +99,96 @@ func (m *mockExtensionRepo) SetExtensionSettingsByUUID(id uuid.UUID, settings ma
 	}
 	m.settingsStore[id] = settings
 	return nil
+}
+
+type mockTrafficRepo struct {
+	summaryData   []*domain.RequestResponseSummary
+	rowData       map[uuid.UUID]*domain.RequestResponseRow
+	metadataStore map[uuid.UUID]map[string]any
+	noteStore     map[uuid.UUID]string
+	forceError    bool
+}
+
+func (m *mockTrafficRepo) InsertRequest(req *domain.ProxyRequest) error { return nil }
+func (m *mockTrafficRepo) InsertResponse(res *domain.ProxyResponse) error {
+	return nil
+}
+func (m *mockTrafficRepo) GetResponse(id uuid.UUID) (*domain.ProxyResponse, error) {
+	return nil, nil
+}
+
+func (m *mockTrafficRepo) GetRequestResponseSummary() ([]*domain.RequestResponseSummary, error) {
+	if m.forceError {
+		return nil, errors.New("forced repo error")
+	}
+	if m.summaryData != nil {
+		return m.summaryData, nil
+	}
+	return []*domain.RequestResponseSummary{}, nil
+}
+
+func (m *mockTrafficRepo) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResponseRow, error) {
+	if m.forceError {
+		return nil, errors.New("forced repo error")
+	}
+	if row, ok := m.rowData[id]; ok {
+		return row, nil
+	}
+	return nil, errors.New("row not found")
+}
+
+func (m *mockTrafficRepo) GetMetadata(id uuid.UUID) (map[string]any, error) {
+	if m.forceError {
+		return nil, errors.New("forced repo error")
+	}
+	if meta, ok := m.metadataStore[id]; ok {
+		return meta, nil
+	}
+	return make(map[string]any), nil
+}
+
+func (m *mockTrafficRepo) UpdateMetadata(metadata map[string]any, ids ...uuid.UUID) error {
+	if m.forceError {
+		return errors.New("forced repo error")
+	}
+	if m.metadataStore == nil {
+		m.metadataStore = make(map[uuid.UUID]map[string]any)
+	}
+	for _, id := range ids {
+		m.metadataStore[id] = metadata
+	}
+	return nil
+}
+
+func (m *mockTrafficRepo) GetNote(id uuid.UUID) (string, error) {
+	if m.forceError {
+		return "", errors.New("forced repo error")
+	}
+	if note, ok := m.noteStore[id]; ok {
+		return note, nil
+	}
+	return "", nil
+}
+
+func (m *mockTrafficRepo) UpdateNote(id uuid.UUID, note string) error {
+	if m.forceError {
+		return errors.New("forced repo error")
+	}
+	if m.noteStore == nil {
+		m.noteStore = make(map[uuid.UUID]string)
+	}
+	m.noteStore[id] = note
+	return nil
+}
+
+func (m *mockTrafficRepo) SearchByMetadata(path string, value any) ([]*domain.RequestResponseSummary, error) {
+	if m.forceError {
+		return nil, errors.New("forced repo error")
+	}
+	if m.summaryData != nil {
+		return m.summaryData, nil
+	}
+	return []*domain.RequestResponseSummary{}, nil
 }
 
 func setupTestExtension(t *testing.T, luaCode string, options ...func(*Runtime) error) (*Runtime, *mockProxyService) {

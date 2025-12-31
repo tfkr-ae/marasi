@@ -132,4 +132,5 @@ func registerMarasiLibrary(l *lua.State, proxy ProxyService) {
 	registerUtilsLibrary(l)
 	registerStringsLibrary(l)
 	registerRandomLibrary(l)
+	registerRepoLibrary(l, proxy)
 }
