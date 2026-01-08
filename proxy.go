@@ -511,6 +511,11 @@ func (proxy *Proxy) Launch(raw string, launchpadId string, useHttps bool) error 
 
 	req.RequestURI, req.URL.Scheme, req.URL.Host = "", scheme, host
 	req.Header.Add("x-launchpad-id", launchpadId)
+
+	if _, ok := req.Header["User-Agent"]; !ok {
+		req.Header.Set("User-Agent", "")
+	}
+
 	_, err = proxy.Client.Do(req)
 	if err != nil {
 		return fmt.Errorf("client doing request : %w", err)
