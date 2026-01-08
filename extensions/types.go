@@ -1475,6 +1475,20 @@ func RegisterResponseType(extension *Runtime) {
 		return 0
 	}
 
+	// request returns the original request object associated with this response.
+	//
+	// @return Request The request object.
+	funcs["request"] = func(l *lua.State) int {
+		res := lua.CheckUserData(l, 1, "res").(*http.Response)
+		if res.Request != nil {
+			l.PushUserData(res.Request)
+			lua.SetMetaTableNamed(l, "req")
+			return 1
+		}
+		l.PushNil()
+		return 1
+	}
+
 	// drop marks the response to be dropped by the proxy.
 	funcs["drop"] = func(l *lua.State) int {
 		res := lua.CheckUserData(l, 1, "res").(*http.Response)
