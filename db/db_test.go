@@ -1,6 +1,8 @@
 package db
 
 import (
+	"io"
+	"log/slog"
 	"os"
 	"testing"
 	"time"
@@ -18,7 +20,8 @@ func setupTestDB(t *testing.T) (*Repository, func()) {
 	}
 	tempFile.Close()
 
-	dbConn, err := New(tempFile.Name())
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dbConn, err := New(tempFile.Name(), logger)
 	if err != nil {
 		t.Fatalf("db.New() failed: %v", err)
 	}
