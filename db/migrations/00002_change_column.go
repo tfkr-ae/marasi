@@ -38,17 +38,21 @@ func upMigrateToBlob(ctx context.Context, tx *sql.Tx) error {
 
 		var requestRawBytes []byte
 		if requestRawText.Valid && requestRawText.String != "" {
-			requestRawBytes, err = base64.StdEncoding.DecodeString(requestRawText.String)
+			decoded, err := base64.StdEncoding.DecodeString(requestRawText.String)
 			if err != nil {
-				return fmt.Errorf("decoding requestRawText for row %s : %w", id, err)
+				requestRawBytes = []byte(requestRawText.String)
+			} else {
+				requestRawBytes = decoded
 			}
 		}
 
 		var responseRawBytes []byte
 		if responseRawText.Valid && responseRawText.String != "" {
-			responseRawBytes, err = base64.StdEncoding.DecodeString(responseRawText.String)
+			decoded, err := base64.StdEncoding.DecodeString(responseRawText.String)
 			if err != nil {
-				return fmt.Errorf("decoding responseRawText for row %s : %w", id, err)
+				responseRawBytes = []byte(responseRawText.String)
+			} else {
+				responseRawBytes = decoded
 			}
 		}
 		_, err = tx.Exec("UPDATE request SET request_raw_blob = ?, response_raw_blob = ? WHERE id = ?", requestRawBytes, responseRawBytes, id)

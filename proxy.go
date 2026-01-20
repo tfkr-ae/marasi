@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"mime"
 	"net"
 	"net/http"
@@ -89,6 +90,7 @@ type Proxy struct {
 	LogRepo       domain.LogRepository       // Repository for log data.
 	ExtensionRepo domain.ExtensionRepository // Repository for extension data.
 	DBCloser      io.Closer                  // Closer for the database connection.
+	Logger        *slog.Logger               // Logger for Marasi
 }
 
 // GetConfigDir returns the configuration directory path.
@@ -156,6 +158,7 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 		Scope:          compass.NewScope(true),
 		Waypoints:      make(map[string]string),
 		InterceptFlag:  false,
+		Logger:         slog.Default(),
 	}
 	err := proxy.WithOptions(options...)
 	if err != nil {
