@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path"
@@ -418,4 +419,15 @@ func WithDefaultModifierPipeline() func(*Proxy) error {
 		return nil
 	}
 
+}
+
+// WithLogger sets the structured logger for the proxy.
+// It performs a nil check to ensure the proxy always has a valid logger.
+func WithLogger(logger *slog.Logger) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if logger != nil {
+			proxy.Logger = logger
+		}
+		return nil
+	}
 }

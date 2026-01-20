@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"mime"
 	"net"
 	"net/http"
@@ -89,6 +90,7 @@ type Proxy struct {
 	LogRepo       domain.LogRepository       // Repository for log data.
 	ExtensionRepo domain.ExtensionRepository // Repository for extension data.
 	DBCloser      io.Closer                  // Closer for the database connection.
+	Logger        *slog.Logger               // Logger for Marasi
 }
 
 // GetConfigDir returns the configuration directory path.
@@ -156,6 +158,7 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 		Scope:          compass.NewScope(true),
 		Waypoints:      make(map[string]string),
 		InterceptFlag:  false,
+		Logger:         slog.Default(),
 	}
 	err := proxy.WithOptions(options...)
 	if err != nil {
@@ -511,6 +514,11 @@ func (proxy *Proxy) Launch(raw string, launchpadId string, useHttps bool) error 
 
 	req.RequestURI, req.URL.Scheme, req.URL.Host = "", scheme, host
 	req.Header.Add("x-launchpad-id", launchpadId)
+
+	if _, ok := req.Header["User-Agent"]; !ok {
+		req.Header.Set("User-Agent", "")
+	}
+
 	_, err = proxy.Client.Do(req)
 	if err != nil {
 		return fmt.Errorf("client doing request : %w", err)
