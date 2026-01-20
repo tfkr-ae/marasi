@@ -103,5 +103,9 @@ func (m *marasiRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		return resp, nil
 	}
 
+	if _, ok := req.Header["User-Agent"]; !ok {
+		req.Header.Set("User-Agent", "")
+	}
+
 	return m.base.RoundTrip(req)
 }

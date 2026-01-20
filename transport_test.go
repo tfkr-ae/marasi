@@ -191,6 +191,34 @@ func TestMarasiRoundTripper(t *testing.T) {
 			t.Errorf("wanted: %v\n got: %v", resp, want)
 		}
 	})
+
+	t.Run("requests without User-Agent should not receive the Go default", func(t *testing.T) {
+		baseRoundTripper := &testBaseRoundTripper{
+			response: &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewBufferString("UA Test")),
+			},
+		}
+		roundTripper := &marasiRoundTripper{
+			cert: cert,
+			base: baseRoundTripper,
+		}
+
+		req := httptest.NewRequest("GET", "https://marasi.app", nil)
+		req.Header.Del("User-Agent")
+
+		_, err := roundTripper.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+
+		val, ok := baseRoundTripper.request.Header["User-Agent"]
+		if !ok {
+			t.Error("wanted: User-Agent key to be present\ngot: missing")
+		} else if len(val) > 0 && val[0] != "" {
+			t.Errorf("wanted: %q\ngot: %q", "", val[0])
+		}
+	})
 }
 
 func TestMarasiTransportDialTLSContext(t *testing.T) {

@@ -2428,6 +2428,64 @@ func TestResponseType(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "res:request should return the associated request object",
+			luaCode: `
+				local req = r:request()
+				if req == nil then return "got nil" end
+				return req:method(), req:url():string(), req:body()
+			`,
+			options: []func(*Runtime) error{
+				func(r *Runtime) error {
+					req := httptest.NewRequest("POST", "https://marasi.app/submit", strings.NewReader("request payload"))
+					res := &http.Response{
+						Request: req,
+						Header:  make(http.Header),
+						Body:    io.NopCloser(strings.NewReader("response")),
+					}
+					return withResponse(res)(r)
+				},
+			},
+			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
+				body := got.(string)
+				ext.LuaState.Pop(1)
+				url := GoValue(ext.LuaState, -1).(string)
+				ext.LuaState.Pop(1)
+				method := GoValue(ext.LuaState, -1).(string)
+
+				if method != "POST" {
+					t.Errorf("\nwanted:\nPOST\ngot:\n%v", method)
+				}
+				if url != "https://marasi.app/submit" {
+					t.Errorf("\nwanted:\nhttps://marasi.app/submit\ngot:\n%v", url)
+				}
+				if body != "request payload" {
+					t.Errorf("\nwanted:\nrequest payload\ngot:\n%v", body)
+				}
+			},
+		},
+		{
+			name:    "res:request should return nil if no request is associated",
+			luaCode: `return r:request()`,
+			options: []func(*Runtime) error{
+				func(r *Runtime) error {
+					res := &http.Response{
+						Header: make(http.Header),
+						Body:   io.NopCloser(strings.NewReader("")),
+					}
+
+					r.LuaState.PushUserData(res)
+					lua.SetMetaTableNamed(r.LuaState, "res")
+					r.LuaState.SetGlobal("r")
+					return nil
+				},
+			},
+			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
+				if got != nil {
+					t.Errorf("\nwanted:\nnil\ngot:\n%v", got)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
