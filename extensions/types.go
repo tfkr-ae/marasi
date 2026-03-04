@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Shopify/go-lua"
@@ -20,6 +21,8 @@ import (
 	"github.com/tfkr-ae/marasi/compass"
 	"github.com/tfkr-ae/marasi/core"
 )
+
+var globalCallbackCounter uint64
 
 // RegisterType creates a new metatable in the Lua state and associates it with a name.
 // It registers a set of functions as methods for the type and a `__tostring` metamethod.
@@ -1528,7 +1531,6 @@ func RegisterResponseType(extension *Runtime) {
 // RegisterRequestBuilderType registers the `RequestBuilder` type and its methods with the Lua state.
 // This allows Lua scripts to construct and send new HTTP requests from within an extension.
 func RegisterRequestBuilderType(extension *Runtime) {
-	var callbackCounter int
 	funcs := make(map[string]lua.Function)
 	// method returns the request builder's method.
 	//
@@ -1824,7 +1826,7 @@ func RegisterRequestBuilderType(extension *Runtime) {
 
 	// send_async sends the HTTP request asynchronously.
 	//
-	// @param callback function (optional) A function to call with the response.
+	// @param callback function (optional) A function to call with the response and error
 	funcs["send_async"] = func(l *lua.State) int {
 		builder := lua.CheckUserData(l, 1, "RequestBuilder").(*RequestBuilder)
 
@@ -1833,17 +1835,15 @@ func RegisterRequestBuilderType(extension *Runtime) {
 			return 0
 		}
 
-		var callbackID int = 0
-		if l.IsFunction(-1) {
-			callbackCounter++
-			callbackID = callbackCounter
-
-			l.PushValue(-1)
-			l.RawSetInt(lua.RegistryIndex, callbackID)
+		var callbackKey string
+		if l.IsFunction(2) {
+			callbackKey = fmt.Sprintf("marasi_cb_%d", atomic.AddUint64(&globalCallbackCounter, 1))
+			l.PushValue(2)
+			l.SetField(lua.RegistryIndex, callbackKey)
 		}
 
 		reqMethod := builder.method
-		reqUrl := builder.url
+		reqUrlStr := builder.url.String()
 		reqBody := builder.body
 		reqHeaders := builder.headers.Clone()
 
@@ -1853,10 +1853,12 @@ func RegisterRequestBuilderType(extension *Runtime) {
 		reqMetadata := make(map[string]any)
 		maps.Copy(reqMetadata, builder.metadata)
 
+		extID := extension.Data.ID.String()
+
 		go func() {
 			reqBodyBuffer := bytes.NewBuffer([]byte(reqBody))
 			var resp *http.Response
-			req, err := http.NewRequest(reqMethod, reqUrl.String(), reqBodyBuffer)
+			req, err := http.NewRequest(reqMethod, reqUrlStr, reqBodyBuffer)
 			if err == nil {
 				req.Header = reqHeaders
 
@@ -1873,51 +1875,48 @@ func RegisterRequestBuilderType(extension *Runtime) {
 					req.AddCookie(c)
 				}
 
-				req.Header.Set("x-extension-id", extension.Data.ID.String())
+				req.Header.Set("x-extension-id", extID)
 
 				resp, err = builder.client.Do(req)
 
 			}
 
-			if callbackID != 0 {
+			if callbackKey != "" {
 				extension.Mu.Lock()
 				defer extension.Mu.Unlock()
 
-				l.RawGetInt(lua.RegistryIndex, callbackID)
+				top := l.Top()
+				defer l.SetTop(top)
 
-				if !l.IsFunction(-1) {
-					l.Pop(1)
-					return
-				}
+				l.Field(lua.RegistryIndex, callbackKey)
 
-				if err != nil {
-					l.PushNil()
-					l.PushString(err.Error())
-				} else {
-					bodyBytes, readErr := io.ReadAll(resp.Body)
-					resp.Body.Close()
-
-					resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-
-					if readErr != nil {
+				if l.IsFunction(-1) {
+					if err != nil {
 						l.PushNil()
-						l.PushString(fmt.Sprintf("reading body: %s", readErr.Error()))
+						l.PushString(err.Error())
 					} else {
-						resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-						l.PushUserData(resp)
-						lua.SetMetaTableNamed(l, "res")
-						l.PushNil()
+						bodyBytes, readErr := io.ReadAll(resp.Body)
+						resp.Body.Close()
+
+						if readErr != nil {
+							l.PushNil()
+							l.PushString(fmt.Sprintf("reading body: %s", readErr.Error()))
+						} else {
+							resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+							l.PushUserData(resp)
+							lua.SetMetaTableNamed(l, "res")
+							l.PushNil()
+						}
+					}
+
+					if callErr := l.ProtectedCall(2, 0, 0); callErr != nil {
+						// TODO: This needs to be properly logged
 					}
 				}
 
-				if callErr := l.ProtectedCall(2, 0, 0); callErr != nil {
-					l.Pop(1)
-				}
-
 				l.PushNil()
-				l.RawSetInt(lua.RegistryIndex, callbackID)
+				l.SetField(lua.RegistryIndex, callbackKey)
 			}
-
 		}()
 		return 0
 	}

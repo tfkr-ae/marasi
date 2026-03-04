@@ -169,7 +169,6 @@ scope:add_rule("-.*\\/complete\\/search.*", "url")
 scope:add_rule("-.*GetAsyncData.*", "url")
 scope:add_rule("-.*\\/optimizationguide.*", "url")
 scope:add_rule("-.*tbn:ANd9Gc.*", "url")
-scope:add_rule("-.*\\/log.*", "url")
 
 function processRequest(request)
   if not scope:matches(request) then
