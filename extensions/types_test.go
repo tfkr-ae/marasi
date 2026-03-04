@@ -2753,15 +2753,21 @@ func TestRequestBuilderType(t *testing.T) {
 			},
 		},
 		{
-			name: "b:send_async should execute request asynchronously",
+			name: "b:send_async should execute multiple requests asynchronously without race conditions",
 			luaCode: fmt.Sprintf(`
-                b:set_method("GET")
-                b:set_url("%s")
-                b:send_async(function(res, err)
-                    -- Call the Go function registered in options
-                    test_done(res and res:body() or err)
-                end)
-            `, server.URL),
+				b:set_method("GET")
+				b:set_url("%s")
+				
+				for i = 1, 3 do
+					b:send_async(function(res, err)
+						if err then
+							test_done("error: " .. err)
+						else
+							test_done(res:body())
+						end
+					end)
+				end
+			`, server.URL),
 			options: []func(*Runtime) error{
 				withBuilder(server.Client()),
 				func(r *Runtime) error {
@@ -2774,13 +2780,35 @@ func TestRequestBuilderType(t *testing.T) {
 				},
 			},
 			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
-				select {
-				case res := <-asyncResultCh:
-					if res != "server response" {
-						t.Errorf("wanted 'server response', got %q", res)
+				for i := range 3 {
+					select {
+					case res := <-asyncResultCh:
+						if res != "server response" {
+							t.Errorf("\nwanted:\nserver response\ngot:\n%q", res)
+						}
+					case <-time.After(5 * time.Second):
+						t.Fatalf("\nwanted:\ncallback execution\ngot:\ntimeout on request %d/3", i+1)
 					}
-				case <-time.After(10 * time.Second):
-					t.Fatal("timed out waiting for async callback")
+				}
+			},
+		},
+		{
+			name: "b:send_async should error if method or url are missing",
+			luaCode: `
+				local ok, res = pcall(b.send_async, b, function(res, err) end)
+				if ok then return "expected error" end
+				return res
+			`,
+			options: []func(*Runtime) error{
+				withBuilder(server.Client()),
+			},
+			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
+				errStr, ok := got.(string)
+				if !ok {
+					t.Fatalf("\nwanted:\nstring error\ngot:\n%T", got)
+				}
+				if !strings.Contains(errStr, "method and url must be set") {
+					t.Errorf("\nwanted:\nerror containing 'method and url must be set'\ngot:\n%s", errStr)
 				}
 			},
 		},
