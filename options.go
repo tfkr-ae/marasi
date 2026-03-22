@@ -31,6 +31,7 @@ type RepositoryProvider interface {
 	domain.StatsRepository
 	domain.ConfigRepository
 	domain.LogRepository
+	domain.ReportingRepository
 	io.Closer
 }
 
@@ -270,6 +271,7 @@ func WithDefaultRepositories(repo RepositoryProvider) func(*Proxy) error {
 			WithExtensionRepository(repo),
 			WithLaunchpadRepository(repo),
 			WithWaypointRepository(repo),
+			WithReportingRepository(repo),
 			WithDBCloser(repo),
 		)
 	}
@@ -339,6 +341,14 @@ func WithConfigRepository(repo domain.ConfigRepository) func(*Proxy) error {
 func WithLogRepository(repo domain.LogRepository) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		proxy.LogRepo = repo
+		return nil
+	}
+}
+
+// WithReportingRepository injects the reporting repository implementation.
+func WithReportingRepository(repo domain.ReportingRepository) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		proxy.ReportingRepo = repo
 		return nil
 	}
 }

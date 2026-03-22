@@ -36,3 +36,30 @@ func (m Metadata) Value() (driver.Value, error) {
 	}
 	return json.Marshal(m)
 }
+
+type StringArray []string
+
+// Scan implements the sql.Scanner interface.
+func (a *StringArray) Scan(value interface{}) error {
+	if value == nil {
+		*a = make(StringArray, 0)
+		return nil
+	}
+
+	switch v := value.(type) {
+	case []byte:
+		return json.Unmarshal(v, &a)
+	case string:
+		return json.Unmarshal([]byte(v), &a)
+	default:
+		return fmt.Errorf("unsupported type %T", v)
+	}
+}
+
+// Value implements the driver.Valuer interface.
+func (a StringArray) Value() (driver.Value, error) {
+	if len(a) == 0 {
+		return "[]", nil // Return empty JSON array rather than null
+	}
+	return json.Marshal(a)
+}

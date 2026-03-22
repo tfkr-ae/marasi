@@ -49,6 +49,8 @@ var (
 	ErrClientNotFound = errors.New("http client field not found")
 	// ErrExtensionRepoNotFound is returned when the extension repository is not found.
 	ErrExtensionRepoNotFound = errors.New("extension repo not found")
+	// ErrReportingRepoNotFound is returned when the reporting repository is not found.
+	ErrReportingRepoNotFound = errors.New("reporting repo not found")
 )
 
 const (
@@ -89,6 +91,7 @@ type Proxy struct {
 	ConfigRepo    domain.ConfigRepository    // Repository for configuration data.
 	LogRepo       domain.LogRepository       // Repository for log data.
 	ExtensionRepo domain.ExtensionRepository // Repository for extension data.
+	ReportingRepo domain.ReportingRepository // Repository for reporting data.
 	DBCloser      io.Closer                  // Closer for the database connection.
 	Logger        *slog.Logger               // Logger for Marasi
 }
@@ -136,6 +139,15 @@ func (proxy *Proxy) GetTrafficRepo() (domain.TrafficRepository, error) {
 		return nil, ErrExtensionRepoNotFound
 	}
 	return proxy.TrafficRepo, nil
+}
+
+// GetReportingRepo returns the reporting repository.
+// It returns an error if the repository is not set.
+func (proxy *Proxy) GetReportingRepo() (domain.ReportingRepository, error) {
+	if proxy.ReportingRepo == nil {
+		return nil, ErrReportingRepoNotFound
+	}
+	return proxy.ReportingRepo, nil
 }
 
 // New creates a new Proxy instance with default configuration and applies any provided options.
