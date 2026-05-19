@@ -26,12 +26,14 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/martian"
 	"github.com/google/martian/fifo"
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/chrome"
 	"github.com/tfkr-ae/marasi/compass"
 	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
@@ -536,4 +538,30 @@ func (proxy *Proxy) Launch(raw string, launchpadId string, useHttps bool) error 
 		return fmt.Errorf("client doing request : %w", err)
 	}
 	return nil
+}
+
+// StartChrome launches Chrome with proxy configuration and security settings.
+// It configures Chrome to use the proxy server, creates an isolated user profile,
+// and disables various Chrome features that might interfere with testing.
+//
+// Returns:
+//   - error: Chrome launch error if executable not found or process fails to start
+func (proxy *Proxy) StartChrome(profile string) error {
+	launchProfile := "default-profile"
+	if profile != "" {
+		if !slices.Contains(proxy.Config.ChromeProfiles, profile) {
+			return fmt.Errorf("invalid launch request: profile %q is not configured", profile)
+		}
+		launchProfile = profile
+	}
+
+	launcher := chrome.NewLauncher(
+		chrome.WithProxy(proxy.Addr, proxy.Port),
+		chrome.WithSPKIHash(proxy.SPKIHash),
+		chrome.WithConfigDir(proxy.ConfigDir),
+		chrome.WithProfile(launchProfile),
+		chrome.WithCustomPaths(proxy.Config.ChromeDirs),
+	)
+
+	return launcher.Start()
 }
