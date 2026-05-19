@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/martian/mitm"
 	"github.com/spf13/viper"
+	"github.com/tfkr-ae/marasi/chrome"
 	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
@@ -72,7 +73,7 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 		if err != nil {
 			if os.IsNotExist(err) {
 				log.Println("[*] creating config dir")
-				err := os.MkdirAll(appConfigDir, 0700)
+				err = os.MkdirAll(appConfigDir, 0700)
 				if err != nil {
 					return fmt.Errorf("creating config dir %s: %w", appConfigDir, err)
 				}
@@ -87,7 +88,8 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 		viperInstance.SetConfigName("marasi_config")
 		viperInstance.SetConfigType("yaml")
 		viperInstance.AddConfigPath(appConfigDir)
-		viperInstance.SetDefault("chrome_dirs", []ChromePathConfig{})
+		viperInstance.SetDefault("chrome_dirs", []chrome.PathConfig{})
+		viperInstance.SetDefault("chrome_profiles", []string{})
 		err = viperInstance.ReadInConfig()
 		if err != nil {
 			// need to check if the error is config file doesn't exist
@@ -107,7 +109,7 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 		proxy.Config.viper = viperInstance
 
 		proxy.Config.DesktopOS = runtime.GOOS
-		log.Print(proxy.Config.ChromeDirs)
+		proxy.Config.ConfigDir = appConfigDir
 		// Rewrite entire file from struct
 		err = viperInstance.WriteConfig()
 		if err != nil {
