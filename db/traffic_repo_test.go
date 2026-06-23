@@ -306,6 +306,106 @@ func TestTrafficRepo_GetRequestResponseRow(t *testing.T) {
 	})
 }
 
+func TestTrafficRepo_GetRequestResponseRows(t *testing.T) {
+	t.Run("should get multiple full rows with mixed details and notes", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		reqID1 := testRequest(t, repo, nil)
+		resp1 := insertTestResponseAndGet(t, repo, reqID1, nil)
+		wantNote1 := "Note for first item"
+		err := repo.UpdateNote(reqID1, wantNote1)
+		if err != nil {
+			t.Fatalf("updating note 1: %v", err)
+		}
+
+		reqMeta2 := map[string]any{"context": "batch_test"}
+		reqID2 := testRequest(t, repo, reqMeta2)
+
+		targetIDs := []uuid.UUID{reqID1, reqID2}
+
+		got, err := repo.GetRequestResponseRows(targetIDs)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if len(got) != 2 {
+			t.Fatalf("\nwanted:\n2 rows\ngot:\n%d rows", len(got))
+		}
+
+		if got[0].Response.Status != resp1.Status {
+			t.Fatalf("\nwanted response status:\n%s\ngot:\n%s", resp1.Status, got[0].Response.Status)
+		}
+		if got[0].Note != wantNote1 {
+			t.Fatalf("\nwanted note:\n%s\ngot:\n%s", wantNote1, got[0].Note)
+		}
+
+		if !reflect.DeepEqual(got[1].Metadata, reqMeta2) {
+			t.Fatalf("\nwanted metadata:\n%v\ngot:\n%v", reqMeta2, got[1].Metadata)
+		}
+	})
+
+	t.Run("should preserve the exact order of input IDs", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		reqID1 := testRequest(t, repo, nil)
+		reqID2 := testRequest(t, repo, nil)
+		reqID3 := testRequest(t, repo, nil)
+
+		forwardIDs := []uuid.UUID{reqID1, reqID2, reqID3}
+		gotForward, err := repo.GetRequestResponseRows(forwardIDs)
+		if err != nil {
+			t.Fatalf("fetching forward order: %v", err)
+		}
+
+		if len(gotForward) != 3 || gotForward[0].Request.ID != reqID1 || gotForward[1].Request.ID != reqID2 || gotForward[2].Request.ID != reqID3 {
+			t.Fatalf("forward order not preserved")
+		}
+
+		reverseIDs := []uuid.UUID{reqID3, reqID2, reqID1}
+		gotReverse, err := repo.GetRequestResponseRows(reverseIDs)
+		if err != nil {
+			t.Fatalf("fetching reverse order: %v", err)
+		}
+
+		if len(gotReverse) != 3 || gotReverse[0].Request.ID != reqID3 || gotReverse[1].Request.ID != reqID2 || gotReverse[2].Request.ID != reqID1 {
+			t.Fatalf("reverse order not preserved")
+		}
+	})
+
+	t.Run("should return empty slice if slice parameter is empty", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		got, err := repo.GetRequestResponseRows([]uuid.UUID{})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if len(got) != 0 {
+			t.Fatalf("\nwanted:\n0\ngot:\n%d", len(got))
+		}
+	})
+
+	t.Run("should return empty slice if none of the IDs exist", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		nonExistentID1 := uuid.New()
+		nonExistentID2 := uuid.New()
+
+		got, err := repo.GetRequestResponseRows([]uuid.UUID{nonExistentID1, nonExistentID2})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if len(got) != 0 {
+			t.Fatalf("\nwanted:\n0 records\ngot:\n%d records", len(got))
+		}
+	})
+}
+
 func TestTrafficRepo_GetRequestResponseSummary(t *testing.T) {
 	t.Run("should return an empty slice if database is empty", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)

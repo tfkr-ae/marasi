@@ -51,6 +51,8 @@ type TrafficRepository interface {
 	// If there is a note on that request ID it will fetch the note contents as well.
 	// When there is no response data for the row, it will return the same empty ProxyResponse as GetResponse
 	GetRequestResponseRow(id uuid.UUID) (*RequestResponseRow, error)
+	// GetRequestResponseRows will return the entire request - response data for a slice of IDs.
+	GetRequestResponseRows(ids []uuid.UUID) ([]*RequestResponseRow, error)
 
 	//GetRequestResponseSummary will return the request-response data without the raw and prettified fields
 	GetRequestResponseSummary() ([]*RequestResponseSummary, error)
@@ -96,7 +98,7 @@ type ProxyResponse struct {
 	RespondedAt time.Time      // Timestamp when response was received
 }
 
-// Row represents a complete request-response pair with associated metadata,
+// RequestResponseRow represents a complete request-response pair with associated metadata,
 // typically used when retrieving data from the database.
 type RequestResponseRow struct {
 	Request  ProxyRequest   // The HTTP request

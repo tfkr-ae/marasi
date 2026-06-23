@@ -9,61 +9,61 @@ import (
 // TestCase represents a single security test case with its metadata and associated data.
 type TestCase struct {
 	// ID is the unique identifier for the test case.
-	ID          uuid.UUID
+	ID uuid.UUID
 	// Title is the short name of the test case.
-	Title       string
+	Title string
 	// Description provides detailed information about what the test case covers.
 	Description string
 	// Category is the classification group for the test case.
-	Category    string
+	Category string
 	// Tags are labels used for filtering and organizing test cases.
-	Tags        []string
+	Tags []string
 	// Requests is a list of associated HTTP request IDs.
-	Requests    []uuid.UUID
+	Requests []uuid.UUID
 	// Artifacts is a list of metadata for files associated with this test case.
-	Artifacts   []*ArtifactMetadata
+	Artifacts []*ArtifactMetadata
 	// Note contains additional researcher observations.
-	Note        string
+	Note string
 	// CreatedAt is the timestamp when the test case was first recorded.
-	CreatedAt   time.Time
+	CreatedAt time.Time
 }
 
 // Finding represents a security vulnerability or discovery identified during testing.
 type Finding struct {
 	// ID is the unique identifier for the finding.
-	ID            uuid.UUID
+	ID uuid.UUID
 	// TestCaseID is an optional reference to the test case that triggered this finding.
-	TestCaseID    *uuid.UUID
+	TestCaseID *uuid.UUID
 	// Title is the short name of the finding.
-	Title         string
+	Title string
 	// Requests is a list of associated HTTP request IDs that demonstrate the finding.
-	Requests      []uuid.UUID
+	Requests []uuid.UUID
 	// CVSSVector is the CVSS v3.1 vector string.
-	CVSSVector    string
+	CVSSVector string
 	// CVSSScore is the numerical CVSS score.
-	CVSSScore     float64
+	CVSSScore float64
 	// Severity is the qualitative rating (e.g., Low, Medium, High, Critical).
-	Severity      string
+	Severity string
 	// WriteUp is the detailed explanation of the finding, impact, and reproduction steps.
-	WriteUp       string
+	WriteUp string
 	// TreatmentPlan provides recommendations for remediation.
 	TreatmentPlan string
 	// Artifacts is a list of metadata for files associated with this finding.
-	Artifacts     []*ArtifactMetadata
+	Artifacts []*ArtifactMetadata
 	// CreatedAt is the timestamp when the finding was first recorded.
-	CreatedAt     time.Time
+	CreatedAt time.Time
 }
 
 // ArtifactMetadata contains the properties of an associated file without its raw data.
 type ArtifactMetadata struct {
 	// ID is the unique identifier for the artifact.
-	ID        uuid.UUID
+	ID uuid.UUID
 	// Filename is the original name of the file.
-	Filename  string
+	Filename string
 	// MimeType is the media type of the file content.
-	MimeType  string
+	MimeType string
 	// Size is the size of the file in bytes.
-	Size      int64
+	Size int64
 	// CreatedAt is the timestamp when the artifact was uploaded.
 	CreatedAt time.Time
 }
@@ -75,9 +75,45 @@ type Artifact struct {
 	// TestCaseID is an optional reference to an associated test case.
 	TestCaseID *uuid.UUID
 	// FindingID is an optional reference to an associated finding.
-	FindingID  *uuid.UUID
+	FindingID *uuid.UUID
 	// Data is the raw byte content of the file.
-	Data       []byte
+	Data []byte
+}
+
+// ReportMetadata contains high level properties for the report.
+type ReportMetadata struct {
+	Title            string         `json:"title"`
+	Client           string         `json:"client"`
+	Type             string         `json:"type"`
+	IsDraft          bool           `json:"is_draft"`
+	Scope            string         `json:"scope"`
+	Assessor         string         `json:"assessor"`
+	Start            time.Time      `json:"start"`
+	End              time.Time      `json:"end"`
+	CreatedAt        time.Time      `json:"created_at"`
+	TruncateLength   int            `json:"truncate_length"`
+	CustomProperties map[string]any `json:"custom_properties"`
+}
+
+// ReportPayload is the data injected into the user template.
+type ReportPayload struct {
+	Metadata  ReportMetadata `json:"metadata"`
+	TestCases []*TestCase    `json:"test_cases"`
+	Findings  []*Finding     `json:"findings"`
+}
+
+// ReportGenerator defines the interface for managing report templates and executing reports.
+type ReportGenerator interface {
+	// ListTemplates returns the saved report templates available to the generator.
+	ListTemplates() ([]string, error)
+	// LoadTemplate retrieves a saved report template by name.
+	LoadTemplate(name string) ([]byte, error)
+	// SaveTemplate stores a reusable report template by name.
+	SaveTemplate(name string, data []byte) error
+	// Execute renders a report from raw template bytes and a report payload.
+	Execute(rawTemplate []byte, payload *ReportPayload) ([]byte, error)
+	// Validate executes a report template with the provided payload and validates the syntax
+	Validate(rawTemplate []byte) error
 }
 
 // ReportingRepository defines the interface for persisting and retrieving reporting data.

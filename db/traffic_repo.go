@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -281,6 +282,49 @@ func (repo *Repository) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResp
 	}
 
 	return toDomainRequestResponseRow(&dbRow), nil
+}
+
+// GetRequestResponseRows retrieves multiple complete request-response pairs,
+// including any associated notes, for a slice of request IDs in a single query.
+func (repo *Repository) GetRequestResponseRows(ids []uuid.UUID) ([]*domain.RequestResponseRow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	query := `SELECT
+			  r.id, r.scheme, r.method, r.host, r.path, r.request_raw, r.requested_at,
+			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
+			  r.metadata, n.note
+			  FROM request r
+			  LEFT JOIN notes n ON r.id = n.request_id
+			  WHERE r.id IN (?)`
+
+	query, args, err := sqlx.In(query, ids)
+	if err != nil {
+		return nil, fmt.Errorf("binding slice args for request rows: %w", err)
+	}
+
+	query = repo.dbConn.Rebind(query)
+
+	var dbRows []*dbRequestResponse
+	err = repo.dbConn.Select(&dbRows, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("getting bulk request & responses: %w", err)
+	}
+
+	rowMap := make(map[uuid.UUID]*domain.RequestResponseRow, len(dbRows))
+	for _, row := range dbRows {
+		rowMap[row.ID] = toDomainRequestResponseRow(row)
+	}
+
+	reqRows := make([]*domain.RequestResponseRow, 0, len(ids))
+	for _, id := range ids {
+		if domainRow, exists := rowMap[id]; exists {
+			reqRows = append(reqRows, domainRow)
+		}
+	}
+
+	return reqRows, nil
 }
 
 // GetRequestResponseSummary retrieves a list of summarized request-response entries.

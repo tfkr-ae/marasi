@@ -355,6 +355,14 @@ func WithReportingRepository(repo domain.ReportingRepository) func(*Proxy) error
 	}
 }
 
+// WithReportGenerator injects the report generator implementation.
+func WithReportGenerator(generator domain.ReportGenerator) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		proxy.ReportGenerator = generator
+		return nil
+	}
+}
+
 // WithBasePipeline will setup the base modifier pipeline for marasi
 // It will define the main Request & Response modifiers that will execute the
 // attached modifiers and hande `ErrDropped` and `ErrSkipPipeline`.

@@ -2,10 +2,40 @@ package marasi
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/tfkr-ae/marasi/db"
+	"github.com/tfkr-ae/marasi/report"
 )
+
+func setupTestDB(t *testing.T) (*db.Repository, func()) {
+	t.Helper()
+
+	tempFile, err := os.CreateTemp(t.TempDir(), "test_*.db")
+	if err != nil {
+		t.Fatalf("os.CreateTemp() failed: %v", err)
+	}
+	tempFile.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dbConn, err := db.New(tempFile.Name(), logger)
+	if err != nil {
+		t.Fatalf("db.New() failed: %v", err)
+	}
+
+	repo := db.NewProxyRepo(dbConn)
+
+	teardown := func() {
+		repo.Close()
+		os.Remove(tempFile.Name())
+	}
+
+	return repo, teardown
+}
 
 func TestWithLogger(t *testing.T) {
 	t.Run("sets custom logger", func(t *testing.T) {
@@ -49,4 +79,25 @@ func TestWithLogger(t *testing.T) {
 
 		p.Logger.Info("safe check")
 	})
+}
+
+func TestWithReportGenerator(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+
+	generator, err := report.NewGenerator(repo, report.WithConfigDir(t.TempDir()))
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+
+	p, err := New(
+		WithReportGenerator(generator),
+	)
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+
+	if p.ReportGenerator != generator {
+		t.Fatalf("\nwanted:\n%v\ngot:\n%v", generator, p.ReportGenerator)
+	}
 }
