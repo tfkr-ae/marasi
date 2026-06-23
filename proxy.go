@@ -86,16 +86,17 @@ type Proxy struct {
 	Waypoints             map[string]string                    // Map of host:port overrides
 	InterceptFlag         bool                                 // Global intercept flag
 
-	TrafficRepo   domain.TrafficRepository   // Repository for traffic data.
-	LaunchpadRepo domain.LaunchpadRepository // Repository for launchpad data.
-	WaypointRepo  domain.WaypointRepository  // Repository for waypoint data.
-	StatsRepo     domain.StatsRepository     // Repository for statistics data.
-	ConfigRepo    domain.ConfigRepository    // Repository for configuration data.
-	LogRepo       domain.LogRepository       // Repository for log data.
-	ExtensionRepo domain.ExtensionRepository // Repository for extension data.
-	ReportingRepo domain.ReportingRepository // Repository for reporting data.
-	DBCloser      io.Closer                  // Closer for the database connection.
-	Logger        *slog.Logger               // Logger for Marasi
+	TrafficRepo     domain.TrafficRepository   // Repository for traffic data.
+	LaunchpadRepo   domain.LaunchpadRepository // Repository for launchpad data.
+	WaypointRepo    domain.WaypointRepository  // Repository for waypoint data.
+	StatsRepo       domain.StatsRepository     // Repository for statistics data.
+	ConfigRepo      domain.ConfigRepository    // Repository for configuration data.
+	LogRepo         domain.LogRepository       // Repository for log data.
+	ExtensionRepo   domain.ExtensionRepository // Repository for extension data.
+	ReportingRepo   domain.ReportingRepository // Repository for reporting data.
+	ReportGenerator domain.ReportGenerator     // Generator for report templates and exports.
+	DBCloser        io.Closer                  // Closer for the database connection.
+	Logger          *slog.Logger               // Logger for Marasi
 }
 
 // GetConfigDir returns the configuration directory path.

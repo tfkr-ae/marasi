@@ -137,6 +137,21 @@ func (m *mockTrafficRepo) GetRequestResponseRow(id uuid.UUID) (*domain.RequestRe
 	return nil, errors.New("row not found")
 }
 
+func (m *mockTrafficRepo) GetRequestResponseRows(ids []uuid.UUID) ([]*domain.RequestResponseRow, error) {
+	if m.forceError {
+		return nil, errors.New("forced repo error")
+	}
+
+	reqRows := make([]*domain.RequestResponseRow, 0, len(ids))
+	for _, id := range ids {
+		if row, ok := m.rowData[id]; ok {
+			reqRows = append(reqRows, row)
+		}
+	}
+
+	return reqRows, nil
+}
+
 func (m *mockTrafficRepo) GetMetadata(id uuid.UUID) (map[string]any, error) {
 	if m.forceError {
 		return nil, errors.New("forced repo error")
