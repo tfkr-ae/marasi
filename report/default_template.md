@@ -60,13 +60,13 @@ created: {{.Metadata.CreatedAt.Local.Format "2006-01-02 15:04:05"}}
 ##### Request
 
 ```http
-{{ truncate $row.Request.Raw .Metadata.TruncateLength | cleanPrint }}
+{{ truncate $row.Request.Raw $.Metadata.TruncateLength | cleanPrint }}
 ```
 
 ##### Response
 
 ```http
-{{ truncate $row.Response.Raw .Metadata.TruncateLength | cleanPrint }}
+{{ truncate $row.Response.Raw $.Metadata.TruncateLength | cleanPrint }}
 ```
 
 {{- end }} {{/* requests range */}}
