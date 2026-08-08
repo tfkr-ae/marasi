@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/tfkr-ae/marasi/db"
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/report"
 )
 
@@ -99,5 +100,109 @@ func TestWithReportGenerator(t *testing.T) {
 
 	if p.ReportGenerator != generator {
 		t.Fatalf("\nwanted:\n%v\ngot:\n%v", generator, p.ReportGenerator)
+	}
+}
+
+func TestWithWebSocketOpenHandler(t *testing.T) {
+	proxy := &Proxy{}
+	called := false
+	handler := func(domain.WebSocketConnection) error {
+		called = true
+		return nil
+	}
+
+	err := WithWebSocketOpenHandler(handler)(proxy)
+	if err != nil {
+		t.Fatalf("wanted: nil\ngot: %v", err)
+	}
+	if proxy.OnWebSocketOpen == nil {
+		t.Fatalf("wanted websocket open handler to be set")
+	}
+	if err := proxy.OnWebSocketOpen(domain.WebSocketConnection{}); err != nil {
+		t.Fatalf("calling websocket open handler: %v", err)
+	}
+	if !called {
+		t.Fatalf("wanted websocket open handler to be called")
+	}
+	if err := WithWebSocketOpenHandler(handler)(proxy); err == nil {
+		t.Fatalf("wanted duplicate websocket open handler error")
+	}
+}
+
+func TestWithWebSocketMessageHandler(t *testing.T) {
+	proxy := &Proxy{}
+	called := false
+	handler := func(domain.WebSocketMessage) error {
+		called = true
+		return nil
+	}
+
+	err := WithWebSocketMessageHandler(handler)(proxy)
+	if err != nil {
+		t.Fatalf("wanted: nil\ngot: %v", err)
+	}
+	if proxy.OnWebSocketMessage == nil {
+		t.Fatalf("wanted websocket message handler to be set")
+	}
+	if err := proxy.OnWebSocketMessage(domain.WebSocketMessage{}); err != nil {
+		t.Fatalf("calling websocket message handler: %v", err)
+	}
+	if !called {
+		t.Fatalf("wanted websocket message handler to be called")
+	}
+	if err := WithWebSocketMessageHandler(handler)(proxy); err == nil {
+		t.Fatalf("wanted duplicate websocket message handler error")
+	}
+}
+
+func TestWithWebSocketCloseHandler(t *testing.T) {
+	proxy := &Proxy{}
+	called := false
+	handler := func(domain.WebSocketConnection) error {
+		called = true
+		return nil
+	}
+
+	err := WithWebSocketCloseHandler(handler)(proxy)
+	if err != nil {
+		t.Fatalf("wanted: nil\ngot: %v", err)
+	}
+	if proxy.OnWebSocketClose == nil {
+		t.Fatalf("wanted websocket close handler to be set")
+	}
+	if err := proxy.OnWebSocketClose(domain.WebSocketConnection{}); err != nil {
+		t.Fatalf("calling websocket close handler: %v", err)
+	}
+	if !called {
+		t.Fatalf("wanted websocket close handler to be called")
+	}
+	if err := WithWebSocketCloseHandler(handler)(proxy); err == nil {
+		t.Fatalf("wanted duplicate websocket close handler error")
+	}
+}
+
+func TestWithWebSocketInterceptHandler(t *testing.T) {
+	proxy := &Proxy{}
+	called := false
+	handler := func(domain.WebSocketMessage) error {
+		called = true
+		return nil
+	}
+
+	err := WithWebSocketInterceptHandler(handler)(proxy)
+	if err != nil {
+		t.Fatalf("wanted: nil\ngot: %v", err)
+	}
+	if proxy.OnWebSocketIntercept == nil {
+		t.Fatalf("wanted websocket intercept handler to be set")
+	}
+	if err := proxy.OnWebSocketIntercept(domain.WebSocketMessage{}); err != nil {
+		t.Fatalf("calling websocket intercept handler: %v", err)
+	}
+	if !called {
+		t.Fatalf("wanted websocket intercept handler to be called")
+	}
+	if err := WithWebSocketInterceptHandler(handler)(proxy); err == nil {
+		t.Fatalf("wanted duplicate websocket intercept handler error")
 	}
 }

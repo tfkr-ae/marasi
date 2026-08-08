@@ -13,8 +13,6 @@
 package marasi
 
 import (
-	"bufio"
-	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -28,6 +26,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/martian"
@@ -40,6 +40,7 @@ import (
 	"github.com/tfkr-ae/marasi/extensions"
 	"github.com/tfkr-ae/marasi/listener"
 	"github.com/tfkr-ae/marasi/rawhttp"
+	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
 var (
@@ -53,6 +54,12 @@ var (
 	ErrExtensionRepoNotFound = errors.New("extension repo not found")
 	// ErrReportingRepoNotFound is returned when the reporting repository is not found.
 	ErrReportingRepoNotFound = errors.New("reporting repo not found")
+	// ErrWebSocketConnectionNotFound is returned when a live WebSocket cannot be located.
+	ErrWebSocketConnectionNotFound = errors.New("websocket connection not found or closed")
+	// ErrWebSocketRepositoryNotSet is returned when WebSocket persistence is unavailable.
+	ErrWebSocketRepositoryNotSet = errors.New("websocket repository not set")
+	// ErrWebSocketDirection is returned when an inject direction is not client or server.
+	ErrWebSocketDirection = errors.New("websocket direction must be client or server")
 )
 
 const (
@@ -64,39 +71,69 @@ const (
 // extension management, database operations, and TLS handling. It serves as the central coordinator
 // for the Marasi proxy server.
 type Proxy struct {
-	martianProxy          *martian.Proxy                       // The underlying martian.Proxy
-	ConfigDir             string                               // The configuration directory (defaults to the marasi folder under the user configuration directory)
-	Config                *Config                              // The marasi proxy configuration (separate from the GUI config)
-	Modifiers             *fifo.Group                          // Modifier group pipeline
-	DBWriteChannel        chan any                             // DB Write Channel
-	InterceptedQueue      []*Intercepted                       // Queue of intercepted requests / responses
-	OnRequest             func(req domain.ProxyRequest) error  // Function to be ran on each request - used by the GUI application to handle the new requests
-	OnResponse            func(res domain.ProxyResponse) error // Function to be ran on each response - used by the GUI application to handle the new responses
-	OnIntercept           func(intercepted *Intercepted) error // Function to be ran on each intercept - used by the GUI application to handle the new intercepted items
-	OnLog                 func(log domain.Log) error           // Function to be ran on each log event - used by the GUI application to handle new log entries
-	Addr                  string                               // IP Address of the proxy
-	Port                  string                               // Port of the proxy
-	Client                *http.Client                         // HTTP Client that is used by the repeater functionality (autoconfigured to use the proxy)
-	Extensions            []*extensions.Runtime                // Slice of loaded extensions
-	SPKIHash              string                               // SPKI Hash of the current certificate
-	Cert                  *x509.Certificate                    // The proxy's TLS certificate.
-	mitmConfig            *tls.Config                          // Martian Proxy MITM config
-	MarasiClientTLSConfig *tls.Config                          // TLSConfig for the proxy.Client
-	Scope                 *compass.Scope                       // Proxy scope configuration through Compass
-	Waypoints             map[string]string                    // Map of host:port overrides
-	InterceptFlag         bool                                 // Global intercept flag
+	martianProxy     *martian.Proxy                       // The underlying martian.Proxy
+	ConfigDir        string                               // The configuration directory (defaults to the marasi folder under the user configuration directory)
+	Config           *Config                              // The marasi proxy configuration (separate from the GUI config)
+	Modifiers        *fifo.Group                          // Modifier group pipeline
+	DBWriteChannel   chan any                             // DB Write Channel
+	InterceptedQueue []*Intercepted                       // Queue of intercepted requests / responses
+	OnRequest        func(req domain.ProxyRequest) error  // Function to be ran on each request - used by the GUI application to handle the new requests
+	OnResponse       func(res domain.ProxyResponse) error // Function to be ran on each response - used by the GUI application to handle the new responses
+	OnIntercept      func(intercepted *Intercepted) error // Function to be ran on each intercept - used by the GUI application to handle the new intercepted items
+	OnLog            func(log domain.Log) error           // Function to be ran on each log event - used by the GUI application to handle new log entries
+	// OnWebSocketOpen is called when a WebSocket connection opens.
+	OnWebSocketOpen func(domain.WebSocketConnection) error
+	// OnWebSocketMessage is called for each processed WebSocket message.
+	OnWebSocketMessage func(domain.WebSocketMessage) error
+	// OnWebSocketClose is called when a WebSocket connection closes.
+	OnWebSocketClose func(domain.WebSocketConnection) error
+	// OnWebSocketIntercept is called when a WebSocket message is paused for inspection.
+	OnWebSocketIntercept  func(domain.WebSocketMessage) error
+	Addr                  string                // IP Address of the proxy
+	Port                  string                // Port of the proxy
+	Client                *http.Client          // HTTP Client that is used by the repeater functionality (autoconfigured to use the proxy)
+	Extensions            []*extensions.Runtime // Slice of loaded extensions
+	SPKIHash              string                // SPKI Hash of the current certificate
+	Cert                  *x509.Certificate     // The proxy's TLS certificate.
+	mitmConfig            *tls.Config           // Martian Proxy MITM config
+	MarasiClientTLSConfig *tls.Config           // TLSConfig for the proxy.Client
+	Scope                 *compass.Scope        // Proxy scope configuration through Compass
+	Waypoints             map[string]string     // Map of host:port overrides
+	InterceptFlag         bool                  // Global intercept flag
+	// WebSocketRegistry tracks live WebSocket connections.
+	WebSocketRegistry *marasiws.Registry
+	// WebSocketInterceptor pauses WebSocket messages for manual inspection.
+	WebSocketInterceptor *marasiws.Interceptor
+	webSocketIntercept   atomic.Bool
+	webSocketLifecycleMu sync.RWMutex
+	webSocketSessions    sync.WaitGroup
+	webSocketsClosing    bool
+	martianCloseOnce     sync.Once
+	martianCloseDone     chan struct{}
+	listenerMu           sync.Mutex
+	activeListener       net.Listener
+	dbWriterStarted      atomic.Bool
+	launchpadWSMu        sync.Mutex
+	launchpadWS          map[io.Closer]struct{}
 
-	TrafficRepo     domain.TrafficRepository   // Repository for traffic data.
-	LaunchpadRepo   domain.LaunchpadRepository // Repository for launchpad data.
-	WaypointRepo    domain.WaypointRepository  // Repository for waypoint data.
-	StatsRepo       domain.StatsRepository     // Repository for statistics data.
-	ConfigRepo      domain.ConfigRepository    // Repository for configuration data.
-	LogRepo         domain.LogRepository       // Repository for log data.
-	ExtensionRepo   domain.ExtensionRepository // Repository for extension data.
-	ReportingRepo   domain.ReportingRepository // Repository for reporting data.
-	ReportGenerator domain.ReportGenerator     // Generator for report templates and exports.
-	DBCloser        io.Closer                  // Closer for the database connection.
-	Logger          *slog.Logger               // Logger for Marasi
+	TrafficRepo   domain.TrafficRepository   // Repository for traffic data.
+	LaunchpadRepo domain.LaunchpadRepository // Repository for launchpad data.
+	WaypointRepo  domain.WaypointRepository  // Repository for waypoint data.
+	StatsRepo     domain.StatsRepository     // Repository for statistics data.
+	ConfigRepo    domain.ConfigRepository    // Repository for configuration data.
+	LogRepo       domain.LogRepository       // Repository for log data.
+	ExtensionRepo domain.ExtensionRepository // Repository for extension data.
+	ReportingRepo domain.ReportingRepository // Repository for reporting data.
+	// WebSocketRepo persists WebSocket connections and messages.
+	WebSocketRepo domain.WebSocketRepository
+
+	ReportGenerator domain.ReportGenerator // Generator for report templates and exports.
+	DBCloser        io.Closer              // Closer for the database connection.
+	Logger          *slog.Logger           // Logger for Marasi
+}
+
+type dbWriteBarrier struct {
+	done chan struct{}
 }
 
 // GetConfigDir returns the configuration directory path.
@@ -165,15 +202,18 @@ func (proxy *Proxy) GetReportingRepo() (domain.ReportingRepository, error) {
 //   - error: Configuration error if any option fails
 func New(options ...func(*Proxy) error) (*Proxy, error) {
 	proxy := &Proxy{
-		martianProxy:   martian.NewProxy(),
-		Modifiers:      fifo.NewGroup(),
-		DBWriteChannel: make(chan any, 10),
-		Extensions:     make([]*extensions.Runtime, 0),
-		Client:         &http.Client{},
-		Scope:          compass.NewScope(true),
-		Waypoints:      make(map[string]string),
-		InterceptFlag:  false,
-		Logger:         slog.Default(),
+		martianProxy:         martian.NewProxy(),
+		Modifiers:            fifo.NewGroup(),
+		DBWriteChannel:       make(chan any, 10),
+		Extensions:           make([]*extensions.Runtime, 0),
+		Client:               &http.Client{},
+		Scope:                compass.NewScope(true),
+		Waypoints:            make(map[string]string),
+		InterceptFlag:        false,
+		Logger:               slog.Default(),
+		WebSocketRegistry:    marasiws.NewRegistry(),
+		WebSocketInterceptor: marasiws.NewInterceptor(),
+		launchpadWS:          make(map[io.Closer]struct{}),
 	}
 	err := proxy.WithOptions(options...)
 	if err != nil {
@@ -381,7 +421,7 @@ func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
 }
 
 // WriteToDB reads from the DBWriteChannel and writes items to their respective repositories.
-// It handles ProxyRequest, ProxyResponse, LaunchpadRequest, and Log items.
+// It handles proxy traffic, websocket traffic, and log items.
 func (proxy *Proxy) WriteToDB() {
 	for proxyItem := range proxy.DBWriteChannel {
 		switch castItem := proxyItem.(type) {
@@ -405,16 +445,44 @@ func (proxy *Proxy) WriteToDB() {
 			if err != nil {
 				log.Println(err)
 			}
+		case *domain.WebSocketConnection:
+			err := proxy.WebSocketRepo.InsertConnection(castItem)
+			if err != nil {
+				log.Println(err)
+			}
+		case *domain.WebSocketConnectionUpdate:
+			err := proxy.WebSocketRepo.UpdateConnection(&castItem.Connection)
+			if err != nil {
+				log.Println(err)
+			}
+		case *domain.WebSocketMessage:
+			err := proxy.WebSocketRepo.InsertMessage(castItem)
+			if err != nil {
+				log.Println(err)
+			}
 		case *domain.Log:
 			err := proxy.LogRepo.InsertLog(castItem)
 			if err != nil {
 				log.Print(err)
 			}
 			proxy.OnLog(*castItem)
+		case *dbWriteBarrier:
+			close(castItem.done)
 		default:
 			log.Print(castItem)
 		}
 	}
+}
+
+func (proxy *Proxy) flushDBWrites() error {
+	if !proxy.dbWriterStarted.Load() || proxy.DBWriteChannel == nil {
+		return nil
+	}
+
+	barrier := &dbWriteBarrier{done: make(chan struct{})}
+	proxy.DBWriteChannel <- barrier
+	<-barrier.done
+	return nil
 }
 
 // WriteLog creates a new log entry and sends it to the DBWriteChannel.
@@ -486,59 +554,65 @@ func (proxy *Proxy) GetListener(address string, port string) (net.Listener, erro
 
 // Serve starts the proxy and begins accepting connections on the provided listener.
 // It also starts the database writer goroutine.
-func (proxy *Proxy) Serve(listener net.Listener) error {
-	go proxy.WriteToDB()
+func (proxy *Proxy) Serve(activeListener net.Listener) error {
+	if proxy.dbWriterStarted.CompareAndSwap(false, true) {
+		go proxy.WriteToDB()
+	}
 	roundTripper := newMarasiTransport(proxy.Cert)
 	proxy.martianProxy.SetRoundTripper(roundTripper)
-	return proxy.martianProxy.Serve(listener)
+	proxy.listenerMu.Lock()
+	proxy.activeListener = activeListener
+	proxy.listenerMu.Unlock()
+	defer func() {
+		proxy.listenerMu.Lock()
+		if proxy.activeListener == activeListener {
+			proxy.activeListener = nil
+		}
+		proxy.listenerMu.Unlock()
+	}()
+
+	return proxy.martianProxy.Serve(listener.NewClosingListener(
+		activeListener,
+		proxy.martianProxy.Closing,
+	))
 }
 
 // Close shuts down the proxy and closes the database connection.
 func (proxy *Proxy) Close() {
-	proxy.martianProxy.Close()
+	proxy.webSocketLifecycleMu.Lock()
+	proxy.webSocketsClosing = true
+	proxy.webSocketLifecycleMu.Unlock()
+
+	proxy.martianCloseOnce.Do(func() {
+		proxy.martianCloseDone = make(chan struct{})
+		go func() {
+			proxy.martianProxy.Close()
+			close(proxy.martianCloseDone)
+		}()
+	})
+	for !proxy.martianProxy.Closing() {
+		time.Sleep(time.Millisecond)
+	}
+
+	proxy.listenerMu.Lock()
+	if proxy.activeListener != nil {
+		_ = proxy.activeListener.Close()
+	}
+	proxy.listenerMu.Unlock()
+
+	proxy.closeLaunchpadWebSockets()
+	if proxy.WebSocketInterceptor != nil {
+		proxy.WebSocketInterceptor.CancelAll()
+	}
+	if err := proxy.CloseWebSocketsAndFlush(); err != nil {
+		log.Printf("closing websocket connections: %v", err)
+	}
+	<-proxy.martianCloseDone
 	if proxy.DBCloser != nil {
 		log.Println("Closing database connection...")
 		proxy.DBCloser.Close()
 	}
 
-}
-
-// Launch sends a raw HTTP request through the proxy client.
-// It is used for the launchpad functionality to replay and test requests.
-func (proxy *Proxy) Launch(raw string, launchpadId string, useHttps bool) error {
-	updated, err := rawhttp.RecalculateContentLength([]byte(raw))
-	if err != nil {
-		return fmt.Errorf("recalculating content length : %w", err)
-	}
-	req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(updated)))
-	if err != nil {
-		return fmt.Errorf("reading http request : %w", err)
-	}
-
-	scheme := "http"
-	if req.TLS != nil {
-		scheme = "https"
-	}
-	if useHttps {
-		scheme = "https"
-	}
-	host := req.Host
-	if host == "" {
-		return fmt.Errorf("host header not found or is empty")
-	}
-
-	req.RequestURI, req.URL.Scheme, req.URL.Host = "", scheme, host
-	req.Header.Add("x-launchpad-id", launchpadId)
-
-	if _, ok := req.Header["User-Agent"]; !ok {
-		req.Header.Set("User-Agent", "")
-	}
-
-	_, err = proxy.Client.Do(req)
-	if err != nil {
-		return fmt.Errorf("client doing request : %w", err)
-	}
-	return nil
 }
 
 // StartChrome launches Chrome with proxy configuration and security settings.

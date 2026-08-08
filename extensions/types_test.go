@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/compass"
 	"github.com/tfkr-ae/marasi/core"
+	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
 func TestScopeType(t *testing.T) {
@@ -518,6 +519,108 @@ func TestScopeType(t *testing.T) {
 				tt.validatorFunc(t, scope, extension, got)
 			}
 		})
+	}
+}
+
+func TestWebSocketMessageType(t *testing.T) {
+	messageID := uuid.MustParse("019fc3b7-e13c-7000-8000-000000000001")
+	connectionID := uuid.MustParse("019fc3b7-e13c-7000-8000-000000000002")
+	requestID := uuid.MustParse("019fc3b7-e13c-7000-8000-000000000003")
+	message := &marasiws.Message{
+		ID:           messageID,
+		ConnectionID: connectionID,
+		RequestID:    requestID,
+		Direction:    marasiws.DirectionFromClient,
+		Frame: marasiws.Frame{
+			Fin:     true,
+			Opcode:  marasiws.OpText,
+			Payload: []byte("Hello from Marasi"),
+		},
+		Metadata: map[string]any{"source": "test"},
+	}
+	withMessage := func(runtime *Runtime) error {
+		runtime.LuaState.PushUserData(message)
+		lua.SetMetaTableNamed(runtime.LuaState, "wsmsg")
+		runtime.LuaState.SetGlobal("message")
+		return nil
+	}
+	extension, _ := setupTestExtension(t, "", withMessage)
+
+	err := extension.ExecuteLua(`
+		return {
+			id = message:id(),
+			connection_id = message:connection_id(),
+			request_id = message:request_id(),
+			direction = message:direction(),
+			opcode = message:opcode(),
+			payload = message:payload(),
+			length = message:length(),
+			fin = message:fin(),
+			is_binary = message:is_binary(),
+			metadata = message:metadata(),
+			string_value = tostring(message),
+		}
+	`)
+	if err != nil {
+		t.Fatalf("executing websocket message Lua methods: %v", err)
+	}
+
+	got, ok := GoValue(extension.LuaState, -1).(map[string]any)
+	if !ok {
+		t.Fatalf("wanted: map[string]any\ngot: %T", GoValue(extension.LuaState, -1))
+	}
+	want := map[string]any{
+		"id":            messageID.String(),
+		"connection_id": connectionID.String(),
+		"request_id":    requestID.String(),
+		"direction":     marasiws.DirectionFromClient,
+		"opcode":        float64(marasiws.OpText),
+		"payload":       "Hello from Marasi",
+		"length":        float64(len("Hello from Marasi")),
+		"fin":           true,
+		"is_binary":     false,
+		"metadata":      map[string]any{"source": "test"},
+		"string_value": fmt.Sprintf(
+			"WebSocketMessage { ID: %s, ConnectionID: %s, Direction: %s, Opcode: %d, Length: %d }",
+			messageID,
+			connectionID,
+			marasiws.DirectionFromClient,
+			marasiws.OpText,
+			len("Hello from Marasi"),
+		),
+	}
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("wanted:\n%v\ngot:\n%v", want, got)
+	}
+
+	err = extension.ExecuteLua(`
+		message:set_opcode(2)
+		message:set_payload("modified")
+		message:set_metadata({ source = "lua", count = 2 })
+		message:drop()
+		message:skip()
+	`)
+	if err != nil {
+		t.Fatalf("executing websocket message Lua mutations: %v", err)
+	}
+	if message.Frame.Opcode != marasiws.OpBinary {
+		t.Fatalf("wanted: %d\ngot: %d", marasiws.OpBinary, message.Frame.Opcode)
+	}
+	if string(message.Frame.Payload) != "modified" {
+		t.Fatalf("wanted: %q\ngot: %q", "modified", message.Frame.Payload)
+	}
+	if !message.Dropped {
+		t.Fatalf("wanted dropped: true\ngot: false")
+	}
+	if !message.Skipped {
+		t.Fatalf("wanted skipped: true\ngot: false")
+	}
+	wantMetadata := map[string]any{
+		"source": "lua",
+		"count":  float64(2),
+	}
+	if !reflect.DeepEqual(wantMetadata, message.Metadata[extension.Data.Name]) {
+		t.Fatalf("wanted metadata:\n%v\ngot:\n%v", wantMetadata, message.Metadata[extension.Data.Name])
 	}
 }
 

@@ -272,6 +272,10 @@ end
 function interceptResponse(response)
 	return 1~=1
 end
+
+function interceptWebSocketMessage(message)
+	return false
+end
 ', 
 CURRENT_TIMESTAMP, true, 'Intercept Requests / Responses', "{}"
 WHERE NOT EXISTS (SELECT 1 FROM extensions WHERE name = 'checkpoint');

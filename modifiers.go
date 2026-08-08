@@ -17,7 +17,9 @@ import (
 	"github.com/google/martian"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/core"
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/rawhttp"
+	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
 var (
@@ -58,6 +60,9 @@ var (
 
 	// ErrReadBody is returned when there is an error with reading the response body
 	ErrReadBody = errors.New("failed to read the body")
+
+	// ErrWebSocketUpstreamUnavailable is returned when an upgrade response does not expose a bidirectional upstream stream.
+	ErrWebSocketUpstreamUnavailable = errors.New("websocket upstream stream unavailable")
 )
 
 // RequestModifierFunc is a signature for HTTP request modifiers, it takes in the request and *Proxy
@@ -197,10 +202,10 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 	}
 
 	// Requests coming from launchpad will have x-launchpad-id set as a header
-	if isLaunchpad, launchpadId := isLaunchpad(req); isLaunchpad {
+	if isLaunchpad, launchpadID := isLaunchpad(req); isLaunchpad {
 		metadata["launchpad"] = true
-		metadata["launchpad_id"] = launchpadId
-		*req = *core.ContextWithLaunchpadID(req, launchpadId)
+		metadata["launchpad_id"] = launchpadID
+		*req = *core.ContextWithLaunchpadID(req, launchpadID)
 
 		// Header is removed after processing
 		req.Header.Del("x-launchpad-id")
@@ -213,6 +218,12 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 			maps.Copy(metadata, headerMetadata)
 		}
 		req.Header.Del("x-marasi-metadata")
+	}
+
+	if marasiws.IsUpgradeRequest(req) {
+		metadata["protocol"] = "websocket"
+		metadata["websocket.transport"] = marasiws.TransportFromRequest(req)
+		metadata["websocket.state"] = "pending"
 	}
 
 	*req = *core.ContextWithRequestID(req, uuid)
@@ -412,10 +423,215 @@ func ResponseFilterModifier(proxy *Proxy, res *http.Response) error {
 	return nil
 }
 
+// WebSocketPrepareModifier detaches the upstream stream from a successful upgrade
+// response and marks the request metadata state as open.
+func WebSocketPrepareModifier(proxy *Proxy, res *http.Response) error {
+	if !marasiws.IsUpgradeResponse(res) {
+		return nil
+	}
+
+	upstream, ok := res.Body.(io.ReadWriteCloser)
+	if !ok {
+		return fmt.Errorf(
+			"%w: response body has type %T",
+			ErrWebSocketUpstreamUnavailable,
+			res.Body,
+		)
+	}
+	metadata, ok := core.MetadataFromContext(res.Request.Context())
+	if !ok {
+		return ErrMetadataNotFound
+	}
+	metadata = maps.Clone(metadata)
+	metadata["websocket.state"] = "open"
+	res.Request = core.ContextWithMetadata(res.Request, metadata)
+
+	res.Request = core.ContextWithWebSocketUpstream(
+		res.Request,
+		upstream,
+	)
+
+	res.Body = http.NoBody
+	res.ContentLength = 0
+	res.Header.Del("Content-Length")
+	res.TransferEncoding = nil
+
+	return nil
+}
+
+// shouldInterceptWebSocketMessage reports whether a message should enter manual interception.
+// Global interception takes precedence; otherwise only the enabled checkpoint extension is consulted.
+func shouldInterceptWebSocketMessage(proxy *Proxy, message *marasiws.Message) bool {
+	if proxy.GetWebSocketIntercept() {
+		return true
+	}
+
+	checkpoint, ok := proxy.GetExtension("checkpoint")
+	if !ok || checkpoint.Data == nil || !checkpoint.Data.Enabled {
+		return false
+	}
+
+	shouldIntercept, err := checkpoint.ShouldInterceptWebSocketMessage(message)
+	if err != nil {
+		proxy.WriteLog(
+			"ERROR",
+			fmt.Sprintf("Running interceptWebSocketMessage : %s", err.Error()),
+			core.LogWithExtensionID(checkpoint.Data.ID),
+		)
+		return false
+	}
+
+	return shouldIntercept
+}
+
+// processWebSocketMessageExtensions runs enabled non-checkpoint extensions against a live message.
+// Dropped and skipped messages stop further extension processing.
+func processWebSocketMessageExtensions(proxy *Proxy, message *marasiws.Message) {
+	for _, extension := range proxy.Extensions {
+		if extension == nil || extension.Data == nil || !extension.Data.Enabled || extension.Data.Name == "checkpoint" {
+			continue
+		}
+
+		if err := extension.CallWebSocketMessageHandler(message); err != nil {
+			proxy.WriteLog(
+				"ERROR",
+				fmt.Sprintf("Running processWebSocketMessage : %s", err.Error()),
+				core.LogWithExtensionID(extension.Data.ID),
+			)
+		}
+		if message.Dropped || message.Skipped {
+			return
+		}
+	}
+}
+
+// WebSocketHandoffModifier hijacks the client connection after a successful upgrade,
+// writes the 101 response, and runs the bidirectional WebSocket session.
+func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
+	if !marasiws.IsUpgradeResponse(res) {
+		return nil
+	}
+
+	requestID, ok := core.RequestIDFromContext(res.Request.Context())
+	if !ok {
+		return ErrRequestIDNotFound
+	}
+
+	upstream, ok := core.WebSocketUpstreamFromContext(res.Request.Context())
+	if !ok {
+		return ErrWebSocketUpstreamUnavailable
+	}
+
+	session, ok := core.SessionFromContext(res.Request.Context())
+	if !ok {
+		return ErrSessionContext
+	}
+
+	connectionID, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("creating websocket connection ID: %w", err)
+	}
+
+	client, bufferedClient, err := session.Hijack()
+	if err != nil {
+		return fmt.Errorf("hijacking websocket client connection: %w", err)
+	}
+
+	defer client.Close()
+	defer upstream.Close()
+
+	if err := client.SetDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("clearing websocket client deadline: %w", err)
+	}
+
+	if err := res.Write(bufferedClient); err != nil {
+		return fmt.Errorf("writing websocket handshake response: %w", err)
+	}
+
+	if err := bufferedClient.Flush(); err != nil {
+		return fmt.Errorf("flushing websocket handshake response: %w", err)
+	}
+
+	var connection *marasiws.Connection
+	process := func(message *marasiws.Message) error {
+		generated, _ := message.Metadata["generated"].(bool)
+		if !generated {
+			processWebSocketMessageExtensions(proxy, message)
+
+			if !message.Dropped && shouldInterceptWebSocketMessage(proxy, message) && proxy.OnWebSocketIntercept != nil {
+				if proxy.WebSocketInterceptor == nil {
+					return errors.New("websocket interceptor not configured")
+				}
+				err := proxy.WebSocketInterceptor.Intercept(message, func(snapshot domain.WebSocketMessage) {
+					if err := proxy.OnWebSocketIntercept(snapshot); err != nil {
+						_ = proxy.ResolveWebSocketInterception(snapshot.ID, marasiws.InterceptionDecision{
+							Resume:  true,
+							Opcode:  snapshot.Opcode,
+							Payload: snapshot.Payload,
+						})
+					}
+				})
+				if err != nil {
+					return fmt.Errorf("intercepting websocket message: %w", err)
+				}
+			}
+		}
+		if message.Dropped {
+			if message.Metadata == nil {
+				message.Metadata = make(map[string]any)
+			}
+			message.Metadata["dropped"] = true
+		}
+
+		snapshot := message.ToDomain()
+		proxy.DBWriteChannel <- &snapshot
+		if proxy.OnWebSocketMessage != nil {
+			_ = proxy.OnWebSocketMessage(snapshot)
+		}
+		return nil
+	}
+
+	clientStream := &marasiws.HijackedConn{
+		Conn:       client,
+		ReadWriter: bufferedClient,
+	}
+	connection = marasiws.NewConnection(
+		connectionID,
+		requestID,
+		clientStream,
+		clientStream,
+		upstream,
+		process,
+	)
+	if proxy.WebSocketInterceptor != nil {
+		connection.SetShutdownHandler(proxy.WebSocketInterceptor.CancelConnection)
+	}
+
+	path := res.Request.URL.Path
+	if res.Request.URL.RawQuery != "" {
+		path += "?" + res.Request.URL.RawQuery
+	}
+
+	record := domain.WebSocketConnection{
+		ID:        connectionID,
+		RequestID: requestID,
+		State:     "open",
+		Transport: marasiws.TransportFromRequest(res.Request),
+		Host:      res.Request.Host,
+		Path:      path,
+		StartedAt: time.Now(),
+	}
+
+	return proxy.runWebSocketSession(connection, record)
+}
+
 // BufferStreamingBodyModifier reads the entire streaming response body into memory
 // and replaces the `res.Body` with a new `io.NopCloser` on the full body. It will
 // remove the `Transfer-Encoding` and update the `Content-Length` to reflect the new body.
 func BufferStreamingBodyModifier(proxy *Proxy, res *http.Response) error {
+	if marasiws.IsUpgradeResponse(res) {
+		return nil
+	}
 	defer res.Body.Close()
 
 	responseBody, err := io.ReadAll(res.Body)
@@ -427,6 +643,7 @@ func BufferStreamingBodyModifier(proxy *Proxy, res *http.Response) error {
 	res.ContentLength = int64(len(responseBody))
 	res.Header.Set("Content-Length", fmt.Sprintf("%d", len(responseBody)))
 	res.TransferEncoding = nil
+
 	return nil
 }
 
