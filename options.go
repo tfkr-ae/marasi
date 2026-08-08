@@ -33,6 +33,7 @@ type RepositoryProvider interface {
 	domain.ConfigRepository
 	domain.LogRepository
 	domain.ReportingRepository
+	domain.WebSocketRepository
 	io.Closer
 }
 
@@ -205,6 +206,50 @@ func WithLogHandler(handler func(log domain.Log) error) func(*Proxy) error {
 	}
 }
 
+// WithWebSocketOpenHandler takes a handler function that will be executed when a WebSocket connection opens.
+func WithWebSocketOpenHandler(handler func(domain.WebSocketConnection) error) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnWebSocketOpen != nil {
+			return errors.New("proxy already has a websocket open handler defined")
+		}
+		proxy.OnWebSocketOpen = handler
+		return nil
+	}
+}
+
+// WithWebSocketMessageHandler takes a handler function that will be executed for each WebSocket message.
+func WithWebSocketMessageHandler(handler func(domain.WebSocketMessage) error) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnWebSocketMessage != nil {
+			return errors.New("proxy already has a websocket message handler defined")
+		}
+		proxy.OnWebSocketMessage = handler
+		return nil
+	}
+}
+
+// WithWebSocketCloseHandler takes a handler function that will be executed when a WebSocket connection closes.
+func WithWebSocketCloseHandler(handler func(domain.WebSocketConnection) error) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnWebSocketClose != nil {
+			return errors.New("proxy already has a websocket close handler defined")
+		}
+		proxy.OnWebSocketClose = handler
+		return nil
+	}
+}
+
+// WithWebSocketInterceptHandler takes a handler function that will be executed when a WebSocket message is intercepted.
+func WithWebSocketInterceptHandler(handler func(domain.WebSocketMessage) error) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnWebSocketIntercept != nil {
+			return errors.New("proxy already has a websocket intercept handler defined")
+		}
+		proxy.OnWebSocketIntercept = handler
+		return nil
+	}
+}
+
 // WithTLS will configure the proxy CA based on the proxy.ConfigDir
 // It will also configure the http.Client that is used for the launchpad requests
 // TODO - Check if the certificate expired
@@ -274,6 +319,7 @@ func WithDefaultRepositories(repo RepositoryProvider) func(*Proxy) error {
 			WithLaunchpadRepository(repo),
 			WithWaypointRepository(repo),
 			WithReportingRepository(repo),
+			WithWebSocketRepository(repo),
 			WithDBCloser(repo),
 		)
 	}
@@ -355,6 +401,14 @@ func WithReportingRepository(repo domain.ReportingRepository) func(*Proxy) error
 	}
 }
 
+// WithWebSocketRepository injects the WebSocket repository implementation.
+func WithWebSocketRepository(repo domain.WebSocketRepository) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		proxy.WebSocketRepo = repo
+		return nil
+	}
+}
+
 // WithReportGenerator injects the report generator implementation.
 func WithReportGenerator(generator domain.ReportGenerator) func(*Proxy) error {
 	return func(proxy *Proxy) error {
@@ -410,7 +464,7 @@ func WithBasePipeline() func(*Proxy) error {
 	}
 }
 
-// WithDefaultPipeline will apply the default modifier pipelines
+// WithDefaultModifierPipeline will apply the default modifier pipelines
 // The default processing order is: waypoint overrides → extensions → interception → database storage.
 // WithDefaultModifierPipeline will apply the default modifier pipelines for Requests & Responses.
 // The processing order is:
@@ -430,12 +484,14 @@ func WithDefaultModifierPipeline() func(*Proxy) error {
 
 		// Response Modifiers
 		proxy.AddResponseModifier(ResponseFilterModifier)
+		proxy.AddResponseModifier(WebSocketPrepareModifier)
 		proxy.AddResponseModifier(BufferStreamingBodyModifier)
 		proxy.AddResponseModifier(CompressedResponseModifier)
 		proxy.AddResponseModifier(CompassResponseModifier)
 		proxy.AddResponseModifier(ExtensionsResponseModifier)
 		proxy.AddResponseModifier(CheckpointResponseModifier)
 		proxy.AddResponseModifier(WriteResponseModifier)
+		proxy.AddResponseModifier(WebSocketHandoffModifier)
 		return nil
 	}
 

@@ -11,6 +11,7 @@ import (
 	"github.com/Shopify/go-lua"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
+	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
 func TestRuntime_Sandbox(t *testing.T) {
@@ -216,6 +217,120 @@ func TestRuntime_ShouldInterceptResponse(t *testing.T) {
 		}
 		if got {
 			t.Errorf("\nwanted:\nfalse\ngot:\ntrue")
+		}
+	})
+}
+
+func TestRuntime_ShouldInterceptWebSocketMessage(t *testing.T) {
+	t.Run("should return true when interceptWebSocketMessage returns true", func(t *testing.T) {
+		luaCode := `
+			function interceptWebSocketMessage(message)
+				return message:opcode() == 1 and message:payload() == "intercept me"
+			end
+		`
+		ext, _ := setupTestExtension(t, luaCode)
+		message := &marasiws.Message{
+			Frame: marasiws.Frame{
+				Opcode:  marasiws.OpText,
+				Payload: []byte("intercept me"),
+			},
+		}
+
+		got, err := ext.ShouldInterceptWebSocketMessage(message)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if !got {
+			t.Errorf("\nwanted:\ntrue\ngot:\nfalse")
+		}
+	})
+
+	t.Run("should return false when interceptWebSocketMessage returns false", func(t *testing.T) {
+		luaCode := `
+			function interceptWebSocketMessage(message)
+				return false
+			end
+		`
+		ext, _ := setupTestExtension(t, luaCode)
+
+		got, err := ext.ShouldInterceptWebSocketMessage(&marasiws.Message{})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got {
+			t.Errorf("\nwanted:\nfalse\ngot:\ntrue")
+		}
+	})
+
+	t.Run("should return false when interceptWebSocketMessage is missing", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "")
+
+		got, err := ext.ShouldInterceptWebSocketMessage(&marasiws.Message{})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got {
+			t.Errorf("\nwanted:\nfalse\ngot:\ntrue")
+		}
+	})
+
+	t.Run("should return error if interceptWebSocketMessage fails", func(t *testing.T) {
+		luaCode := `
+			function interceptWebSocketMessage(message)
+				error("forced error")
+			end
+		`
+		ext, _ := setupTestExtension(t, luaCode)
+
+		got, err := ext.ShouldInterceptWebSocketMessage(&marasiws.Message{})
+		if err == nil {
+			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
+		}
+		if got {
+			t.Errorf("\nwanted:\nfalse\ngot:\ntrue")
+		}
+	})
+}
+
+func TestRuntime_CallWebSocketMessageHandler(t *testing.T) {
+	t.Run("should execute processWebSocketMessage successfully", func(t *testing.T) {
+		luaCode := `
+			function processWebSocketMessage(message)
+				message:set_payload("modified")
+			end
+		`
+		ext, _ := setupTestExtension(t, luaCode)
+		message := &marasiws.Message{}
+
+		err := ext.CallWebSocketMessageHandler(message)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if string(message.Frame.Payload) != "modified" {
+			t.Fatalf("\nwanted:\n%q\ngot:\n%q", "modified", message.Frame.Payload)
+		}
+	})
+
+	t.Run("should return nil when processWebSocketMessage is missing", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "")
+
+		err := ext.CallWebSocketMessageHandler(&marasiws.Message{})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should return error if processWebSocketMessage fails", func(t *testing.T) {
+		luaCode := `
+			function processWebSocketMessage(message)
+				error("forced error")
+			end
+		`
+		ext, _ := setupTestExtension(t, luaCode)
+
+		err := ext.CallWebSocketMessageHandler(&marasiws.Message{})
+		if err == nil {
+			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
 		}
 	})
 }

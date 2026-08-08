@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"time"
 
@@ -33,6 +34,8 @@ const (
 	ResponseTimeKey contextKey = "ResponseTime"
 	// MartianSessionKey is the context key to store the martian session (*martian.Session). This is used to hijack connection and control the response
 	MartianSessionKey contextKey = "SessionKey"
+	// WebSocketUpstreamKey stores the upgraded upstream WebSocket stream.
+	WebSocketUpstreamKey contextKey = "WebSocketUpstream"
 )
 
 // ContextWithSession returns a new request with a martian session in the context.
@@ -153,4 +156,26 @@ func ContextWithDropFlag(req *http.Request, drop bool) *http.Request {
 func DroppedFlagFromContext(ctx context.Context) (bool, bool) {
 	dropped, ok := ctx.Value(DropKey).(bool)
 	return dropped, ok
+}
+
+// ContextWithWebSocketUpstream returns a new request containing the upstream WebSocket stream.
+func ContextWithWebSocketUpstream(
+	req *http.Request,
+	upstream io.ReadWriteCloser,
+) *http.Request {
+	ctx := context.WithValue(
+		req.Context(),
+		WebSocketUpstreamKey,
+		upstream,
+	)
+
+	return req.WithContext(ctx)
+}
+
+// WebSocketUpstreamFromContext returns the upstream WebSocket stream when present.
+func WebSocketUpstreamFromContext(
+	ctx context.Context,
+) (io.ReadWriteCloser, bool) {
+	upstream, ok := ctx.Value(WebSocketUpstreamKey).(io.ReadWriteCloser)
+	return upstream, ok
 }
