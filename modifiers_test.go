@@ -1,11 +1,13 @@
 package marasi
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -22,7 +24,27 @@ import (
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
 	"github.com/tfkr-ae/marasi/rawhttp"
+	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
+
+type trackingResponseBody struct {
+	read   bool
+	closed bool
+}
+
+func (b *trackingResponseBody) Read([]byte) (int, error) {
+	b.read = true
+	return 0, forcedErr
+}
+
+func (b *trackingResponseBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+func (b *trackingResponseBody) Write(p []byte) (int, error) {
+	return len(p), nil
+}
 
 func testBrotliBody(t *testing.T, content string) (io.ReadCloser, int) {
 	t.Helper()
@@ -668,6 +690,68 @@ func TestSetupRequestModifier(t *testing.T) {
 
 		if req.Header.Get("x-marasi-metadata") != "" {
 			t.Errorf("expected x-marasi-metadata header to be removed")
+		}
+	})
+
+	t.Run("websocket upgrade request should set ws metadata", func(t *testing.T) {
+		proxy := &Proxy{}
+		req := httptest.NewRequest(http.MethodGet, "http://marasi.app/socket", nil)
+		req.Header.Set("Connection", "keep-alive, Upgrade")
+		req.Header.Set("Upgrade", "websocket")
+
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context: %v", err)
+		}
+		defer remove()
+
+		err = SetupRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+
+		metadata, ok := core.MetadataFromContext(req.Context())
+		if !ok {
+			t.Fatalf("wanted metadata to be set in context")
+		}
+		want := map[string]any{
+			"protocol":            "websocket",
+			"websocket.transport": "ws",
+			"websocket.state":     "pending",
+		}
+		if !reflect.DeepEqual(want, metadata) {
+			t.Fatalf("wanted:\n%v\ngot:\n%v", want, metadata)
+		}
+	})
+
+	t.Run("secure websocket upgrade request should set wss metadata", func(t *testing.T) {
+		proxy := &Proxy{}
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app/socket", nil)
+		req.Header.Set("Connection", "keep-alive, Upgrade")
+		req.Header.Set("Upgrade", "websocket")
+
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context: %v", err)
+		}
+		defer remove()
+
+		err = SetupRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+
+		metadata, ok := core.MetadataFromContext(req.Context())
+		if !ok {
+			t.Fatalf("wanted metadata to be set in context")
+		}
+		want := map[string]any{
+			"protocol":            "websocket",
+			"websocket.transport": "wss",
+			"websocket.state":     "pending",
+		}
+		if !reflect.DeepEqual(want, metadata) {
+			t.Fatalf("wanted:\n%v\ngot:\n%v", want, metadata)
 		}
 	})
 }
@@ -1750,6 +1834,543 @@ func TestResponseFilterModifier(t *testing.T) {
 	})
 }
 
+func TestWebSocketPrepareModifier(t *testing.T) {
+	t.Run("websocket upgrade response should prepare upstream and set open metadata", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app/socket", nil)
+		req.Header.Set("Connection", "Upgrade")
+		req.Header.Set("Upgrade", "websocket")
+		requestMetadata := map[string]any{
+			"protocol":            "websocket",
+			"websocket.transport": "wss",
+			"websocket.state":     "pending",
+		}
+		req = core.ContextWithMetadata(req, requestMetadata)
+
+		body := &trackingResponseBody{}
+		res := &http.Response{
+			StatusCode:       http.StatusSwitchingProtocols,
+			Request:          req,
+			ContentLength:    100,
+			TransferEncoding: []string{"chunked"},
+			Header: http.Header{
+				"Connection":     []string{"Upgrade"},
+				"Upgrade":        []string{"websocket"},
+				"Content-Length": []string{"100"},
+			},
+			Body: body,
+		}
+
+		err := WebSocketPrepareModifier(&Proxy{}, res)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+
+		metadata, ok := core.MetadataFromContext(res.Request.Context())
+		if !ok {
+			t.Fatalf("wanted metadata to be set in context")
+		}
+		if metadata["websocket.state"] != "open" {
+			t.Fatalf("wanted: %q\ngot: %q", "open", metadata["websocket.state"])
+		}
+		if requestMetadata["websocket.state"] != "pending" {
+			t.Fatalf("wanted request state: %q\ngot: %q", "pending", requestMetadata["websocket.state"])
+		}
+
+		upstream, ok := core.WebSocketUpstreamFromContext(res.Request.Context())
+		if !ok {
+			t.Fatalf("wanted upstream in context: true\ngot: %v", ok)
+		}
+		if upstream != body {
+			t.Fatalf("wanted upstream: %p\ngot: %p", body, upstream)
+		}
+		if res.Body != http.NoBody {
+			t.Fatalf("wanted response body: %p\ngot: %p", http.NoBody, res.Body)
+		}
+		if res.ContentLength != 0 {
+			t.Fatalf("wanted content length: %d\ngot: %d", 0, res.ContentLength)
+		}
+		if res.Header.Get("Content-Length") != "" {
+			t.Fatalf("wanted Content-Length header: %q\ngot: %q", "", res.Header.Get("Content-Length"))
+		}
+		if res.TransferEncoding != nil {
+			t.Fatalf("wanted transfer encoding: nil\ngot: %v", res.TransferEncoding)
+		}
+		if body.read {
+			t.Fatalf("wanted upstream read: false\ngot: %v", body.read)
+		}
+		if body.closed {
+			t.Fatalf("wanted upstream closed: false\ngot: %v", body.closed)
+		}
+	})
+
+	t.Run("non-websocket response should leave metadata unchanged", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+		req = core.ContextWithMetadata(req, map[string]any{
+			"websocket.state": "pending",
+		})
+		res := &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    req,
+			Header:     make(http.Header),
+			Body:       http.NoBody,
+		}
+
+		err := WebSocketPrepareModifier(&Proxy{}, res)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+
+		metadata, ok := core.MetadataFromContext(res.Request.Context())
+		if !ok {
+			t.Fatalf("wanted metadata to be set in context")
+		}
+		if metadata["websocket.state"] != "pending" {
+			t.Fatalf("wanted: %q\ngot: %q", "pending", metadata["websocket.state"])
+		}
+	})
+
+	t.Run("websocket upgrade response without metadata should return an error", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app/socket", nil)
+		req.Header.Set("Connection", "Upgrade")
+		req.Header.Set("Upgrade", "websocket")
+		res := &http.Response{
+			StatusCode: http.StatusSwitchingProtocols,
+			Request:    req,
+			Header: http.Header{
+				"Connection": []string{"Upgrade"},
+				"Upgrade":    []string{"websocket"},
+			},
+			Body: &trackingResponseBody{},
+		}
+
+		err := WebSocketPrepareModifier(&Proxy{}, res)
+		if !errors.Is(err, ErrMetadataNotFound) {
+			t.Fatalf("wanted: %v\ngot: %v", ErrMetadataNotFound, err)
+		}
+	})
+}
+
+func TestShouldInterceptWebSocketMessage(t *testing.T) {
+	checkpointProxy := func(t *testing.T, luaCode string, enabled bool) *Proxy {
+		t.Helper()
+
+		proxy := newTestProxy(t, &domain.Extension{
+			ID:         testExtensions["checkpoint"].ID,
+			Name:       "checkpoint",
+			LuaContent: luaCode,
+		})
+		checkpoint, ok := proxy.GetExtension("checkpoint")
+		if !ok {
+			t.Fatalf("getting checkpoint extension")
+		}
+		checkpoint.Data.Enabled = enabled
+		return proxy
+	}
+
+	t.Run("global websocket interception should return true without checkpoint", func(t *testing.T) {
+		proxy := &Proxy{}
+		proxy.SetWebSocketIntercept(true)
+
+		if !shouldInterceptWebSocketMessage(proxy, &marasiws.Message{}) {
+			t.Fatalf("wanted: true\ngot: false")
+		}
+	})
+
+	t.Run("missing checkpoint should return false", func(t *testing.T) {
+		proxy := &Proxy{}
+
+		if shouldInterceptWebSocketMessage(proxy, &marasiws.Message{}) {
+			t.Fatalf("wanted: false\ngot: true")
+		}
+	})
+
+	t.Run("disabled checkpoint should return false", func(t *testing.T) {
+		proxy := checkpointProxy(t, `
+			function interceptWebSocketMessage(message)
+				return true
+			end
+		`, false)
+
+		if shouldInterceptWebSocketMessage(proxy, &marasiws.Message{}) {
+			t.Fatalf("wanted: false\ngot: true")
+		}
+	})
+
+	t.Run("enabled checkpoint returning true should return true", func(t *testing.T) {
+		proxy := checkpointProxy(t, `
+			function interceptWebSocketMessage(message)
+				return message:opcode() == 1
+			end
+		`, true)
+		message := &marasiws.Message{Frame: marasiws.Frame{Opcode: marasiws.OpText}}
+
+		if !shouldInterceptWebSocketMessage(proxy, message) {
+			t.Fatalf("wanted: true\ngot: false")
+		}
+	})
+
+	t.Run("enabled checkpoint returning false should return false", func(t *testing.T) {
+		proxy := checkpointProxy(t, `
+			function interceptWebSocketMessage(message)
+				return false
+			end
+		`, true)
+
+		if shouldInterceptWebSocketMessage(proxy, &marasiws.Message{}) {
+			t.Fatalf("wanted: false\ngot: true")
+		}
+	})
+
+	t.Run("checkpoint error should log and return false", func(t *testing.T) {
+		proxy := checkpointProxy(t, `
+			function interceptWebSocketMessage(message)
+				error("forced error")
+			end
+		`, true)
+
+		if shouldInterceptWebSocketMessage(proxy, &marasiws.Message{}) {
+			t.Fatalf("wanted: false\ngot: true")
+		}
+		if len(proxy.DBWriteChannel) != 1 {
+			t.Fatalf("wanted log write count: %d\ngot: %d", 1, len(proxy.DBWriteChannel))
+		}
+	})
+}
+
+func TestProcessWebSocketMessageExtensions(t *testing.T) {
+	enableExtensions := func(proxy *Proxy) {
+		for _, extension := range proxy.Extensions {
+			extension.Data.Enabled = true
+		}
+	}
+
+	t.Run("enabled extensions should process messages in order and skip checkpoint", func(t *testing.T) {
+		proxy := newTestProxy(t,
+			&domain.Extension{
+				ID:   uuid.New(),
+				Name: "first",
+				LuaContent: `
+					function processWebSocketMessage(message)
+						message:set_payload("first")
+					end
+				`,
+			},
+			&domain.Extension{
+				ID:   testExtensions["checkpoint"].ID,
+				Name: "checkpoint",
+				LuaContent: `
+					function processWebSocketMessage(message)
+						message:drop()
+					end
+				`,
+			},
+			&domain.Extension{
+				ID:   uuid.New(),
+				Name: "second",
+				LuaContent: `
+					function processWebSocketMessage(message)
+						if message:payload() == "first" then
+							message:set_opcode(2)
+						end
+					end
+				`,
+			},
+		)
+		enableExtensions(proxy)
+		message := &marasiws.Message{Frame: marasiws.Frame{Opcode: marasiws.OpText}}
+
+		processWebSocketMessageExtensions(proxy, message)
+
+		if string(message.Frame.Payload) != "first" {
+			t.Fatalf("wanted: %q\ngot: %q", "first", message.Frame.Payload)
+		}
+		if message.Frame.Opcode != marasiws.OpBinary {
+			t.Fatalf("wanted: %d\ngot: %d", marasiws.OpBinary, message.Frame.Opcode)
+		}
+		if message.Dropped {
+			t.Fatalf("wanted dropped: false\ngot: true")
+		}
+	})
+
+	t.Run("dropped message should stop later extensions", func(t *testing.T) {
+		proxy := newTestProxy(t,
+			&domain.Extension{
+				ID:   uuid.New(),
+				Name: "dropper",
+				LuaContent: `
+					function processWebSocketMessage(message)
+						message:drop()
+					end
+				`,
+			},
+			&domain.Extension{
+				ID:   uuid.New(),
+				Name: "later",
+				LuaContent: `
+					function processWebSocketMessage(message)
+						message:set_payload("should not run")
+					end
+				`,
+			},
+		)
+		enableExtensions(proxy)
+		message := &marasiws.Message{}
+
+		processWebSocketMessageExtensions(proxy, message)
+
+		if !message.Dropped {
+			t.Fatalf("wanted dropped: true\ngot: false")
+		}
+		if len(message.Frame.Payload) != 0 {
+			t.Fatalf("wanted empty payload\ngot: %q", message.Frame.Payload)
+		}
+	})
+
+	t.Run("skipped message should stop later extensions without dropping", func(t *testing.T) {
+		proxy := newTestProxy(t,
+			&domain.Extension{
+				ID:   uuid.New(),
+				Name: "skipper",
+				LuaContent: `
+					function processWebSocketMessage(message)
+						message:skip()
+					end
+				`,
+			},
+			&domain.Extension{
+				ID:   uuid.New(),
+				Name: "later",
+				LuaContent: `
+					function processWebSocketMessage(message)
+						message:drop()
+					end
+				`,
+			},
+		)
+		enableExtensions(proxy)
+		message := &marasiws.Message{}
+
+		processWebSocketMessageExtensions(proxy, message)
+
+		if !message.Skipped {
+			t.Fatalf("wanted skipped: true\ngot: false")
+		}
+		if message.Dropped {
+			t.Fatalf("wanted dropped: false\ngot: true")
+		}
+	})
+}
+
+func TestWebSocketHandoffModifier(t *testing.T) {
+	upgradeResponse := func(req *http.Request) *http.Response {
+		return &http.Response{
+			StatusCode: http.StatusSwitchingProtocols,
+			Proto:      "HTTP/1.1",
+			ProtoMajor: 1,
+			ProtoMinor: 1,
+			Request:    req,
+			Header: http.Header{
+				"Connection": []string{"Upgrade"},
+				"Upgrade":    []string{"websocket"},
+			},
+			Body: http.NoBody,
+		}
+	}
+
+	upgradeRequest := func() *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app/socket?token=test", nil)
+		req.Header.Set("Connection", "Upgrade")
+		req.Header.Set("Upgrade", "websocket")
+		return req
+	}
+
+	t.Run("non-websocket response should be ignored", func(t *testing.T) {
+		res := &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    httptest.NewRequest(http.MethodGet, "https://marasi.app", nil),
+			Header:     make(http.Header),
+			Body:       http.NoBody,
+		}
+
+		err := WebSocketHandoffModifier(&Proxy{}, res)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+	})
+
+	t.Run("missing request ID should return an error", func(t *testing.T) {
+		res := upgradeResponse(upgradeRequest())
+
+		err := WebSocketHandoffModifier(&Proxy{}, res)
+		if !errors.Is(err, ErrRequestIDNotFound) {
+			t.Fatalf("wanted: %v\ngot: %v", ErrRequestIDNotFound, err)
+		}
+	})
+
+	t.Run("missing upstream should return an error", func(t *testing.T) {
+		req := core.ContextWithRequestID(upgradeRequest(), uuid.New())
+		res := upgradeResponse(req)
+
+		err := WebSocketHandoffModifier(&Proxy{}, res)
+		if !errors.Is(err, ErrWebSocketUpstreamUnavailable) {
+			t.Fatalf("wanted: %v\ngot: %v", ErrWebSocketUpstreamUnavailable, err)
+		}
+	})
+
+	t.Run("missing session should return an error", func(t *testing.T) {
+		req := core.ContextWithRequestID(upgradeRequest(), uuid.New())
+		upstream := &trackingResponseBody{}
+		req = core.ContextWithWebSocketUpstream(req, upstream)
+		res := upgradeResponse(req)
+
+		err := WebSocketHandoffModifier(&Proxy{}, res)
+		if !errors.Is(err, ErrSessionContext) {
+			t.Fatalf("wanted: %v\ngot: %v", ErrSessionContext, err)
+		}
+	})
+
+	t.Run("successful handoff should relay and persist lifecycle", func(t *testing.T) {
+		requestID, requestIDErr := uuid.NewV7()
+		if requestIDErr != nil {
+			t.Fatalf("creating request UUID: %v", requestIDErr)
+		}
+
+		clientConnection, clientPeer := net.Pipe()
+		upstreamConnection, upstreamPeer := net.Pipe()
+		defer clientPeer.Close()
+		defer upstreamPeer.Close()
+
+		deadline := time.Now().Add(5 * time.Second)
+		if deadlineErr := clientPeer.SetDeadline(deadline); deadlineErr != nil {
+			t.Fatalf("setting client peer deadline: %v", deadlineErr)
+		}
+		if deadlineErr := upstreamPeer.SetDeadline(deadline); deadlineErr != nil {
+			t.Fatalf("setting upstream peer deadline: %v", deadlineErr)
+		}
+
+		req := upgradeRequest()
+		clientBuffer := bufio.NewReadWriter(bufio.NewReader(clientConnection), bufio.NewWriter(clientConnection))
+		martianContext, remove, contextErr := martian.TestContext(req, clientConnection, clientBuffer)
+		if contextErr != nil {
+			t.Fatalf("applying martian context: %v", contextErr)
+		}
+		defer remove()
+
+		req = core.ContextWithRequestID(req, requestID)
+		req = core.ContextWithSession(req, martianContext.Session())
+		req = core.ContextWithWebSocketUpstream(req, upstreamConnection)
+		res := upgradeResponse(req)
+		proxy := &Proxy{
+			WebSocketRegistry: marasiws.NewRegistry(),
+			DBWriteChannel:    make(chan any, 4),
+		}
+		handoffResult := make(chan error, 1)
+		go func() {
+			handoffResult <- WebSocketHandoffModifier(proxy, res)
+		}()
+
+		clientReader := bufio.NewReader(clientPeer)
+		statusLine, readErr := clientReader.ReadString('\n')
+		if readErr != nil {
+			t.Fatalf("reading handshake status: %v", readErr)
+		}
+		if statusLine != "HTTP/1.1 101 Switching Protocols\r\n" {
+			t.Fatalf("wanted: %q\ngot: %q", "HTTP/1.1 101 Switching Protocols\r\n", statusLine)
+		}
+		for {
+			headerLine, headerErr := clientReader.ReadString('\n')
+			if headerErr != nil {
+				t.Fatalf("reading handshake header: %v", headerErr)
+			}
+			if headerLine == "\r\n" {
+				break
+			}
+		}
+
+		openItem := receiveSessionDBWrite(t, proxy.DBWriteChannel)
+		openRecord, ok := openItem.(*domain.WebSocketConnection)
+		if !ok {
+			t.Fatalf("wanted: %T\ngot: %T", (*domain.WebSocketConnection)(nil), openItem)
+		}
+		if openRecord.RequestID != requestID {
+			t.Fatalf("wanted: %s\ngot: %s", requestID, openRecord.RequestID)
+		}
+		if openRecord.Transport != "wss" {
+			t.Fatalf("wanted: %q\ngot: %q", "wss", openRecord.Transport)
+		}
+		if openRecord.Host != "marasi.app" {
+			t.Fatalf("wanted: %q\ngot: %q", "marasi.app", openRecord.Host)
+		}
+		if openRecord.Path != "/socket?token=test" {
+			t.Fatalf("wanted: %q\ngot: %q", "/socket?token=test", openRecord.Path)
+		}
+		if !martianContext.Session().Hijacked() {
+			t.Fatalf("wanted: %v\ngot: %v", true, martianContext.Session().Hijacked())
+		}
+		if registered, exists := proxy.WebSocketRegistry.Get(openRecord.ID); !exists || registered == nil {
+			t.Fatalf("wanted registered connection: true\ngot: %v", exists)
+		}
+
+		closePayload, closePayloadErr := marasiws.EncodeClosePayload(1000, "Goodbye")
+		if closePayloadErr != nil {
+			t.Fatalf("EncodeClosePayload() returned unexpected error: %v", closePayloadErr)
+		}
+		if writeErr := marasiws.WriteFrame(clientPeer, marasiws.Frame{
+			Fin:     true,
+			Opcode:  marasiws.OpClose,
+			Payload: closePayload,
+		}, true); writeErr != nil {
+			t.Fatalf("writing client close frame: %v", writeErr)
+		}
+		upstreamFrame, upstreamReadErr := marasiws.ReadFrame(upstreamPeer)
+		if upstreamReadErr != nil {
+			t.Fatalf("reading upstream close frame: %v", upstreamReadErr)
+		}
+		if upstreamFrame.Opcode != marasiws.OpClose {
+			t.Fatalf("wanted: %d\ngot: %d", marasiws.OpClose, upstreamFrame.Opcode)
+		}
+
+		messageItem := receiveSessionDBWrite(t, proxy.DBWriteChannel)
+		message, ok := messageItem.(*domain.WebSocketMessage)
+		if !ok {
+			t.Fatalf("wanted: %T\ngot: %T", (*domain.WebSocketMessage)(nil), messageItem)
+		}
+		if message.ConnectionID != openRecord.ID {
+			t.Fatalf("wanted: %s\ngot: %s", openRecord.ID, message.ConnectionID)
+		}
+		if message.Direction != marasiws.DirectionFromClient {
+			t.Fatalf("wanted: %q\ngot: %q", marasiws.DirectionFromClient, message.Direction)
+		}
+
+		select {
+		case handoffErr := <-handoffResult:
+			if handoffErr != nil {
+				t.Fatalf("WebSocketHandoffModifier() returned unexpected error: %v", handoffErr)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("wanted handoff state: %q\ngot: %q", "returned", "blocked")
+		}
+
+		updateItem := receiveSessionDBWrite(t, proxy.DBWriteChannel)
+		update, ok := updateItem.(*domain.WebSocketConnectionUpdate)
+		if !ok {
+			t.Fatalf("wanted: %T\ngot: %T", (*domain.WebSocketConnectionUpdate)(nil), updateItem)
+		}
+		if update.Connection.State != "closed" {
+			t.Fatalf("wanted: %q\ngot: %q", "closed", update.Connection.State)
+		}
+		if update.Connection.CloseCode != 1000 {
+			t.Fatalf("wanted: %d\ngot: %d", 1000, update.Connection.CloseCode)
+		}
+		if update.Connection.CloseReason != "Goodbye" {
+			t.Fatalf("wanted: %q\ngot: %q", "Goodbye", update.Connection.CloseReason)
+		}
+		if _, exists := proxy.WebSocketRegistry.Get(openRecord.ID); exists {
+			t.Fatalf("wanted registered connection: false\ngot: %v", exists)
+		}
+	})
+}
+
 func TestBufferedStreamingResponseModifier(t *testing.T) {
 	proxy := &Proxy{}
 	t.Run("chunked response modifier should return an error if it fails to read the body", func(t *testing.T) {
@@ -1807,6 +2428,44 @@ func TestBufferedStreamingResponseModifier(t *testing.T) {
 
 		if res.TransferEncoding != nil {
 			t.Fatalf("wanted: nil\ngot: %v", res.TransferEncoding)
+		}
+	})
+	t.Run("websocket upgrade should not read or close the response body", func(t *testing.T) {
+		req := httptest.NewRequest(
+			http.MethodGet,
+			"https://marasi.app/socket",
+			nil,
+		)
+		req.Header.Set("Connection", "Upgrade")
+		req.Header.Set("Upgrade", "websocket")
+
+		body := &trackingResponseBody{}
+
+		res := &http.Response{
+			StatusCode: http.StatusSwitchingProtocols,
+			Request:    req,
+			Header: http.Header{
+				"Connection": []string{"Upgrade"},
+				"Upgrade":    []string{"websocket"},
+			},
+			Body: body,
+		}
+
+		err := BufferStreamingBodyModifier(&Proxy{}, res)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if body.read {
+			t.Fatalf("\nwanted body read:\n%v\ngot:\n%v", false, body.read)
+		}
+
+		if body.closed {
+			t.Fatalf("\nwanted body closed:\n%v\ngot:\n%v", false, body.closed)
+		}
+
+		if res.Body != body {
+			t.Fatalf("\nwanted body:\n%p\ngot:\n%p", body, res.Body)
 		}
 	})
 }
