@@ -123,3 +123,33 @@ func (l *MarasiListener) Accept() (net.Conn, error) {
 		return conn, nil
 	}
 }
+
+// ClosingListener makes listener errors temporary while its owner is shutting down.
+type ClosingListener struct {
+	net.Listener
+	isClosing func() bool
+}
+
+func NewClosingListener(listener net.Listener, isClosing func() bool) *ClosingListener {
+	return &ClosingListener{
+		Listener:  listener,
+		isClosing: isClosing,
+	}
+}
+
+func (l *ClosingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil && l.isClosing() {
+		return nil, temporaryListenerError{err: err}
+	}
+	return conn, err
+}
+
+type temporaryListenerError struct {
+	err error
+}
+
+func (e temporaryListenerError) Error() string   { return e.err.Error() }
+func (e temporaryListenerError) Unwrap() error   { return e.err }
+func (e temporaryListenerError) Timeout() bool   { return false }
+func (e temporaryListenerError) Temporary() bool { return true }

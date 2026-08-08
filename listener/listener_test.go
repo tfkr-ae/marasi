@@ -371,3 +371,59 @@ func TestMarasiListener_FatalError(t *testing.T) {
 		t.Errorf("expected 1 but got %d", acceptedCount)
 	}
 }
+
+func TestClosingListener_Accept(t *testing.T) {
+	t.Run("successful accept is unchanged", func(t *testing.T) {
+		server, client := net.Pipe()
+		defer server.Close()
+		defer client.Close()
+
+		wrapped := NewClosingListener(&mockListener{
+			accept: func() (net.Conn, error) {
+				return server, nil
+			},
+		}, func() bool { return true })
+
+		conn, err := wrapped.Accept()
+		if err != nil {
+			t.Fatalf("Accept() returned unexpected error: %v", err)
+		}
+		if conn != server {
+			t.Fatal("Accept() did not return the underlying connection")
+		}
+	})
+
+	t.Run("shutdown error is temporary", func(t *testing.T) {
+		wrapped := NewClosingListener(&mockListener{
+			accept: func() (net.Conn, error) {
+				return nil, net.ErrClosed
+			},
+		}, func() bool { return true })
+
+		_, err := wrapped.Accept()
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Accept() error does not wrap net.ErrClosed: %v", err)
+		}
+		netErr, ok := err.(net.Error)
+		if !ok || !netErr.Temporary() {
+			t.Fatalf("Accept() error is not temporary: %v", err)
+		}
+		if netErr.Timeout() {
+			t.Fatalf("Accept() error unexpectedly reports a timeout")
+		}
+	})
+
+	t.Run("non-shutdown error is unchanged", func(t *testing.T) {
+		wantErr := errors.New("accept failed")
+		wrapped := NewClosingListener(&mockListener{
+			accept: func() (net.Conn, error) {
+				return nil, wantErr
+			},
+		}, func() bool { return false })
+
+		_, err := wrapped.Accept()
+		if err != wantErr {
+			t.Fatalf("Accept() error:\nwant: %v\ngot:  %v", wantErr, err)
+		}
+	})
+}

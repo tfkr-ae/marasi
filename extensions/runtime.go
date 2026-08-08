@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/compass"
 	"github.com/tfkr-ae/marasi/domain"
+	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
 // ProxyService defines the interface that extensions use to interact with the core proxy.
@@ -94,6 +95,7 @@ func (extension *Runtime) PrepareState(proxy ProxyService, options []func(*Runti
 	RegisterCustomPrint(extension)
 	RegisterRequestType(extension)
 	RegisterResponseType(extension)
+	RegisterWebSocketMessageType(extension)
 	RegisterURLType(extension)
 	RegisterHeaderType(extension)
 	RegisterCookieType(extension)
@@ -221,6 +223,52 @@ func (extension *Runtime) ShouldInterceptResponse(res *http.Response) (bool, err
 	should := extension.LuaState.ToBoolean(-1)
 	extension.LuaState.Pop(1)
 	return should, nil
+}
+
+// ShouldInterceptWebSocketMessage calls the `interceptWebSocketMessage` function in the Lua script
+// to determine if the given WebSocket message should be intercepted.
+func (extension *Runtime) ShouldInterceptWebSocketMessage(message *marasiws.Message) (bool, error) {
+	extension.Mu.Lock()
+	defer extension.Mu.Unlock()
+
+	extension.LuaState.Global("interceptWebSocketMessage")
+	if !extension.LuaState.IsFunction(-1) {
+		extension.LuaState.Pop(1)
+		return false, nil
+	}
+
+	extension.LuaState.PushUserData(message)
+	lua.SetMetaTableNamed(extension.LuaState, "wsmsg")
+	if err := extension.LuaState.ProtectedCall(1, 1, 0); err != nil {
+		extension.LuaState.Pop(1)
+		return false, fmt.Errorf("calling shouldInterceptWebSocketMessage : %w", err)
+	}
+
+	should := extension.LuaState.ToBoolean(-1)
+	extension.LuaState.Pop(1)
+	return should, nil
+}
+
+// CallWebSocketMessageHandler calls the `processWebSocketMessage` function in the Lua script,
+// passing the live WebSocket message to be processed by the extension.
+func (extension *Runtime) CallWebSocketMessageHandler(message *marasiws.Message) error {
+	extension.Mu.Lock()
+	defer extension.Mu.Unlock()
+
+	extension.LuaState.Global("processWebSocketMessage")
+	if !extension.LuaState.IsFunction(-1) {
+		extension.LuaState.Pop(1)
+		return nil
+	}
+
+	extension.LuaState.PushUserData(message)
+	lua.SetMetaTableNamed(extension.LuaState, "wsmsg")
+	if err := extension.LuaState.ProtectedCall(1, 0, 0); err != nil {
+		extension.LuaState.Pop(1)
+		return fmt.Errorf("calling processWebSocketMessage : %w", err)
+	}
+
+	return nil
 }
 
 // CallResponseHandler calls the `processResponse` function in the Lua script,

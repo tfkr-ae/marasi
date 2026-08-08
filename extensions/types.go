@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/compass"
 	"github.com/tfkr-ae/marasi/core"
+	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
 var globalCallbackCounter uint64
@@ -1212,6 +1213,128 @@ func RegisterRequestType(extension *Runtime) {
 	})
 }
 
+// RegisterWebSocketMessageType registers the websocket Message type and its methods with the Lua state.
+func RegisterWebSocketMessageType(extension *Runtime) {
+	funcs := make(map[string]lua.Function)
+
+	funcs["id"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		l.PushString(message.ID.String())
+		return 1
+	}
+
+	funcs["connection_id"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		l.PushString(message.ConnectionID.String())
+		return 1
+	}
+
+	funcs["request_id"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		l.PushString(message.RequestID.String())
+		return 1
+	}
+
+	funcs["direction"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		l.PushString(message.Direction)
+		return 1
+	}
+
+	funcs["opcode"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		l.PushInteger(message.Frame.Opcode)
+		return 1
+	}
+
+	funcs["set_opcode"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		message.Frame.Opcode = lua.CheckInteger(l, 2)
+		return 0
+	}
+
+	funcs["payload"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		l.PushString(string(message.Frame.Payload))
+		return 1
+	}
+
+	funcs["set_payload"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		message.Frame.Payload = []byte(lua.CheckString(l, 2))
+		return 0
+	}
+
+	funcs["length"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		l.PushInteger(len(message.Frame.Payload))
+		return 1
+	}
+
+	funcs["fin"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		l.PushBoolean(message.Frame.Fin)
+		return 1
+	}
+
+	funcs["is_binary"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		l.PushBoolean(message.IsBinary())
+		return 1
+	}
+
+	funcs["metadata"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		util.DeepPush(l, message.Metadata)
+		return 1
+	}
+
+	funcs["set_metadata"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		value := ParseTable(l, 2, GoValue)
+		metadata, ok := value.(map[string]any)
+		if !ok {
+			lua.ArgumentError(l, 2, "metadata must be a key-value table, not an array")
+			return 0
+		}
+		if message.Metadata == nil {
+			message.Metadata = make(map[string]any)
+		}
+		extensionMetadata, _ := message.Metadata[extension.Data.Name].(map[string]any)
+		if extensionMetadata == nil {
+			extensionMetadata = make(map[string]any)
+		}
+		maps.Copy(extensionMetadata, metadata)
+		message.Metadata[extension.Data.Name] = extensionMetadata
+		return 0
+	}
+
+	funcs["drop"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		message.Dropped = true
+		return 0
+	}
+
+	funcs["skip"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		message.Skipped = true
+		return 0
+	}
+
+	RegisterType(extension.LuaState, "wsmsg", funcs, func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		l.PushString(fmt.Sprintf(
+			"WebSocketMessage { ID: %s, ConnectionID: %s, Direction: %s, Opcode: %d, Length: %d }",
+			message.ID,
+			message.ConnectionID,
+			message.Direction,
+			message.Frame.Opcode,
+			len(message.Frame.Payload),
+		))
+		return 1
+	})
+}
+
 // RegisterResponseType registers the `http.Response` type and its methods with the Lua state.
 // This allows Lua scripts to read and modify outgoing HTTP responses.
 func RegisterResponseType(extension *Runtime) {
@@ -1843,7 +1966,7 @@ func RegisterRequestBuilderType(extension *Runtime) {
 		}
 
 		reqMethod := builder.method
-		reqUrlStr := builder.url.String()
+		reqURLStr := builder.url.String()
 		reqBody := builder.body
 		reqHeaders := builder.headers.Clone()
 
@@ -1858,7 +1981,7 @@ func RegisterRequestBuilderType(extension *Runtime) {
 		go func() {
 			reqBodyBuffer := bytes.NewBuffer([]byte(reqBody))
 			var resp *http.Response
-			req, err := http.NewRequest(reqMethod, reqUrlStr, reqBodyBuffer)
+			req, err := http.NewRequest(reqMethod, reqURLStr, reqBodyBuffer)
 			if err == nil {
 				req.Header = reqHeaders
 
