@@ -69,6 +69,26 @@ created: {{.Metadata.CreatedAt.Local.Format "2006-01-02 15:04:05"}}
 {{ truncate $row.Response.Raw $.Metadata.TruncateLength | cleanPrint }}
 ```
 
+{{- if and (eq (index $row.Metadata "protocol") "websocket") (eq $row.Response.StatusCode 101) }}
+{{- $webSocket := getWebSocket $row.Request.ID }}
+
+##### WebSocket Connection
+
+| Property | Value |
+|-|-|
+| Endpoint | {{ $webSocket.Connection.Transport }}://{{ $webSocket.Connection.Host }}{{ $webSocket.Connection.Path }} |
+| State | {{ $webSocket.Connection.State }} |
+| Started | {{ $webSocket.Connection.StartedAt.Local.Format "2006-01-02 15:04:05.000" }} |
+{{- if $webSocket.Connection.ClosedAt }}
+| Closed | {{ $webSocket.Connection.ClosedAt.Local.Format "2006-01-02 15:04:05.000" }} |
+{{- end }}
+{{- if $webSocket.Connection.CloseCode }}
+| Close | {{ $webSocket.Connection.CloseCode }} {{ $webSocket.Connection.CloseReason }} |
+{{- end }}
+
+WebSocket messages are included in [Appendix A: WebSocket Messages](#appendix-finding-{{ inc $index }}-request-{{ inc $reqIndex }}).
+{{- end }} {{/* websocket if */}}
+
 {{- end }} {{/* requests range */}}
 {{- end }} {{/* requests if */}}
 
@@ -88,3 +108,174 @@ created: {{.Metadata.CreatedAt.Local.Format "2006-01-02 15:04:05"}}
 {{- end }} {{/* artifacts range */}}
 {{- end }} {{/* artifacts if */}}
 {{- end }} {{/* findings range */}}
+
+{{- if .TestCases }}
+
+# Test Cases
+
+{{- range $testCaseIndex, $testCase := .TestCases }}
+
+## TC-{{ printf "%02d" (inc $testCaseIndex) }} {{ $testCase.Title }}
+
+| Category | Tags |
+|-|-|
+| {{ $testCase.Category }} | {{ join $testCase.Tags ", " }} |
+
+### Description
+
+{{ $testCase.Description }}
+
+{{- if $testCase.Note }}
+
+### Notes
+
+{{ $testCase.Note }}
+{{- end }}
+
+{{- if $testCase.Requests }}
+
+### Requests
+
+{{- range $reqIndex, $row := ($testCase.Requests | getRows) }}
+
+#### Request {{ inc $reqIndex }}
+
+##### Request
+
+```http
+{{ truncate $row.Request.Raw $.Metadata.TruncateLength | cleanPrint }}
+```
+
+##### Response
+
+```http
+{{ truncate $row.Response.Raw $.Metadata.TruncateLength | cleanPrint }}
+```
+
+{{- if and (eq (index $row.Metadata "protocol") "websocket") (eq $row.Response.StatusCode 101) }}
+{{- $webSocket := getWebSocket $row.Request.ID }}
+
+##### WebSocket Connection
+
+| Property | Value |
+|-|-|
+| Endpoint | {{ $webSocket.Connection.Transport }}://{{ $webSocket.Connection.Host }}{{ $webSocket.Connection.Path }} |
+| State | {{ $webSocket.Connection.State }} |
+| Started | {{ $webSocket.Connection.StartedAt.Local.Format "2006-01-02 15:04:05.000" }} |
+{{- if $webSocket.Connection.ClosedAt }}
+| Closed | {{ $webSocket.Connection.ClosedAt.Local.Format "2006-01-02 15:04:05.000" }} |
+{{- end }}
+{{- if $webSocket.Connection.CloseCode }}
+| Close | {{ $webSocket.Connection.CloseCode }} {{ $webSocket.Connection.CloseReason }} |
+{{- end }}
+
+WebSocket messages are included in [Appendix A: WebSocket Messages](#appendix-test-case-{{ inc $testCaseIndex }}-request-{{ inc $reqIndex }}).
+{{- end }} {{/* test case websocket if */}}
+
+{{- end }} {{/* test case requests range */}}
+{{- end }} {{/* test case requests if */}}
+
+{{- if $testCase.Artifacts }}
+
+### Artifacts
+
+{{- range $artIndex, $artifact := $testCase.Artifacts }}
+
+#### Artifact {{ inc $artIndex }}
+
+{{- if isImage $artifact }}
+<img src="{{ artifactDataURI $artifact }}" alt="{{ $artifact.Filename }}" style="width: 100%; max-width: 600px;" />
+{{- else }}
+{{ $artifact.Filename }}
+{{- end }} {{/* isImage if */}}
+{{- end }} {{/* test case artifacts range */}}
+{{- end }} {{/* test case artifacts if */}}
+{{- end }} {{/* test cases range */}}
+{{- end }} {{/* test cases if */}}
+
+{{- $appendixStarted := false }}
+{{- range $findingIndex, $finding := .Findings }}
+{{- range $requestIndex, $row := ($finding.Requests | getRows) }}
+{{- if and (eq (index $row.Metadata "protocol") "websocket") (eq $row.Response.StatusCode 101) }}
+{{- if not $appendixStarted }}
+
+# Appendix A: WebSocket Messages
+{{- $appendixStarted = true }}
+{{- end }}
+{{- $webSocket := getWebSocket $row.Request.ID }}
+
+<a id="appendix-finding-{{ inc $findingIndex }}-request-{{ inc $requestIndex }}"></a>
+
+## Finding {{ inc $findingIndex }} - Request {{ inc $requestIndex }}
+
+{{- range $messageIndex, $message := $webSocket.Messages }}
+{{- $dropped := index $message.Metadata "dropped" }}
+
+### {{ if $dropped }}~~Message {{ inc $messageIndex }}~~{{ else }}Message {{ inc $messageIndex }}{{ end }}
+
+| Time | Direction | Opcode | Binary | Status |
+|-|-|-:|:-:|-|
+| {{ $message.CreatedAt.Local.Format "2006-01-02 15:04:05.000" }} | {{ $message.Direction }} | {{ $message.Opcode }} | {{ $message.IsBinary }} | {{ if $dropped }}dropped{{ if index $message.Metadata "injected" }}, {{ end }}{{ end }}{{ if index $message.Metadata "injected" }}injected{{ end }} |
+
+```text
+{{ truncate $message.Payload $.Metadata.TruncateLength | cleanPrint }}
+```
+
+{{- if $message.Metadata }}
+
+#### Metadata
+
+```json
+{{ toJSON $message.Metadata }}
+```
+{{- end }}
+{{- else }}
+
+No WebSocket messages were captured.
+{{- end }} {{/* finding websocket messages range */}}
+{{- end }} {{/* finding websocket if */}}
+{{- end }} {{/* finding requests range */}}
+{{- end }} {{/* appendix findings range */}}
+
+{{- range $testCaseIndex, $testCase := .TestCases }}
+{{- range $requestIndex, $row := ($testCase.Requests | getRows) }}
+{{- if and (eq (index $row.Metadata "protocol") "websocket") (eq $row.Response.StatusCode 101) }}
+{{- if not $appendixStarted }}
+
+# Appendix A: WebSocket Messages
+{{- $appendixStarted = true }}
+{{- end }}
+{{- $webSocket := getWebSocket $row.Request.ID }}
+
+<a id="appendix-test-case-{{ inc $testCaseIndex }}-request-{{ inc $requestIndex }}"></a>
+
+## Test Case {{ inc $testCaseIndex }} - Request {{ inc $requestIndex }}
+
+{{- range $messageIndex, $message := $webSocket.Messages }}
+{{- $dropped := index $message.Metadata "dropped" }}
+
+### {{ if $dropped }}~~Message {{ inc $messageIndex }}~~{{ else }}Message {{ inc $messageIndex }}{{ end }}
+
+| Time | Direction | Opcode | Binary | Status |
+|-|-|-:|:-:|-|
+| {{ $message.CreatedAt.Local.Format "2006-01-02 15:04:05.000" }} | {{ $message.Direction }} | {{ $message.Opcode }} | {{ $message.IsBinary }} | {{ if $dropped }}dropped{{ if index $message.Metadata "injected" }}, {{ end }}{{ end }}{{ if index $message.Metadata "injected" }}injected{{ end }} |
+
+```text
+{{ truncate $message.Payload $.Metadata.TruncateLength | cleanPrint }}
+```
+
+{{- if $message.Metadata }}
+
+#### Metadata
+
+```json
+{{ toJSON $message.Metadata }}
+```
+{{- end }}
+{{- else }}
+
+No WebSocket messages were captured.
+{{- end }} {{/* test case websocket messages range */}}
+{{- end }} {{/* test case websocket if */}}
+{{- end }} {{/* test case requests range */}}
+{{- end }} {{/* appendix test cases range */}}

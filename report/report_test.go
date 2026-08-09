@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ func testRequest(t *testing.T, repo *db.Repository, metadata map[string]any) uui
 	t.Helper()
 	id, err := uuid.NewV7()
 	if err != nil {
-		t.Fatalf("creating uuid: %v", err)
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 	}
 
 	if metadata == nil {
@@ -39,7 +40,7 @@ func testRequest(t *testing.T, repo *db.Repository, metadata map[string]any) uui
 
 	err = repo.InsertRequest(req)
 	if err != nil {
-		t.Fatalf("inserting request: %v", err)
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 	}
 	return id
 }
@@ -66,7 +67,7 @@ func insertTestResponseAndGet(t *testing.T, repo *db.Repository, reqID uuid.UUID
 
 	err := repo.InsertResponse(resp)
 	if err != nil {
-		t.Fatalf("inserting response: %v", err)
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 	}
 	return resp
 }
@@ -76,14 +77,14 @@ func setupTestDB(t *testing.T) (*db.Repository, func()) {
 
 	tempFile, err := os.CreateTemp(t.TempDir(), "test_*.db")
 	if err != nil {
-		t.Fatalf("os.CreateTemp() failed: %v", err)
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 	}
 	tempFile.Close()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dbConn, err := db.New(tempFile.Name(), logger)
 	if err != nil {
-		t.Fatalf("db.New() failed: %v", err)
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 	}
 
 	repo := db.NewProxyRepo(dbConn)
@@ -193,6 +194,33 @@ func TestWithConfigDir(t *testing.T) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, string(got))
 		}
 	})
+}
+
+func TestGeneratorRestoreDefaultTemplate(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+
+	generator, err := NewGenerator(repo, WithConfigDir(t.TempDir()))
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+
+	if err := generator.SaveTemplate("default_template.md", []byte("custom template")); err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+
+	if err := RestoreDefaultTemplate(generator); err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+
+	got, err := generator.LoadTemplate("default_template.md")
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+
+	if string(got) != defaultTemplate {
+		t.Fatalf("\nwanted:\n%s\ngot:\n%s", defaultTemplate, got)
+	}
 }
 
 func TestGeneratorListTemplates(t *testing.T) {
@@ -873,13 +901,73 @@ func TestGeneratorFuncMap(t *testing.T) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", id, got[0].Response.ID)
 		}
 	})
+	t.Run("should get websocket transcript from repository", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		requestID := testRequest(t, repo, map[string]any{"protocol": "websocket"})
+		connectionID, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		connection := &domain.WebSocketConnection{
+			ID:        connectionID,
+			RequestID: requestID,
+			State:     "open",
+			Transport: "wss",
+			Host:      "marasi.app",
+			Path:      "/ws",
+			StartedAt: time.Now(),
+		}
+		if err := repo.InsertConnection(connection); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		messageID, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		message := &domain.WebSocketMessage{
+			ID:           messageID,
+			ConnectionID: connectionID,
+			RequestID:    requestID,
+			Direction:    "client",
+			Opcode:       1,
+			Fin:          true,
+			Payload:      []byte("hello"),
+			CreatedAt:    time.Now(),
+			Metadata:     map[string]any{},
+		}
+		if err := repo.InsertMessage(message); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		generator, err := NewGenerator(repo)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		fn := generator.FuncMap()["getWebSocket"].(func(uuid.UUID) (*WebSocketTranscript, error))
+		got, err := fn(requestID)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if got.Connection.ID != connectionID {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", connectionID, got.Connection.ID)
+		}
+		if len(got.Messages) != 1 || got.Messages[0].ID != messageID {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%#v", messageID, got.Messages)
+		}
+	})
 	t.Run("should return artifact data uri", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 
 		fID, err := uuid.NewV7()
 		if err != nil {
-			t.Fatalf("creating finding uuid: %v", err)
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
 		finding := &domain.Finding{
@@ -899,7 +987,7 @@ func TestGeneratorFuncMap(t *testing.T) {
 
 		artID, err := uuid.NewV7()
 		if err != nil {
-			t.Fatalf("creating artifact uuid: %v", err)
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
 		art := &domain.Artifact{
@@ -943,7 +1031,7 @@ func TestGeneratorFuncMap(t *testing.T) {
 
 		fID, err := uuid.NewV7()
 		if err != nil {
-			t.Fatalf("creating finding uuid: %v", err)
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
 		finding := &domain.Finding{
@@ -963,7 +1051,7 @@ func TestGeneratorFuncMap(t *testing.T) {
 
 		artID, err := uuid.NewV7()
 		if err != nil {
-			t.Fatalf("creating artifact uuid: %v", err)
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
 		art := &domain.Artifact{
@@ -1080,6 +1168,170 @@ func TestGeneratorExecute(t *testing.T) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, string(got))
 		}
 	})
+}
+
+func TestDefaultTemplateWebSocketTranscript(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+
+	now := time.Date(2026, time.August, 9, 12, 0, 0, 0, time.UTC)
+	metadata := map[string]any{
+		"protocol":            "websocket",
+		"websocket.transport": "wss",
+		"websocket.state":     "closed",
+	}
+	requestID := testRequest(t, repo, metadata)
+
+	response := &domain.ProxyResponse{
+		ID:          requestID,
+		Status:      "101 Switching Protocols",
+		StatusCode:  101,
+		Raw:         []byte("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"),
+		Metadata:    metadata,
+		RespondedAt: now,
+	}
+	if err := repo.InsertResponse(response); err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+
+	connectionID, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	closedAt := now.Add(time.Minute)
+	connection := &domain.WebSocketConnection{
+		ID:          connectionID,
+		RequestID:   requestID,
+		State:       "closed",
+		Transport:   "wss",
+		Host:        "marasi.app",
+		Path:        "/ws?room=test",
+		StartedAt:   now,
+		ClosedAt:    &closedAt,
+		CloseCode:   1000,
+		CloseReason: "complete",
+	}
+	if err := repo.InsertConnection(connection); err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	failedUpgradeID := testRequest(t, repo, metadata)
+	insertTestResponseAndGet(t, repo, failedUpgradeID, metadata)
+
+	for _, message := range []*domain.WebSocketMessage{
+		{
+			ConnectionID: connectionID,
+			RequestID:    requestID,
+			Direction:    "client",
+			Opcode:       1,
+			Fin:          true,
+			Payload:      []byte(`{"message":"hello"}`),
+			CreatedAt:    now.Add(time.Second),
+			Metadata: map[string]any{
+				"dropped":  true,
+				"injected": true,
+			},
+		},
+		{
+			ConnectionID: connectionID,
+			RequestID:    requestID,
+			Direction:    "server",
+			Opcode:       2,
+			Fin:          true,
+			Payload:      []byte{0x00, 0xff},
+			IsBinary:     true,
+			CreatedAt:    now.Add(2 * time.Second),
+			Metadata: map[string]any{
+				"generated": true,
+			},
+		},
+	} {
+		message.ID, err = uuid.NewV7()
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := repo.InsertMessage(message); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+	}
+
+	generator, err := NewGenerator(repo)
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	payload := &domain.ReportPayload{
+		Metadata: domain.ReportMetadata{
+			Title:          "WebSocket Assessment",
+			Client:         "Test Client",
+			Type:           "Assessment",
+			Scope:          "marasi.app",
+			Assessor:       "Tester",
+			Start:          now,
+			End:            now.Add(time.Hour),
+			CreatedAt:      now,
+			TruncateLength: 0,
+		},
+		Findings: []*domain.Finding{
+			{
+				Title:         "WebSocket authorization bypass",
+				Severity:      "High",
+				Requests:      []uuid.UUID{requestID, failedUpgradeID},
+				Artifacts:     []*domain.ArtifactMetadata{},
+				WriteUp:       "WebSocket finding",
+				TreatmentPlan: "Authorize messages",
+			},
+		},
+		TestCases: []*domain.TestCase{
+			{
+				Title:       "WebSocket authorization test",
+				Description: "Verify WebSocket message authorization.",
+				Category:    "Authorization",
+				Tags:        []string{"websocket", "access-control"},
+				Requests:    []uuid.UUID{requestID, failedUpgradeID},
+				Note:        "Test both allowed and denied messages.",
+			},
+		},
+	}
+
+	out, err := generator.Execute([]byte(defaultTemplate), payload)
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+
+	for _, want := range []string{
+		"WebSocket Connection",
+		"wss://marasi.app/ws?room=test",
+		"1000 complete",
+		"# Test Cases",
+		"## TC-01 WebSocket authorization test",
+		"Verify WebSocket message authorization.",
+		"websocket, access-control",
+		"[Appendix A: WebSocket Messages](#appendix-finding-1-request-1)",
+		"[Appendix A: WebSocket Messages](#appendix-test-case-1-request-1)",
+		"# Appendix A: WebSocket Messages",
+		`<a id="appendix-finding-1-request-1"></a>`,
+		`<a id="appendix-test-case-1-request-1"></a>`,
+		"## Finding 1 - Request 1",
+		"## Test Case 1 - Request 1",
+		"### ~~Message 1~~",
+		`{"message":"hello"}`,
+		`\x00\xFF`,
+		"```text",
+		"#### Metadata",
+		`"dropped": true`,
+		`"generated": true`,
+		`dropped, injected`,
+		`| server | 2 | true |  |`,
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("rendered report does not contain %q:\n%s", want, out)
+		}
+	}
+	if count := strings.Count(string(out), "# Appendix A: WebSocket Messages"); count != 1 {
+		t.Errorf("rendered report contains %d appendix headings, wanted 1:\n%s", count, out)
+	}
+	if strings.Contains(string(out), "&#34;") {
+		t.Errorf("rendered report HTML-escapes websocket payloads:\n%s", out)
+	}
 }
 
 func TestGeneratorValidate(t *testing.T) {
