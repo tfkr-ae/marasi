@@ -12,8 +12,8 @@
 // Templates may then be listed, loaded, saved, validated, and executed.
 //
 // Some template functions require access to persisted assessment data.
-// Generator therefore uses a Repository to retrieve request-response rows and
-// artifact contents while rendering a report.
+// Generator therefore uses a Repository to retrieve request-response rows,
+// WebSocket transcripts, and artifact contents while rendering a report.
 //
 // Template execution uses missingkey=error, so references to missing map keys
 // cause rendering to fail rather than silently producing empty output.
@@ -24,6 +24,7 @@ import (
 	"cmp"
 	_ "embed"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -50,6 +51,16 @@ type Repository interface {
 	GetRequestResponseRows(ids []uuid.UUID) ([]*domain.RequestResponseRow, error)
 	// GetArtifact retrieves an artifact with its raw data by ID.
 	GetArtifact(uuid.UUID) (*domain.Artifact, error)
+	// GetConnectionByRequestID retrieves a WebSocket connection by its HTTP upgrade request ID.
+	GetConnectionByRequestID(requestID uuid.UUID) (*domain.WebSocketConnection, error)
+	// GetMessagesByRequestID retrieves WebSocket messages by their HTTP upgrade request ID.
+	GetMessagesByRequestID(requestID uuid.UUID) ([]*domain.WebSocketMessage, error)
+}
+
+// WebSocketTranscript contains a persisted WebSocket connection and its messages.
+type WebSocketTranscript struct {
+	Connection *domain.WebSocketConnection
+	Messages   []*domain.WebSocketMessage
 }
 
 // Option configures a report Generator.
@@ -195,11 +206,17 @@ func (g *Generator) SaveTemplate(name string, data []byte) error {
 	return nil
 }
 
+// RestoreDefaultTemplate overwrites default_template.md with the embedded template.
+func RestoreDefaultTemplate(generator domain.ReportGenerator) error {
+	return generator.SaveTemplate("default_template.md", []byte(defaultTemplate))
+}
+
 // FuncMap returns the functions made available to report templates.
 //
-// Some functions retrieve request-response rows and artifact data through the
-// Generator's Repository. Template authors should therefore expect those
-// functions to return execution errors when repository operations fail.
+// Some functions retrieve request-response rows, WebSocket transcripts, and
+// artifact data through the Generator's Repository. Template authors should
+// therefore expect those functions to return execution errors when repository
+// operations fail.
 func (g *Generator) FuncMap() template.FuncMap {
 	return template.FuncMap{
 		"severityCount": func(findings []*domain.Finding) map[string]int {
@@ -225,6 +242,7 @@ func (g *Generator) FuncMap() template.FuncMap {
 			return i + 1
 		},
 		"upper": strings.ToUpper,
+		"join":  strings.Join,
 		"truncate": func(input []byte, maxLen int) []byte {
 			if maxLen <= 0 || len(input) <= maxLen {
 				return input
@@ -268,6 +286,22 @@ func (g *Generator) FuncMap() template.FuncMap {
 			}
 			return row, nil
 		},
+		"getWebSocket": func(requestID uuid.UUID) (*WebSocketTranscript, error) {
+			connection, err := g.repo.GetConnectionByRequestID(requestID)
+			if err != nil {
+				return nil, fmt.Errorf("getting websocket connection for request %s: %w", requestID, err)
+			}
+
+			messages, err := g.repo.GetMessagesByRequestID(requestID)
+			if err != nil {
+				return nil, fmt.Errorf("getting websocket messages for request %s: %w", requestID, err)
+			}
+
+			return &WebSocketTranscript{
+				Connection: connection,
+				Messages:   messages,
+			}, nil
+		},
 		"artifactDataURI": func(metadata *domain.ArtifactMetadata) (string, error) {
 			if !strings.HasPrefix(metadata.MimeType, "image/") {
 				return "", fmt.Errorf("artifact %s is not an image: %s", metadata.ID, metadata.MimeType)
@@ -301,6 +335,13 @@ func (g *Generator) FuncMap() template.FuncMap {
 			}
 			return sb.String()
 
+		},
+		"toJSON": func(value any) (string, error) {
+			data, err := json.MarshalIndent(value, "", "  ")
+			if err != nil {
+				return "", err
+			}
+			return string(data), nil
 		},
 	}
 }
