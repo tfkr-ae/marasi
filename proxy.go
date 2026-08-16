@@ -41,6 +41,7 @@ import (
 	"github.com/tfkr-ae/marasi/listener"
 	"github.com/tfkr-ae/marasi/rawhttp"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
+	"github.com/tfkr-ae/marasi/wordlist"
 )
 
 var (
@@ -54,6 +55,8 @@ var (
 	ErrExtensionRepoNotFound = errors.New("extension repo not found")
 	// ErrReportingRepoNotFound is returned when the reporting repository is not found.
 	ErrReportingRepoNotFound = errors.New("reporting repo not found")
+	// ErrWordlistManagerNotSet is returned when the wordlist manager is not set.
+	ErrWordlistManagerNotSet = errors.New("wordlist manager not set")
 	// ErrWebSocketConnectionNotFound is returned when a live WebSocket cannot be located.
 	ErrWebSocketConnectionNotFound = errors.New("websocket connection not found or closed")
 	// ErrWebSocketRepositoryNotSet is returned when WebSocket persistence is unavailable.
@@ -93,6 +96,7 @@ type Proxy struct {
 	Port                  string                // Port of the proxy
 	Client                *http.Client          // HTTP Client that is used by the repeater functionality (autoconfigured to use the proxy)
 	Extensions            []*extensions.Runtime // Slice of loaded extensions
+	WordlistManager       wordlist.Provider     // Provider for available wordlists.
 	SPKIHash              string                // SPKI Hash of the current certificate
 	Cert                  *x509.Certificate     // The proxy's TLS certificate.
 	mitmConfig            *tls.Config           // Martian Proxy MITM config
@@ -143,6 +147,15 @@ func (proxy *Proxy) GetConfigDir() (string, error) {
 		return "", ErrConfigDirNotSet
 	}
 	return proxy.ConfigDir, nil
+}
+
+// GetWordlistManager returns the proxy's wordlist provider.
+// It returns an error if the provider is not set.
+func (proxy *Proxy) GetWordlistManager() (wordlist.Provider, error) {
+	if proxy.WordlistManager == nil {
+		return nil, ErrWordlistManagerNotSet
+	}
+	return proxy.WordlistManager, nil
 }
 
 // GetScope returns the current scope configuration.
