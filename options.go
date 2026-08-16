@@ -20,6 +20,7 @@ import (
 	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
+	"github.com/tfkr-ae/marasi/wordlist"
 )
 
 // RepositoryProvider defines the interface for a provider of all data repositories
@@ -413,6 +414,17 @@ func WithWebSocketRepository(repo domain.WebSocketRepository) func(*Proxy) error
 func WithReportGenerator(generator domain.ReportGenerator) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		proxy.ReportGenerator = generator
+		return nil
+	}
+}
+
+// WithWordlistManager injects the wordlist provider implementation.
+func WithWordlistManager(manager wordlist.Provider) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if manager == nil {
+			return errors.New("wordlist manager cannot be nil")
+		}
+		proxy.WordlistManager = manager
 		return nil
 	}
 }

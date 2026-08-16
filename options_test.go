@@ -2,6 +2,7 @@ package marasi
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/report"
+	"github.com/tfkr-ae/marasi/wordlist"
 )
 
 func setupTestDB(t *testing.T) (*db.Repository, func()) {
@@ -100,6 +102,44 @@ func TestWithReportGenerator(t *testing.T) {
 
 	if p.ReportGenerator != generator {
 		t.Fatalf("\nwanted:\n%v\ngot:\n%v", generator, p.ReportGenerator)
+	}
+}
+
+func TestWithWordlistManager(t *testing.T) {
+	t.Run("should set wordlist manager", func(t *testing.T) {
+		manager, err := wordlist.NewManager(t.TempDir())
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		proxy, err := New(WithWordlistManager(manager))
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		got, err := proxy.GetWordlistManager()
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got != manager {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", manager, got)
+		}
+	})
+
+	t.Run("should raise an error if wordlist manager is nil", func(t *testing.T) {
+		_, err := New(WithWordlistManager(nil))
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+	})
+}
+
+func TestGetWordlistManager(t *testing.T) {
+	proxy := &Proxy{}
+
+	_, err := proxy.GetWordlistManager()
+	if !errors.Is(err, ErrWordlistManagerNotSet) {
+		t.Fatalf("\nwanted:\n%v\ngot:\n%v", ErrWordlistManagerNotSet, err)
 	}
 }
 
