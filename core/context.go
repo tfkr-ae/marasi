@@ -18,6 +18,8 @@ const (
 	RequestIDKey contextKey = "RequestID"
 	// LaunchpadIDKey is the context key for the launchpad ID (uuid.UUID). This is set if the request originated from a launchpad
 	LaunchpadIDKey contextKey = "LaunchpadID"
+	// ArmoryRunIDKey is the context key for the Armory run that generated the request.
+	ArmoryRunIDKey contextKey = "ArmoryRunID"
 	// MetadataKey is the context key for the request & response metadata (Metadata)
 	MetadataKey contextKey = "Metadata"
 	// ExtensionKey is the context key for the extension ID (uuid.UUID) that the request originated from
@@ -72,6 +74,18 @@ func ContextWithLaunchpadID(req *http.Request, launchpadId uuid.UUID) *http.Requ
 func LaunchpadIDFromContext(ctx context.Context) (uuid.UUID, bool) {
 	id, ok := ctx.Value(LaunchpadIDKey).(uuid.UUID)
 	return id, ok
+}
+
+// ContextWithArmoryRunID returns a request containing its originating Armory run ID.
+func ContextWithArmoryRunID(req *http.Request, runID uuid.UUID) *http.Request {
+	ctx := context.WithValue(req.Context(), ArmoryRunIDKey, runID)
+	return req.WithContext(ctx)
+}
+
+// ArmoryRunIDFromContext returns the originating Armory run ID when present.
+func ArmoryRunIDFromContext(ctx context.Context) (uuid.UUID, bool) {
+	runID, ok := ctx.Value(ArmoryRunIDKey).(uuid.UUID)
+	return runID, ok
 }
 
 // ContextWithMetadata returns a new request with metadata in the context.

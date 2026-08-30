@@ -29,6 +29,7 @@ type RepositoryProvider interface {
 	domain.TrafficRepository
 	domain.ExtensionRepository
 	domain.LaunchpadRepository
+	domain.ArmoryRepository
 	domain.WaypointRepository
 	domain.StatsRepository
 	domain.ConfigRepository
@@ -318,6 +319,7 @@ func WithDefaultRepositories(repo RepositoryProvider) func(*Proxy) error {
 			WithStatsRepository(repo),
 			WithExtensionRepository(repo),
 			WithLaunchpadRepository(repo),
+			WithArmoryRepository(repo),
 			WithWaypointRepository(repo),
 			WithReportingRepository(repo),
 			WithWebSocketRepository(repo),
@@ -354,6 +356,14 @@ func WithTrafficRepository(repo domain.TrafficRepository) func(*Proxy) error {
 func WithLaunchpadRepository(repo domain.LaunchpadRepository) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		proxy.LaunchpadRepo = repo
+		return nil
+	}
+}
+
+// WithArmoryRepository injects the Armory repository implementation.
+func WithArmoryRepository(repo domain.ArmoryRepository) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		proxy.ArmoryRepo = repo
 		return nil
 	}
 }
@@ -406,6 +416,18 @@ func WithReportingRepository(repo domain.ReportingRepository) func(*Proxy) error
 func WithWebSocketRepository(repo domain.WebSocketRepository) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		proxy.WebSocketRepo = repo
+		return nil
+	}
+}
+
+// WithArmory sets the Armory service exposed by the proxy.
+func WithArmory(service ArmoryService) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if service == nil {
+			return errors.New("armory service cannot be nil")
+		}
+
+		proxy.Armory = service
 		return nil
 	}
 }
