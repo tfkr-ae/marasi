@@ -655,6 +655,70 @@ func TestSetupRequestModifier(t *testing.T) {
 
 	})
 
+	t.Run("requests sent from armory should set the run ID in context and metadata", func(t *testing.T) {
+		proxy := &Proxy{}
+		want, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("creating uuid: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+		req.Header.Set(armoryRunIDHeader, want.String())
+
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context: %v", err)
+		}
+		defer remove()
+
+		err = SetupRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		got, exists := core.ArmoryRunIDFromContext(req.Context())
+		if !exists || got != want {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
+		}
+		metadata, exists := core.MetadataFromContext(req.Context())
+		if !exists || metadata["armory_run_id"] != want {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, metadata)
+		}
+		if req.Header.Get(armoryRunIDHeader) != "" {
+			t.Fatalf("\nwanted:\nremoved %s header\ngot:\n%s", armoryRunIDHeader, req.Header.Get(armoryRunIDHeader))
+		}
+	})
+
+	t.Run("requests with an invalid armory run ID should remove the internal header", func(t *testing.T) {
+		proxy := &Proxy{}
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+		req.Header.Set(armoryRunIDHeader, "invalid")
+
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context: %v", err)
+		}
+		defer remove()
+
+		err = SetupRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if _, exists := core.ArmoryRunIDFromContext(req.Context()); exists {
+			t.Fatal("\nwanted:\nno armory run ID\ngot:\narmory run ID")
+		}
+		metadata, exists := core.MetadataFromContext(req.Context())
+		if !exists {
+			t.Fatal("\nwanted:\nrequest metadata\ngot:\nnil")
+		}
+		if _, exists := metadata["armory_run_id"]; exists {
+			t.Fatalf("\nwanted:\nno armory metadata\ngot:\n%v", metadata)
+		}
+		if req.Header.Get(armoryRunIDHeader) != "" {
+			t.Fatalf("\nwanted:\nremoved %s header\ngot:\n%s", armoryRunIDHeader, req.Header.Get(armoryRunIDHeader))
+		}
+	})
+
 	t.Run("requests with x-marasi-metadata header should preload metadata into context", func(t *testing.T) {
 		proxy := &Proxy{}
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)

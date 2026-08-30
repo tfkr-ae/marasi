@@ -3,6 +3,7 @@ package marasi
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"crypto/tls"
 	"crypto/x509"
@@ -10,10 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +39,362 @@ func (c *sessionTestReadWriteCloser) Close() error {
 
 type sessionTestErrorReader struct {
 	err error
+}
+
+type testRoundTripFunc func(*http.Request) (*http.Response, error)
+
+type testResponseBody struct {
+	*strings.Reader
+	closed bool
+}
+
+type testArmoryTrafficRepository struct {
+	domain.TrafficRepository
+	inserted []*domain.ProxyRequest
+	err      error
+}
+
+type testArmoryEntryRepository struct {
+	domain.ArmoryRepository
+	entries []*domain.ArmoryEntry
+	err     error
+}
+
+type testProxyArmoryService struct {
+	ArmoryService
+	repository domain.ArmoryRepository
+}
+
+func (roundTrip testRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return roundTrip(req)
+}
+
+func (body *testResponseBody) Close() error {
+	body.closed = true
+	return nil
+}
+
+func (repository *testArmoryTrafficRepository) InsertRequest(request *domain.ProxyRequest) error {
+	if repository.err != nil {
+		return repository.err
+	}
+	repository.inserted = append(repository.inserted, request)
+	return nil
+}
+
+func (repository *testArmoryEntryRepository) CreateArmoryEntry(entry *domain.ArmoryEntry) error {
+	if repository.err != nil {
+		return repository.err
+	}
+	repository.entries = append(repository.entries, entry)
+	return nil
+}
+
+func (service *testProxyArmoryService) Repo() domain.ArmoryRepository {
+	return service.repository
+}
+
+func TestProxy_SendArmoryRequest(t *testing.T) {
+	t.Run("should send a rendered request with armory correlation", func(t *testing.T) {
+		runID, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("creating run uuid: %v", err)
+		}
+		responseBody := &testResponseBody{Reader: strings.NewReader("bad gateway")}
+		var got *http.Request
+		var gotBody string
+		proxy := &Proxy{
+			Client: &http.Client{Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				got = req
+				body, err := io.ReadAll(req.Body)
+				if err != nil {
+					return nil, err
+				}
+				gotBody = string(body)
+				return &http.Response{
+					StatusCode: http.StatusBadGateway,
+					Body:       responseBody,
+					Header:     make(http.Header),
+					Request:    req,
+				}, nil
+			})},
+		}
+		raw := "POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: 100\r\n\r\npayload"
+
+		err = proxy.SendArmoryRequest(context.Background(), raw, runID, false)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got == nil {
+			t.Fatal("\nwanted:\nHTTP request\ngot:\nnil")
+		}
+		if got.URL.Scheme != "http" {
+			t.Fatalf("\nwanted:\nhttp\ngot:\n%s", got.URL.Scheme)
+		}
+		if got.URL.Host != "example.com" {
+			t.Fatalf("\nwanted:\nexample.com\ngot:\n%s", got.URL.Host)
+		}
+		if got.RequestURI != "" {
+			t.Fatalf("\nwanted:\nempty request URI\ngot:\n%s", got.RequestURI)
+		}
+		if got.Header.Get(armoryRunIDHeader) != runID.String() {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", runID, got.Header.Get(armoryRunIDHeader))
+		}
+		if _, exists := got.Header["User-Agent"]; !exists {
+			t.Fatal("\nwanted:\nuser-agent header\ngot:\nmissing header")
+		}
+		if got.ContentLength != int64(len("payload")) {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", len("payload"), got.ContentLength)
+		}
+		if gotBody != "payload" {
+			t.Fatalf("\nwanted:\npayload\ngot:\n%s", gotBody)
+		}
+		if !responseBody.closed {
+			t.Fatal("\nwanted:\nclosed response body\ngot:\nopen response body")
+		}
+		if responseBody.Len() != 0 {
+			t.Fatalf("\nwanted:\ndrained response body\ngot:\n%d unread bytes", responseBody.Len())
+		}
+	})
+
+	t.Run("should use HTTPS when configured", func(t *testing.T) {
+		runID, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("creating run uuid: %v", err)
+		}
+		var got *http.Request
+		proxy := &Proxy{
+			Client: &http.Client{Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				got = req
+				return &http.Response{
+					StatusCode: http.StatusNoContent,
+					Body:       io.NopCloser(strings.NewReader("")),
+					Header:     make(http.Header),
+					Request:    req,
+				}, nil
+			})},
+		}
+
+		err = proxy.SendArmoryRequest(context.Background(), "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n", runID, true)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got.URL.Scheme != "https" {
+			t.Fatalf("\nwanted:\nhttps\ngot:\n%s", got.URL.Scheme)
+		}
+	})
+
+	t.Run("should cancel an in-flight request", func(t *testing.T) {
+		runID, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("creating run uuid: %v", err)
+		}
+		started := make(chan struct{})
+		proxy := &Proxy{
+			Client: &http.Client{Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				close(started)
+				<-req.Context().Done()
+				return nil, req.Context().Err()
+			})},
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			result <- proxy.SendArmoryRequest(ctx, "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n", runID, false)
+		}()
+
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("\nwanted:\nrequest to start\ngot:\ntimeout")
+		}
+		cancel()
+
+		select {
+		case err := <-result:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.Canceled, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("\nwanted:\ncancelled request\ngot:\ntimeout")
+		}
+	})
+
+	t.Run("should return an error for invalid input", func(t *testing.T) {
+		runID, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("creating run uuid: %v", err)
+		}
+
+		tests := []struct {
+			name  string
+			ctx   context.Context
+			raw   string
+			runID uuid.UUID
+			want  string
+		}{
+			{name: "missing context", raw: "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n", runID: runID, want: "request context is required"},
+			{name: "missing run ID", ctx: context.Background(), raw: "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n", want: "armory run ID is required"},
+			{name: "malformed request", ctx: context.Background(), raw: "malformed", runID: runID, want: "recalculating content length"},
+			{name: "missing host", ctx: context.Background(), raw: "GET / HTTP/1.1\r\n\r\n", runID: runID, want: "host header not found or is empty"},
+		}
+
+		proxy := &Proxy{Client: &http.Client{}}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				err := proxy.SendArmoryRequest(test.ctx, test.raw, test.runID, false)
+				if err == nil {
+					t.Fatal("\nwanted:\nerror\ngot:\nnil")
+				}
+				if !strings.Contains(err.Error(), test.want) {
+					t.Fatalf("\nwanted:\nerror containing %q\ngot:\n%v", test.want, err)
+				}
+			})
+		}
+	})
+
+	t.Run("should return a client transport error", func(t *testing.T) {
+		runID, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("creating run uuid: %v", err)
+		}
+		proxy := &Proxy{
+			Client: &http.Client{Transport: testRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, errors.New("transport failed")
+			})},
+		}
+
+		err = proxy.SendArmoryRequest(context.Background(), "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n", runID, false)
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !strings.Contains(err.Error(), "sending armory request") {
+			t.Fatalf("\nwanted:\nerror containing 'sending armory request'\ngot:\n%v", err)
+		}
+	})
+}
+
+func TestProxy_WriteToDBArmoryEntry(t *testing.T) {
+	t.Run("should link an inserted request to its armory run", func(t *testing.T) {
+		runID, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("creating run uuid: %v", err)
+		}
+		requestID, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("creating request uuid: %v", err)
+		}
+		trafficRepository := &testArmoryTrafficRepository{}
+		armoryRepository := &testArmoryEntryRepository{}
+		proxy := &Proxy{
+			TrafficRepo:    trafficRepository,
+			Armory:         &testProxyArmoryService{repository: armoryRepository},
+			DBWriteChannel: make(chan any, 1),
+		}
+		request := &domain.ProxyRequest{ID: requestID, Metadata: map[string]any{"armory_run_id": runID}}
+		proxy.DBWriteChannel <- request
+		close(proxy.DBWriteChannel)
+
+		proxy.WriteToDB()
+
+		if len(trafficRepository.inserted) != 1 || trafficRepository.inserted[0] != request {
+			t.Fatalf("\nwanted:\ninserted request\ngot:\n%v", trafficRepository.inserted)
+		}
+		want := []*domain.ArmoryEntry{{RunID: runID, RequestID: requestID}}
+		if !reflect.DeepEqual(armoryRepository.entries, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, armoryRepository.entries)
+		}
+	})
+
+	t.Run("should not link a request that could not be inserted", func(t *testing.T) {
+		runID, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("creating run uuid: %v", err)
+		}
+		trafficRepository := &testArmoryTrafficRepository{err: errors.New("insert failed")}
+		armoryRepository := &testArmoryEntryRepository{}
+		proxy := &Proxy{
+			TrafficRepo:    trafficRepository,
+			Armory:         &testProxyArmoryService{repository: armoryRepository},
+			DBWriteChannel: make(chan any, 1),
+		}
+		proxy.DBWriteChannel <- &domain.ProxyRequest{Metadata: map[string]any{"armory_run_id": runID}}
+		close(proxy.DBWriteChannel)
+
+		proxy.WriteToDB()
+
+		if len(armoryRepository.entries) != 0 {
+			t.Fatalf("\nwanted:\n0 armory entries\ngot:\n%d", len(armoryRepository.entries))
+		}
+	})
+
+	t.Run("should log an armory linking failure and continue", func(t *testing.T) {
+		runID, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("creating run uuid: %v", err)
+		}
+		trafficRepository := &testArmoryTrafficRepository{}
+		armoryRepository := &testArmoryEntryRepository{err: errors.New("link failed")}
+		var logs strings.Builder
+		previousOutput := log.Writer()
+		log.SetOutput(&logs)
+		defer log.SetOutput(previousOutput)
+		proxy := &Proxy{
+			TrafficRepo:    trafficRepository,
+			Armory:         &testProxyArmoryService{repository: armoryRepository},
+			DBWriteChannel: make(chan any, 2),
+		}
+		proxy.DBWriteChannel <- &domain.ProxyRequest{Metadata: map[string]any{"armory_run_id": runID}}
+		proxy.DBWriteChannel <- &domain.ProxyRequest{Metadata: make(map[string]any)}
+		close(proxy.DBWriteChannel)
+
+		proxy.WriteToDB()
+
+		if !strings.Contains(logs.String(), "linking request to armory run: link failed") {
+			t.Fatalf("\nwanted:\nlog containing 'linking request to armory run: link failed'\ngot:\n%s", logs.String())
+		}
+		if len(trafficRepository.inserted) != 2 {
+			t.Fatalf("\nwanted:\n2 inserted requests\ngot:\n%d", len(trafficRepository.inserted))
+		}
+	})
+
+	t.Run("should log missing armory dependencies", func(t *testing.T) {
+		runID, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("creating run uuid: %v", err)
+		}
+
+		tests := []struct {
+			name    string
+			service ArmoryService
+			want    string
+		}{
+			{name: "missing service", want: "armory service is not configured"},
+			{name: "missing repository", service: &testProxyArmoryService{}, want: "armory repository is not configured"},
+		}
+
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				var logs strings.Builder
+				previousOutput := log.Writer()
+				log.SetOutput(&logs)
+				defer log.SetOutput(previousOutput)
+				proxy := &Proxy{
+					TrafficRepo:    &testArmoryTrafficRepository{},
+					Armory:         test.service,
+					DBWriteChannel: make(chan any, 1),
+				}
+				proxy.DBWriteChannel <- &domain.ProxyRequest{Metadata: map[string]any{"armory_run_id": runID}}
+				close(proxy.DBWriteChannel)
+
+				proxy.WriteToDB()
+
+				if !strings.Contains(logs.String(), test.want) {
+					t.Fatalf("\nwanted:\nlog containing %q\ngot:\n%s", test.want, logs.String())
+				}
+			})
+		}
+	})
 }
 
 type websocketRepositoryStub struct {

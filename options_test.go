@@ -9,11 +9,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tfkr-ae/marasi/armory"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/report"
 	"github.com/tfkr-ae/marasi/wordlist"
 )
+
+var _ ArmoryService = (*armory.Manager)(nil)
+
+type testArmoryService struct {
+	ArmoryService
+}
 
 func setupTestDB(t *testing.T) (*db.Repository, func()) {
 	t.Helper()
@@ -130,6 +137,30 @@ func TestWithWordlistManager(t *testing.T) {
 		_, err := New(WithWordlistManager(nil))
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+	})
+}
+
+func TestWithArmory(t *testing.T) {
+	t.Run("should set armory service", func(t *testing.T) {
+		service := &testArmoryService{}
+
+		proxy, err := New(WithArmory(service))
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if proxy.Armory != service {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", service, proxy.Armory)
+		}
+	})
+
+	t.Run("should return an error if armory service is nil", func(t *testing.T) {
+		_, err := New(WithArmory(nil))
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !strings.Contains(err.Error(), "armory service cannot be nil") {
+			t.Fatalf("\nwanted:\nerror containing 'armory service cannot be nil'\ngot:\n%v", err)
 		}
 	})
 }
