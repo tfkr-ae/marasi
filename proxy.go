@@ -55,6 +55,8 @@ var (
 	ErrExtensionRepoNotFound = errors.New("extension repo not found")
 	// ErrReportingRepoNotFound is returned when the reporting repository is not found.
 	ErrReportingRepoNotFound = errors.New("reporting repo not found")
+	// ErrArmoryRepoNotFound is returned when the Armory repository is not found.
+	ErrArmoryRepoNotFound = errors.New("armory repo not found")
 	// ErrWordlistManagerNotSet is returned when the wordlist manager is not set.
 	ErrWordlistManagerNotSet = errors.New("wordlist manager not set")
 	// ErrWebSocketConnectionNotFound is returned when a live WebSocket cannot be located.
@@ -122,15 +124,16 @@ type Proxy struct {
 
 	TrafficRepo   domain.TrafficRepository   // Repository for traffic data.
 	LaunchpadRepo domain.LaunchpadRepository // Repository for launchpad data.
+	ArmoryRepo    domain.ArmoryRepository    // Repository for Armory data.
 	WaypointRepo  domain.WaypointRepository  // Repository for waypoint data.
 	StatsRepo     domain.StatsRepository     // Repository for statistics data.
 	ConfigRepo    domain.ConfigRepository    // Repository for configuration data.
 	LogRepo       domain.LogRepository       // Repository for log data.
 	ExtensionRepo domain.ExtensionRepository // Repository for extension data.
 	ReportingRepo domain.ReportingRepository // Repository for reporting data.
-	// WebSocketRepo persists WebSocket connections and messages.
-	WebSocketRepo domain.WebSocketRepository
+	WebSocketRepo domain.WebSocketRepository // Repository for websocket data
 
+	Armory          ArmoryService          // Provides persistence and execution operations for request fuzzing.
 	ReportGenerator domain.ReportGenerator // Generator for report templates and exports.
 	DBCloser        io.Closer              // Closer for the database connection.
 	Logger          *slog.Logger           // Logger for Marasi
@@ -201,6 +204,15 @@ func (proxy *Proxy) GetReportingRepo() (domain.ReportingRepository, error) {
 		return nil, ErrReportingRepoNotFound
 	}
 	return proxy.ReportingRepo, nil
+}
+
+// GetArmoryRepo returns the Armory repository.
+// It returns an error if the repository is not set.
+func (proxy *Proxy) GetArmoryRepo() (domain.ArmoryRepository, error) {
+	if proxy.ArmoryRepo == nil {
+		return nil, ErrArmoryRepoNotFound
+	}
+	return proxy.ArmoryRepo, nil
 }
 
 // New creates a new Proxy instance with default configuration and applies any provided options.
@@ -450,6 +462,18 @@ func (proxy *Proxy) WriteToDB() {
 					err := proxy.LaunchpadRepo.LinkRequestToLaunchpad(castItem.ID, launchpadID)
 					if err != nil {
 						log.Printf("linking request to launchpad: %v", err)
+					}
+				}
+			}
+
+			if runID, ok := castItem.Metadata["armory_run_id"].(uuid.UUID); ok {
+				if proxy.Armory == nil {
+					log.Printf("linking request to armory run: armory service is not configured")
+				} else if repo := proxy.Armory.Repo(); repo == nil {
+					log.Printf("linking request to armory run: armory repository is not configured")
+				} else {
+					if err := repo.CreateArmoryEntry(&domain.ArmoryEntry{RunID: runID, RequestID: castItem.ID}); err != nil {
+						log.Printf("linking request to armory run: %v", err)
 					}
 				}
 			}
