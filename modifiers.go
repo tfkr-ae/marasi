@@ -128,6 +128,15 @@ func isLaunchpad(req *http.Request) (bool, uuid.UUID) {
 	return false, uuid.Nil
 }
 
+// armoryRunID returns the Armory run ID carried by an internal request header.
+func armoryRunID(req *http.Request) (uuid.UUID, bool) {
+	runID, err := uuid.Parse(req.Header.Get(armoryRunIDHeader))
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return runID, true
+}
+
 // getHostPort will return a host:port string based on the request
 // It will fall back to 443 or 80 depending on the scheme or req.TLS
 func getHostPort(req *http.Request) string {
@@ -190,9 +199,8 @@ func SkipConnectRequestModifier(proxy *Proxy, req *http.Request) error {
 	return nil
 }
 
-// SetupRequestModifier initializes the request context. It will generate and set the request ID,
-// set the request time, initial and set the metadata map, and stores the Martian session. If the request is coming
-// from launchpad, it will set the launchapd ID in the context
+// SetupRequestModifier initializes request IDs, timing, metadata, and the Martian session.
+// It also captures internal Launchpad and Armory correlation IDs.
 func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 	*req = *core.ContextWithRequestTime(req, time.Now())
 	metadata := make(map[string]any)
@@ -210,6 +218,12 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 		// Header is removed after processing
 		req.Header.Del("x-launchpad-id")
 	}
+
+	if runID, exists := armoryRunID(req); exists {
+		metadata["armory_run_id"] = runID
+		*req = *core.ContextWithArmoryRunID(req, runID)
+	}
+	req.Header.Del(armoryRunIDHeader)
 
 	if metadataString := req.Header.Get("x-marasi-metadata"); metadataString != "" {
 		var headerMetadata map[string]any

@@ -2628,7 +2628,7 @@ func TestRequestBuilderType(t *testing.T) {
 		}
 	}
 
-	asyncResultCh := make(chan string, 1)
+	asyncResultCh := make(chan string, 3)
 	tests := []struct {
 		name          string
 		luaCode       string
@@ -2965,7 +2965,9 @@ func TestRequestBuilderType(t *testing.T) {
 				t.Fatalf("executing lua code %s : %v", tt.luaCode, err)
 			}
 
+			extension.Mu.Lock()
 			got := GoValue(extension.LuaState, -1)
+			extension.Mu.Unlock()
 			if tt.validatorFunc != nil {
 				tt.validatorFunc(t, extension, got)
 			}
