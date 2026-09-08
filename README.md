@@ -1,3 +1,7 @@
+This branch works towards implementing marasi as a headless service separate from the GUI
+
+
+---
 <div align="center">
 
 # Marasi
