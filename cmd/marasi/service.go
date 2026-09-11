@@ -8,10 +8,14 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/wordlist"
 )
 
+var projectName string
+
 func init() {
+	startCmd.Flags().StringVar(&projectName, "project", "scratchpad", "Project name")
 	serviceCmd.AddCommand(startCmd)
 	rootCmd.AddCommand(serviceCmd)
 }
@@ -28,13 +32,18 @@ var startCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
 
-		return startService(ctx, configDir)
+		return startService(ctx, configDir, projectName)
 	},
 }
 
-func startService(ctx context.Context, configDir string) error {
+func startService(ctx context.Context, configDir, projectName string) error {
 	if configDir == "" {
 		return fmt.Errorf("config dir is empty")
+	}
+
+	path, err := projectPath(configDir, projectName)
+	if err != nil {
+		return err
 	}
 
 	proxy, err := marasi.New(marasi.WithConfigDir(configDir))
@@ -47,8 +56,22 @@ func startService(ctx context.Context, configDir string) error {
 		return fmt.Errorf("creating wordlist manager : %w", err)
 	}
 
+	unlock, err := lockProject(path)
+	if err != nil {
+		return fmt.Errorf("locking project: %w", err)
+	}
+	defer unlock()
+
+	dbConn, err := db.New(path, proxy.Logger)
+	if err != nil {
+		return fmt.Errorf("opening project: %w", err)
+	}
+	repo := db.NewProxyRepo(dbConn)
+	defer repo.Close()
+
 	err = proxy.WithOptions(
 		marasi.WithWordlistManager(wordlists),
+		marasi.WithDefaultRepositories(repo),
 		marasi.WithBasePipeline(),
 		marasi.WithDefaultModifierPipeline(),
 	)
