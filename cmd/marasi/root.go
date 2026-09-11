@@ -8,6 +8,7 @@ import (
 )
 
 var configDir string
+var instance string
 
 var rootCmd = &cobra.Command{
 	Use:          "marasi",
@@ -17,6 +18,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&configDir, "config-dir", defaultConfigDir(), "Marasi config directory")
+	rootCmd.PersistentFlags().StringVar(&instance, "instance", "default", "Instance name")
 }
 
 func defaultConfigDir() string {

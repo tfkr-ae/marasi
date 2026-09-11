@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -12,10 +14,13 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/db"
+	"github.com/tfkr-ae/marasi/service"
 	"github.com/tfkr-ae/marasi/wordlist"
 )
 
 var projectName string
+
+const unixSocketPathLimit = 104
 
 func init() {
 	startCmd.Flags().StringVar(&projectName, "project", "scratchpad", "Project name")
@@ -35,16 +40,21 @@ var startCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
 
-		return startService(ctx, configDir, projectName)
+		return startService(ctx, configDir, projectName, instance)
 	},
 }
 
-func startService(ctx context.Context, configDir, projectName string) error {
+func startService(ctx context.Context, configDir, projectName, instanceName string) error {
 	if configDir == "" {
 		return fmt.Errorf("config dir is empty")
 	}
 
 	path, err := projectPath(configDir, projectName)
+	if err != nil {
+		return err
+	}
+
+	socketPath, lockPath, err := resolveInstancePaths(configDir, instanceName)
 	if err != nil {
 		return err
 	}
@@ -69,6 +79,7 @@ func startService(ctx context.Context, configDir, projectName string) error {
 	if err != nil {
 		return fmt.Errorf("opening project: %w", err)
 	}
+
 	repo := db.NewProxyRepo(dbConn)
 
 	err = proxy.WithOptions(
@@ -81,10 +92,32 @@ func startService(ctx context.Context, configDir, projectName string) error {
 		repo.Close()
 		return fmt.Errorf("starting proxy base options: %w", err)
 	}
+	defer proxy.Close()
 
-	<-ctx.Done()
-	proxy.Close()
-	return nil
+	listener, instanceLock, err := claimInstance(socketPath, lockPath)
+	if err != nil {
+		return err
+	}
+	defer releaseInstance(listener, socketPath, instanceLock)
+
+	server := &http.Server{Handler: service.NewServer(proxy)}
+	serveResult := make(chan error, 1)
+	go func() {
+		serveResult <- server.Serve(listener)
+	}()
+
+	select {
+	case <-ctx.Done():
+		if err := server.Close(); err != nil {
+			return fmt.Errorf("closing control server: %w", err)
+		}
+		if err := <-serveResult; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("serving control API: %w", err)
+		}
+		return nil
+	case err := <-serveResult:
+		return fmt.Errorf("serving control API: %w", err)
+	}
 }
 
 func projectPath(configDir, name string) (string, error) {
@@ -104,6 +137,98 @@ func projectPath(configDir, name string) (string, error) {
 	}
 
 	return filepath.Join(configDir, "projects", name+".marasi"), nil
+}
+
+func resolveInstancePaths(configDir, name string) (string, string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", "", errors.New("invalid instance name: cannot be empty")
+	}
+	if name == "." || name == ".." || !filepath.IsLocal(name) {
+		return "", "", errors.New("invalid instance name: paths and parent directory references are not allowed")
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return "", "", errors.New("invalid instance name: path separators are not allowed")
+	}
+	if strings.HasSuffix(name, ".sock") {
+		return "", "", errors.New("invalid instance name: .sock suffix is not allowed")
+	}
+
+	dir := filepath.Join(configDir, "instances")
+	socketPath := filepath.Join(dir, name+".sock")
+	lockPath := filepath.Join(dir, name+".lock")
+	if len([]byte(socketPath))+1 > unixSocketPathLimit {
+		return "", "", fmt.Errorf("instance socket path %q exceeds %d-byte limit", socketPath, unixSocketPathLimit)
+	}
+
+	return socketPath, lockPath, nil
+}
+
+func claimInstance(socketPath, lockPath string) (net.Listener, *os.File, error) {
+	if err := prepareInstancesDir(filepath.Dir(socketPath)); err != nil {
+		return nil, nil, err
+	}
+	lock, err := acquireInstanceLock(lockPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	listener, err := listenOnInstanceSocket(socketPath)
+	if err != nil {
+		unlockFile(lock)
+		lock.Close()
+		return nil, nil, err
+	}
+
+	return listener, lock, nil
+}
+
+func prepareInstancesDir(path string) error {
+	if err := os.MkdirAll(path, 0700); err != nil {
+		return fmt.Errorf("creating instances directory: %w", err)
+	}
+	if err := os.Chmod(path, 0700); err != nil {
+		return fmt.Errorf("securing instances directory: %w", err)
+	}
+	return nil
+}
+
+func acquireInstanceLock(path string) (*os.File, error) {
+	lock, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("opening instance lock %s: %w", path, err)
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		lock.Close()
+		return nil, fmt.Errorf("securing instance lock %s: %w", path, err)
+	}
+	if err := lockFile(lock); err != nil {
+		lock.Close()
+		return nil, fmt.Errorf("instance already running: %w", err)
+	}
+	return lock, nil
+}
+
+func listenOnInstanceSocket(path string) (net.Listener, error) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("removing stale instance socket %s: %w", path, err)
+	}
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, fmt.Errorf("listening on instance socket %s: %w", path, err)
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		listener.Close()
+		os.Remove(path)
+		return nil, fmt.Errorf("securing instance socket %s: %w", path, err)
+	}
+	return listener, nil
+}
+
+func releaseInstance(listener net.Listener, socketPath string, lock *os.File) {
+	listener.Close()
+	os.Remove(socketPath)
+	unlockFile(lock)
+	lock.Close()
 }
 
 func lockProject(path string) (func() error, error) {
