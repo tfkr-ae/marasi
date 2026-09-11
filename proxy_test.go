@@ -41,6 +41,12 @@ type sessionTestErrorReader struct {
 	err error
 }
 
+type errorCloser struct {
+	err error
+}
+
+func (closer *errorCloser) Close() error { return closer.err }
+
 type testRoundTripFunc func(*http.Request) (*http.Response, error)
 
 type testResponseBody struct {
@@ -806,6 +812,19 @@ func TestProxy_CloseClosesWebSockets(t *testing.T) {
 	}
 	if reason != "" {
 		t.Fatalf("wanted close reason:\n%q\ngot:\n%q", "", reason)
+	}
+}
+
+func TestProxy_CloseReturnsDatabaseError(t *testing.T) {
+	want := errors.New("database close failed")
+	proxy := &Proxy{
+		martianProxy: martian.NewProxy(),
+		DBCloser:     &errorCloser{err: want},
+	}
+
+	err := proxy.Close()
+	if !errors.Is(err, want) {
+		t.Fatalf("wanted database close error:\n%v\ngot:\n%v", want, err)
 	}
 }
 

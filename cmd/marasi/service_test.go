@@ -13,6 +13,21 @@ import (
 	"time"
 )
 
+var errServing = errors.New("serving failed")
+var errClosingListener = errors.New("listener close failed")
+
+type failingListener struct {
+	closed   bool
+	closeErr error
+}
+
+func (l *failingListener) Accept() (net.Conn, error) { return nil, errServing }
+func (l *failingListener) Addr() net.Addr            { return &net.TCPAddr{} }
+func (l *failingListener) Close() error {
+	l.closed = true
+	return l.closeErr
+}
+
 func TestProjectPath(t *testing.T) {
 	t.Run("should resolve scratchpad under projects", func(t *testing.T) {
 		configDir := t.TempDir()
@@ -292,6 +307,43 @@ func TestClaimInstance(t *testing.T) {
 		}
 		defer releaseInstance(secondListener, socketPath, secondLock)
 	})
+
+	t.Run("should preserve errors and complete every release step", func(t *testing.T) {
+		dir := t.TempDir()
+		socketPath := filepath.Join(dir, "work.sock")
+		if err := os.Mkdir(socketPath, 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.WriteFile(filepath.Join(socketPath, "keep"), nil, 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		lockPath := filepath.Join(dir, "work.lock")
+		lock, err := acquireInstanceLock(lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		listener := &failingListener{closeErr: errClosingListener}
+
+		err = releaseInstance(listener, socketPath, lock)
+		if !errors.Is(err, errClosingListener) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", errClosingListener, err)
+		}
+		if !strings.Contains(err.Error(), "removing instance socket") {
+			t.Fatalf("\nwanted:\nremove error\ngot:\n%v", err)
+		}
+		if _, err := lock.Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("\nwanted:\nclosed lock\ngot:\n%v", err)
+		}
+
+		restartedLock, err := acquireInstanceLock(lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer func() {
+			unlockFile(restartedLock)
+			restartedLock.Close()
+		}()
+	})
 }
 
 func serviceConfigDir(t *testing.T) string {
@@ -358,6 +410,25 @@ func TestLockProject(t *testing.T) {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 		defer unlock()
+	})
+
+	t.Run("should preserve unlock and close errors", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "projects", "scratchpad.marasi")
+		unlock, err := lockProject(path)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := unlock(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		err = unlock()
+		if !strings.Contains(err.Error(), "unlocking project") {
+			t.Fatalf("\nwanted:\nunlock error\ngot:\n%v", err)
+		}
+		if !strings.Contains(err.Error(), "closing project lock") {
+			t.Fatalf("\nwanted:\nclose error\ngot:\n%v", err)
+		}
 	})
 }
 
@@ -446,6 +517,104 @@ func TestStartService(t *testing.T) {
 		err := startService(ctx, serviceConfigDir(t), "scratchpad", "work.sock")
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+	})
+
+}
+
+func TestServeControlAPI(t *testing.T) {
+	t.Run("should give an active request time to finish", func(t *testing.T) {
+		requestStarted := make(chan struct{})
+		finishRequest := make(chan struct{})
+		server := &http.Server{Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			close(requestStarted)
+			<-finishRequest
+		})}
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			result <- serveControlAPI(ctx, server, listener, time.Second)
+		}()
+		requestResult := make(chan error, 1)
+		go func() {
+			response, err := http.Get("http://" + listener.Addr().String())
+			if err == nil {
+				response.Body.Close()
+			}
+			requestResult <- err
+		}()
+
+		<-requestStarted
+		cancel()
+		select {
+		case err := <-result:
+			t.Fatalf("\nwanted:\nserver to wait for request\ngot:\n%v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		close(finishRequest)
+		if err := <-result; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := <-requestResult; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should force close a stuck request after the deadline", func(t *testing.T) {
+		requestStarted := make(chan struct{})
+		server := &http.Server{Handler: http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+			close(requestStarted)
+			<-request.Context().Done()
+		})}
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			result <- serveControlAPI(ctx, server, listener, 50*time.Millisecond)
+		}()
+		go http.Get("http://" + listener.Addr().String())
+
+		<-requestStarted
+		cancel()
+		err = <-result
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.DeadlineExceeded, err)
+		}
+	})
+
+	t.Run("should return an unexpected serving failure", func(t *testing.T) {
+		listener := &failingListener{}
+
+		err := serveControlAPI(context.Background(), &http.Server{}, listener, time.Second)
+		if !errors.Is(err, errServing) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", errServing, err)
+		}
+		if !listener.closed {
+			t.Fatal("\nwanted:\nclosed listener\ngot:\nopen listener")
+		}
+	})
+
+	t.Run("should return ErrServerClosed without a shutdown request", func(t *testing.T) {
+		server := &http.Server{}
+		if err := server.Close(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		err = serveControlAPI(context.Background(), server, listener, time.Second)
+		if !errors.Is(err, http.ErrServerClosed) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", http.ErrServerClosed, err)
 		}
 	})
 }

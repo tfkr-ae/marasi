@@ -615,7 +615,7 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 }
 
 // Close shuts down the proxy and closes the database connection.
-func (proxy *Proxy) Close() {
+func (proxy *Proxy) Close() error {
 	proxy.webSocketLifecycleMu.Lock()
 	proxy.webSocketsClosing = true
 	proxy.webSocketLifecycleMu.Unlock()
@@ -631,9 +631,13 @@ func (proxy *Proxy) Close() {
 		time.Sleep(time.Millisecond)
 	}
 
+	var listenerErr error
 	proxy.listenerMu.Lock()
 	if proxy.activeListener != nil {
-		_ = proxy.activeListener.Close()
+		listenerErr = proxy.activeListener.Close()
+		if errors.Is(listenerErr, net.ErrClosed) {
+			listenerErr = nil
+		}
 	}
 	proxy.listenerMu.Unlock()
 
@@ -641,15 +645,15 @@ func (proxy *Proxy) Close() {
 	if proxy.WebSocketInterceptor != nil {
 		proxy.WebSocketInterceptor.CancelAll()
 	}
-	if err := proxy.CloseWebSocketsAndFlush(); err != nil {
-		log.Printf("closing websocket connections: %v", err)
-	}
+	webSocketErr := proxy.CloseWebSocketsAndFlush()
 	<-proxy.martianCloseDone
+	var databaseErr error
 	if proxy.DBCloser != nil {
 		log.Println("Closing database connection...")
-		proxy.DBCloser.Close()
+		databaseErr = proxy.DBCloser.Close()
 	}
 
+	return errors.Join(listenerErr, webSocketErr, databaseErr)
 }
 
 // StartChrome launches Chrome with proxy configuration and security settings.

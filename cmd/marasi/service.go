@@ -10,6 +10,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi"
@@ -20,7 +22,10 @@ import (
 
 var projectName string
 
-const unixSocketPathLimit = 104
+const (
+	unixSocketPathLimit = 104
+	shutdownTimeout     = 5 * time.Second
+)
 
 func init() {
 	startCmd.Flags().StringVar(&projectName, "project", "scratchpad", "Project name")
@@ -37,14 +42,14 @@ var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start a marasi instance",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
 		return startService(ctx, configDir, projectName, instance)
 	},
 }
 
-func startService(ctx context.Context, configDir, projectName, instanceName string) error {
+func startService(ctx context.Context, configDir, projectName, instanceName string) (resultErr error) {
 	if configDir == "" {
 		return fmt.Errorf("config dir is empty")
 	}
@@ -73,7 +78,9 @@ func startService(ctx context.Context, configDir, projectName, instanceName stri
 	if err != nil {
 		return fmt.Errorf("locking project: %w", err)
 	}
-	defer unlock()
+	defer func() {
+		resultErr = errors.Join(resultErr, unlock())
+	}()
 
 	dbConn, err := db.New(path, proxy.Logger)
 	if err != nil {
@@ -92,15 +99,23 @@ func startService(ctx context.Context, configDir, projectName, instanceName stri
 		repo.Close()
 		return fmt.Errorf("starting proxy base options: %w", err)
 	}
-	defer proxy.Close()
+	defer func() {
+		resultErr = errors.Join(resultErr, wrapError("closing proxy", proxy.Close()))
+	}()
 
 	listener, instanceLock, err := claimInstance(socketPath, lockPath)
 	if err != nil {
 		return err
 	}
-	defer releaseInstance(listener, socketPath, instanceLock)
+	defer func() {
+		resultErr = errors.Join(resultErr, releaseInstance(listener, socketPath, instanceLock))
+	}()
 
 	server := &http.Server{Handler: service.NewServer(proxy)}
+	return serveControlAPI(ctx, server, listener, shutdownTimeout)
+}
+
+func serveControlAPI(ctx context.Context, server *http.Server, listener net.Listener, timeout time.Duration) error {
 	serveResult := make(chan error, 1)
 	go func() {
 		serveResult <- server.Serve(listener)
@@ -108,16 +123,37 @@ func startService(ctx context.Context, configDir, projectName, instanceName stri
 
 	select {
 	case <-ctx.Done():
-		if err := server.Close(); err != nil {
-			return fmt.Errorf("closing control server: %w", err)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		shutdownErr := server.Shutdown(shutdownCtx)
+		cancel()
+
+		var closeErr error
+		if shutdownErr != nil {
+			closeErr = server.Close()
 		}
-		if err := <-serveResult; err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("serving control API: %w", err)
+		serveErr := <-serveResult
+		if errors.Is(serveErr, http.ErrServerClosed) {
+			serveErr = nil
 		}
-		return nil
+
+		return errors.Join(
+			wrapError("shutting down control server", shutdownErr),
+			wrapError("force closing control server", closeErr),
+			wrapError("serving control API", serveErr),
+		)
 	case err := <-serveResult:
-		return fmt.Errorf("serving control API: %w", err)
+		return errors.Join(
+			wrapError("serving control API", err),
+			wrapError("closing control server", server.Close()),
+		)
 	}
+}
+
+func wrapError(action string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", action, err)
 }
 
 func projectPath(configDir, name string) (string, error) {
@@ -224,11 +260,22 @@ func listenOnInstanceSocket(path string) (net.Listener, error) {
 	return listener, nil
 }
 
-func releaseInstance(listener net.Listener, socketPath string, lock *os.File) {
-	listener.Close()
-	os.Remove(socketPath)
-	unlockFile(lock)
-	lock.Close()
+func releaseInstance(listener net.Listener, socketPath string, lock *os.File) error {
+	closeListenerErr := listener.Close()
+	if errors.Is(closeListenerErr, net.ErrClosed) {
+		closeListenerErr = nil
+	}
+	removeSocketErr := os.Remove(socketPath)
+	if errors.Is(removeSocketErr, os.ErrNotExist) {
+		removeSocketErr = nil
+	}
+
+	return errors.Join(
+		wrapError("closing instance listener", closeListenerErr),
+		wrapError("removing instance socket", removeSocketErr),
+		wrapError("unlocking instance", unlockFile(lock)),
+		wrapError("closing instance lock", lock.Close()),
+	)
 }
 
 func lockProject(path string) (func() error, error) {
@@ -250,12 +297,9 @@ func lockProject(path string) (func() error, error) {
 	return func() error {
 		unlockErr := unlockFile(f)
 		closeErr := f.Close()
-		if unlockErr != nil {
-			return fmt.Errorf("unlocking project: %w", unlockErr)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("closing project lock: %w", closeErr)
-		}
-		return nil
+		return errors.Join(
+			wrapError("unlocking project", unlockErr),
+			wrapError("closing project lock", closeErr),
+		)
 	}, nil
 }
