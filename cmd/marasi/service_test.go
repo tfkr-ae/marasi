@@ -50,22 +50,43 @@ func TestProjectPath(t *testing.T) {
 		}
 	})
 
-	t.Run("should raise an error if the project name is empty", func(t *testing.T) {
+	t.Run("should raise an error if project name is empty", func(t *testing.T) {
 		_, err := projectPath(t.TempDir(), "")
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
 	})
 
-	t.Run("should raise an error if the project name contains a slash", func(t *testing.T) {
-		_, err := projectPath(t.TempDir(), "foo/bar")
+	t.Run("should raise an error if project name is absolute path", func(t *testing.T) {
+		_, err := projectPath(t.TempDir(), "/tmp/scratchpad")
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
 	})
 
-	t.Run("should raise an error if the project name is a path traversal", func(t *testing.T) {
-		_, err := projectPath(t.TempDir(), "..")
+	t.Run("should raise an error if project name contains parent directory reference", func(t *testing.T) {
+		_, err := projectPath(t.TempDir(), "../scratchpad")
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+	})
+
+	t.Run("should raise an error if project name contains subdirectory", func(t *testing.T) {
+		_, err := projectPath(t.TempDir(), "nested/scratchpad")
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+	})
+
+	t.Run("should raise an error if project name contains Windows path separator", func(t *testing.T) {
+		_, err := projectPath(t.TempDir(), `nested\scratchpad`)
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+	})
+
+	t.Run("should raise an error if project name is current directory", func(t *testing.T) {
+		_, err := projectPath(t.TempDir(), ".")
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
