@@ -15,3 +15,11 @@ func lockFile(f *os.File) error {
 func unlockFile(f *os.File) error {
 	return unix.Flock(int(f.Fd()), unix.LOCK_UN)
 }
+
+func secureInstancesDir(path string) error {
+	return os.Chmod(path, 0700)
+}
+
+func secureInstanceFile(path string) error {
+	return os.Chmod(path, 0600)
+}

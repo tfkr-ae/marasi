@@ -222,7 +222,7 @@ func prepareInstancesDir(path string) error {
 	if err := os.MkdirAll(path, 0700); err != nil {
 		return fmt.Errorf("creating instances directory: %w", err)
 	}
-	if err := os.Chmod(path, 0700); err != nil {
+	if err := secureInstancesDir(path); err != nil {
 		return fmt.Errorf("securing instances directory: %w", err)
 	}
 	return nil
@@ -233,7 +233,7 @@ func acquireInstanceLock(path string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening instance lock %s: %w", path, err)
 	}
-	if err := os.Chmod(path, 0600); err != nil {
+	if err := secureInstanceFile(path); err != nil {
 		lock.Close()
 		return nil, fmt.Errorf("securing instance lock %s: %w", path, err)
 	}
@@ -252,7 +252,7 @@ func listenOnInstanceSocket(path string) (net.Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listening on instance socket %s: %w", path, err)
 	}
-	if err := os.Chmod(path, 0600); err != nil {
+	if err := secureInstanceFile(path); err != nil {
 		listener.Close()
 		os.Remove(path)
 		return nil, fmt.Errorf("securing instance socket %s: %w", path, err)
