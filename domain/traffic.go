@@ -57,6 +57,11 @@ type TrafficRepository interface {
 	//GetRequestResponseSummary will return the request-response data without the raw and prettified fields
 	GetRequestResponseSummary() ([]*RequestResponseSummary, error)
 
+	// ListTraffic returns a newest-first page of summaries older than cursor.
+	// A nil cursor starts at the newest row. nextCursor is the last returned
+	// item's id when another older page exists, otherwise nil.
+	ListTraffic(cursor *uuid.UUID, limit int) (items []*RequestResponseSummary, nextCursor *uuid.UUID, err error)
+
 	// GetMetadata returns the metadata map for a specific request ID.
 	GetMetadata(id uuid.UUID) (metadata map[string]any, err error)
 

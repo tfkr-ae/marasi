@@ -127,6 +127,16 @@ func (m *mockTrafficRepo) GetRequestResponseSummary() ([]*domain.RequestResponse
 	return []*domain.RequestResponseSummary{}, nil
 }
 
+func (m *mockTrafficRepo) ListTraffic(cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+	if m.forceError {
+		return nil, nil, errors.New("forced repo error")
+	}
+	if m.summaryData != nil {
+		return m.summaryData, nil, nil
+	}
+	return []*domain.RequestResponseSummary{}, nil, nil
+}
+
 func (m *mockTrafficRepo) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResponseRow, error) {
 	if m.forceError {
 		return nil, errors.New("forced repo error")

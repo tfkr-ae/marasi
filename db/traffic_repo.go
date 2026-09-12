@@ -350,6 +350,45 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 	return reqResSummary, nil
 }
 
+// ListTraffic returns a newest-first page of summaries older than cursor.
+func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+	query := `SELECT
+			  id, scheme, method, host, path, requested_at,
+			  status, status_code, content_type, length, responded_at,
+			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
+			  FROM request`
+	args := make([]any, 0, 2)
+	if cursor != nil {
+		query += ` WHERE id < ?`
+		args = append(args, *cursor)
+	}
+	query += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit+1)
+
+	var dbSummary []*dbRequestResponseSummary
+	err := repo.dbConn.Select(&dbSummary, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listing traffic: %w", err)
+	}
+
+	hasMore := len(dbSummary) > limit
+	if hasMore {
+		dbSummary = dbSummary[:limit]
+	}
+
+	items := make([]*domain.RequestResponseSummary, len(dbSummary))
+	for i, row := range dbSummary {
+		items[i] = toDomainRequestResponseSummary(row)
+	}
+
+	var nextCursor *uuid.UUID
+	if hasMore {
+		id := items[len(items)-1].ID
+		nextCursor = &id
+	}
+	return items, nextCursor, nil
+}
+
 // GetMetadata retrieves the metadata map for a specific request ID.
 func (repo *Repository) GetMetadata(id uuid.UUID) (map[string]any, error) {
 	var dbMeta Metadata

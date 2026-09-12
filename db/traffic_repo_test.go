@@ -772,3 +772,209 @@ func TestTrafficRepo_SearchByMetadata(t *testing.T) {
 		}
 	})
 }
+
+func TestTrafficRepo_ListTraffic(t *testing.T) {
+	t.Run("should return an empty page if database is empty", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		items, nextCursor, err := repo.ListTraffic(nil, 200)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 0 {
+			t.Fatalf("\nwanted:\n0\ngot:\n%d", len(items))
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should return newest first and a null next cursor when all rows fit", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		older := testRequest(t, repo, nil)
+		time.Sleep(2 * time.Millisecond)
+		newer := testRequest(t, repo, nil)
+		insertTestResponseAndGet(t, repo, newer, nil)
+
+		items, nextCursor, err := repo.ListTraffic(nil, 200)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("\nwanted:\n2\ngot:\n%d", len(items))
+		}
+		if items[0].ID != newer {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", newer, items[0].ID)
+		}
+		if items[1].ID != older {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", older, items[1].ID)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should set next cursor to the last item when another page exists", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		oldest := testRequest(t, repo, nil)
+		time.Sleep(2 * time.Millisecond)
+		middle := testRequest(t, repo, nil)
+		time.Sleep(2 * time.Millisecond)
+		newest := testRequest(t, repo, nil)
+
+		items, nextCursor, err := repo.ListTraffic(nil, 2)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("\nwanted:\n2\ngot:\n%d", len(items))
+		}
+		if items[0].ID != newest {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", newest, items[0].ID)
+		}
+		if items[1].ID != middle {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, items[1].ID)
+		}
+		if nextCursor == nil {
+			t.Fatal("\nwanted:\nnext cursor\ngot:\nnil")
+		}
+		if *nextCursor != middle {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, *nextCursor)
+		}
+
+		older, olderNext, err := repo.ListTraffic(nextCursor, 2)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(older) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(older))
+		}
+		if older[0].ID != oldest {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", oldest, older[0].ID)
+		}
+		if olderNext != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", olderNext)
+		}
+	})
+
+	t.Run("should not change an older page when newer rows are inserted", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		oldest := testRequest(t, repo, nil)
+		time.Sleep(2 * time.Millisecond)
+		middle := testRequest(t, repo, nil)
+		time.Sleep(2 * time.Millisecond)
+		newest := testRequest(t, repo, nil)
+
+		first, nextCursor, err := repo.ListTraffic(nil, 2)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(first) != 2 || first[0].ID != newest || first[1].ID != middle {
+			t.Fatalf("\nwanted:\n%v then %v\ngot:\n%v", newest, middle, idsOf(first))
+		}
+		if nextCursor == nil || *nextCursor != middle {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, nextCursor)
+		}
+
+		time.Sleep(2 * time.Millisecond)
+		_ = testRequest(t, repo, nil)
+
+		older, olderNext, err := repo.ListTraffic(nextCursor, 2)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(older) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(older))
+		}
+		if older[0].ID != oldest {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", oldest, older[0].ID)
+		}
+		if olderNext != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", olderNext)
+		}
+	})
+
+	t.Run("should treat a zero uuid cursor as older than that id", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		_ = testRequest(t, repo, nil)
+		zero := uuid.Nil
+
+		items, nextCursor, err := repo.ListTraffic(&zero, 200)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 0 {
+			t.Fatalf("\nwanted:\n0\ngot:\n%d", len(items))
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should include in-flight rows with status code -1", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		id := testRequest(t, repo, nil)
+
+		items, nextCursor, err := repo.ListTraffic(nil, 200)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(items))
+		}
+		if items[0].ID != id {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", id, items[0].ID)
+		}
+		if items[0].StatusCode != -1 {
+			t.Fatalf("\nwanted:\n-1\ngot:\n%d", items[0].StatusCode)
+		}
+		if !items[0].RespondedAt.IsZero() {
+			t.Fatalf("\nwanted:\nzero responded_at\ngot:\n%v", items[0].RespondedAt)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should omit prettified metadata keys", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		id := testRequest(t, repo, map[string]any{
+			"foo":                 "bar",
+			"prettified-request":  "pretty-req",
+			"prettified-response": "pretty-res",
+		})
+
+		items, _, err := repo.ListTraffic(nil, 200)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 || items[0].ID != id {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", id, idsOf(items))
+		}
+		wantMeta := map[string]any{"foo": "bar"}
+		if !reflect.DeepEqual(items[0].Metadata, wantMeta) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", wantMeta, items[0].Metadata)
+		}
+	})
+}
+
+func idsOf(items []*domain.RequestResponseSummary) []uuid.UUID {
+	ids := make([]uuid.UUID, len(items))
+	for i, item := range items {
+		ids[i] = item.ID
+	}
+	return ids
+}

@@ -2,12 +2,33 @@ package service
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/domain"
 )
+
+type trafficList struct {
+	Items      []trafficSummary `json:"items"`
+	NextCursor *uuid.UUID       `json:"next_cursor"`
+}
+
+type trafficSummary struct {
+	ID          uuid.UUID      `json:"id"`
+	Scheme      string         `json:"scheme"`
+	Method      string         `json:"method"`
+	Host        string         `json:"host"`
+	Path        string         `json:"path"`
+	Status      string         `json:"status"`
+	StatusCode  int            `json:"status_code"`
+	ContentType string         `json:"content_type"`
+	Length      string         `json:"length"`
+	Metadata    map[string]any `json:"metadata"`
+	RequestedAt time.Time      `json:"requested_at"`
+	RespondedAt *time.Time     `json:"responded_at"`
+}
 
 type trafficDetail struct {
 	ID       uuid.UUID       `json:"id"`
@@ -36,6 +57,24 @@ type trafficResponse struct {
 }
 
 func addTrafficRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
+	mux.HandleFunc("GET /traffic", func(w http.ResponseWriter, r *http.Request) {
+		limit, cursor, ok := parseTrafficListQuery(r)
+		if !ok {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
+		repo, err := proxy.GetTrafficRepo()
+		if err != nil {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		items, nextCursor, err := repo.ListTraffic(cursor, limit)
+		if err != nil {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		writeJSON(w, r, http.StatusOK, trafficListFromSummaries(items, nextCursor))
+	})
 	mux.HandleFunc("GET /traffic/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
@@ -54,6 +93,54 @@ func addTrafficRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 		}
 		writeJSON(w, r, http.StatusOK, trafficDetailFromRow(row))
 	})
+}
+
+func parseTrafficListQuery(r *http.Request) (limit int, cursor *uuid.UUID, ok bool) {
+	limit = 200
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 500 {
+			return 0, nil, false
+		}
+		limit = parsed
+	}
+	if raw := r.URL.Query().Get("cursor"); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			return 0, nil, false
+		}
+		cursor = &parsed
+	}
+	return limit, cursor, true
+}
+
+func trafficListFromSummaries(items []*domain.RequestResponseSummary, nextCursor *uuid.UUID) trafficList {
+	summaries := make([]trafficSummary, 0, len(items))
+	for _, item := range items {
+		summaries = append(summaries, trafficSummaryFromDomain(item))
+	}
+	return trafficList{Items: summaries, NextCursor: nextCursor}
+}
+
+func trafficSummaryFromDomain(item *domain.RequestResponseSummary) trafficSummary {
+	summary := trafficSummary{
+		ID:          item.ID,
+		Scheme:      item.Scheme,
+		Method:      item.Method,
+		Host:        item.Host,
+		Path:        item.Path,
+		Status:      item.Status,
+		StatusCode:  item.StatusCode,
+		ContentType: item.ContentType,
+		Length:      item.Length,
+		Metadata:    metadataWithoutPrettified(item.Metadata),
+		RequestedAt: item.RequestedAt,
+	}
+	if !item.RespondedAt.IsZero() {
+		respondedAt := item.RespondedAt
+		summary.RespondedAt = &respondedAt
+	}
+	return summary
 }
 
 func trafficDetailFromRow(row *domain.RequestResponseRow) trafficDetail {

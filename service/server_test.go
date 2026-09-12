@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +15,9 @@ import (
 
 type stubTrafficRepository struct {
 	domain.TrafficRepository
-	row *domain.RequestResponseRow
+	row        *domain.RequestResponseRow
+	items      []*domain.RequestResponseSummary
+	nextCursor *uuid.UUID
 }
 
 func (s *stubTrafficRepository) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResponseRow, error) {
@@ -22,6 +25,28 @@ func (s *stubTrafficRepository) GetRequestResponseRow(id uuid.UUID) (*domain.Req
 		return s.row, nil
 	}
 	return nil, errors.New("not found")
+}
+
+func (s *stubTrafficRepository) ListTraffic(cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+	items := s.items
+	if items == nil {
+		items = []*domain.RequestResponseSummary{}
+	}
+	if cursor != nil {
+		older := make([]*domain.RequestResponseSummary, 0, len(items))
+		for _, item := range items {
+			if item.ID.String() < cursor.String() {
+				older = append(older, item)
+			}
+		}
+		items = older
+	}
+	if limit < len(items) {
+		items = items[:limit]
+		id := items[len(items)-1].ID
+		return items, &id, nil
+	}
+	return items, s.nextCursor, nil
 }
 
 type shutdownOrderRecorder struct {
@@ -248,6 +273,286 @@ func TestTrafficGet(t *testing.T) {
 		id := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
 		server := NewServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
 		request := httptest.NewRequest(http.MethodPost, "/traffic/"+id.String(), nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		if response.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusMethodNotAllowed, response.Code)
+		}
+	})
+}
+
+func TestTrafficList(t *testing.T) {
+	t.Run("should return a page of summaries", func(t *testing.T) {
+		id := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+		repo := &stubTrafficRepository{
+			items: []*domain.RequestResponseSummary{{
+				ID:          id,
+				Scheme:      "https",
+				Method:      "GET",
+				Host:        "example.com",
+				Path:        "/a",
+				Status:      "200 OK",
+				StatusCode:  200,
+				ContentType: "application/json",
+				Length:      "12",
+				Metadata:    map[string]any{"foo": "bar"},
+				RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+				RespondedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC),
+			}},
+		}
+		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		request := httptest.NewRequest(http.MethodGet, "/traffic", nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
+		}
+		if got := response.Header().Get("Content-Type"); got != "application/json" {
+			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		}
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\"}],\"next_cursor\":null}\n"
+		if got := response.Body.String(); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should omit prettified metadata keys and raw bytes", func(t *testing.T) {
+		id := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+		repo := &stubTrafficRepository{
+			items: []*domain.RequestResponseSummary{{
+				ID:          id,
+				Scheme:      "https",
+				Method:      "GET",
+				Host:        "example.com",
+				Path:        "/a",
+				Status:      "200 OK",
+				StatusCode:  200,
+				ContentType: "application/json",
+				Length:      "12",
+				Metadata: map[string]any{
+					"foo":                 "bar",
+					"prettified-request":  "pretty-req",
+					"prettified-response": "pretty-res",
+				},
+				RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+				RespondedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC),
+			}},
+		}
+		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		request := httptest.NewRequest(http.MethodGet, "/traffic", nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
+		}
+		if got := response.Header().Get("Content-Type"); got != "application/json" {
+			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		}
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\"}],\"next_cursor\":null}\n"
+		if got := response.Body.String(); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should include in-flight rows with status code -1 and null responded_at", func(t *testing.T) {
+		id := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+		repo := &stubTrafficRepository{
+			items: []*domain.RequestResponseSummary{{
+				ID:          id,
+				Scheme:      "https",
+				Method:      "GET",
+				Host:        "example.com",
+				Path:        "/a",
+				Status:      "N/A",
+				StatusCode:  -1,
+				Length:      "0",
+				Metadata:    map[string]any{},
+				RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+			}},
+		}
+		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		request := httptest.NewRequest(http.MethodGet, "/traffic", nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
+		}
+		if got := response.Header().Get("Content-Type"); got != "application/json" {
+			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		}
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"N/A\",\"status_code\":-1,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
+		if got := response.Body.String(); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should return next_cursor when another page exists", func(t *testing.T) {
+		newer := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
+		older := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+		repo := &stubTrafficRepository{
+			items: []*domain.RequestResponseSummary{
+				{ID: newer, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
+				{ID: older, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
+			},
+			nextCursor: &older,
+		}
+		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		request := httptest.NewRequest(http.MethodGet, "/traffic?limit=2", nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
+		}
+		if got := response.Header().Get("Content-Type"); got != "application/json" {
+			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		}
+		want := "{\"items\":[{\"id\":\"01938032-1b17-7243-b035-e6a9f4645904\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:06Z\",\"responded_at\":null},{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":\"0193802f-f0e7-73d9-a764-06d21e367809\"}\n"
+		if got := response.Body.String(); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should default limit to 200", func(t *testing.T) {
+		items := make([]*domain.RequestResponseSummary, 201)
+		for i := range items {
+			id, err := uuid.NewV7()
+			if err != nil {
+				t.Fatalf("creating uuid: %v", err)
+			}
+			items[i] = &domain.RequestResponseSummary{ID: id, Length: "0"}
+		}
+		server := NewServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{items: items}}, func() {})
+		request := httptest.NewRequest(http.MethodGet, "/traffic", nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
+		}
+		if got := response.Header().Get("Content-Type"); got != "application/json" {
+			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		}
+		var body struct {
+			Items []struct {
+				ID uuid.UUID `json:"id"`
+			} `json:"items"`
+			NextCursor *uuid.UUID `json:"next_cursor"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decoding body: %v", err)
+		}
+		if len(body.Items) != 200 {
+			t.Fatalf("\nwanted:\n200\ngot:\n%d", len(body.Items))
+		}
+		if body.NextCursor == nil || *body.NextCursor != items[199].ID {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", items[199].ID, body.NextCursor)
+		}
+	})
+
+	t.Run("should reject a limit below 1, above 500, or a non-integer", func(t *testing.T) {
+		server := NewServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
+		for _, raw := range []string{"0", "501", "abc", "1.5"} {
+			request := httptest.NewRequest(http.MethodGet, "/traffic?limit="+raw, nil)
+			response := httptest.NewRecorder()
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("\nlimit %s wanted:\n%d\ngot:\n%d", raw, http.StatusBadRequest, response.Code)
+			}
+			if got := response.Header().Get("Content-Type"); got != "application/json" {
+				t.Fatalf("\nlimit %s wanted:\napplication/json\ngot:\n%s", raw, got)
+			}
+			if got := response.Body.String(); got != "{\"error\":\"bad_request\"}\n" {
+				t.Fatalf("\nlimit %s wanted:\n%s\ngot:\n%s", raw, "{\"error\":\"bad_request\"}\\n", got)
+			}
+		}
+	})
+
+	t.Run("should return the next older page for a cursor", func(t *testing.T) {
+		newer := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
+		older := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+		repo := &stubTrafficRepository{
+			items: []*domain.RequestResponseSummary{
+				{ID: newer, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
+				{ID: older, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
+			},
+		}
+		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		request := httptest.NewRequest(http.MethodGet, "/traffic?cursor="+newer.String(), nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
+		}
+		if got := response.Header().Get("Content-Type"); got != "application/json" {
+			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		}
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
+		if got := response.Body.String(); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should treat a zero uuid cursor as older than that id", func(t *testing.T) {
+		id := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+		repo := &stubTrafficRepository{
+			items: []*domain.RequestResponseSummary{
+				{ID: id, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
+			},
+		}
+		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		request := httptest.NewRequest(http.MethodGet, "/traffic?cursor="+uuid.Nil.String(), nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
+		}
+		if got := response.Header().Get("Content-Type"); got != "application/json" {
+			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		}
+		want := "{\"items\":[],\"next_cursor\":null}\n"
+		if got := response.Body.String(); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should reject an unparseable cursor", func(t *testing.T) {
+		server := NewServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
+		request := httptest.NewRequest(http.MethodGet, "/traffic?cursor=not-a-uuid", nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusBadRequest, response.Code)
+		}
+		if got := response.Header().Get("Content-Type"); got != "application/json" {
+			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		}
+		if got := response.Body.String(); got != "{\"error\":\"bad_request\"}\n" {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", "{\"error\":\"bad_request\"}\\n", got)
+		}
+	})
+
+	t.Run("should reject other methods", func(t *testing.T) {
+		server := NewServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
+		request := httptest.NewRequest(http.MethodPost, "/traffic", nil)
 		response := httptest.NewRecorder()
 
 		server.ServeHTTP(response, request)
