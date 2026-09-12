@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -464,6 +466,414 @@ func TestCleanupService(t *testing.T) {
 	})
 }
 
+func TestStopService(t *testing.T) {
+	t.Run("should reject an empty config directory", func(t *testing.T) {
+		err := stopService(context.Background(), "", "work")
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+	})
+
+	t.Run("should stop the selected instance and wait for cleanup", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		listener, lock, err := claimInstance(socketPath, lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		released := false
+		requestReceived := make(chan struct{}, 1)
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.Path != "/service/stop" {
+				t.Errorf("\nwanted:\nPOST /service/stop\ngot:\n%s %s", r.Method, r.URL.Path)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			requestReceived <- struct{}{}
+		})}
+		go server.Serve(listener)
+		defer func() {
+			server.Close()
+			if !released {
+				releaseInstance(listener, socketPath, lock)
+			}
+		}()
+
+		result := make(chan error, 1)
+		go func() {
+			result <- stopService(context.Background(), configDir, "work")
+		}()
+		select {
+		case <-requestReceived:
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\nstop request\ngot:\ntimeout")
+		}
+
+		select {
+		case err := <-result:
+			t.Fatalf("\nwanted:\ncommand waiting for cleanup\ngot:\n%v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		if err := releaseInstance(listener, socketPath, lock); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		released = true
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\ncommand completion\ngot:\ntimeout")
+		}
+	})
+
+	t.Run("should succeed without creating resources when the socket is missing", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if err := stopService(context.Background(), configDir, "work"); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		for _, path := range []string{socketPath, lockPath} {
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("\nwanted:\nmissing %s\ngot:\n%v", path, err)
+			}
+		}
+	})
+
+	t.Run("should leave a stale socket when no instance owns the lock", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.WriteFile(socketPath, []byte("stale"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if err := stopService(context.Background(), configDir, "work"); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got, err := os.ReadFile(socketPath); err != nil || string(got) != "stale" {
+			t.Fatalf("\nwanted:\nstale socket\ngot:\n%s, %v", got, err)
+		}
+		probe, err := acquireInstanceLock(lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nreleased probe lock\ngot:\n%v", err)
+		}
+		defer func() {
+			unlockFile(probe)
+			probe.Close()
+		}()
+	})
+
+	t.Run("should wait after a failed dial while the instance lock is held", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.WriteFile(socketPath, []byte("stale"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		lock, err := acquireInstanceLock(lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		locked := true
+		defer func() {
+			if locked {
+				unlockFile(lock)
+				lock.Close()
+			}
+		}()
+
+		result := make(chan error, 1)
+		go func() {
+			result <- stopService(context.Background(), configDir, "work")
+		}()
+		select {
+		case err := <-result:
+			t.Fatalf("\nwanted:\ncommand waiting for lock release\ngot:\n%v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		if err := errors.Join(unlockFile(lock), lock.Close()); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		locked = false
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\ncommand completion\ngot:\ntimeout")
+		}
+	})
+
+	t.Run("should let repeated stops wait for the same cleanup", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		listener, lock, err := claimInstance(socketPath, lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		released := false
+		requests := make(chan struct{}, 2)
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusAccepted)
+			requests <- struct{}{}
+		})}
+		go server.Serve(listener)
+		defer func() {
+			server.Close()
+			if !released {
+				releaseInstance(listener, socketPath, lock)
+			}
+		}()
+
+		results := make(chan error, 2)
+		go func() { results <- stopService(context.Background(), configDir, "work") }()
+		select {
+		case <-requests:
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\nfirst stop request\ngot:\ntimeout")
+		}
+		go func() { results <- stopService(context.Background(), configDir, "work") }()
+		select {
+		case <-requests:
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\nsecond stop request\ngot:\ntimeout")
+		}
+
+		for range 2 {
+			select {
+			case err := <-results:
+				t.Fatalf("\nwanted:\ncommands waiting for cleanup\ngot:\n%v", err)
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+		if err := releaseInstance(listener, socketPath, lock); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		released = true
+		for range 2 {
+			select {
+			case err := <-results:
+				if err != nil {
+					t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("\nwanted:\ncommand completion\ngot:\ntimeout")
+			}
+		}
+	})
+
+	t.Run("should report a rejected response with a bounded body", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		listener, lock, err := claimInstance(socketPath, lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, strings.Repeat("x", maxErrorBodySize+100))
+		})}
+		go server.Serve(listener)
+		defer func() {
+			server.Close()
+			releaseInstance(listener, socketPath, lock)
+		}()
+
+		err = stopService(context.Background(), configDir, "work")
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !strings.Contains(err.Error(), "500 Internal Server Error") {
+			t.Fatalf("\nwanted:\nHTTP status\ngot:\n%v", err)
+		}
+		if got := strings.Count(err.Error(), "x"); got != maxErrorBodySize {
+			t.Fatalf("\nwanted:\n%d response bytes\ngot:\n%d", maxErrorBodySize, got)
+		}
+	})
+
+	t.Run("should reject redirects without following them", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		listener, lock, err := claimInstance(socketPath, lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/service/stop" {
+				http.Redirect(w, r, "/accepted", http.StatusTemporaryRedirect)
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+		})}
+		go server.Serve(listener)
+		defer func() {
+			server.Close()
+			releaseInstance(listener, socketPath, lock)
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		err = stopService(ctx, configDir, "work")
+		if err == nil || !strings.Contains(err.Error(), "307 Temporary Redirect") {
+			t.Fatalf("\nwanted:\nredirect status error\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should stop waiting when its context is canceled", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.WriteFile(socketPath, []byte("stale"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		lock, err := acquireInstanceLock(lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer func() {
+			unlockFile(lock)
+			lock.Close()
+		}()
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() { result <- stopService(ctx, configDir, "work") }()
+
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		select {
+		case err := <-result:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.Canceled, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\ncanceled command\ngot:\ntimeout")
+		}
+	})
+}
+
+func TestStopCommand(t *testing.T) {
+	t.Run("should accept no arguments and keep the project flag exclusive to start", func(t *testing.T) {
+		if err := stopCmd.Args(stopCmd, nil); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := stopCmd.Args(stopCmd, []string{"extra"}); err == nil {
+			t.Fatal("\nwanted:\nargument error\ngot:\nnil")
+		}
+		if flag := stopCmd.Flag("config-dir"); flag == nil {
+			t.Fatal("\nwanted:\nconfig-dir flag\ngot:\nnil")
+		}
+		if flag := stopCmd.Flag("instance"); flag == nil {
+			t.Fatal("\nwanted:\ninstance flag\ngot:\nnil")
+		}
+		if flag := stopCmd.Flag("project"); flag != nil {
+			t.Fatalf("\nwanted:\nno project flag\ngot:\n%s", flag.Name)
+		}
+	})
+
+	t.Run("should write nothing after a successful stop", func(t *testing.T) {
+		oldConfigDir, oldInstance := configDir, instance
+		defer func() {
+			configDir, instance = oldConfigDir, oldInstance
+		}()
+		configDir = serviceConfigDir(t)
+		instance = "work"
+		stopCmd.SetContext(context.Background())
+		var output bytes.Buffer
+		stopCmd.SetOut(&output)
+		stopCmd.SetErr(&output)
+		defer func() {
+			stopCmd.SetContext(nil)
+			stopCmd.SetOut(nil)
+			stopCmd.SetErr(nil)
+		}()
+
+		if err := stopCmd.RunE(stopCmd, nil); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if output.Len() != 0 {
+			t.Fatalf("\nwanted:\nno output\ngot:\n%s", output.String())
+		}
+	})
+
+	t.Run("should stop waiting when the command context is canceled", func(t *testing.T) {
+		oldConfigDir, oldInstance := configDir, instance
+		defer func() {
+			configDir, instance = oldConfigDir, oldInstance
+			stopCmd.SetContext(nil)
+		}()
+		configDir = serviceConfigDir(t)
+		instance = "work"
+		socketPath, lockPath, err := resolveInstancePaths(configDir, instance)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.WriteFile(socketPath, []byte("stale"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		lock, err := acquireInstanceLock(lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer func() {
+			unlockFile(lock)
+			lock.Close()
+		}()
+		ctx, cancel := context.WithCancel(context.Background())
+		stopCmd.SetContext(ctx)
+		result := make(chan error, 1)
+		go func() { result <- stopCmd.RunE(stopCmd, nil) }()
+
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		select {
+		case err := <-result:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.Canceled, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\ncanceled command\ngot:\ntimeout")
+		}
+	})
+}
+
 func TestStartService(t *testing.T) {
 	t.Run("should stop through the control API", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
@@ -495,19 +905,8 @@ func TestStartService(t *testing.T) {
 			unlock()
 			t.Fatal("\nwanted:\nheld project lock\ngot:\nfree project lock")
 		}
-		transport := &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
-			},
-		}
-		defer transport.CloseIdleConnections()
-		response, err := (&http.Client{Transport: transport}).Post("http://marasi/service/stop", "", nil)
-		if err != nil {
+		if err := stopService(context.Background(), configDir, "work"); err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
-		}
-		response.Body.Close()
-		if response.StatusCode != http.StatusAccepted {
-			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusAccepted, response.StatusCode)
 		}
 
 		err = <-result

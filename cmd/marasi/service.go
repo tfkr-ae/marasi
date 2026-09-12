@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -22,14 +23,18 @@ import (
 
 var projectName string
 
+var errInstanceLockHeld = errors.New("instance lock held")
+
 const (
 	unixSocketPathLimit = 104
 	shutdownTimeout     = 5 * time.Second
+	instancePollDelay   = 10 * time.Millisecond
+	maxErrorBodySize    = 4 * 1024
 )
 
 func init() {
 	startCmd.Flags().StringVar(&projectName, "project", "scratchpad", "Project name")
-	serviceCmd.AddCommand(startCmd)
+	serviceCmd.AddCommand(startCmd, stopCmd)
 	rootCmd.AddCommand(serviceCmd)
 }
 
@@ -46,6 +51,18 @@ var startCmd = &cobra.Command{
 		defer cancel()
 
 		return startService(ctx, configDir, projectName, instance)
+	},
+}
+
+var stopCmd = &cobra.Command{
+	Use:   "stop",
+	Short: "Stop a marasi instance",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+
+		return stopService(ctx, configDir, instance)
 	},
 }
 
@@ -115,6 +132,84 @@ func startService(ctx context.Context, configDir, projectName, instanceName stri
 	defer stopService()
 	server := &http.Server{Handler: service.NewServer(proxy, stopService)}
 	return serveControlAPI(serviceCtx, server, listener, shutdownTimeout)
+}
+
+func stopService(ctx context.Context, configDir, instanceName string) error {
+	if configDir == "" {
+		return fmt.Errorf("config dir is empty")
+	}
+
+	socketPath, lockPath, err := resolveInstancePaths(configDir, instanceName)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(socketPath); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("checking instance socket %s: %w", socketPath, err)
+	}
+
+	client := service.NewClient(socketPath)
+	defer client.Close()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://marasi/service/stop", nil)
+	if err != nil {
+		return fmt.Errorf("creating service stop request: %w", err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			return fmt.Errorf("dialing instance socket %s: %w", socketPath, err)
+		}
+		return waitForInstanceStop(ctx, lockPath)
+	}
+
+	if response.StatusCode != http.StatusAccepted {
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, maxErrorBodySize))
+		closeErr := response.Body.Close()
+		responseErr := fmt.Errorf("stopping service: %s: %s", response.Status, body)
+		return errors.Join(
+			responseErr,
+			wrapError("reading service stop response", readErr),
+			wrapError("closing service stop response", closeErr),
+		)
+	}
+
+	closeErr := response.Body.Close()
+	waitErr := waitForInstanceStop(ctx, lockPath)
+	return errors.Join(
+		wrapError("closing service stop response", closeErr),
+		waitErr,
+	)
+}
+
+func waitForInstanceStop(ctx context.Context, lockPath string) error {
+	ticker := time.NewTicker(instancePollDelay)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		lock, err := acquireInstanceLock(lockPath)
+		if err == nil {
+			return errors.Join(
+				wrapError("unlocking instance probe", unlockFile(lock)),
+				wrapError("closing instance probe", lock.Close()),
+			)
+		}
+		if !errors.Is(err, errInstanceLockHeld) {
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func cleanupService(closeProxy, unlockProject, releaseInstance func() error) error {
@@ -252,7 +347,10 @@ func acquireInstanceLock(path string) (*os.File, error) {
 	}
 	if err := lockFile(lock); err != nil {
 		lock.Close()
-		return nil, fmt.Errorf("instance already running: %w", err)
+		if isLockUnavailable(err) {
+			return nil, fmt.Errorf("instance already running: %w: %v", errInstanceLockHeld, err)
+		}
+		return nil, fmt.Errorf("locking instance %s: %w", path, err)
 	}
 	return lock, nil
 }

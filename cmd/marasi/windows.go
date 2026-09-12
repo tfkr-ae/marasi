@@ -3,11 +3,16 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
 	"golang.org/x/sys/windows"
 )
+
+func isLockUnavailable(err error) bool {
+	return errors.Is(err, windows.ERROR_LOCK_VIOLATION)
+}
 
 func lockFile(f *os.File) error {
 	var overlapped windows.Overlapped
