@@ -8,17 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1250,11 +1251,99 @@ func TestStopCommand(t *testing.T) {
 }
 
 func TestStartService(t *testing.T) {
+	t.Run("should report the default instance and leave it running", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		binary := buildMarasi(t)
+		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "service", "stop") })
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "service", "start", "--port", "0")
+		if err != nil || stdout != "" || !strings.HasPrefix(stderr, "instance default started\nproxy listener started on 127.0.0.1:") || strings.Count(stderr, "\n") != 2 {
+			t.Fatalf("\nwanted:\ndefault instance startup on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		if stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "service", "stop"); err != nil || stdout != "" || stderr != "" {
+			t.Fatalf("\nwanted:\nsilent successful stop\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+	})
+
+	t.Run("should reject an already-running instance without disturbing it", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		binary := buildMarasi(t)
+		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
+		if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0"); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--project", "other", "--port", "0")
+		if err == nil || stdout != "" || !strings.Contains(stderr, "instance already running") || strings.Contains(stderr, "instance work started") {
+			t.Fatalf("\nwanted:\nalready-running error only\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "traffic", "list"); err != nil {
+			t.Fatalf("\nwanted:\noriginal instance reachable\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should keep two named instances running independently", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		binary := buildMarasi(t)
+		for _, name := range []string{"first", "second"} {
+			name := name
+			t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", name, "service", "stop") })
+			stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", name, "service", "start", "--project", name, "--port", "0")
+			if err != nil || stdout != "" || !strings.HasPrefix(stderr, "instance "+name+" started\nproxy listener started on 127.0.0.1:") {
+				t.Fatalf("\nwanted:\nrunning instance %s\ngot:\nstdout %q, stderr %q, error %v", name, stdout, stderr, err)
+			}
+		}
+
+		for _, name := range []string{"first", "second"} {
+			if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", name, "traffic", "list"); err != nil {
+				t.Fatalf("\nwanted:\nreachable instance %s\ngot:\n%v", name, err)
+			}
+			contents, err := os.ReadFile(filepath.Join(configDir, "instances", name+".log"))
+			if err != nil || !strings.Contains(string(contents), "Connecting to SQLite") {
+				t.Fatalf("\nwanted:\ninstance log for %s\ngot:\n%s, %v", name, contents, err)
+			}
+		}
+	})
+
+	for name, signal := range map[string]os.Signal{"Interrupt": os.Interrupt, "SIGTERM": syscall.SIGTERM} {
+		t.Run("should abort a child that is still starting on "+name, func(t *testing.T) {
+			testCanceledStart(t, signal)
+		})
+	}
+
+	t.Run("should abort the child when success output fails", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		binary := buildMarasi(t)
+		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
+		closedReader, stderr, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		closedReader.Close()
+		defer stderr.Close()
+		var stdout bytes.Buffer
+		command := exec.Command(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0")
+		command.Stdout = &stdout
+		command.Stderr = stderr
+
+		if err := command.Run(); err == nil {
+			t.Fatal("\nwanted:\nstartup output error\ngot:\nnil")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		instancePath := filepath.Join(configDir, "instances", "work")
+		if err := waitForInstanceStop(ctx, instancePath+".lock"); err != nil {
+			t.Fatalf("\nwanted:\nreleased instance lock\ngot:\n%v", err)
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("\nwanted:\nempty stdout\ngot:\n%s", stdout.String())
+		}
+		if _, err := os.Stat(instancePath + ".sock"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("\nwanted:\nremoved instance socket\ngot:\n%v", err)
+		}
+	})
+
 	t.Run("should append service logs to the retained owner-only instance log", func(t *testing.T) {
-		var processLog bytes.Buffer
-		previousLogOutput := log.Writer()
-		log.SetOutput(&processLog)
-		t.Cleanup(func() { log.SetOutput(previousLogOutput) })
 		configDir := serviceConfigDir(t)
 		instancePath := filepath.Join(configDir, "instances", "work")
 		if err := os.MkdirAll(filepath.Dir(instancePath), 0700); err != nil {
@@ -1264,43 +1353,47 @@ func TestStartService(t *testing.T) {
 		if err := os.WriteFile(logPath, []byte("previous start\n"), 0600); err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		t.Cleanup(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			stopService(ctx, instancePath)
-		})
+		binary := buildMarasi(t)
+		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
+
 		type commandResult struct {
 			stdout string
 			stderr string
 			err    error
 		}
-		result := make(chan commandResult, 1)
+		started := make(chan commandResult, 1)
 		go func() {
-			stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0")
-			result <- commandResult{stdout: stdout, stderr: stderr, err: err}
+			stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0")
+			started <- commandResult{stdout: stdout, stderr: stderr, err: err}
 		}()
-		waitForPath(t, instancePath+".sock")
+		var stdout, stderr string
+		var err error
 		select {
-		case got := <-result:
-			t.Fatalf("\nwanted:\nblocking start command\ngot:\n%v", got.err)
-		default:
+		case result := <-started:
+			stdout, stderr, err = result.stdout, result.stderr, result.err
+		case <-time.After(10 * time.Second):
+			t.Fatal("\nwanted:\nstart command to return and close its output pipes\ngot:\ntimeout")
 		}
-
-		if err := stopService(context.Background(), instancePath); err != nil {
+		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		got := <-result
-		if got.err != nil {
-			t.Fatalf("\nwanted:\nnil\ngot:\n%v", got.err)
+		if stdout != "" {
+			t.Fatalf("\nwanted:\nempty stdout\ngot:\n%s", stdout)
 		}
-		if got.stdout != "" {
-			t.Fatalf("\nwanted:\nempty stdout\ngot:\n%s", got.stdout)
+		lines := strings.Split(strings.TrimSuffix(stderr, "\n"), "\n")
+		if len(lines) != 2 || lines[0] != "instance work started" || !strings.HasPrefix(lines[1], "proxy listener started on 127.0.0.1:") {
+			t.Fatalf("\nwanted:\ninstance work started\nproxy listener started on 127.0.0.1:<port>\ngot:\n%s", stderr)
 		}
-		if !strings.HasPrefix(got.stderr, "proxy listener started on ") || strings.Count(got.stderr, "\n") != 1 {
-			t.Fatalf("\nwanted:\nproxy startup line only\ngot:\n%s", got.stderr)
+		if _, port, err := net.SplitHostPort(strings.TrimPrefix(lines[1], "proxy listener started on ")); err != nil || port == "0" {
+			t.Fatalf("\nwanted:\nassigned proxy port\ngot:\n%s (%v)", lines[1], err)
 		}
-		if processLog.Len() != 0 {
-			t.Fatalf("\nwanted:\nno process log output\ngot:\n%s", processLog.String())
+
+		trafficStdout, trafficStderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "traffic", "list")
+		if err != nil || trafficStdout != "" || trafficStderr != "" {
+			t.Fatalf("\nwanted:\nrunning instance with empty traffic\ngot:\nstdout %q, stderr %q, error %v", trafficStdout, trafficStderr, err)
+		}
+		if stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop"); err != nil || stdout != "" || stderr != "" {
+			t.Fatalf("\nwanted:\nsilent successful stop\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
 		}
 		contents, err := os.ReadFile(logPath)
 		if err != nil {
@@ -1327,9 +1420,9 @@ func TestStartService(t *testing.T) {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
-		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0")
-		if err == nil || !strings.Contains(err.Error(), "opening instance log") {
-			t.Fatalf("\nwanted:\ninstance log open error\ngot:\n%v", err)
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0")
+		if err == nil || !strings.Contains(stderr, "opening instance log") {
+			t.Fatalf("\nwanted:\ninstance log open error\ngot:\n%s\n%v", stderr, err)
 		}
 		if stdout != "" || !strings.Contains(stderr, "opening instance log") {
 			t.Fatalf("\nwanted:\nlog error on stderr only\ngot:\nstdout %q, stderr %q", stdout, stderr)
@@ -1350,7 +1443,7 @@ func TestStartService(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		port := occupied.Addr().(*net.TCPAddr).Port
 
-		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", strconv.Itoa(port))
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "service", "start", "--port", strconv.Itoa(port))
 		if err == nil {
 			t.Fatal("\nwanted:\nbind error\ngot:\nnil")
 		}
@@ -1775,6 +1868,85 @@ func TestStartService(t *testing.T) {
 		}
 	})
 
+}
+
+func testCanceledStart(t *testing.T, signal os.Signal) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("process signals are not implemented on Windows")
+	}
+	configDir := serviceConfigDir(t)
+	certificateLock, err := os.OpenFile(filepath.Join(configDir, "certificate.lock"), os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	if err := filelock.TryLock(certificateLock); err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	defer func() {
+		filelock.Unlock(certificateLock)
+		certificateLock.Close()
+	}()
+
+	binary := buildMarasi(t)
+	var stdout, stderr bytes.Buffer
+	command := exec.Command(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0")
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	instancePath := filepath.Join(configDir, "instances", "work")
+	waitForPath(t, instancePath+".log")
+	if err := command.Process.Signal(signal); err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	result := make(chan error, 1)
+	go func() { result <- command.Wait() }()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("\nwanted:\ncanceled start error\ngot:\nnil")
+		}
+	case <-time.After(5 * time.Second):
+		command.Process.Kill()
+		t.Fatal("\nwanted:\ncanceled start to return\ngot:\ntimeout")
+	}
+	if stdout.Len() != 0 || strings.Contains(stderr.String(), "instance work started") || strings.Contains(stderr.String(), "proxy listener started") {
+		t.Fatalf("\nwanted:\nerror without startup output\ngot:\nstdout %q, stderr %q", stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(instancePath + ".sock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("\nwanted:\nremoved instance socket\ngot:\n%v", err)
+	}
+	probe, err := acquireInstanceLock(instancePath + ".lock")
+	if err != nil {
+		t.Fatalf("\nwanted:\nreleased instance lock\ngot:\n%v", err)
+	}
+	filelock.Unlock(probe)
+	probe.Close()
+}
+
+func buildMarasi(t *testing.T) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "marasi")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	command := exec.Command("go", "build", "-o", binary, ".")
+	command.Env = append(os.Environ(), "GOWORK=off")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("\nwanted:\nbuilt marasi command\ngot:\n%s\n%v", output, err)
+	}
+	return binary
+}
+
+func runMarasi(binary string, args ...string) (stdout, stderr string, err error) {
+	var outBuf, errBuf bytes.Buffer
+	command := exec.Command(binary, args...)
+	command.Stdout = &outBuf
+	command.Stderr = &errBuf
+	err = command.Run()
+	return outBuf.String(), errBuf.String(), err
 }
 
 func TestServeControlAPI(t *testing.T) {

@@ -94,7 +94,10 @@ var startCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return startService(ctx, configDir, projectPath, instancePath, proxyAddress, uint16(proxyPort), cmd.ErrOrStderr())
+		if serviceChild {
+			return runServiceChild(ctx, configDir, projectPath, instancePath, proxyAddress, uint16(proxyPort))
+		}
+		return startServiceProcess(ctx, configDir, projectName, instancePath, proxyAddress, uint16(proxyPort), cmd.ErrOrStderr())
 	},
 }
 
@@ -111,6 +114,13 @@ var stopCmd = &cobra.Command{
 }
 
 func startService(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, stderr io.Writer) (resultErr error) {
+	return startServiceReady(ctx, configDir, projectPath, instancePath, address, port, func(proxyListener string) error {
+		_, err := fmt.Fprintf(stderr, "proxy listener started on %s\n", proxyListener)
+		return err
+	})
+}
+
+func startServiceReady(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, ready func(string) error) (resultErr error) {
 	socketPath := instancePath + ".sock"
 	lockPath := instancePath + ".lock"
 	logFile, err := openInstanceLog(instancePath + ".log")
@@ -187,12 +197,13 @@ func startService(ctx context.Context, configDir, projectPath, instancePath, add
 		<-proxyServeDone
 		return closeErr
 	}
-	fmt.Fprintf(stderr, "proxy listener started on %s\n", proxyListener.Addr())
 
 	serviceCtx, stopService := context.WithCancel(ctx)
 	defer stopService()
 	server := &http.Server{Handler: service.NewServer(proxy, stopService)}
-	return serveControlAPI(serviceCtx, server, controlListener, shutdownTimeout)
+	return serveControlAPIReady(serviceCtx, server, controlListener, shutdownTimeout, func() error {
+		return ready(proxyListener.Addr().String())
+	})
 }
 
 func serveProxy(server proxyServer, listener net.Listener, logWriter io.Writer) <-chan struct{} {
@@ -296,37 +307,62 @@ func cleanupService(closeProxy, unlockProject, releaseInstance func() error) err
 }
 
 func serveControlAPI(ctx context.Context, server *http.Server, listener net.Listener, timeout time.Duration) error {
+	return serveControlAPIReady(ctx, server, listener, timeout, nil)
+}
+
+func serveControlAPIReady(ctx context.Context, server *http.Server, listener net.Listener, timeout time.Duration, ready func() error) error {
+	readyListener := &startupListener{Listener: listener, started: make(chan struct{})}
 	serveResult := make(chan error, 1)
 	go func() {
-		serveResult <- server.Serve(listener)
+		serveResult <- server.Serve(readyListener)
 	}()
 
 	select {
+	case <-readyListener.started:
+		if ready != nil {
+			if err := ready(); err != nil {
+				return errors.Join(err, wrapError("closing control server", server.Close()), wrapError("serving control API", <-serveResult))
+			}
+		}
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
-		shutdownErr := server.Shutdown(shutdownCtx)
-		cancel()
-
-		var closeErr error
-		if shutdownErr != nil {
-			closeErr = server.Close()
-		}
-		serveErr := <-serveResult
-		if errors.Is(serveErr, http.ErrServerClosed) {
-			serveErr = nil
-		}
-
-		return errors.Join(
-			wrapError("shutting down control server", shutdownErr),
-			wrapError("force closing control server", closeErr),
-			wrapError("serving control API", serveErr),
-		)
+		return shutdownControlAPI(server, serveResult, timeout)
 	case err := <-serveResult:
 		return errors.Join(
 			wrapError("serving control API", err),
 			wrapError("closing control server", server.Close()),
 		)
 	}
+
+	select {
+	case <-ctx.Done():
+		return shutdownControlAPI(server, serveResult, timeout)
+	case err := <-serveResult:
+		return errors.Join(
+			wrapError("serving control API", err),
+			wrapError("closing control server", server.Close()),
+		)
+	}
+}
+
+func shutdownControlAPI(server *http.Server, serveResult <-chan error, timeout time.Duration) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	shutdownErr := server.Shutdown(shutdownCtx)
+	cancel()
+
+	var closeErr error
+	if shutdownErr != nil {
+		closeErr = server.Close()
+	}
+	serveErr := <-serveResult
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
+	}
+
+	return errors.Join(
+		wrapError("shutting down control server", shutdownErr),
+		wrapError("force closing control server", closeErr),
+		wrapError("serving control API", serveErr),
+	)
 }
 
 func wrapError(action string, err error) error {
