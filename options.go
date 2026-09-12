@@ -74,7 +74,7 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 		_, err := os.ReadDir(appConfigDir)
 		if err != nil {
 			if os.IsNotExist(err) {
-				log.Println("[*] creating config dir")
+				proxy.Logger.Info("Creating config directory")
 				err = os.MkdirAll(appConfigDir, 0700)
 				if err != nil {
 					return fmt.Errorf("creating config dir %s: %w", appConfigDir, err)
@@ -262,7 +262,7 @@ func WithTLS() func(*Proxy) error {
 // waiting for another process to finish initializing the shared CA.
 func WithTLSContext(ctx context.Context) func(*Proxy) error {
 	return func(proxy *Proxy) error {
-		certificate, privateKey, err := initializeCertificateAuthority(ctx, proxy.ConfigDir)
+		certificate, privateKey, err := initializeCertificateAuthority(ctx, proxy.ConfigDir, proxy.Logger)
 		if err != nil {
 			return err
 		}

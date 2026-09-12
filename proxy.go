@@ -581,7 +581,7 @@ func (proxy *Proxy) GetListener(address string, port string) (net.Listener, erro
 		log.Fatal(fmt.Errorf("error parsing proxy URL: %w", err))
 	}
 
-	log.Printf("Proxy Client Configured: %s", parsedURL.String())
+	proxy.Logger.Info("Proxy Client Configured", "url", parsedURL.String())
 
 	transport := &http.Transport{
 		Proxy:           http.ProxyURL(parsedURL),
@@ -651,7 +651,9 @@ func (proxy *Proxy) Close() error {
 	<-proxy.martianCloseDone
 	var databaseErr error
 	if proxy.DBCloser != nil {
-		log.Println("Closing database connection...")
+		if proxy.Logger != nil {
+			proxy.Logger.Info("Closing database connection")
+		}
 		databaseErr = proxy.DBCloser.Close()
 	}
 

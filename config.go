@@ -10,7 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -163,7 +163,7 @@ func getSPKIHash(cert *x509.Certificate) string {
 
 const certificateLockPollDelay = 10 * time.Millisecond
 
-func initializeCertificateAuthority(ctx context.Context, configDir string) (certificate *x509.Certificate, privateKey any, resultErr error) {
+func initializeCertificateAuthority(ctx context.Context, configDir string, logger *slog.Logger) (certificate *x509.Certificate, privateKey any, resultErr error) {
 	lock, err := acquireCertificateLock(ctx, configDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("acquiring certificate lock: %w", err)
@@ -181,7 +181,7 @@ func initializeCertificateAuthority(ctx context.Context, configDir string) (cert
 		return nil, nil, err
 	}
 	if certExists && keyExists {
-		log.Println("[*] Loading existing cert")
+		logger.Info("Loading existing certificate")
 		certificate, privateKey, err = loadCertAndKey(configDir)
 		if err != nil {
 			return nil, nil, fmt.Errorf("loading cert and key from disk: %w", err)
@@ -189,7 +189,7 @@ func initializeCertificateAuthority(ctx context.Context, configDir string) (cert
 		return certificate, privateKey, nil
 	}
 
-	log.Println("[*] Certificate does not exist, creating a new one ")
+	logger.Info("Certificate does not exist, creating a new one")
 	certificate, privateKey, err = mitm.NewAuthority("Marasi", "Marasi Authority", 365*3*24*time.Hour)
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating new mitm authority: %w", err)

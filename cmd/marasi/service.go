@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -112,8 +113,16 @@ var stopCmd = &cobra.Command{
 func startService(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, stderr io.Writer) (resultErr error) {
 	socketPath := instancePath + ".sock"
 	lockPath := instancePath + ".lock"
+	logFile, err := openInstanceLog(instancePath + ".log")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, wrapError("closing instance log", logFile.Close()))
+	}()
+	logger := slog.New(slog.NewTextHandler(logFile, nil))
 
-	proxy, err := marasi.New(marasi.WithConfigDir(configDir))
+	proxy, err := marasi.New(marasi.WithLogger(logger), marasi.WithConfigDir(configDir))
 	if err != nil {
 		return fmt.Errorf("starting proxy with config dir: %w", err)
 	}
@@ -172,7 +181,7 @@ func startService(ctx context.Context, configDir, projectPath, instancePath, add
 	if err != nil {
 		return fmt.Errorf("binding proxy listener on address %s port %s: %w", address, portString, err)
 	}
-	proxyServeDone := serveProxy(proxy, proxyListener, stderr)
+	proxyServeDone := serveProxy(proxy, proxyListener, logFile)
 	closeProxy = func() error {
 		closeErr := proxy.Close()
 		<-proxyServeDone
@@ -186,14 +195,14 @@ func startService(ctx context.Context, configDir, projectPath, instancePath, add
 	return serveControlAPI(serviceCtx, server, controlListener, shutdownTimeout)
 }
 
-func serveProxy(server proxyServer, listener net.Listener, stderr io.Writer) <-chan struct{} {
+func serveProxy(server proxyServer, listener net.Listener, logWriter io.Writer) <-chan struct{} {
 	readyListener := &startupListener{Listener: listener, started: make(chan struct{})}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		serveErr := server.Serve(readyListener)
 		if serveErr != nil {
-			fmt.Fprintf(stderr, "proxy listener stopped: %v\n", serveErr)
+			fmt.Fprintf(logWriter, "proxy listener stopped: %v\n", serveErr)
 		}
 	}()
 	select {
@@ -381,6 +390,21 @@ func prepareInstancesDir(path string) error {
 		return fmt.Errorf("securing instances directory: %w", err)
 	}
 	return nil
+}
+
+func openInstanceLog(path string) (*os.File, error) {
+	if err := prepareInstancesDir(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	logFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("opening instance log %s: %w", path, err)
+	}
+	if err := secureInstanceFile(path); err != nil {
+		logFile.Close()
+		return nil, fmt.Errorf("securing instance log %s: %w", path, err)
+	}
+	return logFile, nil
 }
 
 func acquireInstanceLock(path string) (*os.File, error) {

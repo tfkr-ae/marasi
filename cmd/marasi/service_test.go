@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1248,6 +1250,120 @@ func TestStopCommand(t *testing.T) {
 }
 
 func TestStartService(t *testing.T) {
+	t.Run("should append service logs to the retained owner-only instance log", func(t *testing.T) {
+		var processLog bytes.Buffer
+		previousLogOutput := log.Writer()
+		log.SetOutput(&processLog)
+		t.Cleanup(func() { log.SetOutput(previousLogOutput) })
+		configDir := serviceConfigDir(t)
+		instancePath := filepath.Join(configDir, "instances", "work")
+		if err := os.MkdirAll(filepath.Dir(instancePath), 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		logPath := instancePath + ".log"
+		if err := os.WriteFile(logPath, []byte("previous start\n"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			stopService(ctx, instancePath)
+		})
+		type commandResult struct {
+			stdout string
+			stderr string
+			err    error
+		}
+		result := make(chan commandResult, 1)
+		go func() {
+			stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0")
+			result <- commandResult{stdout: stdout, stderr: stderr, err: err}
+		}()
+		waitForPath(t, instancePath+".sock")
+		select {
+		case got := <-result:
+			t.Fatalf("\nwanted:\nblocking start command\ngot:\n%v", got.err)
+		default:
+		}
+
+		if err := stopService(context.Background(), instancePath); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		got := <-result
+		if got.err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", got.err)
+		}
+		if got.stdout != "" {
+			t.Fatalf("\nwanted:\nempty stdout\ngot:\n%s", got.stdout)
+		}
+		if !strings.HasPrefix(got.stderr, "proxy listener started on ") || strings.Count(got.stderr, "\n") != 1 {
+			t.Fatalf("\nwanted:\nproxy startup line only\ngot:\n%s", got.stderr)
+		}
+		if processLog.Len() != 0 {
+			t.Fatalf("\nwanted:\nno process log output\ngot:\n%s", processLog.String())
+		}
+		contents, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got := string(contents); !strings.Contains(got, "previous start\n") || !strings.Contains(got, "Connecting to SQLite") || !strings.Contains(got, "Proxy Client Configured") {
+			t.Fatalf("\nwanted:\nappended SQLite and proxy listener logs\ngot:\n%s", got)
+		}
+		if runtime.GOOS != "windows" {
+			info, err := os.Stat(logPath)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			if got := info.Mode().Perm(); got != 0600 {
+				t.Fatalf("\nwanted:\n0600\ngot:\n%#o", got)
+			}
+		}
+	})
+
+	t.Run("should fail before claiming the instance when its log cannot be opened", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		instancePath := filepath.Join(configDir, "instances", "work")
+		if err := os.MkdirAll(instancePath+".log", 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0")
+		if err == nil || !strings.Contains(err.Error(), "opening instance log") {
+			t.Fatalf("\nwanted:\ninstance log open error\ngot:\n%v", err)
+		}
+		if stdout != "" || !strings.Contains(stderr, "opening instance log") {
+			t.Fatalf("\nwanted:\nlog error on stderr only\ngot:\nstdout %q, stderr %q", stdout, stderr)
+		}
+		for _, path := range []string{instancePath + ".sock", instancePath + ".lock"} {
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("\nwanted:\nmissing %s\ngot:\n%v", path, err)
+			}
+		}
+	})
+
+	t.Run("should retain the instance log and report only the error after a failed start", func(t *testing.T) {
+		occupied, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		t.Cleanup(func() { occupied.Close() })
+		configDir := serviceConfigDir(t)
+		port := occupied.Addr().(*net.TCPAddr).Port
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", strconv.Itoa(port))
+		if err == nil {
+			t.Fatal("\nwanted:\nbind error\ngot:\nnil")
+		}
+		if stdout != "" || !strings.Contains(stderr, "binding proxy listener") || strings.Contains(stderr, "proxy listener started") {
+			t.Fatalf("\nwanted:\nbind error on stderr only\ngot:\nstdout %q, stderr %q", stdout, stderr)
+		}
+		logPath := filepath.Join(configDir, "instances", "work.log")
+		info, statErr := os.Stat(logPath)
+		if statErr != nil || !info.Mode().IsRegular() {
+			t.Fatalf("\nwanted:\nretained instance log\ngot:\n%v, %v", info, statErr)
+		}
+	})
+
 	t.Run("should initialize the shared certificate authority for HTTPS proxy connections", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 
@@ -1354,6 +1470,15 @@ func TestStartService(t *testing.T) {
 		}
 		if len(addresses) != 2 {
 			t.Fatalf("\nwanted:\n2 distinct proxy addresses\ngot:\n%v", addresses)
+		}
+		for _, instance := range instances {
+			contents, err := os.ReadFile(instance.path + ".log")
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			if !strings.Contains(string(contents), "Connecting to SQLite") {
+				t.Fatalf("\nwanted:\nSQLite logs in %s.log\ngot:\n%s", instance.path, contents)
+			}
 		}
 
 		for _, instance := range instances {
