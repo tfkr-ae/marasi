@@ -557,9 +557,9 @@ func (proxy *Proxy) WriteLog(level string, message string, options ...func(log *
 }
 
 func (proxy *Proxy) GetListener(address string, port string) (net.Listener, error) {
-	rawListener, err := net.Listen("tcp", fmt.Sprintf("%s:%s", address, port))
+	rawListener, err := net.Listen("tcp", net.JoinHostPort(address, port))
 	if err != nil {
-		return rawListener, fmt.Errorf("setting up listener on address:port %s:%s", address, port)
+		return nil, fmt.Errorf("setting up listener on address:port %s:%s: %w", address, port, err)
 	}
 	addr := rawListener.Addr().(*net.TCPAddr)
 

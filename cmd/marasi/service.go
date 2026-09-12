@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,6 +26,42 @@ import (
 
 var projectName string
 var projectPath string
+var proxyAddress string
+var proxyPort decimalPort
+
+type decimalPort uint16
+
+type proxyServer interface {
+	Serve(net.Listener) error
+}
+
+type startupListener struct {
+	net.Listener
+	started chan struct{}
+	once    sync.Once
+}
+
+func (listener *startupListener) Accept() (net.Conn, error) {
+	listener.once.Do(func() { close(listener.started) })
+	return listener.Listener.Accept()
+}
+
+func (port *decimalPort) Set(value string) error {
+	parsed, err := strconv.ParseUint(value, 10, 16)
+	if err != nil {
+		return err
+	}
+	*port = decimalPort(parsed)
+	return nil
+}
+
+func (port *decimalPort) String() string {
+	return strconv.FormatUint(uint64(*port), 10)
+}
+
+func (*decimalPort) Type() string {
+	return "port"
+}
 
 var errInstanceLockHeld = errors.New("instance lock held")
 
@@ -35,6 +73,9 @@ const (
 
 func init() {
 	startCmd.Flags().StringVar(&projectName, "project", "scratchpad", "Project name")
+	startCmd.Flags().StringVar(&proxyAddress, "address", "127.0.0.1", "Proxy listener address")
+	proxyPort = 8080
+	startCmd.Flags().Var(&proxyPort, "port", "Proxy listener port")
 	serviceCmd.AddCommand(startCmd, stopCmd)
 	rootCmd.AddCommand(serviceCmd)
 }
@@ -52,7 +93,7 @@ var startCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return startService(ctx, configDir, projectPath, instancePath)
+		return startService(ctx, configDir, projectPath, instancePath, proxyAddress, uint16(proxyPort), cmd.ErrOrStderr())
 	},
 }
 
@@ -68,7 +109,7 @@ var stopCmd = &cobra.Command{
 	},
 }
 
-func startService(ctx context.Context, configDir, projectPath, instancePath string) (resultErr error) {
+func startService(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, stderr io.Writer) (resultErr error) {
 	socketPath := instancePath + ".sock"
 	lockPath := instancePath + ".lock"
 
@@ -98,12 +139,19 @@ func startService(ctx context.Context, configDir, projectPath, instancePath stri
 	}
 
 	repo := db.NewProxyRepo(dbConn)
+	extensions, err := repo.GetExtensions()
+	if err != nil {
+		repo.Close()
+		return fmt.Errorf("loading project extensions: %w", err)
+	}
 
 	err = proxy.WithOptions(
 		marasi.WithWordlistManager(wordlists),
 		marasi.WithDefaultRepositories(repo),
+		marasi.WithExtensions(extensions),
 		marasi.WithBasePipeline(),
 		marasi.WithDefaultModifierPipeline(),
+		marasi.WithTLSContext(ctx),
 	)
 	if err != nil {
 		repo.Close()
@@ -111,18 +159,48 @@ func startService(ctx context.Context, configDir, projectPath, instancePath stri
 	}
 	closeProxy = proxy.Close
 
-	listener, instanceLock, err := claimInstance(socketPath, lockPath)
+	controlListener, instanceLock, err := claimInstance(socketPath, lockPath)
 	if err != nil {
 		return err
 	}
 	releaseClaim = func() error {
-		return releaseInstance(listener, socketPath, instanceLock)
+		return releaseInstance(controlListener, socketPath, instanceLock)
 	}
+
+	portString := strconv.FormatUint(uint64(port), 10)
+	proxyListener, err := proxy.GetListener(address, portString)
+	if err != nil {
+		return fmt.Errorf("binding proxy listener on address %s port %s: %w", address, portString, err)
+	}
+	proxyServeDone := serveProxy(proxy, proxyListener, stderr)
+	closeProxy = func() error {
+		closeErr := proxy.Close()
+		<-proxyServeDone
+		return closeErr
+	}
+	fmt.Fprintf(stderr, "proxy listener started on %s\n", proxyListener.Addr())
 
 	serviceCtx, stopService := context.WithCancel(ctx)
 	defer stopService()
 	server := &http.Server{Handler: service.NewServer(proxy, stopService)}
-	return serveControlAPI(serviceCtx, server, listener, shutdownTimeout)
+	return serveControlAPI(serviceCtx, server, controlListener, shutdownTimeout)
+}
+
+func serveProxy(server proxyServer, listener net.Listener, stderr io.Writer) <-chan struct{} {
+	readyListener := &startupListener{Listener: listener, started: make(chan struct{})}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveErr := server.Serve(readyListener)
+		if serveErr != nil {
+			fmt.Fprintf(stderr, "proxy listener stopped: %v\n", serveErr)
+		}
+	}()
+	select {
+	case <-readyListener.started:
+	case <-done:
+	}
+	return done
 }
 
 func stopService(ctx context.Context, instancePath string) error {

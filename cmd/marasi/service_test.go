@@ -3,10 +3,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,6 +21,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/internal/filelock"
 )
 
@@ -27,6 +34,28 @@ var errReleasingInstance = errors.New("instance release failed")
 type failingListener struct {
 	closed   bool
 	closeErr error
+}
+
+type lineWriter struct {
+	lines chan string
+}
+
+type stubProxyServer struct {
+	result   error
+	release  chan struct{}
+	accepted chan struct{}
+}
+
+func (server *stubProxyServer) Serve(listener net.Listener) error {
+	listener.Accept()
+	close(server.accepted)
+	<-server.release
+	return server.result
+}
+
+func (writer *lineWriter) Write(contents []byte) (int, error) {
+	writer.lines <- strings.TrimSpace(string(contents))
+	return len(contents), nil
 }
 
 func (l *failingListener) Accept() (net.Conn, error) { return nil, errServing }
@@ -184,7 +213,72 @@ func TestInstanceFlag(t *testing.T) {
 	})
 }
 
+func TestProxyListenerFlags(t *testing.T) {
+	t.Run("should belong only to service start with loopback defaults", func(t *testing.T) {
+		addressFlag := startCmd.Flags().Lookup("address")
+		if addressFlag == nil {
+			t.Fatal("\nwanted:\naddress flag\ngot:\nnil")
+		}
+		if addressFlag.DefValue != "127.0.0.1" {
+			t.Fatalf("\nwanted:\n127.0.0.1\ngot:\n%s", addressFlag.DefValue)
+		}
+		portFlag := startCmd.Flags().Lookup("port")
+		if portFlag == nil {
+			t.Fatal("\nwanted:\nport flag\ngot:\nnil")
+		}
+		if portFlag.DefValue != "8080" {
+			t.Fatalf("\nwanted:\n8080\ngot:\n%s", portFlag.DefValue)
+		}
+		if stopCmd.Flags().Lookup("address") != nil || stopCmd.Flags().Lookup("port") != nil {
+			t.Fatal("\nwanted:\nno proxy listener flags on service stop\ngot:\nproxy listener flag")
+		}
+	})
+
+	for _, value := range []string{"-1", "65536", "not-a-port", "0x50"} {
+		t.Run("should reject non-decimal or out-of-range port "+value, func(t *testing.T) {
+			if err := startCmd.Flags().Set("port", value); err == nil {
+				t.Fatal("\nwanted:\nerror\ngot:\nnil")
+			}
+		})
+	}
+
+	for _, value := range []string{"0", "65535"} {
+		t.Run("should accept decimal port "+value, func(t *testing.T) {
+			oldPort := proxyPort
+			t.Cleanup(func() { proxyPort = oldPort })
+			if err := startCmd.Flags().Set("port", value); err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+		})
+	}
+}
+
 func TestCommandPreparation(t *testing.T) {
+	t.Run("should prepare proxy listener flags only for service start", func(t *testing.T) {
+		oldRunE := startCmd.RunE
+		oldAddress, oldPort := proxyAddress, proxyPort
+		t.Cleanup(func() {
+			startCmd.RunE = oldRunE
+			proxyAddress, proxyPort = oldAddress, oldPort
+			rootCmd.SetArgs(nil)
+		})
+
+		var gotAddress string
+		var gotPort decimalPort
+		startCmd.RunE = func(*cobra.Command, []string) error {
+			gotAddress, gotPort = proxyAddress, proxyPort
+			return nil
+		}
+		rootCmd.SetArgs([]string{"--config-dir", serviceConfigDir(t), "service", "start", "--address", "localhost", "--port", "0"})
+
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if gotAddress != "localhost" || gotPort != 0 {
+			t.Fatalf("\nwanted:\nlocalhost:0\ngot:\n%s:%s", gotAddress, gotPort.String())
+		}
+	})
+
 	t.Run("should prepare the instance path before service stop runs", func(t *testing.T) {
 		oldRunE := stopCmd.RunE
 		oldConfigDir, oldInstancePath := configDir, instancePath
@@ -394,8 +488,8 @@ func TestCommandPreparation(t *testing.T) {
 
 		select {
 		case err := <-result:
-			if err != nil {
-				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.Canceled, err)
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatal("\nwanted:\ncanceled command\ngot:\ntimeout")
@@ -690,6 +784,60 @@ func TestCleanupService(t *testing.T) {
 			if !errors.Is(err, want) {
 				t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, err)
 			}
+		}
+	})
+}
+
+func TestServeProxy(t *testing.T) {
+	t.Run("should report and discard an unexpected failure while control serving continues", func(t *testing.T) {
+		server := &stubProxyServer{result: errServing, release: make(chan struct{}), accepted: make(chan struct{})}
+		var stderr bytes.Buffer
+		done := serveProxy(server, &failingListener{}, &stderr)
+		select {
+		case <-server.accepted:
+		default:
+			t.Fatal("\nwanted:\nproxy accepting before startup continues\ngot:\nproxy not accepting")
+		}
+		controlListener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		controlContext, stopControl := context.WithCancel(context.Background())
+		controlResult := make(chan error, 1)
+		go func() {
+			controlResult <- serveControlAPI(controlContext, &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})}, controlListener, time.Second)
+		}()
+
+		close(server.release)
+		<-done
+		if got := stderr.String(); !strings.Contains(got, errServing.Error()) {
+			t.Fatalf("\nwanted:\nproxy serve failure\ngot:\n%s", got)
+		}
+		response, err := http.Get("http://" + controlListener.Addr().String())
+		if err != nil {
+			t.Fatalf("\nwanted:\nreachable control API\ngot:\n%v", err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusNoContent {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusNoContent, response.StatusCode)
+		}
+		stopControl()
+		if err := <-controlResult; err != nil {
+			t.Fatalf("\nwanted:\nclean shutdown\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should not report the serving return caused by shutdown", func(t *testing.T) {
+		server := &stubProxyServer{release: make(chan struct{}), accepted: make(chan struct{})}
+		var stderr bytes.Buffer
+		done := serveProxy(server, &failingListener{}, &stderr)
+
+		close(server.release)
+		<-done
+		if stderr.Len() != 0 {
+			t.Fatalf("\nwanted:\nno output\ngot:\n%s", stderr.String())
 		}
 	})
 }
@@ -1100,6 +1248,284 @@ func TestStopCommand(t *testing.T) {
 }
 
 func TestStartService(t *testing.T) {
+	t.Run("should initialize the shared certificate authority for HTTPS proxy connections", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+
+		instancePath := filepath.Join(configDir, "instances", "secure")
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		output := &lineWriter{lines: make(chan string, 1)}
+		go func() {
+			result <- startService(ctx, configDir, filepath.Join(configDir, "projects", "secure.marasi"), instancePath, "127.0.0.1", 0, output)
+		}()
+		finished := false
+		defer func() {
+			if !finished {
+				cancel()
+				<-result
+			}
+		}()
+
+		var proxyAddress string
+		select {
+		case line := <-output.lines:
+			proxyAddress = strings.TrimPrefix(line, "proxy listener started on ")
+		case err := <-result:
+			finished = true
+			t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("\nwanted:\nrunning service\ngot:\ntimeout")
+		}
+		roots := x509.NewCertPool()
+		certificatePEM, err := os.ReadFile(filepath.Join(configDir, "marasi_cert.pem"))
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if !roots.AppendCertsFromPEM(certificatePEM) {
+			t.Fatal("\nwanted:\nvalid shared certificate authority\ngot:\ninvalid certificate")
+		}
+		connection, err := tls.Dial("tcp", proxyAddress, &tls.Config{
+			RootCAs:    roots,
+			ServerName: "marasi.test",
+		})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		connection.Close()
+
+		if err := stopService(context.Background(), instancePath); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := <-result; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		finished = true
+	})
+
+	t.Run("should run two named instances on distinct assigned ports", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		type runningInstance struct {
+			path   string
+			cancel context.CancelFunc
+			result chan error
+			output *lineWriter
+		}
+		instances := []runningInstance{
+			{path: filepath.Join(configDir, "instances", "first")},
+			{path: filepath.Join(configDir, "instances", "second")},
+		}
+		for index := range instances {
+			ctx, cancel := context.WithCancel(context.Background())
+			instances[index].cancel = cancel
+			instances[index].result = make(chan error, 1)
+			instances[index].output = &lineWriter{lines: make(chan string, 1)}
+			projectPath := filepath.Join(configDir, "projects", fmt.Sprintf("project-%d.marasi", index))
+			go func(instance runningInstance, projectPath string) {
+				instance.result <- startService(ctx, configDir, projectPath, instance.path, "127.0.0.1", 0, instance.output)
+			}(instances[index], projectPath)
+		}
+		finished := false
+		defer func() {
+			if !finished {
+				for _, instance := range instances {
+					instance.cancel()
+					select {
+					case <-instance.result:
+					case <-time.After(5 * time.Second):
+					}
+				}
+			}
+		}()
+
+		addresses := make(map[string]struct{})
+		for _, instance := range instances {
+			select {
+			case line := <-instance.output.lines:
+				address := strings.TrimPrefix(line, "proxy listener started on ")
+				if _, _, err := net.SplitHostPort(address); err != nil {
+					t.Fatalf("\nwanted:\nproxy listener address\ngot:\n%s", line)
+				}
+				addresses[address] = struct{}{}
+			case err := <-instance.result:
+				t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("\nwanted:\nrunning service\ngot:\ntimeout")
+			}
+		}
+		if len(addresses) != 2 {
+			t.Fatalf("\nwanted:\n2 distinct proxy addresses\ngot:\n%v", addresses)
+		}
+
+		for _, instance := range instances {
+			if err := stopService(context.Background(), instance.path); err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			if err := <-instance.result; err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+		}
+		finished = true
+	})
+
+	t.Run("should abort and clean up after a proxy bind collision", func(t *testing.T) {
+		occupied, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer occupied.Close()
+		port := uint16(occupied.Addr().(*net.TCPAddr).Port)
+		configDir := serviceConfigDir(t)
+		projectPath := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		instancePath := filepath.Join(configDir, "instances", "work")
+
+		err = startService(context.Background(), configDir, projectPath, instancePath, "127.0.0.1", port, io.Discard)
+		if err == nil {
+			t.Fatal("\nwanted:\nbind error\ngot:\nnil")
+		}
+		var operationError *net.OpError
+		if !errors.As(err, &operationError) {
+			t.Fatalf("\nwanted:\nwrapped operating-system error\ngot:\n%v", err)
+		}
+		if !strings.Contains(err.Error(), "127.0.0.1") || !strings.Contains(err.Error(), fmt.Sprint(port)) {
+			t.Fatalf("\nwanted:\nrequested address and port\ngot:\n%v", err)
+		}
+		if _, statErr := os.Stat(instancePath + ".sock"); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("\nwanted:\nremoved control socket\ngot:\n%v", statErr)
+		}
+		instanceLock, err := acquireInstanceLock(instancePath + ".lock")
+		if err != nil {
+			t.Fatalf("\nwanted:\nreleased instance lock\ngot:\n%v", err)
+		}
+		defer func() {
+			filelock.Unlock(instanceLock)
+			instanceLock.Close()
+		}()
+		projectUnlock, err := lockProject(projectPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nreleased project lock\ngot:\n%v", err)
+		}
+		defer projectUnlock()
+
+		connection, err := net.Dial("tcp", occupied.Addr().String())
+		if err != nil {
+			t.Fatalf("\nwanted:\nexisting listener left open\ngot:\n%v", err)
+		}
+		connection.Close()
+	})
+
+	t.Run("should abort and clean up after TLS setup fails", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		if err := os.WriteFile(filepath.Join(configDir, "marasi_cert.pem"), []byte("invalid certificate"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.WriteFile(filepath.Join(configDir, "marasi_key.pem"), []byte("invalid key"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		projectPath := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		instancePath := filepath.Join(configDir, "instances", "work")
+
+		err := startService(context.Background(), configDir, projectPath, instancePath, "127.0.0.1", 0, io.Discard)
+		if err == nil {
+			t.Fatal("\nwanted:\nTLS setup error\ngot:\nnil")
+		}
+		if _, statErr := os.Stat(instancePath + ".sock"); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("\nwanted:\nno control socket\ngot:\n%v", statErr)
+		}
+		projectUnlock, err := lockProject(projectPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nreleased project lock\ngot:\n%v", err)
+		}
+		defer projectUnlock()
+	})
+
+	t.Run("should proxy and persist HTTP traffic on an assigned port", func(t *testing.T) {
+		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			fmt.Fprint(w, "proxied "+request.URL.Path)
+		}))
+		defer origin.Close()
+
+		configDir := serviceConfigDir(t)
+		projectPath := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		instancePath := filepath.Join(configDir, "instances", "work")
+		ctx, cancel := context.WithCancel(context.Background())
+		output := &lineWriter{lines: make(chan string, 1)}
+		result := make(chan error, 1)
+		go func() {
+			result <- startService(ctx, configDir, projectPath, instancePath, "127.0.0.1", 0, output)
+		}()
+		finished := false
+		defer func() {
+			if !finished {
+				cancel()
+				<-result
+			}
+		}()
+
+		var line string
+		select {
+		case line = <-output.lines:
+		case err := <-result:
+			finished = true
+			t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("\nwanted:\nproxy startup message\ngot:\ntimeout")
+		}
+		const prefix = "proxy listener started on "
+		if !strings.HasPrefix(line, prefix) {
+			t.Fatalf("\nwanted:\n%s<address>\ngot:\n%s", prefix, line)
+		}
+		proxyAddress := strings.TrimPrefix(line, prefix)
+		_, assignedPort, err := net.SplitHostPort(proxyAddress)
+		if err != nil || assignedPort == "0" {
+			t.Fatalf("\nwanted:\nassigned TCP port\ngot:\n%s (%v)", proxyAddress, err)
+		}
+
+		parsedProxyURL, err := url.Parse("http://" + proxyAddress)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		transport := &http.Transport{Proxy: http.ProxyURL(parsedProxyURL)}
+		defer transport.CloseIdleConnections()
+		response, err := (&http.Client{Transport: transport}).Get(origin.URL + "/ticket-03")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", readErr)
+		}
+		if got := string(body); got != "proxied /ticket-03" {
+			t.Fatalf("\nwanted:\nproxied /ticket-03\ngot:\n%s", got)
+		}
+
+		if err := stopService(context.Background(), instancePath); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := <-result; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		finished = true
+		if connection, err := net.DialTimeout("tcp", proxyAddress, 100*time.Millisecond); err == nil {
+			connection.Close()
+			t.Fatal("\nwanted:\nclosed proxy listener\ngot:\nopen proxy listener")
+		}
+
+		dbConn, err := db.New(projectPath, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		repository := db.NewProxyRepo(dbConn)
+		defer repository.Close()
+		summaries, err := repository.GetRequestResponseSummary()
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(summaries) != 1 {
+			t.Fatalf("\nwanted:\n1 persisted request\ngot:\n%d", len(summaries))
+		}
+	})
+
 	t.Run("should stop through the control API", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
@@ -1109,7 +1535,7 @@ func TestStartService(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		result := make(chan error, 1)
 		go func() {
-			result <- startService(ctx, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "work"))
+			result <- startService(ctx, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "work"), "127.0.0.1", 0, io.Discard)
 		}()
 		finished := false
 		defer func() {
@@ -1166,7 +1592,7 @@ func TestStartService(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		result := make(chan error, 1)
 		go func() {
-			result <- startService(ctx, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "work"))
+			result <- startService(ctx, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "work"), "127.0.0.1", 0, io.Discard)
 		}()
 		finished := false
 		defer func() {
@@ -1203,8 +1629,8 @@ func TestStartService(t *testing.T) {
 
 		restartContext, stopRestart := context.WithCancel(context.Background())
 		stopRestart()
-		if err := startService(restartContext, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "work")); err != nil {
-			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		if err := startService(restartContext, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "work"), "127.0.0.1", 0, io.Discard); !errors.Is(err, context.Canceled) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.Canceled, err)
 		}
 	})
 
@@ -1213,9 +1639,9 @@ func TestStartService(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := startService(ctx, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "default"))
-		if err != nil {
-			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		err := startService(ctx, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "default"), "127.0.0.1", 0, io.Discard)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.Canceled, err)
 		}
 
 		path := filepath.Join(configDir, "projects", "scratchpad.marasi")

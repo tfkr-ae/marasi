@@ -924,6 +924,28 @@ func TestProxy_CloseStopsServeCleanly(t *testing.T) {
 	close(proxy.DBWriteChannel)
 }
 
+func TestProxy_GetListenerAcceptsNetListenAddresses(t *testing.T) {
+	addresses := []string{"localhost", "127.0.0.1", "0.0.0.0"}
+	if probe, err := net.Listen("tcp", net.JoinHostPort("::1", "0")); err == nil {
+		probe.Close()
+		addresses = append(addresses, "::1")
+	}
+
+	for _, address := range addresses {
+		t.Run("should bind "+address, func(t *testing.T) {
+			proxy, err := New()
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			listener, err := proxy.GetListener(address, "0")
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			defer listener.Close()
+		})
+	}
+}
+
 func TestProxy_CloseWebSocketsClosesActiveSession(t *testing.T) {
 	clientConnection, clientPeer := net.Pipe()
 	upstreamConnection, upstreamPeer := net.Pipe()

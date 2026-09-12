@@ -99,7 +99,12 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 				// Config file is not found
 				err = viperInstance.SafeWriteConfig()
 				if err != nil {
-					return fmt.Errorf("writing config file : %w", err)
+					if readErr := viperInstance.ReadInConfig(); readErr != nil {
+						return errors.Join(
+							fmt.Errorf("writing config file : %w", err),
+							fmt.Errorf("reading concurrently created config file : %w", readErr),
+						)
+					}
 				}
 			} else {
 				return fmt.Errorf("reading config file : %w", err)
@@ -112,11 +117,6 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 
 		proxy.Config.DesktopOS = runtime.GOOS
 		proxy.Config.ConfigDir = appConfigDir
-		// Rewrite entire file from struct
-		err = viperInstance.WriteConfig()
-		if err != nil {
-			return fmt.Errorf("writing config after unmarshalling : %w", err)
-		}
 		return nil
 	}
 }
