@@ -403,6 +403,60 @@ func TestProxy_WriteToDBArmoryEntry(t *testing.T) {
 	})
 }
 
+func TestProxy_WriteToDBLog(t *testing.T) {
+	tests := []struct {
+		name         string
+		withCallback bool
+	}{
+		{name: "should persist a log without a callback"},
+		{name: "should deliver a log to a configured callback", withCallback: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			dbConnection, err := db.New(":memory:", logger)
+			if err != nil {
+				t.Fatalf("creating in-memory database: %v", err)
+			}
+			repository := db.NewProxyRepo(dbConnection)
+			t.Cleanup(func() { repository.Close() })
+			entry := &domain.Log{
+				ID:        uuid.New(),
+				Timestamp: time.Now(),
+				Level:     "INFO",
+				Message:   "listener started",
+			}
+			var received domain.Log
+			proxy := &Proxy{
+				LogRepo:        repository,
+				DBWriteChannel: make(chan any, 1),
+			}
+			if test.withCallback {
+				proxy.OnLog = func(log domain.Log) error {
+					received = log
+					return nil
+				}
+			}
+			proxy.DBWriteChannel <- entry
+			close(proxy.DBWriteChannel)
+
+			proxy.WriteToDB()
+
+			logs, err := repository.GetLogs()
+			if err != nil {
+				t.Fatalf("getting persisted logs: %v", err)
+			}
+			if len(logs) != 1 || logs[0].ID != entry.ID {
+				t.Fatalf("\nwanted:\npersisted log %s\ngot:\n%v", entry.ID, logs)
+			}
+			if test.withCallback && received.ID != entry.ID {
+				t.Fatalf("\nwanted:\ncallback log %s\ngot:\n%v", entry.ID, received)
+			}
+		})
+	}
+}
+
 type websocketRepositoryStub struct {
 	connection *domain.WebSocketConnection
 	messages   []*domain.WebSocketMessage

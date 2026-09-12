@@ -502,7 +502,9 @@ func (proxy *Proxy) WriteToDB() {
 			if err != nil {
 				log.Print(err)
 			}
-			proxy.OnLog(*castItem)
+			if proxy.OnLog != nil {
+				proxy.OnLog(*castItem)
+			}
 		case *dbWriteBarrier:
 			close(castItem.done)
 		default:
