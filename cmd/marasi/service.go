@@ -29,6 +29,7 @@ var projectName string
 var projectPath string
 var proxyAddress string
 var proxyPort decimalPort
+var startJSON bool
 
 type decimalPort uint16
 
@@ -77,6 +78,7 @@ func init() {
 	startCmd.Flags().StringVar(&proxyAddress, "address", "127.0.0.1", "Proxy listener address")
 	proxyPort = 8080
 	startCmd.Flags().Var(&proxyPort, "port", "Proxy listener port")
+	startCmd.Flags().BoolVar(&startJSON, "json", false, "Print instance name and proxy listener as JSON")
 	serviceCmd.AddCommand(startCmd, stopCmd)
 	rootCmd.AddCommand(serviceCmd)
 }
@@ -97,7 +99,7 @@ var startCmd = &cobra.Command{
 		if serviceChild {
 			return runServiceChild(ctx, configDir, projectPath, instancePath, proxyAddress, uint16(proxyPort))
 		}
-		return startServiceProcess(ctx, configDir, projectName, instancePath, proxyAddress, uint16(proxyPort), cmd.ErrOrStderr())
+		return startServiceProcess(ctx, configDir, projectName, instancePath, proxyAddress, uint16(proxyPort), cmd.OutOrStdout(), cmd.ErrOrStderr(), startJSON)
 	},
 }
 

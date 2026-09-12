@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,7 +32,7 @@ func init() {
 	_ = startCmd.Flags().MarkHidden("service-child")
 }
 
-func startServiceProcess(ctx context.Context, configDir, projectName, instancePath, address string, port uint16, stderr io.Writer) error {
+func startServiceProcess(ctx context.Context, configDir, projectName, instancePath, address string, port uint16, stdout, stderr io.Writer, asJSON bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -72,9 +73,9 @@ func startServiceProcess(ctx context.Context, configDir, projectName, instancePa
 	}
 	processResult := make(chan error, 1)
 	go func() { processResult <- command.Wait() }()
-	stdout := bufio.NewReader(childOutput)
+	childStdout := bufio.NewReader(childOutput)
 	startupResult := make(chan childStartup, 1)
-	go func() { startupResult <- readChildStartup(stdout) }()
+	go func() { startupResult <- readChildStartup(childStdout) }()
 
 	select {
 	case startup := <-startupResult:
@@ -86,9 +87,9 @@ func startServiceProcess(ctx context.Context, configDir, projectName, instancePa
 			stopChild(childInput, processResult)
 			return err
 		}
-		if _, err := fmt.Fprintf(stderr, "instance %s started\nproxy listener started on %s\n", instanceName, startup.proxyListener); err != nil {
+		if err := writeStartOutput(stdout, stderr, asJSON, instanceName, startup.proxyListener); err != nil {
 			stopChild(childInput, processResult)
-			return fmt.Errorf("writing service startup: %w", err)
+			return err
 		}
 		if _, err := childInput.Write([]byte{detachChild}); err != nil {
 			stopChild(childInput, processResult)
@@ -100,6 +101,26 @@ func startServiceProcess(ctx context.Context, configDir, projectName, instancePa
 		stopChild(childInput, processResult)
 		return ctx.Err()
 	}
+}
+
+func writeStartOutput(stdout, stderr io.Writer, asJSON bool, instanceName, proxyListener string) error {
+	if asJSON {
+		payload, err := json.Marshal(struct {
+			Instance      string `json:"instance"`
+			ProxyListener string `json:"proxy_listener"`
+		}{Instance: instanceName, ProxyListener: proxyListener})
+		if err != nil {
+			return fmt.Errorf("encoding service startup: %w", err)
+		}
+		if _, err := fmt.Fprintf(stdout, "%s\n", payload); err != nil {
+			return fmt.Errorf("writing service startup: %w", err)
+		}
+		return nil
+	}
+	if _, err := fmt.Fprintf(stderr, "instance %s started\nproxy listener started on %s\n", instanceName, proxyListener); err != nil {
+		return fmt.Errorf("writing service startup: %w", err)
+	}
+	return nil
 }
 
 func readChildStartup(reader *bufio.Reader) childStartup {

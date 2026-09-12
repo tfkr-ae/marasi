@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -254,6 +255,27 @@ func TestProxyListenerFlags(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStartJSONFlag(t *testing.T) {
+	t.Run("should belong only to service start and default to false", func(t *testing.T) {
+		flag := startCmd.Flags().Lookup("json")
+		if flag == nil {
+			t.Fatal("\nwanted:\njson flag\ngot:\nnil")
+		}
+		if flag.DefValue != "false" {
+			t.Fatalf("\nwanted:\nfalse\ngot:\n%s", flag.DefValue)
+		}
+		if rootCmd.PersistentFlags().Lookup("json") != nil {
+			t.Fatal("\nwanted:\nno json flag on root\ngot:\njson flag")
+		}
+		if serviceCmd.PersistentFlags().Lookup("json") != nil {
+			t.Fatal("\nwanted:\nno json flag on service\ngot:\njson flag")
+		}
+		if stopCmd.Flags().Lookup("json") != nil {
+			t.Fatal("\nwanted:\nno json flag on service stop\ngot:\njson flag")
+		}
+	})
 }
 
 func TestCommandPreparation(t *testing.T) {
@@ -1251,6 +1273,74 @@ func TestStopCommand(t *testing.T) {
 }
 
 func TestStartService(t *testing.T) {
+	t.Run("should print JSON for a named instance and leave it running", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		binary := buildMarasi(t)
+		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0", "--json")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if stderr != "" {
+			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+		}
+		if !strings.HasSuffix(stdout, "\n") || strings.Contains(stdout, " ") {
+			t.Fatalf("\nwanted:\ncompact JSON line\ngot:\n%q", stdout)
+		}
+		var got map[string]string
+		if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+			t.Fatalf("\nwanted:\nJSON object\ngot:\n%q, %v", stdout, err)
+		}
+		if got["instance"] != "work" {
+			t.Fatalf("\nwanted:\nwork\ngot:\n%s", got["instance"])
+		}
+		host, port, err := net.SplitHostPort(got["proxy_listener"])
+		if err != nil || host != "127.0.0.1" || port == "0" {
+			t.Fatalf("\nwanted:\nassigned 127.0.0.1 port\ngot:\n%s (%v)", got["proxy_listener"], err)
+		}
+		if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "traffic", "list"); err != nil {
+			t.Fatalf("\nwanted:\nrunning instance\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should print JSON for the default instance", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		binary := buildMarasi(t)
+		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "service", "stop") })
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "service", "start", "--port", "0", "--json")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if stderr != "" {
+			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+		}
+		var got map[string]string
+		if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+			t.Fatalf("\nwanted:\nJSON object\ngot:\n%q, %v", stdout, err)
+		}
+		if got["instance"] != "default" {
+			t.Fatalf("\nwanted:\ndefault\ngot:\n%s", got["instance"])
+		}
+		if _, _, err := net.SplitHostPort(got["proxy_listener"]); err != nil {
+			t.Fatalf("\nwanted:\nproxy listener address\ngot:\n%s (%v)", got["proxy_listener"], err)
+		}
+	})
+
+	t.Run("should fail --json without printing JSON", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		instancePath := filepath.Join(configDir, "instances", "work")
+		if err := os.MkdirAll(instancePath+".log", 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0", "--json")
+		if err == nil || stdout != "" || !strings.Contains(stderr, "opening instance log") || strings.Contains(stderr, "instance work started") {
+			t.Fatalf("\nwanted:\nlog error on stderr and no JSON\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+	})
+
 	t.Run("should report the default instance and leave it running", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		binary := buildMarasi(t)
