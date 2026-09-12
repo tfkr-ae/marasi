@@ -22,14 +22,14 @@ import (
 )
 
 var projectName string
+var projectPath string
 
 var errInstanceLockHeld = errors.New("instance lock held")
 
 const (
-	unixSocketPathLimit = 104
-	shutdownTimeout     = 5 * time.Second
-	instancePollDelay   = 10 * time.Millisecond
-	maxErrorBodySize    = 4 * 1024
+	shutdownTimeout   = 5 * time.Second
+	instancePollDelay = 10 * time.Millisecond
+	maxErrorBodySize  = 4 * 1024
 )
 
 func init() {
@@ -44,13 +44,14 @@ var serviceCmd = &cobra.Command{
 }
 
 var startCmd = &cobra.Command{
-	Use:   "start",
-	Short: "Start a marasi instance",
+	Use:     "start",
+	Short:   "Start a marasi instance",
+	PreRunE: prepareProjectPath,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return startService(ctx, configDir, projectName, instance)
+		return startService(ctx, configDir, projectPath, instancePath)
 	},
 }
 
@@ -62,24 +63,13 @@ var stopCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return stopService(ctx, configDir, instance)
+		return stopService(ctx, instancePath)
 	},
 }
 
-func startService(ctx context.Context, configDir, projectName, instanceName string) (resultErr error) {
-	if configDir == "" {
-		return fmt.Errorf("config dir is empty")
-	}
-
-	path, err := projectPath(configDir, projectName)
-	if err != nil {
-		return err
-	}
-
-	socketPath, lockPath, err := resolveInstancePaths(configDir, instanceName)
-	if err != nil {
-		return err
-	}
+func startService(ctx context.Context, configDir, projectPath, instancePath string) (resultErr error) {
+	socketPath := instancePath + ".sock"
+	lockPath := instancePath + ".lock"
 
 	proxy, err := marasi.New(marasi.WithConfigDir(configDir))
 	if err != nil {
@@ -91,7 +81,7 @@ func startService(ctx context.Context, configDir, projectName, instanceName stri
 		return fmt.Errorf("creating wordlist manager : %w", err)
 	}
 
-	unlock, err := lockProject(path)
+	unlock, err := lockProject(projectPath)
 	if err != nil {
 		return fmt.Errorf("locking project: %w", err)
 	}
@@ -101,7 +91,7 @@ func startService(ctx context.Context, configDir, projectName, instanceName stri
 		resultErr = errors.Join(resultErr, cleanupService(closeProxy, unlock, releaseClaim))
 	}()
 
-	dbConn, err := db.New(path, proxy.Logger)
+	dbConn, err := db.New(projectPath, proxy.Logger)
 	if err != nil {
 		return fmt.Errorf("opening project: %w", err)
 	}
@@ -134,15 +124,9 @@ func startService(ctx context.Context, configDir, projectName, instanceName stri
 	return serveControlAPI(serviceCtx, server, listener, shutdownTimeout)
 }
 
-func stopService(ctx context.Context, configDir, instanceName string) error {
-	if configDir == "" {
-		return fmt.Errorf("config dir is empty")
-	}
-
-	socketPath, lockPath, err := resolveInstancePaths(configDir, instanceName)
-	if err != nil {
-		return err
-	}
+func stopService(ctx context.Context, instancePath string) error {
+	socketPath := instancePath + ".sock"
+	lockPath := instancePath + ".lock"
 	if _, err := os.Stat(socketPath); errors.Is(err, os.ErrNotExist) {
 		return nil
 	} else if err != nil {
@@ -264,7 +248,16 @@ func wrapError(action string, err error) error {
 	return fmt.Errorf("%s: %w", action, err)
 }
 
-func projectPath(configDir, name string) (string, error) {
+func prepareProjectPath(*cobra.Command, []string) error {
+	path, err := resolveProjectPath(configDir, projectName)
+	if err != nil {
+		return err
+	}
+	projectPath = path
+	return nil
+}
+
+func resolveProjectPath(configDir, name string) (string, error) {
 	name = strings.TrimSpace(name)
 	name = strings.TrimSuffix(name, ".marasi")
 	if name == "" {
@@ -281,31 +274,6 @@ func projectPath(configDir, name string) (string, error) {
 	}
 
 	return filepath.Join(configDir, "projects", name+".marasi"), nil
-}
-
-func resolveInstancePaths(configDir, name string) (string, string, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "", "", errors.New("invalid instance name: cannot be empty")
-	}
-	if name == "." || name == ".." || !filepath.IsLocal(name) {
-		return "", "", errors.New("invalid instance name: paths and parent directory references are not allowed")
-	}
-	if strings.ContainsAny(name, `/\`) {
-		return "", "", errors.New("invalid instance name: path separators are not allowed")
-	}
-	if strings.HasSuffix(name, ".sock") {
-		return "", "", errors.New("invalid instance name: .sock suffix is not allowed")
-	}
-
-	dir := filepath.Join(configDir, "instances")
-	socketPath := filepath.Join(dir, name+".sock")
-	lockPath := filepath.Join(dir, name+".lock")
-	if len([]byte(socketPath))+1 > unixSocketPathLimit {
-		return "", "", fmt.Errorf("instance socket path %q exceeds %d-byte limit", socketPath, unixSocketPathLimit)
-	}
-
-	return socketPath, lockPath, nil
 }
 
 func claimInstance(socketPath, lockPath string) (net.Listener, *os.File, error) {

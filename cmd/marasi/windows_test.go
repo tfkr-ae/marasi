@@ -12,7 +12,7 @@ import (
 
 func TestWindowsInstanceSecurity(t *testing.T) {
 	t.Run("should protect the instances directory and inherit its access rules", func(t *testing.T) {
-		socketPath, lockPath, err := resolveInstancePaths(t.TempDir(), "work")
+		socketPath, lockPath, err := instanceResourcePaths(t.TempDir(), "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}

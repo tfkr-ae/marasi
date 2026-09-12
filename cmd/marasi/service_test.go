@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 var errServing = errors.New("serving failed")
@@ -37,7 +39,7 @@ func TestProjectPath(t *testing.T) {
 	t.Run("should resolve scratchpad under projects", func(t *testing.T) {
 		configDir := t.TempDir()
 
-		got, err := projectPath(configDir, "scratchpad")
+		got, err := resolveProjectPath(configDir, "scratchpad")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -51,7 +53,7 @@ func TestProjectPath(t *testing.T) {
 	t.Run("should resolve a named project under projects", func(t *testing.T) {
 		configDir := t.TempDir()
 
-		got, err := projectPath(configDir, "juiceshop-test")
+		got, err := resolveProjectPath(configDir, "juiceshop-test")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -65,7 +67,7 @@ func TestProjectPath(t *testing.T) {
 	t.Run("should strip a trailing .marasi suffix", func(t *testing.T) {
 		configDir := t.TempDir()
 
-		got, err := projectPath(configDir, "scratchpad.marasi")
+		got, err := resolveProjectPath(configDir, "scratchpad.marasi")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -77,65 +79,60 @@ func TestProjectPath(t *testing.T) {
 	})
 
 	t.Run("should raise an error if project name is empty", func(t *testing.T) {
-		_, err := projectPath(t.TempDir(), "")
+		_, err := resolveProjectPath(t.TempDir(), "")
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
 	})
 
 	t.Run("should raise an error if project name is absolute path", func(t *testing.T) {
-		_, err := projectPath(t.TempDir(), "/tmp/scratchpad")
+		_, err := resolveProjectPath(t.TempDir(), "/tmp/scratchpad")
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
 	})
 
 	t.Run("should raise an error if project name contains parent directory reference", func(t *testing.T) {
-		_, err := projectPath(t.TempDir(), "../scratchpad")
+		_, err := resolveProjectPath(t.TempDir(), "../scratchpad")
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
 	})
 
 	t.Run("should raise an error if project name contains subdirectory", func(t *testing.T) {
-		_, err := projectPath(t.TempDir(), "nested/scratchpad")
+		_, err := resolveProjectPath(t.TempDir(), "nested/scratchpad")
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
 	})
 
 	t.Run("should raise an error if project name contains Windows path separator", func(t *testing.T) {
-		_, err := projectPath(t.TempDir(), `nested\scratchpad`)
+		_, err := resolveProjectPath(t.TempDir(), `nested\scratchpad`)
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
 	})
 
 	t.Run("should raise an error if project name is current directory", func(t *testing.T) {
-		_, err := projectPath(t.TempDir(), ".")
+		_, err := resolveProjectPath(t.TempDir(), ".")
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
 	})
 }
 
-func TestInstancePaths(t *testing.T) {
+func TestInstancePath(t *testing.T) {
 	t.Run("should resolve a named instance under instances", func(t *testing.T) {
 		configDir := filepath.Join(string(filepath.Separator), "config")
 
-		socketPath, lockPath, err := resolveInstancePaths(configDir, " work ")
+		got, err := resolveInstancePath(configDir, " work ")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
-		wantSocket := filepath.Join(configDir, "instances", "work.sock")
-		if socketPath != wantSocket {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantSocket, socketPath)
-		}
-
-		wantLock := filepath.Join(configDir, "instances", "work.lock")
-		if lockPath != wantLock {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantLock, lockPath)
+		want := filepath.Join(configDir, "instances", "work")
+		if got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
 	})
 
@@ -152,7 +149,7 @@ func TestInstancePaths(t *testing.T) {
 	}
 	for _, name := range invalidNames {
 		t.Run("should reject invalid instance name "+name, func(t *testing.T) {
-			_, _, err := resolveInstancePaths(t.TempDir(), name)
+			_, err := resolveInstancePath(t.TempDir(), name)
 			if err == nil {
 				t.Fatal("\nwanted:\nerror\ngot:\nnil")
 			}
@@ -164,7 +161,7 @@ func TestInstancePaths(t *testing.T) {
 		name := strings.Repeat("a", 104)
 		path := filepath.Join(configDir, "instances", name+".sock")
 
-		_, _, err := resolveInstancePaths(configDir, name)
+		_, err := resolveInstancePath(configDir, name)
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
@@ -186,9 +183,239 @@ func TestInstanceFlag(t *testing.T) {
 	})
 }
 
+func TestCommandPreparation(t *testing.T) {
+	t.Run("should prepare the instance path before service stop runs", func(t *testing.T) {
+		oldRunE := stopCmd.RunE
+		oldConfigDir, oldInstancePath := configDir, instancePath
+		t.Cleanup(func() {
+			stopCmd.RunE = oldRunE
+			configDir, instancePath = oldConfigDir, oldInstancePath
+			rootCmd.SetArgs(nil)
+		})
+
+		dir := serviceConfigDir(t)
+		var got string
+		stopCmd.RunE = func(*cobra.Command, []string) error {
+			got = instancePath
+			return nil
+		}
+		rootCmd.SetArgs([]string{"--config-dir", dir, "--instance", " work ", "service", "stop"})
+
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := filepath.Join(dir, "instances", "work")
+		if got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should prepare instance and project paths before service start runs", func(t *testing.T) {
+		oldRootPreRunE := rootCmd.PersistentPreRunE
+		oldStartPreRunE, oldRunE := startCmd.PreRunE, startCmd.RunE
+		oldConfigDir, oldInstancePath, oldProjectPath := configDir, instancePath, projectPath
+		t.Cleanup(func() {
+			rootCmd.PersistentPreRunE = oldRootPreRunE
+			startCmd.PreRunE, startCmd.RunE = oldStartPreRunE, oldRunE
+			configDir, instancePath, projectPath = oldConfigDir, oldInstancePath, oldProjectPath
+			rootCmd.SetArgs(nil)
+		})
+
+		var order []string
+		rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+			if err := oldRootPreRunE(cmd, args); err != nil {
+				return err
+			}
+			order = append(order, "instance")
+			return nil
+		}
+		startCmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+			if err := oldStartPreRunE(cmd, args); err != nil {
+				return err
+			}
+			order = append(order, "project")
+			return nil
+		}
+		startCmd.RunE = func(*cobra.Command, []string) error {
+			order = append(order, "run")
+			return nil
+		}
+		dir := serviceConfigDir(t)
+		rootCmd.SetArgs([]string{"--config-dir", dir, "--instance", "work", "service", "start", "--project", " juice-shop.marasi "})
+
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got := strings.Join(order, ","); got != "instance,project,run" {
+			t.Fatalf("\nwanted:\ninstance,project,run\ngot:\n%s", got)
+		}
+		wantInstancePath := filepath.Join(dir, "instances", "work")
+		if instancePath != wantInstancePath {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantInstancePath, instancePath)
+		}
+		wantProjectPath := filepath.Join(dir, "projects", "juice-shop.marasi")
+		if projectPath != wantProjectPath {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantProjectPath, projectPath)
+		}
+	})
+
+	t.Run("should not prepare a project for service stop", func(t *testing.T) {
+		oldRunE := stopCmd.RunE
+		oldProjectPath := projectPath
+		t.Cleanup(func() {
+			stopCmd.RunE = oldRunE
+			projectPath = oldProjectPath
+			rootCmd.SetArgs(nil)
+		})
+
+		projectPath = "unchanged"
+		stopCmd.RunE = func(*cobra.Command, []string) error { return nil }
+		rootCmd.SetArgs([]string{"--config-dir", serviceConfigDir(t), "service", "stop"})
+
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if projectPath != "unchanged" {
+			t.Fatalf("\nwanted:\nunchanged\ngot:\n%s", projectPath)
+		}
+	})
+
+	t.Run("should stop before project preparation when instance preparation fails", func(t *testing.T) {
+		oldPreRunE, oldRunE := startCmd.PreRunE, startCmd.RunE
+		oldInstancePath := instancePath
+		t.Cleanup(func() {
+			startCmd.PreRunE, startCmd.RunE = oldPreRunE, oldRunE
+			instancePath = oldInstancePath
+			rootCmd.SetArgs(nil)
+		})
+
+		projectPrepared, ran := false, false
+		startCmd.PreRunE = func(*cobra.Command, []string) error {
+			projectPrepared = true
+			return nil
+		}
+		startCmd.RunE = func(*cobra.Command, []string) error {
+			ran = true
+			return nil
+		}
+		instancePath = "unchanged"
+		rootCmd.SetArgs([]string{"--config-dir", "", "service", "start"})
+
+		if err := rootCmd.Execute(); err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if projectPrepared || ran {
+			t.Fatalf("\nwanted:\nno descendant execution\ngot:\nproject prepared %t, ran %t", projectPrepared, ran)
+		}
+		if instancePath != "unchanged" {
+			t.Fatalf("\nwanted:\nunchanged\ngot:\n%s", instancePath)
+		}
+	})
+
+	t.Run("should stop before execution when project preparation fails", func(t *testing.T) {
+		oldRunE := startCmd.RunE
+		oldProjectPath := projectPath
+		t.Cleanup(func() {
+			startCmd.RunE = oldRunE
+			projectPath = oldProjectPath
+			rootCmd.SetArgs(nil)
+		})
+
+		ran := false
+		startCmd.RunE = func(*cobra.Command, []string) error {
+			ran = true
+			return nil
+		}
+		projectPath = "unchanged"
+		rootCmd.SetArgs([]string{"--config-dir", serviceConfigDir(t), "service", "start", "--project", "foo/bar"})
+
+		if err := rootCmd.Execute(); err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if ran {
+			t.Fatal("\nwanted:\nno command execution\ngot:\ncommand ran")
+		}
+		if projectPath != "unchanged" {
+			t.Fatalf("\nwanted:\nunchanged\ngot:\n%s", projectPath)
+		}
+	})
+
+	t.Run("should run root preparation before a descendant persistent hook", func(t *testing.T) {
+		oldPreRunE, oldRunE := serviceCmd.PersistentPreRunE, stopCmd.RunE
+		oldInstancePath := instancePath
+		t.Cleanup(func() {
+			serviceCmd.PersistentPreRunE, stopCmd.RunE = oldPreRunE, oldRunE
+			instancePath = oldInstancePath
+			rootCmd.SetArgs(nil)
+		})
+
+		dir := serviceConfigDir(t)
+		want := filepath.Join(dir, "instances", "work")
+		var order []string
+		instancePath = "unchanged"
+		serviceCmd.PersistentPreRunE = func(*cobra.Command, []string) error {
+			if instancePath != want {
+				return fmt.Errorf("instance path not prepared: %s", instancePath)
+			}
+			order = append(order, "descendant")
+			return nil
+		}
+		stopCmd.RunE = func(*cobra.Command, []string) error {
+			order = append(order, "run")
+			return nil
+		}
+		rootCmd.SetArgs([]string{"--config-dir", dir, "--instance", "work", "service", "stop"})
+
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got := strings.Join(order, ","); got != "descendant,run" {
+			t.Fatalf("\nwanted:\ndescendant,run\ngot:\n%s", got)
+		}
+	})
+
+	t.Run("should pass command cancellation to service start", func(t *testing.T) {
+		oldConfigDir, oldInstancePath, oldProjectPath := configDir, instancePath, projectPath
+		t.Cleanup(func() {
+			configDir, instancePath, projectPath = oldConfigDir, oldInstancePath, oldProjectPath
+			rootCmd.SetArgs(nil)
+			rootCmd.SetContext(nil)
+			startCmd.SetContext(nil)
+		})
+
+		dir := serviceConfigDir(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		startCmd.SetContext(nil)
+		rootCmd.SetArgs([]string{"--config-dir", dir, "--instance", "work", "service", "start", "--project", "scratchpad"})
+		result := make(chan error, 1)
+		go func() { result <- rootCmd.ExecuteContext(ctx) }()
+
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("\nwanted:\ncanceled command\ngot:\ntimeout")
+		}
+		if _, err := os.Stat(filepath.Join(dir, "instances", "work.sock")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("\nwanted:\nremoved socket\ngot:\n%v", err)
+		}
+	})
+}
+
+func instanceResourcePaths(configDir, name string) (string, string, error) {
+	path, err := resolveInstancePath(configDir, name)
+	if err != nil {
+		return "", "", err
+	}
+	return path + ".sock", path + ".lock", nil
+}
+
 func TestClaimInstance(t *testing.T) {
 	t.Run("should create owner-only instance resources", func(t *testing.T) {
-		socketPath, lockPath, err := resolveInstancePaths(serviceConfigDir(t), "work")
+		socketPath, lockPath, err := instanceResourcePaths(serviceConfigDir(t), "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -218,7 +445,7 @@ func TestClaimInstance(t *testing.T) {
 	})
 
 	t.Run("should replace a stale socket after acquiring the lock", func(t *testing.T) {
-		socketPath, lockPath, err := resolveInstancePaths(serviceConfigDir(t), "work")
+		socketPath, lockPath, err := instanceResourcePaths(serviceConfigDir(t), "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -245,7 +472,7 @@ func TestClaimInstance(t *testing.T) {
 	})
 
 	t.Run("should reject a concurrent owner without disturbing it", func(t *testing.T) {
-		socketPath, lockPath, err := resolveInstancePaths(serviceConfigDir(t), "work")
+		socketPath, lockPath, err := instanceResourcePaths(serviceConfigDir(t), "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -267,11 +494,11 @@ func TestClaimInstance(t *testing.T) {
 
 	t.Run("should allow different instance names", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		workSocketPath, workLockPath, err := resolveInstancePaths(configDir, "work")
+		workSocketPath, workLockPath, err := instanceResourcePaths(configDir, "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		personalSocketPath, personalLockPath, err := resolveInstancePaths(configDir, "personal")
+		personalSocketPath, personalLockPath, err := instanceResourcePaths(configDir, "personal")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -289,7 +516,7 @@ func TestClaimInstance(t *testing.T) {
 	})
 
 	t.Run("should leave the lock and permit restart after close", func(t *testing.T) {
-		socketPath, lockPath, err := resolveInstancePaths(serviceConfigDir(t), "work")
+		socketPath, lockPath, err := instanceResourcePaths(serviceConfigDir(t), "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -467,16 +694,9 @@ func TestCleanupService(t *testing.T) {
 }
 
 func TestStopService(t *testing.T) {
-	t.Run("should reject an empty config directory", func(t *testing.T) {
-		err := stopService(context.Background(), "", "work")
-		if err == nil {
-			t.Fatal("\nwanted:\nerror\ngot:\nnil")
-		}
-	})
-
 	t.Run("should stop the selected instance and wait for cleanup", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -503,7 +723,7 @@ func TestStopService(t *testing.T) {
 
 		result := make(chan error, 1)
 		go func() {
-			result <- stopService(context.Background(), configDir, "work")
+			result <- stopService(context.Background(), filepath.Join(configDir, "instances", "work"))
 		}()
 		select {
 		case <-requestReceived:
@@ -533,12 +753,12 @@ func TestStopService(t *testing.T) {
 
 	t.Run("should succeed without creating resources when the socket is missing", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
-		if err := stopService(context.Background(), configDir, "work"); err != nil {
+		if err := stopService(context.Background(), filepath.Join(configDir, "instances", "work")); err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 		for _, path := range []string{socketPath, lockPath} {
@@ -550,7 +770,7 @@ func TestStopService(t *testing.T) {
 
 	t.Run("should leave a stale socket when no instance owns the lock", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -561,7 +781,7 @@ func TestStopService(t *testing.T) {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
-		if err := stopService(context.Background(), configDir, "work"); err != nil {
+		if err := stopService(context.Background(), filepath.Join(configDir, "instances", "work")); err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 		if got, err := os.ReadFile(socketPath); err != nil || string(got) != "stale" {
@@ -579,7 +799,7 @@ func TestStopService(t *testing.T) {
 
 	t.Run("should wait after a failed dial while the instance lock is held", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -603,7 +823,7 @@ func TestStopService(t *testing.T) {
 
 		result := make(chan error, 1)
 		go func() {
-			result <- stopService(context.Background(), configDir, "work")
+			result <- stopService(context.Background(), filepath.Join(configDir, "instances", "work"))
 		}()
 		select {
 		case err := <-result:
@@ -627,7 +847,7 @@ func TestStopService(t *testing.T) {
 
 	t.Run("should let repeated stops wait for the same cleanup", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -650,13 +870,13 @@ func TestStopService(t *testing.T) {
 		}()
 
 		results := make(chan error, 2)
-		go func() { results <- stopService(context.Background(), configDir, "work") }()
+		go func() { results <- stopService(context.Background(), filepath.Join(configDir, "instances", "work")) }()
 		select {
 		case <-requests:
 		case <-time.After(time.Second):
 			t.Fatal("\nwanted:\nfirst stop request\ngot:\ntimeout")
 		}
-		go func() { results <- stopService(context.Background(), configDir, "work") }()
+		go func() { results <- stopService(context.Background(), filepath.Join(configDir, "instances", "work")) }()
 		select {
 		case <-requests:
 		case <-time.After(time.Second):
@@ -688,7 +908,7 @@ func TestStopService(t *testing.T) {
 
 	t.Run("should report a rejected response with a bounded body", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -706,7 +926,7 @@ func TestStopService(t *testing.T) {
 			releaseInstance(listener, socketPath, lock)
 		}()
 
-		err = stopService(context.Background(), configDir, "work")
+		err = stopService(context.Background(), filepath.Join(configDir, "instances", "work"))
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
@@ -720,7 +940,7 @@ func TestStopService(t *testing.T) {
 
 	t.Run("should reject redirects without following them", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -743,7 +963,7 @@ func TestStopService(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 
-		err = stopService(ctx, configDir, "work")
+		err = stopService(ctx, filepath.Join(configDir, "instances", "work"))
 		if err == nil || !strings.Contains(err.Error(), "307 Temporary Redirect") {
 			t.Fatalf("\nwanted:\nredirect status error\ngot:\n%v", err)
 		}
@@ -751,7 +971,7 @@ func TestStopService(t *testing.T) {
 
 	t.Run("should stop waiting when its context is canceled", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -771,7 +991,7 @@ func TestStopService(t *testing.T) {
 		}()
 		ctx, cancel := context.WithCancel(context.Background())
 		result := make(chan error, 1)
-		go func() { result <- stopService(ctx, configDir, "work") }()
+		go func() { result <- stopService(ctx, filepath.Join(configDir, "instances", "work")) }()
 
 		time.Sleep(50 * time.Millisecond)
 		cancel()
@@ -806,12 +1026,13 @@ func TestStopCommand(t *testing.T) {
 	})
 
 	t.Run("should write nothing after a successful stop", func(t *testing.T) {
-		oldConfigDir, oldInstance := configDir, instance
+		oldConfigDir, oldInstance, oldInstancePath := configDir, instance, instancePath
 		defer func() {
-			configDir, instance = oldConfigDir, oldInstance
+			configDir, instance, instancePath = oldConfigDir, oldInstance, oldInstancePath
 		}()
 		configDir = serviceConfigDir(t)
 		instance = "work"
+		instancePath = filepath.Join(configDir, "instances", instance)
 		stopCmd.SetContext(context.Background())
 		var output bytes.Buffer
 		stopCmd.SetOut(&output)
@@ -831,14 +1052,16 @@ func TestStopCommand(t *testing.T) {
 	})
 
 	t.Run("should stop waiting when the command context is canceled", func(t *testing.T) {
-		oldConfigDir, oldInstance := configDir, instance
+		oldConfigDir, oldInstance, oldInstancePath := configDir, instance, instancePath
 		defer func() {
-			configDir, instance = oldConfigDir, oldInstance
+			configDir, instance, instancePath = oldConfigDir, oldInstance, oldInstancePath
+			rootCmd.SetArgs(nil)
+			rootCmd.SetContext(nil)
 			stopCmd.SetContext(nil)
 		}()
 		configDir = serviceConfigDir(t)
 		instance = "work"
-		socketPath, lockPath, err := resolveInstancePaths(configDir, instance)
+		socketPath, lockPath, err := instanceResourcePaths(configDir, instance)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -857,9 +1080,10 @@ func TestStopCommand(t *testing.T) {
 			lock.Close()
 		}()
 		ctx, cancel := context.WithCancel(context.Background())
-		stopCmd.SetContext(ctx)
+		stopCmd.SetContext(nil)
+		rootCmd.SetArgs([]string{"--config-dir", configDir, "--instance", instance, "service", "stop"})
 		result := make(chan error, 1)
-		go func() { result <- stopCmd.RunE(stopCmd, nil) }()
+		go func() { result <- rootCmd.ExecuteContext(ctx) }()
 
 		time.Sleep(50 * time.Millisecond)
 		cancel()
@@ -877,14 +1101,14 @@ func TestStopCommand(t *testing.T) {
 func TestStartService(t *testing.T) {
 	t.Run("should stop through the control API", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		result := make(chan error, 1)
 		go func() {
-			result <- startService(ctx, configDir, "scratchpad", "work")
+			result <- startService(ctx, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "work"))
 		}()
 		finished := false
 		defer func() {
@@ -905,7 +1129,7 @@ func TestStartService(t *testing.T) {
 			unlock()
 			t.Fatal("\nwanted:\nheld project lock\ngot:\nfree project lock")
 		}
-		if err := stopService(context.Background(), configDir, "work"); err != nil {
+		if err := stopService(context.Background(), filepath.Join(configDir, "instances", "work")); err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
@@ -934,14 +1158,14 @@ func TestStartService(t *testing.T) {
 
 	t.Run("should serve HTTP on the named instance socket until cancellation", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		socketPath, _, err := resolveInstancePaths(configDir, "work")
+		socketPath, _, err := instanceResourcePaths(configDir, "work")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		result := make(chan error, 1)
 		go func() {
-			result <- startService(ctx, configDir, "scratchpad", "work")
+			result <- startService(ctx, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "work"))
 		}()
 		finished := false
 		defer func() {
@@ -978,7 +1202,7 @@ func TestStartService(t *testing.T) {
 
 		restartContext, stopRestart := context.WithCancel(context.Background())
 		stopRestart()
-		if err := startService(restartContext, configDir, "scratchpad", "work"); err != nil {
+		if err := startService(restartContext, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "work")); err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 	})
@@ -988,7 +1212,7 @@ func TestStartService(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := startService(ctx, configDir, "scratchpad", "default")
+		err := startService(ctx, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "default"))
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -996,26 +1220,6 @@ func TestStartService(t *testing.T) {
 		path := filepath.Join(configDir, "projects", "scratchpad.marasi")
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
-		}
-	})
-
-	t.Run("should raise an error if the project name is invalid", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-
-		err := startService(ctx, serviceConfigDir(t), "foo/bar", "default")
-		if err == nil {
-			t.Fatal("\nwanted:\nerror\ngot:\nnil")
-		}
-	})
-
-	t.Run("should raise an error if the instance name is invalid", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-
-		err := startService(ctx, serviceConfigDir(t), "scratchpad", "work.sock")
-		if err == nil {
-			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
 	})
 
