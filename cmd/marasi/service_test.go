@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/tfkr-ae/marasi/internal/filelock"
 )
 
 var errServing = errors.New("serving failed")
@@ -572,7 +573,7 @@ func TestClaimInstance(t *testing.T) {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 		defer func() {
-			unlockFile(restartedLock)
+			filelock.Unlock(restartedLock)
 			restartedLock.Close()
 		}()
 	})
@@ -792,7 +793,7 @@ func TestStopService(t *testing.T) {
 			t.Fatalf("\nwanted:\nreleased probe lock\ngot:\n%v", err)
 		}
 		defer func() {
-			unlockFile(probe)
+			filelock.Unlock(probe)
 			probe.Close()
 		}()
 	})
@@ -816,7 +817,7 @@ func TestStopService(t *testing.T) {
 		locked := true
 		defer func() {
 			if locked {
-				unlockFile(lock)
+				filelock.Unlock(lock)
 				lock.Close()
 			}
 		}()
@@ -831,7 +832,7 @@ func TestStopService(t *testing.T) {
 		case <-time.After(50 * time.Millisecond):
 		}
 
-		if err := errors.Join(unlockFile(lock), lock.Close()); err != nil {
+		if err := errors.Join(filelock.Unlock(lock), lock.Close()); err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 		locked = false
@@ -986,7 +987,7 @@ func TestStopService(t *testing.T) {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 		defer func() {
-			unlockFile(lock)
+			filelock.Unlock(lock)
 			lock.Close()
 		}()
 		ctx, cancel := context.WithCancel(context.Background())
@@ -1076,7 +1077,7 @@ func TestStopCommand(t *testing.T) {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 		defer func() {
-			unlockFile(lock)
+			filelock.Unlock(lock)
 			lock.Close()
 		}()
 		ctx, cancel := context.WithCancel(context.Background())
@@ -1120,7 +1121,7 @@ func TestStartService(t *testing.T) {
 
 		waitForPath(t, socketPath)
 		if probe, err := acquireInstanceLock(lockPath); err == nil {
-			unlockFile(probe)
+			filelock.Unlock(probe)
 			probe.Close()
 			t.Fatal("\nwanted:\nheld instance lock\ngot:\nfree instance lock")
 		}
@@ -1146,7 +1147,7 @@ func TestStartService(t *testing.T) {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 		defer func() {
-			unlockFile(instanceLock)
+			filelock.Unlock(instanceLock)
 			instanceLock.Close()
 		}()
 		projectLock, err := lockProject(projectPath)

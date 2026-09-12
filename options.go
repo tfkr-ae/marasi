@@ -1,6 +1,7 @@
 package marasi
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -10,9 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path"
 	"runtime"
-	"time"
 
 	"github.com/google/martian/mitm"
 	"github.com/spf13/viper"
@@ -256,51 +255,37 @@ func WithWebSocketInterceptHandler(handler func(domain.WebSocketMessage) error) 
 // It will also configure the http.Client that is used for the launchpad requests
 // TODO - Check if the certificate expired
 func WithTLS() func(*Proxy) error {
-	return func(proxy *Proxy) error {
-		var x509c *x509.Certificate
-		var priv any
-		var err error
-		certPath := path.Join(proxy.ConfigDir, certFile)
-		if _, err = os.Stat(certPath); os.IsNotExist(err) {
-			log.Println("[*] Certificate does not exist, creating a new one ")
-			// Certificate and key do not exist, create new ones
-			x509c, priv, err = mitm.NewAuthority("Marasi", "Marasi Authority", 365*3*24*time.Hour)
-			if err != nil {
-				return fmt.Errorf("creating new mitm authority : %w", err)
-			}
+	return WithTLSContext(context.Background())
+}
 
-			// Save certificate and private key to disk
-			if err := saveCertAndKey(x509c, priv, proxy.ConfigDir); err != nil {
-				return fmt.Errorf("saving cert and key to disk: %w", err)
-			}
-		} else {
-			log.Println("[*] Loading existing cert")
-			// Load existing certificate and key from disk
-			x509c, priv, err = loadCertAndKey(proxy.ConfigDir)
-			if err != nil {
-				return fmt.Errorf("loading cert and key from disk: %w", err)
-			}
+// WithTLSContext configures TLS like WithTLS and allows cancellation while
+// waiting for another process to finish initializing the shared CA.
+func WithTLSContext(ctx context.Context) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		certificate, privateKey, err := initializeCertificateAuthority(ctx, proxy.ConfigDir)
+		if err != nil {
+			return err
 		}
 
-		proxy.SPKIHash = getSPKIHash(x509c)
-		proxy.Cert = x509c
+		proxy.SPKIHash = getSPKIHash(certificate)
+		proxy.Cert = certificate
 		err = proxy.ConfigRepo.UpdateSPKI(proxy.SPKIHash)
 		if err != nil {
 			return fmt.Errorf("setting spki hash %s : %w", proxy.SPKIHash, err)
 		}
-		tlsc, err := mitm.NewConfig(x509c, priv)
+		mitmConfig, err := mitm.NewConfig(certificate, privateKey)
 		if err != nil {
 			return fmt.Errorf("creating new mitm config : %w", err)
 		}
-		proxy.martianProxy.SetMITM(tlsc)
-		proxy.mitmConfig = tlsc.TLS()
+		proxy.martianProxy.SetMITM(mitmConfig)
+		proxy.mitmConfig = mitmConfig.TLS()
 
 		// Add system certificates + marasi cert
 		systemPool, err := x509.SystemCertPool()
 		if err != nil {
 			return fmt.Errorf("fetching system cert pool : %w", err)
 		}
-		systemPool.AddCert(x509c)
+		systemPool.AddCert(certificate)
 		proxy.MarasiClientTLSConfig = &tls.Config{
 			RootCAs: systemPool,
 		}

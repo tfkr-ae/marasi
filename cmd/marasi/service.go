@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/db"
+	"github.com/tfkr-ae/marasi/internal/filelock"
 	"github.com/tfkr-ae/marasi/service"
 	"github.com/tfkr-ae/marasi/wordlist"
 )
@@ -180,7 +181,7 @@ func waitForInstanceStop(ctx context.Context, lockPath string) error {
 		lock, err := acquireInstanceLock(lockPath)
 		if err == nil {
 			return errors.Join(
-				wrapError("unlocking instance probe", unlockFile(lock)),
+				wrapError("unlocking instance probe", filelock.Unlock(lock)),
 				wrapError("closing instance probe", lock.Close()),
 			)
 		}
@@ -286,7 +287,7 @@ func claimInstance(socketPath, lockPath string) (net.Listener, *os.File, error) 
 	}
 	listener, err := listenOnInstanceSocket(socketPath)
 	if err != nil {
-		unlockFile(lock)
+		filelock.Unlock(lock)
 		lock.Close()
 		return nil, nil, err
 	}
@@ -313,9 +314,9 @@ func acquireInstanceLock(path string) (*os.File, error) {
 		lock.Close()
 		return nil, fmt.Errorf("securing instance lock %s: %w", path, err)
 	}
-	if err := lockFile(lock); err != nil {
+	if err := filelock.TryLock(lock); err != nil {
 		lock.Close()
-		if isLockUnavailable(err) {
+		if filelock.IsUnavailable(err) {
 			return nil, fmt.Errorf("instance already running: %w: %v", errInstanceLockHeld, err)
 		}
 		return nil, fmt.Errorf("locking instance %s: %w", path, err)
@@ -352,7 +353,7 @@ func releaseInstance(listener net.Listener, socketPath string, lock *os.File) er
 	return errors.Join(
 		wrapError("closing instance listener", closeListenerErr),
 		wrapError("removing instance socket", removeSocketErr),
-		wrapError("unlocking instance", unlockFile(lock)),
+		wrapError("unlocking instance", filelock.Unlock(lock)),
 		wrapError("closing instance lock", lock.Close()),
 	)
 }
@@ -368,13 +369,13 @@ func lockProject(path string) (func() error, error) {
 		return nil, fmt.Errorf("opening project lock %s: %w", lockPath, err)
 	}
 
-	if err := lockFile(f); err != nil {
+	if err := filelock.TryLock(f); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("project already open: %w", err)
 	}
 
 	return func() error {
-		unlockErr := unlockFile(f)
+		unlockErr := filelock.Unlock(f)
 		closeErr := f.Close()
 		return errors.Join(
 			wrapError("unlocking project", unlockErr),
