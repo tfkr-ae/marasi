@@ -778,7 +778,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 
-		items, nextCursor, err := repo.ListTraffic(nil, 200)
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{})
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -799,7 +799,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		newer := testRequest(t, repo, nil)
 		insertTestResponseAndGet(t, repo, newer, nil)
 
-		items, nextCursor, err := repo.ListTraffic(nil, 200)
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{})
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -827,7 +827,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		newest := testRequest(t, repo, nil)
 
-		items, nextCursor, err := repo.ListTraffic(nil, 2)
+		items, nextCursor, err := repo.ListTraffic(nil, 2, domain.TrafficListFilter{})
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -847,7 +847,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, *nextCursor)
 		}
 
-		older, olderNext, err := repo.ListTraffic(nextCursor, 2)
+		older, olderNext, err := repo.ListTraffic(nextCursor, 2, domain.TrafficListFilter{})
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -872,7 +872,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		newest := testRequest(t, repo, nil)
 
-		first, nextCursor, err := repo.ListTraffic(nil, 2)
+		first, nextCursor, err := repo.ListTraffic(nil, 2, domain.TrafficListFilter{})
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -886,7 +886,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		_ = testRequest(t, repo, nil)
 
-		older, olderNext, err := repo.ListTraffic(nextCursor, 2)
+		older, olderNext, err := repo.ListTraffic(nextCursor, 2, domain.TrafficListFilter{})
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -908,7 +908,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		_ = testRequest(t, repo, nil)
 		zero := uuid.Nil
 
-		items, nextCursor, err := repo.ListTraffic(&zero, 200)
+		items, nextCursor, err := repo.ListTraffic(&zero, 200, domain.TrafficListFilter{})
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -926,7 +926,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 
 		id := testRequest(t, repo, nil)
 
-		items, nextCursor, err := repo.ListTraffic(nil, 200)
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{})
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -957,7 +957,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 			"prettified-response": "pretty-res",
 		})
 
-		items, _, err := repo.ListTraffic(nil, 200)
+		items, _, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{})
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -969,6 +969,197 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", wantMeta, items[0].Metadata)
 		}
 	})
+
+	t.Run("should match host exactly and case-sensitively", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		matching := insertTraffic(t, repo, "GET", "example.com", "/")
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "GET", "Example.com", "/")
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "GET", "other.com", "/")
+
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{Host: "example.com"})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(items))
+		}
+		if items[0].ID != matching {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", matching, items[0].ID)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should match method exactly and case-sensitively", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		matching := insertTraffic(t, repo, "POST", "example.com", "/")
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "post", "example.com", "/")
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "GET", "example.com", "/")
+
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{Method: "POST"})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(items))
+		}
+		if items[0].ID != matching {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", matching, items[0].ID)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should match status code exactly", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		matching := insertTraffic(t, repo, "GET", "example.com", "/")
+		insertTrafficResponse(t, repo, matching, 200)
+		time.Sleep(2 * time.Millisecond)
+		notFound := insertTraffic(t, repo, "GET", "example.com", "/")
+		insertTrafficResponse(t, repo, notFound, 404)
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "GET", "example.com", "/")
+
+		status200 := 200
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{StatusCode: &status200})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(items))
+		}
+		if items[0].ID != matching {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", matching, items[0].ID)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should match a prefix of the stored path including the query string", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		matching := insertTraffic(t, repo, "GET", "example.com", "/api/users?id=1")
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "GET", "example.com", "/api/v2/users")
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "GET", "example.com", "/users?id=1")
+
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{PathPrefix: "/api/users"})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(items))
+		}
+		if items[0].ID != matching {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", matching, items[0].ID)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should AND host, method, status code, and path prefix", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		matching := insertTraffic(t, repo, "POST", "example.com", "/api/users")
+		insertTrafficResponse(t, repo, matching, 200)
+		time.Sleep(2 * time.Millisecond)
+		wrongMethod := insertTraffic(t, repo, "GET", "example.com", "/api/users")
+		insertTrafficResponse(t, repo, wrongMethod, 200)
+		time.Sleep(2 * time.Millisecond)
+		wrongHost := insertTraffic(t, repo, "POST", "other.com", "/api/users")
+		insertTrafficResponse(t, repo, wrongHost, 200)
+		time.Sleep(2 * time.Millisecond)
+		wrongPath := insertTraffic(t, repo, "POST", "example.com", "/other")
+		insertTrafficResponse(t, repo, wrongPath, 200)
+		time.Sleep(2 * time.Millisecond)
+		wrongStatus := insertTraffic(t, repo, "POST", "example.com", "/api/users")
+		insertTrafficResponse(t, repo, wrongStatus, 404)
+
+		status200 := 200
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{
+			Host:       "example.com",
+			Method:     "POST",
+			PathPrefix: "/api",
+			StatusCode: &status200,
+		})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(items))
+		}
+		if items[0].ID != matching {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", matching, items[0].ID)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should page a filtered list with a cursor", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		oldest := insertTraffic(t, repo, "GET", "example.com", "/")
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "GET", "other.com", "/")
+		time.Sleep(2 * time.Millisecond)
+		middle := insertTraffic(t, repo, "GET", "example.com", "/")
+		time.Sleep(2 * time.Millisecond)
+		newest := insertTraffic(t, repo, "GET", "example.com", "/")
+
+		filter := domain.TrafficListFilter{Host: "example.com"}
+		items, nextCursor, err := repo.ListTraffic(nil, 2, filter)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("\nwanted:\n2\ngot:\n%d", len(items))
+		}
+		if items[0].ID != newest {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", newest, items[0].ID)
+		}
+		if items[1].ID != middle {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, items[1].ID)
+		}
+		if nextCursor == nil {
+			t.Fatal("\nwanted:\nnext cursor\ngot:\nnil")
+		}
+		if *nextCursor != middle {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, *nextCursor)
+		}
+
+		older, olderNext, err := repo.ListTraffic(nextCursor, 2, filter)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(older) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(older))
+		}
+		if older[0].ID != oldest {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", oldest, older[0].ID)
+		}
+		if olderNext != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", olderNext)
+		}
+	})
 }
 
 func idsOf(items []*domain.RequestResponseSummary) []uuid.UUID {
@@ -977,4 +1168,43 @@ func idsOf(items []*domain.RequestResponseSummary) []uuid.UUID {
 		ids[i] = item.ID
 	}
 	return ids
+}
+
+func insertTraffic(t *testing.T, repo *Repository, method, host, path string) uuid.UUID {
+	t.Helper()
+	id, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("creating uuid: %v", err)
+	}
+	req := &domain.ProxyRequest{
+		ID:          id,
+		Scheme:      "https",
+		Method:      method,
+		Host:        host,
+		Path:        path,
+		Raw:         []byte("GET / HTTP/1.1\r\n\r\n"),
+		Metadata:    map[string]any{},
+		RequestedAt: time.Now(),
+	}
+	if err := repo.InsertRequest(req); err != nil {
+		t.Fatalf("inserting request: %v", err)
+	}
+	return id
+}
+
+func insertTrafficResponse(t *testing.T, repo *Repository, id uuid.UUID, statusCode int) {
+	t.Helper()
+	resp := &domain.ProxyResponse{
+		ID:          id,
+		Status:      "OK",
+		StatusCode:  statusCode,
+		ContentType: "text/plain",
+		Length:      "0",
+		Raw:         []byte{},
+		Metadata:    map[string]any{},
+		RespondedAt: time.Now().UTC().Truncate(time.Millisecond),
+	}
+	if err := repo.InsertResponse(resp); err != nil {
+		t.Fatalf("inserting response: %v", err)
+	}
 }

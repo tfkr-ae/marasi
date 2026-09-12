@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -351,16 +352,36 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 }
 
 // ListTraffic returns a newest-first page of summaries older than cursor.
-func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, filter domain.TrafficListFilter) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
 	query := `SELECT
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
 			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
 			  FROM request`
-	args := make([]any, 0, 2)
+	args := make([]any, 0, 7)
+	var conditions []string
 	if cursor != nil {
-		query += ` WHERE id < ?`
+		conditions = append(conditions, `id < ?`)
 		args = append(args, *cursor)
+	}
+	if filter.Host != "" {
+		conditions = append(conditions, `host = ?`)
+		args = append(args, filter.Host)
+	}
+	if filter.Method != "" {
+		conditions = append(conditions, `method = ?`)
+		args = append(args, filter.Method)
+	}
+	if filter.StatusCode != nil {
+		conditions = append(conditions, `status_code = ?`)
+		args = append(args, *filter.StatusCode)
+	}
+	if filter.PathPrefix != "" {
+		conditions = append(conditions, `substr(path, 1, length(?)) = ?`)
+		args = append(args, filter.PathPrefix, filter.PathPrefix)
+	}
+	if len(conditions) > 0 {
+		query += ` WHERE ` + strings.Join(conditions, ` AND `)
 	}
 	query += ` ORDER BY id DESC LIMIT ?`
 	args = append(args, limit+1)

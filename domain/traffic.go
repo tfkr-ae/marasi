@@ -60,7 +60,7 @@ type TrafficRepository interface {
 	// ListTraffic returns a newest-first page of summaries older than cursor.
 	// A nil cursor starts at the newest row. nextCursor is the last returned
 	// item's id when another older page exists, otherwise nil.
-	ListTraffic(cursor *uuid.UUID, limit int) (items []*RequestResponseSummary, nextCursor *uuid.UUID, err error)
+	ListTraffic(cursor *uuid.UUID, limit int, filter TrafficListFilter) (items []*RequestResponseSummary, nextCursor *uuid.UUID, err error)
 
 	// GetMetadata returns the metadata map for a specific request ID.
 	GetMetadata(id uuid.UUID) (metadata map[string]any, err error)
@@ -110,6 +110,16 @@ type RequestResponseRow struct {
 	Response ProxyResponse  // The corresponding HTTP response
 	Metadata map[string]any // Combined metadata from request and response
 	Note     string         // Note contents
+}
+
+// TrafficListFilter narrows ListTraffic. Empty strings and a nil StatusCode
+// mean no constraint on that column. PathPrefix matches the start of the
+// stored path, which includes the query string.
+type TrafficListFilter struct {
+	Host       string
+	Method     string
+	PathPrefix string
+	StatusCode *int
 }
 
 // RequestResponseSummary provides a summary of a request-response pair,

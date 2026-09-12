@@ -58,7 +58,7 @@ type trafficResponse struct {
 
 func addTrafficRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 	mux.HandleFunc("GET /traffic", func(w http.ResponseWriter, r *http.Request) {
-		limit, cursor, ok := parseTrafficListQuery(r)
+		limit, cursor, filter, ok := parseTrafficListQuery(r)
 		if !ok {
 			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
 			return
@@ -68,7 +68,7 @@ func addTrafficRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		items, nextCursor, err := repo.ListTraffic(cursor, limit)
+		items, nextCursor, err := repo.ListTraffic(cursor, limit, filter)
 		if err != nil {
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
@@ -95,23 +95,34 @@ func addTrafficRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 	})
 }
 
-func parseTrafficListQuery(r *http.Request) (limit int, cursor *uuid.UUID, ok bool) {
+func parseTrafficListQuery(r *http.Request) (limit int, cursor *uuid.UUID, filter domain.TrafficListFilter, ok bool) {
+	query := r.URL.Query()
 	limit = 200
-	if raw := r.URL.Query().Get("limit"); raw != "" {
+	if raw := query.Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed < 1 || parsed > 500 {
-			return 0, nil, false
+			return 0, nil, filter, false
 		}
 		limit = parsed
 	}
-	if raw := r.URL.Query().Get("cursor"); raw != "" {
+	if raw := query.Get("cursor"); raw != "" {
 		parsed, err := uuid.Parse(raw)
 		if err != nil {
-			return 0, nil, false
+			return 0, nil, filter, false
 		}
 		cursor = &parsed
 	}
-	return limit, cursor, true
+	filter.Host = query.Get("host")
+	filter.Method = query.Get("method")
+	filter.PathPrefix = query.Get("path")
+	if raw := query.Get("status_code"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return 0, nil, filter, false
+		}
+		filter.StatusCode = &parsed
+	}
+	return limit, cursor, filter, true
 }
 
 func trafficListFromSummaries(items []*domain.RequestResponseSummary, nextCursor *uuid.UUID) trafficList {
