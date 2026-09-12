@@ -15,6 +15,9 @@ import (
 
 var errServing = errors.New("serving failed")
 var errClosingListener = errors.New("listener close failed")
+var errClosingProxy = errors.New("proxy close failed")
+var errUnlockingProject = errors.New("project unlock failed")
+var errReleasingInstance = errors.New("instance release failed")
 
 type failingListener struct {
 	closed   bool
@@ -432,7 +435,104 @@ func TestLockProject(t *testing.T) {
 	})
 }
 
+func TestCleanupService(t *testing.T) {
+	t.Run("should clean up in completion order and preserve errors", func(t *testing.T) {
+		var order []string
+		err := cleanupService(
+			func() error {
+				order = append(order, "proxy")
+				return errClosingProxy
+			},
+			func() error {
+				order = append(order, "project")
+				return errUnlockingProject
+			},
+			func() error {
+				order = append(order, "instance")
+				return errReleasingInstance
+			},
+		)
+
+		if got := strings.Join(order, ","); got != "proxy,project,instance" {
+			t.Fatalf("\nwanted:\nproxy,project,instance\ngot:\n%s", got)
+		}
+		for _, want := range []error{errClosingProxy, errUnlockingProject, errReleasingInstance} {
+			if !errors.Is(err, want) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, err)
+			}
+		}
+	})
+}
+
 func TestStartService(t *testing.T) {
+	t.Run("should stop through the control API", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := resolveInstancePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			result <- startService(ctx, configDir, "scratchpad", "work")
+		}()
+		finished := false
+		defer func() {
+			if !finished {
+				cancel()
+				<-result
+			}
+		}()
+
+		waitForPath(t, socketPath)
+		if probe, err := acquireInstanceLock(lockPath); err == nil {
+			unlockFile(probe)
+			probe.Close()
+			t.Fatal("\nwanted:\nheld instance lock\ngot:\nfree instance lock")
+		}
+		projectPath := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		if unlock, err := lockProject(projectPath); err == nil {
+			unlock()
+			t.Fatal("\nwanted:\nheld project lock\ngot:\nfree project lock")
+		}
+		transport := &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+			},
+		}
+		defer transport.CloseIdleConnections()
+		response, err := (&http.Client{Transport: transport}).Post("http://marasi/service/stop", "", nil)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusAccepted {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusAccepted, response.StatusCode)
+		}
+
+		err = <-result
+		finished = true
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if _, err := os.Stat(socketPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("\nwanted:\nremoved socket\ngot:\n%v", err)
+		}
+		instanceLock, err := acquireInstanceLock(lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer func() {
+			unlockFile(instanceLock)
+			instanceLock.Close()
+		}()
+		projectLock, err := lockProject(projectPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer projectLock()
+	})
+
 	t.Run("should serve HTTP on the named instance socket until cancellation", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		socketPath, _, err := resolveInstancePaths(configDir, "work")

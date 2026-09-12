@@ -78,8 +78,10 @@ func startService(ctx context.Context, configDir, projectName, instanceName stri
 	if err != nil {
 		return fmt.Errorf("locking project: %w", err)
 	}
+	closeProxy := func() error { return nil }
+	releaseClaim := func() error { return nil }
 	defer func() {
-		resultErr = errors.Join(resultErr, unlock())
+		resultErr = errors.Join(resultErr, cleanupService(closeProxy, unlock, releaseClaim))
 	}()
 
 	dbConn, err := db.New(path, proxy.Logger)
@@ -99,20 +101,31 @@ func startService(ctx context.Context, configDir, projectName, instanceName stri
 		repo.Close()
 		return fmt.Errorf("starting proxy base options: %w", err)
 	}
-	defer func() {
-		resultErr = errors.Join(resultErr, wrapError("closing proxy", proxy.Close()))
-	}()
+	closeProxy = proxy.Close
 
 	listener, instanceLock, err := claimInstance(socketPath, lockPath)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		resultErr = errors.Join(resultErr, releaseInstance(listener, socketPath, instanceLock))
-	}()
+	releaseClaim = func() error {
+		return releaseInstance(listener, socketPath, instanceLock)
+	}
 
-	server := &http.Server{Handler: service.NewServer(proxy)}
-	return serveControlAPI(ctx, server, listener, shutdownTimeout)
+	serviceCtx, stopService := context.WithCancel(ctx)
+	defer stopService()
+	server := &http.Server{Handler: service.NewServer(proxy, stopService)}
+	return serveControlAPI(serviceCtx, server, listener, shutdownTimeout)
+}
+
+func cleanupService(closeProxy, unlockProject, releaseInstance func() error) error {
+	proxyErr := wrapError("closing proxy", closeProxy())
+	projectErr := unlockProject()
+	instanceErr := releaseInstance()
+	return errors.Join(
+		proxyErr,
+		projectErr,
+		instanceErr,
+	)
 }
 
 func serveControlAPI(ctx context.Context, server *http.Server, listener net.Listener, timeout time.Duration) error {

@@ -6,8 +6,8 @@ import (
 	"github.com/tfkr-ae/marasi"
 )
 
-func NewServer(proxy *marasi.Proxy) http.Handler {
+func NewServer(proxy *marasi.Proxy, stop func()) http.Handler {
 	mux := http.NewServeMux()
-	addRoutes(mux)
+	addRoutes(mux, stop)
 	return mux
 }
