@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,9 +18,21 @@ import (
 )
 
 var trafficJSON bool
+var trafficListHost string
+var trafficListMethod string
+var trafficListStatusCode string
+var trafficListPath string
+var trafficListLimit string
+var trafficListCursor string
 
 func init() {
 	trafficCmd.PersistentFlags().BoolVar(&trafficJSON, "json", false, "Print the control API response body")
+	trafficListCmd.Flags().StringVar(&trafficListHost, "host", "", "Keep only this exact host")
+	trafficListCmd.Flags().StringVar(&trafficListMethod, "method", "", "Keep only this exact method")
+	trafficListCmd.Flags().StringVar(&trafficListStatusCode, "status-code", "", "Keep only this exact status code")
+	trafficListCmd.Flags().StringVar(&trafficListPath, "path", "", "Keep pairs whose path starts with this prefix")
+	trafficListCmd.Flags().StringVar(&trafficListLimit, "limit", "200", "Page size")
+	trafficListCmd.Flags().StringVar(&trafficListCursor, "cursor", "", "Fetch the next older page")
 	trafficCmd.AddCommand(trafficListCmd)
 	rootCmd.AddCommand(trafficCmd)
 }
@@ -37,15 +50,36 @@ var trafficListCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return listTraffic(ctx, instancePath, instance, trafficJSON, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		return listTraffic(ctx, instancePath, instance, trafficJSON, trafficListQuery(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
-func listTraffic(ctx context.Context, instancePath, instanceName string, asJSON bool, stdout, stderr io.Writer) error {
+func trafficListQuery() string {
+	query := url.Values{}
+	query.Set("limit", trafficListLimit)
+	if trafficListHost != "" {
+		query.Set("host", trafficListHost)
+	}
+	if trafficListMethod != "" {
+		query.Set("method", trafficListMethod)
+	}
+	if trafficListStatusCode != "" {
+		query.Set("status_code", trafficListStatusCode)
+	}
+	if trafficListPath != "" {
+		query.Set("path", trafficListPath)
+	}
+	if trafficListCursor != "" {
+		query.Set("cursor", trafficListCursor)
+	}
+	return query.Encode()
+}
+
+func listTraffic(ctx context.Context, instancePath, instanceName string, asJSON bool, query string, stdout, stderr io.Writer) error {
 	socketPath := instancePath + ".sock"
 	client := service.NewClient(socketPath)
 	defer client.Close()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/traffic?limit=200", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/traffic?"+query, nil)
 	if err != nil {
 		return fmt.Errorf("creating traffic list request: %w", err)
 	}
@@ -65,15 +99,19 @@ func listTraffic(ctx context.Context, instancePath, instanceName string, asJSON 
 			wrapError("closing traffic list response", closeErr),
 		)
 	}
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("listing traffic: %s: %s", response.Status, body)
-	}
 	if asJSON {
-		_, err := stdout.Write(body)
-		return err
+		if _, err := stdout.Write(body); err != nil {
+			return err
+		}
+	} else if response.StatusCode == http.StatusOK {
+		if err := writeTrafficListHuman(body, stdout, stderr); err != nil {
+			return err
+		}
 	}
-
-	return writeTrafficListHuman(body, stdout, stderr)
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("listing traffic: %s", response.Status)
+	}
+	return nil
 }
 
 func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {

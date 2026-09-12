@@ -115,6 +115,124 @@ func TestTrafficListCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("should print a short stderr message for a 400", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		body := `{"error":"bad_request"}`
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, body)
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--cursor", "not-a-uuid")
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if sent.RawQuery != "cursor=not-a-uuid&limit=200" {
+			t.Fatalf("\nwanted:\ncursor=not-a-uuid&limit=200\ngot:\n%s", sent.RawQuery)
+		}
+		if stdout != "" {
+			t.Fatalf("\nwanted:\nno stdout\ngot:\n%s", stdout)
+		}
+		if !strings.Contains(stderr, "400") {
+			t.Fatalf("\nwanted:\nstderr naming 400\ngot:\n%s", stderr)
+		}
+		if strings.Contains(stderr, body) {
+			t.Fatalf("\nwanted:\nshort stderr without the HTTP body\ngot:\n%s", stderr)
+		}
+	})
+
+	t.Run("should print the 400 body with --json and exit non-zero", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		body := `{"error":"bad_request"}`
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, body)
+
+		stdout, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--json", "--limit", "0")
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if sent.RawQuery != "limit=0" {
+			t.Fatalf("\nwanted:\nlimit=0\ngot:\n%s", sent.RawQuery)
+		}
+		if stdout != body {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", body, stdout)
+		}
+	})
+
+	t.Run("should send --cursor as the cursor query parameter", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--cursor", "0193802f-f0e7-73d9-a764-06d21e367809")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if sent.Method != http.MethodGet || sent.Path != "/traffic" || sent.RawQuery != "cursor=0193802f-f0e7-73d9-a764-06d21e367809&limit=200" {
+			t.Fatalf("\nwanted:\nGET /traffic?cursor=0193802f-f0e7-73d9-a764-06d21e367809&limit=200\ngot:\n%s %s?%s", sent.Method, sent.Path, sent.RawQuery)
+		}
+	})
+
+	t.Run("should send --limit as the limit query parameter", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--limit", "10")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if sent.Method != http.MethodGet || sent.Path != "/traffic" || sent.RawQuery != "limit=10" {
+			t.Fatalf("\nwanted:\nGET /traffic?limit=10\ngot:\n%s %s?%s", sent.Method, sent.Path, sent.RawQuery)
+		}
+	})
+
+	t.Run("should send --path as the path query parameter", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--path", "/api")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if sent.Method != http.MethodGet || sent.Path != "/traffic" || sent.RawQuery != "limit=200&path=%2Fapi" {
+			t.Fatalf("\nwanted:\nGET /traffic?limit=200&path=%%2Fapi\ngot:\n%s %s?%s", sent.Method, sent.Path, sent.RawQuery)
+		}
+	})
+
+	t.Run("should send --status-code as the status_code query parameter", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--status-code", "404")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if sent.Method != http.MethodGet || sent.Path != "/traffic" || sent.RawQuery != "limit=200&status_code=404" {
+			t.Fatalf("\nwanted:\nGET /traffic?limit=200&status_code=404\ngot:\n%s %s?%s", sent.Method, sent.Path, sent.RawQuery)
+		}
+	})
+
+	t.Run("should send --method as the method query parameter", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--method", "POST")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if sent.Method != http.MethodGet || sent.Path != "/traffic" || sent.RawQuery != "limit=200&method=POST" {
+			t.Fatalf("\nwanted:\nGET /traffic?limit=200&method=POST\ngot:\n%s %s?%s", sent.Method, sent.Path, sent.RawQuery)
+		}
+	})
+
+	t.Run("should send --host as the host query parameter", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--host", "example.com")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if sent.Method != http.MethodGet || sent.Path != "/traffic" || sent.RawQuery != "host=example.com&limit=200" {
+			t.Fatalf("\nwanted:\nGET /traffic?host=example.com&limit=200\ngot:\n%s %s?%s", sent.Method, sent.Path, sent.RawQuery)
+		}
+	})
+
 	t.Run("should reject --project", func(t *testing.T) {
 		stdout, stderr, err := executeRoot(t, "--config-dir", serviceConfigDir(t), "traffic", "list", "--project", "scratchpad")
 		if err == nil {
@@ -168,6 +286,7 @@ func startCannedControlAPI(t *testing.T, configDir, name string, status int, bod
 func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	oldJSON := trafficJSON
+	oldHost, oldMethod, oldStatusCode, oldPath, oldLimit, oldCursor := trafficListHost, trafficListMethod, trafficListStatusCode, trafficListPath, trafficListLimit, trafficListCursor
 	oldConfigDir, oldInstance, oldInstancePath := configDir, instance, instancePath
 	var outBuf, errBuf bytes.Buffer
 	rootCmd.SetArgs(args)
@@ -175,6 +294,7 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	rootCmd.SetErr(&errBuf)
 	t.Cleanup(func() {
 		trafficJSON = oldJSON
+		trafficListHost, trafficListMethod, trafficListStatusCode, trafficListPath, trafficListLimit, trafficListCursor = oldHost, oldMethod, oldStatusCode, oldPath, oldLimit, oldCursor
 		configDir, instance, instancePath = oldConfigDir, oldInstance, oldInstancePath
 		rootCmd.SetArgs(nil)
 		rootCmd.SetOut(nil)
