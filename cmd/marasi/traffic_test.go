@@ -250,6 +250,214 @@ func TestTrafficListCommand(t *testing.T) {
 	})
 }
 
+func TestTrafficGetCommand(t *testing.T) {
+	t.Run("should print the control API detail body with --json", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		id := "0193802f-f0e7-73d9-a764-06d21e367809"
+		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","note":"a note","metadata":{"foo":"bar"},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/json","length":"12","raw":"aGVsbG8K","responded_at":"2026-01-02T03:04:06Z"}}`
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", "--json", id)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if sent.Method != http.MethodGet || sent.Path != "/traffic/"+id || sent.RawQuery != "" {
+			t.Fatalf("\nwanted:\nGET /traffic/%s\ngot:\n%s %s?%s", id, sent.Method, sent.Path, sent.RawQuery)
+		}
+		if stdout != body {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", body, stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+		}
+	})
+
+	t.Run("should print fields, note, metadata, and utf-8 raw", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		id := "0193802f-f0e7-73d9-a764-06d21e367809"
+		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","note":"a note","metadata":{"foo":"bar"},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/json","length":"12","raw":"aGVsbG8K","responded_at":"2026-01-02T03:04:06Z"}}`
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", id)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if sent.Method != http.MethodGet || sent.Path != "/traffic/"+id {
+			t.Fatalf("\nwanted:\nGET /traffic/%s\ngot:\n%s %s", id, sent.Method, sent.Path)
+		}
+		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: 200 OK\nstatus_code: 200\ncontent_type: application/json\nlength: 12\nresponded_at: 2026-01-02T03:04:06Z\nnote: a note\nmetadata: {\"foo\":\"bar\"}\nGET /a\nhello\n"
+		if stdout != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+		}
+	})
+
+	t.Run("should skip empty note and metadata", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		id := "0193802f-f0e7-73d9-a764-06d21e367809"
+		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","note":"","metadata":{},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/json","length":"12","raw":"aGVsbG8K","responded_at":"2026-01-02T03:04:06Z"}}`
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+
+		stdout, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", id)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if strings.Contains(stdout, "note:") {
+			t.Fatalf("\nwanted:\nno note line\ngot:\n%s", stdout)
+		}
+		if strings.Contains(stdout, "metadata:") {
+			t.Fatalf("\nwanted:\nno metadata line\ngot:\n%s", stdout)
+		}
+	})
+
+	t.Run("should print a not-utf-8 line for invalid raw", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		id := "0193802f-f0e7-73d9-a764-06d21e367809"
+		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","note":"","metadata":{},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"/wAB","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/octet-stream","length":"3","raw":"gIGC","responded_at":"2026-01-02T03:04:06Z"}}`
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+
+		stdout, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", id)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if !strings.Contains(stdout, "request raw: 3 bytes, not utf-8\n") {
+			t.Fatalf("\nwanted:\nrequest raw: 3 bytes, not utf-8\ngot:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "response raw: 3 bytes, not utf-8\n") {
+			t.Fatalf("\nwanted:\nresponse raw: 3 bytes, not utf-8\ngot:\n%s", stdout)
+		}
+	})
+
+	t.Run("should say there is no response yet for an in-flight pair", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		id := "0193802f-f0e7-73d9-a764-06d21e367809"
+		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","note":"","metadata":{},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"N/A","status_code":-1,"content_type":"","length":"0","raw":null,"responded_at":"0001-01-01T00:00:00Z"}}`
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+
+		stdout, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", id)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: N/A\nstatus_code: -1\ncontent_type: \nlength: 0\nresponded_at: 0001-01-01T00:00:00Z\nGET /a\nno response yet\n"
+		if stdout != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
+		}
+	})
+
+	t.Run("should print a short stderr message for a 404", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		id := "01938032-1b17-7243-b035-e6a9f4645904"
+		body := `{"error":"not_found"}`
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusNotFound, body)
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", id)
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if sent.Method != http.MethodGet || sent.Path != "/traffic/"+id {
+			t.Fatalf("\nwanted:\nGET /traffic/%s\ngot:\n%s %s", id, sent.Method, sent.Path)
+		}
+		if stdout != "" {
+			t.Fatalf("\nwanted:\nno stdout\ngot:\n%s", stdout)
+		}
+		if !strings.Contains(stderr, "404") {
+			t.Fatalf("\nwanted:\nstderr naming 404\ngot:\n%s", stderr)
+		}
+		if strings.Contains(stderr, body) {
+			t.Fatalf("\nwanted:\nshort stderr without the HTTP body\ngot:\n%s", stderr)
+		}
+	})
+
+	t.Run("should print the 404 body with --json and exit non-zero", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		id := "01938032-1b17-7243-b035-e6a9f4645904"
+		body := `{"error":"not_found"}`
+		startCannedControlAPI(t, configDir, "work", http.StatusNotFound, body)
+
+		stdout, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", "--json", id)
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if stdout != body {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", body, stdout)
+		}
+	})
+
+	t.Run("should fail and name the instance when the control listener is missing", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", "0193802f-f0e7-73d9-a764-06d21e367809")
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !strings.Contains(err.Error(), "work") {
+			t.Fatalf("\nwanted:\nerror naming work\ngot:\n%v", err)
+		}
+		if stdout != "" {
+			t.Fatalf("\nwanted:\nno stdout\ngot:\n%s", stdout)
+		}
+		if !strings.Contains(stderr, "work") {
+			t.Fatalf("\nwanted:\nstderr naming work\ngot:\n%s", stderr)
+		}
+	})
+
+	t.Run("should fail without JSON when the control listener is missing and --json is set", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", "--json", "0193802f-f0e7-73d9-a764-06d21e367809")
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !strings.Contains(err.Error(), "work") {
+			t.Fatalf("\nwanted:\nerror naming work\ngot:\n%v", err)
+		}
+		if stdout != "" {
+			t.Fatalf("\nwanted:\nno stdout\ngot:\n%s", stdout)
+		}
+		if !strings.Contains(stderr, "work") {
+			t.Fatalf("\nwanted:\nstderr naming work\ngot:\n%s", stderr)
+		}
+	})
+
+	t.Run("should require exactly one uuid", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get")
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !strings.Contains(err.Error(), "accepts 1 arg(s), received 0") {
+			t.Fatalf("\nwanted:\naccepts 1 arg(s), received 0\ngot:\n%v", err)
+		}
+
+		_, _, err = executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", "0193802f-f0e7-73d9-a764-06d21e367809", "extra")
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !strings.Contains(err.Error(), "accepts 1 arg(s), received 2") {
+			t.Fatalf("\nwanted:\naccepts 1 arg(s), received 2\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should reject --project", func(t *testing.T) {
+		stdout, stderr, err := executeRoot(t, "--config-dir", serviceConfigDir(t), "traffic", "get", "--project", "scratchpad", "0193802f-f0e7-73d9-a764-06d21e367809")
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !strings.Contains(err.Error(), "unknown flag: --project") {
+			t.Fatalf("\nwanted:\nunknown flag: --project\ngot:\n%v", err)
+		}
+		if stdout != "" {
+			t.Fatalf("\nwanted:\nno stdout\ngot:\n%s", stdout)
+		}
+		if !strings.Contains(stderr, "unknown flag: --project") {
+			t.Fatalf("\nwanted:\nstderr naming unknown flag\ngot:\n%s", stderr)
+		}
+	})
+}
+
 type cannedControlRequest struct {
 	Method   string
 	Path     string

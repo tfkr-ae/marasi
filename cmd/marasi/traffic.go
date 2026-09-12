@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"syscall"
 	"text/tabwriter"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi/service"
@@ -33,7 +34,7 @@ func init() {
 	trafficListCmd.Flags().StringVar(&trafficListPath, "path", "", "Keep pairs whose path starts with this prefix")
 	trafficListCmd.Flags().StringVar(&trafficListLimit, "limit", "200", "Page size")
 	trafficListCmd.Flags().StringVar(&trafficListCursor, "cursor", "", "Fetch the next older page")
-	trafficCmd.AddCommand(trafficListCmd)
+	trafficCmd.AddCommand(trafficListCmd, trafficGetCmd)
 	rootCmd.AddCommand(trafficCmd)
 }
 
@@ -51,6 +52,18 @@ var trafficListCmd = &cobra.Command{
 		defer cancel()
 
 		return listTraffic(ctx, instancePath, instance, trafficJSON, trafficListQuery(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+	},
+}
+
+var trafficGetCmd = &cobra.Command{
+	Use:   "get uuid",
+	Short: "Get one request/response pair",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+
+		return getTraffic(ctx, instancePath, instance, trafficJSON, args[0], cmd.OutOrStdout())
 	},
 }
 
@@ -141,4 +154,106 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stderr, "next_cursor=%s\n", *page.NextCursor)
 	}
 	return nil
+}
+
+func getTraffic(ctx context.Context, instancePath, instanceName string, asJSON bool, id string, stdout io.Writer) error {
+	socketPath := instancePath + ".sock"
+	client := service.NewClient(socketPath)
+	defer client.Close()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/traffic/"+id, nil)
+	if err != nil {
+		return fmt.Errorf("creating traffic get request: %w", err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("instance %s is not running", instanceName)
+	}
+
+	body, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil || closeErr != nil {
+		return errors.Join(
+			wrapError("reading traffic get response", readErr),
+			wrapError("closing traffic get response", closeErr),
+		)
+	}
+	if asJSON {
+		if _, err := stdout.Write(body); err != nil {
+			return err
+		}
+	} else if response.StatusCode == http.StatusOK {
+		if err := writeTrafficGetHuman(body, stdout); err != nil {
+			return err
+		}
+	}
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("getting traffic: %s", response.Status)
+	}
+	return nil
+}
+
+func writeTrafficGetHuman(body []byte, stdout io.Writer) error {
+	var detail struct {
+		ID       string          `json:"id"`
+		Note     string          `json:"note"`
+		Metadata json.RawMessage `json:"metadata"`
+		Request  struct {
+			Scheme      string `json:"scheme"`
+			Method      string `json:"method"`
+			Host        string `json:"host"`
+			Path        string `json:"path"`
+			Raw         []byte `json:"raw"`
+			RequestedAt string `json:"requested_at"`
+		} `json:"request"`
+		Response struct {
+			Status      string `json:"status"`
+			StatusCode  int    `json:"status_code"`
+			ContentType string `json:"content_type"`
+			Length      string `json:"length"`
+			Raw         []byte `json:"raw"`
+			RespondedAt string `json:"responded_at"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(body, &detail); err != nil {
+		return fmt.Errorf("decoding traffic: %w", err)
+	}
+
+	fmt.Fprintf(stdout, "id: %s\n", detail.ID)
+	fmt.Fprintf(stdout, "scheme: %s\n", detail.Request.Scheme)
+	fmt.Fprintf(stdout, "method: %s\n", detail.Request.Method)
+	fmt.Fprintf(stdout, "host: %s\n", detail.Request.Host)
+	fmt.Fprintf(stdout, "path: %s\n", detail.Request.Path)
+	fmt.Fprintf(stdout, "requested_at: %s\n", detail.Request.RequestedAt)
+	fmt.Fprintf(stdout, "status: %s\n", detail.Response.Status)
+	fmt.Fprintf(stdout, "status_code: %d\n", detail.Response.StatusCode)
+	fmt.Fprintf(stdout, "content_type: %s\n", detail.Response.ContentType)
+	fmt.Fprintf(stdout, "length: %s\n", detail.Response.Length)
+	fmt.Fprintf(stdout, "responded_at: %s\n", detail.Response.RespondedAt)
+	if detail.Note != "" {
+		fmt.Fprintf(stdout, "note: %s\n", detail.Note)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(detail.Metadata, &metadata); err == nil && len(metadata) > 0 {
+		fmt.Fprintf(stdout, "metadata: %s\n", detail.Metadata)
+	}
+	if err := writeTrafficRaw(stdout, "request", detail.Request.Raw); err != nil {
+		return err
+	}
+	if detail.Response.StatusCode == -1 {
+		fmt.Fprintln(stdout, "no response yet")
+		return nil
+	}
+	return writeTrafficRaw(stdout, "response", detail.Response.Raw)
+}
+
+func writeTrafficRaw(stdout io.Writer, side string, raw []byte) error {
+	if utf8.Valid(raw) {
+		_, err := stdout.Write(raw)
+		return err
+	}
+	_, err := fmt.Fprintf(stdout, "%s raw: %d bytes, not utf-8\n", side, len(raw))
+	return err
 }
