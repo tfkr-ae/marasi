@@ -6,12 +6,15 @@ import (
 	"net/http"
 	"os"
 	"sync"
+
+	"github.com/tfkr-ae/marasi"
 )
 
-func addRoutes(mux *http.ServeMux, stop func()) {
+func addRoutes(mux *http.ServeMux, proxy *marasi.Proxy, stop func()) {
 	serviceMux := http.NewServeMux()
 	addServiceRoutes(serviceMux, stop)
 	mux.Handle("/service/", http.StripPrefix("/service", serviceMux))
+	addTrafficRoutes(mux, proxy)
 }
 
 func addServiceRoutes(mux *http.ServeMux, stop func()) {
@@ -28,4 +31,10 @@ func encode[T any](w http.ResponseWriter, r *http.Request, status int, value T) 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	return json.NewEncoder(w).Encode(value)
+}
+
+func writeJSON[T any](w http.ResponseWriter, r *http.Request, status int, value T) {
+	if err := encode(w, r, status, value); err != nil {
+		fmt.Fprintf(os.Stderr, "encoding response: %v\n", err)
+	}
 }

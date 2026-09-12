@@ -8,6 +8,6 @@ import (
 
 func NewServer(proxy *marasi.Proxy, stop func()) http.Handler {
 	mux := http.NewServeMux()
-	addRoutes(mux, stop)
+	addRoutes(mux, proxy, stop)
 	return mux
 }
