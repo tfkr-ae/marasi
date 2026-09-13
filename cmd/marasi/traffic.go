@@ -65,6 +65,7 @@ var trafficGetCmd = &cobra.Command{
 	},
 }
 
+// trafficListQuery encodes the traffic list flags as a query string.
 func trafficListQuery() string {
 	query := url.Values{}
 	query.Set("limit", trafficListLimit)
@@ -86,6 +87,7 @@ func trafficListQuery() string {
 	return query.Encode()
 }
 
+// listTraffic prints one page of traffic for the instance.
 func listTraffic(ctx context.Context, instancePath, instanceName string, asJSON bool, query string, stdout, stderr io.Writer) error {
 	socketPath := instancePath + ".sock"
 	client := service.NewClient(socketPath)
@@ -128,6 +130,7 @@ func listTraffic(ctx context.Context, instancePath, instanceName string, asJSON 
 	return nil
 }
 
+// writeTrafficListHuman writes a tab-separated traffic page and the next cursor, if any.
 func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 	var page struct {
 		Items []struct {
@@ -157,6 +160,7 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 	return nil
 }
 
+// getTraffic prints one request/response pair.
 func getTraffic(ctx context.Context, instancePath, instanceName string, asJSON bool, id string, stdout io.Writer) error {
 	socketPath := instancePath + ".sock"
 	client := service.NewClient(socketPath)
@@ -199,6 +203,8 @@ func getTraffic(ctx context.Context, instancePath, instanceName string, asJSON b
 	return nil
 }
 
+// controlAPIError formats a control API failure.
+// A JSON string error field is preferred over status.
 func controlAPIError(operation, status string, body []byte) error {
 	var payload struct {
 		Error json.RawMessage `json:"error"`
@@ -210,6 +216,7 @@ func controlAPIError(operation, status string, body []byte) error {
 	return fmt.Errorf("%s: %s", operation, status)
 }
 
+// writeTrafficGetHuman writes one traffic pair as labeled fields and raw HTTP messages.
 func writeTrafficGetHuman(body []byte, stdout io.Writer) error {
 	var detail struct {
 		ID       string          `json:"id"`
@@ -264,6 +271,7 @@ func writeTrafficGetHuman(body []byte, stdout io.Writer) error {
 	return writeTrafficRaw(stdout, "response", detail.Response.Raw)
 }
 
+// writeTrafficRaw writes raw if it is valid UTF-8, otherwise a length note.
 func writeTrafficRaw(stdout io.Writer, side string, raw []byte) error {
 	if utf8.Valid(raw) {
 		_, err := stdout.Write(raw)

@@ -1,16 +1,9 @@
-// Package service is the Marasi Service control plane.
+// Package service is the HTTP control API for a running Marasi instance.
 //
-// GET /events is a live notification stream, not a source of truth. It has no
-// replay, filtering, or persistence. Clients should subscribe first:
+// Server serves the API. Client dials the instance Unix socket.
+// The routes are GET /traffic, GET /traffic/{id}, GET /events, and POST /service/stop.
 //
-//  1. connect to /events and wait until the connected comment has been received
-//  2. fetch the needed pages from /traffic
-//  3. merge buffered request and response events with those results
-//  4. correlate by UUID and event type
-//
-// That sequence reduces the initial race but is not gapless. Marasi currently
-// invokes handlers after queuing an asynchronous database write, so an event
-// fired immediately before subscription might not yet appear in a concurrent
-// /traffic read. Clients that require stronger convergence may poll the newest
-// traffic page periodically.
+// GET /events is live and has no replay. Subscribe first, then fetch /traffic.
+// Events can arrive before the matching row is visible until handlers run
+// after the database write.
 package service

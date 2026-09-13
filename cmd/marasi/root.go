@@ -28,6 +28,7 @@ var rootCmd = &cobra.Command{
 	PersistentPreRunE: prepareInstancePath,
 }
 
+// executeCommand runs the root cobra command with args.
 func executeCommand(args []string) error {
 	rootCmd.SetArgs(args)
 	jsonOutput = recognizedJSONMode(args)
@@ -57,6 +58,7 @@ func executeCommand(args []string) error {
 	return err
 }
 
+// recognizedJSONMode reports whether args request --json before Cobra executes.
 func recognizedJSONMode(args []string) bool {
 	command, commandArgs, findErr := rootCmd.Find(args)
 	requested := false
@@ -107,6 +109,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Print command output as JSON")
 }
 
+// prepareInstancePath resolves --config-dir and --instance into instancePath.
 func prepareInstancePath(*cobra.Command, []string) error {
 	if configDir == "" {
 		return fmt.Errorf("config dir is empty")
@@ -120,6 +123,7 @@ func prepareInstancePath(*cobra.Command, []string) error {
 	return nil
 }
 
+// resolveInstancePath returns the instance directory under configDir for name.
 func resolveInstancePath(configDir, name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -144,6 +148,7 @@ func resolveInstancePath(configDir, name string) (string, error) {
 	return instancePath, nil
 }
 
+// defaultConfigDir returns the per-user Marasi config directory, or empty if it cannot be determined.
 func defaultConfigDir() string {
 	dir, err := os.UserConfigDir()
 	if err != nil {

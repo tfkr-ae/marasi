@@ -22,9 +22,10 @@ const (
 
 var serviceChild bool
 
+// childStartup is the child's first message to its parent.
 type childStartup struct {
-	proxyListener string
-	err           error
+	proxyListener string // address the proxy is listening on
+	err           error  // startup failure, if any
 }
 
 func init() {
@@ -32,6 +33,7 @@ func init() {
 	_ = startCmd.Flags().MarkHidden("service-child")
 }
 
+// startServiceProcess starts a detached child and waits until it reports ready or fails.
 func startServiceProcess(ctx context.Context, configDir, projectName, instancePath, address string, port uint16, stdout, stderr io.Writer, asJSON bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -103,6 +105,7 @@ func startServiceProcess(ctx context.Context, configDir, projectName, instancePa
 	}
 }
 
+// writeStartOutput writes the start result in JSON or human form.
 func writeStartOutput(stdout, stderr io.Writer, asJSON bool, instanceName, proxyListener string) error {
 	if asJSON {
 		payload, err := json.Marshal(struct {
@@ -123,6 +126,7 @@ func writeStartOutput(stdout, stderr io.Writer, asJSON bool, instanceName, proxy
 	return nil
 }
 
+// readChildStartup reads the child's ready or error status from stdout.
 func readChildStartup(reader *bufio.Reader) childStartup {
 	status, err := reader.ReadByte()
 	if err != nil {
@@ -146,11 +150,13 @@ func readChildStartup(reader *bufio.Reader) childStartup {
 	}
 }
 
+// stopChild closes the child's stdin and waits for the process to exit.
 func stopChild(input io.WriteCloser, processResult <-chan error) {
 	_ = input.Close()
 	<-processResult
 }
 
+// runServiceChild runs the in-process service and reports ready or error on stdout.
 func runServiceChild(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16) error {
 	serviceCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

@@ -8,6 +8,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// secureInstancesDir restricts path to the current user, Administrators, and SYSTEM.
 func secureInstancesDir(path string) error {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
@@ -39,6 +40,7 @@ func secureInstancesDir(path string) error {
 	return nil
 }
 
+// secureInstanceFile is a no-op on Windows. New files inherit the directory DACL.
 func secureInstanceFile(string) error {
 	return nil
 }

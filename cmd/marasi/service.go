@@ -31,23 +31,28 @@ var projectPath string
 var proxyAddress string
 var proxyPort decimalPort
 
+// decimalPort is a pflag.Value for a TCP port parsed in base 10.
 type decimalPort uint16
 
+// proxyServer is the Serve subset used by serveProxy.
 type proxyServer interface {
 	Serve(net.Listener) error
 }
 
+// startupListener signals when Accept is first called so callers can wait until Serve has started.
 type startupListener struct {
 	net.Listener
-	started chan struct{}
-	once    sync.Once
+	started chan struct{} // closed on the first Accept
+	once    sync.Once     // closes started once
 }
 
+// Accept records that Serve has started, then accepts the next connection.
 func (listener *startupListener) Accept() (net.Conn, error) {
 	listener.once.Do(func() { close(listener.started) })
 	return listener.Listener.Accept()
 }
 
+// Set parses value as a base-10 TCP port.
 func (port *decimalPort) Set(value string) error {
 	parsed, err := strconv.ParseUint(value, 10, 16)
 	if err != nil {
@@ -57,10 +62,12 @@ func (port *decimalPort) Set(value string) error {
 	return nil
 }
 
+// String returns the port in base 10.
 func (port *decimalPort) String() string {
 	return strconv.FormatUint(uint64(*port), 10)
 }
 
+// Type returns the flag type name "port".
 func (*decimalPort) Type() string {
 	return "port"
 }
@@ -130,6 +137,7 @@ var stopCmd = &cobra.Command{
 	},
 }
 
+// startService starts a proxy instance and writes the listener address to stderr when ready.
 func startService(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, stderr io.Writer) (resultErr error) {
 	return startServiceReady(ctx, configDir, projectPath, instancePath, address, port, func(proxyListener string) error {
 		_, err := fmt.Fprintf(stderr, "proxy listener started on %s\n", proxyListener)
@@ -137,6 +145,7 @@ func startService(ctx context.Context, configDir, projectPath, instancePath, add
 	})
 }
 
+// startServiceReady starts a proxy instance and calls ready with the proxy listener address.
 func startServiceReady(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, ready func(string) error) (resultErr error) {
 	socketPath := instancePath + ".sock"
 	lockPath := instancePath + ".lock"
@@ -231,6 +240,9 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	})
 }
 
+// serveProxy serves the proxy in the background and returns a channel that
+// closes when Serve returns. It waits until Accept is first called or Serve
+// has already returned.
 func serveProxy(server proxyServer, listener net.Listener, logWriter io.Writer) <-chan struct{} {
 	readyListener := &startupListener{Listener: listener, started: make(chan struct{})}
 	done := make(chan struct{})
@@ -248,6 +260,7 @@ func serveProxy(server proxyServer, listener net.Listener, logWriter io.Writer) 
 	return done
 }
 
+// stopService stops the instance at instancePath. A missing socket and lock is success.
 func stopService(ctx context.Context, instancePath string) error {
 	socketPath := instancePath + ".sock"
 	lockPath := instancePath + ".lock"
@@ -295,6 +308,7 @@ func stopService(ctx context.Context, instancePath string) error {
 	)
 }
 
+// waitForInstanceStop polls until lockPath can be locked, or ctx is cancelled.
 func waitForInstanceStop(ctx context.Context, lockPath string) error {
 	ticker := time.NewTicker(instancePollDelay)
 	defer ticker.Stop()
@@ -325,6 +339,7 @@ func waitForInstanceStop(ctx context.Context, lockPath string) error {
 	}
 }
 
+// cleanupService closes the proxy, unlocks the project, and releases the instance claim.
 func cleanupService(closeProxy, unlockProject, releaseInstance func() error) error {
 	proxyErr := wrapError("closing proxy", closeProxy())
 	projectErr := unlockProject()
@@ -336,10 +351,12 @@ func cleanupService(closeProxy, unlockProject, releaseInstance func() error) err
 	)
 }
 
+// serveControlAPI serves server on listener until ctx is cancelled, then shuts down within timeout.
 func serveControlAPI(ctx context.Context, server *http.Server, listener net.Listener, timeout time.Duration) error {
 	return serveControlAPIReady(ctx, server, listener, timeout, nil)
 }
 
+// serveControlAPIReady is serveControlAPI plus a ready hook after the listener starts accepting.
 func serveControlAPIReady(ctx context.Context, server *http.Server, listener net.Listener, timeout time.Duration, ready func() error) error {
 	readyListener := &startupListener{Listener: listener, started: make(chan struct{})}
 	serveResult := make(chan error, 1)
@@ -374,6 +391,7 @@ func serveControlAPIReady(ctx context.Context, server *http.Server, listener net
 	}
 }
 
+// shutdownControlAPI shuts down server within timeout, then waits for Serve to return.
 func shutdownControlAPI(server *http.Server, serveResult <-chan error, timeout time.Duration) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	shutdownErr := server.Shutdown(shutdownCtx)
@@ -395,6 +413,7 @@ func shutdownControlAPI(server *http.Server, serveResult <-chan error, timeout t
 	)
 }
 
+// wrapError returns nil if err is nil, otherwise annotates err with action.
 func wrapError(action string, err error) error {
 	if err == nil {
 		return nil
@@ -402,6 +421,7 @@ func wrapError(action string, err error) error {
 	return fmt.Errorf("%s: %w", action, err)
 }
 
+// prepareProjectPath resolves --project into projectPath.
 func prepareProjectPath(*cobra.Command, []string) error {
 	path, err := resolveProjectPath(configDir, projectName)
 	if err != nil {
@@ -411,6 +431,7 @@ func prepareProjectPath(*cobra.Command, []string) error {
 	return nil
 }
 
+// resolveProjectPath returns the project file under configDir for name.
 func resolveProjectPath(configDir, name string) (string, error) {
 	name = strings.TrimSpace(name)
 	name = strings.TrimSuffix(name, ".marasi")
@@ -430,6 +451,7 @@ func resolveProjectPath(configDir, name string) (string, error) {
 	return filepath.Join(configDir, "projects", name+".marasi"), nil
 }
 
+// claimInstance locks lockPath and listens on socketPath.
 func claimInstance(socketPath, lockPath string) (net.Listener, *os.File, error) {
 	if err := prepareInstancesDir(filepath.Dir(socketPath)); err != nil {
 		return nil, nil, err
@@ -448,6 +470,7 @@ func claimInstance(socketPath, lockPath string) (net.Listener, *os.File, error) 
 	return listener, lock, nil
 }
 
+// prepareInstancesDir creates path with instance-only permissions.
 func prepareInstancesDir(path string) error {
 	if err := os.MkdirAll(path, 0700); err != nil {
 		return fmt.Errorf("creating instances directory: %w", err)
@@ -458,6 +481,7 @@ func prepareInstancesDir(path string) error {
 	return nil
 }
 
+// openInstanceLog appends to path, creating it with instance-only permissions.
 func openInstanceLog(path string) (*os.File, error) {
 	if err := prepareInstancesDir(filepath.Dir(path)); err != nil {
 		return nil, err
@@ -473,6 +497,8 @@ func openInstanceLog(path string) (*os.File, error) {
 	return logFile, nil
 }
 
+// acquireInstanceLock creates path and takes an exclusive lock.
+// errInstanceLockHeld means another process holds it.
 func acquireInstanceLock(path string) (*os.File, error) {
 	lock, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
@@ -492,6 +518,7 @@ func acquireInstanceLock(path string) (*os.File, error) {
 	return lock, nil
 }
 
+// listenOnInstanceSocket listens on a Unix socket at path after removing a stale file.
 func listenOnInstanceSocket(path string) (net.Listener, error) {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("removing stale instance socket %s: %w", path, err)
@@ -508,6 +535,7 @@ func listenOnInstanceSocket(path string) (net.Listener, error) {
 	return listener, nil
 }
 
+// releaseInstance closes the listener, removes socketPath, and unlocks the instance lock.
 func releaseInstance(listener net.Listener, socketPath string, lock *os.File) error {
 	closeListenerErr := listener.Close()
 	if errors.Is(closeListenerErr, net.ErrClosed) {
@@ -526,6 +554,7 @@ func releaseInstance(listener net.Listener, socketPath string, lock *os.File) er
 	)
 }
 
+// lockProject takes an exclusive lock on path so only one process can open the project.
 func lockProject(path string) (func() error, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, fmt.Errorf("creating projects dir: %w", err)

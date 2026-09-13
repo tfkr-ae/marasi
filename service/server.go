@@ -13,12 +13,13 @@ const eventHeartbeatInterval = 15 * time.Second
 
 // Server serves a service instance's control API.
 type Server struct {
-	mux               *http.ServeMux
-	events            *eventBroadcaster
-	heartbeatInterval time.Duration
+	mux               *http.ServeMux    // control API routes
+	events            *eventBroadcaster // live traffic event fan-out
+	heartbeatInterval time.Duration     // idle SSE comment interval
 }
 
 // NewServer creates a control API server for proxy.
+// stop runs after a POST /service/stop, once event streams have been closed.
 func NewServer(proxy *marasi.Proxy, stop func()) *Server {
 	mux := http.NewServeMux()
 	server := &Server{
@@ -34,6 +35,7 @@ func NewServer(proxy *marasi.Proxy, stop func()) *Server {
 	return server
 }
 
+// ServeHTTP serves the instance control API.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
@@ -57,6 +59,9 @@ func (s *Server) Close() {
 	s.events.close()
 }
 
+// serveEvents handles GET /events as a Server-Sent Events stream of traffic
+// notifications. It writes a connected comment, then request and response
+// events, with heartbeat comments while idle.
 func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)

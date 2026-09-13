@@ -8,8 +8,8 @@ import (
 
 // Client calls a service instance's HTTP API over its Unix socket.
 type Client struct {
-	http      *http.Client
-	transport *http.Transport
+	http      *http.Client    // client that dials the instance socket
+	transport *http.Transport // owned by the client; idle conns closed by Close
 }
 
 // NewClient creates a client for the service instance at socketPath.
@@ -30,7 +30,7 @@ func NewClient(socketPath string) *Client {
 	}
 }
 
-// Do sends an HTTP request to the service instance.
+// Do sends an HTTP request to the service instance. Redirects are not followed.
 func (c *Client) Do(request *http.Request) (*http.Response, error) {
 	return c.http.Do(request)
 }

@@ -10,52 +10,58 @@ import (
 	"github.com/tfkr-ae/marasi/domain"
 )
 
+// trafficList is the GET /traffic response body.
 type trafficList struct {
-	Items      []trafficSummary `json:"items"`
-	NextCursor *uuid.UUID       `json:"next_cursor"`
+	Items      []trafficSummary `json:"items"`       // newest-first page
+	NextCursor *uuid.UUID       `json:"next_cursor"` // last item id when an older page exists
 }
 
+// trafficSummary is one request/response pair in a traffic list page.
 type trafficSummary struct {
-	ID          uuid.UUID      `json:"id"`
-	Scheme      string         `json:"scheme"`
-	Method      string         `json:"method"`
-	Host        string         `json:"host"`
-	Path        string         `json:"path"`
-	Status      string         `json:"status"`
-	StatusCode  int            `json:"status_code"`
-	ContentType string         `json:"content_type"`
-	Length      string         `json:"length"`
-	Metadata    map[string]any `json:"metadata"`
-	RequestedAt time.Time      `json:"requested_at"`
-	RespondedAt *time.Time     `json:"responded_at"`
+	ID          uuid.UUID      `json:"id"`           // request UUID
+	Scheme      string         `json:"scheme"`       // http or https
+	Method      string         `json:"method"`       // HTTP method
+	Host        string         `json:"host"`         // request host
+	Path        string         `json:"path"`         // path including query
+	Status      string         `json:"status"`       // HTTP status text
+	StatusCode  int            `json:"status_code"`  // HTTP status code
+	ContentType string         `json:"content_type"` // response content type
+	Length      string         `json:"length"`       // content length
+	Metadata    map[string]any `json:"metadata"`     // request metadata without prettified bodies
+	RequestedAt time.Time      `json:"requested_at"` // when the request was made
+	RespondedAt *time.Time     `json:"responded_at"` // when the response arrived; nil if none
 }
 
+// trafficDetail is the GET /traffic/{id} response body.
 type trafficDetail struct {
-	ID       uuid.UUID       `json:"id"`
-	Note     string          `json:"note"`
-	Metadata map[string]any  `json:"metadata"`
-	Request  trafficRequest  `json:"request"`
-	Response trafficResponse `json:"response"`
+	ID       uuid.UUID       `json:"id"`       // request UUID
+	Note     string          `json:"note"`     // user note, empty if none
+	Metadata map[string]any  `json:"metadata"` // combined metadata without prettified bodies
+	Request  trafficRequest  `json:"request"`  // captured request
+	Response trafficResponse `json:"response"` // captured response; StatusCode is -1 if none yet
 }
 
+// trafficRequest is the request half of a traffic detail.
 type trafficRequest struct {
-	Scheme      string    `json:"scheme"`
-	Method      string    `json:"method"`
-	Host        string    `json:"host"`
-	Path        string    `json:"path"`
-	Raw         []byte    `json:"raw"`
-	RequestedAt time.Time `json:"requested_at"`
+	Scheme      string    `json:"scheme"`       // http or https
+	Method      string    `json:"method"`       // HTTP method
+	Host        string    `json:"host"`         // request host
+	Path        string    `json:"path"`         // path including query
+	Raw         []byte    `json:"raw"`          // complete raw HTTP request
+	RequestedAt time.Time `json:"requested_at"` // when the request was made
 }
 
+// trafficResponse is the response half of a traffic detail.
 type trafficResponse struct {
-	Status      string    `json:"status"`
-	StatusCode  int       `json:"status_code"`
-	ContentType string    `json:"content_type"`
-	Length      string    `json:"length"`
-	Raw         []byte    `json:"raw"`
-	RespondedAt time.Time `json:"responded_at"`
+	Status      string    `json:"status"`       // HTTP status text
+	StatusCode  int       `json:"status_code"`  // HTTP status code; -1 if none yet
+	ContentType string    `json:"content_type"` // response content type
+	Length      string    `json:"length"`       // content length
+	Raw         []byte    `json:"raw"`          // complete raw HTTP response
+	RespondedAt time.Time `json:"responded_at"` // when the response arrived
 }
 
+// addTrafficRoutes registers GET /traffic and GET /traffic/{id}.
 func addTrafficRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 	mux.HandleFunc("GET /traffic", func(w http.ResponseWriter, r *http.Request) {
 		limit, cursor, filter, ok := parseTrafficListQuery(r)
@@ -95,6 +101,7 @@ func addTrafficRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 	})
 }
 
+// parseTrafficListQuery reads limit, cursor, and filter query parameters.
 func parseTrafficListQuery(r *http.Request) (limit int, cursor *uuid.UUID, filter domain.TrafficListFilter, ok bool) {
 	query := r.URL.Query()
 	limit = 200
@@ -125,6 +132,7 @@ func parseTrafficListQuery(r *http.Request) (limit int, cursor *uuid.UUID, filte
 	return limit, cursor, filter, true
 }
 
+// trafficListFromSummaries maps repository summaries to a list response.
 func trafficListFromSummaries(items []*domain.RequestResponseSummary, nextCursor *uuid.UUID) trafficList {
 	summaries := make([]trafficSummary, 0, len(items))
 	for _, item := range items {
@@ -133,6 +141,7 @@ func trafficListFromSummaries(items []*domain.RequestResponseSummary, nextCursor
 	return trafficList{Items: summaries, NextCursor: nextCursor}
 }
 
+// trafficSummaryFromDomain maps a repository summary to a list item.
 func trafficSummaryFromDomain(item *domain.RequestResponseSummary) trafficSummary {
 	summary := trafficSummary{
 		ID:          item.ID,
@@ -154,6 +163,7 @@ func trafficSummaryFromDomain(item *domain.RequestResponseSummary) trafficSummar
 	return summary
 }
 
+// trafficDetailFromRow maps a repository row to a detail response.
 func trafficDetailFromRow(row *domain.RequestResponseRow) trafficDetail {
 	metadata := metadataWithoutPrettified(row.Metadata)
 	return trafficDetail{
@@ -179,6 +189,7 @@ func trafficDetailFromRow(row *domain.RequestResponseRow) trafficDetail {
 	}
 }
 
+// metadataWithoutPrettified copies metadata without prettified-request and prettified-response.
 func metadataWithoutPrettified(metadata map[string]any) map[string]any {
 	out := make(map[string]any, len(metadata))
 	for key, value := range metadata {
