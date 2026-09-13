@@ -1,13 +1,257 @@
 package service
 
 import (
+	"bufio"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
 )
+
+func TestServiceEvents(t *testing.T) {
+	t.Run("should connect and flush an event stream", func(t *testing.T) {
+		server := NewServer(nil, func() {})
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		response, _ := connectEventStream(t, httpServer.URL)
+		defer response.Body.Close()
+	})
+
+	t.Run("should accept explicit broad and missing accept headers", func(t *testing.T) {
+		for _, accept := range []string{"text/event-stream", "*/*", ""} {
+			server := NewServer(nil, func() {})
+			httpServer := httptest.NewServer(server)
+			request, err := http.NewRequest(http.MethodGet, httpServer.URL+"/events", nil)
+			if err != nil {
+				t.Fatalf("creating request: %v", err)
+			}
+			if accept != "" {
+				request.Header.Set("Accept", accept)
+			}
+
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatalf("connecting with Accept %q: %v", accept, err)
+			}
+			if got := response.Header.Get("Content-Type"); got != "text/event-stream" {
+				response.Body.Close()
+				httpServer.Close()
+				t.Fatalf("\nAccept %q wanted:\ntext/event-stream\ngot:\n%s", accept, got)
+			}
+			response.Body.Close()
+			httpServer.Close()
+		}
+	})
+
+	t.Run("should reject non-GET methods", func(t *testing.T) {
+		server := NewServer(nil, func() {})
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		for _, method := range []string{http.MethodHead, http.MethodPost} {
+			request, err := http.NewRequest(method, httpServer.URL+"/events", nil)
+			if err != nil {
+				t.Fatalf("creating %s request: %v", method, err)
+			}
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatalf("sending %s request: %v", method, err)
+			}
+			response.Body.Close()
+			if response.StatusCode != http.StatusMethodNotAllowed {
+				t.Fatalf("\n%s wanted:\n%d\ngot:\n%d", method, http.StatusMethodNotAllowed, response.StatusCode)
+			}
+		}
+	})
+
+	t.Run("should frame publications without an SSE id", func(t *testing.T) {
+		server := NewServer(nil, func() {})
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		response, reader := connectEventStream(t, httpServer.URL)
+		defer response.Body.Close()
+
+		server.events.publish("traffic.request", struct {
+			ID   string `json:"id"`
+			Path string `json:"path"`
+		}{ID: "0193802f-f0e7-73d9-a764-06d21e367809", Path: "/a?b=c"})
+
+		if got := readEventFrame(t, reader); got != "event: traffic.request\ndata: {\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"path\":\"/a?b=c\"}\n\n" {
+			t.Fatalf("\nwanted exact event frame without id field\ngot:\n%s", got)
+		}
+	})
+
+	t.Run("should flush heartbeat comments without waiting fifteen seconds", func(t *testing.T) {
+		server := NewServer(nil, func() {})
+		server.heartbeatInterval = time.Millisecond
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		response, reader := connectEventStream(t, httpServer.URL)
+		defer response.Body.Close()
+
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("reading heartbeat: %v", err)
+		}
+		blank, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("reading heartbeat terminator: %v", err)
+		}
+		if got := line + blank; got != ": heartbeat\n\n" {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", ": heartbeat\\n\\n", got)
+		}
+	})
+
+	t.Run("should wait for an idle interval after a publication before heartbeating", func(t *testing.T) {
+		server := NewServer(nil, func() {})
+		server.heartbeatInterval = 80 * time.Millisecond
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		response, reader := connectEventStream(t, httpServer.URL)
+		defer response.Body.Close()
+
+		time.Sleep(50 * time.Millisecond)
+		server.events.publish("traffic.request", map[string]string{"path": "/active"})
+		if got := readEventFrame(t, reader); got != "event: traffic.request\ndata: {\"path\":\"/active\"}\n\n" {
+			t.Fatalf("\nwanted publication before heartbeat\ngot:\n%s", got)
+		}
+
+		heartbeat := make(chan string, 1)
+		go func() {
+			line, _ := reader.ReadString('\n')
+			blank, _ := reader.ReadString('\n')
+			heartbeat <- line + blank
+		}()
+		select {
+		case got := <-heartbeat:
+			t.Fatalf("\nwanted:\nno heartbeat during the new idle interval\ngot:\n%s", got)
+		case <-time.After(50 * time.Millisecond):
+		}
+		select {
+		case got := <-heartbeat:
+			if got != ": heartbeat\n\n" {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", ": heartbeat\\n\\n", got)
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("heartbeat did not arrive after the idle interval")
+		}
+	})
+
+	t.Run("should send publications in order to concurrent subscribers", func(t *testing.T) {
+		server := NewServer(nil, func() {})
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		firstResponse, first := connectEventStream(t, httpServer.URL)
+		defer firstResponse.Body.Close()
+		secondResponse, second := connectEventStream(t, httpServer.URL)
+		defer secondResponse.Body.Close()
+
+		server.events.publish("first", map[string]string{"value": "one"})
+		server.events.publish("second", map[string]string{"value": "two"})
+
+		wantFirst := "event: first\ndata: {\"value\":\"one\"}\n\n"
+		wantSecond := "event: second\ndata: {\"value\":\"two\"}\n\n"
+		for name, reader := range map[string]*bufio.Reader{"first subscriber": first, "second subscriber": second} {
+			if got := readEventFrame(t, reader); got != wantFirst {
+				t.Fatalf("\n%s wanted:\n%s\ngot:\n%s", name, wantFirst, got)
+			}
+			if got := readEventFrame(t, reader); got != wantSecond {
+				t.Fatalf("\n%s wanted:\n%s\ngot:\n%s", name, wantSecond, got)
+			}
+		}
+	})
+
+	t.Run("should remove a subscriber when its request is cancelled", func(t *testing.T) {
+		server := NewServer(nil, func() {})
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		response, _ := connectEventStream(t, httpServer.URL)
+
+		if err := response.Body.Close(); err != nil {
+			t.Fatalf("closing event stream: %v", err)
+		}
+		waitForSubscriberCount(t, server.events, 0)
+	})
+
+	t.Run("should close streams without a final event during service shutdown", func(t *testing.T) {
+		server := NewServer(nil, func() {})
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		response, reader := connectEventStream(t, httpServer.URL)
+		defer response.Body.Close()
+
+		stopResponse, err := http.Post(httpServer.URL+"/service/stop", "", nil)
+		if err != nil {
+			t.Fatalf("stopping service: %v", err)
+		}
+		stopResponse.Body.Close()
+
+		if _, err := reader.ReadString('\n'); err == nil {
+			t.Fatal("\nwanted:\nclosed stream\ngot:\nmore stream data")
+		}
+	})
+}
+
+func connectEventStream(t *testing.T, url string) (*http.Response, *bufio.Reader) {
+	t.Helper()
+	response, err := http.Get(url + "/events")
+	if err != nil {
+		t.Fatalf("connecting to events: %v", err)
+	}
+	if got := response.Header.Get("Content-Type"); got != "text/event-stream" {
+		response.Body.Close()
+		t.Fatalf("\nwanted:\ntext/event-stream\ngot:\n%s", got)
+	}
+	reader := bufio.NewReader(response.Body)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		response.Body.Close()
+		t.Fatalf("reading connected comment: %v", err)
+	}
+	blank, err := reader.ReadString('\n')
+	if err != nil {
+		response.Body.Close()
+		t.Fatalf("reading connected comment terminator: %v", err)
+	}
+	if got := line + blank; got != ": connected\n\n" {
+		response.Body.Close()
+		t.Fatalf("\nwanted:\n%s\ngot:\n%s", ": connected\\n\\n", got)
+	}
+	return response, reader
+}
+
+func readEventFrame(t *testing.T, reader *bufio.Reader) string {
+	t.Helper()
+	var frame string
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("reading event frame: %v", err)
+		}
+		frame += line
+		if line == "\n" {
+			return frame
+		}
+	}
+}
+
+func waitForSubscriberCount(t *testing.T, broadcaster *eventBroadcaster, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		broadcaster.mu.Lock()
+		got := len(broadcaster.subscribers)
+		broadcaster.mu.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("subscriber count did not reach %d", want)
+}
 
 func TestEventBroadcaster(t *testing.T) {
 	t.Run("should publish exact request and response events", func(t *testing.T) {

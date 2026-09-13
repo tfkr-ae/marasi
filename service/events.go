@@ -24,6 +24,7 @@ type eventSubscriber struct {
 type eventBroadcaster struct {
 	mu          sync.Mutex
 	subscribers map[*eventSubscriber]struct{}
+	closed      bool
 }
 
 type trafficRequestEvent struct {
@@ -56,9 +57,28 @@ func (b *eventBroadcaster) subscribe() *eventSubscriber {
 		done:   make(chan struct{}),
 	}
 	b.mu.Lock()
+	if b.closed {
+		close(subscriber.events)
+		close(subscriber.done)
+		b.mu.Unlock()
+		return subscriber
+	}
 	b.subscribers[subscriber] = struct{}{}
 	b.mu.Unlock()
 	return subscriber
+}
+
+func (b *eventBroadcaster) close() {
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return
+	}
+	b.closed = true
+	for subscriber := range b.subscribers {
+		b.removeLocked(subscriber)
+	}
+	b.mu.Unlock()
 }
 
 func (b *eventBroadcaster) unsubscribe(subscriber *eventSubscriber) {
