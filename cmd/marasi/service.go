@@ -34,11 +34,6 @@ var proxyPort decimalPort
 // decimalPort is a pflag.Value for a TCP port parsed in base 10.
 type decimalPort uint16
 
-// proxyServer is the Serve subset used by serveProxy.
-type proxyServer interface {
-	Serve(net.Listener) error
-}
-
 // startupListener signals when Accept is first called so callers can wait until Serve has started.
 type startupListener struct {
 	net.Listener
@@ -315,7 +310,9 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	defer stopService()
 	instanceName := filepath.Base(instancePath)
 	projectName := strings.TrimSuffix(filepath.Base(projectPath), ".marasi")
-	serviceServer := service.NewServer(proxy, stopService, version, instanceName, projectName)
+	listenerLifecycle := service.NewListenerLifecycle(proxy, logFile)
+	closeProxy = listenerLifecycle.Shutdown
+	serviceServer := service.NewServer(proxy, listenerLifecycle, stopService, version, instanceName, projectName)
 	if err := proxy.WithOptions(
 		marasi.WithRequestHandler(serviceServer.HandleRequest),
 		marasi.WithResponseHandler(serviceServer.HandleResponse),
@@ -323,42 +320,15 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 		return fmt.Errorf("installing traffic event handlers: %w", err)
 	}
 
-	portString := strconv.FormatUint(uint64(port), 10)
-	proxyListener, err := proxy.GetListener(address, portString)
+	listenerStatus, err := listenerLifecycle.Start(serviceCtx, service.ListenerSettings{Address: &address, Port: &port})
 	if err != nil {
-		return fmt.Errorf("binding proxy listener on address %s port %s: %w", address, portString, err)
-	}
-	proxyServeDone := serveProxy(proxy, proxyListener, logFile)
-	closeProxy = func() error {
-		closeErr := proxy.Close()
-		<-proxyServeDone
-		return closeErr
+		return fmt.Errorf("binding proxy listener on address %s port %d: %w", address, port, err)
 	}
 
 	server := &http.Server{Handler: serviceServer}
 	return serveControlAPIReady(serviceCtx, server, controlListener, shutdownTimeout, func() error {
-		return ready(proxyListener.Addr().String())
+		return ready(*listenerStatus.ProxyListener)
 	})
-}
-
-// serveProxy serves the proxy in the background and returns a channel that
-// closes when Serve returns. It waits until Accept is first called or Serve
-// has already returned.
-func serveProxy(server proxyServer, listener net.Listener, logWriter io.Writer) <-chan struct{} {
-	readyListener := &startupListener{Listener: listener, started: make(chan struct{})}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		serveErr := server.Serve(readyListener)
-		if serveErr != nil {
-			fmt.Fprintf(logWriter, "proxy listener stopped: %v\n", serveErr)
-		}
-	}()
-	select {
-	case <-readyListener.started:
-	case <-done:
-	}
-	return done
 }
 
 // stopService stops the instance at instancePath. A missing socket and lock is success.

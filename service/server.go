@@ -17,6 +17,7 @@ type Server struct {
 	events            *eventBroadcaster // live traffic event fan-out
 	heartbeatInterval time.Duration     // idle SSE comment interval
 	proxy             *marasi.Proxy
+	listener          ListenerLifecycle
 	version           string
 	instance          string
 	project           string
@@ -24,13 +25,14 @@ type Server struct {
 
 // NewServer creates a control API server for proxy.
 // stop runs after a POST /service/stop, once event streams have been closed.
-func NewServer(proxy *marasi.Proxy, stop func(), version, instance, project string) *Server {
+func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, stop func(), version, instance, project string) *Server {
 	mux := http.NewServeMux()
 	server := &Server{
 		mux:               mux,
 		events:            newEventBroadcaster(),
 		heartbeatInterval: eventHeartbeatInterval,
 		proxy:             proxy,
+		listener:          listener,
 		version:           version,
 		instance:          instance,
 		project:           project,
@@ -56,10 +58,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var proxyListener *string
-	if address, active := s.proxy.ActiveListenerAddress(); active {
-		proxyListener = &address
-	}
+	proxyListener := s.listener.Status().ProxyListener
 	writeJSON(w, r, http.StatusOK, struct {
 		Status        string  `json:"status"`
 		Version       string  `json:"version"`

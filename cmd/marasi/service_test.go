@@ -46,19 +46,6 @@ type lineWriter struct {
 	lines chan string
 }
 
-type stubProxyServer struct {
-	result   error
-	release  chan struct{}
-	accepted chan struct{}
-}
-
-func (server *stubProxyServer) Serve(listener net.Listener) error {
-	listener.Accept()
-	close(server.accepted)
-	<-server.release
-	return server.result
-}
-
 func (writer *lineWriter) Write(contents []byte) (int, error) {
 	writer.lines <- strings.TrimSpace(string(contents))
 	return len(contents), nil
@@ -870,60 +857,6 @@ func TestCleanupService(t *testing.T) {
 			if !errors.Is(err, want) {
 				t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, err)
 			}
-		}
-	})
-}
-
-func TestServeProxy(t *testing.T) {
-	t.Run("should report and discard an unexpected failure while control serving continues", func(t *testing.T) {
-		server := &stubProxyServer{result: errServing, release: make(chan struct{}), accepted: make(chan struct{})}
-		var stderr bytes.Buffer
-		done := serveProxy(server, &failingListener{}, &stderr)
-		select {
-		case <-server.accepted:
-		default:
-			t.Fatal("\nwanted:\nproxy accepting before startup continues\ngot:\nproxy not accepting")
-		}
-		controlListener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
-		}
-		controlContext, stopControl := context.WithCancel(context.Background())
-		controlResult := make(chan error, 1)
-		go func() {
-			controlResult <- serveControlAPI(controlContext, &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusNoContent)
-			})}, controlListener, time.Second)
-		}()
-
-		close(server.release)
-		<-done
-		if got := stderr.String(); !strings.Contains(got, errServing.Error()) {
-			t.Fatalf("\nwanted:\nproxy serve failure\ngot:\n%s", got)
-		}
-		response, err := http.Get("http://" + controlListener.Addr().String())
-		if err != nil {
-			t.Fatalf("\nwanted:\nreachable control API\ngot:\n%v", err)
-		}
-		response.Body.Close()
-		if response.StatusCode != http.StatusNoContent {
-			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusNoContent, response.StatusCode)
-		}
-		stopControl()
-		if err := <-controlResult; err != nil {
-			t.Fatalf("\nwanted:\nclean shutdown\ngot:\n%v", err)
-		}
-	})
-
-	t.Run("should not report the serving return caused by shutdown", func(t *testing.T) {
-		server := &stubProxyServer{release: make(chan struct{}), accepted: make(chan struct{})}
-		var stderr bytes.Buffer
-		done := serveProxy(server, &failingListener{}, &stderr)
-
-		close(server.release)
-		<-done
-		if stderr.Len() != 0 {
-			t.Fatalf("\nwanted:\nno output\ngot:\n%s", stderr.String())
 		}
 	})
 }

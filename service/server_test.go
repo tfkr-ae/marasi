@@ -1,10 +1,10 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,8 +17,24 @@ import (
 )
 
 func newTestServer(proxy *marasi.Proxy, stop func()) *Server {
-	return NewServer(proxy, stop, "test-version", "test-instance", "test-project")
+	return NewServer(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, stop, "test-version", "test-instance", "test-project")
 }
+
+type statusListener struct {
+	status ListenerStatus
+}
+
+func (l *statusListener) Status() ListenerStatus { return cloneListenerStatus(l.status) }
+func (l *statusListener) Start(context.Context, ListenerSettings) (ListenerStatus, error) {
+	panic("unexpected listener start")
+}
+func (l *statusListener) Stop(context.Context) (ListenerStatus, error) {
+	panic("unexpected listener stop")
+}
+func (l *statusListener) Update(context.Context, ListenerSettings) (ListenerStatus, error) {
+	panic("unexpected listener update")
+}
+func (l *statusListener) Shutdown() error { panic("unexpected listener shutdown") }
 
 type stubTrafficRepository struct {
 	domain.TrafficRepository
@@ -173,33 +189,19 @@ func TestServiceStatus(t *testing.T) {
 		}
 		proxy.Addr = "wrong-address"
 		proxy.Port = "1"
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		listenerProxy := newListenerTestProxy()
+		lifecycle := newListenerLifecycle(listenerProxy, nil)
+		port := uint16(0)
+		address := "127.0.0.1"
+		status, err := lifecycle.Start(context.Background(), ListenerSettings{Address: &address, Port: &port})
 		if err != nil {
-			t.Fatalf("creating listener: %v", err)
-		}
-		serveResult := make(chan error, 1)
-		go func() { serveResult <- proxy.Serve(listener) }()
-		deadline := time.Now().Add(5 * time.Second)
-		for {
-			if _, active := proxy.ActiveListenerAddress(); active {
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatal("proxy did not start serving")
-			}
-			time.Sleep(time.Millisecond)
+			t.Fatalf("starting listener: %v", err)
 		}
 		t.Cleanup(func() {
-			if err := proxy.Close(); err != nil {
-				t.Fatalf("closing proxy: %v", err)
-			}
-			if err := <-serveResult; err != nil {
-				t.Fatalf("serving proxy: %v", err)
-			}
-			close(proxy.DBWriteChannel)
+			lifecycle.Shutdown()
 		})
 
-		server := NewServer(proxy, func() {}, "13.09.2026", "work", "juice-shop")
+		server := NewServer(proxy, lifecycle, func() {}, "13.09.2026", "work", "juice-shop")
 		request := httptest.NewRequest(http.MethodGet, "/service/status", nil)
 		response := httptest.NewRecorder()
 
@@ -211,14 +213,25 @@ func TestServiceStatus(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := fmt.Sprintf("{\"status\":\"running\",\"version\":\"13.09.2026\",\"instance\":\"work\",\"project\":\"juice-shop\",\"proxy_listener\":%q}\n", listener.Addr().String())
+		want := fmt.Sprintf("{\"status\":\"running\",\"version\":\"13.09.2026\",\"instance\":\"work\",\"project\":\"juice-shop\",\"proxy_listener\":%q}\n", *status.ProxyListener)
+		if got := response.Body.String(); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+
+		if _, err := lifecycle.Stop(context.Background()); err != nil {
+			t.Fatalf("stopping listener: %v", err)
+		}
+		response = httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/service/status", nil))
+		want = "{\"status\":\"running\",\"version\":\"13.09.2026\",\"instance\":\"work\",\"project\":\"juice-shop\",\"proxy_listener\":null}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
 	})
 
 	t.Run("should report an inactive listener", func(t *testing.T) {
-		server := NewServer(&marasi.Proxy{}, func() {}, "dev", "default", "scratchpad")
+		proxy := &marasi.Proxy{}
+		server := NewServer(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, func() {}, "dev", "default", "scratchpad")
 		request := httptest.NewRequest(http.MethodGet, "/service/status", nil)
 		response := httptest.NewRecorder()
 
@@ -237,7 +250,8 @@ func TestServiceStatus(t *testing.T) {
 	})
 
 	t.Run("should return an internal error without an open project", func(t *testing.T) {
-		server := NewServer(&marasi.Proxy{}, func() {}, "dev", "default", "")
+		proxy := &marasi.Proxy{}
+		server := NewServer(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, func() {}, "dev", "default", "")
 		request := httptest.NewRequest(http.MethodGet, "/service/status", nil)
 		response := httptest.NewRecorder()
 
@@ -255,7 +269,8 @@ func TestServiceStatus(t *testing.T) {
 	})
 
 	t.Run("should reject other methods and leave unknown paths not found", func(t *testing.T) {
-		server := NewServer(&marasi.Proxy{}, func() {}, "dev", "default", "scratchpad")
+		proxy := &marasi.Proxy{}
+		server := NewServer(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, func() {}, "dev", "default", "scratchpad")
 		for _, test := range []struct {
 			method string
 			path   string
