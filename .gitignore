@@ -21,3 +21,6 @@ dist/
 go.work
 
 .DS_Store
+
+# Local verification evidence
+.opencode/verification-artifacts/
