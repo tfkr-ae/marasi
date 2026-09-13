@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -109,7 +110,23 @@ var stopCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return stopService(ctx, instancePath)
+		if err := stopService(ctx, instancePath); err != nil {
+			return err
+		}
+		instanceName := filepath.Base(instancePath)
+		if jsonOutput {
+			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
+				Instance string `json:"instance"`
+				Status   string `json:"status"`
+			}{Instance: instanceName, Status: "stopped"}); err != nil {
+				return fmt.Errorf("writing service stop result: %w", err)
+			}
+			return nil
+		}
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "instance %s stopped successfully\n", instanceName); err != nil {
+			return fmt.Errorf("writing service stop result: %w", err)
+		}
+		return nil
 	},
 }
 
@@ -227,7 +244,12 @@ func stopService(ctx context.Context, instancePath string) error {
 	socketPath := instancePath + ".sock"
 	lockPath := instancePath + ".lock"
 	if _, err := os.Stat(socketPath); errors.Is(err, os.ErrNotExist) {
-		return nil
+		if _, lockErr := os.Stat(lockPath); errors.Is(lockErr, os.ErrNotExist) {
+			return nil
+		} else if lockErr != nil {
+			return fmt.Errorf("checking instance lock %s: %w", lockPath, lockErr)
+		}
+		return waitForInstanceStop(ctx, lockPath)
 	} else if err != nil {
 		return fmt.Errorf("checking instance socket %s: %w", socketPath, err)
 	}

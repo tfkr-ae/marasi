@@ -1239,29 +1239,111 @@ func TestStopCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("should write nothing after a successful stop", func(t *testing.T) {
-		oldConfigDir, oldInstance, oldInstancePath := configDir, instance, instancePath
-		defer func() {
-			configDir, instance, instancePath = oldConfigDir, oldInstance, oldInstancePath
-		}()
-		configDir = serviceConfigDir(t)
-		instance = "work"
-		instancePath = filepath.Join(configDir, "instances", instance)
-		stopCmd.SetContext(context.Background())
-		var output bytes.Buffer
-		stopCmd.SetOut(&output)
-		stopCmd.SetErr(&output)
-		defer func() {
-			stopCmd.SetContext(nil)
-			stopCmd.SetOut(nil)
-			stopCmd.SetErr(nil)
-		}()
+	t.Run("should report an already stopped instance in JSON and human modes", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		binary := buildMarasi(t)
 
-		if err := stopCmd.RunE(stopCmd, nil); err != nil {
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop", "--json")
+		if err != nil || stdout != "{\"instance\":\"work\",\"status\":\"stopped\"}\n" || stderr != "" {
+			t.Fatalf("\nwanted:\nJSON stop result on stdout\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop")
+		if err != nil || stdout != "" || stderr != "instance work stopped successfully\n" {
+			t.Fatalf("\nwanted:\nhuman stop result on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+	})
+
+	t.Run("should report a stale unowned socket without removing it", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, _, err := instanceResourcePaths(configDir, "work")
+		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if output.Len() != 0 {
-			t.Fatalf("\nwanted:\nno output\ngot:\n%s", output.String())
+		if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.WriteFile(socketPath, []byte("stale"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		binary := buildMarasi(t)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop", "--json")
+		if err != nil || stdout != "{\"instance\":\"work\",\"status\":\"stopped\"}\n" || stderr != "" {
+			t.Fatalf("\nwanted:\nJSON stop result on stdout\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop")
+		if err != nil || stdout != "" || stderr != "instance work stopped successfully\n" {
+			t.Fatalf("\nwanted:\nhuman stop result on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		if got, err := os.ReadFile(socketPath); err != nil || string(got) != "stale" {
+			t.Fatalf("\nwanted:\nstale socket\ngot:\n%s, %v", got, err)
+		}
+	})
+
+	t.Run("should report concurrent stops only after ownership is released", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		listener, lock, err := claimInstance(socketPath, lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.Remove(socketPath); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		released := false
+		defer func() {
+			if !released {
+				releaseInstance(listener, socketPath, lock)
+			}
+		}()
+
+		binary := buildMarasi(t)
+		var jsonStdout, jsonStderr, humanStdout, humanStderr bytes.Buffer
+		jsonCommand := exec.Command(binary, "--config-dir", configDir, "--instance", "work", "service", "stop", "--json")
+		jsonCommand.Stdout, jsonCommand.Stderr = &jsonStdout, &jsonStderr
+		humanCommand := exec.Command(binary, "--config-dir", configDir, "--instance", "work", "service", "stop")
+		humanCommand.Stdout, humanCommand.Stderr = &humanStdout, &humanStderr
+		if err := jsonCommand.Start(); err != nil {
+			t.Fatalf("\nwanted:\nstarted JSON stop\ngot:\n%v", err)
+		}
+		if err := humanCommand.Start(); err != nil {
+			jsonCommand.Process.Kill()
+			t.Fatalf("\nwanted:\nstarted human stop\ngot:\n%v", err)
+		}
+		jsonResult, humanResult := make(chan error, 1), make(chan error, 1)
+		go func() { jsonResult <- jsonCommand.Wait() }()
+		go func() { humanResult <- humanCommand.Wait() }()
+		select {
+		case err := <-jsonResult:
+			t.Fatalf("\nwanted:\nJSON stop waiting for ownership release\ngot:\n%v", err)
+		case err := <-humanResult:
+			t.Fatalf("\nwanted:\nhuman stop waiting for ownership release\ngot:\n%v", err)
+		case <-time.After(500 * time.Millisecond):
+		}
+
+		if err := releaseInstance(listener, socketPath, lock); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		released = true
+		for name, result := range map[string]<-chan error{"JSON": jsonResult, "human": humanResult} {
+			select {
+			case err := <-result:
+				if err != nil {
+					t.Fatalf("\nwanted:\n%s stop success\ngot:\n%v", name, err)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("\nwanted:\n%s stop completion\ngot:\ntimeout", name)
+			}
+		}
+		if jsonStdout.String() != "{\"instance\":\"work\",\"status\":\"stopped\"}\n" || jsonStderr.Len() != 0 {
+			t.Fatalf("\nwanted:\nJSON stop result on stdout\ngot:\nstdout %q, stderr %q", jsonStdout.String(), jsonStderr.String())
+		}
+		if humanStdout.Len() != 0 || humanStderr.String() != "instance work stopped successfully\n" {
+			t.Fatalf("\nwanted:\nhuman stop result on stderr\ngot:\nstdout %q, stderr %q", humanStdout.String(), humanStderr.String())
 		}
 	})
 
@@ -1313,7 +1395,7 @@ func TestStopCommand(t *testing.T) {
 }
 
 func TestStartService(t *testing.T) {
-	t.Run("should print JSON for a named instance and leave it running", func(t *testing.T) {
+	t.Run("should print JSON for a named instance and report its completed stop", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		binary := buildMarasi(t)
 		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
@@ -1341,6 +1423,24 @@ func TestStartService(t *testing.T) {
 		}
 		if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "traffic", "list"); err != nil {
 			t.Fatalf("\nwanted:\nrunning instance\ngot:\n%v", err)
+		}
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop", "--json")
+		if err != nil || stdout != "{\"instance\":\"work\",\"status\":\"stopped\"}\n" || stderr != "" {
+			t.Fatalf("\nwanted:\ncompleted JSON stop result\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		var stopped map[string]string
+		if err := json.Unmarshal([]byte(stdout), &stopped); err != nil {
+			t.Fatalf("\nwanted:\nJSON stop object\ngot:\n%q, %v", stdout, err)
+		}
+		if len(stopped) != 2 || stopped["instance"] != "work" || stopped["status"] != "stopped" {
+			t.Fatalf("\nwanted:\nwork stopped\ngot:\n%v", stopped)
+		}
+		lock, err := acquireInstanceLock(filepath.Join(configDir, "instances", "work.lock"))
+		if err != nil {
+			t.Fatalf("\nwanted:\nreleased instance ownership\ngot:\n%v", err)
+		}
+		if err := errors.Join(filelock.Unlock(lock), lock.Close()); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 	})
 
@@ -1388,8 +1488,8 @@ func TestStartService(t *testing.T) {
 		if err != nil || stdout != "" || !strings.HasPrefix(stderr, "instance default started\nproxy listener started on 127.0.0.1:") || strings.Count(stderr, "\n") != 2 {
 			t.Fatalf("\nwanted:\ndefault instance startup on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
 		}
-		if stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "service", "stop"); err != nil || stdout != "" || stderr != "" {
-			t.Fatalf("\nwanted:\nsilent successful stop\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		if stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "service", "stop"); err != nil || stdout != "" || stderr != "instance default stopped successfully\n" {
+			t.Fatalf("\nwanted:\nhuman stop result on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
 		}
 	})
 
@@ -1523,8 +1623,8 @@ func TestStartService(t *testing.T) {
 		if err != nil || trafficStdout != "" || trafficStderr != "" {
 			t.Fatalf("\nwanted:\nrunning instance with empty traffic\ngot:\nstdout %q, stderr %q, error %v", trafficStdout, trafficStderr, err)
 		}
-		if stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop"); err != nil || stdout != "" || stderr != "" {
-			t.Fatalf("\nwanted:\nsilent successful stop\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		if stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop"); err != nil || stdout != "" || stderr != "instance work stopped successfully\n" {
+			t.Fatalf("\nwanted:\nhuman stop result on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
 		}
 		contents, err := os.ReadFile(logPath)
 		if err != nil {
