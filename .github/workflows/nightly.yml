@@ -85,7 +85,7 @@ jobs:
       - env:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: make darwin-arm64 VERSION="$VERSION"
-      - uses: Apple-Actions/import-codesign-certs@v3
+      - uses: Apple-Actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.MACOS_DEVELOPER_CERT }}
           p12-password: ${{ secrets.MACOS_DEVELOPER_CERT_PASSWORD }}
