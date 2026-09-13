@@ -61,18 +61,22 @@ jobs:
           git tag -f nightly
           git push origin nightly --force
 
-      - uses: softprops/action-gh-release@v2
+      - name: Publish nightly
         if: steps.should_publish.outputs.publish == 'true'
-        with:
-          tag_name: nightly
-          name: Nightly
-          prerelease: true
-          make_latest: false
-          body: |
-            Branch: ${{ github.ref_name }}
-            Commit: ${{ github.sha }}
-          files: |
-            dist/marasi-linux-amd64
-            dist/marasi-darwin-arm64
-            dist/marasi-windows-amd64.exe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=$(printf 'Branch: %s\nCommit: %s\n' "$GITHUB_REF_NAME" "$GITHUB_SHA")
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release delete nightly --yes
+          fi
+          gh release create nightly \
+            --verify-tag \
+            --title Nightly \
+            --prerelease \
+            --latest=false \
+            --notes "$notes" \
+            dist/marasi-linux-amd64 \
+            dist/marasi-darwin-arm64 \
+            dist/marasi-windows-amd64.exe \
             dist/checksums.txt
