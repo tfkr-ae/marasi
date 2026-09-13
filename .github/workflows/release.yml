@@ -41,13 +41,15 @@ jobs:
         working-directory: dist
         run: sha256sum marasi-linux-amd64 marasi-darwin-arm64 marasi-windows-amd64.exe > checksums.txt
 
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          prerelease: false
-          generate_release_notes: true
-          files: |
-            dist/marasi-linux-amd64
-            dist/marasi-darwin-arm64
-            dist/marasi-windows-amd64.exe
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --generate-notes \
+            --latest \
+            dist/marasi-linux-amd64 \
+            dist/marasi-darwin-arm64 \
+            dist/marasi-windows-amd64.exe \
             dist/checksums.txt
