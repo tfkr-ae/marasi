@@ -13,7 +13,7 @@ func TestTrafficListCommand(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"0193802f-f0e7-73d9-a764-06d21e367809","scheme":"https","method":"GET","host":"example.com","path":"/a","status":"200 OK","status_code":200,"content_type":"application/json","length":"12","metadata":{"foo":"bar"},"requested_at":"2026-01-02T03:04:05Z","responded_at":"2026-01-02T03:04:06Z"},{"id":"01938032-1b17-7243-b035-e6a9f4645904","scheme":"https","method":"POST","host":"example.com","path":"/login","status":"401 Unauthorized","status_code":401,"content_type":"text/plain","length":"45","metadata":{},"requested_at":"2026-01-02T03:04:04Z","responded_at":"2026-01-02T03:04:05Z"}],"next_cursor":null}`)
 
-		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list")
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "list")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -51,7 +51,7 @@ func TestTrafficListCommand(t *testing.T) {
 		body := `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","method":"GET","host":"example.com","path":"/a","status_code":200,"length":"12"}],"next_cursor":"0193802f-f0e7-73d9-a764-06d21e367809"}`
 		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 
-		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "--json", "list")
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "--json", "traffic", "list")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -257,7 +257,7 @@ func TestTrafficGetCommand(t *testing.T) {
 		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","note":"a note","metadata":{"foo":"bar"},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/json","length":"12","raw":"aGVsbG8K","responded_at":"2026-01-02T03:04:06Z"}}`
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 
-		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", "--json", id)
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "get", "--json", id)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -278,7 +278,7 @@ func TestTrafficGetCommand(t *testing.T) {
 		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","note":"a note","metadata":{"foo":"bar"},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/json","length":"12","raw":"aGVsbG8K","responded_at":"2026-01-02T03:04:06Z"}}`
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 
-		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", id)
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "get", id)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -493,7 +493,7 @@ func startCannedControlAPI(t *testing.T, configDir, name string, status int, bod
 
 func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
-	oldJSON := trafficJSON
+	oldJSON := jsonOutput
 	oldHost, oldMethod, oldStatusCode, oldPath, oldLimit, oldCursor := trafficListHost, trafficListMethod, trafficListStatusCode, trafficListPath, trafficListLimit, trafficListCursor
 	oldConfigDir, oldInstance, oldInstancePath := configDir, instance, instancePath
 	var outBuf, errBuf bytes.Buffer
@@ -501,7 +501,7 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	rootCmd.SetOut(&outBuf)
 	rootCmd.SetErr(&errBuf)
 	t.Cleanup(func() {
-		trafficJSON = oldJSON
+		jsonOutput = oldJSON
 		trafficListHost, trafficListMethod, trafficListStatusCode, trafficListPath, trafficListLimit, trafficListCursor = oldHost, oldMethod, oldStatusCode, oldPath, oldLimit, oldCursor
 		configDir, instance, instancePath = oldConfigDir, oldInstance, oldInstancePath
 		rootCmd.SetArgs(nil)

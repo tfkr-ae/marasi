@@ -13,6 +13,7 @@ import (
 var configDir string
 var instance string
 var instancePath string
+var jsonOutput bool
 
 const unixSocketPathLimit = 104
 
@@ -27,6 +28,7 @@ func init() {
 	cobra.EnableTraverseRunHooks = true
 	rootCmd.PersistentFlags().StringVar(&configDir, "config-dir", defaultConfigDir(), "Marasi config directory")
 	rootCmd.PersistentFlags().StringVar(&instance, "instance", "default", "Instance name")
+	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Print command output as JSON")
 }
 
 func prepareInstancePath(*cobra.Command, []string) error {

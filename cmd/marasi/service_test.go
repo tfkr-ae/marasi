@@ -257,23 +257,17 @@ func TestProxyListenerFlags(t *testing.T) {
 	}
 }
 
-func TestStartJSONFlag(t *testing.T) {
-	t.Run("should belong only to service start and default to false", func(t *testing.T) {
-		flag := startCmd.Flags().Lookup("json")
-		if flag == nil {
-			t.Fatal("\nwanted:\njson flag\ngot:\nnil")
+func TestGlobalJSONOption(t *testing.T) {
+	t.Run("should keep help human-readable when set", func(t *testing.T) {
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--json", "--help")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if flag.DefValue != "false" {
-			t.Fatalf("\nwanted:\nfalse\ngot:\n%s", flag.DefValue)
+		if !strings.Contains(stdout, "Usage:") || !strings.Contains(stdout, "--json") {
+			t.Fatalf("\nwanted:\nhuman-readable help with --json\ngot:\n%s", stdout)
 		}
-		if rootCmd.PersistentFlags().Lookup("json") != nil {
-			t.Fatal("\nwanted:\nno json flag on root\ngot:\njson flag")
-		}
-		if serviceCmd.PersistentFlags().Lookup("json") != nil {
-			t.Fatal("\nwanted:\nno json flag on service\ngot:\njson flag")
-		}
-		if stopCmd.Flags().Lookup("json") != nil {
-			t.Fatal("\nwanted:\nno json flag on service stop\ngot:\njson flag")
+		if stderr != "" {
+			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
 		}
 	})
 }
@@ -1278,7 +1272,7 @@ func TestStartService(t *testing.T) {
 		binary := buildMarasi(t)
 		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
 
-		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0", "--json")
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "--json", "service", "start", "--port", "0")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}

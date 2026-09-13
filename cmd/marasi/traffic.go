@@ -18,7 +18,6 @@ import (
 	"github.com/tfkr-ae/marasi/service"
 )
 
-var trafficJSON bool
 var trafficListHost string
 var trafficListMethod string
 var trafficListStatusCode string
@@ -27,7 +26,6 @@ var trafficListLimit string
 var trafficListCursor string
 
 func init() {
-	trafficCmd.PersistentFlags().BoolVar(&trafficJSON, "json", false, "Print the control API response body")
 	trafficListCmd.Flags().StringVar(&trafficListHost, "host", "", "Keep only this exact host")
 	trafficListCmd.Flags().StringVar(&trafficListMethod, "method", "", "Keep only this exact method")
 	trafficListCmd.Flags().StringVar(&trafficListStatusCode, "status-code", "", "Keep only this exact status code")
@@ -51,7 +49,7 @@ var trafficListCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return listTraffic(ctx, instancePath, instance, trafficJSON, trafficListQuery(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+		return listTraffic(ctx, instancePath, instance, jsonOutput, trafficListQuery(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
@@ -63,7 +61,7 @@ var trafficGetCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return getTraffic(ctx, instancePath, instance, trafficJSON, args[0], cmd.OutOrStdout())
+		return getTraffic(ctx, instancePath, instance, jsonOutput, args[0], cmd.OutOrStdout())
 	},
 }
 
