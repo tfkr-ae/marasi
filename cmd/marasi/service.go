@@ -85,7 +85,7 @@ func init() {
 	startCmd.Flags().StringVar(&proxyAddress, "address", "127.0.0.1", "Proxy listener address")
 	proxyPort = 8080
 	startCmd.Flags().Var(&proxyPort, "port", "Proxy listener port")
-	serviceCmd.AddCommand(startCmd, stopCmd)
+	serviceCmd.AddCommand(startCmd, stopCmd, statusCmd)
 	rootCmd.AddCommand(serviceCmd)
 }
 
@@ -135,6 +135,105 @@ var stopCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+var statusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Report a marasi instance's status",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+
+		return getServiceStatus(ctx, instancePath, filepath.Base(instancePath), jsonOutput, cmd.OutOrStdout())
+	},
+}
+
+// getServiceStatus queries and prints the selected service instance's status.
+func getServiceStatus(ctx context.Context, instancePath, instanceName string, asJSON bool, stdout io.Writer) error {
+	client := service.NewClient(instancePath + ".sock")
+	defer client.Close()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/service/status", nil)
+	if err != nil {
+		return fmt.Errorf("creating service status request: %w", err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("instance %s is not running", instanceName)
+	}
+
+	body, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil || closeErr != nil {
+		return errors.Join(
+			wrapError("reading service status response", readErr),
+			wrapError("closing service status response", closeErr),
+		)
+	}
+	if response.StatusCode != http.StatusOK {
+		if asJSON {
+			return controlAPIError("getting service status", response.Status, body)
+		}
+		return fmt.Errorf("getting service status: %s", response.Status)
+	}
+	if asJSON {
+		if _, err := stdout.Write(body); err != nil {
+			return fmt.Errorf("writing service status response: %w", err)
+		}
+		return nil
+	}
+	return writeServiceStatusHuman(body, stdout)
+}
+
+// writeServiceStatusHuman validates and writes the service status projection.
+func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
+	var status struct {
+		Status        *string         `json:"status"`
+		Version       *string         `json:"version"`
+		Instance      *string         `json:"instance"`
+		Project       *string         `json:"project"`
+		ProxyListener json.RawMessage `json:"proxy_listener"`
+	}
+	if err := json.Unmarshal(body, &status); err != nil {
+		return fmt.Errorf("decoding service status: %w", err)
+	}
+	if status.Status == nil || *status.Status != "running" {
+		return errors.New("invalid service status: status must be running")
+	}
+	if status.Version == nil || *status.Version == "" {
+		return errors.New("invalid service status: version must be a non-empty string")
+	}
+	if status.Instance == nil || *status.Instance == "" {
+		return errors.New("invalid service status: instance must be a non-empty string")
+	}
+	if strings.TrimSpace(*status.Instance) != *status.Instance {
+		return errors.New("invalid service status: instance must be canonical")
+	}
+	if status.Project == nil || *status.Project == "" {
+		return errors.New("invalid service status: project must be a non-empty string")
+	}
+	if strings.TrimSpace(*status.Project) != *status.Project || strings.HasSuffix(*status.Project, ".marasi") {
+		return errors.New("invalid service status: project must be canonical")
+	}
+	if status.ProxyListener == nil {
+		return errors.New("invalid service status: proxy_listener is missing")
+	}
+	proxyListener := "inactive"
+	if string(status.ProxyListener) != "null" {
+		var address string
+		if err := json.Unmarshal(status.ProxyListener, &address); err != nil || address == "" {
+			return errors.New("invalid service status: proxy_listener must be a non-empty string or null")
+		}
+		proxyListener = address
+	}
+
+	if _, err := fmt.Fprintf(stdout, "status: %s\nversion: %s\ninstance: %s\nproject: %s\nproxy listener: %s\n", *status.Status, *status.Version, *status.Instance, *status.Project, proxyListener); err != nil {
+		return fmt.Errorf("writing service status: %w", err)
+	}
+	return nil
 }
 
 // startService starts a proxy instance and writes the listener address to stderr when ready.
