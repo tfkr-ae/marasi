@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -27,6 +28,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/internal/filelock"
+	"github.com/tfkr-ae/marasi/service"
 )
 
 var errServing = errors.New("serving failed")
@@ -1994,6 +1996,168 @@ func TestStartService(t *testing.T) {
 		}
 	})
 
+	t.Run("should publish proxied traffic events after the listener starts accepting", func(t *testing.T) {
+		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			fmt.Fprint(w, "proxied "+request.URL.Path)
+		}))
+		defer origin.Close()
+
+		configDir := serviceConfigDir(t)
+		projectPath := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		instancePath := filepath.Join(configDir, "instances", "work")
+		ctx, cancel := context.WithCancel(context.Background())
+		output := &lineWriter{lines: make(chan string, 1)}
+		result := make(chan error, 1)
+		go func() {
+			result <- startService(ctx, configDir, projectPath, instancePath, "127.0.0.1", 0, output)
+		}()
+		finished := false
+		defer func() {
+			if !finished {
+				cancel()
+				<-result
+			}
+		}()
+
+		var line string
+		select {
+		case line = <-output.lines:
+		case err := <-result:
+			finished = true
+			t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("\nwanted:\nproxy startup message\ngot:\ntimeout")
+		}
+		const prefix = "proxy listener started on "
+		if !strings.HasPrefix(line, prefix) {
+			t.Fatalf("\nwanted:\n%s<address>\ngot:\n%s", prefix, line)
+		}
+		proxyAddress := strings.TrimPrefix(line, prefix)
+
+		_, reader, closeEvents := connectInstanceEvents(t, instancePath+".sock")
+		defer closeEvents()
+
+		parsedProxyURL, err := url.Parse("http://" + proxyAddress)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		transport := &http.Transport{Proxy: http.ProxyURL(parsedProxyURL)}
+		defer transport.CloseIdleConnections()
+		response, err := (&http.Client{Transport: transport}).Get(origin.URL + "/events-path")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", readErr)
+		}
+		if got := string(body); got != "proxied /events-path" {
+			t.Fatalf("\nwanted:\nproxied /events-path\ngot:\n%s", got)
+		}
+
+		requestName, requestData := readControlEvent(t, reader)
+		responseName, responseData := readControlEvent(t, reader)
+		if requestName != "traffic.request" || responseName != "traffic.response" {
+			t.Fatalf("\nwanted:\ntraffic.request then traffic.response\ngot:\n%s then %s", requestName, responseName)
+		}
+		var requestEvent struct {
+			ID   string `json:"id"`
+			Path string `json:"path"`
+		}
+		var responseEvent struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(requestData), &requestEvent); err != nil {
+			t.Fatalf("\nwanted:\nrequest event JSON\ngot:\n%s (%v)", requestData, err)
+		}
+		if err := json.Unmarshal([]byte(responseData), &responseEvent); err != nil {
+			t.Fatalf("\nwanted:\nresponse event JSON\ngot:\n%s (%v)", responseData, err)
+		}
+		if requestEvent.ID == "" || requestEvent.ID != responseEvent.ID {
+			t.Fatalf("\nwanted:\nshared traffic UUID\ngot:\nrequest %q response %q", requestEvent.ID, responseEvent.ID)
+		}
+		if !strings.Contains(requestEvent.Path, "/events-path") {
+			t.Fatalf("\nwanted:\npath containing /events-path\ngot:\n%s", requestEvent.Path)
+		}
+
+		if err := stopService(context.Background(), instancePath); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := <-result; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		finished = true
+	})
+
+	t.Run("should complete proxied traffic when an event subscriber stops reading", func(t *testing.T) {
+		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			fmt.Fprint(w, "ok")
+		}))
+		defer origin.Close()
+
+		configDir := serviceConfigDir(t)
+		projectPath := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		instancePath := filepath.Join(configDir, "instances", "work")
+		ctx, cancel := context.WithCancel(context.Background())
+		output := &lineWriter{lines: make(chan string, 1)}
+		result := make(chan error, 1)
+		go func() {
+			result <- startService(ctx, configDir, projectPath, instancePath, "127.0.0.1", 0, output)
+		}()
+		finished := false
+		defer func() {
+			if !finished {
+				cancel()
+				<-result
+			}
+		}()
+
+		var line string
+		select {
+		case line = <-output.lines:
+		case err := <-result:
+			finished = true
+			t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("\nwanted:\nproxy startup message\ngot:\ntimeout")
+		}
+		proxyAddress := strings.TrimPrefix(line, "proxy listener started on ")
+
+		_, _, closeEvents := connectInstanceEvents(t, instancePath+".sock")
+		defer closeEvents()
+
+		parsedProxyURL, err := url.Parse("http://" + proxyAddress)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		client := &http.Client{
+			Transport: &http.Transport{Proxy: http.ProxyURL(parsedProxyURL)},
+			Timeout:   2 * time.Second,
+		}
+		defer client.Transport.(*http.Transport).CloseIdleConnections()
+		for range 200 {
+			response, err := client.Get(origin.URL + "/overflow")
+			if err != nil {
+				t.Fatalf("\nwanted:\ncompleted proxy request\ngot:\n%v", err)
+			}
+			if _, err := io.Copy(io.Discard, response.Body); err != nil {
+				response.Body.Close()
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			response.Body.Close()
+		}
+
+		closeEvents()
+		if err := stopService(context.Background(), instancePath); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := <-result; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		finished = true
+	})
+
 	t.Run("should stop through the control API", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
@@ -2336,4 +2500,87 @@ func waitForPath(t *testing.T, path string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func connectInstanceEvents(t *testing.T, socketPath string) (*http.Response, *bufio.Reader, func()) {
+	t.Helper()
+	client := service.NewClient(socketPath)
+	request, err := http.NewRequest(http.MethodGet, "http://marasi/events", nil)
+	if err != nil {
+		client.Close()
+		t.Fatalf("creating events request: %v", err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		client.Close()
+		t.Fatalf("connecting to events: %v", err)
+	}
+	if got := response.Header.Get("Content-Type"); got != "text/event-stream" {
+		response.Body.Close()
+		client.Close()
+		t.Fatalf("\nwanted:\ntext/event-stream\ngot:\n%s", got)
+	}
+	reader := bufio.NewReader(response.Body)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		response.Body.Close()
+		client.Close()
+		t.Fatalf("reading connected comment: %v", err)
+	}
+	blank, err := reader.ReadString('\n')
+	if err != nil {
+		response.Body.Close()
+		client.Close()
+		t.Fatalf("reading connected comment terminator: %v", err)
+	}
+	if got := line + blank; got != ": connected\n\n" {
+		response.Body.Close()
+		client.Close()
+		t.Fatalf("\nwanted:\n%s\ngot:\n%s", ": connected\\n\\n", got)
+	}
+	return response, reader, func() {
+		response.Body.Close()
+		client.Close()
+	}
+}
+
+func readControlEvent(t *testing.T, reader *bufio.Reader) (string, string) {
+	t.Helper()
+	type result struct {
+		name string
+		data string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		var name, data string
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				done <- result{err: err}
+				return
+			}
+			if line == "\n" {
+				done <- result{name: name, data: data}
+				return
+			}
+			line = strings.TrimSuffix(line, "\n")
+			switch {
+			case strings.HasPrefix(line, "event: "):
+				name = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: "):
+				data = strings.TrimPrefix(line, "data: ")
+			}
+		}
+	}()
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("reading control event: %v", got.err)
+		}
+		return got.name, got.data
+	case <-time.After(5 * time.Second):
+		t.Fatal("\nwanted:\ntraffic event\ngot:\ntimeout")
+	}
+	return "", ""
 }

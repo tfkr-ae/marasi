@@ -193,6 +193,74 @@ func TestServiceEvents(t *testing.T) {
 			t.Fatal("\nwanted:\nclosed stream\ngot:\nmore stream data")
 		}
 	})
+
+	t.Run("should publish request and response handler values on the event stream", func(t *testing.T) {
+		server := NewServer(nil, func() {})
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		response, reader := connectEventStream(t, httpServer.URL)
+		defer response.Body.Close()
+		id := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+
+		if err := server.HandleRequest(domain.ProxyRequest{
+			ID:          id,
+			Scheme:      "https",
+			Method:      "GET",
+			Host:        "example.com",
+			Path:        "/a?b=c",
+			Raw:         []byte("raw request"),
+			Metadata:    map[string]any{"foo": "bar", "prettified-request": "pretty request", "prettified-response": "pretty response"},
+			RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		}); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := server.HandleResponse(domain.ProxyResponse{
+			ID:          id,
+			Status:      "200 OK",
+			StatusCode:  200,
+			ContentType: "application/json",
+			Length:      "12",
+			Raw:         []byte("raw response"),
+			Metadata:    map[string]any{"foo": "bar", "prettified-request": "pretty request", "prettified-response": "pretty response"},
+			RespondedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC),
+		}); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if got := readEventFrame(t, reader); got != "event: traffic.request\ndata: {\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a?b=c\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\"}\n\n" {
+			t.Fatalf("\nwanted exact traffic.request frame\ngot:\n%s", got)
+		}
+		if got := readEventFrame(t, reader); got != "event: traffic.response\ndata: {\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"responded_at\":\"2026-01-02T03:04:06Z\"}\n\n" {
+			t.Fatalf("\nwanted exact traffic.response frame\ngot:\n%s", got)
+		}
+	})
+
+	t.Run("should return nil from handlers when a subscriber queue fills", func(t *testing.T) {
+		server := NewServer(nil, func() {})
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		response, _ := connectEventStream(t, httpServer.URL)
+		defer response.Body.Close()
+
+		done := make(chan error, 1)
+		go func() {
+			for range eventQueueSize + 1 {
+				if err := server.HandleRequest(domain.ProxyRequest{Path: "/overflow"}); err != nil {
+					done <- err
+					return
+				}
+			}
+			done <- nil
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\nhandlers to return while the subscriber is not reading\ngot:\nblocked publication")
+		}
+	})
 }
 
 func connectEventStream(t *testing.T, url string) (*http.Response, *bufio.Reader) {

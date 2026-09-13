@@ -203,6 +203,16 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 		return releaseInstance(controlListener, socketPath, instanceLock)
 	}
 
+	serviceCtx, stopService := context.WithCancel(ctx)
+	defer stopService()
+	serviceServer := service.NewServer(proxy, stopService)
+	if err := proxy.WithOptions(
+		marasi.WithRequestHandler(serviceServer.HandleRequest),
+		marasi.WithResponseHandler(serviceServer.HandleResponse),
+	); err != nil {
+		return fmt.Errorf("installing traffic event handlers: %w", err)
+	}
+
 	portString := strconv.FormatUint(uint64(port), 10)
 	proxyListener, err := proxy.GetListener(address, portString)
 	if err != nil {
@@ -215,9 +225,7 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 		return closeErr
 	}
 
-	serviceCtx, stopService := context.WithCancel(ctx)
-	defer stopService()
-	server := &http.Server{Handler: service.NewServer(proxy, stopService)}
+	server := &http.Server{Handler: serviceServer}
 	return serveControlAPIReady(serviceCtx, server, controlListener, shutdownTimeout, func() error {
 		return ready(proxyListener.Addr().String())
 	})

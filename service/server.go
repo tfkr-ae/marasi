@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 const eventHeartbeatInterval = 15 * time.Second
@@ -35,6 +36,20 @@ func NewServer(proxy *marasi.Proxy, stop func()) *Server {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
+}
+
+// HandleRequest publishes a traffic.request event. It always returns nil so
+// streaming failures cannot fail proxied traffic.
+func (s *Server) HandleRequest(request domain.ProxyRequest) error {
+	s.events.publishRequest(request)
+	return nil
+}
+
+// HandleResponse publishes a traffic.response event. It always returns nil so
+// streaming failures cannot fail proxied traffic.
+func (s *Server) HandleResponse(response domain.ProxyResponse) error {
+	s.events.publishResponse(response)
+	return nil
 }
 
 // Close closes active event streams.
