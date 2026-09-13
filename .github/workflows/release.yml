@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '[0-9][0-9].[0-9][0-9].[0-9][0-9][0-9][0-9]'
+      - '[0-9][0-9].[0-9][0-9].[0-9][0-9][0-9][0-9]-*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          default_branch=$(gh api "repos/${GITHUB_REPOSITORY}" --jq .default_branch)
+          git fetch origin "$default_branch"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
+            echo "::error::tag ${GITHUB_REF_NAME} is not on ${default_branch}"
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - run: go test -v -race ./...
+
+      - run: make linux-amd64 darwin-arm64 windows-amd64 VERSION="${GITHUB_REF_NAME}"
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum marasi-linux-amd64 marasi-darwin-arm64 marasi-windows-amd64.exe > checksums.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/marasi-linux-amd64
+            dist/marasi-darwin-arm64
+            dist/marasi-windows-amd64.exe
+            dist/checksums.txt

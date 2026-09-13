@@ -1,0 +1,73 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for recent commits
+        id: should_publish
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          commits=$(git rev-list --count --since='24 hours ago' HEAD)
+          if [ "$commits" -gt 0 ] || [ "$EVENT_NAME" = workflow_dispatch ]; then
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-go@v5
+        if: steps.should_publish.outputs.publish == 'true'
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        if: steps.should_publish.outputs.publish == 'true'
+        run: go test -v -race ./...
+
+      - name: Build
+        if: steps.should_publish.outputs.publish == 'true'
+        run: |
+          date_utc=$(date -u '+%d.%m.%Y')
+          make linux-amd64 darwin-arm64 windows-amd64 \
+            VERSION="${date_utc} (nightly ${GITHUB_SHA:0:7})"
+
+      - name: Checksums
+        if: steps.should_publish.outputs.publish == 'true'
+        working-directory: dist
+        run: sha256sum marasi-linux-amd64 marasi-darwin-arm64 marasi-windows-amd64.exe > checksums.txt
+
+      - name: Move nightly tag
+        if: steps.should_publish.outputs.publish == 'true'
+        run: |
+          git tag -f nightly
+          git push origin nightly --force
+
+      - uses: softprops/action-gh-release@v2
+        if: steps.should_publish.outputs.publish == 'true'
+        with:
+          tag_name: nightly
+          name: Nightly
+          prerelease: true
+          make_latest: false
+          body: |
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+          files: |
+            dist/marasi-linux-amd64
+            dist/marasi-darwin-arm64
+            dist/marasi-windows-amd64.exe
+            dist/checksums.txt
