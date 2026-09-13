@@ -9,15 +9,16 @@ permissions:
   contents: write
 
 jobs:
-  nightly:
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+      version: ${{ steps.check.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Check for recent commits
-        id: should_publish
+      - id: check
         env:
           EVENT_NAME: ${{ github.event_name }}
         run: |
@@ -27,42 +28,112 @@ jobs:
             exit 0
           fi
           commits=$(git rev-list --count --since='24 hours ago' HEAD)
-          if [ "$commits" -gt 0 ] || [ "$EVENT_NAME" = workflow_dispatch ]; then
-            echo 'publish=true' >> "$GITHUB_OUTPUT"
-          else
+          if [ "$commits" -eq 0 ] && [ "$EVENT_NAME" != workflow_dispatch ]; then
             echo 'publish=false' >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo 'publish=true' >> "$GITHUB_OUTPUT"
+          date_utc=$(date -u '+%d.%m.%Y')
+          {
+            echo 'version<<EOF'
+            echo "${date_utc} (nightly ${GITHUB_SHA:0:7})"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
+  test:
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        if: steps.should_publish.outputs.publish == 'true'
         with:
           go-version-file: go.mod
           cache: true
+      - run: go test -v -race ./...
 
-      - name: Test
-        if: steps.should_publish.outputs.publish == 'true'
-        run: go test -v -race ./...
+  build-linux:
+    needs: [prepare, test]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: make linux-amd64 windows-amd64 VERSION="$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unix-windows
+          path: |
+            dist/marasi-linux-amd64
+            dist/marasi-windows-amd64.exe
 
-      - name: Build
-        if: steps.should_publish.outputs.publish == 'true'
+  build-darwin:
+    needs: [prepare, test]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: make darwin-arm64 VERSION="$VERSION"
+      - uses: Apple-Actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.MACOS_DEVELOPER_CERT }}
+          p12-password: ${{ secrets.MACOS_DEVELOPER_CERT_PASSWORD }}
+          keychain-password: ${{ secrets.MACOS_DEVELOPER_CERT_PASSWORD }}
+      - name: Sign and notarize
+        env:
+          MACOS_DEVELOPER_CERT_ID: ${{ secrets.MACOS_DEVELOPER_CERT_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
-          date_utc=$(date -u '+%d.%m.%Y')
-          make linux-amd64 darwin-arm64 windows-amd64 \
-            VERSION="${date_utc} (nightly ${GITHUB_SHA:0:7})"
+          binary=dist/marasi-darwin-arm64
+          codesign --force --options runtime --timestamp --sign "$MACOS_DEVELOPER_CERT_ID" "$binary"
+          codesign --verify --verbose "$binary"
+          team_id="${MACOS_DEVELOPER_CERT_ID##*(}"
+          team_id="${team_id%)}"
+          zip_path="${binary}.zip"
+          ditto -c -k "$binary" "$zip_path"
+          xcrun notarytool submit "$zip_path" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$team_id" \
+            --wait
+          rm -f "$zip_path"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin
+          path: dist/marasi-darwin-arm64
 
+  publish:
+    needs: [prepare, build-linux, build-darwin]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - name: Checksums
-        if: steps.should_publish.outputs.publish == 'true'
         working-directory: dist
         run: sha256sum marasi-linux-amd64 marasi-darwin-arm64 marasi-windows-amd64.exe > checksums.txt
-
       - name: Move nightly tag
-        if: steps.should_publish.outputs.publish == 'true'
         run: |
           git tag -f nightly
           git push origin nightly --force
-
       - name: Publish nightly
-        if: steps.should_publish.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
