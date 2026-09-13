@@ -444,6 +444,7 @@ type cannedControlRequest struct {
 	Method   string
 	Path     string
 	RawQuery string
+	Body     string
 }
 
 func startCannedControlAPI(t *testing.T, configDir, name string, status int, body string) *cannedControlRequest {
@@ -461,6 +462,8 @@ func startCannedControlAPI(t *testing.T, configDir, name string, status int, bod
 		got.Method = r.Method
 		got.Path = r.URL.Path
 		got.RawQuery = r.URL.RawQuery
+		requestBody, _ := io.ReadAll(r.Body)
+		got.Body = string(requestBody)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		io.WriteString(w, body)
