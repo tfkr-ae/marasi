@@ -103,10 +103,15 @@ jobs:
           team_id="${team_id%)}"
           zip_path="${binary}.zip"
           ditto -c -k "$binary" "$zip_path"
-          xcrun notarytool submit "$zip_path" \
+          keychain="$HOME/Library/Keychains/signing_temp.keychain-db"
+          xcrun notarytool store-credentials marasi-notary \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_SPECIFIC_PASSWORD" \
             --team-id "$team_id" \
+            --keychain "$keychain"
+          xcrun notarytool submit "$zip_path" \
+            --keychain-profile marasi-notary \
+            --keychain "$keychain" \
             --wait
           rm -f "$zip_path"
       - uses: actions/upload-artifact@v4
