@@ -16,23 +16,63 @@ type Server struct {
 	mux               *http.ServeMux    // control API routes
 	events            *eventBroadcaster // live traffic event fan-out
 	heartbeatInterval time.Duration     // idle SSE comment interval
+	proxy             *marasi.Proxy
+	version           string
+	instance          string
+	project           string
 }
 
 // NewServer creates a control API server for proxy.
 // stop runs after a POST /service/stop, once event streams have been closed.
-func NewServer(proxy *marasi.Proxy, stop func()) *Server {
+func NewServer(proxy *marasi.Proxy, stop func(), version, instance, project string) *Server {
 	mux := http.NewServeMux()
 	server := &Server{
 		mux:               mux,
 		events:            newEventBroadcaster(),
 		heartbeatInterval: eventHeartbeatInterval,
+		proxy:             proxy,
+		version:           version,
+		instance:          instance,
+		project:           project,
 	}
-	addRoutes(mux, proxy, func() {
+	addRoutes(mux, proxy, server.serveStatus, func() {
 		server.Close()
 		stop()
 	})
 	mux.HandleFunc("/events", server.serveEvents)
 	return server
+}
+
+func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.project == "" {
+		writeJSON(w, r, http.StatusInternalServerError, struct {
+			Error string `json:"error"`
+		}{Error: "internal_server_error"})
+		return
+	}
+
+	var proxyListener *string
+	if address, active := s.proxy.ActiveListenerAddress(); active {
+		proxyListener = &address
+	}
+	writeJSON(w, r, http.StatusOK, struct {
+		Status        string  `json:"status"`
+		Version       string  `json:"version"`
+		Instance      string  `json:"instance"`
+		Project       string  `json:"project"`
+		ProxyListener *string `json:"proxy_listener"`
+	}{
+		Status:        "running",
+		Version:       s.version,
+		Instance:      s.instance,
+		Project:       s.project,
+		ProxyListener: proxyListener,
+	})
 }
 
 // ServeHTTP serves the instance control API.

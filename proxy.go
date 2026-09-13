@@ -591,6 +591,17 @@ func (proxy *Proxy) GetListener(address string, port string) (net.Listener, erro
 	return marasiListener, nil
 }
 
+// ActiveListenerAddress returns the bound address of the listener currently
+// served by the proxy.
+func (proxy *Proxy) ActiveListenerAddress() (string, bool) {
+	proxy.listenerMu.Lock()
+	defer proxy.listenerMu.Unlock()
+	if proxy.activeListener == nil {
+		return "", false
+	}
+	return proxy.activeListener.Addr().String(), true
+}
+
 // Serve starts the proxy and begins accepting connections on the provided listener.
 // It also starts the database writer goroutine.
 func (proxy *Proxy) Serve(activeListener net.Listener) error {

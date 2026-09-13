@@ -924,6 +924,62 @@ func TestProxy_CloseStopsServeCleanly(t *testing.T) {
 	close(proxy.DBWriteChannel)
 }
 
+func TestProxy_ActiveListenerAddress(t *testing.T) {
+	t.Run("should report no address before serving", func(t *testing.T) {
+		proxy := &Proxy{}
+
+		address, active := proxy.ActiveListenerAddress()
+
+		if active || address != "" {
+			t.Fatalf("\nwanted:\nno active listener\ngot:\n%q, %t", address, active)
+		}
+	})
+
+	t.Run("should report the active listener's assigned address", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("creating listener: %v", err)
+		}
+		proxy := &Proxy{
+			martianProxy:      martian.NewProxy(),
+			DBWriteChannel:    make(chan any, 1),
+			WebSocketRegistry: marasiws.NewRegistry(),
+			Addr:              "wrong-address",
+			Port:              "1",
+		}
+		serveResult := make(chan error, 1)
+		go func() { serveResult <- proxy.Serve(listener) }()
+
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			address, active := proxy.ActiveListenerAddress()
+			if active {
+				if address != listener.Addr().String() {
+					t.Fatalf("\nwanted:\n%s\ngot:\n%s", listener.Addr(), address)
+				}
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("proxy did not start serving")
+			}
+			time.Sleep(time.Millisecond)
+		}
+
+		if err := proxy.Close(); err != nil {
+			t.Fatalf("closing proxy: %v", err)
+		}
+		if err := <-serveResult; err != nil {
+			t.Fatalf("serving proxy: %v", err)
+		}
+		close(proxy.DBWriteChannel)
+
+		address, active := proxy.ActiveListenerAddress()
+		if active || address != "" {
+			t.Fatalf("\nwanted:\nno active listener after close\ngot:\n%q, %t", address, active)
+		}
+	})
+}
+
 func TestProxy_GetListenerAcceptsNetListenAddresses(t *testing.T) {
 	addresses := []string{"localhost", "127.0.0.1", "0.0.0.0"}
 	if probe, err := net.Listen("tcp", net.JoinHostPort("::1", "0")); err == nil {

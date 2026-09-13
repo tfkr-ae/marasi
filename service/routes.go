@@ -11,16 +11,17 @@ import (
 )
 
 // addRoutes registers control and traffic routes on mux.
-func addRoutes(mux *http.ServeMux, proxy *marasi.Proxy, stop func()) {
+func addRoutes(mux *http.ServeMux, proxy *marasi.Proxy, status http.HandlerFunc, stop func()) {
 	serviceMux := http.NewServeMux()
-	addServiceRoutes(serviceMux, stop)
+	addServiceRoutes(serviceMux, status, stop)
 	mux.Handle("/service/", http.StripPrefix("/service", serviceMux))
 	addTrafficRoutes(mux, proxy)
 }
 
-// addServiceRoutes registers POST /stop, which runs stop once and returns 202.
-func addServiceRoutes(mux *http.ServeMux, stop func()) {
+// addServiceRoutes registers the service status and stop routes.
+func addServiceRoutes(mux *http.ServeMux, status http.HandlerFunc, stop func()) {
 	var stopOnce sync.Once
+	mux.HandleFunc("/status", status)
 	mux.HandleFunc("POST /stop", func(w http.ResponseWriter, r *http.Request) {
 		stopOnce.Do(stop)
 		if err := encode(w, r, http.StatusAccepted, map[string]string{"status": "shutdown_in_progress"}); err != nil {

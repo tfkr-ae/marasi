@@ -14,7 +14,7 @@ import (
 
 func TestServiceEvents(t *testing.T) {
 	t.Run("should connect and flush an event stream", func(t *testing.T) {
-		server := NewServer(nil, func() {})
+		server := newTestServer(nil, func() {})
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
 		response, _ := connectEventStream(t, httpServer.URL)
@@ -23,7 +23,7 @@ func TestServiceEvents(t *testing.T) {
 
 	t.Run("should accept explicit broad and missing accept headers", func(t *testing.T) {
 		for _, accept := range []string{"text/event-stream", "*/*", ""} {
-			server := NewServer(nil, func() {})
+			server := newTestServer(nil, func() {})
 			httpServer := httptest.NewServer(server)
 			request, err := http.NewRequest(http.MethodGet, httpServer.URL+"/events", nil)
 			if err != nil {
@@ -48,7 +48,7 @@ func TestServiceEvents(t *testing.T) {
 	})
 
 	t.Run("should reject non-GET methods", func(t *testing.T) {
-		server := NewServer(nil, func() {})
+		server := newTestServer(nil, func() {})
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
 		for _, method := range []string{http.MethodHead, http.MethodPost} {
@@ -68,7 +68,7 @@ func TestServiceEvents(t *testing.T) {
 	})
 
 	t.Run("should frame publications without an SSE id", func(t *testing.T) {
-		server := NewServer(nil, func() {})
+		server := newTestServer(nil, func() {})
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
 		response, reader := connectEventStream(t, httpServer.URL)
@@ -85,7 +85,7 @@ func TestServiceEvents(t *testing.T) {
 	})
 
 	t.Run("should flush heartbeat comments without waiting fifteen seconds", func(t *testing.T) {
-		server := NewServer(nil, func() {})
+		server := newTestServer(nil, func() {})
 		server.heartbeatInterval = time.Millisecond
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
@@ -106,7 +106,7 @@ func TestServiceEvents(t *testing.T) {
 	})
 
 	t.Run("should wait for an idle interval after a publication before heartbeating", func(t *testing.T) {
-		server := NewServer(nil, func() {})
+		server := newTestServer(nil, func() {})
 		server.heartbeatInterval = 80 * time.Millisecond
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
@@ -141,7 +141,7 @@ func TestServiceEvents(t *testing.T) {
 	})
 
 	t.Run("should send publications in order to concurrent subscribers", func(t *testing.T) {
-		server := NewServer(nil, func() {})
+		server := newTestServer(nil, func() {})
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
 		firstResponse, first := connectEventStream(t, httpServer.URL)
@@ -165,7 +165,7 @@ func TestServiceEvents(t *testing.T) {
 	})
 
 	t.Run("should remove a subscriber when its request is cancelled", func(t *testing.T) {
-		server := NewServer(nil, func() {})
+		server := newTestServer(nil, func() {})
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
 		response, _ := connectEventStream(t, httpServer.URL)
@@ -177,7 +177,7 @@ func TestServiceEvents(t *testing.T) {
 	})
 
 	t.Run("should close streams without a final event during service shutdown", func(t *testing.T) {
-		server := NewServer(nil, func() {})
+		server := newTestServer(nil, func() {})
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
 		response, reader := connectEventStream(t, httpServer.URL)
@@ -195,7 +195,7 @@ func TestServiceEvents(t *testing.T) {
 	})
 
 	t.Run("should publish request and response handler values on the event stream", func(t *testing.T) {
-		server := NewServer(nil, func() {})
+		server := newTestServer(nil, func() {})
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
 		response, reader := connectEventStream(t, httpServer.URL)
@@ -236,7 +236,7 @@ func TestServiceEvents(t *testing.T) {
 	})
 
 	t.Run("should return nil from handlers when a subscriber queue fills", func(t *testing.T) {
-		server := NewServer(nil, func() {})
+		server := newTestServer(nil, func() {})
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
 		response, _ := connectEventStream(t, httpServer.URL)

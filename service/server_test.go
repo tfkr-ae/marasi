@@ -3,6 +3,8 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +15,10 @@ import (
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/domain"
 )
+
+func newTestServer(proxy *marasi.Proxy, stop func()) *Server {
+	return NewServer(proxy, stop, "test-version", "test-instance", "test-project")
+}
 
 type stubTrafficRepository struct {
 	domain.TrafficRepository
@@ -84,7 +90,7 @@ func (r *shutdownOrderRecorder) WriteHeader(status int) {
 func TestServiceStop(t *testing.T) {
 	t.Run("should request shutdown and return accepted", func(t *testing.T) {
 		stopCalls := 0
-		server := NewServer(nil, func() { stopCalls++ })
+		server := newTestServer(nil, func() { stopCalls++ })
 		request := httptest.NewRequest(http.MethodPost, "/service/stop", nil)
 		response := &shutdownOrderRecorder{
 			ResponseRecorder:  httptest.NewRecorder(),
@@ -112,7 +118,7 @@ func TestServiceStop(t *testing.T) {
 
 	t.Run("should request shutdown once across repeated requests", func(t *testing.T) {
 		stopCalls := 0
-		server := NewServer(nil, func() { stopCalls++ })
+		server := newTestServer(nil, func() { stopCalls++ })
 
 		for range 2 {
 			request := httptest.NewRequest(http.MethodPost, "/service/stop", nil)
@@ -133,7 +139,7 @@ func TestServiceStop(t *testing.T) {
 	})
 
 	t.Run("should reject other methods", func(t *testing.T) {
-		server := NewServer(nil, func() {})
+		server := newTestServer(nil, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/service/stop", nil)
 		response := httptest.NewRecorder()
 
@@ -146,7 +152,7 @@ func TestServiceStop(t *testing.T) {
 
 	for _, path := range []string{"/service/unknown", "/stop"} {
 		t.Run("should not find "+path, func(t *testing.T) {
-			server := NewServer(nil, func() {})
+			server := newTestServer(nil, func() {})
 			request := httptest.NewRequest(http.MethodPost, path, nil)
 			response := httptest.NewRecorder()
 
@@ -157,6 +163,118 @@ func TestServiceStop(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServiceStatus(t *testing.T) {
+	t.Run("should report the supplied identity and active assigned listener", func(t *testing.T) {
+		proxy, err := marasi.New()
+		if err != nil {
+			t.Fatalf("creating proxy: %v", err)
+		}
+		proxy.Addr = "wrong-address"
+		proxy.Port = "1"
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("creating listener: %v", err)
+		}
+		serveResult := make(chan error, 1)
+		go func() { serveResult <- proxy.Serve(listener) }()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if _, active := proxy.ActiveListenerAddress(); active {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("proxy did not start serving")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Cleanup(func() {
+			if err := proxy.Close(); err != nil {
+				t.Fatalf("closing proxy: %v", err)
+			}
+			if err := <-serveResult; err != nil {
+				t.Fatalf("serving proxy: %v", err)
+			}
+			close(proxy.DBWriteChannel)
+		})
+
+		server := NewServer(proxy, func() {}, "13.09.2026", "work", "juice-shop")
+		request := httptest.NewRequest(http.MethodGet, "/service/status", nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
+		}
+		if got := response.Header().Get("Content-Type"); got != "application/json" {
+			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		}
+		want := fmt.Sprintf("{\"status\":\"running\",\"version\":\"13.09.2026\",\"instance\":\"work\",\"project\":\"juice-shop\",\"proxy_listener\":%q}\n", listener.Addr().String())
+		if got := response.Body.String(); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should report an inactive listener", func(t *testing.T) {
+		server := NewServer(&marasi.Proxy{}, func() {}, "dev", "default", "scratchpad")
+		request := httptest.NewRequest(http.MethodGet, "/service/status", nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
+		}
+		if got := response.Header().Get("Content-Type"); got != "application/json" {
+			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		}
+		want := "{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"default\",\"project\":\"scratchpad\",\"proxy_listener\":null}\n"
+		if got := response.Body.String(); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should return an internal error without an open project", func(t *testing.T) {
+		server := NewServer(&marasi.Proxy{}, func() {}, "dev", "default", "")
+		request := httptest.NewRequest(http.MethodGet, "/service/status", nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		if response.Code != http.StatusInternalServerError {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusInternalServerError, response.Code)
+		}
+		if got := response.Header().Get("Content-Type"); got != "application/json" {
+			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		}
+		if got := response.Body.String(); got != "{\"error\":\"internal_server_error\"}\n" {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", "{\"error\":\"internal_server_error\"}\\n", got)
+		}
+	})
+
+	t.Run("should reject other methods and leave unknown paths not found", func(t *testing.T) {
+		server := NewServer(&marasi.Proxy{}, func() {}, "dev", "default", "scratchpad")
+		for _, test := range []struct {
+			method string
+			path   string
+			status int
+		}{
+			{method: http.MethodPost, path: "/service/status", status: http.StatusMethodNotAllowed},
+			{method: http.MethodHead, path: "/service/status", status: http.StatusMethodNotAllowed},
+			{method: http.MethodGet, path: "/service/unknown", status: http.StatusNotFound},
+		} {
+			request := httptest.NewRequest(test.method, test.path, nil)
+			response := httptest.NewRecorder()
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != test.status {
+				t.Fatalf("\n%s %s wanted:\n%d\ngot:\n%d", test.method, test.path, test.status, response.Code)
+			}
+		}
+	})
 }
 
 func TestTrafficGet(t *testing.T) {
@@ -186,7 +304,7 @@ func TestTrafficGet(t *testing.T) {
 				Note:     "a note",
 			},
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic/"+id.String(), nil)
 		response := httptest.NewRecorder()
 
@@ -234,7 +352,7 @@ func TestTrafficGet(t *testing.T) {
 				Note: "a note",
 			},
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic/"+id.String(), nil)
 		response := httptest.NewRecorder()
 
@@ -253,7 +371,7 @@ func TestTrafficGet(t *testing.T) {
 	})
 
 	t.Run("should not find a well-formed unknown id", func(t *testing.T) {
-		server := NewServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic/01938032-1b17-7243-b035-e6a9f4645904", nil)
 		response := httptest.NewRecorder()
 
@@ -271,7 +389,7 @@ func TestTrafficGet(t *testing.T) {
 	})
 
 	t.Run("should reject an unparseable id", func(t *testing.T) {
-		server := NewServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic/not-a-uuid", nil)
 		response := httptest.NewRecorder()
 
@@ -290,7 +408,7 @@ func TestTrafficGet(t *testing.T) {
 
 	t.Run("should reject other methods", func(t *testing.T) {
 		id := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
-		server := NewServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
 		request := httptest.NewRequest(http.MethodPost, "/traffic/"+id.String(), nil)
 		response := httptest.NewRecorder()
 
@@ -321,7 +439,7 @@ func TestTrafficList(t *testing.T) {
 				RespondedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC),
 			}},
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic", nil)
 		response := httptest.NewRecorder()
 
@@ -361,7 +479,7 @@ func TestTrafficList(t *testing.T) {
 				RespondedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC),
 			}},
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic", nil)
 		response := httptest.NewRecorder()
 
@@ -395,7 +513,7 @@ func TestTrafficList(t *testing.T) {
 				RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 			}},
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic", nil)
 		response := httptest.NewRecorder()
 
@@ -423,7 +541,7 @@ func TestTrafficList(t *testing.T) {
 			},
 			nextCursor: &older,
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic?limit=2", nil)
 		response := httptest.NewRecorder()
 
@@ -450,7 +568,7 @@ func TestTrafficList(t *testing.T) {
 			}
 			items[i] = &domain.RequestResponseSummary{ID: id, Length: "0"}
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{items: items}}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{items: items}}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic", nil)
 		response := httptest.NewRecorder()
 
@@ -480,7 +598,7 @@ func TestTrafficList(t *testing.T) {
 	})
 
 	t.Run("should reject a limit below 1, above 500, or a non-integer", func(t *testing.T) {
-		server := NewServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
 		for _, raw := range []string{"0", "501", "abc", "1.5"} {
 			request := httptest.NewRequest(http.MethodGet, "/traffic?limit="+raw, nil)
 			response := httptest.NewRecorder()
@@ -508,7 +626,7 @@ func TestTrafficList(t *testing.T) {
 				{ID: older, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
 			},
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic?cursor="+newer.String(), nil)
 		response := httptest.NewRecorder()
 
@@ -533,7 +651,7 @@ func TestTrafficList(t *testing.T) {
 				{ID: id, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
 			},
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic?cursor="+uuid.Nil.String(), nil)
 		response := httptest.NewRecorder()
 
@@ -552,7 +670,7 @@ func TestTrafficList(t *testing.T) {
 	})
 
 	t.Run("should reject an unparseable cursor", func(t *testing.T) {
-		server := NewServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic?cursor=not-a-uuid", nil)
 		response := httptest.NewRecorder()
 
@@ -570,7 +688,7 @@ func TestTrafficList(t *testing.T) {
 	})
 
 	t.Run("should reject other methods", func(t *testing.T) {
-		server := NewServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
 		request := httptest.NewRequest(http.MethodPost, "/traffic", nil)
 		response := httptest.NewRecorder()
 
@@ -590,7 +708,7 @@ func TestTrafficList(t *testing.T) {
 				{ID: matching, Host: "example.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
 			},
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic?host=example.com", nil)
 		response := httptest.NewRecorder()
 
@@ -617,7 +735,7 @@ func TestTrafficList(t *testing.T) {
 				{ID: matching, Method: "POST", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
 			},
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic?method=POST", nil)
 		response := httptest.NewRecorder()
 
@@ -644,7 +762,7 @@ func TestTrafficList(t *testing.T) {
 				{ID: matching, StatusCode: 200, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
 			},
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic?status_code=200", nil)
 		response := httptest.NewRecorder()
 
@@ -671,7 +789,7 @@ func TestTrafficList(t *testing.T) {
 				{ID: matching, Path: "/api/users?id=1", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
 			},
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic?path=/api/users", nil)
 		response := httptest.NewRecorder()
 
@@ -698,7 +816,7 @@ func TestTrafficList(t *testing.T) {
 				{ID: matching, Host: "example.com", Method: "POST", Path: "/api/users", StatusCode: 200, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
 			},
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic?host=example.com&method=POST&status_code=200&path=/api", nil)
 		response := httptest.NewRecorder()
 
@@ -725,7 +843,7 @@ func TestTrafficList(t *testing.T) {
 				{ID: matching, Host: "example.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
 			},
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic?host=example.com&q=secret", nil)
 		response := httptest.NewRecorder()
 
@@ -744,7 +862,7 @@ func TestTrafficList(t *testing.T) {
 	})
 
 	t.Run("should reject a non-integer status_code", func(t *testing.T) {
-		server := NewServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
 		for _, raw := range []string{"abc", "1.5"} {
 			request := httptest.NewRequest(http.MethodGet, "/traffic?status_code="+raw, nil)
 			response := httptest.NewRecorder()
@@ -774,7 +892,7 @@ func TestTrafficList(t *testing.T) {
 				{ID: oldest, Host: "example.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
 			},
 		}
-		server := NewServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic?host=example.com&limit=1", nil)
 		response := httptest.NewRecorder()
 

@@ -1416,6 +1416,70 @@ func TestStopCommand(t *testing.T) {
 }
 
 func TestStartService(t *testing.T) {
+	t.Run("should report the Make-injected version and canonical names from the running binary", func(t *testing.T) {
+		dist := t.TempDir()
+		const wantVersion = "ticket-01-test-version"
+		command := exec.Command("make", "-C", filepath.Join("..", ".."), "build", "DIST="+dist, "VERSION="+wantVersion)
+		command.Env = append(os.Environ(), "GOWORK=off")
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("\nwanted:\nMake-built marasi command\ngot:\n%s\n%v", output, err)
+		}
+		binary := filepath.Join(dist, "marasi")
+		configDir := serviceConfigDir(t)
+		stopped := false
+		t.Cleanup(func() {
+			if !stopped {
+				runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop")
+			}
+		})
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", " work ", "service", "start", "--project", " juice-shop.marasi ", "--port", "0")
+		if err != nil {
+			t.Fatalf("\nwanted:\nrunning service\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		if stdout != "" {
+			t.Fatalf("\nwanted:\nempty stdout\ngot:\n%s", stdout)
+		}
+		const listenerPrefix = "proxy listener started on "
+		listenerIndex := strings.Index(stderr, listenerPrefix)
+		if listenerIndex < 0 {
+			t.Fatalf("\nwanted:\nproxy listener startup output\ngot:\n%s", stderr)
+		}
+		proxyListener := strings.TrimSpace(stderr[listenerIndex+len(listenerPrefix):])
+		socketPath := filepath.Join(configDir, "instances", "work.sock")
+		waitForPath(t, socketPath)
+		client := service.NewClient(socketPath)
+		defer client.Close()
+		request, err := http.NewRequest(http.MethodGet, "http://marasi/service/status", nil)
+		if err != nil {
+			t.Fatalf("creating status request: %v", err)
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatalf("getting service status: %v", err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil {
+			t.Fatalf("reading service status: %v", readErr)
+		}
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.StatusCode)
+		}
+		if got := response.Header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		}
+		want := fmt.Sprintf("{\"status\":\"running\",\"version\":%q,\"instance\":\"work\",\"project\":\"juice-shop\",\"proxy_listener\":%q}\n", wantVersion, proxyListener)
+		if got := string(body); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+
+		if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop"); err != nil {
+			t.Fatalf("stopping service: %v", err)
+		}
+		stopped = true
+	})
+
 	t.Run("should print JSON for a named instance and report its completed stop", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		binary := buildMarasi(t)

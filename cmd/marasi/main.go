@@ -4,6 +4,8 @@ package main
 
 import "os"
 
+var version = "dev"
+
 func main() {
 	if err := executeCommand(os.Args[1:]); err != nil {
 		os.Exit(1)

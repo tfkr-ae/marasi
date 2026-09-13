@@ -214,7 +214,9 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 
 	serviceCtx, stopService := context.WithCancel(ctx)
 	defer stopService()
-	serviceServer := service.NewServer(proxy, stopService)
+	instanceName := filepath.Base(instancePath)
+	projectName := strings.TrimSuffix(filepath.Base(projectPath), ".marasi")
+	serviceServer := service.NewServer(proxy, stopService, version, instanceName, projectName)
 	if err := proxy.WithOptions(
 		marasi.WithRequestHandler(serviceServer.HandleRequest),
 		marasi.WithResponseHandler(serviceServer.HandleResponse),
