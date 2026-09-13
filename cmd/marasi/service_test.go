@@ -258,6 +258,25 @@ func TestProxyListenerFlags(t *testing.T) {
 }
 
 func TestGlobalJSONOption(t *testing.T) {
+	t.Run("should be accepted by every executable command", func(t *testing.T) {
+		binary := buildMarasi(t)
+		tests := []struct {
+			name string
+			args []string
+		}{
+			{name: "service start before command group", args: []string{"--json", "--config-dir=", "service", "start"}},
+			{name: "service stop after executable command", args: []string{"service", "stop", "--json", "--config-dir="}},
+			{name: "traffic list before command group", args: []string{"--json", "--config-dir=", "traffic", "list"}},
+			{name: "traffic get after executable command", args: []string{"traffic", "get", "00000000-0000-0000-0000-000000000000", "--json", "--config-dir="}},
+		}
+		for _, test := range tests {
+			t.Run("should accept JSON for "+test.name, func(t *testing.T) {
+				stdout, stderr, err := runMarasi(binary, test.args...)
+				assertJSONCommandError(t, stdout, stderr, err, "config dir is empty")
+			})
+		}
+	})
+
 	t.Run("should keep help human-readable when set", func(t *testing.T) {
 		stdout, stderr, err := runMarasi(buildMarasi(t), "--json", "--help")
 		if err != nil {
