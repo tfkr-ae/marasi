@@ -97,22 +97,11 @@ func TestTrafficListCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("should fail without JSON when the control listener is missing and --json is set", func(t *testing.T) {
+	t.Run("should print a JSON error when the control listener is missing", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 
-		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--json")
-		if err == nil {
-			t.Fatal("\nwanted:\nerror\ngot:\nnil")
-		}
-		if !strings.Contains(err.Error(), "work") {
-			t.Fatalf("\nwanted:\nerror naming work\ngot:\n%v", err)
-		}
-		if stdout != "" {
-			t.Fatalf("\nwanted:\nno stdout\ngot:\n%s", stdout)
-		}
-		if !strings.Contains(stderr, "work") {
-			t.Fatalf("\nwanted:\nstderr naming work\ngot:\n%s", stderr)
-		}
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "list", "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "instance work is not running")
 	})
 
 	t.Run("should print a short stderr message for a 400", func(t *testing.T) {
@@ -138,22 +127,31 @@ func TestTrafficListCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("should print the 400 body with --json and exit non-zero", func(t *testing.T) {
+	t.Run("should normalize a JSON control API error", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		body := `{"error":"bad_request"}`
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, body)
 
-		stdout, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--json", "--limit", "0")
-		if err == nil {
-			t.Fatal("\nwanted:\nerror\ngot:\nnil")
-		}
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "list", "--json", "--limit", "0")
 		if sent.RawQuery != "limit=0" {
 			t.Fatalf("\nwanted:\nlimit=0\ngot:\n%s", sent.RawQuery)
 		}
-		if stdout != body {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", body, stdout)
-		}
+		assertJSONCommandError(t, stdout, stderr, err, "listing traffic: bad_request")
 	})
+
+	for name, body := range map[string]string{
+		"missing API error":    `{}`,
+		"malformed API error":  `{`,
+		"non-string API error": `{"error":42}`,
+	} {
+		t.Run("should use HTTP status for "+name, func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, body)
+
+			stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "list", "--json")
+			assertJSONCommandError(t, stdout, stderr, err, "listing traffic: 400 Bad Request")
+		})
+	}
 
 	t.Run("should send --cursor as the cursor query parameter", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
@@ -370,19 +368,14 @@ func TestTrafficGetCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("should print the 404 body with --json and exit non-zero", func(t *testing.T) {
+	t.Run("should normalize a JSON control API error", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		id := "01938032-1b17-7243-b035-e6a9f4645904"
 		body := `{"error":"not_found"}`
 		startCannedControlAPI(t, configDir, "work", http.StatusNotFound, body)
 
-		stdout, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", "--json", id)
-		if err == nil {
-			t.Fatal("\nwanted:\nerror\ngot:\nnil")
-		}
-		if stdout != body {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", body, stdout)
-		}
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "get", "--json", id)
+		assertJSONCommandError(t, stdout, stderr, err, "getting traffic: not_found")
 	})
 
 	t.Run("should fail and name the instance when the control listener is missing", func(t *testing.T) {
@@ -403,22 +396,11 @@ func TestTrafficGetCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("should fail without JSON when the control listener is missing and --json is set", func(t *testing.T) {
+	t.Run("should print a JSON error when the control listener is missing", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 
-		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", "--json", "0193802f-f0e7-73d9-a764-06d21e367809")
-		if err == nil {
-			t.Fatal("\nwanted:\nerror\ngot:\nnil")
-		}
-		if !strings.Contains(err.Error(), "work") {
-			t.Fatalf("\nwanted:\nerror naming work\ngot:\n%v", err)
-		}
-		if stdout != "" {
-			t.Fatalf("\nwanted:\nno stdout\ngot:\n%s", stdout)
-		}
-		if !strings.Contains(stderr, "work") {
-			t.Fatalf("\nwanted:\nstderr naming work\ngot:\n%s", stderr)
-		}
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "get", "--json", "0193802f-f0e7-73d9-a764-06d21e367809")
+		assertJSONCommandError(t, stdout, stderr, err, "instance work is not running")
 	})
 
 	t.Run("should require exactly one uuid", func(t *testing.T) {
@@ -509,6 +491,6 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 		rootCmd.SetErr(nil)
 		rootCmd.SetContext(nil)
 	})
-	err = rootCmd.Execute()
+	err = executeCommand(args)
 	return outBuf.String(), errBuf.String(), err
 }

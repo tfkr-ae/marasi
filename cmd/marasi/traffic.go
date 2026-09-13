@@ -110,17 +110,20 @@ func listTraffic(ctx context.Context, instancePath, instanceName string, asJSON 
 			wrapError("closing traffic list response", closeErr),
 		)
 	}
+	if response.StatusCode != http.StatusOK {
+		if asJSON {
+			return controlAPIError("listing traffic", response.Status, body)
+		}
+		return fmt.Errorf("listing traffic: %s", response.Status)
+	}
 	if asJSON {
 		if _, err := stdout.Write(body); err != nil {
 			return err
 		}
-	} else if response.StatusCode == http.StatusOK {
+	} else {
 		if err := writeTrafficListHuman(body, stdout, stderr); err != nil {
 			return err
 		}
-	}
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("listing traffic: %s", response.Status)
 	}
 	return nil
 }
@@ -178,19 +181,33 @@ func getTraffic(ctx context.Context, instancePath, instanceName string, asJSON b
 			wrapError("closing traffic get response", closeErr),
 		)
 	}
+	if response.StatusCode != http.StatusOK {
+		if asJSON {
+			return controlAPIError("getting traffic", response.Status, body)
+		}
+		return fmt.Errorf("getting traffic: %s", response.Status)
+	}
 	if asJSON {
 		if _, err := stdout.Write(body); err != nil {
 			return err
 		}
-	} else if response.StatusCode == http.StatusOK {
+	} else {
 		if err := writeTrafficGetHuman(body, stdout); err != nil {
 			return err
 		}
 	}
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("getting traffic: %s", response.Status)
-	}
 	return nil
+}
+
+func controlAPIError(operation, status string, body []byte) error {
+	var payload struct {
+		Error json.RawMessage `json:"error"`
+	}
+	var message string
+	if json.Unmarshal(body, &payload) == nil && json.Unmarshal(payload.Error, &message) == nil {
+		return fmt.Errorf("%s: %s", operation, message)
+	}
+	return fmt.Errorf("%s: %s", operation, status)
 }
 
 func writeTrafficGetHuman(body []byte, stdout io.Writer) error {

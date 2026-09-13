@@ -3,7 +3,7 @@ package main
 import "os"
 
 func main() {
-	if err := rootCmd.Execute(); err != nil {
+	if err := executeCommand(os.Args[1:]); err != nil {
 		os.Exit(1)
 	}
 }

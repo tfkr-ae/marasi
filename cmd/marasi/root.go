@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -22,6 +26,78 @@ var rootCmd = &cobra.Command{
 	Short:             "Marasi proxy service",
 	SilenceUsage:      true,
 	PersistentPreRunE: prepareInstancePath,
+}
+
+func executeCommand(args []string) error {
+	rootCmd.SetArgs(args)
+	jsonOutput = recognizedJSONMode(args)
+	rootCmd.SilenceErrors = jsonOutput
+	stdout := rootCmd.OutOrStdout()
+	var output bytes.Buffer
+	if jsonOutput {
+		rootCmd.SetOut(&output)
+	}
+	err := rootCmd.Execute()
+	if jsonOutput {
+		rootCmd.SetOut(stdout)
+	}
+	rootCmd.SilenceErrors = false
+	if err == nil {
+		if jsonOutput {
+			_, err = io.Copy(stdout, &output)
+		}
+		return err
+	}
+	if jsonOutput {
+		encodeErr := json.NewEncoder(stdout).Encode(struct {
+			Error string `json:"error"`
+		}{Error: err.Error()})
+		return errors.Join(err, encodeErr)
+	}
+	return err
+}
+
+func recognizedJSONMode(args []string) bool {
+	command, commandArgs, findErr := rootCmd.Find(args)
+	requested := false
+	for index := 0; index < len(commandArgs); index++ {
+		arg := commandArgs[index]
+		if arg == "--" {
+			return requested
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			if findErr != nil {
+				return requested
+			}
+			continue
+		}
+		if !strings.HasPrefix(arg, "--") {
+			return requested
+		}
+
+		flagArg := strings.TrimPrefix(arg, "--")
+		name, value, hasValue := flagArg, "", false
+		if separator := strings.IndexByte(flagArg, '='); separator >= 0 {
+			name, value, hasValue = flagArg[:separator], flagArg[separator+1:], true
+		}
+		flag := command.Flags().Lookup(name)
+		if flag == nil {
+			return requested
+		}
+		if name == "json" {
+			if !hasValue {
+				requested = true
+			} else if parsed, err := strconv.ParseBool(value); err == nil {
+				requested = parsed
+			} else {
+				return requested
+			}
+		}
+		if !hasValue && flag.NoOptDefVal == "" {
+			index++
+		}
+	}
+	return requested
 }
 
 func init() {

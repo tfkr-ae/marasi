@@ -270,6 +270,52 @@ func TestGlobalJSONOption(t *testing.T) {
 			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
 		}
 	})
+
+	t.Run("should normalize parsing validation and preparation failures", func(t *testing.T) {
+		binary := buildMarasi(t)
+		configDir := serviceConfigDir(t)
+		tests := []struct {
+			name string
+			args []string
+			want string
+		}{
+			{name: "unknown command", args: []string{"--json", "unknown"}, want: "unknown command"},
+			{name: "unknown flag", args: []string{"traffic", "list", "--json", "--unknown"}, want: "unknown flag"},
+			{name: "wrong argument count", args: []string{"traffic", "get", "--json"}, want: "accepts 1 arg(s)"},
+			{name: "instance validation", args: []string{"--config-dir", configDir, "--instance", "../work", "traffic", "list", "--json"}, want: "invalid instance name"},
+			{name: "project validation", args: []string{"--config-dir", configDir, "service", "start", "--project", "../work", "--json"}, want: "invalid project name"},
+			{name: "command preparation", args: []string{"--config-dir", "", "traffic", "list", "--json"}, want: "config dir is empty"},
+		}
+		for _, test := range tests {
+			t.Run("should normalize "+test.name, func(t *testing.T) {
+				stdout, stderr, err := runMarasi(binary, test.args...)
+				assertJSONCommandError(t, stdout, stderr, err, test.want)
+			})
+		}
+	})
+
+	t.Run("should normalize a service runtime failure", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusInternalServerError, `{"error":"internal_server_error"}`)
+
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "service", "stop", "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "stopping service: 500 Internal Server Error")
+	})
+
+	t.Run("should keep human parsing errors on stderr when JSON was not recognized", func(t *testing.T) {
+		binary := buildMarasi(t)
+		for _, args := range [][]string{
+			{"--unknown", "--json", "traffic", "list"},
+			{"-x", "--json", "traffic", "list"},
+			{"--instance", "--json", "traffic", "list"},
+			{"service", "stop", "--limit", "1", "--json"},
+		} {
+			stdout, stderr, err := runMarasi(binary, args...)
+			if err == nil || stdout != "" || stderr == "" {
+				t.Fatalf("\nwanted:\nhuman parsing error on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+			}
+		}
+	})
 }
 
 func TestCommandPreparation(t *testing.T) {
@@ -1322,7 +1368,7 @@ func TestStartService(t *testing.T) {
 		}
 	})
 
-	t.Run("should fail --json without printing JSON", func(t *testing.T) {
+	t.Run("should print a JSON error when startup fails", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		instancePath := filepath.Join(configDir, "instances", "work")
 		if err := os.MkdirAll(instancePath+".log", 0700); err != nil {
@@ -1330,9 +1376,7 @@ func TestStartService(t *testing.T) {
 		}
 
 		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0", "--json")
-		if err == nil || stdout != "" || !strings.Contains(stderr, "opening instance log") || strings.Contains(stderr, "instance work started") {
-			t.Fatalf("\nwanted:\nlog error on stderr and no JSON\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
-		}
+		assertJSONCommandError(t, stdout, stderr, err, "opening instance log")
 	})
 
 	t.Run("should report the default instance and leave it running", func(t *testing.T) {
@@ -1391,9 +1435,12 @@ func TestStartService(t *testing.T) {
 
 	for name, signal := range map[string]os.Signal{"Interrupt": os.Interrupt, "SIGTERM": syscall.SIGTERM} {
 		t.Run("should abort a child that is still starting on "+name, func(t *testing.T) {
-			testCanceledStart(t, signal)
+			testCanceledStart(t, signal, false)
 		})
 	}
+	t.Run("should print a JSON error when startup is canceled", func(t *testing.T) {
+		testCanceledStart(t, syscall.SIGTERM, true)
+	})
 
 	t.Run("should abort the child when success output fails", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
@@ -1954,7 +2001,7 @@ func TestStartService(t *testing.T) {
 
 }
 
-func testCanceledStart(t *testing.T, signal os.Signal) {
+func testCanceledStart(t *testing.T, signal os.Signal, asJSON bool) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("process signals are not implemented on Windows")
@@ -1974,7 +2021,11 @@ func testCanceledStart(t *testing.T, signal os.Signal) {
 
 	binary := buildMarasi(t)
 	var stdout, stderr bytes.Buffer
-	command := exec.Command(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0")
+	args := []string{"--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0"}
+	if asJSON {
+		args = append(args, "--json")
+	}
+	command := exec.Command(binary, args...)
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	if err := command.Start(); err != nil {
@@ -1987,16 +2038,19 @@ func testCanceledStart(t *testing.T, signal os.Signal) {
 	}
 	result := make(chan error, 1)
 	go func() { result <- command.Wait() }()
+	var commandErr error
 	select {
-	case err := <-result:
-		if err == nil {
+	case commandErr = <-result:
+		if commandErr == nil {
 			t.Fatal("\nwanted:\ncanceled start error\ngot:\nnil")
 		}
 	case <-time.After(5 * time.Second):
 		command.Process.Kill()
 		t.Fatal("\nwanted:\ncanceled start to return\ngot:\ntimeout")
 	}
-	if stdout.Len() != 0 || strings.Contains(stderr.String(), "instance work started") || strings.Contains(stderr.String(), "proxy listener started") {
+	if asJSON {
+		assertJSONCommandError(t, stdout.String(), stderr.String(), commandErr, "context canceled")
+	} else if stdout.Len() != 0 || strings.Contains(stderr.String(), "instance work started") || strings.Contains(stderr.String(), "proxy listener started") {
 		t.Fatalf("\nwanted:\nerror without startup output\ngot:\nstdout %q, stderr %q", stdout.String(), stderr.String())
 	}
 	if _, err := os.Stat(instancePath + ".sock"); !errors.Is(err, os.ErrNotExist) {
@@ -2031,6 +2085,27 @@ func runMarasi(binary string, args ...string) (stdout, stderr string, err error)
 	command.Stderr = &errBuf
 	err = command.Run()
 	return outBuf.String(), errBuf.String(), err
+}
+
+func assertJSONCommandError(t *testing.T, stdout, stderr string, commandErr error, want string) {
+	t.Helper()
+	if commandErr == nil {
+		t.Fatal("\nwanted:\nexit status 1\ngot:\nnil")
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(commandErr, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("\nwanted:\nexit status 1\ngot:\n%v", commandErr)
+	}
+	if stderr != "" {
+		t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+	}
+	if !strings.HasSuffix(stdout, "\n") || strings.Count(stdout, "\n") != 1 {
+		t.Fatalf("\nwanted:\none compact JSON line\ngot:\n%q", stdout)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil || len(payload) != 1 || !strings.Contains(payload["error"], want) {
+		t.Fatalf("\nwanted:\none error containing %q\ngot:\n%q, %v", want, stdout, err)
+	}
 }
 
 func TestServeControlAPI(t *testing.T) {
