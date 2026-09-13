@@ -1,7 +1,11 @@
 package service
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -27,9 +31,13 @@ type Server struct {
 // stop runs after a POST /service/stop, once event streams have been closed.
 func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, stop func(), version, instance, project string) *Server {
 	mux := http.NewServeMux()
+	events := newEventBroadcaster()
+	if lifecycle, ok := listener.(*listenerLifecycle); ok {
+		events = lifecycle.events
+	}
 	server := &Server{
 		mux:               mux,
-		events:            newEventBroadcaster(),
+		events:            events,
 		heartbeatInterval: eventHeartbeatInterval,
 		proxy:             proxy,
 		listener:          listener,
@@ -41,8 +49,154 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, stop func(), ver
 		server.Close()
 		stop()
 	})
+	listenerMux := http.NewServeMux()
+	listenerMux.HandleFunc("/status", server.serveListenerStatus)
+	listenerMux.HandleFunc("/start", server.serveListenerStart)
+	listenerMux.HandleFunc("/stop", server.serveListenerStop)
+	listenerMux.HandleFunc("/update", server.serveListenerUpdate)
+	mux.Handle("/listener/", http.StripPrefix("/listener", listenerMux))
 	mux.HandleFunc("/events", server.serveEvents)
 	return server
+}
+
+func (s *Server) serveListenerStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, r, http.StatusOK, s.listener.Status())
+}
+
+func (s *Server) serveListenerStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	settings, err := decodeListenerSettings(r, false)
+	if err != nil {
+		writeListenerError(w, r, err)
+		return
+	}
+	status, err := s.listener.Start(r.Context(), settings)
+	if err != nil {
+		writeListenerError(w, r, err)
+		return
+	}
+	writeJSON(w, r, http.StatusOK, status)
+}
+
+func (s *Server) serveListenerStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if r.Body != nil {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1))
+		if err != nil || len(body) != 0 {
+			writeListenerError(w, r, errInvalidListenerRequest)
+			return
+		}
+	}
+	status, err := s.listener.Stop(r.Context())
+	if err != nil {
+		writeListenerError(w, r, err)
+		return
+	}
+	writeJSON(w, r, http.StatusOK, status)
+}
+
+func (s *Server) serveListenerUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	settings, err := decodeListenerSettings(r, true)
+	if err != nil {
+		writeListenerError(w, r, err)
+		return
+	}
+	status, err := s.listener.Update(r.Context(), settings)
+	if err != nil {
+		writeListenerError(w, r, err)
+		return
+	}
+	writeJSON(w, r, http.StatusOK, status)
+}
+
+var errInvalidListenerRequest = errors.New("invalid listener request")
+
+func decodeListenerSettings(r *http.Request, requireField bool) (ListenerSettings, error) {
+	if r.Body == nil {
+		if requireField {
+			return ListenerSettings{}, errInvalidListenerRequest
+		}
+		return ListenerSettings{}, nil
+	}
+	decoder := json.NewDecoder(r.Body)
+	var fields map[string]json.RawMessage
+	if err := decoder.Decode(&fields); err != nil {
+		if errors.Is(err, io.EOF) && !requireField {
+			return ListenerSettings{}, nil
+		}
+		return ListenerSettings{}, errInvalidListenerRequest
+	}
+	if fields == nil {
+		return ListenerSettings{}, errInvalidListenerRequest
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return ListenerSettings{}, errInvalidListenerRequest
+	}
+	if requireField && len(fields) == 0 {
+		return ListenerSettings{}, errInvalidListenerRequest
+	}
+	var settings ListenerSettings
+	for name, raw := range fields {
+		switch name {
+		case "address":
+			var address string
+			if err := json.Unmarshal(raw, &address); err != nil || address == "" {
+				return ListenerSettings{}, errInvalidListenerRequest
+			}
+			settings.Address = &address
+		case "port":
+			var port int
+			if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+				return ListenerSettings{}, errInvalidListenerRequest
+			}
+			if err := json.Unmarshal(raw, &port); err != nil || port < 0 || port > 65535 {
+				return ListenerSettings{}, errInvalidListenerRequest
+			}
+			value := uint16(port)
+			settings.Port = &value
+		default:
+			return ListenerSettings{}, errInvalidListenerRequest
+		}
+	}
+	return settings, nil
+}
+
+func writeListenerError(w http.ResponseWriter, r *http.Request, err error) {
+	status := http.StatusInternalServerError
+	code := "internal_server_error"
+	switch {
+	case errors.Is(err, errInvalidListenerRequest):
+		status, code = http.StatusBadRequest, "invalid_listener_request"
+	case errors.Is(err, ErrListenerAlreadyActive):
+		status, code = http.StatusConflict, "listener_already_active"
+	case errors.Is(err, ErrListenerInactive):
+		status, code = http.StatusConflict, "listener_inactive"
+	case errors.Is(err, ErrListenerUnavailable):
+		status, code = http.StatusConflict, "listener_unavailable"
+	case errors.Is(err, ErrListenerCleanup):
+		status, code = http.StatusInternalServerError, "listener_cleanup_failed"
+	}
+	writeJSON(w, r, status, struct {
+		Error string `json:"error"`
+	}{Error: code})
 }
 
 func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {

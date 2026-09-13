@@ -79,7 +79,15 @@ type listenerRun struct {
 	listener net.Listener
 	started  chan struct{}
 	finished chan struct{}
+	state    atomic.Uint32
+	serveErr error
 }
+
+const (
+	listenerRunServing uint32 = iota
+	listenerRunExpectedClose
+	listenerRunUnexpectedEnd
+)
 
 // ListenerLifecycle starts, stops, updates, and reports one proxy listener.
 type ListenerLifecycle interface {
@@ -93,6 +101,7 @@ type ListenerLifecycle interface {
 type listenerLifecycle struct {
 	proxy      listenerProxy
 	logWriter  io.Writer
+	events     *eventBroadcaster
 	requests   chan listenerRequest
 	serveEnded chan listenerServeResult
 	done       chan struct{}
@@ -112,6 +121,7 @@ func newListenerLifecycle(proxy listenerProxy, logWriter io.Writer) ListenerLife
 	lifecycle := &listenerLifecycle{
 		proxy:      proxy,
 		logWriter:  logWriter,
+		events:     newEventBroadcaster(),
 		requests:   make(chan listenerRequest, 64),
 		serveEnded: make(chan listenerServeResult, 1),
 		done:       make(chan struct{}),
@@ -206,6 +216,7 @@ func (l *listenerLifecycle) run() {
 				if err == nil {
 					current, retained = run, endpoint
 					l.setStatus(status)
+					l.events.publish("listener.started", status)
 				}
 				request.result <- listenerResult{status: l.Status(), err: err}
 			case stopListener:
@@ -214,14 +225,30 @@ func (l *listenerLifecycle) run() {
 					continue
 				}
 				err := l.stopRun(current, true)
+				unexpected := current.state.Load() == listenerRunUnexpectedEnd
+				if unexpected {
+					l.logUnexpectedServe(current.serveErr)
+				}
 				current = nil
-				l.setStatus(ListenerStatus{Status: ListenerInactive})
+				status := ListenerStatus{Status: ListenerInactive}
+				l.setStatus(status)
+				if unexpected {
+					l.publishStopped(status, "failed")
+				} else {
+					l.publishStopped(status, "requested")
+				}
 				request.result <- listenerResult{status: l.Status(), err: err}
 			case updateListener:
 				status, run, endpoint, changed, err := l.update(current, retained, request.settings)
 				if changed {
+					if current.state.Load() == listenerRunUnexpectedEnd {
+						l.logUnexpectedServe(current.serveErr)
+						inactive := ListenerStatus{Status: ListenerInactive}
+						l.publishStopped(inactive, "failed")
+					}
 					current, retained = run, endpoint
 					l.setStatus(status)
+					l.events.publish("listener.updated", status)
 				}
 				request.result <- listenerResult{status: l.Status(), err: err}
 			case shutdownListener:
@@ -239,17 +266,31 @@ func (l *listenerLifecycle) run() {
 				continue
 			}
 			current = nil
-			if ended.err != nil {
-				fmt.Fprintf(l.logWriter, "proxy listener stopped unexpectedly: %v\n", ended.err)
-			} else {
-				fmt.Fprintln(l.logWriter, "proxy listener stopped unexpectedly")
-			}
+			l.logUnexpectedServe(ended.err)
 			if err := l.proxy.CloseWebSocketsAndFlush(); err != nil {
 				fmt.Fprintf(l.logWriter, "cleaning up WebSockets after proxy listener failure: %v\n", err)
 			}
-			l.setStatus(ListenerStatus{Status: ListenerInactive})
+			status := ListenerStatus{Status: ListenerInactive}
+			l.setStatus(status)
+			l.publishStopped(status, "failed")
 		}
 	}
+}
+
+func (l *listenerLifecycle) logUnexpectedServe(err error) {
+	if err != nil {
+		fmt.Fprintf(l.logWriter, "proxy listener stopped unexpectedly: %v\n", err)
+	} else {
+		fmt.Fprintln(l.logWriter, "proxy listener stopped unexpectedly")
+	}
+}
+
+func (l *listenerLifecycle) publishStopped(status ListenerStatus, reason string) {
+	l.events.publish("listener.stopped", struct {
+		Status        ListenerState `json:"status"`
+		ProxyListener *string       `json:"proxy_listener"`
+		Reason        string        `json:"reason"`
+	}{Status: status.Status, ProxyListener: status.ProxyListener, Reason: reason})
 }
 
 func (l *listenerLifecycle) start(current *listenerRun, retained string, settings ListenerSettings) (ListenerStatus, *listenerRun, string, error) {
@@ -308,6 +349,8 @@ func (l *listenerLifecycle) serve(listener net.Listener) *listenerRun {
 	run := &listenerRun{listener: listener, started: ready.started, finished: make(chan struct{})}
 	go func() {
 		err := l.proxy.Serve(ready)
+		run.serveErr = err
+		run.state.CompareAndSwap(listenerRunServing, listenerRunUnexpectedEnd)
 		close(run.finished)
 		l.serveEnded <- listenerServeResult{run: run, err: err}
 	}()
@@ -319,6 +362,7 @@ func (l *listenerLifecycle) serve(listener net.Listener) *listenerRun {
 }
 
 func (l *listenerLifecycle) stopRun(run *listenerRun, cleanup bool) error {
+	run.state.CompareAndSwap(listenerRunServing, listenerRunExpectedClose)
 	closeErr := run.listener.Close()
 	if closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
 		fmt.Fprintf(l.logWriter, "closing proxy listener: %v\n", closeErr)

@@ -1,10 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -290,6 +292,196 @@ func TestServiceStatus(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestListenerControl(t *testing.T) {
+	t.Run("should report listener status and enforce route methods", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		lifecycle := newListenerLifecycle(proxy, nil)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/listener/status", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
+		}
+		if got := response.Header().Get("Content-Type"); got != "application/json" {
+			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		}
+		if got := response.Body.String(); got != "{\"status\":\"inactive\",\"proxy_listener\":null}\n" {
+			t.Fatalf("\nwanted exact inactive status\ngot:\n%s", got)
+		}
+
+		for _, test := range []struct {
+			method string
+			path   string
+			allow  string
+		}{
+			{method: http.MethodPost, path: "/listener/status", allow: http.MethodGet},
+			{method: http.MethodGet, path: "/listener/start", allow: http.MethodPost},
+			{method: http.MethodGet, path: "/listener/stop", allow: http.MethodPost},
+			{method: http.MethodGet, path: "/listener/update", allow: http.MethodPost},
+		} {
+			response = httptest.NewRecorder()
+			server.ServeHTTP(response, httptest.NewRequest(test.method, test.path, bytes.NewReader(nil)))
+			if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != test.allow {
+				t.Fatalf("\n%s %s wanted:\n405 Allow %s\ngot:\n%d Allow %s", test.method, test.path, test.allow, response.Code, response.Header().Get("Allow"))
+			}
+		}
+	})
+
+	t.Run("should start stop and update with exact status responses", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		lifecycle := newListenerLifecycle(proxy, nil)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+
+		response := requestListener(t, server, http.MethodPost, "/listener/start", `{"address":"127.0.0.1","port":0}`)
+		if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/json" {
+			t.Fatalf("\nwanted:\n200 application/json\ngot:\n%d %s", response.Code, response.Header().Get("Content-Type"))
+		}
+		var started ListenerStatus
+		if err := json.Unmarshal(response.Body.Bytes(), &started); err != nil {
+			t.Fatalf("decoding start response: %v", err)
+		}
+		startedAddress := statusAddress(t, started)
+		wantStarted := fmt.Sprintf("{\"status\":\"active\",\"proxy_listener\":%q}\n", startedAddress)
+		if got := response.Body.String(); got != wantStarted {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantStarted, got)
+		}
+		serviceStatus := httptest.NewRecorder()
+		server.ServeHTTP(serviceStatus, httptest.NewRequest(http.MethodGet, "/service/status", nil))
+		wantServiceStatus := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"default\",\"project\":\"scratchpad\",\"proxy_listener\":%q}\n", startedAddress)
+		if serviceStatus.Code != http.StatusOK || serviceStatus.Body.String() != wantServiceStatus {
+			t.Fatalf("\nwanted synchronized service status:\n%s\ngot:\n%d %s", wantServiceStatus, serviceStatus.Code, serviceStatus.Body.String())
+		}
+
+		response = requestListener(t, server, http.MethodPost, "/listener/update", `{"port":0}`)
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n200\ngot:\n%d %s", response.Code, response.Body.String())
+		}
+		var updated ListenerStatus
+		if err := json.Unmarshal(response.Body.Bytes(), &updated); err != nil {
+			t.Fatalf("decoding update response: %v", err)
+		}
+		if updated.Status != ListenerActive || statusAddress(t, updated) == startedAddress {
+			t.Fatalf("\nwanted:\nactive replacement\ngot:\n%+v", updated)
+		}
+
+		response = requestListener(t, server, http.MethodPost, "/listener/stop", "")
+		if response.Code != http.StatusOK || response.Body.String() != "{\"status\":\"inactive\",\"proxy_listener\":null}\n" {
+			t.Fatalf("\nwanted:\n200 inactive status\ngot:\n%d %s", response.Code, response.Body.String())
+		}
+		serviceStatus = httptest.NewRecorder()
+		server.ServeHTTP(serviceStatus, httptest.NewRequest(http.MethodGet, "/service/status", nil))
+		wantServiceStatus = "{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"default\",\"project\":\"scratchpad\",\"proxy_listener\":null}\n"
+		if serviceStatus.Code != http.StatusOK || serviceStatus.Body.String() != wantServiceStatus {
+			t.Fatalf("\nwanted synchronized inactive service status:\n%s\ngot:\n%d %s", wantServiceStatus, serviceStatus.Code, serviceStatus.Body.String())
+		}
+		response = requestListener(t, server, http.MethodPost, "/listener/start", "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n200 for absent start body\ngot:\n%d %s", response.Code, response.Body.String())
+		}
+		requestListener(t, server, http.MethodPost, "/listener/stop", "")
+		response = requestListener(t, server, http.MethodPost, "/listener/start", "{}")
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n200 for empty start object\ngot:\n%d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("should reject invalid mutation requests with the stable error", func(t *testing.T) {
+		server := NewServer(nil, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, func() {}, "dev", "default", "scratchpad")
+		for _, test := range []struct {
+			name string
+			path string
+			body string
+		}{
+			{name: "malformed JSON", path: "/listener/start", body: "{"},
+			{name: "trailing JSON", path: "/listener/start", body: "{} {}"},
+			{name: "null object", path: "/listener/start", body: "null"},
+			{name: "unknown field", path: "/listener/start", body: `{"host":"127.0.0.1"}`},
+			{name: "empty address", path: "/listener/start", body: `{"address":""}`},
+			{name: "null address", path: "/listener/start", body: `{"address":null}`},
+			{name: "negative port", path: "/listener/start", body: `{"port":-1}`},
+			{name: "large port", path: "/listener/start", body: `{"port":65536}`},
+			{name: "fractional port", path: "/listener/start", body: `{"port":1.5}`},
+			{name: "null port", path: "/listener/start", body: `{"port":null}`},
+			{name: "empty update body", path: "/listener/update", body: ""},
+			{name: "empty update object", path: "/listener/update", body: "{}"},
+			{name: "stop body", path: "/listener/stop", body: "{}"},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				response := requestListener(t, server, http.MethodPost, test.path, test.body)
+				if response.Code != http.StatusBadRequest || response.Header().Get("Content-Type") != "application/json" || response.Body.String() != "{\"error\":\"invalid_listener_request\"}\n" {
+					t.Fatalf("\nwanted:\n400 application/json invalid_listener_request\ngot:\n%d %s %s", response.Code, response.Header().Get("Content-Type"), response.Body.String())
+				}
+			})
+		}
+	})
+
+	t.Run("should map state bind and cleanup failures without exposing details", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		var log bytes.Buffer
+		lifecycle := newListenerLifecycle(proxy, &log)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+
+		response := requestListener(t, server, http.MethodPost, "/listener/update", `{"port":0}`)
+		assertListenerError(t, response, http.StatusConflict, "listener_inactive")
+		occupiedStart, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("occupying listener start endpoint: %v", err)
+		}
+		defer occupiedStart.Close()
+		response = requestListener(t, server, http.MethodPost, "/listener/start", fmt.Sprintf(`{"address":"127.0.0.1","port":%d}`, occupiedStart.Addr().(*net.TCPAddr).Port))
+		assertListenerError(t, response, http.StatusConflict, "listener_unavailable")
+		response = requestListener(t, server, http.MethodPost, "/listener/start", `{"address":"127.0.0.1","port":0}`)
+		if response.Code != http.StatusOK {
+			t.Fatalf("starting listener: %d %s", response.Code, response.Body.String())
+		}
+		response = requestListener(t, server, http.MethodPost, "/listener/start", "")
+		assertListenerError(t, response, http.StatusConflict, "listener_already_active")
+
+		occupied, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("occupying listener endpoint: %v", err)
+		}
+		defer occupied.Close()
+		port := occupied.Addr().(*net.TCPAddr).Port
+		response = requestListener(t, server, http.MethodPost, "/listener/update", fmt.Sprintf(`{"port":%d}`, port))
+		assertListenerError(t, response, http.StatusConflict, "listener_unavailable")
+		if log.Len() == 0 || bytes.Contains(response.Body.Bytes(), log.Bytes()) {
+			t.Fatalf("\nwanted:\nbind details only in instance log\ngot response:\n%s\ngot log:\n%s", response.Body.String(), log.String())
+		}
+
+		proxy.cleanupErr = errors.New("secret cleanup detail")
+		response = requestListener(t, server, http.MethodPost, "/listener/stop", "")
+		assertListenerError(t, response, http.StatusInternalServerError, "listener_cleanup_failed")
+		if !strings.Contains(log.String(), "secret cleanup detail") || strings.Contains(response.Body.String(), "secret cleanup detail") {
+			t.Fatalf("\nwanted:\ncleanup details only in instance log\ngot response:\n%s\ngot log:\n%s", response.Body.String(), log.String())
+		}
+		response = requestListener(t, server, http.MethodPost, "/listener/stop", "")
+		if response.Code != http.StatusOK || response.Body.String() != "{\"status\":\"inactive\",\"proxy_listener\":null}\n" {
+			t.Fatalf("\nwanted:\nidempotent inactive stop\ngot:\n%d %s", response.Code, response.Body.String())
+		}
+	})
+}
+
+func requestListener(t *testing.T, server *Server, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	return response
+}
+
+func assertListenerError(t *testing.T, response *httptest.ResponseRecorder, status int, code string) {
+	t.Helper()
+	want := fmt.Sprintf("{\"error\":%q}\n", code)
+	if response.Code != status || response.Header().Get("Content-Type") != "application/json" || response.Body.String() != want {
+		t.Fatalf("\nwanted:\n%d application/json %s\ngot:\n%d %s %s", status, want, response.Code, response.Header().Get("Content-Type"), response.Body.String())
+	}
 }
 
 func TestTrafficGet(t *testing.T) {

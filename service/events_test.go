@@ -2,9 +2,14 @@ package service
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -259,6 +264,217 @@ func TestServiceEvents(t *testing.T) {
 			}
 		case <-time.After(time.Second):
 			t.Fatal("\nwanted:\nhandlers to return while the subscriber is not reading\ngot:\nblocked publication")
+		}
+	})
+}
+
+func TestListenerEvents(t *testing.T) {
+	t.Run("should not replay normal service startup", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		lifecycle := newListenerLifecycle(proxy, nil)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		if _, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0)); err != nil {
+			t.Fatalf("starting initial listener: %v", err)
+		}
+		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+		server.heartbeatInterval = time.Millisecond
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		stream, reader := connectEventStream(t, httpServer.URL)
+		defer stream.Body.Close()
+
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("reading heartbeat after startup: %v", err)
+		}
+		blank, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("reading heartbeat terminator: %v", err)
+		}
+		if line+blank != ": heartbeat\n\n" {
+			t.Fatalf("\nwanted:\nno startup event\ngot:\n%s", line+blank)
+		}
+	})
+
+	t.Run("should publish completed state changes in order and keep no-ops silent", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		lifecycle := newListenerLifecycle(proxy, nil)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+		server.heartbeatInterval = 500 * time.Millisecond
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		stream, reader := connectEventStream(t, httpServer.URL)
+		defer stream.Body.Close()
+
+		startedResponse := requestListener(t, server, http.MethodPost, "/listener/start", `{"address":"127.0.0.1","port":0}`)
+		if startedResponse.Code != http.StatusOK {
+			t.Fatalf("starting listener: %d %s", startedResponse.Code, startedResponse.Body.String())
+		}
+		var started ListenerStatus
+		if err := json.Unmarshal(startedResponse.Body.Bytes(), &started); err != nil {
+			t.Fatalf("decoding listener start: %v", err)
+		}
+		address := statusAddress(t, started)
+		requestListener(t, server, http.MethodPost, "/listener/update", `{"address":"127.0.0.1"}`)
+		requestListener(t, server, http.MethodPost, "/listener/start", "")
+		occupied, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("occupying listener endpoint: %v", err)
+		}
+		defer occupied.Close()
+		requestListener(t, server, http.MethodPost, "/listener/update", fmt.Sprintf(`{"port":%d}`, occupied.Addr().(*net.TCPAddr).Port))
+		updatedResponse := requestListener(t, server, http.MethodPost, "/listener/update", `{"port":0}`)
+		var updated ListenerStatus
+		if err := json.Unmarshal(updatedResponse.Body.Bytes(), &updated); err != nil {
+			t.Fatalf("decoding listener update: %v", err)
+		}
+		requestListener(t, server, http.MethodPost, "/listener/stop", "")
+		requestListener(t, server, http.MethodPost, "/listener/stop", "")
+
+		want := []string{
+			fmt.Sprintf("event: listener.started\ndata: {\"status\":\"active\",\"proxy_listener\":%q}\n\n", address),
+			fmt.Sprintf("event: listener.updated\ndata: {\"status\":\"active\",\"proxy_listener\":%q}\n\n", statusAddress(t, updated)),
+			"event: listener.stopped\ndata: {\"status\":\"inactive\",\"proxy_listener\":null,\"reason\":\"requested\"}\n\n",
+		}
+		for _, expected := range want {
+			if got := readEventFrame(t, reader); got != expected {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", expected, got)
+			}
+		}
+		heartbeat, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("reading heartbeat after listener events: %v", err)
+		}
+		blank, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("reading heartbeat terminator: %v", err)
+		}
+		if heartbeat+blank != ": heartbeat\n\n" {
+			t.Fatalf("\nwanted:\nno extra listener event\ngot:\n%s", heartbeat+blank)
+		}
+	})
+
+	t.Run("should publish requested stop when cleanup fails", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		lifecycle := newListenerLifecycle(proxy, nil)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		stream, reader := connectEventStream(t, httpServer.URL)
+		defer stream.Body.Close()
+		requestListener(t, server, http.MethodPost, "/listener/start", `{"address":"127.0.0.1","port":0}`)
+		readEventFrame(t, reader)
+		proxy.cleanupErr = errors.New("flush failed")
+
+		response := requestListener(t, server, http.MethodPost, "/listener/stop", "")
+		assertListenerError(t, response, http.StatusInternalServerError, "listener_cleanup_failed")
+		want := "event: listener.stopped\ndata: {\"status\":\"inactive\",\"proxy_listener\":null,\"reason\":\"requested\"}\n\n"
+		if got := readEventFrame(t, reader); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should publish one updated event when replacement cleanup fails", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		lifecycle := newListenerLifecycle(proxy, nil)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		stream, reader := connectEventStream(t, httpServer.URL)
+		defer stream.Body.Close()
+		requestListener(t, server, http.MethodPost, "/listener/start", `{"address":"127.0.0.1","port":0}`)
+		readEventFrame(t, reader)
+		proxy.cleanupErr = errors.New("flush failed")
+
+		response := requestListener(t, server, http.MethodPost, "/listener/update", `{"port":0}`)
+		assertListenerError(t, response, http.StatusInternalServerError, "listener_cleanup_failed")
+		status := lifecycle.Status()
+		want := fmt.Sprintf("event: listener.updated\ndata: {\"status\":\"active\",\"proxy_listener\":%q}\n\n", statusAddress(t, status))
+		if got := readEventFrame(t, reader); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should publish failed stop after an unexpected serve failure", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		lifecycle := newListenerLifecycle(proxy, nil)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		stream, reader := connectEventStream(t, httpServer.URL)
+		defer stream.Body.Close()
+		if _, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0)); err != nil {
+			t.Fatalf("starting listener: %v", err)
+		}
+		readEventFrame(t, reader)
+		served := <-proxy.served
+		if err := served.Close(); err != nil {
+			t.Fatalf("failing listener: %v", err)
+		}
+
+		want := "event: listener.stopped\ndata: {\"status\":\"inactive\",\"proxy_listener\":null,\"reason\":\"failed\"}\n\n"
+		if got := readEventFrame(t, reader); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should preserve an unexpected failure that races with replacement", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		secondBind := make(chan struct{})
+		releaseBind := make(chan struct{})
+		bindCalls := 0
+		proxy.bind = func(address, port string) (net.Listener, error) {
+			bindCalls++
+			if bindCalls == 2 {
+				close(secondBind)
+				<-releaseBind
+			}
+			return net.Listen("tcp", net.JoinHostPort(address, port))
+		}
+		firstServeEnded := make(chan struct{})
+		var firstServe sync.Once
+		proxy.serve = func(listener net.Listener) error {
+			_, err := listener.Accept()
+			firstServe.Do(func() { close(firstServeEnded) })
+			return err
+		}
+		lifecycle := newListenerLifecycle(proxy, nil)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		stream, reader := connectEventStream(t, httpServer.URL)
+		defer stream.Body.Close()
+		requestListener(t, server, http.MethodPost, "/listener/start", `{"address":"127.0.0.1","port":0}`)
+		readEventFrame(t, reader)
+		old := <-proxy.served
+		updateDone := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			updateDone <- requestListener(t, server, http.MethodPost, "/listener/update", `{"port":0}`)
+		}()
+		<-secondBind
+		if err := old.Close(); err != nil {
+			t.Fatalf("failing old listener: %v", err)
+		}
+		<-firstServeEnded
+		close(releaseBind)
+		response := <-updateDone
+		if response.Code != http.StatusOK {
+			t.Fatalf("updating after serving failure: %d %s", response.Code, response.Body.String())
+		}
+
+		failed := "event: listener.stopped\ndata: {\"status\":\"inactive\",\"proxy_listener\":null,\"reason\":\"failed\"}\n\n"
+		if got := readEventFrame(t, reader); got != failed {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", failed, got)
+		}
+		updated := lifecycle.Status()
+		wantUpdated := fmt.Sprintf("event: listener.updated\ndata: {\"status\":\"active\",\"proxy_listener\":%q}\n\n", statusAddress(t, updated))
+		if got := readEventFrame(t, reader); got != wantUpdated {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantUpdated, got)
 		}
 	})
 }
