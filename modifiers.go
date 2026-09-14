@@ -636,7 +636,8 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		StartedAt: time.Now(),
 	}
 
-	return proxy.runWebSocketSession(connection, record)
+	release, _ := res.Request.Context().Value(projectReleaseKey{}).(func())
+	return proxy.runWebSocketSessionWithRelease(connection, record, release)
 }
 
 // BufferStreamingBodyModifier reads the entire streaming response body into memory

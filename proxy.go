@@ -13,6 +13,7 @@
 package marasi
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -137,6 +138,17 @@ type Proxy struct {
 	ReportGenerator domain.ReportGenerator // Generator for report templates and exports.
 	DBCloser        io.Closer              // Closer for the database connection.
 	Logger          *slog.Logger           // Logger for Marasi
+	admitWork       func(context.Context) (func(), error)
+}
+
+// ProjectResources is the complete set of dependencies owned by one open project.
+type ProjectResources struct {
+	Repository      RepositoryProvider
+	Extensions      []*extensions.Runtime
+	Scope           *compass.Scope
+	Waypoints       map[string]string
+	Armory          ArmoryService
+	ReportGenerator domain.ReportGenerator
 }
 
 type dbWriteBarrier struct {
@@ -239,12 +251,36 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 		WebSocketRegistry:    marasiws.NewRegistry(),
 		WebSocketInterceptor: marasiws.NewInterceptor(),
 		launchpadWS:          make(map[io.Closer]struct{}),
+		admitWork: func(context.Context) (func(), error) {
+			return func() {}, nil
+		},
 	}
 	err := proxy.WithOptions(options...)
 	if err != nil {
 		return nil, err
 	}
 	return proxy, nil
+}
+
+// SetProjectResources replaces every project-owned dependency. Callers must
+// block project work before calling it.
+func (proxy *Proxy) SetProjectResources(resources ProjectResources) {
+	proxy.TrafficRepo = resources.Repository
+	proxy.LaunchpadRepo = resources.Repository
+	proxy.ArmoryRepo = resources.Repository
+	proxy.WaypointRepo = resources.Repository
+	proxy.StatsRepo = resources.Repository
+	proxy.ConfigRepo = resources.Repository
+	proxy.LogRepo = resources.Repository
+	proxy.ExtensionRepo = resources.Repository
+	proxy.ReportingRepo = resources.Repository
+	proxy.WebSocketRepo = resources.Repository
+	proxy.DBCloser = resources.Repository
+	proxy.Extensions = resources.Extensions
+	proxy.Scope = resources.Scope
+	proxy.Waypoints = resources.Waypoints
+	proxy.Armory = resources.Armory
+	proxy.ReportGenerator = resources.ReportGenerator
 }
 
 // AddRequestModifier accepts RequestModifierFunc and wraps it in a reqAdapter
@@ -629,6 +665,16 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 
 // Close shuts down the proxy and closes the database connection.
 func (proxy *Proxy) Close() error {
+	return proxy.close(true)
+}
+
+// CloseTransport stops listeners and live connections without closing the
+// open project's database. The service project lifecycle closes that resource.
+func (proxy *Proxy) CloseTransport() error {
+	return proxy.close(false)
+}
+
+func (proxy *Proxy) close(closeDatabase bool) error {
 	proxy.webSocketLifecycleMu.Lock()
 	proxy.webSocketsClosing = true
 	proxy.webSocketLifecycleMu.Unlock()
@@ -661,7 +707,7 @@ func (proxy *Proxy) Close() error {
 	webSocketErr := proxy.CloseWebSocketsAndFlush()
 	<-proxy.martianCloseDone
 	var databaseErr error
-	if proxy.DBCloser != nil {
+	if closeDatabase && proxy.DBCloser != nil {
 		if proxy.Logger != nil {
 			proxy.Logger.Info("Closing database connection")
 		}

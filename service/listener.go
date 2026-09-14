@@ -45,7 +45,7 @@ type listenerProxy interface {
 	GetListener(string, string) (net.Listener, error)
 	Serve(net.Listener) error
 	CloseWebSocketsAndFlush() error
-	Close() error
+	CloseTransport() error
 }
 
 type listenerOperation uint8
@@ -252,7 +252,7 @@ func (l *listenerLifecycle) run() {
 				}
 				request.result <- listenerResult{status: l.Status(), err: err}
 			case shutdownListener:
-				err := l.proxy.Close()
+				err := l.proxy.CloseTransport()
 				if current != nil {
 					<-current.finished
 				}

@@ -569,9 +569,18 @@ func TestProxy_RunWebSocketSession(t *testing.T) {
 			Path:      "/socket",
 		}
 		runResult := make(chan error, 1)
+		released := make(chan struct{})
 		go func() {
-			runResult <- proxy.runWebSocketSession(connection, record)
+			runResult <- proxy.runWebSocketSessionWithRelease(connection, record, func() { close(released) })
 		}()
+		select {
+		case <-released:
+			if _, exists := proxy.WebSocketRegistry.Get(connectionID); !exists {
+				t.Fatal("\nwanted:\nWebSocket registered before HTTP admission release\ngot:\nrelease before registration")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for HTTP admission release")
+		}
 
 		openItem := receiveSessionDBWrite(t, proxy.DBWriteChannel)
 		openRecord, ok := openItem.(*domain.WebSocketConnection)

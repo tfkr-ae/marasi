@@ -436,6 +436,17 @@ func WithWordlistManager(manager wordlist.Provider) func(*Proxy) error {
 	}
 }
 
+// WithWorkAdmission coordinates proxy traffic with service lifecycle changes.
+func WithWorkAdmission(admit func(context.Context) (func(), error)) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if admit == nil {
+			return errors.New("work admission cannot be nil")
+		}
+		proxy.admitWork = admit
+		return nil
+	}
+}
+
 // WithBasePipeline will setup the base modifier pipeline for marasi
 // It will define the main Request & Response modifiers that will execute the
 // attached modifiers and hande `ErrDropped` and `ErrSkipPipeline`.
@@ -445,10 +456,19 @@ func WithBasePipeline() func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		proxy.martianProxy.SetRequestModifier(
 			martianReqModifierFunc(func(req *http.Request) error {
-				err := proxy.Modifiers.ModifyRequest(req)
+				release, err := proxy.admitWork(req.Context())
+				if err != nil {
+					return err
+				}
+				*req = *req.WithContext(context.WithValue(req.Context(), projectReleaseKey{}, release))
+				err = proxy.Modifiers.ModifyRequest(req)
 				if err == nil || errors.Is(err, ErrDropped) || errors.Is(err, ErrSkipPipeline) {
+					if err != nil {
+						release()
+					}
 					return nil
 				}
+				release()
 				// TODO this should be handled through logging
 				log.Printf("request pipeline: %v", err)
 				return err
@@ -456,6 +476,9 @@ func WithBasePipeline() func(*Proxy) error {
 		)
 		proxy.martianProxy.SetResponseModifier(
 			martianResModifierFunc(func(res *http.Response) error {
+				if release, ok := res.Request.Context().Value(projectReleaseKey{}).(func()); ok {
+					defer release()
+				}
 				err := proxy.Modifiers.ModifyResponse(res)
 				if err == nil || errors.Is(err, ErrSkipPipeline) {
 					return nil
@@ -482,6 +505,8 @@ func WithBasePipeline() func(*Proxy) error {
 		return nil
 	}
 }
+
+type projectReleaseKey struct{}
 
 // WithDefaultModifierPipeline will apply the default modifier pipelines
 // The default processing order is: waypoint overrides → extensions → interception → database storage.

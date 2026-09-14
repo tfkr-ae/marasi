@@ -20,7 +20,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi"
-	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/internal/filelock"
 	"github.com/tfkr-ae/marasi/service"
 	"github.com/tfkr-ae/marasi/wordlist"
@@ -266,41 +265,34 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 		return fmt.Errorf("creating wordlist manager : %w", err)
 	}
 
-	unlock, err := lockProject(projectPath)
-	if err != nil {
-		return fmt.Errorf("locking project: %w", err)
-	}
 	closeProxy := func() error { return nil }
+	closeProject := func() error { return nil }
 	releaseClaim := func() error { return nil }
 	defer func() {
-		resultErr = errors.Join(resultErr, cleanupService(closeProxy, unlock, releaseClaim))
+		resultErr = errors.Join(resultErr, cleanupService(closeProxy, closeProject, releaseClaim))
 	}()
 
-	dbConn, err := db.New(projectPath, proxy.Logger)
-	if err != nil {
+	projects := service.NewProjectLifecycle(proxy, configDir, wordlists, logger)
+	if filepath.Clean(filepath.Dir(projectPath)) == filepath.Join(filepath.Clean(configDir), "projects") {
+		if err := os.MkdirAll(filepath.Dir(projectPath), 0700); err != nil {
+			return fmt.Errorf("creating projects dir: %w", err)
+		}
+	}
+	if err := projects.Open(ctx, projectPath); err != nil {
 		return fmt.Errorf("opening project: %w", err)
 	}
-
-	repo := db.NewProxyRepo(dbConn)
-	extensions, err := repo.GetExtensions()
-	if err != nil {
-		repo.Close()
-		return fmt.Errorf("loading project extensions: %w", err)
-	}
+	closeProject = projects.Shutdown
 
 	err = proxy.WithOptions(
 		marasi.WithWordlistManager(wordlists),
-		marasi.WithDefaultRepositories(repo),
-		marasi.WithExtensions(extensions),
 		marasi.WithBasePipeline(),
 		marasi.WithDefaultModifierPipeline(),
 		marasi.WithTLSContext(ctx),
 	)
 	if err != nil {
-		repo.Close()
 		return fmt.Errorf("starting proxy base options: %w", err)
 	}
-	closeProxy = proxy.Close
+	closeProxy = proxy.CloseTransport
 
 	controlListener, instanceLock, err := claimInstance(socketPath, lockPath)
 	if err != nil {
@@ -315,7 +307,7 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	instanceName := filepath.Base(instancePath)
 	listenerLifecycle := service.NewListenerLifecycle(proxy, logFile)
 	closeProxy = listenerLifecycle.Shutdown
-	serviceServer := service.NewServer(proxy, listenerLifecycle, stopService, version, instanceName, projectPath)
+	serviceServer := service.NewServer(proxy, listenerLifecycle, stopService, version, instanceName, projects.Path())
 	if handlerErr := proxy.WithOptions(
 		marasi.WithRequestHandler(serviceServer.HandleRequest),
 		marasi.WithResponseHandler(serviceServer.HandleResponse),
@@ -522,34 +514,7 @@ func prepareProjectPath(cmd *cobra.Command, _ []string) error {
 }
 
 // resolveProjectPath returns the canonical absolute path for a project file.
-func resolveProjectPath(path string) (string, error) {
-	if !strings.HasSuffix(path, ".marasi") {
-		return "", errors.New("invalid project path: must end in .marasi")
-	}
-
-	absolutePath, err := filepath.Abs(path)
-	if err != nil {
-		return "", fmt.Errorf("resolving project path: %w", err)
-	}
-	if _, err := os.Lstat(absolutePath); err == nil {
-		canonicalPath, err := filepath.EvalSymlinks(absolutePath)
-		if err != nil {
-			return "", fmt.Errorf("resolving project path: %w", err)
-		}
-		if !strings.HasSuffix(canonicalPath, ".marasi") {
-			return "", errors.New("invalid project path: canonical path must end in .marasi")
-		}
-		return canonicalPath, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("checking project path: %w", err)
-	}
-
-	parent, err := filepath.EvalSymlinks(filepath.Dir(absolutePath))
-	if err != nil {
-		return "", fmt.Errorf("resolving project parent directory: %w", err)
-	}
-	return filepath.Join(parent, filepath.Base(absolutePath)), nil
-}
+func resolveProjectPath(path string) (string, error) { return service.ResolveProjectPath(path) }
 
 // resolveNamedProjectPath returns a named project under configDir/projects.
 func resolveNamedProjectPath(configDir, name string) (string, error) {
@@ -681,29 +646,23 @@ func releaseInstance(listener net.Listener, socketPath string, lock *os.File) er
 	)
 }
 
-// lockProject takes an exclusive lock on path so only one process can open the project.
+// lockProject is retained for ownership probes in service integration tests.
 func lockProject(path string) (func() error, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return nil, fmt.Errorf("creating projects dir: %w", err)
+		return nil, err
 	}
-
-	lockPath := path + ".lock"
-	f, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0600)
+	lock, err := os.OpenFile(path+".lock", os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
-		return nil, fmt.Errorf("opening project lock %s: %w", lockPath, err)
+		return nil, err
 	}
-
-	if err := filelock.TryLock(f); err != nil {
-		f.Close()
+	if err := filelock.TryLock(lock); err != nil {
+		lock.Close()
 		return nil, fmt.Errorf("project already open: %w", err)
 	}
-
 	return func() error {
-		unlockErr := filelock.Unlock(f)
-		closeErr := f.Close()
 		return errors.Join(
-			wrapError("unlocking project", unlockErr),
-			wrapError("closing project lock", closeErr),
+			wrapError("unlocking project", filelock.Unlock(lock)),
+			wrapError("closing project lock", lock.Close()),
 		)
 	}, nil
 }

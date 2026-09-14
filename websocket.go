@@ -143,6 +143,10 @@ func (proxy *Proxy) closeWebSockets(code int, reason string, flush bool) error {
 
 // runWebSocketSession registers a connection, emits lifecycle events, and runs the relay.
 func (proxy *Proxy) runWebSocketSession(connection *marasiws.Connection, record domain.WebSocketConnection) error {
+	return proxy.runWebSocketSessionWithRelease(connection, record, nil)
+}
+
+func (proxy *Proxy) runWebSocketSessionWithRelease(connection *marasiws.Connection, record domain.WebSocketConnection, release func()) error {
 	if connection.ID != record.ID {
 		return fmt.Errorf(
 			"websocket connection ID mismatch: %s != %s",
@@ -172,6 +176,9 @@ func (proxy *Proxy) runWebSocketSession(connection *marasiws.Connection, record 
 		return fmt.Errorf("registering websocket connection: %w", err)
 	}
 	proxy.webSocketLifecycleMu.RUnlock()
+	if release != nil {
+		release()
+	}
 	defer func() {
 		proxy.WebSocketRegistry.Remove(connection.ID)
 		proxy.webSocketSessions.Done()

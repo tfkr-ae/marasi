@@ -56,7 +56,7 @@ func (p *listenerTestProxy) Serve(listener net.Listener) error {
 	}
 }
 
-func (p *listenerTestProxy) Close() error {
+func (p *listenerTestProxy) CloseTransport() error {
 	p.mu.Lock()
 	p.closeCalls++
 	listener := p.current
