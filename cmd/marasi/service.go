@@ -309,15 +309,15 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	serviceCtx, stopService := context.WithCancel(ctx)
 	defer stopService()
 	instanceName := filepath.Base(instancePath)
-	projectName := strings.TrimSuffix(filepath.Base(projectPath), ".marasi")
+	resolvedProjectName := strings.TrimSuffix(filepath.Base(projectPath), ".marasi")
 	listenerLifecycle := service.NewListenerLifecycle(proxy, logFile)
 	closeProxy = listenerLifecycle.Shutdown
-	serviceServer := service.NewServer(proxy, listenerLifecycle, stopService, version, instanceName, projectName)
-	if err := proxy.WithOptions(
+	serviceServer := service.NewServer(proxy, listenerLifecycle, stopService, version, instanceName, resolvedProjectName)
+	if handlerErr := proxy.WithOptions(
 		marasi.WithRequestHandler(serviceServer.HandleRequest),
 		marasi.WithResponseHandler(serviceServer.HandleResponse),
-	); err != nil {
-		return fmt.Errorf("installing traffic event handlers: %w", err)
+	); handlerErr != nil {
+		return fmt.Errorf("installing traffic event handlers: %w", handlerErr)
 	}
 
 	listenerStatus, err := listenerLifecycle.Start(serviceCtx, service.ListenerSettings{Address: &address, Port: &port})

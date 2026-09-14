@@ -139,13 +139,13 @@ func resolveInstancePath(configDir, name string) (string, error) {
 		return "", errors.New("invalid instance name: .sock suffix is not allowed")
 	}
 
-	instancePath := filepath.Join(configDir, "instances", name)
-	socketPath := instancePath + ".sock"
+	resolvedPath := filepath.Join(configDir, "instances", name)
+	socketPath := resolvedPath + ".sock"
 	if len([]byte(socketPath))+1 > unixSocketPathLimit {
 		return "", fmt.Errorf("instance socket path %q exceeds %d-byte limit", socketPath, unixSocketPathLimit)
 	}
 
-	return instancePath, nil
+	return resolvedPath, nil
 }
 
 // defaultConfigDir returns the per-user Marasi config directory, or empty if it cannot be determined.

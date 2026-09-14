@@ -114,15 +114,16 @@ func runListenerCommand(cmd *cobra.Command, settings listenerRequest) error {
 func controlListener(ctx context.Context, instancePath, instanceName string, asJSON bool, action string, settings listenerRequest, stdout, stderr io.Writer) error {
 	method := http.MethodPost
 	operation := "starting proxy listener"
-	if action == "update" {
+	switch action {
+	case "update":
 		operation = "updating proxy listener"
-	} else if action == "status" || action == "address" {
+	case "status":
 		method = http.MethodGet
 		operation = "getting proxy listener status"
-		if action == "address" {
-			operation = "getting proxy listener address"
-		}
-	} else if action == "stop" {
+	case "address":
+		method = http.MethodGet
+		operation = "getting proxy listener address"
+	case "stop":
 		operation = "stopping proxy listener"
 	}
 	path := "/listener/" + action
@@ -170,29 +171,29 @@ func controlListener(ctx context.Context, instancePath, instanceName string, asJ
 		return fmt.Errorf("%s: %s", operation, response.Status)
 	}
 	if action == "address" {
-		status, proxyListener, err := decodeListenerStatus(body)
-		if err != nil {
-			return err
+		status, proxyListener, decodeErr := decodeListenerStatus(body)
+		if decodeErr != nil {
+			return decodeErr
 		}
 		if status != "active" {
 			return errors.New("proxy listener is inactive")
 		}
 		if asJSON {
-			if err := json.NewEncoder(stdout).Encode(struct {
+			if encodeErr := json.NewEncoder(stdout).Encode(struct {
 				ProxyListener string `json:"proxy_listener"`
-			}{ProxyListener: proxyListener}); err != nil {
-				return fmt.Errorf("writing proxy listener address: %w", err)
+			}{ProxyListener: proxyListener}); encodeErr != nil {
+				return fmt.Errorf("writing proxy listener address: %w", encodeErr)
 			}
 			return nil
 		}
-		if _, err := fmt.Fprintln(stdout, proxyListener); err != nil {
-			return fmt.Errorf("writing proxy listener address: %w", err)
+		if _, writeErr := fmt.Fprintln(stdout, proxyListener); writeErr != nil {
+			return fmt.Errorf("writing proxy listener address: %w", writeErr)
 		}
 		return nil
 	}
 	if asJSON {
-		if _, err := stdout.Write(body); err != nil {
-			return fmt.Errorf("writing proxy listener response: %w", err)
+		if _, writeErr := stdout.Write(body); writeErr != nil {
+			return fmt.Errorf("writing proxy listener response: %w", writeErr)
 		}
 		return nil
 	}
