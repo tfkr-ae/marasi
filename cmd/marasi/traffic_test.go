@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestTrafficListCommand(t *testing.T) {
@@ -26,6 +27,37 @@ func TestTrafficListCommand(t *testing.T) {
 		}
 		if stderr != "" {
 			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+		}
+	})
+
+	t.Run("should truncate long paths before aligning the row", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"0193802f-f0e7-73d9-a764-06d21e367809","method":"GET","host":"example.com","path":"/12345678901234567890123456789012345678901234567890","status_code":200,"length":"12"},{"id":"01938032-1b17-7243-b035-e6a9f4645904","method":"POST","host":"example.com","path":"/short","status_code":404,"length":"45"}],"next_cursor":null}`)
+
+		stdout, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := "0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /123456789012345678901234567890123456...  200  12\n01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /short                                    404  45\n"
+		if stdout != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
+		}
+	})
+
+	t.Run("should truncate long paths without splitting utf-8 characters", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"0193802f-f0e7-73d9-a764-06d21e367809","method":"GET","host":"example.com","path":"/12345678901234567890123456789012345😀XYZQ","status_code":200,"length":"12"}],"next_cursor":null}`)
+
+		stdout, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := "0193802f-f0e7-73d9-a764-06d21e367809  GET  example.com  /12345678901234567890123456789012345😀...  200  12\n"
+		if stdout != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
+		}
+		if !utf8.ValidString(stdout) {
+			t.Fatalf("\nwanted:\nvalid utf-8\ngot:\n%s", stdout)
 		}
 	})
 
@@ -270,6 +302,24 @@ func TestTrafficGetCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("should preserve the full path and raw values with --json", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		id := "0193802f-f0e7-73d9-a764-06d21e367809"
+		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","note":"","metadata":{},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/12345678901234567890123456789012345678901234567890","raw":"R0VUIC9hAA==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/octet-stream","length":"3","raw":"gIGC","responded_at":"2026-01-02T03:04:06Z"}}`
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "get", "--json", id)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if stdout != body {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", body, stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+		}
+	})
+
 	t.Run("should print fields, note, metadata, and utf-8 raw", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		id := "0193802f-f0e7-73d9-a764-06d21e367809"
@@ -289,6 +339,22 @@ func TestTrafficGetCommand(t *testing.T) {
 		}
 		if stderr != "" {
 			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+		}
+	})
+
+	t.Run("should start the response raw on a new line", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		id := "0193802f-f0e7-73d9-a764-06d21e367809"
+		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","note":"","metadata":{},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9h","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"400 Bad Request","status_code":400,"content_type":"text/plain","length":"12","raw":"SFRUUC8xLjEgNDAwIEJhZCBSZXF1ZXN0Cg==","responded_at":"2026-01-02T03:04:06Z"}}`
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+
+		stdout, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", id)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: 400 Bad Request\nstatus_code: 400\ncontent_type: text/plain\nlength: 12\nresponded_at: 2026-01-02T03:04:06Z\nGET /a\nHTTP/1.1 400 Bad Request\n"
+		if stdout != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
 	})
 
@@ -332,6 +398,22 @@ func TestTrafficGetCommand(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		id := "0193802f-f0e7-73d9-a764-06d21e367809"
 		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","note":"","metadata":{},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"N/A","status_code":-1,"content_type":"","length":"0","raw":null,"responded_at":"0001-01-01T00:00:00Z"}}`
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+
+		stdout, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", id)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: N/A\nstatus_code: -1\ncontent_type: \nlength: 0\nresponded_at: 0001-01-01T00:00:00Z\nGET /a\nno response yet\n"
+		if stdout != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
+		}
+	})
+
+	t.Run("should start no response yet on a new line", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		id := "0193802f-f0e7-73d9-a764-06d21e367809"
+		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","note":"","metadata":{},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9h","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"N/A","status_code":-1,"content_type":"","length":"0","raw":null,"responded_at":"0001-01-01T00:00:00Z"}}`
 		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 
 		stdout, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", id)

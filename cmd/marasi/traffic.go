@@ -25,6 +25,8 @@ var trafficListPath string
 var trafficListLimit string
 var trafficListCursor string
 
+const trafficPathDisplayLimit = 40
+
 func init() {
 	trafficListCmd.Flags().StringVar(&trafficListHost, "host", "", "Keep only this exact host")
 	trafficListCmd.Flags().StringVar(&trafficListMethod, "method", "", "Keep only this exact method")
@@ -149,7 +151,12 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 
 	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	for _, item := range page.Items {
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%d\t%s\n", item.ID, item.Method, item.Host, item.Path, item.StatusCode, item.Length)
+		path := item.Path
+		pathRunes := []rune(path)
+		if len(pathRunes) > trafficPathDisplayLimit {
+			path = string(pathRunes[:trafficPathDisplayLimit-3]) + "..."
+		}
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%d\t%s\n", item.ID, item.Method, item.Host, path, item.StatusCode, item.Length)
 	}
 	if err := writer.Flush(); err != nil {
 		return err
@@ -263,6 +270,11 @@ func writeTrafficGetHuman(body []byte, stdout io.Writer) error {
 	}
 	if err := writeTrafficRaw(stdout, "request", detail.Request.Raw); err != nil {
 		return err
+	}
+	if utf8.Valid(detail.Request.Raw) && len(detail.Request.Raw) > 0 && detail.Request.Raw[len(detail.Request.Raw)-1] != '\n' {
+		if _, err := fmt.Fprintln(stdout); err != nil {
+			return err
+		}
 	}
 	if detail.Response.StatusCode == -1 {
 		fmt.Fprintln(stdout, "no response yet")
