@@ -24,7 +24,7 @@ GOWORK=off make build VERSION="verify-${VERIFY_RUN_ID}"
   --config-dir "$VERIFY_CONFIG_DIR" \
   --instance "$VERIFY_INSTANCE" \
   service start \
-  --project "$VERIFY_PROJECT" \
+  --project-name "$VERIFY_PROJECT" \
   --address 127.0.0.1 \
   --port 0 \
   --json
@@ -52,7 +52,8 @@ Drive the instance only when the command exits zero and reports all of the follo
 
 - `status` is `running`.
 - `version` is `verify-$VERIFY_RUN_ID`.
-- `instance` and `project` equal this run's values.
+- `instance` equals `$VERIFY_INSTANCE`.
+- `project` is the canonical absolute path of the file `$VERIFY_CONFIG_DIR/projects/$VERIFY_PROJECT.marasi`. On macOS that path is under `/private/tmp` even when the config directory was created as `/tmp/mv.XXXXXX`.
 - `proxy_listener` is `127.0.0.1` with a non-empty assigned decimal port.
 
 This status comes from the service reached through this run's private Unix socket. The unique config directory and instance name identify the process as ours. If any identity field differs, stop. Do not drive or stop that instance.

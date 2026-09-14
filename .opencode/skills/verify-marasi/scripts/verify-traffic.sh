@@ -60,9 +60,9 @@ cd "$ROOT"
 printf 'GOWORK=off make build VERSION=verify-%s\n' "$RUN_ID" >>"$EVIDENCE_DIR/actions.log"
 GOWORK=off make build VERSION="verify-$RUN_ID" >"$EVIDENCE_DIR/build.log" 2>&1
 
-printf '%q ' "$BINARY" --config-dir "$CONFIG_DIR" --instance "$INSTANCE" service start --project "$PROJECT" --address 127.0.0.1 --port 0 --json >>"$EVIDENCE_DIR/actions.log"
+printf '%q ' "$BINARY" --config-dir "$CONFIG_DIR" --instance "$INSTANCE" service start --project-name "$PROJECT" --address 127.0.0.1 --port 0 --json >>"$EVIDENCE_DIR/actions.log"
 printf '\n' >>"$EVIDENCE_DIR/actions.log"
-"$BINARY" --config-dir "$CONFIG_DIR" --instance "$INSTANCE" service start --project "$PROJECT" --address 127.0.0.1 --port 0 --json >"$EVIDENCE_DIR/launch.json" 2>"$EVIDENCE_DIR/launch.stderr"
+"$BINARY" --config-dir "$CONFIG_DIR" --instance "$INSTANCE" service start --project-name "$PROJECT" --address 127.0.0.1 --port 0 --json >"$EVIDENCE_DIR/launch.json" 2>"$EVIDENCE_DIR/launch.stderr"
 SERVICE_STARTED=1
 
 printf '%q ' "$BINARY" --config-dir "$CONFIG_DIR" --instance "$INSTANCE" service status --json >>"$EVIDENCE_DIR/actions.log"
@@ -71,6 +71,7 @@ printf '\n' >>"$EVIDENCE_DIR/actions.log"
 
 PROXY_LISTENER="$(python3 - "$EVIDENCE_DIR/doctor.json" "$RUN_ID" "$INSTANCE" "$PROJECT" <<'PY'
 import json
+import os
 import sys
 
 path, run_id, instance, project = sys.argv[1:]
@@ -79,7 +80,8 @@ with open(path, encoding="utf-8") as handle:
 assert status["status"] == "running", status
 assert status["version"] == f"verify-{run_id}", status
 assert status["instance"] == instance, status
-assert status["project"] == project, status
+assert os.path.basename(status["project"]) == f"{project}.marasi", status
+assert os.path.isabs(status["project"]), status
 listener = status["proxy_listener"]
 assert isinstance(listener, str) and listener.startswith("127.0.0.1:"), status
 print(listener)
