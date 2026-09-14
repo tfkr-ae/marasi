@@ -133,7 +133,7 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 	}
 
 	lifecycle.proxy.SetProjectResources(resources)
-	lifecycle.setCurrent(targetProject)
+	lifecycle.setOpen(targetProject)
 	if old == nil {
 		return nil
 	}
@@ -171,7 +171,7 @@ func (lifecycle *ProjectLifecycle) Shutdown() error {
 	flushErr := lifecycle.proxy.CloseWebSocketsAndFlush()
 	cleanupErr := closeProject(project)
 	if cleanupErr == nil {
-		lifecycle.setCurrent(nil)
+		lifecycle.setOpen(nil)
 	}
 	return errors.Join(flushErr, cleanupErr)
 }
@@ -182,7 +182,7 @@ func (lifecycle *ProjectLifecycle) openProject() *openProject {
 	return lifecycle.open
 }
 
-func (lifecycle *ProjectLifecycle) setCurrent(project *openProject) {
+func (lifecycle *ProjectLifecycle) setOpen(project *openProject) {
 	lifecycle.statusMu.Lock()
 	lifecycle.open = project
 	lifecycle.statusMu.Unlock()

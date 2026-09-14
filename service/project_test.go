@@ -7,12 +7,23 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/wordlist"
 )
+
+type busyArmory struct{}
+
+func (busyArmory) Repo() domain.ArmoryRepository       { return nil }
+func (busyArmory) ValidateRun(*domain.ArmoryRun) error { return nil }
+func (busyArmory) StartRun(uuid.UUID) error            { return nil }
+func (busyArmory) CancelRun(uuid.UUID) error           { return nil }
+func (busyArmory) ActiveRunIDs() []uuid.UUID           { return []uuid.UUID{uuid.Nil} }
 
 func newTestProjectLifecycle(t *testing.T) (*ProjectLifecycle, *marasi.Proxy, string) {
 	t.Helper()
@@ -72,6 +83,31 @@ func TestProjectLifecycle(t *testing.T) {
 		_ = unlock()
 		if _, err := acquireProjectOwnership(second); !errors.Is(err, ErrProjectAlreadyOpen) {
 			t.Fatalf("\nwanted:\nowned second project\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should acquire ownership before opening the target database", func(t *testing.T) {
+		lifecycle, _, dir := newTestProjectLifecycle(t)
+		path := canonicalProjectPath(t, filepath.Join(dir, "project.marasi"))
+		var order []string
+		realLock := lifecycle.lock
+		lifecycle.lock = func(path string) (func() error, error) {
+			order = append(order, "lock")
+			return realLock(path)
+		}
+		realPrepare := lifecycle.prepare
+		lifecycle.prepare = func(ctx context.Context, path string) (marasi.ProjectResources, error) {
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("\nwanted:\nlock before the project file exists\ngot:\nproject file already created")
+			}
+			order = append(order, "open")
+			return realPrepare(ctx, path)
+		}
+		if err := lifecycle.Open(context.Background(), path); err != nil {
+			t.Fatalf("opening project: %v", err)
+		}
+		if got := strings.Join(order, ","); got != "lock,open" {
+			t.Fatalf("\nwanted:\nlock,open\ngot:\n%s", got)
 		}
 	})
 
@@ -296,6 +332,75 @@ func TestProjectLifecycle(t *testing.T) {
 		}
 		if lifecycle.Path() != second {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", second, lifecycle.Path())
+		}
+	})
+
+	t.Run("should retain the old project when the target is already owned", func(t *testing.T) {
+		lifecycle, _, dir := newTestProjectLifecycle(t)
+		oldPath := canonicalProjectPath(t, filepath.Join(dir, "old.marasi"))
+		target := canonicalProjectPath(t, filepath.Join(dir, "target.marasi"))
+		if err := lifecycle.Open(context.Background(), oldPath); err != nil {
+			t.Fatalf("opening old project: %v", err)
+		}
+		held, err := acquireProjectOwnership(target)
+		if err != nil {
+			t.Fatalf("holding target ownership: %v", err)
+		}
+		defer held()
+		if err := lifecycle.Open(context.Background(), target); !errors.Is(err, ErrProjectAlreadyOpen) {
+			t.Fatalf("\nwanted:\nproject already open\ngot:\n%v", err)
+		}
+		if lifecycle.Path() != oldPath {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", oldPath, lifecycle.Path())
+		}
+		if _, err := acquireProjectOwnership(oldPath); !errors.Is(err, ErrProjectAlreadyOpen) {
+			t.Fatalf("\nwanted:\nold project still owned\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should retain the old project when it is busy", func(t *testing.T) {
+		lifecycle, _, dir := newTestProjectLifecycle(t)
+		oldPath := canonicalProjectPath(t, filepath.Join(dir, "old.marasi"))
+		target := canonicalProjectPath(t, filepath.Join(dir, "target.marasi"))
+		if err := lifecycle.Open(context.Background(), oldPath); err != nil {
+			t.Fatalf("opening old project: %v", err)
+		}
+		lifecycle.open.resources.Armory = busyArmory{}
+		if err := lifecycle.Open(context.Background(), target); !errors.Is(err, ErrProjectBusy) {
+			t.Fatalf("\nwanted:\nproject busy\ngot:\n%v", err)
+		}
+		if lifecycle.Path() != oldPath {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", oldPath, lifecycle.Path())
+		}
+		if _, err := acquireProjectOwnership(oldPath); !errors.Is(err, ErrProjectAlreadyOpen) {
+			t.Fatalf("\nwanted:\nold project still owned\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should flush the old project before publication", func(t *testing.T) {
+		lifecycle, _, dir := newTestProjectLifecycle(t)
+		oldPath := canonicalProjectPath(t, filepath.Join(dir, "old.marasi"))
+		target := canonicalProjectPath(t, filepath.Join(dir, "target.marasi"))
+		if err := lifecycle.Open(context.Background(), oldPath); err != nil {
+			t.Fatalf("opening old project: %v", err)
+		}
+		realFlush := lifecycle.flushOpenProject
+		flushed := false
+		lifecycle.flushOpenProject = func() error {
+			flushed = true
+			if lifecycle.Path() != oldPath {
+				t.Fatalf("\nwanted:\n%s during flush\ngot:\n%s", oldPath, lifecycle.Path())
+			}
+			return realFlush()
+		}
+		if err := lifecycle.Open(context.Background(), target); err != nil {
+			t.Fatalf("opening target: %v", err)
+		}
+		if !flushed {
+			t.Fatal("\nwanted:\nflush before publication\ngot:\nno flush")
+		}
+		if lifecycle.Path() != target {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", target, lifecycle.Path())
 		}
 	})
 
