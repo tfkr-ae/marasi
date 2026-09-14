@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,7 +14,11 @@ func TestServiceStatusCommand(t *testing.T) {
 
 	t.Run("should print exact status for the selected named instance", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		project := filepath.Join(configDir, "juice-shop.marasi")
+		canonicalConfigDir, err := filepath.EvalSymlinks(configDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		project := filepath.Join(canonicalConfigDir, "juice-shop.marasi")
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"13.09.2026","instance":"work","project":%q,"proxy_listener":"127.0.0.1:8080"}`, project))
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
@@ -31,7 +36,11 @@ func TestServiceStatusCommand(t *testing.T) {
 
 	t.Run("should print an inactive proxy listener", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		project := filepath.Join(configDir, "scratchpad.marasi")
+		canonicalConfigDir, err := filepath.EvalSymlinks(configDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		project := filepath.Join(canonicalConfigDir, "scratchpad.marasi")
 		startCannedControlAPI(t, configDir, "work", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","instance":"work","project":%q,"proxy_listener":null}`, project))
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
@@ -96,6 +105,25 @@ func TestServiceStatusCommand(t *testing.T) {
 		})
 	}
 
+	t.Run("should reject a project path with an unresolved symlink", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		target := filepath.Join(configDir, "target.marasi")
+		if err := os.WriteFile(target, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		alias := filepath.Join(configDir, "alias.marasi")
+		if err := os.Symlink(target, alias); err != nil {
+			t.Skipf("creating symlink: %v", err)
+		}
+		body := fmt.Sprintf(`{"status":"running","version":"dev","instance":"work","project":%q,"proxy_listener":null}`, alias)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+
+		stdout, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
+		if err == nil || stdout != "" {
+			t.Fatalf("\nwanted:\ncanonical project error with empty stdout\ngot:\nstdout %q, error %v", stdout, err)
+		}
+	})
+
 	for name, body := range map[string]string{
 		"malformed JSON":         `{`,
 		"missing field":          fmt.Sprintf(`{"status":"running","version":"dev","instance":"work","project":%q}`, filepath.Join(string(filepath.Separator), "work", "scratchpad.marasi")),
@@ -134,7 +162,12 @@ func TestServiceStatusCommand(t *testing.T) {
 
 	t.Run("should query a running built service", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		project := filepath.Join(configDir, "juice-shop.marasi")
+		projectDir, err := os.MkdirTemp(".", "status-project-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(projectDir) })
+		project := filepath.Join(projectDir, "juice-shop.marasi")
 		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
 
 		_, startStderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--project", project, "--port", "0")
@@ -147,7 +180,11 @@ func TestServiceStatusCommand(t *testing.T) {
 			t.Fatalf("\nwanted:\nproxy listener startup output\ngot:\n%s", startStderr)
 		}
 		listener := strings.TrimSpace(startStderr[index+len(prefix):])
-		canonicalProject, err := filepath.EvalSymlinks(project)
+		absoluteProject, err := filepath.Abs(project)
+		if err != nil {
+			t.Fatal(err)
+		}
+		canonicalProject, err := filepath.EvalSymlinks(absoluteProject)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -175,7 +175,7 @@ func TestNamedProjectPath(t *testing.T) {
 		})
 	}
 
-	for _, name := range []string{"", ".", "..", "/tmp/scratchpad", "../scratchpad", "nested/scratchpad", `nested\scratchpad`} {
+	for _, name := range []string{"", ".", "..", "/tmp/scratchpad", "../scratchpad", "nested/scratchpad", `nested\scratchpad`, "scratchpad.marasi.marasi"} {
 		t.Run("should reject invalid name "+name, func(t *testing.T) {
 			if _, err := resolveNamedProjectPath(t.TempDir(), name); err == nil {
 				t.Fatal("\nwanted:\nerror\ngot:\nnil")
@@ -1584,6 +1584,21 @@ func TestStartService(t *testing.T) {
 		}
 		if _, _, err := net.SplitHostPort(got["proxy_listener"]); err != nil {
 			t.Fatalf("\nwanted:\nproxy listener address\ngot:\n%s (%v)", got["proxy_listener"], err)
+		}
+		statusStdout, statusStderr, err := runMarasi(binary, "--config-dir", configDir, "service", "status", "--json")
+		if err != nil || statusStderr != "" {
+			t.Fatalf("getting default service status: stdout %q, stderr %q, error %v", statusStdout, statusStderr, err)
+		}
+		var status map[string]any
+		if err := json.Unmarshal([]byte(statusStdout), &status); err != nil {
+			t.Fatalf("decoding default service status: %v", err)
+		}
+		projectPath, err := filepath.EvalSymlinks(filepath.Join(configDir, "projects", "scratchpad.marasi"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status["project"] != projectPath {
+			t.Fatalf("\nwanted:\nproject %s\ngot:\n%v", projectPath, status["project"])
 		}
 	})
 

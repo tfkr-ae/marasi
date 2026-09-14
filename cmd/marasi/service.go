@@ -213,7 +213,8 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 	if status.Project == nil || *status.Project == "" {
 		return errors.New("invalid service status: project must be a non-empty string")
 	}
-	if strings.TrimSpace(*status.Project) != *status.Project || !filepath.IsAbs(*status.Project) || filepath.Clean(*status.Project) != *status.Project || !strings.HasSuffix(*status.Project, ".marasi") {
+	canonicalProject, err := resolveProjectPath(*status.Project)
+	if err != nil || canonicalProject != *status.Project {
 		return errors.New("invalid service status: project must be canonical")
 	}
 	if status.ProxyListener == nil {
@@ -556,6 +557,9 @@ func resolveNamedProjectPath(configDir, name string) (string, error) {
 	name = strings.TrimSuffix(name, ".marasi")
 	if name == "" {
 		return "", errors.New("invalid project name: cannot be empty")
+	}
+	if strings.HasSuffix(name, ".marasi") {
+		return "", errors.New("invalid project name: only one .marasi suffix is allowed")
 	}
 	if !filepath.IsLocal(name) {
 		return "", errors.New("invalid project name: absolute paths and parent directory references are not allowed")
