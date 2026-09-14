@@ -347,6 +347,7 @@ func TestGlobalJSONOption(t *testing.T) {
 			{name: "service stop after executable command", args: []string{"service", "stop", "--json", "--config-dir="}},
 			{name: "traffic list before command group", args: []string{"--json", "--config-dir=", "traffic", "list"}},
 			{name: "traffic get after executable command", args: []string{"traffic", "get", "00000000-0000-0000-0000-000000000000", "--json", "--config-dir="}},
+			{name: "project open after executable command", args: []string{"project", "open", "--path", "x.marasi", "--json", "--config-dir="}},
 		}
 		for _, test := range tests {
 			t.Run("should accept JSON for "+test.name, func(t *testing.T) {
