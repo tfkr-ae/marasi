@@ -52,6 +52,7 @@ type ProjectLifecycle struct {
 	prepare          func(context.Context, string) (marasi.ProjectResources, error)
 	lock             func(string) (func() error, error)
 	flushOpenProject func() error
+	opened           func(string)
 }
 
 // NewProjectLifecycle creates a lifecycle with no open project. Open must
@@ -136,6 +137,9 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 	lifecycle.setOpen(targetProject)
 	if old == nil {
 		return nil
+	}
+	if lifecycle.opened != nil {
+		lifecycle.opened(path)
 	}
 	if err := closeProject(old); err != nil {
 		if lifecycle.logger != nil {

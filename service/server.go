@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tfkr-ae/marasi"
@@ -22,6 +25,7 @@ type Server struct {
 	heartbeatInterval time.Duration     // idle SSE comment interval
 	proxy             *marasi.Proxy
 	listener          ListenerLifecycle
+	projects          *ProjectLifecycle
 	version           string
 	instance          string
 	project           string
@@ -29,7 +33,7 @@ type Server struct {
 
 // NewServer creates a control API server for proxy.
 // stop runs after a POST /service/stop, once event streams have been closed.
-func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, stop func(), version, instance, project string) *Server {
+func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *ProjectLifecycle, stop func(), version, instance, project string) *Server {
 	mux := http.NewServeMux()
 	events := newEventBroadcaster()
 	if lifecycle, ok := listener.(*listenerLifecycle); ok {
@@ -41,9 +45,17 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, stop func(), ver
 		heartbeatInterval: eventHeartbeatInterval,
 		proxy:             proxy,
 		listener:          listener,
+		projects:          projects,
 		version:           version,
 		instance:          instance,
 		project:           project,
+	}
+	if projects != nil {
+		projects.opened = func(path string) {
+			events.publish("project.opened", struct {
+				Project string `json:"project"`
+			}{Project: path})
+		}
 	}
 	addRoutes(mux, proxy, server.serveStatus, func() {
 		server.Close()
@@ -55,6 +67,9 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, stop func(), ver
 	listenerMux.HandleFunc("/stop", server.serveListenerStop)
 	listenerMux.HandleFunc("/update", server.serveListenerUpdate)
 	mux.Handle("/listener/", http.StripPrefix("/listener", listenerMux))
+	projectMux := http.NewServeMux()
+	projectMux.HandleFunc("/open", server.serveProjectOpen)
+	mux.Handle("/project/", http.StripPrefix("/project", projectMux))
 	mux.HandleFunc("/events", server.serveEvents)
 	return server
 }
@@ -199,13 +214,98 @@ func writeListenerError(w http.ResponseWriter, r *http.Request, err error) {
 	}{Error: code})
 }
 
+func (s *Server) serveProjectOpen(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	path, err := decodeProjectOpen(r)
+	if err != nil {
+		writeProjectError(w, r, err)
+		return
+	}
+	if s.projects == nil {
+		writeProjectError(w, r, errors.New("project open not configured"))
+		return
+	}
+	if err := s.projects.Open(r.Context(), path); err != nil {
+		writeProjectError(w, r, err)
+		return
+	}
+	writeJSON(w, r, http.StatusOK, struct {
+		Project string `json:"project"`
+	}{Project: path})
+}
+
+var errInvalidProjectRequest = errors.New("invalid project request")
+
+func decodeProjectOpen(r *http.Request) (string, error) {
+	if r.Body == nil {
+		return "", errInvalidProjectRequest
+	}
+	decoder := json.NewDecoder(r.Body)
+	var fields map[string]json.RawMessage
+	if err := decoder.Decode(&fields); err != nil {
+		return "", errInvalidProjectRequest
+	}
+	if fields == nil {
+		return "", errInvalidProjectRequest
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return "", errInvalidProjectRequest
+	}
+	raw, ok := fields["path"]
+	if !ok || len(fields) != 1 {
+		return "", errInvalidProjectRequest
+	}
+	var path string
+	if err := json.Unmarshal(raw, &path); err != nil || path == "" {
+		return "", errInvalidProjectRequest
+	}
+	if !filepath.IsAbs(path) || !strings.HasSuffix(path, ".marasi") {
+		return "", errInvalidProjectRequest
+	}
+	parent, err := os.Stat(filepath.Dir(path))
+	if err != nil || !parent.IsDir() {
+		return "", errInvalidProjectRequest
+	}
+	canonical, err := ResolveProjectPath(path)
+	if err != nil {
+		return "", errInvalidProjectRequest
+	}
+	return canonical, nil
+}
+
+func writeProjectError(w http.ResponseWriter, r *http.Request, err error) {
+	status := http.StatusInternalServerError
+	code := "internal_server_error"
+	switch {
+	case errors.Is(err, errInvalidProjectRequest):
+		status, code = http.StatusBadRequest, "invalid_project_request"
+	case errors.Is(err, ErrProjectAlreadyOpen):
+		status, code = http.StatusConflict, "project_already_open"
+	case errors.Is(err, ErrProjectBusy):
+		status, code = http.StatusConflict, "project_busy"
+	case errors.Is(err, ErrProjectCleanup):
+		status, code = http.StatusInternalServerError, "project_cleanup_failed"
+	}
+	writeJSON(w, r, status, struct {
+		Error string `json:"error"`
+	}{Error: code})
+}
+
 func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if s.project == "" {
+	project := s.project
+	if s.projects != nil {
+		project = s.projects.Path()
+	}
+	if project == "" {
 		writeJSON(w, r, http.StatusInternalServerError, struct {
 			Error string `json:"error"`
 		}{Error: "internal_server_error"})
@@ -223,7 +323,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		Status:        "running",
 		Version:       s.version,
 		Instance:      s.instance,
-		Project:       s.project,
+		Project:       project,
 		ProxyListener: proxyListener,
 	})
 }

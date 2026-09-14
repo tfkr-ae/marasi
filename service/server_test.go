@@ -19,7 +19,7 @@ import (
 )
 
 func newTestServer(proxy *marasi.Proxy, stop func()) *Server {
-	return NewServer(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, stop, "test-version", "test-instance", "test-project")
+	return NewServer(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, nil, stop, "test-version", "test-instance", "test-project")
 }
 
 type statusListener struct {
@@ -203,7 +203,7 @@ func TestServiceStatus(t *testing.T) {
 			lifecycle.Shutdown()
 		})
 
-		server := NewServer(proxy, lifecycle, func() {}, "13.09.2026", "work", "/work/juice-shop.marasi")
+		server := NewServer(proxy, lifecycle, nil, func() {}, "13.09.2026", "work", "/work/juice-shop.marasi")
 		request := httptest.NewRequest(http.MethodGet, "/service/status", nil)
 		response := httptest.NewRecorder()
 
@@ -233,7 +233,7 @@ func TestServiceStatus(t *testing.T) {
 
 	t.Run("should report an inactive listener", func(t *testing.T) {
 		proxy := &marasi.Proxy{}
-		server := NewServer(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, func() {}, "dev", "default", "/work/scratchpad.marasi")
+		server := NewServer(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, nil, func() {}, "dev", "default", "/work/scratchpad.marasi")
 		request := httptest.NewRequest(http.MethodGet, "/service/status", nil)
 		response := httptest.NewRecorder()
 
@@ -253,7 +253,7 @@ func TestServiceStatus(t *testing.T) {
 
 	t.Run("should return an internal error without an open project", func(t *testing.T) {
 		proxy := &marasi.Proxy{}
-		server := NewServer(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, func() {}, "dev", "default", "")
+		server := NewServer(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, nil, func() {}, "dev", "default", "")
 		request := httptest.NewRequest(http.MethodGet, "/service/status", nil)
 		response := httptest.NewRecorder()
 
@@ -272,7 +272,7 @@ func TestServiceStatus(t *testing.T) {
 
 	t.Run("should reject other methods and leave unknown paths not found", func(t *testing.T) {
 		proxy := &marasi.Proxy{}
-		server := NewServer(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, func() {}, "dev", "default", "scratchpad")
+		server := NewServer(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, nil, func() {}, "dev", "default", "scratchpad")
 		for _, test := range []struct {
 			method string
 			path   string
@@ -299,7 +299,7 @@ func TestListenerControl(t *testing.T) {
 		proxy := newListenerTestProxy()
 		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
-		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "/work/scratchpad.marasi")
+		server := NewServer(nil, lifecycle, nil, func() {}, "dev", "default", "/work/scratchpad.marasi")
 
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/listener/status", nil))
@@ -335,7 +335,7 @@ func TestListenerControl(t *testing.T) {
 		proxy := newListenerTestProxy()
 		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
-		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "/work/scratchpad.marasi")
+		server := NewServer(nil, lifecycle, nil, func() {}, "dev", "default", "/work/scratchpad.marasi")
 
 		response := requestListener(t, server, http.MethodPost, "/listener/start", `{"address":"127.0.0.1","port":0}`)
 		if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/json" {
@@ -391,7 +391,7 @@ func TestListenerControl(t *testing.T) {
 	})
 
 	t.Run("should reject invalid mutation requests with the stable error", func(t *testing.T) {
-		server := NewServer(nil, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, func() {}, "dev", "default", "scratchpad")
+		server := NewServer(nil, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, nil, func() {}, "dev", "default", "scratchpad")
 		for _, test := range []struct {
 			name string
 			path string
@@ -425,7 +425,7 @@ func TestListenerControl(t *testing.T) {
 		var log bytes.Buffer
 		lifecycle := newListenerLifecycle(proxy, &log)
 		t.Cleanup(func() { lifecycle.Shutdown() })
-		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+		server := NewServer(nil, lifecycle, nil, func() {}, "dev", "default", "scratchpad")
 
 		response := requestListener(t, server, http.MethodPost, "/listener/update", `{"port":0}`)
 		assertListenerError(t, response, http.StatusConflict, "listener_inactive")

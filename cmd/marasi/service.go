@@ -307,7 +307,7 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	instanceName := filepath.Base(instancePath)
 	listenerLifecycle := service.NewListenerLifecycle(proxy, logFile)
 	closeProxy = listenerLifecycle.Shutdown
-	serviceServer := service.NewServer(proxy, listenerLifecycle, stopService, version, instanceName, projects.Path())
+	serviceServer := service.NewServer(proxy, listenerLifecycle, projects, stopService, version, instanceName, projects.Path())
 	if handlerErr := proxy.WithOptions(
 		marasi.WithRequestHandler(serviceServer.HandleRequest),
 		marasi.WithResponseHandler(serviceServer.HandleResponse),

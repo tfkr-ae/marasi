@@ -276,7 +276,7 @@ func TestListenerEvents(t *testing.T) {
 		if _, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0)); err != nil {
 			t.Fatalf("starting initial listener: %v", err)
 		}
-		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+		server := NewServer(nil, lifecycle, nil, func() {}, "dev", "default", "scratchpad")
 		server.heartbeatInterval = time.Millisecond
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
@@ -300,7 +300,7 @@ func TestListenerEvents(t *testing.T) {
 		proxy := newListenerTestProxy()
 		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
-		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+		server := NewServer(nil, lifecycle, nil, func() {}, "dev", "default", "scratchpad")
 		server.heartbeatInterval = 500 * time.Millisecond
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
@@ -359,7 +359,7 @@ func TestListenerEvents(t *testing.T) {
 		proxy := newListenerTestProxy()
 		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
-		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+		server := NewServer(nil, lifecycle, nil, func() {}, "dev", "default", "scratchpad")
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
 		stream, reader := connectEventStream(t, httpServer.URL)
@@ -380,7 +380,7 @@ func TestListenerEvents(t *testing.T) {
 		proxy := newListenerTestProxy()
 		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
-		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+		server := NewServer(nil, lifecycle, nil, func() {}, "dev", "default", "scratchpad")
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
 		stream, reader := connectEventStream(t, httpServer.URL)
@@ -402,7 +402,7 @@ func TestListenerEvents(t *testing.T) {
 		proxy := newListenerTestProxy()
 		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
-		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+		server := NewServer(nil, lifecycle, nil, func() {}, "dev", "default", "scratchpad")
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
 		stream, reader := connectEventStream(t, httpServer.URL)
@@ -444,7 +444,7 @@ func TestListenerEvents(t *testing.T) {
 		}
 		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
-		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+		server := NewServer(nil, lifecycle, nil, func() {}, "dev", "default", "scratchpad")
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
 		stream, reader := connectEventStream(t, httpServer.URL)
