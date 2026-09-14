@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -298,7 +299,7 @@ func TestListenerCommandLifecycle(t *testing.T) {
 	configDir := serviceConfigDir(t)
 	t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
 
-	_, startStderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--project", "listener-cli", "--port", "0")
+	_, startStderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--project-name", "listener-cli", "--port", "0")
 	if err != nil {
 		t.Fatalf("starting service: %v", err)
 	}
@@ -348,7 +349,11 @@ func TestListenerCommandLifecycle(t *testing.T) {
 	}
 	connection.Close()
 	serviceStatus, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
-	if err != nil || !strings.Contains(serviceStatus, fmt.Sprintf("project: listener-cli\nproxy listener: %s\n", updatedAddress)) {
+	projectPath, pathErr := filepath.EvalSymlinks(filepath.Join(configDir, "projects", "listener-cli.marasi"))
+	if pathErr != nil {
+		t.Fatal(pathErr)
+	}
+	if err != nil || !strings.Contains(serviceStatus, fmt.Sprintf("project: %s\nproxy listener: %s\n", projectPath, updatedAddress)) {
 		t.Fatalf("project continuity: stdout %q, error %v", serviceStatus, err)
 	}
 	if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop"); err != nil {

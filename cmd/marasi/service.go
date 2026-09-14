@@ -27,6 +27,7 @@ import (
 )
 
 var projectName string
+var requestedProjectPath string
 var projectPath string
 var proxyAddress string
 var proxyPort decimalPort
@@ -76,7 +77,9 @@ const (
 )
 
 func init() {
-	startCmd.Flags().StringVar(&projectName, "project", "scratchpad", "Project name")
+	startCmd.Flags().StringVar(&requestedProjectPath, "project", "", "Project path")
+	startCmd.Flags().StringVar(&projectName, "project-name", "", "Project name under the default projects directory")
+	startCmd.MarkFlagsMutuallyExclusive("project", "project-name")
 	startCmd.Flags().StringVar(&proxyAddress, "address", "127.0.0.1", "Proxy listener address")
 	proxyPort = 8080
 	startCmd.Flags().Var(&proxyPort, "port", "Proxy listener port")
@@ -100,7 +103,7 @@ var startCmd = &cobra.Command{
 		if serviceChild {
 			return runServiceChild(ctx, configDir, projectPath, instancePath, proxyAddress, uint16(proxyPort))
 		}
-		return startServiceProcess(ctx, configDir, projectName, instancePath, proxyAddress, uint16(proxyPort), cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput)
+		return startServiceProcess(ctx, configDir, projectPath, instancePath, proxyAddress, uint16(proxyPort), cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput)
 	},
 }
 
@@ -210,7 +213,7 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 	if status.Project == nil || *status.Project == "" {
 		return errors.New("invalid service status: project must be a non-empty string")
 	}
-	if strings.TrimSpace(*status.Project) != *status.Project || strings.HasSuffix(*status.Project, ".marasi") {
+	if strings.TrimSpace(*status.Project) != *status.Project || !filepath.IsAbs(*status.Project) || filepath.Clean(*status.Project) != *status.Project || !strings.HasSuffix(*status.Project, ".marasi") {
 		return errors.New("invalid service status: project must be canonical")
 	}
 	if status.ProxyListener == nil {
@@ -309,10 +312,9 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	serviceCtx, stopService := context.WithCancel(ctx)
 	defer stopService()
 	instanceName := filepath.Base(instancePath)
-	resolvedProjectName := strings.TrimSuffix(filepath.Base(projectPath), ".marasi")
 	listenerLifecycle := service.NewListenerLifecycle(proxy, logFile)
 	closeProxy = listenerLifecycle.Shutdown
-	serviceServer := service.NewServer(proxy, listenerLifecycle, stopService, version, instanceName, resolvedProjectName)
+	serviceServer := service.NewServer(proxy, listenerLifecycle, stopService, version, instanceName, projectPath)
 	if handlerErr := proxy.WithOptions(
 		marasi.WithRequestHandler(serviceServer.HandleRequest),
 		marasi.WithResponseHandler(serviceServer.HandleResponse),
@@ -492,9 +494,25 @@ func wrapError(action string, err error) error {
 	return fmt.Errorf("%s: %w", action, err)
 }
 
-// prepareProjectPath resolves --project into projectPath.
-func prepareProjectPath(*cobra.Command, []string) error {
-	path, err := resolveProjectPath(configDir, projectName)
+// prepareProjectPath resolves the startup selector into projectPath.
+func prepareProjectPath(cmd *cobra.Command, _ []string) error {
+	pathSelected := cmd.Flags().Changed("project")
+	nameSelected := cmd.Flags().Changed("project-name")
+	if pathSelected && nameSelected {
+		return errors.New("--project and --project-name are mutually exclusive")
+	}
+
+	var path string
+	var err error
+	if pathSelected {
+		path, err = resolveProjectPath(requestedProjectPath)
+	} else {
+		name := projectName
+		if !nameSelected {
+			name = "scratchpad"
+		}
+		path, err = resolveNamedProjectPath(configDir, name)
+	}
 	if err != nil {
 		return err
 	}
@@ -502,8 +520,38 @@ func prepareProjectPath(*cobra.Command, []string) error {
 	return nil
 }
 
-// resolveProjectPath returns the project file under configDir for name.
-func resolveProjectPath(configDir, name string) (string, error) {
+// resolveProjectPath returns the canonical absolute path for a project file.
+func resolveProjectPath(path string) (string, error) {
+	if !strings.HasSuffix(path, ".marasi") {
+		return "", errors.New("invalid project path: must end in .marasi")
+	}
+
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving project path: %w", err)
+	}
+	if _, err := os.Lstat(absolutePath); err == nil {
+		canonicalPath, err := filepath.EvalSymlinks(absolutePath)
+		if err != nil {
+			return "", fmt.Errorf("resolving project path: %w", err)
+		}
+		if !strings.HasSuffix(canonicalPath, ".marasi") {
+			return "", errors.New("invalid project path: canonical path must end in .marasi")
+		}
+		return canonicalPath, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("checking project path: %w", err)
+	}
+
+	parent, err := filepath.EvalSymlinks(filepath.Dir(absolutePath))
+	if err != nil {
+		return "", fmt.Errorf("resolving project parent directory: %w", err)
+	}
+	return filepath.Join(parent, filepath.Base(absolutePath)), nil
+}
+
+// resolveNamedProjectPath returns a named project under configDir/projects.
+func resolveNamedProjectPath(configDir, name string) (string, error) {
 	name = strings.TrimSpace(name)
 	name = strings.TrimSuffix(name, ".marasi")
 	if name == "" {
@@ -519,7 +567,11 @@ func resolveProjectPath(configDir, name string) (string, error) {
 		return "", errors.New("invalid project name: subdirectories not allowed")
 	}
 
-	return filepath.Join(configDir, "projects", name+".marasi"), nil
+	projectsDir := filepath.Join(configDir, "projects")
+	if err := os.MkdirAll(projectsDir, 0755); err != nil {
+		return "", fmt.Errorf("creating projects dir: %w", err)
+	}
+	return resolveProjectPath(filepath.Join(projectsDir, name+".marasi"))
 }
 
 // claimInstance locks lockPath and listens on socketPath.

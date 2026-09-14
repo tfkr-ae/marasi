@@ -203,7 +203,7 @@ func TestServiceStatus(t *testing.T) {
 			lifecycle.Shutdown()
 		})
 
-		server := NewServer(proxy, lifecycle, func() {}, "13.09.2026", "work", "juice-shop")
+		server := NewServer(proxy, lifecycle, func() {}, "13.09.2026", "work", "/work/juice-shop.marasi")
 		request := httptest.NewRequest(http.MethodGet, "/service/status", nil)
 		response := httptest.NewRecorder()
 
@@ -215,7 +215,7 @@ func TestServiceStatus(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := fmt.Sprintf("{\"status\":\"running\",\"version\":\"13.09.2026\",\"instance\":\"work\",\"project\":\"juice-shop\",\"proxy_listener\":%q}\n", *status.ProxyListener)
+		want := fmt.Sprintf("{\"status\":\"running\",\"version\":\"13.09.2026\",\"instance\":\"work\",\"project\":\"/work/juice-shop.marasi\",\"proxy_listener\":%q}\n", *status.ProxyListener)
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -225,7 +225,7 @@ func TestServiceStatus(t *testing.T) {
 		}
 		response = httptest.NewRecorder()
 		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/service/status", nil))
-		want = "{\"status\":\"running\",\"version\":\"13.09.2026\",\"instance\":\"work\",\"project\":\"juice-shop\",\"proxy_listener\":null}\n"
+		want = "{\"status\":\"running\",\"version\":\"13.09.2026\",\"instance\":\"work\",\"project\":\"/work/juice-shop.marasi\",\"proxy_listener\":null}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -233,7 +233,7 @@ func TestServiceStatus(t *testing.T) {
 
 	t.Run("should report an inactive listener", func(t *testing.T) {
 		proxy := &marasi.Proxy{}
-		server := NewServer(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, func() {}, "dev", "default", "scratchpad")
+		server := NewServer(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, func() {}, "dev", "default", "/work/scratchpad.marasi")
 		request := httptest.NewRequest(http.MethodGet, "/service/status", nil)
 		response := httptest.NewRecorder()
 
@@ -245,7 +245,7 @@ func TestServiceStatus(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"default\",\"project\":\"scratchpad\",\"proxy_listener\":null}\n"
+		want := "{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"default\",\"project\":\"/work/scratchpad.marasi\",\"proxy_listener\":null}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -299,7 +299,7 @@ func TestListenerControl(t *testing.T) {
 		proxy := newListenerTestProxy()
 		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
-		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "/work/scratchpad.marasi")
 
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/listener/status", nil))
@@ -335,7 +335,7 @@ func TestListenerControl(t *testing.T) {
 		proxy := newListenerTestProxy()
 		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
-		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "scratchpad")
+		server := NewServer(nil, lifecycle, func() {}, "dev", "default", "/work/scratchpad.marasi")
 
 		response := requestListener(t, server, http.MethodPost, "/listener/start", `{"address":"127.0.0.1","port":0}`)
 		if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/json" {
@@ -352,7 +352,7 @@ func TestListenerControl(t *testing.T) {
 		}
 		serviceStatus := httptest.NewRecorder()
 		server.ServeHTTP(serviceStatus, httptest.NewRequest(http.MethodGet, "/service/status", nil))
-		wantServiceStatus := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"default\",\"project\":\"scratchpad\",\"proxy_listener\":%q}\n", startedAddress)
+		wantServiceStatus := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"default\",\"project\":\"/work/scratchpad.marasi\",\"proxy_listener\":%q}\n", startedAddress)
 		if serviceStatus.Code != http.StatusOK || serviceStatus.Body.String() != wantServiceStatus {
 			t.Fatalf("\nwanted synchronized service status:\n%s\ngot:\n%d %s", wantServiceStatus, serviceStatus.Code, serviceStatus.Body.String())
 		}
@@ -375,7 +375,7 @@ func TestListenerControl(t *testing.T) {
 		}
 		serviceStatus = httptest.NewRecorder()
 		server.ServeHTTP(serviceStatus, httptest.NewRequest(http.MethodGet, "/service/status", nil))
-		wantServiceStatus = "{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"default\",\"project\":\"scratchpad\",\"proxy_listener\":null}\n"
+		wantServiceStatus = "{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"default\",\"project\":\"/work/scratchpad.marasi\",\"proxy_listener\":null}\n"
 		if serviceStatus.Code != http.StatusOK || serviceStatus.Body.String() != wantServiceStatus {
 			t.Fatalf("\nwanted synchronized inactive service status:\n%s\ngot:\n%d %s", wantServiceStatus, serviceStatus.Code, serviceStatus.Body.String())
 		}

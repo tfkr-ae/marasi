@@ -59,87 +59,155 @@ func (l *failingListener) Close() error {
 }
 
 func TestProjectPath(t *testing.T) {
-	t.Run("should resolve scratchpad under projects", func(t *testing.T) {
-		configDir := t.TempDir()
+	t.Run("should resolve a relative project path to an absolute path", func(t *testing.T) {
+		parent, err := os.MkdirTemp(".", "project-path-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(parent) })
+		path := filepath.Join(parent, "scratchpad.marasi")
 
-		got, err := resolveProjectPath(configDir, "scratchpad")
+		got, err := resolveProjectPath(path)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-
-		want := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		absoluteParent, err := filepath.Abs(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		canonicalParent, err := filepath.EvalSymlinks(absoluteParent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(canonicalParent, "scratchpad.marasi")
 		if got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
 	})
 
-	t.Run("should resolve a named project under projects", func(t *testing.T) {
-		configDir := t.TempDir()
+	t.Run("should resolve an existing project symlink", func(t *testing.T) {
+		parent := t.TempDir()
+		target := filepath.Join(parent, "target.marasi")
+		if err := os.WriteFile(target, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(parent, "link.marasi")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("creating symlink: %v", err)
+		}
 
-		got, err := resolveProjectPath(configDir, "juiceshop-test")
+		got, err := resolveProjectPath(link)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-
-		want := filepath.Join(configDir, "projects", "juiceshop-test.marasi")
+		want, err := filepath.EvalSymlinks(target)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
 	})
 
-	t.Run("should strip a trailing .marasi suffix", func(t *testing.T) {
-		configDir := t.TempDir()
+	t.Run("should resolve a symlinked parent for a new project", func(t *testing.T) {
+		root := t.TempDir()
+		targetParent := filepath.Join(root, "projects")
+		if err := os.Mkdir(targetParent, 0700); err != nil {
+			t.Fatal(err)
+		}
+		linkParent := filepath.Join(root, "linked-projects")
+		if err := os.Symlink(targetParent, linkParent); err != nil {
+			t.Skipf("creating symlink: %v", err)
+		}
 
-		got, err := resolveProjectPath(configDir, "scratchpad.marasi")
+		got, err := resolveProjectPath(filepath.Join(linkParent, "new.marasi"))
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-
-		want := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		canonicalParent, err := filepath.EvalSymlinks(targetParent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(canonicalParent, "new.marasi")
 		if got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
 	})
 
-	t.Run("should raise an error if project name is empty", func(t *testing.T) {
-		_, err := resolveProjectPath(t.TempDir(), "")
-		if err == nil {
+	for name, path := range map[string]string{
+		"missing extension": filepath.Join(t.TempDir(), "scratchpad"),
+		"missing parent":    filepath.Join(t.TempDir(), "missing", "scratchpad.marasi"),
+	} {
+		t.Run("should reject "+name, func(t *testing.T) {
+			if _, err := resolveProjectPath(path); err == nil {
+				t.Fatal("\nwanted:\nerror\ngot:\nnil")
+			}
+		})
+	}
+
+	t.Run("should reject a parent that is not a directory", func(t *testing.T) {
+		parent := filepath.Join(t.TempDir(), "not-a-directory")
+		if err := os.WriteFile(parent, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := resolveProjectPath(filepath.Join(parent, "scratchpad.marasi")); err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
 	})
+}
 
-	t.Run("should raise an error if project name is absolute path", func(t *testing.T) {
-		_, err := resolveProjectPath(t.TempDir(), "/tmp/scratchpad")
-		if err == nil {
-			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+func TestNamedProjectPath(t *testing.T) {
+	for _, name := range []string{"scratchpad", "scratchpad.marasi"} {
+		t.Run("should resolve name "+name+" under projects", func(t *testing.T) {
+			configDir := t.TempDir()
+			got, err := resolveNamedProjectPath(configDir, name)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			canonicalConfigDir, err := filepath.EvalSymlinks(configDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := filepath.Join(canonicalConfigDir, "projects", "scratchpad.marasi")
+			if got != want {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+			}
+		})
+	}
+
+	for _, name := range []string{"", ".", "..", "/tmp/scratchpad", "../scratchpad", "nested/scratchpad", `nested\scratchpad`} {
+		t.Run("should reject invalid name "+name, func(t *testing.T) {
+			if _, err := resolveNamedProjectPath(t.TempDir(), name); err == nil {
+				t.Fatal("\nwanted:\nerror\ngot:\nnil")
+			}
+		})
+	}
+
+	t.Run("should resolve a symlinked projects directory", func(t *testing.T) {
+		root := t.TempDir()
+		configDir := filepath.Join(root, "config")
+		target := filepath.Join(root, "projects")
+		if err := os.Mkdir(configDir, 0700); err != nil {
+			t.Fatal(err)
 		}
-	})
-
-	t.Run("should raise an error if project name contains parent directory reference", func(t *testing.T) {
-		_, err := resolveProjectPath(t.TempDir(), "../scratchpad")
-		if err == nil {
-			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		if err := os.Mkdir(target, 0700); err != nil {
+			t.Fatal(err)
 		}
-	})
-
-	t.Run("should raise an error if project name contains subdirectory", func(t *testing.T) {
-		_, err := resolveProjectPath(t.TempDir(), "nested/scratchpad")
-		if err == nil {
-			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		if err := os.Symlink(target, filepath.Join(configDir, "projects")); err != nil {
+			t.Skipf("creating symlink: %v", err)
 		}
-	})
 
-	t.Run("should raise an error if project name contains Windows path separator", func(t *testing.T) {
-		_, err := resolveProjectPath(t.TempDir(), `nested\scratchpad`)
-		if err == nil {
-			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		got, err := resolveNamedProjectPath(configDir, "scratchpad")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-	})
-
-	t.Run("should raise an error if project name is current directory", func(t *testing.T) {
-		_, err := resolveProjectPath(t.TempDir(), ".")
-		if err == nil {
-			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		canonicalTarget, err := filepath.EvalSymlinks(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(canonicalTarget, "scratchpad.marasi")
+		if got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
 	})
 }
@@ -202,6 +270,28 @@ func TestInstanceFlag(t *testing.T) {
 		}
 		if flag.DefValue != "default" {
 			t.Fatalf("\nwanted:\ndefault\ngot:\n%s", flag.DefValue)
+		}
+	})
+}
+
+func TestProjectFlags(t *testing.T) {
+	t.Run("should expose path and name selectors without choosing either by default", func(t *testing.T) {
+		pathFlag := startCmd.Flags().Lookup("project")
+		nameFlag := startCmd.Flags().Lookup("project-name")
+		if pathFlag == nil || nameFlag == nil {
+			t.Fatalf("\nwanted:\nproject and project-name flags\ngot:\nproject %v, project-name %v", pathFlag, nameFlag)
+		}
+		if pathFlag.DefValue != "" || nameFlag.DefValue != "" {
+			t.Fatalf("\nwanted:\nempty selector defaults\ngot:\nproject %q, project-name %q", pathFlag.DefValue, nameFlag.DefValue)
+		}
+	})
+
+	t.Run("should reject conflicting path and name selectors", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		project := filepath.Join(configDir, "project.marasi")
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "service", "start", "--project", project, "--project-name", "project")
+		if err == nil || stdout != "" || !strings.Contains(stderr, "--project and --project-name are mutually exclusive") {
+			t.Fatalf("\nwanted:\nselector conflict on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
 		}
 	})
 }
@@ -291,7 +381,7 @@ func TestGlobalJSONOption(t *testing.T) {
 			{name: "unknown flag", args: []string{"traffic", "list", "--json", "--unknown"}, want: "unknown flag"},
 			{name: "wrong argument count", args: []string{"traffic", "get", "--json"}, want: "accepts 1 arg(s)"},
 			{name: "instance validation", args: []string{"--config-dir", configDir, "--instance", "../work", "traffic", "list", "--json"}, want: "invalid instance name"},
-			{name: "project validation", args: []string{"--config-dir", configDir, "service", "start", "--project", "../work", "--json"}, want: "invalid project name"},
+			{name: "project validation", args: []string{"--config-dir", configDir, "service", "start", "--project-name", "../work", "--json"}, want: "invalid project name"},
 			{name: "command preparation", args: []string{"--config-dir", "", "traffic", "list", "--json"}, want: "config dir is empty"},
 		}
 		for _, test := range tests {
@@ -386,6 +476,7 @@ func TestCommandPreparation(t *testing.T) {
 			rootCmd.PersistentPreRunE = oldRootPreRunE
 			startCmd.PreRunE, startCmd.RunE = oldStartPreRunE, oldRunE
 			configDir, instancePath, projectPath = oldConfigDir, oldInstancePath, oldProjectPath
+			startCmd.Flags().Lookup("project-name").Changed = false
 			rootCmd.SetArgs(nil)
 		})
 
@@ -409,7 +500,7 @@ func TestCommandPreparation(t *testing.T) {
 			return nil
 		}
 		dir := serviceConfigDir(t)
-		rootCmd.SetArgs([]string{"--config-dir", dir, "--instance", "work", "service", "start", "--project", " juice-shop.marasi "})
+		rootCmd.SetArgs([]string{"--config-dir", dir, "--instance", "work", "service", "start", "--project-name", " juice-shop.marasi "})
 
 		if err := rootCmd.Execute(); err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
@@ -421,7 +512,11 @@ func TestCommandPreparation(t *testing.T) {
 		if instancePath != wantInstancePath {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantInstancePath, instancePath)
 		}
-		wantProjectPath := filepath.Join(dir, "projects", "juice-shop.marasi")
+		canonicalDir, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantProjectPath := filepath.Join(canonicalDir, "projects", "juice-shop.marasi")
 		if projectPath != wantProjectPath {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantProjectPath, projectPath)
 		}
@@ -486,6 +581,7 @@ func TestCommandPreparation(t *testing.T) {
 		t.Cleanup(func() {
 			startCmd.RunE = oldRunE
 			projectPath = oldProjectPath
+			startCmd.Flags().Lookup("project").Changed = false
 			rootCmd.SetArgs(nil)
 		})
 
@@ -546,6 +642,7 @@ func TestCommandPreparation(t *testing.T) {
 		oldConfigDir, oldInstancePath, oldProjectPath := configDir, instancePath, projectPath
 		t.Cleanup(func() {
 			configDir, instancePath, projectPath = oldConfigDir, oldInstancePath, oldProjectPath
+			startCmd.Flags().Lookup("project-name").Changed = false
 			rootCmd.SetArgs(nil)
 			rootCmd.SetContext(nil)
 			startCmd.SetContext(nil)
@@ -555,7 +652,7 @@ func TestCommandPreparation(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		startCmd.SetContext(nil)
-		rootCmd.SetArgs([]string{"--config-dir", dir, "--instance", "work", "service", "start", "--project", "scratchpad"})
+		rootCmd.SetArgs([]string{"--config-dir", dir, "--instance", "work", "service", "start", "--project-name", "scratchpad"})
 		result := make(chan error, 1)
 		go func() { result <- rootCmd.ExecuteContext(ctx) }()
 
@@ -1366,7 +1463,7 @@ func TestStartService(t *testing.T) {
 			}
 		})
 
-		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", " work ", "service", "start", "--project", " juice-shop.marasi ", "--port", "0")
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", " work ", "service", "start", "--project-name", " juice-shop.marasi ", "--port", "0")
 		if err != nil {
 			t.Fatalf("\nwanted:\nrunning service\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
 		}
@@ -1402,7 +1499,11 @@ func TestStartService(t *testing.T) {
 		if got := response.Header.Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := fmt.Sprintf("{\"status\":\"running\",\"version\":%q,\"instance\":\"work\",\"project\":\"juice-shop\",\"proxy_listener\":%q}\n", wantVersion, proxyListener)
+		canonicalProject, err := filepath.EvalSymlinks(filepath.Join(configDir, "projects", "juice-shop.marasi"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := fmt.Sprintf("{\"status\":\"running\",\"version\":%q,\"instance\":\"work\",\"project\":%q,\"proxy_listener\":%q}\n", wantVersion, canonicalProject, proxyListener)
 		if got := string(body); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1519,7 +1620,7 @@ func TestStartService(t *testing.T) {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
-		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--project", "other", "--port", "0")
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--project-name", "other", "--port", "0")
 		if err == nil || stdout != "" || !strings.Contains(stderr, "instance already running") || strings.Contains(stderr, "instance work started") {
 			t.Fatalf("\nwanted:\nalready-running error only\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
 		}
@@ -1534,7 +1635,7 @@ func TestStartService(t *testing.T) {
 		for _, name := range []string{"first", "second"} {
 			name := name
 			t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", name, "service", "stop") })
-			stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", name, "service", "start", "--project", name, "--port", "0")
+			stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", name, "service", "start", "--project-name", name, "--port", "0")
 			if err != nil || stdout != "" || !strings.HasPrefix(stderr, "instance "+name+" started\nproxy listener started on 127.0.0.1:") {
 				t.Fatalf("\nwanted:\nrunning instance %s\ngot:\nstdout %q, stderr %q, error %v", name, stdout, stderr, err)
 			}

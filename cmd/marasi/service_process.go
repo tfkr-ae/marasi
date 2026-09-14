@@ -34,7 +34,7 @@ func init() {
 }
 
 // startServiceProcess starts a detached child and waits until it reports ready or fails.
-func startServiceProcess(ctx context.Context, configDir, projectName, instancePath, address string, port uint16, stdout, stderr io.Writer, asJSON bool) error {
+func startServiceProcess(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, stdout, stderr io.Writer, asJSON bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -47,7 +47,7 @@ func startServiceProcess(ctx context.Context, configDir, projectName, instancePa
 		"--config-dir", configDir,
 		"--instance", instanceName,
 		"service", "start",
-		"--project", projectName,
+		"--project", projectPath,
 		"--address", address,
 		"--port", strconv.FormatUint(uint64(port), 10),
 		"--service-child",
