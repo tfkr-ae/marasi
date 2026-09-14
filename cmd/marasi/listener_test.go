@@ -102,6 +102,14 @@ func TestListenerCommand(t *testing.T) {
 			path:       "/listener/status",
 			wantStdout: "status: inactive\nproxy listener: inactive\n",
 		},
+		{
+			name:       "should print the active listener address",
+			args:       []string{"listener", "address"},
+			response:   `{"status":"active","proxy_listener":"[::1]:53142"}` + "\n",
+			method:     http.MethodGet,
+			path:       "/listener/status",
+			wantStdout: "[::1]:53142\n",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			configDir := serviceConfigDir(t)
@@ -120,6 +128,62 @@ func TestListenerCommand(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("should project the active listener address in JSON mode", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "json", http.StatusOK, `{"status":"active","proxy_listener":"127.0.0.1:53142"}`+"\n")
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "json", "listener", "address", "--json")
+		if err != nil || stdout != `{"proxy_listener":"127.0.0.1:53142"}`+"\n" || stderr != "" {
+			t.Fatalf("\nwanted:\ncompact address JSON on stdout, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+	})
+
+	t.Run("should reject an inactive listener without success output", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "inactive", http.StatusOK, `{"status":"inactive","proxy_listener":null}`+"\n")
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "inactive", "listener", "address")
+		if err == nil || stdout != "" || !strings.Contains(stderr, "proxy listener is inactive") {
+			t.Fatalf("\nwanted:\ninactive listener error with empty stdout\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "inactive", "listener", "address", "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "proxy listener is inactive")
+	})
+
+	t.Run("should reject an invalid active listener address without success output", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "invalid", http.StatusOK, `{"status":"active","proxy_listener":"not-an-endpoint"}`+"\n")
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "invalid", "listener", "address")
+		if err == nil || stdout != "" || !strings.Contains(stderr, "invalid listener status") {
+			t.Fatalf("\nwanted:\ninvalid listener status with empty stdout\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "invalid", "listener", "address", "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "invalid listener status")
+	})
+
+	t.Run("should normalize address API and response errors", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "api", http.StatusBadGateway, `{}`)
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "api", "listener", "address")
+		if err == nil || stdout != "" || !strings.Contains(stderr, "getting proxy listener address: 502 Bad Gateway") {
+			t.Fatalf("\nwanted:\naddress API error with empty stdout\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+
+		configDir = serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "malformed", http.StatusOK, `{`)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "malformed", "listener", "address", "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "decoding listener status")
+
+		configDir = serviceConfigDir(t)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "missing", "listener", "address")
+		if err == nil || stdout != "" || !strings.Contains(stderr, "instance missing is not running") {
+			t.Fatalf("\nwanted:\nunreachable instance error with empty stdout\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+	})
 
 	for _, command := range []string{"start", "stop", "update", "status"} {
 		t.Run("should pass through the "+command+" response in JSON mode", func(t *testing.T) {
@@ -159,10 +223,12 @@ func TestListenerCommand(t *testing.T) {
 			{"listener", "stop", "extra"},
 			{"listener", "update"},
 			{"listener", "status", "extra"},
+			{"listener", "address", "extra"},
 			{"listener", "start", "--port", "-1"},
 			{"listener", "update", "--port", "65536"},
 			{"listener", "start", "--port", "0x50"},
 			{"listener", "status", "--address", "127.0.0.1"},
+			{"listener", "address", "--address", "127.0.0.1"},
 		} {
 			commandArgs := append([]string{"--config-dir", configDir}, args...)
 			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
@@ -232,10 +298,29 @@ func TestListenerCommandLifecycle(t *testing.T) {
 	configDir := serviceConfigDir(t)
 	t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
 
-	_, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--project", "listener-cli", "--port", "0")
+	_, startStderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--project", "listener-cli", "--port", "0")
 	if err != nil {
 		t.Fatalf("starting service: %v", err)
 	}
+	const startupPrefix = "proxy listener started on "
+	startupIndex := strings.Index(startStderr, startupPrefix)
+	if startupIndex < 0 {
+		t.Fatalf("\nwanted:\nproxy listener startup output\ngot:\n%s", startStderr)
+	}
+	startedAddress := strings.TrimSpace(startStderr[startupIndex+len(startupPrefix):])
+
+	addressStdout, addressStderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "listener", "address")
+	if err != nil || addressStdout != startedAddress+"\n" || addressStderr != "" {
+		t.Fatalf("\nwanted:\naddress %q on stdout, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", startedAddress+"\n", addressStdout, addressStderr, err)
+	}
+
+	shell := exec.Command("sh", "-c", `address="$($MARASI --config-dir "$CONFIG" --instance "$INSTANCE" listener address)"; printf '%s' "$address"`)
+	shell.Env = append(os.Environ(), "MARASI="+binary, "CONFIG="+configDir, "INSTANCE=work")
+	shellOutput, err := shell.Output()
+	if err != nil || string(shellOutput) != startedAddress {
+		t.Fatalf("\nwanted:\nshell substitution %q\ngot:\n%q, error %v", startedAddress, shellOutput, err)
+	}
+
 	_, stopStderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "listener", "stop")
 	if err != nil || stopStderr != "proxy listener stopped successfully\n" {
 		t.Fatalf("stopping listener: stderr %q, error %v", stopStderr, err)
@@ -244,18 +329,18 @@ func TestListenerCommandLifecycle(t *testing.T) {
 	if err != nil || statusStdout != "status: inactive\nproxy listener: inactive\n" {
 		t.Fatalf("inactive status: stdout %q, error %v", statusStdout, err)
 	}
-	_, startStderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "listener", "start", "--port", "0")
+	_, startStderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "listener", "start", "--port", "0")
 	if err != nil {
 		t.Fatalf("restarting listener: %v", err)
 	}
-	startedAddress := strings.TrimSpace(strings.TrimPrefix(startStderr, "proxy listener started on "))
+	restartedAddress := strings.TrimSpace(strings.TrimPrefix(startStderr, "proxy listener started on "))
 	_, updateStderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "listener", "update", "--port", "0")
 	if err != nil {
 		t.Fatalf("updating listener: %v", err)
 	}
 	updatedAddress := strings.TrimSpace(strings.TrimPrefix(updateStderr, "proxy listener updated to "))
-	if updatedAddress == "" || updatedAddress == startedAddress {
-		t.Fatalf("\nwanted:\nlistener moved from %s\ngot:\n%s", startedAddress, updatedAddress)
+	if updatedAddress == "" || updatedAddress == restartedAddress {
+		t.Fatalf("\nwanted:\nlistener moved from %s\ngot:\n%s", restartedAddress, updatedAddress)
 	}
 	connection, err := net.Dial("tcp", updatedAddress)
 	if err != nil {
