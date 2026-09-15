@@ -39,8 +39,8 @@ func TestLaunchpadRepo_GetLaunchpads(t *testing.T) {
 		}
 
 		want := []*domain.Launchpad{
-			{ID: launchpadIDOne, Name: "Test Launchpad 1", Description: "Test Description"},
 			{ID: launchpadIDTwo, Name: "Test Launchpad 2", Description: "Test Description"},
+			{ID: launchpadIDOne, Name: "Test Launchpad 1", Description: "Test Description"},
 		}
 
 		got, err := repo.GetLaunchpads()
@@ -56,6 +56,30 @@ func TestLaunchpadRepo_GetLaunchpads(t *testing.T) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
 		}
 	})
+}
+
+func TestLaunchpadRepo_GetLaunchpad(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+
+	id, err := repo.CreateLaunchpad("Test Launchpad", "Test Description")
+	if err != nil {
+		t.Fatalf("creating launchpad: %v", err)
+	}
+
+	want := &domain.Launchpad{ID: id, Name: "Test Launchpad", Description: "Test Description"}
+	got, err := repo.GetLaunchpad(id)
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
+	}
+
+	missing := uuid.MustParse("01937f48-a14a-74b8-8c50-3d5f8f80ea0c")
+	if _, err := repo.GetLaunchpad(missing); err == nil {
+		t.Fatal("\nwanted:\nerror\ngot:\nnil")
+	}
 }
 
 func TestLaunchpadRepo_CreateLaunchpad(t *testing.T) {
@@ -112,7 +136,7 @@ func TestLaunchpadRepo_UpdateLaunchpad(t *testing.T) {
 		wantName := "Updated Name"
 		wantDesc := "Updated Desc"
 
-		err = repo.UpdateLaunchpad(id, wantName, wantDesc)
+		err = repo.UpdateLaunchpad(id, &wantName, &wantDesc)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -149,7 +173,7 @@ func TestLaunchpadRepo_UpdateLaunchpad(t *testing.T) {
 
 		wantName := "Updated Name"
 
-		err = repo.UpdateLaunchpad(id, wantName, "") // Empty description
+		err = repo.UpdateLaunchpad(id, &wantName, nil)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -182,7 +206,7 @@ func TestLaunchpadRepo_UpdateLaunchpad(t *testing.T) {
 
 		wantDesc := "Updated Desc"
 
-		err = repo.UpdateLaunchpad(id, "", wantDesc) // Empty name
+		err = repo.UpdateLaunchpad(id, nil, &wantDesc)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -206,7 +230,8 @@ func TestLaunchpadRepo_UpdateLaunchpad(t *testing.T) {
 		defer teardown()
 
 		nonExistentID := uuid.MustParse("01937f48-a14a-74b8-8c50-3d5f8f80ea0c")
-		err := repo.UpdateLaunchpad(nonExistentID, "Test", "Test")
+		name, description := "Test", "Test"
+		err := repo.UpdateLaunchpad(nonExistentID, &name, &description)
 
 		if err == nil {
 			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
@@ -214,6 +239,27 @@ func TestLaunchpadRepo_UpdateLaunchpad(t *testing.T) {
 
 		if !strings.Contains(err.Error(), "no launchpad found") {
 			t.Fatalf("\nwanted:\nerror containing 'no launchpad found'\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should clear the description when an empty description is supplied", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		id, err := repo.CreateLaunchpad("Test", "Initial Description")
+		if err != nil {
+			t.Fatalf("creating launchpad: %v", err)
+		}
+		description := ""
+		if err := repo.UpdateLaunchpad(id, nil, &description); err != nil {
+			t.Fatalf("updating launchpad: %v", err)
+		}
+		got, err := repo.GetLaunchpad(id)
+		if err != nil {
+			t.Fatalf("getting launchpad: %v", err)
+		}
+		if got.Description != "" {
+			t.Fatalf("\nwanted:\nempty description\ngot:\n%q", got.Description)
 		}
 	})
 }

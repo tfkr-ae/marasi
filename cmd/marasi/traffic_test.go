@@ -535,6 +535,107 @@ func TestTrafficGetCommand(t *testing.T) {
 	})
 }
 
+func TestLaunchpadCommands(t *testing.T) {
+	binary := buildMarasi(t)
+	id := "01938032-1b17-7243-b035-e6a9f4645904"
+
+	for _, test := range []struct {
+		name       string
+		args       []string
+		response   string
+		method     string
+		path       string
+		body       string
+		wantStdout string
+		wantStderr string
+	}{
+		{
+			name:       "create",
+			args:       []string{"launchpad", "create", "--name", "Login", "--description", "Try variants"},
+			response:   `{"id":"` + id + `","name":"Login","description":"Try variants"}` + "\n",
+			method:     http.MethodPost,
+			path:       "/launchpad",
+			body:       `{"name":"Login","description":"Try variants"}`,
+			wantStderr: "launchpad " + id + " created successfully\n",
+		},
+		{
+			name:       "list",
+			args:       []string{"launchpad", "list"},
+			response:   `{"items":[{"id":"` + id + `","name":"Login","description":"Try variants"}]}` + "\n",
+			method:     http.MethodGet,
+			path:       "/launchpad",
+			wantStdout: id + "  Login  Try variants\n",
+		},
+		{
+			name:       "get",
+			args:       []string{"launchpad", "get", id},
+			response:   `{"id":"` + id + `","name":"Login","description":"Try variants","items":[]}` + "\n",
+			method:     http.MethodGet,
+			path:       "/launchpad/" + id,
+			wantStdout: "id: " + id + "\nname: Login\ndescription: Try variants\n",
+		},
+		{
+			name:       "update",
+			args:       []string{"launchpad", "update", id, "--description", ""},
+			response:   `{"id":"` + id + `","name":"Login","description":""}` + "\n",
+			method:     http.MethodPost,
+			path:       "/launchpad/" + id,
+			body:       `{"description":""}`,
+			wantStderr: "launchpad " + id + " updated successfully\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, test.response)
+			args := append([]string{"--config-dir", configDir, "--instance", "work"}, test.args...)
+			stdout, stderr, err := runMarasi(binary, args...)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			got := sent.snapshot()
+			if got.Method != test.method || got.Path != test.path || got.Body != test.body {
+				t.Fatalf("\nwanted:\n%s %s body %q\ngot:\n%s %s body %q", test.method, test.path, test.body, got.Method, got.Path, got.Body)
+			}
+			if stdout != test.wantStdout || stderr != test.wantStderr {
+				t.Fatalf("\nwanted:\nstdout %q, stderr %q\ngot:\nstdout %q, stderr %q", test.wantStdout, test.wantStderr, stdout, stderr)
+			}
+		})
+	}
+
+	t.Run("should pass control API success through in JSON mode before or after the subcommand", func(t *testing.T) {
+		for _, args := range [][]string{{"--json", "launchpad", "list"}, {"launchpad", "list", "--json"}} {
+			configDir := serviceConfigDir(t)
+			body := " {\n  \"items\": []\n} "
+			startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+			commandArgs := append([]string{"--config-dir", configDir, "--instance", "work"}, args...)
+			stdout, stderr, err := runMarasi(binary, commandArgs...)
+			if err != nil || stdout != body || stderr != "" {
+				t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", body, stdout, stderr, err)
+			}
+		}
+	})
+
+	t.Run("should reject missing required create and update flags", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		for _, args := range [][]string{{"launchpad", "create"}, {"launchpad", "create", "--name", ""}, {"launchpad", "update", id}} {
+			commandArgs := append([]string{"--config-dir", configDir}, args...)
+			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
+				t.Fatalf("\nwanted:\ninvalid invocation\ngot:\naccepted %v", args)
+			}
+		}
+	})
+
+	t.Run("should report a missing instance and normalize JSON API errors", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "list", "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "instance work is not running")
+
+		startCannedControlAPI(t, configDir, "api", http.StatusNotFound, `{"error":"not_found"}`)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "api", "launchpad", "get", id, "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "getting launchpad: not_found")
+	})
+}
+
 type cannedControlRequest struct {
 	mu       sync.Mutex
 	Method   string

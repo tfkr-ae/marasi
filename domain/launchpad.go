@@ -9,6 +9,7 @@ type LaunchpadRepository interface {
 	// GetLaunchpads retrieves all launchpads configured in the application.
 	// It returns a slice of Launchpad pointers.
 	GetLaunchpads() ([]*Launchpad, error)
+	GetLaunchpad(id uuid.UUID) (*Launchpad, error)
 
 	// CreateLaunchpad creates a new launchpad with the given name and description.
 	// It returns the UUID of the newly created launchpad.
@@ -16,7 +17,7 @@ type LaunchpadRepository interface {
 
 	// UpdateLaunchpad updates the name and description of an existing launchpad identified by its UUID.
 	// It returns an error if the launchpad does not exist.
-	UpdateLaunchpad(launchpadID uuid.UUID, name, description string) error
+	UpdateLaunchpad(launchpadID uuid.UUID, name, description *string) error
 
 	// DeleteLaunchpad removes a launchpad identified by its UUID.
 	// It returns an error if the launchpad does not exist.

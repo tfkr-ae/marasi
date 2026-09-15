@@ -28,7 +28,7 @@ func toDomainLaunchpad(dbLaunchpad *dbLaunchpad) *domain.Launchpad {
 // GetLaunchpads retrieves all launchpads from the database.
 func (repo *Repository) GetLaunchpads() ([]*domain.Launchpad, error) {
 	var dbLaunchpads []*dbLaunchpad
-	query := `SELECT * FROM launchpad`
+	query := `SELECT * FROM launchpad ORDER BY id DESC`
 
 	err := repo.dbConn.Select(&dbLaunchpads, query)
 	if err != nil {
@@ -40,6 +40,15 @@ func (repo *Repository) GetLaunchpads() ([]*domain.Launchpad, error) {
 		domainLaunchpads[i] = toDomainLaunchpad(dbLp)
 	}
 	return domainLaunchpads, nil
+}
+
+// GetLaunchpad retrieves one launchpad by id.
+func (repo *Repository) GetLaunchpad(id uuid.UUID) (*domain.Launchpad, error) {
+	var launchpad dbLaunchpad
+	if err := repo.dbConn.Get(&launchpad, `SELECT * FROM launchpad WHERE id = ?`, id); err != nil {
+		return nil, fmt.Errorf("getting launchpad %s: %w", id, err)
+	}
+	return toDomainLaunchpad(&launchpad), nil
 }
 
 // CreateLaunchpad creates a new launchpad in the database.
@@ -60,8 +69,8 @@ func (repo *Repository) CreateLaunchpad(name string, description string) (uuid.U
 }
 
 // UpdateLaunchpad updates an existing launchpad in the database.
-func (repo *Repository) UpdateLaunchpad(launchpadID uuid.UUID, name, description string) error {
-	query := `UPDATE launchpad SET name = COALESCE(NULLIF(?, ''), name), description = COALESCE(NULLIF(?, ''), description) WHERE id = ?`
+func (repo *Repository) UpdateLaunchpad(launchpadID uuid.UUID, name, description *string) error {
+	query := `UPDATE launchpad SET name = COALESCE(?, name), description = COALESCE(?, description) WHERE id = ?`
 
 	result, err := repo.dbConn.Exec(query, name, description, launchpadID)
 	if err != nil {

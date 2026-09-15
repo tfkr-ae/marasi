@@ -45,6 +45,54 @@ type stubTrafficRepository struct {
 	nextCursor *uuid.UUID
 }
 
+type stubLaunchpadRepository struct {
+	domain.LaunchpadRepository
+	items map[uuid.UUID]*domain.Launchpad
+	order []uuid.UUID
+}
+
+func (s *stubLaunchpadRepository) GetLaunchpads() ([]*domain.Launchpad, error) {
+	items := make([]*domain.Launchpad, 0, len(s.order))
+	for _, id := range s.order {
+		item := *s.items[id]
+		items = append(items, &item)
+	}
+	return items, nil
+}
+
+func (s *stubLaunchpadRepository) GetLaunchpad(id uuid.UUID) (*domain.Launchpad, error) {
+	item, ok := s.items[id]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	copy := *item
+	return &copy, nil
+}
+
+func (s *stubLaunchpadRepository) CreateLaunchpad(name, description string) (uuid.UUID, error) {
+	id := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
+	if s.items == nil {
+		s.items = make(map[uuid.UUID]*domain.Launchpad)
+	}
+	s.items[id] = &domain.Launchpad{ID: id, Name: name, Description: description}
+	s.order = append([]uuid.UUID{id}, s.order...)
+	return id, nil
+}
+
+func (s *stubLaunchpadRepository) UpdateLaunchpad(id uuid.UUID, name, description *string) error {
+	item, ok := s.items[id]
+	if !ok {
+		return errors.New("not found")
+	}
+	if name != nil {
+		item.Name = *name
+	}
+	if description != nil {
+		item.Description = *description
+	}
+	return nil
+}
+
 func (s *stubTrafficRepository) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResponseRow, error) {
 	if s.row != nil && s.row.Request.ID == id {
 		return s.row, nil
@@ -481,6 +529,104 @@ func assertListenerError(t *testing.T, response *httptest.ResponseRecorder, stat
 	want := fmt.Sprintf("{\"error\":%q}\n", code)
 	if response.Code != status || response.Header().Get("Content-Type") != "application/json" || response.Body.String() != want {
 		t.Fatalf("\nwanted:\n%d application/json %s\ngot:\n%d %s %s", status, want, response.Code, response.Header().Get("Content-Type"), response.Body.String())
+	}
+}
+
+func TestLaunchpadControlAPI(t *testing.T) {
+	id := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
+
+	t.Run("should create an empty launchpad and publish the mutation", func(t *testing.T) {
+		repo := &stubLaunchpadRepository{}
+		server := newTestServer(&marasi.Proxy{LaunchpadRepo: repo}, func() {})
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+		response := requestLaunchpad(server, http.MethodPost, "/launchpad", `{"name":"Login","description":"Try variants"}`)
+
+		want := `{"id":"01938032-1b17-7243-b035-e6a9f4645904","name":"Login","description":"Try variants"}` + "\n"
+		if response.Code != http.StatusOK || response.Body.String() != want {
+			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
+		}
+		event := <-subscriber.events
+		if event.name != "launchpad.created" || string(event.data) != strings.TrimSpace(want) {
+			t.Fatalf("\nwanted:\nlaunchpad.created %s\ngot:\n%s %s", strings.TrimSpace(want), event.name, event.data)
+		}
+	})
+
+	t.Run("should reject invalid create bodies", func(t *testing.T) {
+		server := newTestServer(&marasi.Proxy{LaunchpadRepo: &stubLaunchpadRepository{}}, func() {})
+		for _, body := range []string{`{}`, `{"name":""}`, `{"name":"x","extra":true}`, `{"name":"x"} {}`} {
+			response := requestLaunchpad(server, http.MethodPost, "/launchpad", body)
+			if response.Code != http.StatusBadRequest || response.Body.String() != "{\"error\":\"invalid_launchpad_request\"}\n" {
+				t.Fatalf("\nbody %s wanted:\n400 invalid_launchpad_request\ngot:\n%d %s", body, response.Code, response.Body.String())
+			}
+		}
+	})
+
+	t.Run("should list launchpads and keep an empty list stable", func(t *testing.T) {
+		older := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+		repo := &stubLaunchpadRepository{items: map[uuid.UUID]*domain.Launchpad{
+			id:    {ID: id, Name: "New", Description: "newest"},
+			older: {ID: older, Name: "Old", Description: "oldest"},
+		}, order: []uuid.UUID{id, older}}
+		server := newTestServer(&marasi.Proxy{LaunchpadRepo: repo}, func() {})
+		response := requestLaunchpad(server, http.MethodGet, "/launchpad", "")
+		want := `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","name":"New","description":"newest"},{"id":"0193802f-f0e7-73d9-a764-06d21e367809","name":"Old","description":"oldest"}]}` + "\n"
+		if response.Code != http.StatusOK || response.Body.String() != want {
+			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
+		}
+
+		empty := newTestServer(&marasi.Proxy{LaunchpadRepo: &stubLaunchpadRepository{}}, func() {})
+		response = requestLaunchpad(empty, http.MethodGet, "/launchpad", "")
+		if response.Code != http.StatusOK || response.Body.String() != "{\"items\":[]}\n" {
+			t.Fatalf("\nwanted:\n200 {\"items\":[]}\ngot:\n%d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("should get an empty launchpad and reject bad or missing ids", func(t *testing.T) {
+		repo := &stubLaunchpadRepository{items: map[uuid.UUID]*domain.Launchpad{id: {ID: id, Name: "Login", Description: ""}}}
+		server := newTestServer(&marasi.Proxy{LaunchpadRepo: repo}, func() {})
+		response := requestLaunchpad(server, http.MethodGet, "/launchpad/"+id.String(), "")
+		want := `{"id":"01938032-1b17-7243-b035-e6a9f4645904","name":"Login","description":"","items":[]}` + "\n"
+		if response.Code != http.StatusOK || response.Body.String() != want {
+			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
+		}
+		assertLaunchpadError(t, requestLaunchpad(server, http.MethodGet, "/launchpad/not-a-uuid", ""), http.StatusBadRequest, "bad_request")
+		assertLaunchpadError(t, requestLaunchpad(server, http.MethodGet, "/launchpad/0193802f-f0e7-73d9-a764-06d21e367809", ""), http.StatusNotFound, "not_found")
+	})
+
+	t.Run("should update only supplied fields and publish the result", func(t *testing.T) {
+		repo := &stubLaunchpadRepository{items: map[uuid.UUID]*domain.Launchpad{id: {ID: id, Name: "Login", Description: "old"}}}
+		server := newTestServer(&marasi.Proxy{LaunchpadRepo: repo}, func() {})
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+		response := requestLaunchpad(server, http.MethodPost, "/launchpad/"+id.String(), `{"description":""}`)
+		want := `{"id":"01938032-1b17-7243-b035-e6a9f4645904","name":"Login","description":""}` + "\n"
+		if response.Code != http.StatusOK || response.Body.String() != want {
+			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
+		}
+		event := <-subscriber.events
+		if event.name != "launchpad.updated" || string(event.data) != strings.TrimSpace(want) {
+			t.Fatalf("\nwanted:\nlaunchpad.updated %s\ngot:\n%s %s", strings.TrimSpace(want), event.name, event.data)
+		}
+
+		assertLaunchpadError(t, requestLaunchpad(server, http.MethodPost, "/launchpad/"+id.String(), `{"name":""}`), http.StatusBadRequest, "invalid_launchpad_request")
+		assertLaunchpadError(t, requestLaunchpad(server, http.MethodPost, "/launchpad/not-a-uuid", `{}`), http.StatusBadRequest, "bad_request")
+		assertLaunchpadError(t, requestLaunchpad(server, http.MethodPost, "/launchpad/0193802f-f0e7-73d9-a764-06d21e367809", `{}`), http.StatusNotFound, "not_found")
+	})
+}
+
+func requestLaunchpad(server *Server, method, path, body string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	return response
+}
+
+func assertLaunchpadError(t *testing.T, response *httptest.ResponseRecorder, status int, code string) {
+	t.Helper()
+	want := fmt.Sprintf("{\"error\":%q}\n", code)
+	if response.Code != status || response.Body.String() != want {
+		t.Fatalf("\nwanted:\n%d %s\ngot:\n%d %s", status, want, response.Code, response.Body.String())
 	}
 }
 

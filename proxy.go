@@ -54,6 +54,8 @@ var (
 	ErrClientNotFound = errors.New("http client field not found")
 	// ErrExtensionRepoNotFound is returned when the extension repository is not found.
 	ErrExtensionRepoNotFound = errors.New("extension repo not found")
+	// ErrLaunchpadRepoNotFound is returned when the launchpad repository is not found.
+	ErrLaunchpadRepoNotFound = errors.New("launchpad repo not found")
 	// ErrReportingRepoNotFound is returned when the reporting repository is not found.
 	ErrReportingRepoNotFound = errors.New("reporting repo not found")
 	// ErrArmoryRepoNotFound is returned when the Armory repository is not found.
@@ -207,6 +209,14 @@ func (proxy *Proxy) GetTrafficRepo() (domain.TrafficRepository, error) {
 		return nil, ErrExtensionRepoNotFound
 	}
 	return proxy.TrafficRepo, nil
+}
+
+// GetLaunchpadRepo returns the launchpad repository.
+func (proxy *Proxy) GetLaunchpadRepo() (domain.LaunchpadRepository, error) {
+	if proxy.LaunchpadRepo == nil {
+		return nil, ErrLaunchpadRepoNotFound
+	}
+	return proxy.LaunchpadRepo, nil
 }
 
 // GetReportingRepo returns the reporting repository.
