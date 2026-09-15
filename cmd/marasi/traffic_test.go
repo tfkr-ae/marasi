@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -538,6 +542,7 @@ func TestTrafficGetCommand(t *testing.T) {
 func TestLaunchpadCommands(t *testing.T) {
 	binary := buildMarasi(t)
 	id := "01938032-1b17-7243-b035-e6a9f4645904"
+	requestID := "01938033-298e-73dc-b640-eb321b621154"
 
 	for _, test := range []struct {
 		name       string
@@ -583,6 +588,15 @@ func TestLaunchpadCommands(t *testing.T) {
 			body:       `{"description":""}`,
 			wantStderr: "launchpad " + id + " updated successfully\n",
 		},
+		{
+			name:       "link",
+			args:       []string{"launchpad", "link", id, "--request", requestID},
+			response:   `{"launchpad_id":"` + id + `","request_id":"` + requestID + `"}` + "\n",
+			method:     http.MethodPost,
+			path:       "/launchpad/" + id + "/link",
+			body:       `{"request_id":"` + requestID + `"}`,
+			wantStderr: "request " + requestID + " linked to launchpad " + id + " successfully\n",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			configDir := serviceConfigDir(t)
@@ -615,9 +629,66 @@ func TestLaunchpadCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("should show linked members on get", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		body := `{"id":"` + id + `","name":"Login","description":"Try variants","items":[{"id":"` + requestID + `","method":"POST","host":"example.com","path":"/login","status_code":200,"length":"2"}]}` + "\n"
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "get", id)
+		want := "id: " + id + "\nname: Login\ndescription: Try variants\n" + requestID + "  POST  example.com  /login  200  2\n"
+		if err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should pass link success through in JSON mode", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		body := `{"launchpad_id":"` + id + `","request_id":"` + requestID + `"}` + "\n"
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "link", id, "--request", requestID, "--json")
+		got := sent.snapshot()
+		if err != nil || stdout != body || stderr != "" || got.Body != `{"request_id":"`+requestID+`"}` {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, body with request id, nil error\ngot:\nstdout %q, stderr %q, body %q, error %v", body, stdout, stderr, got.Body, err)
+		}
+	})
+
+	t.Run("should launch raw from a file", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		raw := []byte("POST /login HTTP/1.1\r\nHost: example.com\r\nContent-Length: 4\r\n\r\nbody")
+		rawFile := filepath.Join(t.TempDir(), "request.raw")
+		if err := os.WriteFile(rawFile, raw, 0o600); err != nil {
+			t.Fatalf("writing raw request: %v", err)
+		}
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, "{\"status\":\"launched\"}\n")
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "launch", id, "--scheme", "http", "--raw-file", rawFile)
+		wantBody := `{"raw":"` + base64.StdEncoding.EncodeToString(raw) + `","scheme":"http"}`
+		got := sent.snapshot()
+		if err != nil || stdout != "" || stderr != "launchpad "+id+" launched successfully\n" || got.Method != http.MethodPost || got.Path != "/launchpad/"+id+"/launch" || got.Body != wantBody {
+			t.Fatalf("\nwanted:\nPOST launch body %q and success on stderr\ngot:\n%s %s body %q, stdout %q, stderr %q, error %v", wantBody, got.Method, got.Path, got.Body, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should launch piped stdin with JSON passthrough", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		raw := []byte("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+		body := "{\"status\":\"launched\"}\n"
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+		var stdout, stderr bytes.Buffer
+		command := exec.Command(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "launch", id, "--scheme", "https", "--json")
+		command.Stdin = bytes.NewReader(raw)
+		command.Stdout = &stdout
+		command.Stderr = &stderr
+		err := command.Run()
+		wantBody := `{"raw":"` + base64.StdEncoding.EncodeToString(raw) + `","scheme":"https"}`
+		got := sent.snapshot()
+		if err != nil || stdout.String() != body || stderr.String() != "" || got.Body != wantBody {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, body %q\ngot:\nstdout %q, stderr %q, body %q, error %v", body, wantBody, stdout.String(), stderr.String(), got.Body, err)
+		}
+	})
+
 	t.Run("should reject missing required create and update flags", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		for _, args := range [][]string{{"launchpad", "create"}, {"launchpad", "create", "--name", ""}, {"launchpad", "update", id}} {
+		for _, args := range [][]string{{"launchpad", "create"}, {"launchpad", "create", "--name", ""}, {"launchpad", "update", id}, {"launchpad", "link", id}, {"launchpad", "launch", id}, {"launchpad", "launch", id, "--scheme", "ftp"}, {"launchpad", "launch", id, "--scheme", "http"}} {
 			commandArgs := append([]string{"--config-dir", configDir}, args...)
 			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
 				t.Fatalf("\nwanted:\ninvalid invocation\ngot:\naccepted %v", args)

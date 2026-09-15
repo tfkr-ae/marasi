@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,10 +22,16 @@ var launchpadCreateName string
 var launchpadCreateDescription string
 var launchpadUpdateName string
 var launchpadUpdateDescription string
+var launchpadLinkRequest string
+var launchpadLaunchScheme string
+var launchpadLaunchRawFile string
 
 type launchpadRequest struct {
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
+	RequestID   *string `json:"request_id,omitempty"`
+	Raw         *string `json:"raw,omitempty"`
+	Scheme      *string `json:"scheme,omitempty"`
 }
 
 func init() {
@@ -33,7 +40,12 @@ func init() {
 	launchpadCreateCmd.MarkFlagRequired("name")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateName, "name", "", "Launchpad name")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateDescription, "description", "", "Launchpad description")
-	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd)
+	launchpadLinkCmd.Flags().StringVar(&launchpadLinkRequest, "request", "", "Request UUID")
+	launchpadLinkCmd.MarkFlagRequired("request")
+	launchpadLaunchCmd.Flags().StringVar(&launchpadLaunchScheme, "scheme", "", "Request scheme (http or https)")
+	launchpadLaunchCmd.Flags().StringVar(&launchpadLaunchRawFile, "raw-file", "", "Read the raw HTTP request from a file")
+	launchpadLaunchCmd.MarkFlagRequired("scheme")
+	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadLaunchCmd)
 	rootCmd.AddCommand(launchpadCmd)
 }
 
@@ -98,6 +110,51 @@ var launchpadUpdateCmd = &cobra.Command{
 	},
 }
 
+var launchpadLinkCmd = &cobra.Command{
+	Use:   "link uuid",
+	Short: "Link a traffic pair to a launchpad",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runLaunchpadCommand(cmd, "link", args[0], launchpadRequest{RequestID: &launchpadLinkRequest})
+	},
+}
+
+var launchpadLaunchCmd = &cobra.Command{
+	Use:   "launch uuid",
+	Short: "Launch a raw request from a working copy",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if launchpadLaunchScheme != "http" && launchpadLaunchScheme != "https" {
+			return errors.New("launchpad launch requires --scheme http or https")
+		}
+		var raw []byte
+		var err error
+		if cmd.Flags().Changed("raw-file") {
+			raw, err = os.ReadFile(launchpadLaunchRawFile)
+			if err != nil {
+				return fmt.Errorf("reading raw request file: %w", err)
+			}
+		} else {
+			stdin := cmd.InOrStdin()
+			if file, ok := stdin.(*os.File); ok {
+				info, statErr := file.Stat()
+				if statErr != nil {
+					return fmt.Errorf("checking stdin: %w", statErr)
+				}
+				if info.Mode()&os.ModeCharDevice != 0 {
+					return errors.New("launchpad launch requires --raw-file or piped stdin")
+				}
+			}
+			raw, err = io.ReadAll(stdin)
+			if err != nil {
+				return fmt.Errorf("reading raw request from stdin: %w", err)
+			}
+		}
+		encoded := base64.StdEncoding.EncodeToString(raw)
+		return runLaunchpadCommand(cmd, "launch", args[0], launchpadRequest{Raw: &encoded, Scheme: &launchpadLaunchScheme})
+	},
+}
+
 func runLaunchpadCommand(cmd *cobra.Command, action, id string, body launchpadRequest) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -124,6 +181,25 @@ func runLaunchpadCommand(cmd *cobra.Command, action, id string, body launchpadRe
 		}
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "launchpad %s %sd successfully\n", result.ID, action)
 		return err
+	case "link":
+		var result struct {
+			LaunchpadID string `json:"launchpad_id"`
+			RequestID   string `json:"request_id"`
+		}
+		if err := json.Unmarshal(response, &result); err != nil || result.LaunchpadID == "" || result.RequestID == "" {
+			return errors.New("decoding launchpad response")
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "request %s linked to launchpad %s successfully\n", result.RequestID, result.LaunchpadID)
+		return err
+	case "launch":
+		var result struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(response, &result); err != nil || result.Status != "launched" {
+			return errors.New("decoding launchpad response")
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "launchpad %s launched successfully\n", id)
+		return err
 	default:
 		return fmt.Errorf("unsupported launchpad action %q", action)
 	}
@@ -141,6 +217,10 @@ func controlLaunchpad(ctx context.Context, instancePath, instanceName string, as
 		path, operation = path+"/"+id, "getting launchpad"
 	case "update":
 		method, path, operation = http.MethodPost, path+"/"+id, "updating launchpad"
+	case "link":
+		method, path, operation = http.MethodPost, path+"/"+id+"/link", "linking launchpad request"
+	case "launch":
+		method, path, operation = http.MethodPost, path+"/"+id+"/launch", "launching launchpad request"
 	}
 	if method == http.MethodPost {
 		encoded, err := json.Marshal(payload)
@@ -207,5 +287,8 @@ func writeLaunchpadGetHuman(body []byte, stdout io.Writer) error {
 		return fmt.Errorf("decoding launchpad: %w", err)
 	}
 	_, err := fmt.Fprintf(stdout, "id: %s\nname: %s\ndescription: %s\n", response.ID, response.Name, response.Description)
-	return err
+	if err != nil {
+		return err
+	}
+	return writeTrafficListHuman(body, stdout, io.Discard)
 }

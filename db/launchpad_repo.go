@@ -118,21 +118,25 @@ func (repo *Repository) DeleteLaunchpad(launchpadID uuid.UUID) error {
 }
 
 // GetLaunchpadRequests retrieves all requests associated with a specific launchpad.
-func (repo *Repository) GetLaunchpadRequests(id uuid.UUID) ([]*domain.ProxyRequest, error) {
-	var dbRequests []*dbRequestResponse
-	query := `SELECT r.id, r.scheme, r.method, r.host, r.path, r.request_raw, r.metadata, r.requested_at
+func (repo *Repository) GetLaunchpadRequests(id uuid.UUID) ([]*domain.RequestResponseSummary, error) {
+	var dbRequests []*dbRequestResponseSummary
+	query := `SELECT
+			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
+			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
+			  json_remove(r.metadata, '$.prettified-request', '$.prettified-response') AS metadata
 		      FROM request r
 		      JOIN launchpad_request lr ON r.id = lr.request_id
-		      WHERE lr.launchpad_id = ?`
+		      WHERE lr.launchpad_id = ?
+		      ORDER BY r.id ASC`
 
 	err := repo.dbConn.Select(&dbRequests, query, id)
 	if err != nil {
 		return nil, fmt.Errorf("getting launchpad requests: %w", err)
 	}
 
-	domainRequests := make([]*domain.ProxyRequest, len(dbRequests))
+	domainRequests := make([]*domain.RequestResponseSummary, len(dbRequests))
 	for i, dbReq := range dbRequests {
-		domainRequests[i] = toDomainProxyRequest(dbReq)
+		domainRequests[i] = toDomainRequestResponseSummary(dbReq)
 	}
 
 	return domainRequests, nil
@@ -140,11 +144,18 @@ func (repo *Repository) GetLaunchpadRequests(id uuid.UUID) ([]*domain.ProxyReque
 
 // LinkRequestToLaunchpad creates an association between a request and a launchpad.
 func (repo *Repository) LinkRequestToLaunchpad(requestID uuid.UUID, launchpadID uuid.UUID) error {
-	query := `INSERT INTO launchpad_request (request_id, launchpad_id) VALUES (?, ?)`
+	query := `INSERT OR IGNORE INTO launchpad_request (request_id, launchpad_id) VALUES (?, ?)`
 
-	_, err := repo.dbConn.Exec(query, requestID, launchpadID)
+	result, err := repo.dbConn.Exec(query, requestID, launchpadID)
 	if err != nil {
 		return fmt.Errorf("linking request with launchpad: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("fetching linked rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return domain.ErrLaunchpadAlreadyLinked
 	}
 
 	return nil

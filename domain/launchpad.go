@@ -9,6 +9,9 @@ import (
 // ErrLaunchpadNotFound means no launchpad has the requested id.
 var ErrLaunchpadNotFound = errors.New("launchpad not found")
 
+// ErrLaunchpadAlreadyLinked means the request is already a member of the launchpad.
+var ErrLaunchpadAlreadyLinked = errors.New("request already linked to launchpad")
+
 // LaunchpadRepository defines the interface for managing Launchpads, which are collections of saved requests.
 // It provides methods for creating, retrieving, updating, and deleting launchpads,
 // as well as managing the requests associated with them.
@@ -30,9 +33,8 @@ type LaunchpadRepository interface {
 	// It returns an error if the launchpad does not exist.
 	DeleteLaunchpad(launchpadID uuid.UUID) error
 
-	// GetLaunchpadRequests retrieves all requests linked to a specific launchpad, identified by its UUID.
-	// It returns a slice of ProxyRequest pointers. If the launchpad has no requests, it returns an empty slice.
-	GetLaunchpadRequests(id uuid.UUID) ([]*ProxyRequest, error)
+	// GetLaunchpadRequests retrieves oldest-first traffic summaries for requests linked to a launchpad.
+	GetLaunchpadRequests(id uuid.UUID) ([]*RequestResponseSummary, error)
 
 	// LinkRequestToLaunchpad associates a request with a launchpad using their respective UUIDs.
 	// This allows for organizing requests into collections.

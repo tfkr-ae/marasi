@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -30,6 +31,11 @@ type launchpadDetail struct {
 type launchpadMutation struct {
 	Name        *string
 	Description *string
+}
+
+type launchpadLink struct {
+	LaunchpadID uuid.UUID `json:"launchpad_id"`
+	RequestID   uuid.UUID `json:"request_id"`
 }
 
 var errInvalidLaunchpadRequest = errors.New("invalid launchpad request")
@@ -93,10 +99,80 @@ func addLaunchpadRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBr
 			writeLaunchpadRepositoryError(w, r, err)
 			return
 		}
+		members, err := repo.GetLaunchpadRequests(id)
+		if err != nil {
+			writeLaunchpadRepositoryError(w, r, err)
+			return
+		}
 		writeJSON(w, r, http.StatusOK, launchpadDetail{
 			launchpadSummary: launchpadSummaryFromDomain(launchpad),
-			Items:            []trafficSummary{},
+			Items:            trafficListFromSummaries(members, nil).Items,
 		})
+	})
+
+	mux.HandleFunc("POST /launchpad/{id}/link", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseLaunchpadID(w, r)
+		if !ok {
+			return
+		}
+		requestID, err := decodeLaunchpadLink(r)
+		if err != nil {
+			writeLaunchpadError(w, r, http.StatusBadRequest, "invalid_launchpad_request")
+			return
+		}
+		repo, err := proxy.GetLaunchpadRepo()
+		if err != nil {
+			writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		if _, err := repo.GetLaunchpad(id); err != nil {
+			writeLaunchpadRepositoryError(w, r, err)
+			return
+		}
+		trafficRepo, err := proxy.GetTrafficRepo()
+		if err != nil {
+			writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		if _, err := trafficRepo.GetRequestResponseRow(requestID); err != nil {
+			writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		if err := repo.LinkRequestToLaunchpad(requestID, id); err != nil {
+			writeLaunchpadRepositoryError(w, r, err)
+			return
+		}
+		response := launchpadLink{LaunchpadID: id, RequestID: requestID}
+		events.publish("launchpad.linked", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
+
+	mux.HandleFunc("POST /launchpad/{id}/launch", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseLaunchpadID(w, r)
+		if !ok {
+			return
+		}
+		raw, useHTTPS, err := decodeLaunchpadLaunch(r)
+		if err != nil {
+			writeLaunchpadError(w, r, http.StatusBadRequest, "invalid_launchpad_request")
+			return
+		}
+		repo, err := proxy.GetLaunchpadRepo()
+		if err != nil {
+			writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		if _, err := repo.GetLaunchpad(id); err != nil {
+			writeLaunchpadRepositoryError(w, r, err)
+			return
+		}
+		if err := proxy.Launch(string(raw), id.String(), useHTTPS); err != nil {
+			writeLaunchpadError(w, r, http.StatusBadRequest, "invalid_launchpad_request")
+			return
+		}
+		writeJSON(w, r, http.StatusOK, struct {
+			Status string `json:"status"`
+		}{Status: "launched"})
 	})
 
 	mux.HandleFunc("POST /launchpad/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -178,6 +254,54 @@ func decodeLaunchpadMutation(r *http.Request, requireName bool) (launchpadMutati
 	return mutation, nil
 }
 
+func decodeLaunchpadLink(r *http.Request) (uuid.UUID, error) {
+	if r.Body == nil {
+		return uuid.Nil, errInvalidLaunchpadRequest
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var body struct {
+		RequestID string `json:"request_id"`
+	}
+	if err := decoder.Decode(&body); err != nil {
+		return uuid.Nil, errInvalidLaunchpadRequest
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return uuid.Nil, errInvalidLaunchpadRequest
+	}
+	requestID, err := uuid.Parse(body.RequestID)
+	if err != nil {
+		return uuid.Nil, errInvalidLaunchpadRequest
+	}
+	return requestID, nil
+}
+
+func decodeLaunchpadLaunch(r *http.Request) ([]byte, bool, error) {
+	if r.Body == nil {
+		return nil, false, errInvalidLaunchpadRequest
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var body struct {
+		Raw    string `json:"raw"`
+		Scheme string `json:"scheme"`
+	}
+	if err := decoder.Decode(&body); err != nil {
+		return nil, false, errInvalidLaunchpadRequest
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, false, errInvalidLaunchpadRequest
+	}
+	if body.Scheme != "http" && body.Scheme != "https" {
+		return nil, false, errInvalidLaunchpadRequest
+	}
+	raw, err := base64.StdEncoding.DecodeString(body.Raw)
+	if err != nil {
+		return nil, false, errInvalidLaunchpadRequest
+	}
+	return raw, body.Scheme == "https", nil
+}
+
 func writeLaunchpadError(w http.ResponseWriter, r *http.Request, status int, code string) {
 	writeJSON(w, r, status, struct {
 		Error string `json:"error"`
@@ -187,6 +311,10 @@ func writeLaunchpadError(w http.ResponseWriter, r *http.Request, status int, cod
 func writeLaunchpadRepositoryError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, domain.ErrLaunchpadNotFound) {
 		writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
+		return
+	}
+	if errors.Is(err, domain.ErrLaunchpadAlreadyLinked) {
+		writeLaunchpadError(w, r, http.StatusConflict, "already_linked")
 		return
 	}
 	writeLaunchpadError(w, r, http.StatusInternalServerError, "internal_server_error")
