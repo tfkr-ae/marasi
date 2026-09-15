@@ -31,25 +31,31 @@ var rootCmd = &cobra.Command{
 // executeCommand runs the root cobra command with args.
 func executeCommand(args []string) error {
 	rootCmd.SetArgs(args)
+	eventsConnected = false
 	jsonOutput = recognizedJSONMode(args)
+	command, _, _ := rootCmd.Find(args)
+	streamingJSON := jsonOutput && command == eventsCmd
 	rootCmd.SilenceErrors = jsonOutput
 	stdout := rootCmd.OutOrStdout()
 	var output bytes.Buffer
-	if jsonOutput {
+	if jsonOutput && !streamingJSON {
 		rootCmd.SetOut(&output)
 	}
 	err := rootCmd.Execute()
-	if jsonOutput {
+	if jsonOutput && !streamingJSON {
 		rootCmd.SetOut(stdout)
 	}
 	rootCmd.SilenceErrors = false
 	if err == nil {
-		if jsonOutput {
+		if jsonOutput && !streamingJSON {
 			_, err = io.Copy(stdout, &output)
 		}
 		return err
 	}
 	if jsonOutput {
+		if streamingJSON && eventsConnected {
+			return err
+		}
 		encodeErr := json.NewEncoder(stdout).Encode(struct {
 			Error string `json:"error"`
 		}{Error: err.Error()})

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,15 +25,18 @@ var eventsCmd = &cobra.Command{
 	Short: "Subscribe to service instance events",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		eventsConnected = false
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return printEvents(ctx, instancePath, instance, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		return printEvents(ctx, instancePath, instance, jsonOutput, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
+var eventsConnected bool
+
 // printEvents subscribes to the instance and prints named events until the connection closes.
-func printEvents(ctx context.Context, instancePath, instanceName string, stdout, stderr io.Writer) error {
+func printEvents(ctx context.Context, instancePath, instanceName string, asJSON bool, stdout, stderr io.Writer) error {
 	client := service.NewClient(instancePath + ".sock")
 	defer client.Close()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/events", nil)
@@ -60,16 +64,24 @@ func printEvents(ctx context.Context, instancePath, instanceName string, stdout,
 		switch {
 		case line == ": connected":
 			connected = true
-			if _, err := fmt.Fprintln(stderr, ": connected"); err != nil {
-				return err
+			eventsConnected = true
+			if !asJSON {
+				if _, err := fmt.Fprintln(stderr, ": connected"); err != nil {
+					return err
+				}
+				if err := flushEventsWriter(stderr); err != nil {
+					return err
+				}
 			}
 		case strings.HasPrefix(line, "event:"):
 			eventName = strings.TrimPrefix(strings.TrimPrefix(line, "event:"), " ")
 		case strings.HasPrefix(line, "data:"):
 			data = strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
-		case line == "" && eventName != "":
-			if _, err := fmt.Fprintf(stdout, "%s %s\n", eventName, data); err != nil {
-				return err
+		case line == "":
+			if connected && eventName != "" {
+				if err := writeEvent(stdout, eventName, data, asJSON); err != nil {
+					return err
+				}
 			}
 			eventName, data = "", ""
 		}
@@ -81,4 +93,30 @@ func printEvents(ctx context.Context, instancePath, instanceName string, stdout,
 		return fmt.Errorf("reading events: %w", scanner.Err())
 	}
 	return fmt.Errorf("instance %s closed the event subscription before connecting", instanceName)
+}
+
+func writeEvent(writer io.Writer, name, data string, asJSON bool) error {
+	if asJSON {
+		encodedName, err := json.Marshal(name)
+		if err != nil {
+			return err
+		}
+		line := append([]byte(`{"event":`), encodedName...)
+		line = append(line, `,"data":`...)
+		line = append(line, data...)
+		line = append(line, '}', '\n')
+		if _, err := writer.Write(line); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprintf(writer, "%s %s\n", name, data); err != nil {
+		return err
+	}
+	return flushEventsWriter(writer)
+}
+
+func flushEventsWriter(writer io.Writer) error {
+	if flusher, ok := writer.(interface{ Flush() error }); ok {
+		return flusher.Flush()
+	}
+	return nil
 }
