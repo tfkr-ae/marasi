@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -237,8 +238,8 @@ func TestLaunchpadRepo_UpdateLaunchpad(t *testing.T) {
 			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
 		}
 
-		if !strings.Contains(err.Error(), "no launchpad found") {
-			t.Fatalf("\nwanted:\nerror containing 'no launchpad found'\ngot:\n%v", err)
+		if !errors.Is(err, domain.ErrLaunchpadNotFound) {
+			t.Fatalf("\nwanted:\nlaunchpad not found\ngot:\n%v", err)
 		}
 	})
 

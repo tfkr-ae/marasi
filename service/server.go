@@ -57,11 +57,10 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 			}{Project: path})
 		}
 	}
-	addRoutes(mux, proxy, server.serveStatus, func() {
+	addRoutes(mux, proxy, events, server.serveStatus, func() {
 		server.Close()
 		stop()
 	})
-	addLaunchpadRoutes(mux, proxy, events)
 	listenerMux := http.NewServeMux()
 	listenerMux.HandleFunc("/status", server.serveListenerStatus)
 	listenerMux.HandleFunc("/start", server.serveListenerStart)

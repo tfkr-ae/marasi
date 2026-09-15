@@ -47,11 +47,17 @@ type stubTrafficRepository struct {
 
 type stubLaunchpadRepository struct {
 	domain.LaunchpadRepository
-	items map[uuid.UUID]*domain.Launchpad
-	order []uuid.UUID
+	items     map[uuid.UUID]*domain.Launchpad
+	order     []uuid.UUID
+	listErr   error
+	getErr    error
+	updateErr error
 }
 
 func (s *stubLaunchpadRepository) GetLaunchpads() ([]*domain.Launchpad, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	items := make([]*domain.Launchpad, 0, len(s.order))
 	for _, id := range s.order {
 		item := *s.items[id]
@@ -61,9 +67,12 @@ func (s *stubLaunchpadRepository) GetLaunchpads() ([]*domain.Launchpad, error) {
 }
 
 func (s *stubLaunchpadRepository) GetLaunchpad(id uuid.UUID) (*domain.Launchpad, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
 	item, ok := s.items[id]
 	if !ok {
-		return nil, errors.New("not found")
+		return nil, domain.ErrLaunchpadNotFound
 	}
 	copy := *item
 	return &copy, nil
@@ -80,9 +89,12 @@ func (s *stubLaunchpadRepository) CreateLaunchpad(name, description string) (uui
 }
 
 func (s *stubLaunchpadRepository) UpdateLaunchpad(id uuid.UUID, name, description *string) error {
+	if s.updateErr != nil {
+		return s.updateErr
+	}
 	item, ok := s.items[id]
 	if !ok {
-		return errors.New("not found")
+		return domain.ErrLaunchpadNotFound
 	}
 	if name != nil {
 		item.Name = *name
@@ -612,6 +624,23 @@ func TestLaunchpadControlAPI(t *testing.T) {
 		assertLaunchpadError(t, requestLaunchpad(server, http.MethodPost, "/launchpad/"+id.String(), `{"name":""}`), http.StatusBadRequest, "invalid_launchpad_request")
 		assertLaunchpadError(t, requestLaunchpad(server, http.MethodPost, "/launchpad/not-a-uuid", `{}`), http.StatusBadRequest, "bad_request")
 		assertLaunchpadError(t, requestLaunchpad(server, http.MethodPost, "/launchpad/0193802f-f0e7-73d9-a764-06d21e367809", `{}`), http.StatusNotFound, "not_found")
+	})
+
+	t.Run("should not report repository failures as missing launchpads", func(t *testing.T) {
+		failure := errors.New("database unavailable")
+		for _, test := range []struct {
+			method string
+			path   string
+			body   string
+			repo   *stubLaunchpadRepository
+		}{
+			{method: http.MethodGet, path: "/launchpad", repo: &stubLaunchpadRepository{listErr: failure}},
+			{method: http.MethodGet, path: "/launchpad/" + id.String(), repo: &stubLaunchpadRepository{getErr: failure}},
+			{method: http.MethodPost, path: "/launchpad/" + id.String(), body: `{}`, repo: &stubLaunchpadRepository{updateErr: failure}},
+		} {
+			server := newTestServer(&marasi.Proxy{LaunchpadRepo: test.repo}, func() {})
+			assertLaunchpadError(t, requestLaunchpad(server, test.method, test.path, test.body), http.StatusInternalServerError, "internal_server_error")
+		}
 	})
 }
 

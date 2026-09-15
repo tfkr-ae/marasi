@@ -1,6 +1,8 @@
 package db
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -46,6 +48,9 @@ func (repo *Repository) GetLaunchpads() ([]*domain.Launchpad, error) {
 func (repo *Repository) GetLaunchpad(id uuid.UUID) (*domain.Launchpad, error) {
 	var launchpad dbLaunchpad
 	if err := repo.dbConn.Get(&launchpad, `SELECT * FROM launchpad WHERE id = ?`, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, domain.ErrLaunchpadNotFound
+		}
 		return nil, fmt.Errorf("getting launchpad %s: %w", id, err)
 	}
 	return toDomainLaunchpad(&launchpad), nil
@@ -84,7 +89,7 @@ func (repo *Repository) UpdateLaunchpad(launchpadID uuid.UUID, name, description
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("no launchpad found with ID %s", launchpadID)
+		return domain.ErrLaunchpadNotFound
 	}
 
 	return nil

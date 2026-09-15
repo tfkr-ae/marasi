@@ -1,6 +1,13 @@
 package domain
 
-import "github.com/google/uuid"
+import (
+	"errors"
+
+	"github.com/google/uuid"
+)
+
+// ErrLaunchpadNotFound means no launchpad has the requested id.
+var ErrLaunchpadNotFound = errors.New("launchpad not found")
 
 // LaunchpadRepository defines the interface for managing Launchpads, which are collections of saved requests.
 // It provides methods for creating, retrieving, updating, and deleting launchpads,
