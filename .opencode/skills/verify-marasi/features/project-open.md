@@ -23,3 +23,4 @@ Run `project open --name "$OTHER_PROJECT" --json`. Require `project` to be the c
 - `--name` uses `$configDir/projects/<name>.marasi`, same as `service start --project-name`. `--path` must end in `.marasi`.
 - A project has an exclusive lock. Opening a project another instance already holds fails.
 - After a switch, `traffic list` and `traffic get` no longer see the previous project's rows.
+- `service status` `project` becomes the new path. The launch doctor check against `$VERIFY_PROJECT` no longer matches, even though the instance is still ours.
