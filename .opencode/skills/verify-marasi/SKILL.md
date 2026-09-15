@@ -64,9 +64,11 @@ Use shell commands for the CLI and `curl` for the proxy. Prefer `--json` because
 
 1. Get `proxy_listener` from `service status --json`.
 2. Start a local HTTP origin on `127.0.0.1` with a port assigned by the OS.
-3. Send `curl --noproxy '' --proxy "http://$PROXY_LISTENER" "http://127.0.0.1:$ORIGIN_PORT/proof.txt"`.
-4. Find the request with `traffic list --path /proof.txt --status-code 200 --json`.
-5. Pass its `id` to `traffic get "$TRAFFIC_ID" --json`.
+3. Subscribe with `events` and wait for `: connected` on stderr. The stream has no replay.
+4. Send `curl --noproxy '' --proxy "http://$PROXY_LISTENER" "http://127.0.0.1:$ORIGIN_PORT/proof.txt"`.
+5. Require `events` stdout to print `traffic.request` then `traffic.response` for that exchange.
+6. Find the request with `traffic list --path /proof.txt --status-code 200 --json`.
+7. Pass its `id` to `traffic get "$TRAFFIC_ID" --json`. The event `id` fields must match.
 
 For the complete recipe, run the bundled executable helper:
 
@@ -74,7 +76,7 @@ For the complete recipe, run the bundled executable helper:
 .opencode/skills/verify-marasi/scripts/verify-traffic.sh
 ```
 
-It builds Marasi, starts an isolated instance and local origin, checks service identity, proxies one request, inspects the stored request/response pair through the CLI, checks the SQLite project side effect, writes evidence, and cleans up.
+It builds Marasi, starts an isolated instance and local origin, checks service identity, subscribes with `events`, proxies one request, inspects the live events and the stored request/response pair through the CLI, checks the SQLite project side effect, writes evidence, and cleans up.
 
 Read `features/README.md` before choosing coverage. A proof is incomplete if the mapped feature has another user entry point that the run ignores.
 
@@ -86,17 +88,19 @@ The helper writes each proof to:
 .opencode/verification-artifacts/verify-marasi/$RUN_ID/
 ```
 
-Keep at least `actions.log`, `launch.json`, `doctor.json`, `response-headers.txt`, `response-body.txt`, `traffic-list.json`, `traffic-detail.json`, `database-state.txt`, `service.log`, `cleanup.json`, and `result.txt`. `result.txt` is valid only when it says `PASS`.
+Keep at least `actions.log`, `launch.json`, `doctor.json`, `events-stderr.txt`, `events-stdout.txt`, `response-headers.txt`, `response-body.txt`, `traffic-list.json`, `traffic-detail.json`, `database-state.txt`, `service.log`, `cleanup.json`, and `result.txt`. `result.txt` is valid only when it says `PASS`.
 
-A valid proof exercises the real CLI, detached service, proxy listener, and a normal HTTP origin. It captures the request action and the returned body, then confirms the same request through `traffic list`, `traffic get`, and the persisted SQLite `request` row. Internal setters and test-only endpoints do not count. Keep both the action and resulting state. Mocks are acceptable only at an existing production boundary. The local origin used here replaces an external website, not Marasi internals.
+A valid proof exercises the real CLI, detached service, proxy listener, and a normal HTTP origin. It captures the request action and the returned body, then confirms the same request through `events`, `traffic list`, `traffic get`, and the persisted SQLite `request` row. Internal setters and test-only endpoints do not count. Keep both the action and resulting state. Mocks are acceptable only at an existing production boundary. The local origin used here replaces an external website, not Marasi internals.
 
 Marasi has no dry-run mode in this path. The helper observes the project database and request row rather than inferring safety from a mode name.
 
 ## Cleanup
 
-Stop the exact instance created by the run, then terminate the recorded local-origin PID and remove only that run's scratch config directory. Never kill by process name.
+Interrupt the `events` subscriber first, stop the exact instance created by the run, then terminate the recorded local-origin PID and remove only that run's scratch config directory. Never kill by process name.
 
 ```bash
+kill -INT "$EVENTS_PID"
+wait "$EVENTS_PID" 2>/dev/null || true
 ./dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANCE" service stop --json
 kill "$ORIGIN_PID"
 wait "$ORIGIN_PID" 2>/dev/null || true

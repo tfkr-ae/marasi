@@ -12,6 +12,7 @@ INSTANCE="v$$"
 PROJECT="verify-$RUN_ID"
 BINARY="$ROOT/dist/marasi"
 ORIGIN_PID=""
+EVENTS_PID=""
 SERVICE_STARTED=0
 
 mkdir -p "$EVIDENCE_DIR" "$SCRATCH_DIR/origin"
@@ -22,6 +23,11 @@ cleanup() {
   local cleanup_status
   trap - EXIT INT TERM
   set +e
+  if [[ -n "$EVENTS_PID" ]]; then
+    kill -INT "$EVENTS_PID" 2>/dev/null
+    wait "$EVENTS_PID" 2>/dev/null
+    EVENTS_PID=""
+  fi
   if [[ "$SERVICE_STARTED" == 1 ]]; then
     "$BINARY" --config-dir "$CONFIG_DIR" --instance "$INSTANCE" service stop --json >"$EVIDENCE_DIR/cleanup.json" 2>"$EVIDENCE_DIR/cleanup.stderr"
     cleanup_status=$?
@@ -111,9 +117,50 @@ done
 ORIGIN_PORT="$(cat "$SCRATCH_DIR/origin-port")"
 URL="http://127.0.0.1:$ORIGIN_PORT/proof.txt"
 
+: >"$EVIDENCE_DIR/events-stdout.txt"
+: >"$EVIDENCE_DIR/events-stderr.txt"
+printf '%q ' "$BINARY" --config-dir "$CONFIG_DIR" --instance "$INSTANCE" events >>"$EVIDENCE_DIR/actions.log"
+printf '\n' >>"$EVIDENCE_DIR/actions.log"
+"$BINARY" --config-dir "$CONFIG_DIR" --instance "$INSTANCE" events >"$EVIDENCE_DIR/events-stdout.txt" 2>"$EVIDENCE_DIR/events-stderr.txt" &
+EVENTS_PID=$!
+
+python3 - "$EVIDENCE_DIR/events-stderr.txt" <<'PY'
+import pathlib
+import sys
+import time
+
+path = pathlib.Path(sys.argv[1])
+deadline = time.time() + 10
+text = ""
+while time.time() < deadline:
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    if ": connected" in text:
+        sys.exit(0)
+    time.sleep(0.05)
+sys.stderr.write(f"events command did not connect; stderr={text!r}\n")
+sys.exit(1)
+PY
+
 printf 'curl --noproxy %q --proxy %q %q\n' '' "http://$PROXY_LISTENER" "$URL" >>"$EVIDENCE_DIR/actions.log"
 curl --fail --silent --show-error --noproxy '' --proxy "http://$PROXY_LISTENER" "$URL" --dump-header "$EVIDENCE_DIR/response-headers.txt" --output "$EVIDENCE_DIR/response-body.txt"
 cmp "$SCRATCH_DIR/origin/proof.txt" "$EVIDENCE_DIR/response-body.txt"
+
+python3 - "$EVIDENCE_DIR/events-stdout.txt" <<'PY'
+import pathlib
+import sys
+import time
+
+path = pathlib.Path(sys.argv[1])
+deadline = time.time() + 10
+text = ""
+while time.time() < deadline:
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    if "traffic.request" in text and "traffic.response" in text:
+        sys.exit(0)
+    time.sleep(0.05)
+sys.stderr.write(f"events stdout missing traffic frames; stdout={text!r}\n")
+sys.exit(1)
+PY
 
 printf '%q ' "$BINARY" --config-dir "$CONFIG_DIR" --instance "$INSTANCE" traffic list --path /proof.txt --status-code 200 --limit 1 --json >>"$EVIDENCE_DIR/actions.log"
 printf '\n' >>"$EVIDENCE_DIR/actions.log"
@@ -152,6 +199,35 @@ assert detail["request"]["path"] == "/proof.txt", detail
 assert detail["response"]["status_code"] == 200, detail
 raw_response = base64.b64decode(detail["response"]["raw"])
 assert f"marasi verification body {run_id}".encode() in raw_response, raw_response
+PY
+
+python3 - "$EVIDENCE_DIR/events-stdout.txt" "$EVIDENCE_DIR/events-stderr.txt" "$TRAFFIC_ID" "$ORIGIN_PORT" <<'PY'
+import json
+import sys
+
+stdout_path, stderr_path, traffic_id, origin_port = sys.argv[1:]
+stderr = open(stderr_path, encoding="utf-8").read()
+assert stderr == ": connected\n", stderr
+request_event = None
+response_event = None
+for raw in open(stdout_path, encoding="utf-8"):
+    line = raw.rstrip("\n")
+    if not line:
+        continue
+    name, _, data = line.partition(" ")
+    payload = json.loads(data)
+    if name == "traffic.request":
+        request_event = payload
+    elif name == "traffic.response":
+        response_event = payload
+assert request_event is not None, "missing traffic.request"
+assert response_event is not None, "missing traffic.response"
+assert request_event["id"] == traffic_id, request_event
+assert response_event["id"] == traffic_id, response_event
+assert request_event["method"] == "GET", request_event
+assert "/proof.txt" in request_event["path"], request_event
+assert request_event["host"] == f"127.0.0.1:{origin_port}", request_event
+assert response_event["status_code"] == 200, response_event
 PY
 
 PROJECT_DB="$CONFIG_DIR/projects/$PROJECT.marasi"
