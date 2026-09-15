@@ -2163,18 +2163,24 @@ func TestProxy_LaunchWebSocket(t *testing.T) {
 		t.Fatalf("injecting websocket message: %v", err)
 	}
 
-	openMetadata, openMetadataErr := repository.GetMetadata(requestID)
-	if openMetadataErr != nil {
-		t.Fatalf("getting open request metadata: %v", openMetadataErr)
+	openDeadline := time.Now().Add(5 * time.Second)
+	var openMetadata map[string]any
+	for time.Now().Before(openDeadline) {
+		metadata, metadataErr := repository.GetMetadata(requestID)
+		if metadataErr == nil && metadata["websocket.state"] == "open" {
+			openMetadata = metadata
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if openMetadata == nil {
+		t.Fatalf("wanted open websocket metadata after Launch")
 	}
 	if openMetadata["protocol"] != "websocket" {
 		t.Fatalf("wanted: %q\ngot: %q", "websocket", openMetadata["protocol"])
 	}
 	if openMetadata["websocket.transport"] != "ws" {
 		t.Fatalf("wanted: %q\ngot: %q", "ws", openMetadata["websocket.transport"])
-	}
-	if openMetadata["websocket.state"] != "open" {
-		t.Fatalf("wanted: %q\ngot: %q", "open", openMetadata["websocket.state"])
 	}
 
 	if err := proxy.CloseWebSocket(requestID, 1000, "done"); err != nil {

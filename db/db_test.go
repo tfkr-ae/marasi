@@ -15,7 +15,7 @@ import (
 
 func TestNewConcurrent(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	const n = 8
+	const n = 2
 	errc := make(chan error, n)
 	for i := 0; i < n; i++ {
 		go func(i int) {

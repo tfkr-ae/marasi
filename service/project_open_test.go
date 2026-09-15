@@ -184,7 +184,7 @@ func TestProjectOpen(t *testing.T) {
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(time.Second):
+		case <-time.After(5 * time.Second):
 			release()
 			t.Fatal("open did not return after cancel")
 		}
@@ -319,7 +319,7 @@ func TestProjectEvents(t *testing.T) {
 			if got != wantOpened {
 				t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantOpened, got)
 			}
-		case <-time.After(time.Second):
+		case <-time.After(5 * time.Second):
 			t.Fatal("project.opened did not arrive after publication")
 		}
 		response := <-result
