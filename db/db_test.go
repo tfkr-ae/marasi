@@ -1,15 +1,38 @@
 package db
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
 )
+
+func TestNewConcurrent(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	const n = 8
+	errc := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			dbConn, err := New(filepath.Join(t.TempDir(), fmt.Sprintf("%d.marasi", i)), logger)
+			if err != nil {
+				errc <- err
+				return
+			}
+			errc <- dbConn.Close()
+		}(i)
+	}
+	for i := 0; i < n; i++ {
+		if err := <-errc; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+	}
+}
 
 func setupTestDB(t *testing.T) (*Repository, func()) {
 	t.Helper()

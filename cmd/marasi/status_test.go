@@ -25,8 +25,9 @@ func TestServiceStatusCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if sent.Method != http.MethodGet || sent.Path != "/service/status" || sent.RawQuery != "" {
-			t.Fatalf("\nwanted:\nGET /service/status\ngot:\n%s %s?%s", sent.Method, sent.Path, sent.RawQuery)
+		got := sent.snapshot()
+		if got.Method != http.MethodGet || got.Path != "/service/status" || got.RawQuery != "" {
+			t.Fatalf("\nwanted:\nGET /service/status\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
 		want := fmt.Sprintf("status: running\nversion: 13.09.2026\ninstance: work\nproject: %s\nproxy listener: 127.0.0.1:8080\n", project)
 		if stdout != want || stderr != "" {

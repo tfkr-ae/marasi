@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"sync"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/pressly/goose/v3"
@@ -15,6 +16,10 @@ import (
 
 //go:embed migrations/*.sql migrations/*.go
 var embedMigrations embed.FS
+
+// migrateMu serializes goose.NewProvider and Up. Goose's global Go migration
+// registry is not safe for concurrent providers.
+var migrateMu sync.Mutex
 
 // Repository provides a centralized structure for database operations, embedding the database connection.
 // It acts as a receiver for methods that implement the various repository interfaces defined in the domain package.
@@ -74,6 +79,9 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 		dbLogger.Error("Failed to load migration file system", "error", err)
 		return nil, fmt.Errorf("creating migrations fs: %w", err)
 	}
+
+	migrateMu.Lock()
+	defer migrateMu.Unlock()
 
 	provider, err := goose.NewProvider(
 		goose.DialectSQLite3,

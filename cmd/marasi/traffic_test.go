@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 )
@@ -18,8 +19,9 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if sent.Method != http.MethodGet || sent.Path != "/traffic" || sent.RawQuery != "limit=200" {
-			t.Fatalf("\nwanted:\nGET /traffic?limit=200\ngot:\n%s %s?%s", sent.Method, sent.Path, sent.RawQuery)
+		got := sent.snapshot()
+		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "limit=200" {
+			t.Fatalf("\nwanted:\nGET /traffic?limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
 		want := "0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /a      200  12\n01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /login  401  45\n"
 		if stdout != want {
@@ -145,8 +147,9 @@ func TestTrafficListCommand(t *testing.T) {
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
-		if sent.RawQuery != "cursor=not-a-uuid&limit=200" {
-			t.Fatalf("\nwanted:\ncursor=not-a-uuid&limit=200\ngot:\n%s", sent.RawQuery)
+		got := sent.snapshot()
+		if got.RawQuery != "cursor=not-a-uuid&limit=200" {
+			t.Fatalf("\nwanted:\ncursor=not-a-uuid&limit=200\ngot:\n%s", got.RawQuery)
 		}
 		if stdout != "" {
 			t.Fatalf("\nwanted:\nno stdout\ngot:\n%s", stdout)
@@ -165,8 +168,9 @@ func TestTrafficListCommand(t *testing.T) {
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, body)
 
 		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "list", "--json", "--limit", "0")
-		if sent.RawQuery != "limit=0" {
-			t.Fatalf("\nwanted:\nlimit=0\ngot:\n%s", sent.RawQuery)
+		got := sent.snapshot()
+		if got.RawQuery != "limit=0" {
+			t.Fatalf("\nwanted:\nlimit=0\ngot:\n%s", got.RawQuery)
 		}
 		assertJSONCommandError(t, stdout, stderr, err, "listing traffic: bad_request")
 	})
@@ -193,8 +197,9 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if sent.Method != http.MethodGet || sent.Path != "/traffic" || sent.RawQuery != "cursor=0193802f-f0e7-73d9-a764-06d21e367809&limit=200" {
-			t.Fatalf("\nwanted:\nGET /traffic?cursor=0193802f-f0e7-73d9-a764-06d21e367809&limit=200\ngot:\n%s %s?%s", sent.Method, sent.Path, sent.RawQuery)
+		got := sent.snapshot()
+		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "cursor=0193802f-f0e7-73d9-a764-06d21e367809&limit=200" {
+			t.Fatalf("\nwanted:\nGET /traffic?cursor=0193802f-f0e7-73d9-a764-06d21e367809&limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
 	})
 
@@ -206,8 +211,9 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if sent.Method != http.MethodGet || sent.Path != "/traffic" || sent.RawQuery != "limit=10" {
-			t.Fatalf("\nwanted:\nGET /traffic?limit=10\ngot:\n%s %s?%s", sent.Method, sent.Path, sent.RawQuery)
+		got := sent.snapshot()
+		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "limit=10" {
+			t.Fatalf("\nwanted:\nGET /traffic?limit=10\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
 	})
 
@@ -219,8 +225,9 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if sent.Method != http.MethodGet || sent.Path != "/traffic" || sent.RawQuery != "limit=200&path=%2Fapi" {
-			t.Fatalf("\nwanted:\nGET /traffic?limit=200&path=%%2Fapi\ngot:\n%s %s?%s", sent.Method, sent.Path, sent.RawQuery)
+		got := sent.snapshot()
+		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "limit=200&path=%2Fapi" {
+			t.Fatalf("\nwanted:\nGET /traffic?limit=200&path=%%2Fapi\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
 	})
 
@@ -232,8 +239,9 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if sent.Method != http.MethodGet || sent.Path != "/traffic" || sent.RawQuery != "limit=200&status_code=404" {
-			t.Fatalf("\nwanted:\nGET /traffic?limit=200&status_code=404\ngot:\n%s %s?%s", sent.Method, sent.Path, sent.RawQuery)
+		got := sent.snapshot()
+		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "limit=200&status_code=404" {
+			t.Fatalf("\nwanted:\nGET /traffic?limit=200&status_code=404\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
 	})
 
@@ -245,8 +253,9 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if sent.Method != http.MethodGet || sent.Path != "/traffic" || sent.RawQuery != "limit=200&method=POST" {
-			t.Fatalf("\nwanted:\nGET /traffic?limit=200&method=POST\ngot:\n%s %s?%s", sent.Method, sent.Path, sent.RawQuery)
+		got := sent.snapshot()
+		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "limit=200&method=POST" {
+			t.Fatalf("\nwanted:\nGET /traffic?limit=200&method=POST\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
 	})
 
@@ -258,8 +267,9 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if sent.Method != http.MethodGet || sent.Path != "/traffic" || sent.RawQuery != "host=example.com&limit=200" {
-			t.Fatalf("\nwanted:\nGET /traffic?host=example.com&limit=200\ngot:\n%s %s?%s", sent.Method, sent.Path, sent.RawQuery)
+		got := sent.snapshot()
+		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "host=example.com&limit=200" {
+			t.Fatalf("\nwanted:\nGET /traffic?host=example.com&limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
 	})
 
@@ -291,8 +301,9 @@ func TestTrafficGetCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if sent.Method != http.MethodGet || sent.Path != "/traffic/"+id || sent.RawQuery != "" {
-			t.Fatalf("\nwanted:\nGET /traffic/%s\ngot:\n%s %s?%s", id, sent.Method, sent.Path, sent.RawQuery)
+		got := sent.snapshot()
+		if got.Method != http.MethodGet || got.Path != "/traffic/"+id || got.RawQuery != "" {
+			t.Fatalf("\nwanted:\nGET /traffic/%s\ngot:\n%s %s?%s", id, got.Method, got.Path, got.RawQuery)
 		}
 		if stdout != body {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", body, stdout)
@@ -330,8 +341,9 @@ func TestTrafficGetCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if sent.Method != http.MethodGet || sent.Path != "/traffic/"+id {
-			t.Fatalf("\nwanted:\nGET /traffic/%s\ngot:\n%s %s", id, sent.Method, sent.Path)
+		got := sent.snapshot()
+		if got.Method != http.MethodGet || got.Path != "/traffic/"+id {
+			t.Fatalf("\nwanted:\nGET /traffic/%s\ngot:\n%s %s", id, got.Method, got.Path)
 		}
 		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: 200 OK\nstatus_code: 200\ncontent_type: application/json\nlength: 12\nresponded_at: 2026-01-02T03:04:06Z\nnote: a note\nmetadata: {\"foo\":\"bar\"}\nGET /a\nhello\n"
 		if stdout != want {
@@ -436,8 +448,9 @@ func TestTrafficGetCommand(t *testing.T) {
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
-		if sent.Method != http.MethodGet || sent.Path != "/traffic/"+id {
-			t.Fatalf("\nwanted:\nGET /traffic/%s\ngot:\n%s %s", id, sent.Method, sent.Path)
+		got := sent.snapshot()
+		if got.Method != http.MethodGet || got.Path != "/traffic/"+id {
+			t.Fatalf("\nwanted:\nGET /traffic/%s\ngot:\n%s %s", id, got.Method, got.Path)
 		}
 		if stdout != "" {
 			t.Fatalf("\nwanted:\nno stdout\ngot:\n%s", stdout)
@@ -523,10 +536,28 @@ func TestTrafficGetCommand(t *testing.T) {
 }
 
 type cannedControlRequest struct {
+	mu       sync.Mutex
 	Method   string
 	Path     string
 	RawQuery string
 	Body     string
+}
+
+func (got *cannedControlRequest) snapshot() cannedControlRequest {
+	got.mu.Lock()
+	defer got.mu.Unlock()
+	return cannedControlRequest{
+		Method:   got.Method,
+		Path:     got.Path,
+		RawQuery: got.RawQuery,
+		Body:     got.Body,
+	}
+}
+
+func (got *cannedControlRequest) reset() {
+	got.mu.Lock()
+	defer got.mu.Unlock()
+	got.Method, got.Path, got.RawQuery, got.Body = "", "", "", ""
 }
 
 func startCannedControlAPI(t *testing.T, configDir, name string, status int, body string) *cannedControlRequest {
@@ -541,11 +572,13 @@ func startCannedControlAPI(t *testing.T, configDir, name string, status int, bod
 	}
 	got := &cannedControlRequest{}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestBody, _ := io.ReadAll(r.Body)
+		got.mu.Lock()
 		got.Method = r.Method
 		got.Path = r.URL.Path
 		got.RawQuery = r.URL.RawQuery
-		requestBody, _ := io.ReadAll(r.Body)
 		got.Body = string(requestBody)
+		got.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		io.WriteString(w, body)

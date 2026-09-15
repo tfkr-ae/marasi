@@ -39,8 +39,9 @@ func TestProjectCommand(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if sent.Method != http.MethodPost || sent.Path != "/project/open" || sent.Body != string(wantBody) {
-			t.Fatalf("\nwanted:\nPOST /project/open body %s\ngot:\n%s %s body %q", wantBody, sent.Method, sent.Path, sent.Body)
+		got := sent.snapshot()
+		if got.Method != http.MethodPost || got.Path != "/project/open" || got.Body != string(wantBody) {
+			t.Fatalf("\nwanted:\nPOST /project/open body %s\ngot:\n%s %s body %q", wantBody, got.Method, got.Path, got.Body)
 		}
 		if stdout != "project: "+path+"\n" || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr\ngot:\nstdout %q, stderr %q", "project: "+path+"\n", stdout, stderr)
@@ -68,8 +69,9 @@ func TestProjectCommand(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if sent.Method != http.MethodPost || sent.Path != "/project/open" || sent.Body != string(wantBody) {
-			t.Fatalf("\nwanted:\nPOST /project/open body %s\ngot:\n%s %s body %q", wantBody, sent.Method, sent.Path, sent.Body)
+		got := sent.snapshot()
+		if got.Method != http.MethodPost || got.Path != "/project/open" || got.Body != string(wantBody) {
+			t.Fatalf("\nwanted:\nPOST /project/open body %s\ngot:\n%s %s body %q", wantBody, got.Method, got.Path, got.Body)
 		}
 		if stdout != "project: "+path+"\n" || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr\ngot:\nstdout %q, stderr %q", "project: "+path+"\n", stdout, stderr)
@@ -87,7 +89,7 @@ func TestProjectCommand(t *testing.T) {
 
 		for _, command := range []string{"open", "switch"} {
 			for _, name := range []string{"named", "named.marasi"} {
-				sent.Method, sent.Path, sent.Body = "", "", ""
+				sent.reset()
 				stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "project", command, "--name", name)
 				if err != nil {
 					t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
@@ -98,8 +100,9 @@ func TestProjectCommand(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if sent.Method != http.MethodPost || sent.Path != "/project/open" || sent.Body != string(wantBody) {
-					t.Fatalf("\nwanted:\nPOST /project/open body %s\ngot:\n%s %s body %q", wantBody, sent.Method, sent.Path, sent.Body)
+				got := sent.snapshot()
+				if got.Method != http.MethodPost || got.Path != "/project/open" || got.Body != string(wantBody) {
+					t.Fatalf("\nwanted:\nPOST /project/open body %s\ngot:\n%s %s body %q", wantBody, got.Method, got.Path, got.Body)
 				}
 				if stdout != "project: "+path+"\n" || stderr != "" {
 					t.Fatalf("\nwanted:\nstdout %q, empty stderr\ngot:\nstdout %q, stderr %q", "project: "+path+"\n", stdout, stderr)
@@ -133,8 +136,9 @@ func TestProjectCommand(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if sent.Body != string(wantBody) {
-			t.Fatalf("\nwanted:\nbody %s\ngot:\n%s", wantBody, sent.Body)
+		got := sent.snapshot()
+		if got.Body != string(wantBody) {
+			t.Fatalf("\nwanted:\nbody %s\ngot:\n%s", wantBody, got.Body)
 		}
 		if stdout != "project: "+path+"\n" || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr\ngot:\nstdout %q, stderr %q", "project: "+path+"\n", stdout, stderr)
@@ -171,13 +175,14 @@ func TestProjectCommand(t *testing.T) {
 			{"project", "open", "--name", "nested/name"},
 			{"project", "switch", "--name", "scratchpad.marasi.marasi"},
 		} {
-			sent.Method, sent.Path, sent.Body = "", "", ""
+			sent.reset()
 			commandArgs := append([]string{"--config-dir", configDir, "--instance", "work"}, args...)
 			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
 				t.Fatalf("\nwanted:\ninvalid invocation\ngot:\naccepted %v", args)
 			}
-			if sent.Method != "" {
-				t.Fatalf("\nwanted:\nno control request for %v\ngot:\n%s %s", args, sent.Method, sent.Path)
+			got := sent.snapshot()
+			if got.Method != "" {
+				t.Fatalf("\nwanted:\nno control request for %v\ngot:\n%s %s", args, got.Method, got.Path)
 			}
 		}
 

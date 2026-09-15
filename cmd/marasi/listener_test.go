@@ -121,8 +121,9 @@ func TestListenerCommand(t *testing.T) {
 			if err != nil {
 				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 			}
-			if sent.Method != test.method || sent.Path != test.path || sent.Body != test.body {
-				t.Fatalf("\nwanted:\n%s %s body %q\ngot:\n%s %s body %q", test.method, test.path, test.body, sent.Method, sent.Path, sent.Body)
+			got := sent.snapshot()
+			if got.Method != test.method || got.Path != test.path || got.Body != test.body {
+				t.Fatalf("\nwanted:\n%s %s body %q\ngot:\n%s %s body %q", test.method, test.path, test.body, got.Method, got.Path, got.Body)
 			}
 			if stdout != test.wantStdout || stderr != test.wantStderr {
 				t.Fatalf("\nwanted:\nstdout %q, stderr %q\ngot:\nstdout %q, stderr %q", test.wantStdout, test.wantStderr, stdout, stderr)
