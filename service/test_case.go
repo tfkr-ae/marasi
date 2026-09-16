@@ -42,8 +42,8 @@ type testCaseSummary struct {
 
 type testCaseDetail struct {
 	testCaseResponse
-	Items     []trafficSummary `json:"items"`
-	Artifacts []any            `json:"artifacts"`
+	Items     []trafficSummary   `json:"items"`
+	Artifacts []artifactResponse `json:"artifacts"`
 }
 
 type testCaseTrafficResponse struct {
@@ -142,7 +142,7 @@ func addTestCaseRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBro
 		writeJSON(w, r, http.StatusOK, testCaseDetail{
 			testCaseResponse: testCaseResponseFromDomain(testCase),
 			Items:            items,
-			Artifacts:        []any{},
+			Artifacts:        artifactResponsesForTestCase(testCase),
 		})
 	})
 

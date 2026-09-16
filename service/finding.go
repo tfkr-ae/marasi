@@ -48,8 +48,8 @@ type findingSummary struct {
 
 type findingDetail struct {
 	findingResponse
-	Items     []trafficSummary `json:"items"`
-	Artifacts []any            `json:"artifacts"`
+	Items     []trafficSummary   `json:"items"`
+	Artifacts []artifactResponse `json:"artifacts"`
 }
 
 type findingTrafficResponse struct {
@@ -143,7 +143,7 @@ func addFindingRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroa
 		writeJSON(w, r, http.StatusOK, findingDetail{
 			findingResponse: findingResponseFromDomain(finding),
 			Items:           items,
-			Artifacts:       []any{},
+			Artifacts:       artifactResponsesForFinding(finding),
 		})
 	})
 

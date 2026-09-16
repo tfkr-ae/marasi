@@ -708,28 +708,30 @@ func TestLaunchpadCommands(t *testing.T) {
 }
 
 type cannedControlRequest struct {
-	mu       sync.Mutex
-	Method   string
-	Path     string
-	RawQuery string
-	Body     string
+	mu          sync.Mutex
+	Method      string
+	Path        string
+	RawQuery    string
+	Body        string
+	ContentType string
 }
 
 func (got *cannedControlRequest) snapshot() cannedControlRequest {
 	got.mu.Lock()
 	defer got.mu.Unlock()
 	return cannedControlRequest{
-		Method:   got.Method,
-		Path:     got.Path,
-		RawQuery: got.RawQuery,
-		Body:     got.Body,
+		Method:      got.Method,
+		Path:        got.Path,
+		RawQuery:    got.RawQuery,
+		Body:        got.Body,
+		ContentType: got.ContentType,
 	}
 }
 
 func (got *cannedControlRequest) reset() {
 	got.mu.Lock()
 	defer got.mu.Unlock()
-	got.Method, got.Path, got.RawQuery, got.Body = "", "", "", ""
+	got.Method, got.Path, got.RawQuery, got.Body, got.ContentType = "", "", "", "", ""
 }
 
 func startCannedControlAPI(t *testing.T, configDir, name string, status int, body string) *cannedControlRequest {
@@ -750,6 +752,7 @@ func startCannedControlAPI(t *testing.T, configDir, name string, status int, bod
 		got.Path = r.URL.Path
 		got.RawQuery = r.URL.RawQuery
 		got.Body = string(requestBody)
+		got.ContentType = r.Header.Get("Content-Type")
 		got.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
