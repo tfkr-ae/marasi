@@ -87,7 +87,7 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 		proxy.ConfigDir = appConfigDir
 		// VIPER
 		viperInstance := viper.New()
-		viperInstance.SetConfigName("config")
+		viperInstance.SetConfigName("marasi_config")
 		viperInstance.SetConfigType("yaml")
 		viperInstance.AddConfigPath(appConfigDir)
 		viperInstance.SetDefault("chrome_dirs", []chrome.PathConfig{})

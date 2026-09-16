@@ -66,10 +66,10 @@ func TestGetChromePath(t *testing.T) {
 			{OS: runtime.GOOS, Path: "go"},
 		}))
 
-		path := l.getChromePath()
+		path, err := l.getChromePath()
 
-		if path == "" {
-			t.Fatalf("\nwanted:\nnon-empty executable path\ngot:\n%q", path)
+		if err != nil || path == "" {
+			t.Fatalf("\nwanted:\nnon-empty executable path\ngot:\n%q, %v", path, err)
 		}
 		if !strings.HasSuffix(path, "go") && !strings.HasSuffix(path, "go.exe") {
 			t.Fatalf("\nwanted:\npath ending with go or go.exe\ngot:\n%q", path)

@@ -31,8 +31,7 @@ type Config struct {
 	ChromeProfiles []string            `mapstructure:"chrome_profiles"`
 }
 
-// AddChromeProfile Adds a chrome profile to the configuration
-// The path is created based on the name and will be in ConfigDir/chrome_profiles/{profileName}
+// AddChromeProfile adds a chrome profile to the configuration.
 func (cfg *Config) AddChromeProfile(name string) error {
 	profileName := strings.TrimSpace(name)
 
@@ -52,21 +51,14 @@ func (cfg *Config) AddChromeProfile(name string) error {
 		return fmt.Errorf("chrome profile %q already exists", profileName)
 	}
 
-	profileDir := filepath.Join(cfg.ConfigDir, "chrome_profiles", profileName)
-	if err := os.MkdirAll(profileDir, 0700); err != nil {
-		return fmt.Errorf("failed to create chrome profile directory: %w", err)
-	}
-
-	cfg.ChromeProfiles = append(cfg.ChromeProfiles, profileName)
-	cfg.viper.Set("chrome_profiles", cfg.ChromeProfiles)
+	profiles := append(slices.Clone(cfg.ChromeProfiles), profileName)
+	cfg.viper.Set("chrome_profiles", profiles)
 
 	if err := cfg.viper.WriteConfig(); err != nil {
+		cfg.viper.Set("chrome_profiles", cfg.ChromeProfiles)
 		return fmt.Errorf("failed to save configuration: %w", err)
 	}
-
-	if err := cfg.viper.Unmarshal(cfg); err != nil {
-		return fmt.Errorf("unmarshalling config to struct: %w", err)
-	}
+	cfg.ChromeProfiles = profiles
 
 	return nil
 }
@@ -94,34 +86,38 @@ func (cfg *Config) DeleteChromeProfile(name string) error {
 		return fmt.Errorf("failed to delete chrome profile directory: %w", err)
 	}
 
-	cfg.ChromeProfiles = slices.DeleteFunc(cfg.ChromeProfiles, func(profile string) bool {
+	profiles := slices.DeleteFunc(slices.Clone(cfg.ChromeProfiles), func(profile string) bool {
 		return profile == profileName
 	})
 
-	cfg.viper.Set("chrome_profiles", cfg.ChromeProfiles)
+	cfg.viper.Set("chrome_profiles", profiles)
 
 	if err := cfg.viper.WriteConfig(); err != nil {
+		cfg.viper.Set("chrome_profiles", cfg.ChromeProfiles)
 		return fmt.Errorf("failed to save configuration: %w", err)
 	}
-
-	if err := cfg.viper.Unmarshal(cfg); err != nil {
-		return fmt.Errorf("unmarshalling config to struct: %w", err)
-	}
+	cfg.ChromeProfiles = profiles
 
 	return nil
 }
 
 func (cfg *Config) AddChromePath(path, os string) error {
+	if path == "" {
+		return errors.New("invalid chrome path: cannot be empty")
+	}
 	switch os {
 	case "darwin", "linux", "windows":
-		cfg.ChromeDirs = append(cfg.ChromeDirs, chrome.PathConfig{OS: os, Path: path})
-		cfg.viper.Set("chrome_dirs", cfg.ChromeDirs)
+		chromePath := chrome.PathConfig{OS: os, Path: path}
+		if slices.Contains(cfg.ChromeDirs, chromePath) {
+			return fmt.Errorf("chrome path for %s %q already exists", os, path)
+		}
+		paths := append(slices.Clone(cfg.ChromeDirs), chromePath)
+		cfg.viper.Set("chrome_dirs", paths)
 		if err := cfg.viper.WriteConfig(); err != nil {
+			cfg.viper.Set("chrome_dirs", cfg.ChromeDirs)
 			return fmt.Errorf("failed to save configuration: %w", err)
 		}
-		if err := cfg.viper.Unmarshal(cfg); err != nil {
-			return fmt.Errorf("unmarshalling config to struct : %w", err)
-		}
+		cfg.ChromeDirs = paths
 	default:
 		return errors.New("invalid os string")
 	}
@@ -130,16 +126,42 @@ func (cfg *Config) AddChromePath(path, os string) error {
 
 func (cfg *Config) DeleteChromePath(path, os string) error {
 	chromePath := chrome.PathConfig{OS: os, Path: path}
-	cfg.ChromeDirs = slices.DeleteFunc(cfg.ChromeDirs, func(c chrome.PathConfig) bool {
+	if !slices.Contains(cfg.ChromeDirs, chromePath) {
+		return fmt.Errorf("chrome path for %s %q does not exist", os, path)
+	}
+	paths := slices.DeleteFunc(slices.Clone(cfg.ChromeDirs), func(c chrome.PathConfig) bool {
 		return c.OS == chromePath.OS && c.Path == chromePath.Path
 	})
-	cfg.viper.Set("chrome_dirs", cfg.ChromeDirs)
+	cfg.viper.Set("chrome_dirs", paths)
 	if err := cfg.viper.WriteConfig(); err != nil {
+		cfg.viper.Set("chrome_dirs", cfg.ChromeDirs)
 		return fmt.Errorf("failed to save configuration: %w", err)
 	}
-	if err := cfg.viper.Unmarshal(cfg); err != nil {
-		return fmt.Errorf("unmarshalling config to struct : %w", err)
+	cfg.ChromeDirs = paths
+	return nil
+}
+
+// ReloadChrome rereads machine Chrome configuration into cfg.
+func (cfg *Config) ReloadChrome() error {
+	config := viper.New()
+	config.SetConfigFile(filepath.Join(cfg.ConfigDir, "marasi_config.yaml"))
+	config.SetConfigType("yaml")
+	config.SetDefault("chrome_dirs", []chrome.PathConfig{})
+	config.SetDefault("chrome_profiles", []string{})
+	if err := config.ReadInConfig(); err != nil {
+		return fmt.Errorf("reading configuration: %w", err)
 	}
+	loaded := Config{viper: config, ConfigDir: cfg.ConfigDir, DesktopOS: cfg.DesktopOS}
+	if err := config.Unmarshal(&loaded); err != nil {
+		return fmt.Errorf("unmarshalling config to struct: %w", err)
+	}
+	if loaded.ChromeDirs == nil {
+		loaded.ChromeDirs = []chrome.PathConfig{}
+	}
+	if loaded.ChromeProfiles == nil {
+		loaded.ChromeProfiles = []string{}
+	}
+	*cfg = loaded
 	return nil
 }
 
