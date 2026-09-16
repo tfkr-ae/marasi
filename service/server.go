@@ -43,6 +43,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		chromeLog = lifecycle.logWriter
 	}
 	chrome := NewChrome(proxy, listener, chromeLog)
+	chrome.events = events
 	server := &Server{
 		mux:               mux,
 		events:            events,

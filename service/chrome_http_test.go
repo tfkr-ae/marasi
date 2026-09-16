@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,9 +12,22 @@ import (
 	"testing"
 
 	"github.com/tfkr-ae/marasi"
+	marasichrome "github.com/tfkr-ae/marasi/chrome"
 )
 
 func TestChromeControlRoutes(t *testing.T) {
+	t.Run("should publish mutations from the serialized chrome operation", func(t *testing.T) {
+		server := newChromeHTTPServer(t, ListenerStatus{Status: ListenerInactive})
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		_, err := server.chrome.AddPath(context.Background(), marasichrome.PathConfig{OS: "linux", Path: "/custom/chrome"})
+		if err != nil {
+			t.Fatalf("adding Chrome path: %v", err)
+		}
+		assertChromeEvent(t, subscriber, "chrome.path.added", `{"items":[{"os":"linux","path":"/custom/chrome"}]}`)
+	})
+
 	t.Run("should list add and remove paths with exact responses and events", func(t *testing.T) {
 		server := newChromeHTTPServer(t, ListenerStatus{Status: ListenerInactive})
 		subscriber := server.events.subscribe()

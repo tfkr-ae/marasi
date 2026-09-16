@@ -57,6 +57,7 @@ type Chrome struct {
 	proxy      *marasi.Proxy
 	listener   interface{ Status() ListenerStatus }
 	logWriter  io.Writer
+	events     *eventBroadcaster
 	operations chan struct{}
 }
 
@@ -70,7 +71,7 @@ func NewChrome(proxy *marasi.Proxy, listener interface{ Status() ListenerStatus 
 	return &Chrome{proxy: proxy, listener: listener, logWriter: logWriter, operations: operations}
 }
 
-func addChromeRoutes(mux *http.ServeMux, chrome *Chrome, events *eventBroadcaster) {
+func addChromeRoutes(mux *http.ServeMux, chrome *Chrome) {
 	mux.HandleFunc("GET /chrome/path", func(w http.ResponseWriter, r *http.Request) {
 		paths, err := chrome.Paths(r.Context())
 		if err != nil {
@@ -91,7 +92,6 @@ func addChromeRoutes(mux *http.ServeMux, chrome *Chrome, events *eventBroadcaste
 			return
 		}
 		response := chromePaths(paths)
-		events.publish("chrome.path.added", response)
 		writeJSON(w, r, http.StatusOK, response)
 	})
 	mux.HandleFunc("DELETE /chrome/path", func(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +106,6 @@ func addChromeRoutes(mux *http.ServeMux, chrome *Chrome, events *eventBroadcaste
 			return
 		}
 		response := chromePaths(paths)
-		events.publish("chrome.path.removed", response)
 		writeJSON(w, r, http.StatusOK, response)
 	})
 	mux.HandleFunc("GET /chrome/profile", func(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +128,6 @@ func addChromeRoutes(mux *http.ServeMux, chrome *Chrome, events *eventBroadcaste
 			return
 		}
 		response := chromeProfiles(profiles)
-		events.publish("chrome.profile.added", response)
 		writeJSON(w, r, http.StatusOK, response)
 	})
 	mux.HandleFunc("DELETE /chrome/profile/{name}", func(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +141,6 @@ func addChromeRoutes(mux *http.ServeMux, chrome *Chrome, events *eventBroadcaste
 			return
 		}
 		response := chromeProfiles(profiles)
-		events.publish("chrome.profile.removed", response)
 		writeJSON(w, r, http.StatusOK, response)
 	})
 	mux.HandleFunc("POST /chrome/start", func(w http.ResponseWriter, r *http.Request) {
@@ -302,6 +299,9 @@ func (c *Chrome) AddProfile(ctx context.Context, name string) ([]string, error) 
 			return err
 		}
 		profiles = slices.Clone(c.proxy.Config.ChromeProfiles)
+		if c.events != nil {
+			c.events.publish("chrome.profile.added", chromeProfiles(profiles))
+		}
 		return nil
 	})
 	return profiles, err
@@ -332,6 +332,9 @@ func (c *Chrome) RemoveProfile(ctx context.Context, name string) ([]string, erro
 			return err
 		}
 		profiles = slices.Clone(c.proxy.Config.ChromeProfiles)
+		if c.events != nil {
+			c.events.publish("chrome.profile.removed", chromeProfiles(profiles))
+		}
 		return nil
 	})
 	return profiles, err
@@ -361,6 +364,9 @@ func (c *Chrome) AddPath(ctx context.Context, path marasichrome.PathConfig) ([]m
 			return err
 		}
 		paths = slices.Clone(c.proxy.Config.ChromeDirs)
+		if c.events != nil {
+			c.events.publish("chrome.path.added", chromePaths(paths))
+		}
 		return nil
 	})
 	return paths, err
@@ -380,6 +386,9 @@ func (c *Chrome) RemovePath(ctx context.Context, path marasichrome.PathConfig) (
 			return err
 		}
 		paths = slices.Clone(c.proxy.Config.ChromeDirs)
+		if c.events != nil {
+			c.events.publish("chrome.path.removed", chromePaths(paths))
+		}
 		return nil
 	})
 	return paths, err
