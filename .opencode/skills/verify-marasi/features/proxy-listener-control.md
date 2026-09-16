@@ -17,7 +17,7 @@ Start a service first. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --inst
 
 ## Driving it with shell and curl
 
-Use `listener status --json` and require `active` plus an assigned address. Run `listener address --json` and require the same `proxy_listener`. Run `listener stop --json`, require `inactive` and `proxy_listener: null`, and confirm `service status --json` still reports `running`. Run `listener start --port 0 --json`, then `listener update --port 0 --json`. Require a new non-empty address after each operation and use `curl --proxy` through the final address to prove it accepts proxy traffic.
+Use `listener status --json` and require `status` `active` plus an assigned `proxy_listener`. Run `listener address --json` and require the same `proxy_listener`. Run `listener stop --json`, require `status` `inactive` and `proxy_listener` `null`, and confirm `service status --json` still reports `running`. Run `listener start --port 0 --json`, then `listener update --port 0 --json`. Require a new non-empty address after each operation and use `curl --proxy` through the final address to prove it accepts proxy traffic.
 
 ## Gotchas
 

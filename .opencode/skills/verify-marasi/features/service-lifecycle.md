@@ -17,7 +17,7 @@ Build `dist/marasi`, then run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --i
 
 ## Driving it with shell and curl
 
-Run `service start --project-name "$VERIFY_PROJECT" --json`, then `service status --json`. Match `instance` to `$VERIFY_INSTANCE` and `version` to the build `VERSION`. Require `project` to be the canonical absolute path of `$VERIFY_CONFIG_DIR/projects/$VERIFY_PROJECT.marasi`. Require `proxy_listener` to contain `127.0.0.1` and an assigned decimal port. Run `service stop --json` and require its `instance` to equal `$VERIFY_INSTANCE` and its `status` to equal `stopped`. A second `service status --json` must exit non-zero with `{"error":"instance $VERIFY_INSTANCE is not running"}`.
+Run `service start --project-name "$VERIFY_PROJECT" --address 127.0.0.1 --port 0 --json`, then `service status --json`. Match `instance` to `$VERIFY_INSTANCE` and `version` to the build `VERSION`. Require `project` to be the canonical absolute path of `$VERIFY_CONFIG_DIR/projects/$VERIFY_PROJECT.marasi`. Require `proxy_listener` to contain `127.0.0.1` and an assigned decimal port. Run `service stop --json` and require its `instance` to equal `$VERIFY_INSTANCE` and its `status` to equal `stopped`. A second `service status --json` must exit non-zero with `{"error":"instance $VERIFY_INSTANCE is not running"}`.
 
 ## Gotchas
 
