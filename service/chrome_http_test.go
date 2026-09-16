@@ -161,6 +161,27 @@ func TestChromeStartRoute(t *testing.T) {
 			t.Fatalf("\nwanted:\nOS error only in instance log\ngot response:\n%s\ngot log:\n%s", response.Body.String(), log.String())
 		}
 	})
+
+	t.Run("should report executable discovery failure without exposing the OS error", func(t *testing.T) {
+		if runtime.GOOS != "linux" {
+			t.Skip("runs in the Chrome-free Linux verification environment")
+		}
+		t.Setenv("PATH", t.TempDir())
+		for _, path := range []string{"/usr/bin/google-chrome", "/usr/bin/chromium", "/snap/bin/chromium"} {
+			if _, err := os.Stat(path); err == nil {
+				t.Skipf("Chrome executable exists at %s", path)
+			}
+		}
+
+		server := newChromeHTTPServer(t, activeListenerStatus("127.0.0.1:43210"))
+		var log bytes.Buffer
+		server.chrome.logWriter = &log
+		response := requestChrome(server, http.MethodPost, "/chrome/start", "")
+		assertChromeError(t, response, http.StatusConflict, "chrome_unavailable")
+		if strings.Contains(response.Body.String(), "finding Chrome executable") || !strings.Contains(log.String(), "finding Chrome executable") {
+			t.Fatalf("\nwanted:\ndiscovery error only in instance log\ngot response:\n%s\ngot log:\n%s", response.Body.String(), log.String())
+		}
+	})
 }
 
 func newChromeHTTPServer(t *testing.T, status ListenerStatus) *Server {
