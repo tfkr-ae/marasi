@@ -26,6 +26,7 @@ type Server struct {
 	proxy             *marasi.Proxy
 	listener          ListenerLifecycle
 	projects          *ProjectLifecycle
+	chrome            *Chrome
 	version           string
 	instance          string
 	project           string
@@ -36,9 +37,12 @@ type Server struct {
 func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *ProjectLifecycle, stop func(), version, instance, project string) *Server {
 	mux := http.NewServeMux()
 	events := newEventBroadcaster()
+	chromeLog := io.Writer(io.Discard)
 	if lifecycle, ok := listener.(*listenerLifecycle); ok {
 		events = lifecycle.events
+		chromeLog = lifecycle.logWriter
 	}
+	chrome := NewChrome(proxy, listener, chromeLog)
 	server := &Server{
 		mux:               mux,
 		events:            events,
@@ -46,6 +50,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		proxy:             proxy,
 		listener:          listener,
 		projects:          projects,
+		chrome:            chrome,
 		version:           version,
 		instance:          instance,
 		project:           project,
@@ -57,7 +62,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 			}{Project: path})
 		}
 	}
-	addRoutes(mux, proxy, events, server.serveStatus, func() {
+	addRoutes(mux, proxy, chrome, events, server.serveStatus, func() {
 		server.Close()
 		stop()
 	})

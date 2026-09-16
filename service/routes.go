@@ -11,7 +11,7 @@ import (
 )
 
 // addRoutes registers control and traffic routes on mux.
-func addRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster, status http.HandlerFunc, stop func()) {
+func addRoutes(mux *http.ServeMux, proxy *marasi.Proxy, chrome *Chrome, events *eventBroadcaster, status http.HandlerFunc, stop func()) {
 	serviceMux := http.NewServeMux()
 	addServiceRoutes(serviceMux, status, stop)
 	mux.Handle("/service/", http.StripPrefix("/service", serviceMux))
@@ -20,6 +20,7 @@ func addRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster
 	addTestCaseRoutes(mux, proxy, events)
 	addFindingRoutes(mux, proxy, events)
 	addArtifactRoutes(mux, proxy, events)
+	addChromeRoutes(mux, chrome, events)
 }
 
 // addServiceRoutes registers the service status and stop routes.

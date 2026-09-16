@@ -1,11 +1,14 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +19,28 @@ import (
 	marasichrome "github.com/tfkr-ae/marasi/chrome"
 	"github.com/tfkr-ae/marasi/internal/filelock"
 )
+
+type chromePath struct {
+	OS   string `json:"os"`
+	Path string `json:"path"`
+}
+
+type chromePathList struct {
+	Items []chromePath `json:"items"`
+}
+
+type chromeProfile struct {
+	Name string `json:"name"`
+}
+
+type chromeProfileList struct {
+	Items []chromeProfile `json:"items"`
+}
+
+type chromeStartResponse struct {
+	Status  string `json:"status"`
+	Profile string `json:"profile"`
+}
 
 const chromeLockPollDelay = 10 * time.Millisecond
 
@@ -43,6 +68,223 @@ func NewChrome(proxy *marasi.Proxy, listener interface{ Status() ListenerStatus 
 	operations := make(chan struct{}, 1)
 	operations <- struct{}{}
 	return &Chrome{proxy: proxy, listener: listener, logWriter: logWriter, operations: operations}
+}
+
+func addChromeRoutes(mux *http.ServeMux, chrome *Chrome, events *eventBroadcaster) {
+	mux.HandleFunc("GET /chrome/path", func(w http.ResponseWriter, r *http.Request) {
+		paths, err := chrome.Paths(r.Context())
+		if err != nil {
+			writeChromeError(w, r, err)
+			return
+		}
+		writeJSON(w, r, http.StatusOK, chromePaths(paths))
+	})
+	mux.HandleFunc("POST /chrome/path", func(w http.ResponseWriter, r *http.Request) {
+		path, err := decodeChromePath(r)
+		if err != nil {
+			writeChromeError(w, r, err)
+			return
+		}
+		paths, err := chrome.AddPath(r.Context(), path)
+		if err != nil {
+			writeChromeError(w, r, err)
+			return
+		}
+		response := chromePaths(paths)
+		events.publish("chrome.path.added", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
+	mux.HandleFunc("DELETE /chrome/path", func(w http.ResponseWriter, r *http.Request) {
+		path, err := decodeChromePath(r)
+		if err != nil {
+			writeChromeError(w, r, err)
+			return
+		}
+		paths, err := chrome.RemovePath(r.Context(), path)
+		if err != nil {
+			writeChromeError(w, r, err)
+			return
+		}
+		response := chromePaths(paths)
+		events.publish("chrome.path.removed", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
+	mux.HandleFunc("GET /chrome/profile", func(w http.ResponseWriter, r *http.Request) {
+		profiles, err := chrome.Profiles(r.Context())
+		if err != nil {
+			writeChromeError(w, r, err)
+			return
+		}
+		writeJSON(w, r, http.StatusOK, chromeProfiles(profiles))
+	})
+	mux.HandleFunc("POST /chrome/profile", func(w http.ResponseWriter, r *http.Request) {
+		name, err := decodeChromeProfile(r)
+		if err != nil {
+			writeChromeError(w, r, err)
+			return
+		}
+		profiles, err := chrome.AddProfile(r.Context(), name)
+		if err != nil {
+			writeChromeError(w, r, err)
+			return
+		}
+		response := chromeProfiles(profiles)
+		events.publish("chrome.profile.added", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
+	mux.HandleFunc("DELETE /chrome/profile/{name}", func(w http.ResponseWriter, r *http.Request) {
+		if !emptyRequestBody(r) {
+			writeChromeError(w, r, ErrInvalidChromeRequest)
+			return
+		}
+		profiles, err := chrome.RemoveProfile(r.Context(), r.PathValue("name"))
+		if err != nil {
+			writeChromeError(w, r, err)
+			return
+		}
+		response := chromeProfiles(profiles)
+		events.publish("chrome.profile.removed", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
+	mux.HandleFunc("POST /chrome/start", func(w http.ResponseWriter, r *http.Request) {
+		profile, err := decodeChromeStart(r)
+		if err != nil {
+			writeChromeError(w, r, err)
+			return
+		}
+		profile, err = chrome.Start(r.Context(), profile)
+		if err != nil {
+			writeChromeError(w, r, err)
+			return
+		}
+		writeJSON(w, r, http.StatusOK, chromeStartResponse{Status: "started", Profile: profile})
+	})
+}
+
+func decodeChromePath(r *http.Request) (marasichrome.PathConfig, error) {
+	fields, err := decodeChromeObject(r, false)
+	if err != nil || len(fields) != 2 {
+		return marasichrome.PathConfig{}, ErrInvalidChromeRequest
+	}
+	var path marasichrome.PathConfig
+	if err := decodeChromeString(fields, "os", &path.OS); err != nil {
+		return marasichrome.PathConfig{}, err
+	}
+	if err := decodeChromeString(fields, "path", &path.Path); err != nil || !validChromePath(path) {
+		return marasichrome.PathConfig{}, ErrInvalidChromeRequest
+	}
+	return path, nil
+}
+
+func decodeChromeProfile(r *http.Request) (string, error) {
+	fields, err := decodeChromeObject(r, false)
+	if err != nil || len(fields) != 1 {
+		return "", ErrInvalidChromeRequest
+	}
+	var name string
+	if err := decodeChromeString(fields, "name", &name); err != nil {
+		return "", err
+	}
+	if _, err := validProfileName(name); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+func decodeChromeStart(r *http.Request) (string, error) {
+	fields, err := decodeChromeObject(r, true)
+	if err != nil || len(fields) > 1 {
+		return "", ErrInvalidChromeRequest
+	}
+	if len(fields) == 0 {
+		return "", nil
+	}
+	var profile string
+	if err := decodeChromeString(fields, "profile", &profile); err != nil || profile == "" {
+		return "", ErrInvalidChromeRequest
+	}
+	return profile, nil
+}
+
+func decodeChromeObject(r *http.Request, allowEmpty bool) (map[string]json.RawMessage, error) {
+	if r.Body == nil {
+		if allowEmpty {
+			return map[string]json.RawMessage{}, nil
+		}
+		return nil, ErrInvalidChromeRequest
+	}
+	decoder := json.NewDecoder(r.Body)
+	var fields map[string]json.RawMessage
+	if err := decoder.Decode(&fields); err != nil {
+		if allowEmpty && errors.Is(err, io.EOF) {
+			return map[string]json.RawMessage{}, nil
+		}
+		return nil, ErrInvalidChromeRequest
+	}
+	if fields == nil {
+		return nil, ErrInvalidChromeRequest
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, ErrInvalidChromeRequest
+	}
+	return fields, nil
+}
+
+func decodeChromeString(fields map[string]json.RawMessage, name string, target *string) error {
+	raw, ok := fields[name]
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return ErrInvalidChromeRequest
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		return ErrInvalidChromeRequest
+	}
+	return nil
+}
+
+func emptyRequestBody(r *http.Request) bool {
+	if r.Body == nil {
+		return true
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1))
+	return err == nil && len(body) == 0
+}
+
+func chromePaths(paths []marasichrome.PathConfig) chromePathList {
+	items := make([]chromePath, len(paths))
+	for i, path := range paths {
+		items[i] = chromePath{OS: path.OS, Path: path.Path}
+	}
+	return chromePathList{Items: items}
+}
+
+func chromeProfiles(profiles []string) chromeProfileList {
+	items := make([]chromeProfile, len(profiles))
+	for i, profile := range profiles {
+		items[i] = chromeProfile{Name: profile}
+	}
+	return chromeProfileList{Items: items}
+}
+
+func writeChromeError(w http.ResponseWriter, r *http.Request, err error) {
+	status := http.StatusInternalServerError
+	code := "internal_server_error"
+	switch {
+	case errors.Is(err, ErrInvalidChromeRequest):
+		status, code = http.StatusBadRequest, "invalid_chrome_request"
+	case errors.Is(err, ErrChromeNotFound):
+		status, code = http.StatusNotFound, "not_found"
+	case errors.Is(err, ErrChromePathAlreadyExists):
+		status, code = http.StatusConflict, "path_already_exists"
+	case errors.Is(err, ErrChromeProfileAlreadyExists):
+		status, code = http.StatusConflict, "profile_already_exists"
+	case errors.Is(err, ErrListenerInactive):
+		status, code = http.StatusConflict, "listener_inactive"
+	case errors.Is(err, ErrChromeUnavailable):
+		status, code = http.StatusConflict, "chrome_unavailable"
+	}
+	writeJSON(w, r, status, struct {
+		Error string `json:"error"`
+	}{Error: code})
 }
 
 // AddProfile registers a Chrome profile without creating its user-data directory.
