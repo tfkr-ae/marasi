@@ -18,6 +18,7 @@ type stubReportingRepository struct {
 	domain.ReportingRepository
 	testCases map[uuid.UUID]*domain.TestCase
 	order     []uuid.UUID
+	traffic   map[uuid.UUID]*domain.RequestResponseSummary
 }
 
 func (repo *stubReportingRepository) SaveTestCase(testCase *domain.TestCase) error {
@@ -54,6 +55,46 @@ func (repo *stubReportingRepository) GetTestCase(id uuid.UUID) (*domain.TestCase
 	return &copy, nil
 }
 
+func (repo *stubReportingRepository) GetTestCaseRequests(id uuid.UUID) ([]*domain.RequestResponseSummary, error) {
+	testCase, ok := repo.testCases[id]
+	if !ok {
+		return nil, sql.ErrNoRows
+	}
+	items := make([]*domain.RequestResponseSummary, 0, len(testCase.Requests))
+	for _, requestID := range testCase.Requests {
+		items = append(items, repo.traffic[requestID])
+	}
+	return items, nil
+}
+
+func (repo *stubReportingRepository) LinkRequestToTestCase(testCaseID, requestID uuid.UUID) error {
+	testCase, ok := repo.testCases[testCaseID]
+	if !ok {
+		return sql.ErrNoRows
+	}
+	for _, linkedID := range testCase.Requests {
+		if linkedID == requestID {
+			return domain.ErrReportingAlreadyLinked
+		}
+	}
+	testCase.Requests = append(testCase.Requests, requestID)
+	return nil
+}
+
+func (repo *stubReportingRepository) UnlinkRequestFromTestCase(testCaseID, requestID uuid.UUID) error {
+	testCase, ok := repo.testCases[testCaseID]
+	if !ok {
+		return sql.ErrNoRows
+	}
+	for i, linkedID := range testCase.Requests {
+		if linkedID == requestID {
+			testCase.Requests = append(testCase.Requests[:i], testCase.Requests[i+1:]...)
+			return nil
+		}
+	}
+	return domain.ErrReportingNotLinked
+}
+
 func (repo *stubReportingRepository) DeleteTestCase(id uuid.UUID) error {
 	if _, ok := repo.testCases[id]; !ok {
 		return sql.ErrNoRows
@@ -63,6 +104,57 @@ func (repo *stubReportingRepository) DeleteTestCase(id uuid.UUID) error {
 }
 
 func TestTestCaseControlAPI(t *testing.T) {
+	t.Run("links, returns, and unlinks traffic", func(t *testing.T) {
+		testCaseID := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
+		requestID := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+		requestedAt := time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
+		repo := &stubReportingRepository{
+			testCases: map[uuid.UUID]*domain.TestCase{testCaseID: {ID: testCaseID, Title: "Access control", Tags: []string{}}},
+			traffic:   map[uuid.UUID]*domain.RequestResponseSummary{requestID: {ID: requestID, Scheme: "https", Method: "GET", Host: "example.com", Path: "/account", Status: "N/A", StatusCode: -1, Length: "0", Metadata: map[string]any{}, RequestedAt: requestedAt}},
+		}
+		trafficRepo := &stubTrafficRepository{row: &domain.RequestResponseRow{Request: domain.ProxyRequest{ID: requestID}}}
+		server := newTestServer(&marasi.Proxy{ReportingRepo: repo, TrafficRepo: trafficRepo}, func() {})
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/test-case/"+testCaseID.String()+"/traffic", strings.NewReader(`{"id":"`+requestID.String()+`"}`)))
+		wantLink := `{"test_case_id":"` + testCaseID.String() + `","id":"` + requestID.String() + `"}` + "\n"
+		if response.Code != http.StatusOK || response.Body.String() != wantLink {
+			t.Fatalf("wanted linked response %s, got %d %s", wantLink, response.Code, response.Body.String())
+		}
+		if event := <-subscriber.events; event.name != "test-case.linked" || string(event.data) != strings.TrimSpace(wantLink) {
+			t.Fatalf("wanted linked event, got %s %s", event.name, event.data)
+		}
+
+		response = httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/test-case/"+testCaseID.String(), nil))
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"items":[{"id":"`+requestID.String()+`","scheme":"https","method":"GET"`) || !strings.Contains(response.Body.String(), `"status_code":-1`) || !strings.Contains(response.Body.String(), `"responded_at":null`) {
+			t.Fatalf("wanted linked in-flight traffic summary, got %d %s", response.Code, response.Body.String())
+		}
+
+		response = httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/test-case/"+testCaseID.String()+"/traffic", strings.NewReader(`{"id":"`+requestID.String()+`"}`)))
+		if response.Code != http.StatusConflict || response.Body.String() != "{\"error\":\"already_linked\"}\n" {
+			t.Fatalf("wanted duplicate conflict, got %d %s", response.Code, response.Body.String())
+		}
+
+		response = httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/test-case/"+testCaseID.String()+"/traffic/"+requestID.String(), nil))
+		if response.Code != http.StatusOK || response.Body.String() != wantLink {
+			t.Fatalf("wanted unlinked response %s, got %d %s", wantLink, response.Code, response.Body.String())
+		}
+		if event := <-subscriber.events; event.name != "test-case.unlinked" || string(event.data) != strings.TrimSpace(wantLink) {
+			t.Fatalf("wanted unlinked event, got %s %s", event.name, event.data)
+		}
+
+		response = httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/test-case/"+testCaseID.String()+"/traffic/"+requestID.String(), nil))
+		if response.Code != http.StatusNotFound || response.Body.String() != "{\"error\":\"not_found\"}\n" {
+			t.Fatalf("wanted missing link not found, got %d %s", response.Code, response.Body.String())
+		}
+	})
+
 	t.Run("creates a title-only test case and publishes it", func(t *testing.T) {
 		repo := &stubReportingRepository{}
 		server := newTestServer(&marasi.Proxy{ReportingRepo: repo}, func() {})

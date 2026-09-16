@@ -46,7 +46,14 @@ type testCaseDetail struct {
 	Artifacts []any            `json:"artifacts"`
 }
 
+type testCaseTrafficResponse struct {
+	TestCaseID uuid.UUID `json:"test_case_id"`
+	ID         uuid.UUID `json:"id"`
+}
+
 func addTestCaseRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+	addTestCaseChecklistRoute(mux, proxy)
+
 	mux.HandleFunc("GET /test-case", func(w http.ResponseWriter, r *http.Request) {
 		repo, err := proxy.GetReportingRepo()
 		if err != nil {
@@ -123,11 +130,87 @@ func addTestCaseRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBro
 			}
 			return
 		}
+		members, err := repo.GetTestCaseRequests(id)
+		if err != nil {
+			writeTestCaseError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		items := make([]trafficSummary, 0, len(members))
+		for _, member := range members {
+			items = append(items, trafficSummaryFromDomain(member))
+		}
 		writeJSON(w, r, http.StatusOK, testCaseDetail{
 			testCaseResponse: testCaseResponseFromDomain(testCase),
-			Items:            []trafficSummary{},
+			Items:            items,
 			Artifacts:        []any{},
 		})
+	})
+
+	mux.HandleFunc("POST /test-case/{id}/traffic", func(w http.ResponseWriter, r *http.Request) {
+		testCaseID, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeTestCaseError(w, r, http.StatusBadRequest, "bad_request")
+			return
+		}
+		requestID, err := decodeTrafficLink(r)
+		if err != nil {
+			writeTestCaseError(w, r, http.StatusBadRequest, "invalid_test_case_request")
+			return
+		}
+		repo, err := proxy.GetReportingRepo()
+		if err != nil {
+			writeTestCaseError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		if _, err := repo.GetTestCase(testCaseID); err != nil {
+			writeTestCaseRepositoryError(w, r, err)
+			return
+		}
+		trafficRepo, err := proxy.GetTrafficRepo()
+		if err != nil {
+			writeTestCaseError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		if _, err := trafficRepo.GetRequestResponseRow(requestID); err != nil {
+			writeTestCaseError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		if err := repo.LinkRequestToTestCase(testCaseID, requestID); err != nil {
+			writeTestCaseRepositoryError(w, r, err)
+			return
+		}
+		response := testCaseTrafficResponse{TestCaseID: testCaseID, ID: requestID}
+		events.publish("test-case.linked", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
+
+	mux.HandleFunc("DELETE /test-case/{id}/traffic/{request_id}", func(w http.ResponseWriter, r *http.Request) {
+		testCaseID, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeTestCaseError(w, r, http.StatusBadRequest, "bad_request")
+			return
+		}
+		requestID, err := uuid.Parse(r.PathValue("request_id"))
+		if err != nil {
+			writeTestCaseError(w, r, http.StatusBadRequest, "bad_request")
+			return
+		}
+		repo, err := proxy.GetReportingRepo()
+		if err != nil {
+			writeTestCaseError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		if _, err := repo.GetTestCase(testCaseID); err != nil {
+			writeTestCaseRepositoryError(w, r, err)
+			return
+		}
+		if err := repo.UnlinkRequestFromTestCase(testCaseID, requestID); err != nil {
+			writeTestCaseRepositoryError(w, r, err)
+			return
+		}
+		response := testCaseTrafficResponse{TestCaseID: testCaseID, ID: requestID}
+		events.publish("test-case.unlinked", response)
+		writeJSON(w, r, http.StatusOK, response)
 	})
 
 	mux.HandleFunc("POST /test-case/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -241,6 +324,24 @@ func decodeTestCaseMutation(r *http.Request) (testCaseMutation, error) {
 	return mutation, nil
 }
 
+func decodeTrafficLink(r *http.Request) (uuid.UUID, error) {
+	if r.Body == nil {
+		return uuid.Nil, errors.New("invalid traffic link")
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := decoder.Decode(&body); err != nil {
+		return uuid.Nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return uuid.Nil, errors.New("invalid traffic link")
+	}
+	return uuid.Parse(body.ID)
+}
+
 func applyTestCaseMutation(testCase *domain.TestCase, mutation testCaseMutation) {
 	if mutation.Title != nil {
 		testCase.Title = *mutation.Title
@@ -282,6 +383,14 @@ func writeTestCaseError(w http.ResponseWriter, r *http.Request, status int, code
 }
 
 func writeTestCaseRepositoryError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, domain.ErrReportingAlreadyLinked) {
+		writeTestCaseError(w, r, http.StatusConflict, "already_linked")
+		return
+	}
+	if errors.Is(err, domain.ErrReportingNotLinked) {
+		writeTestCaseError(w, r, http.StatusNotFound, "not_found")
+		return
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		writeTestCaseError(w, r, http.StatusNotFound, "not_found")
 		return

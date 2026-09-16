@@ -28,6 +28,8 @@ var testCaseUpdateDescription string
 var testCaseUpdateCategory string
 var testCaseUpdateTags []string
 var testCaseUpdateNote string
+var testCaseLinkRequest string
+var testCaseUnlinkRequest string
 
 type testCaseRequest struct {
 	Title       *string   `json:"title,omitempty"`
@@ -49,7 +51,11 @@ func init() {
 	testCaseUpdateCmd.Flags().StringVar(&testCaseUpdateCategory, "category", "", "Test case category")
 	testCaseUpdateCmd.Flags().StringSliceVar(&testCaseUpdateTags, "tag", nil, "Test case tag")
 	testCaseUpdateCmd.Flags().StringVar(&testCaseUpdateNote, "note", "", "Test case note")
-	testCaseCmd.AddCommand(testCaseCreateCmd, testCaseListCmd, testCaseGetCmd, testCaseUpdateCmd, testCaseDeleteCmd)
+	testCaseLinkCmd.Flags().StringVar(&testCaseLinkRequest, "request", "", "Request UUID")
+	testCaseLinkCmd.MarkFlagRequired("request")
+	testCaseUnlinkCmd.Flags().StringVar(&testCaseUnlinkRequest, "request", "", "Request UUID")
+	testCaseUnlinkCmd.MarkFlagRequired("request")
+	testCaseCmd.AddCommand(testCaseCreateCmd, testCaseListCmd, testCaseGetCmd, testCaseUpdateCmd, testCaseDeleteCmd, testCaseLinkCmd, testCaseUnlinkCmd, testCaseChecklistCmd)
 	rootCmd.AddCommand(testCaseCmd)
 }
 
@@ -101,6 +107,15 @@ var testCaseGetCmd = &cobra.Command{
 	},
 }
 
+var testCaseChecklistCmd = &cobra.Command{
+	Use:   "checklist",
+	Short: "List predefined test cases",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return runTestCaseCommand(cmd, "checklist", "", testCaseRequest{})
+	},
+}
+
 var testCaseUpdateCmd = &cobra.Command{
 	Use:   "update uuid",
 	Short: "Update a test case",
@@ -141,6 +156,96 @@ var testCaseDeleteCmd = &cobra.Command{
 	},
 }
 
+var testCaseLinkCmd = &cobra.Command{
+	Use:   "link uuid",
+	Short: "Link traffic to a test case",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runTrafficMembershipCommand(cmd, "test-case", args[0], testCaseLinkRequest, true)
+	},
+}
+
+var testCaseUnlinkCmd = &cobra.Command{
+	Use:   "unlink uuid",
+	Short: "Unlink traffic from a test case",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runTrafficMembershipCommand(cmd, "test-case", args[0], testCaseUnlinkRequest, false)
+	},
+}
+
+func runTrafficMembershipCommand(cmd *cobra.Command, resource, parentID, requestID string, link bool) error {
+	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	response, err := controlTrafficMembership(ctx, instancePath, instance, jsonOutput, resource, parentID, requestID, link)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		_, err = cmd.OutOrStdout().Write(response)
+		return err
+	}
+	action := "unlinked"
+	preposition := "from"
+	label := resource
+	if link {
+		action = "linked"
+		preposition = "to"
+	}
+	if resource == "test-case" {
+		label = "test case"
+	}
+	_, err = fmt.Fprintf(cmd.ErrOrStderr(), "request %s %s %s %s %s successfully\n", requestID, action, preposition, label, parentID)
+	return err
+}
+
+func controlTrafficMembership(ctx context.Context, instancePath, instanceName string, asJSON bool, resource, parentID, requestID string, link bool) ([]byte, error) {
+	method := http.MethodDelete
+	path := "/" + resource + "/" + parentID + "/traffic/" + requestID
+	operation := "unlinking request"
+	var body io.Reader
+	if link {
+		method = http.MethodPost
+		path = "/" + resource + "/" + parentID + "/traffic"
+		operation = "linking request"
+		encoded, err := json.Marshal(struct {
+			ID string `json:"id"`
+		}{ID: requestID})
+		if err != nil {
+			return nil, fmt.Errorf("encoding traffic link: %w", err)
+		}
+		body = bytes.NewReader(encoded)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, body)
+	if err != nil {
+		return nil, fmt.Errorf("creating traffic membership request: %w", err)
+	}
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	client := service.NewClient(instancePath + ".sock")
+	defer client.Close()
+	response, err := client.Do(request)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("instance %s is not running", instanceName)
+	}
+	responseBody, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil || closeErr != nil {
+		return nil, errors.Join(wrapError("reading traffic membership response", readErr), wrapError("closing traffic membership response", closeErr))
+	}
+	if response.StatusCode != http.StatusOK {
+		if asJSON {
+			return nil, controlAPIError(operation, response.Status, responseBody)
+		}
+		return nil, fmt.Errorf("%s: %s", operation, response.Status)
+	}
+	return responseBody, nil
+}
+
 func runTestCaseCommand(cmd *cobra.Command, action, id string, payload testCaseRequest) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -154,6 +259,9 @@ func runTestCaseCommand(cmd *cobra.Command, action, id string, payload testCaseR
 	}
 	if action == "list" {
 		return writeTestCaseListHuman(response, cmd.OutOrStdout())
+	}
+	if action == "checklist" {
+		return writeTestCaseChecklistHuman(response, cmd.OutOrStdout())
 	}
 	if action == "get" {
 		return writeTestCaseGetHuman(response, cmd.OutOrStdout())
@@ -182,6 +290,8 @@ func controlTestCase(ctx context.Context, instancePath, instanceName string, asJ
 		method, path, operation = http.MethodPost, path+"/"+id, "updating test case"
 	case "delete":
 		method, path, operation = http.MethodDelete, path+"/"+id, "deleting test case"
+	case "checklist":
+		path, operation = path+"/checklist", "listing test case checklist"
 	}
 	if method == http.MethodPost {
 		encoded, err := json.Marshal(payload)
@@ -255,4 +365,21 @@ func writeTestCaseGetHuman(body []byte, stdout io.Writer) error {
 	}
 	_, err := fmt.Fprintf(stdout, "id: %s\ntitle: %s\ndescription: %s\ncategory: %s\ntags: %s\nnote: %s\ncreated_at: %s\n", response.ID, response.Title, response.Description, response.Category, strings.Join(response.Tags, ","), response.Note, response.CreatedAt)
 	return err
+}
+
+func writeTestCaseChecklistHuman(body []byte, stdout io.Writer) error {
+	var response struct {
+		Items []struct {
+			Title    string `json:"title"`
+			Category string `json:"category"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return fmt.Errorf("decoding test case checklist: %w", err)
+	}
+	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	for _, item := range response.Items {
+		fmt.Fprintf(writer, "%s\t%s\n", item.Title, item.Category)
+	}
+	return writer.Flush()
 }

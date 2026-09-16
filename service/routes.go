@@ -18,6 +18,7 @@ func addRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster
 	addTrafficRoutes(mux, proxy)
 	addLaunchpadRoutes(mux, proxy, events)
 	addTestCaseRoutes(mux, proxy, events)
+	addFindingRoutes(mux, proxy, events)
 }
 
 // addServiceRoutes registers the service status and stop routes.

@@ -638,9 +638,16 @@ func (repo *Repository) LinkRequestToTestCase(tcID, reqID uuid.UUID) error {
 		VALUES (?, ?) 
 		ON CONFLICT(test_case_id, request_id) DO NOTHING
 	`
-	_, err := repo.dbConn.Exec(query, tcID, reqID)
+	result, err := repo.dbConn.Exec(query, tcID, reqID)
 	if err != nil {
 		return fmt.Errorf("linking request %s to test case %s: %w", reqID, tcID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking linked test case rows: %w", err)
+	}
+	if rowsAffected == 0 {
+		return domain.ErrReportingAlreadyLinked
 	}
 	return nil
 }
@@ -648,11 +655,39 @@ func (repo *Repository) LinkRequestToTestCase(tcID, reqID uuid.UUID) error {
 // UnlinkRequestFromTestCase removes the association between a test case and a request.
 func (repo *Repository) UnlinkRequestFromTestCase(tcID, reqID uuid.UUID) error {
 	query := `DELETE FROM test_case_requests WHERE test_case_id = ? AND request_id = ?`
-	_, err := repo.dbConn.Exec(query, tcID, reqID)
+	result, err := repo.dbConn.Exec(query, tcID, reqID)
 	if err != nil {
 		return fmt.Errorf("unlinking request %s from test case %s: %w", reqID, tcID, err)
 	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking unlinked test case rows: %w", err)
+	}
+	if rowsAffected == 0 {
+		return domain.ErrReportingNotLinked
+	}
 	return nil
+}
+
+// GetTestCaseRequests retrieves oldest-first traffic summaries linked to a test case.
+func (repo *Repository) GetTestCaseRequests(id uuid.UUID) ([]*domain.RequestResponseSummary, error) {
+	var rows []*dbRequestResponseSummary
+	query := `SELECT
+			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
+			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
+			  json_remove(r.metadata, '$.prettified-request', '$.prettified-response') AS metadata
+		      FROM request r
+		      JOIN test_case_requests tcr ON r.id = tcr.request_id
+		      WHERE tcr.test_case_id = ?
+		      ORDER BY r.requested_at ASC, r.id ASC`
+	if err := repo.dbConn.Select(&rows, query, id); err != nil {
+		return nil, fmt.Errorf("getting test case requests: %w", err)
+	}
+	items := make([]*domain.RequestResponseSummary, len(rows))
+	for i, row := range rows {
+		items[i] = toDomainRequestResponseSummary(row)
+	}
+	return items, nil
 }
 
 // LinkRequestToFinding creates an association between a finding and a request.
@@ -662,9 +697,16 @@ func (repo *Repository) LinkRequestToFinding(fID, reqID uuid.UUID) error {
 		VALUES (?, ?) 
 		ON CONFLICT(finding_id, request_id) DO NOTHING
 	`
-	_, err := repo.dbConn.Exec(query, fID, reqID)
+	result, err := repo.dbConn.Exec(query, fID, reqID)
 	if err != nil {
 		return fmt.Errorf("linking request %s to finding %s: %w", reqID, fID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking linked finding rows: %w", err)
+	}
+	if rowsAffected == 0 {
+		return domain.ErrReportingAlreadyLinked
 	}
 	return nil
 }
@@ -672,9 +714,37 @@ func (repo *Repository) LinkRequestToFinding(fID, reqID uuid.UUID) error {
 // UnlinkRequestFromFinding removes the association between a finding and a request.
 func (repo *Repository) UnlinkRequestFromFinding(fID, reqID uuid.UUID) error {
 	query := `DELETE FROM finding_requests WHERE finding_id = ? AND request_id = ?`
-	_, err := repo.dbConn.Exec(query, fID, reqID)
+	result, err := repo.dbConn.Exec(query, fID, reqID)
 	if err != nil {
 		return fmt.Errorf("unlinking request %s from finding %s: %w", reqID, fID, err)
 	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking unlinked finding rows: %w", err)
+	}
+	if rowsAffected == 0 {
+		return domain.ErrReportingNotLinked
+	}
 	return nil
+}
+
+// GetFindingRequests retrieves oldest-first traffic summaries linked to a finding.
+func (repo *Repository) GetFindingRequests(id uuid.UUID) ([]*domain.RequestResponseSummary, error) {
+	var rows []*dbRequestResponseSummary
+	query := `SELECT
+			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
+			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
+			  json_remove(r.metadata, '$.prettified-request', '$.prettified-response') AS metadata
+		      FROM request r
+		      JOIN finding_requests fr ON r.id = fr.request_id
+		      WHERE fr.finding_id = ?
+		      ORDER BY r.requested_at ASC, r.id ASC`
+	if err := repo.dbConn.Select(&rows, query, id); err != nil {
+		return nil, fmt.Errorf("getting finding requests: %w", err)
+	}
+	items := make([]*domain.RequestResponseSummary, len(rows))
+	for i, row := range rows {
+		items[i] = toDomainRequestResponseSummary(row)
+	}
+	return items, nil
 }

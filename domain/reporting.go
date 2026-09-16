@@ -1,10 +1,17 @@
 package domain
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrReportingAlreadyLinked means the request is already linked to the parent.
+var ErrReportingAlreadyLinked = errors.New("request already linked")
+
+// ErrReportingNotLinked means the requested parent/request link does not exist.
+var ErrReportingNotLinked = errors.New("request is not linked")
 
 // TestCase represents a single security test case with its metadata and associated data.
 type TestCase struct {
@@ -130,6 +137,8 @@ type ReportingRepository interface {
 	LinkRequestToTestCase(uuid.UUID, uuid.UUID) error
 	// UnlinkRequestFromTestCase removes the association between a request and a test case.
 	UnlinkRequestFromTestCase(uuid.UUID, uuid.UUID) error
+	// GetTestCaseRequests retrieves oldest-first traffic summaries linked to a test case.
+	GetTestCaseRequests(uuid.UUID) ([]*RequestResponseSummary, error)
 
 	// GetFinding retrieves a single finding by its ID.
 	GetFinding(uuid.UUID) (*Finding, error)
@@ -143,6 +152,8 @@ type ReportingRepository interface {
 	LinkRequestToFinding(uuid.UUID, uuid.UUID) error
 	// UnlinkRequestFromFinding removes the association between a request and a finding.
 	UnlinkRequestFromFinding(uuid.UUID, uuid.UUID) error
+	// GetFindingRequests retrieves oldest-first traffic summaries linked to a finding.
+	GetFindingRequests(uuid.UUID) ([]*RequestResponseSummary, error)
 
 	// SaveArtifact persists an artifact and its raw data.
 	SaveArtifact(*Artifact) error

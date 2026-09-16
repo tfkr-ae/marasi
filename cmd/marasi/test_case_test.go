@@ -72,6 +72,23 @@ func TestTestCaseCommands(t *testing.T) {
 			path:       "/test-case/" + id,
 			wantStderr: "test case " + id + " deleted successfully\n",
 		},
+		{
+			name:       "link",
+			args:       []string{"test-case", "link", id, "--request", "0193802f-f0e7-73d9-a764-06d21e367809"},
+			response:   `{"test_case_id":"` + id + `","id":"0193802f-f0e7-73d9-a764-06d21e367809"}` + "\n",
+			method:     http.MethodPost,
+			path:       "/test-case/" + id + "/traffic",
+			body:       `{"id":"0193802f-f0e7-73d9-a764-06d21e367809"}`,
+			wantStderr: "request 0193802f-f0e7-73d9-a764-06d21e367809 linked to test case " + id + " successfully\n",
+		},
+		{
+			name:       "unlink",
+			args:       []string{"test-case", "unlink", id, "--request", "0193802f-f0e7-73d9-a764-06d21e367809"},
+			response:   `{"test_case_id":"` + id + `","id":"0193802f-f0e7-73d9-a764-06d21e367809"}` + "\n",
+			method:     http.MethodDelete,
+			path:       "/test-case/" + id + "/traffic/0193802f-f0e7-73d9-a764-06d21e367809",
+			wantStderr: "request 0193802f-f0e7-73d9-a764-06d21e367809 unlinked from test case " + id + " successfully\n",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			configDir := serviceConfigDir(t)
@@ -106,7 +123,7 @@ func TestTestCaseCommands(t *testing.T) {
 
 	t.Run("rejects missing create and update flags before dialing", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		for _, args := range [][]string{{"test-case", "create"}, {"test-case", "create", "--title", ""}, {"test-case", "update", id}, {"test-case", "update", id, "--title", ""}} {
+		for _, args := range [][]string{{"test-case", "create"}, {"test-case", "create", "--title", ""}, {"test-case", "update", id}, {"test-case", "update", id, "--title", ""}, {"test-case", "link", id}, {"test-case", "unlink", id}} {
 			commandArgs := append([]string{"--config-dir", configDir}, args...)
 			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
 				t.Fatalf("wanted invalid invocation, accepted %v", args)
