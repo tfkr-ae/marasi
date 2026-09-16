@@ -21,7 +21,7 @@ Start a local HTTP origin that returns a unique body. Start `events` first and w
 ## Gotchas
 
 - `NO_PROXY` commonly contains localhost. `--proxy` alone may bypass Marasi, so include `--noproxy ''`.
-- The helper covers HTTP. Changes to certificates, CONNECT handling, or TLS interception need a separate HTTPS drive. Trust `$VERIFY_CONFIG_DIR/marasi_cert.pem` with `curl --cacert` and send an `https://` request through the proxy.
+- The helper covers HTTP. Changes to certificates, CONNECT handling, or TLS interception need a separate HTTPS drive. Trust `$VERIFY_CONFIG_DIR/marasi_cert.pem` with `curl --cacert` and send an `https://` request through the proxy. The origin certificate must be trusted by the proxy's outbound transport. A self-signed local origin returns 502; use a publicly trusted host.
 - `events` is live and has no replay. Subscribe before the request. stderr is `: connected`; stdout is `event-name json`.
 - A successful origin response alone does not prove capture. The events CLI, traffic CLI, and database row are required evidence.
 - The local origin is a real production boundary. Do not replace Marasi's proxy or repository with test doubles.

@@ -28,4 +28,5 @@ Run `test-case create --title "Auth bypass" --category Access --tag auth --note 
 - Checklist items have no ids. The first `test-case checklist` writes `$VERIFY_CONFIG_DIR/test_cases.yml` from the bundled default if that file is missing.
 - Duplicate link of the same request to the same case returns a conflict.
 - Link, unlink, get, and delete look up ids in the currently open project. After `project open`, previous case and request ids are not visible.
+- Human `test-case get` prints scalar fields only. Linked traffic (`items`) and `artifacts` appear in `--json`.
 - `test-case get --json` includes an `artifacts` array filled by `artifact upload --test-case`.

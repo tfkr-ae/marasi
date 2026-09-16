@@ -1,6 +1,6 @@
 ---
 name: verify-marasi
-description: Verify Marasi's CLI-driven proxy service when a change needs proof through a real launched instance, a proxied HTTP request, persisted traffic inspection, event subscription, launchpad replay, test-case control, finding control, or artifact control.
+description: Verify Marasi's CLI-driven proxy service when a change needs proof through a real launched instance, a proxied HTTP request, persisted traffic inspection, event subscription, launchpad replay, test-case control, finding control, artifact control, or Chrome control.
 ---
 
 # Verify Marasi

@@ -28,4 +28,5 @@ Run `finding create --title "Broken access control" --severity High --test-case 
 - A related test case id must already exist in the open project.
 - Duplicate link of the same request to the same finding returns a conflict.
 - Link, unlink, get, and delete look up ids in the currently open project. After `project open`, previous finding and request ids are not visible.
+- Human `finding get` prints scalar fields only. Linked traffic (`items`) and `artifacts` appear in `--json`.
 - `finding get --json` includes an `artifacts` array filled by `artifact upload --finding`.
