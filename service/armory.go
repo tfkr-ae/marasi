@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -71,6 +72,7 @@ type armoryRunMutation struct {
 var errInvalidArmoryRequest = errors.New("invalid armory request")
 
 func addArmoryRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+	var runMutationMu sync.Mutex
 	mux.HandleFunc("GET /armory/template", func(w http.ResponseWriter, r *http.Request) {
 		repo, ok := armoryRepository(proxy)
 		if !ok {
@@ -192,6 +194,8 @@ func addArmoryRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroad
 		if !ok {
 			return
 		}
+		runMutationMu.Lock()
+		defer runMutationMu.Unlock()
 		repo, ok := armoryRepository(proxy)
 		if !ok {
 			writeArmoryError(w, r, http.StatusNotFound, "not_found")
@@ -330,6 +334,8 @@ func addArmoryRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroad
 		if !ok {
 			return
 		}
+		runMutationMu.Lock()
+		defer runMutationMu.Unlock()
 		armoryService, ok := armoryService(proxy)
 		if !ok || armoryService.Repo() == nil {
 			writeArmoryError(w, r, http.StatusNotFound, "not_found")
@@ -369,6 +375,8 @@ func addArmoryRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroad
 		if !ok {
 			return
 		}
+		runMutationMu.Lock()
+		defer runMutationMu.Unlock()
 		armoryService, ok := armoryService(proxy)
 		if !ok || armoryService.Repo() == nil {
 			writeArmoryError(w, r, http.StatusNotFound, "not_found")
@@ -382,6 +390,10 @@ func addArmoryRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroad
 			return
 		}
 		if err := armoryService.CancelRun(id); err != nil {
+			if !armoryRunIsActive(armoryService, id) {
+				writeArmoryError(w, r, http.StatusConflict, "run_not_active")
+				return
+			}
 			writeArmoryError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
@@ -397,6 +409,8 @@ func addArmoryRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroad
 		if !ok {
 			return
 		}
+		runMutationMu.Lock()
+		defer runMutationMu.Unlock()
 		armoryService, ok := armoryService(proxy)
 		if !ok || armoryService.Repo() == nil {
 			writeArmoryError(w, r, http.StatusNotFound, "not_found")

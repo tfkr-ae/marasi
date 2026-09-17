@@ -56,22 +56,21 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		instance:          instance,
 		project:           project,
 	}
+	publishArmoryRunUpdated := func(run *domain.ArmoryRun) {
+		events.publish("armory.run.updated", armoryRunFromDomain(run))
+	}
 	if projects != nil {
 		projects.opened = func(path string) {
 			events.publish("project.opened", struct {
 				Project string `json:"project"`
 			}{Project: path})
 		}
-		projects.armoryRunUpdated = func(run *domain.ArmoryRun) {
-			events.publish("armory.run.updated", armoryRunFromDomain(run))
-		}
+		projects.armoryRunUpdated = publishArmoryRunUpdated
 	}
 	if proxy != nil {
 		if armoryService, err := proxy.GetArmory(); err == nil {
 			if manager, ok := armoryService.(interface{ SetRunUpdated(func(*domain.ArmoryRun)) }); ok {
-				manager.SetRunUpdated(func(run *domain.ArmoryRun) {
-					events.publish("armory.run.updated", armoryRunFromDomain(run))
-				})
+				manager.SetRunUpdated(publishArmoryRunUpdated)
 			}
 		}
 	}

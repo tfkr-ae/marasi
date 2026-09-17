@@ -24,8 +24,9 @@ import (
 
 type stubArmoryRepository struct {
 	domain.ArmoryRepository
-	templates map[uuid.UUID]*domain.ArmoryTemplate
-	runs      map[uuid.UUID]*domain.ArmoryRun
+	templates    map[uuid.UUID]*domain.ArmoryTemplate
+	runs         map[uuid.UUID]*domain.ArmoryRun
+	beforeDelete func()
 }
 
 func (repo *stubArmoryRepository) CreateArmoryTemplate(template *domain.ArmoryTemplate) error {
@@ -116,6 +117,9 @@ func (repo *stubArmoryRepository) UpdateArmoryRun(run *domain.ArmoryRun) error {
 }
 
 func (repo *stubArmoryRepository) DeleteArmoryRun(id uuid.UUID) error {
+	if repo.beforeDelete != nil {
+		repo.beforeDelete()
+	}
 	delete(repo.runs, id)
 	return nil
 }
@@ -362,6 +366,48 @@ func TestArmoryTemplateEventFrames(t *testing.T) {
 	}
 }
 
+func TestArmoryRunEventFrames(t *testing.T) {
+	templateID := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+	repo := &stubArmoryRepository{templates: map[uuid.UUID]*domain.ArmoryTemplate{
+		templateID: {
+			ID:          templateID,
+			Name:        "Login",
+			RawTemplate: "GET /?value=@@value@@ HTTP/1.1\r\nHost: example.com\r\n\r\n",
+		},
+	}}
+	server := newArmoryServer(repo)
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	stream, reader := connectEventStream(t, httpServer.URL)
+	defer stream.Body.Close()
+
+	createBody := fmt.Sprintf(`{"template_id":%q,"attack_type":"harpoon","wordlists":["passwords.txt"]}`, templateID)
+	response := sendArmoryRequest(t, http.MethodPost, httpServer.URL+"/armory/run", createBody)
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatalf("reading create run response: %v", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("creating run: %d %s", response.StatusCode, body)
+	}
+	var created armoryRun
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatalf("decoding create run response: %v", err)
+	}
+	createdJSON := strings.TrimSpace(string(body))
+	if got := readEventFrame(t, reader); got != "event: armory.run.created\ndata: "+createdJSON+"\n\n" {
+		t.Fatalf("unexpected created run event:\n%s", got)
+	}
+
+	response = sendArmoryRequest(t, http.MethodDelete, httpServer.URL+"/armory/run/"+created.ID.String(), "")
+	response.Body.Close()
+	deletedJSON := fmt.Sprintf(`{"id":%q}`, created.ID)
+	if got := readEventFrame(t, reader); got != "event: armory.run.deleted\ndata: "+deletedJSON+"\n\n" {
+		t.Fatalf("unexpected deleted run event:\n%s", got)
+	}
+}
+
 func TestArmoryRunControlAPI(t *testing.T) {
 	templateID := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
 	runID := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
@@ -374,9 +420,6 @@ func TestArmoryRunControlAPI(t *testing.T) {
 		}}
 		armoryService := &stubArmoryService{repo: repo}
 		server := newTestServer(&marasi.Proxy{Armory: armoryService}, func() {})
-		subscriber := server.events.subscribe()
-		defer server.events.unsubscribe(subscriber)
-
 		response := requestControlAPI(server, http.MethodPost, "/armory/run", fmt.Sprintf(`{"template_id":%q,"attack_type":"harpoon","wordlists":["passwords.txt"]}`, templateID))
 		if response.Code != http.StatusOK {
 			t.Fatalf("\nwanted:\n200\ngot:\n%d %s", response.Code, response.Body.String())
@@ -392,10 +435,8 @@ func TestArmoryRunControlAPI(t *testing.T) {
 		if len(repo.runs) != 1 {
 			t.Fatalf("\nwanted:\none persisted run\ngot:\n%d", len(repo.runs))
 		}
-		event := <-subscriber.events
-		if event.name != "armory.run.created" || string(event.data) != strings.TrimSpace(response.Body.String()) {
-			t.Fatalf("\nwanted:\narmory.run.created matching response\ngot:\n%s %s", event.name, event.data)
-		}
+		want := fmt.Sprintf(`{"id":%q,"template_id":%q,"template_snapshot":"GET /?value=@@value@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","use_https":true,"wordlists":["passwords.txt"],"status":"draft","attack_type":"harpoon","max_concurrent":10,"created_at":%q,"started_at":null,"finished_at":null}`+"\n", created.ID, templateID, created.CreatedAt.Format(time.RFC3339Nano))
+		assertControlAPIResponse(t, response, http.StatusOK, want)
 	})
 
 	t.Run("should list runs oldest first and get a run", func(t *testing.T) {
@@ -411,20 +452,11 @@ func TestArmoryRunControlAPI(t *testing.T) {
 		server := newArmoryServer(repo)
 
 		response := requestControlAPI(server, http.MethodGet, "/armory/template/"+templateID.String()+"/run", "")
-		var list armoryRunList
-		decodeResponse(t, response, &list)
-		if response.Code != http.StatusOK || len(list.Items) != 2 || list.Items[0].ID != olderID || list.Items[1].ID != newerID {
-			t.Fatalf("\nwanted:\nruns oldest first\ngot:\n%d %+v", response.Code, list.Items)
-		}
+		olderJSON := fmt.Sprintf(`{"id":%q,"template_id":%q,"template_snapshot":"GET /?value=@@value@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","use_https":true,"wordlists":["passwords.txt"],"status":"draft","attack_type":"harpoon","max_concurrent":10,"created_at":"2026-09-17T10:30:00Z","started_at":null,"finished_at":null}`, olderID, templateID)
+		newerJSON := fmt.Sprintf(`{"id":%q,"template_id":%q,"template_snapshot":"GET /?value=@@value@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","use_https":true,"wordlists":["passwords.txt"],"status":"draft","attack_type":"harpoon","max_concurrent":10,"created_at":"2026-09-17T10:31:00Z","started_at":null,"finished_at":null}`, newerID, templateID)
+		assertControlAPIResponse(t, response, http.StatusOK, fmt.Sprintf(`{"items":[%s,%s]}`+"\n", olderJSON, newerJSON))
 		get := requestControlAPI(server, http.MethodGet, "/armory/run/"+olderID.String(), "")
-		var got map[string]any
-		decodeResponse(t, get, &got)
-		if get.Code != http.StatusOK || got["template_snapshot"] != "GET /?value=@@value@@ HTTP/1.1\r\nHost: example.com\r\n\r\n" {
-			t.Fatalf("\nwanted:\nrun with snapshot\ngot:\n%d %s", get.Code, get.Body.String())
-		}
-		if _, exists := got["items"]; exists {
-			t.Fatalf("run response unexpectedly contains traffic items: %s", get.Body.String())
-		}
+		assertControlAPIResponse(t, get, http.StatusOK, olderJSON+"\n")
 
 		emptyRepo := &stubArmoryRepository{templates: map[uuid.UUID]*domain.ArmoryTemplate{templateID: {ID: templateID}}}
 		assertControlAPIResponse(t, requestControlAPI(newArmoryServer(emptyRepo), http.MethodGet, "/armory/template/"+templateID.String()+"/run", ""), http.StatusOK, "{\"items\":[]}\n")
@@ -483,16 +515,14 @@ func TestArmoryRunControlAPI(t *testing.T) {
 		server := newTestServer(&marasi.Proxy{Armory: armoryService}, func() {})
 
 		started := requestControlAPI(server, http.MethodPost, "/armory/run/"+runID.String()+"/start", "")
-		var startedRun armoryRun
-		decodeResponse(t, started, &startedRun)
-		if started.Code != http.StatusOK || startedRun.Status != domain.ArmoryRunInProgress {
-			t.Fatalf("\nwanted:\nin-progress run\ngot:\n%d %s", started.Code, started.Body.String())
-		}
+		startedJSON := fmt.Sprintf(`{"id":%q,"template_id":%q,"template_snapshot":"GET /?value=@@value@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","use_https":true,"wordlists":["passwords.txt"],"status":"in_progress","attack_type":"harpoon","max_concurrent":10,"created_at":"2026-09-17T10:30:00Z","started_at":"2026-09-17T10:31:00Z","finished_at":null}`+"\n", runID, templateID)
+		assertControlAPIResponse(t, started, http.StatusOK, startedJSON)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/armory/run/"+runID.String()+"/start", ""), http.StatusConflict, "{\"error\":\"run_active\"}\n")
 
 		cancelResponse := requestControlAPI(server, http.MethodPost, "/armory/run/"+runID.String()+"/cancel", "")
-		if cancelResponse.Code != http.StatusOK || !cancelled {
-			t.Fatalf("\nwanted:\ncancelled active run\ngot:\n%d cancelled=%t", cancelResponse.Code, cancelled)
+		assertControlAPIResponse(t, cancelResponse, http.StatusOK, startedJSON)
+		if !cancelled {
+			t.Fatal("active run was not cancelled")
 		}
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodDelete, "/armory/run/"+runID.String(), ""), http.StatusConflict, "{\"error\":\"run_active\"}\n")
 
@@ -500,16 +530,78 @@ func TestArmoryRunControlAPI(t *testing.T) {
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/armory/run/"+runID.String()+"/cancel", ""), http.StatusConflict, "{\"error\":\"run_not_active\"}\n")
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/armory/run/"+runID.String()+"/start", ""), http.StatusConflict, "{\"error\":\"not_a_draft\"}\n")
 
-		subscriber := server.events.subscribe()
-		defer server.events.unsubscribe(subscriber)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodDelete, "/armory/run/"+runID.String(), ""), http.StatusOK, fmt.Sprintf("{\"id\":%q}\n", runID))
 		if repo.runs[runID] != nil {
 			t.Fatal("inactive run was not deleted")
 		}
-		event := <-subscriber.events
-		if event.name != "armory.run.deleted" {
-			t.Fatalf("\nwanted:\narmory.run.deleted\ngot:\n%s", event.name)
+	})
+
+	t.Run("should return run not active when a run finishes during cancel", func(t *testing.T) {
+		run := testServiceArmoryRun(runID, templateID, createdAt)
+		run.Status = domain.ArmoryRunInProgress
+		repo := &stubArmoryRepository{runs: map[uuid.UUID]*domain.ArmoryRun{runID: run}}
+		armoryService := &stubArmoryService{repo: repo, active: []uuid.UUID{runID}}
+		armoryService.cancel = func(uuid.UUID) error {
+			armoryService.active = nil
+			return errors.New("run is no longer active")
 		}
+		server := newTestServer(&marasi.Proxy{Armory: armoryService}, func() {})
+
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/armory/run/"+runID.String()+"/cancel", ""), http.StatusConflict, "{\"error\":\"run_not_active\"}\n")
+	})
+
+	t.Run("should not delete a run while its start request is in progress", func(t *testing.T) {
+		run := testServiceArmoryRun(runID, templateID, createdAt)
+		deleteEntered := make(chan struct{})
+		repo := &stubArmoryRepository{
+			runs: map[uuid.UUID]*domain.ArmoryRun{runID: run},
+			beforeDelete: func() {
+				close(deleteEntered)
+			},
+		}
+		startEntered := make(chan struct{})
+		releaseStart := make(chan struct{})
+		armoryService := &stubArmoryService{repo: repo}
+		armoryService.start = func(id uuid.UUID) error {
+			close(startEntered)
+			<-releaseStart
+			stored := repo.runs[id]
+			if stored == nil {
+				stored = testServiceArmoryRun(id, templateID, createdAt)
+				repo.runs[id] = stored
+			}
+			stored.Status = domain.ArmoryRunInProgress
+			startedAt := createdAt.Add(time.Minute)
+			stored.StartedAt = &startedAt
+			armoryService.active = []uuid.UUID{id}
+			return nil
+		}
+		server := newTestServer(&marasi.Proxy{Armory: armoryService}, func() {})
+		startResponse := make(chan *httptest.ResponseRecorder, 1)
+		deleteResponse := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			startResponse <- requestControlAPI(server, http.MethodPost, "/armory/run/"+runID.String()+"/start", "")
+		}()
+		<-startEntered
+		go func() {
+			deleteResponse <- requestControlAPI(server, http.MethodDelete, "/armory/run/"+runID.String(), "")
+		}()
+
+		var deleted *httptest.ResponseRecorder
+		select {
+		case <-deleteEntered:
+			deleted = <-deleteResponse
+		case <-time.After(100 * time.Millisecond):
+		}
+		close(releaseStart)
+		started := <-startResponse
+		if deleted == nil {
+			deleted = <-deleteResponse
+		}
+		if started.Code != http.StatusOK {
+			t.Fatalf("start failed: %d %s", started.Code, started.Body.String())
+		}
+		assertControlAPIResponse(t, deleted, http.StatusConflict, "{\"error\":\"run_active\"}\n")
 	})
 }
 
