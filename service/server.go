@@ -62,6 +62,18 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 				Project string `json:"project"`
 			}{Project: path})
 		}
+		projects.armoryRunUpdated = func(run *domain.ArmoryRun) {
+			events.publish("armory.run.updated", armoryRunFromDomain(run))
+		}
+	}
+	if proxy != nil {
+		if armoryService, err := proxy.GetArmory(); err == nil {
+			if manager, ok := armoryService.(interface{ SetRunUpdated(func(*domain.ArmoryRun)) }); ok {
+				manager.SetRunUpdated(func(run *domain.ArmoryRun) {
+					events.publish("armory.run.updated", armoryRunFromDomain(run))
+				})
+			}
+		}
 	}
 	addRoutes(mux, proxy, chrome, events, server.serveStatus, func() {
 		server.Close()

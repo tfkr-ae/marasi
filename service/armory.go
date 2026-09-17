@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
@@ -38,6 +39,33 @@ type armoryTemplateMutation struct {
 	Name        *string `json:"name"`
 	Description *string `json:"description"`
 	RawTemplate *string `json:"raw_template"`
+}
+
+type armoryRun struct {
+	ID               uuid.UUID               `json:"id"`
+	TemplateID       uuid.UUID               `json:"template_id"`
+	TemplateSnapshot string                  `json:"template_snapshot"`
+	UseHTTPS         bool                    `json:"use_https"`
+	Wordlists        []string                `json:"wordlists"`
+	Status           domain.ArmoryRunStatus  `json:"status"`
+	AttackType       domain.ArmoryAttackType `json:"attack_type"`
+	MaxConcurrent    int                     `json:"max_concurrent"`
+	CreatedAt        time.Time               `json:"created_at"`
+	StartedAt        *time.Time              `json:"started_at"`
+	FinishedAt       *time.Time              `json:"finished_at"`
+}
+
+type armoryRunList struct {
+	Items []armoryRun `json:"items"`
+}
+
+type armoryRunMutation struct {
+	TemplateID    *uuid.UUID
+	RawTemplate   *string
+	AttackType    domain.ArmoryAttackType
+	Wordlists     []string
+	UseHTTPS      bool
+	MaxConcurrent int
 }
 
 var errInvalidArmoryRequest = errors.New("invalid armory request")
@@ -197,18 +225,331 @@ func addArmoryRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroad
 		events.publish("armory.template.deleted", response)
 		writeJSON(w, r, http.StatusOK, response)
 	})
+
+	mux.HandleFunc("GET /armory/template/{id}/run", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseArmoryID(w, r)
+		if !ok {
+			return
+		}
+		repo, ok := armoryRepository(proxy)
+		if !ok {
+			writeArmoryError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		if _, err := repo.GetArmoryTemplate(id); err != nil {
+			writeArmoryRepositoryError(w, r, err)
+			return
+		}
+		runs, err := repo.GetArmoryRuns(id)
+		if err != nil {
+			writeArmoryRepositoryError(w, r, err)
+			return
+		}
+		items := make([]armoryRun, 0, len(runs))
+		for _, run := range runs {
+			items = append(items, armoryRunFromDomain(run))
+		}
+		writeJSON(w, r, http.StatusOK, armoryRunList{Items: items})
+	})
+
+	mux.HandleFunc("POST /armory/run", func(w http.ResponseWriter, r *http.Request) {
+		mutation, err := decodeArmoryRunMutation(r, true)
+		if err != nil {
+			writeArmoryError(w, r, http.StatusBadRequest, "invalid_armory_request")
+			return
+		}
+		armoryService, ok := armoryService(proxy)
+		if !ok {
+			writeArmoryError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		repo := armoryService.Repo()
+		if repo == nil {
+			writeArmoryError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		template, err := repo.GetArmoryTemplate(*mutation.TemplateID)
+		if err != nil {
+			writeArmoryRepositoryError(w, r, err)
+			return
+		}
+		id, err := uuid.NewV7()
+		if err != nil {
+			writeArmoryError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		run := mutation.armoryRun(id, template.RawTemplate)
+		if err := armoryService.ValidateRun(run); err != nil {
+			writeArmoryError(w, r, http.StatusBadRequest, "invalid_armory_request")
+			return
+		}
+		if err := repo.CreateArmoryRun(run); err != nil {
+			writeArmoryRepositoryError(w, r, err)
+			return
+		}
+		response := armoryRunFromDomain(run)
+		events.publish("armory.run.created", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
+
+	mux.HandleFunc("POST /armory/run/validate", func(w http.ResponseWriter, r *http.Request) {
+		mutation, err := decodeArmoryRunMutation(r, false)
+		if err != nil {
+			writeArmoryError(w, r, http.StatusBadRequest, "invalid_armory_request")
+			return
+		}
+		armoryService, ok := armoryService(proxy)
+		if !ok || armoryService.Repo() == nil {
+			writeArmoryError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		run := mutation.armoryRun(uuid.Nil, *mutation.RawTemplate)
+		if err := armoryService.ValidateRun(run); err != nil {
+			writeArmoryError(w, r, http.StatusBadRequest, "invalid_armory_request")
+			return
+		}
+		writeJSON(w, r, http.StatusOK, struct {
+			Status string `json:"status"`
+		}{Status: "ok"})
+	})
+
+	mux.HandleFunc("GET /armory/run/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseArmoryID(w, r)
+		if !ok {
+			return
+		}
+		run, ok := getArmoryRun(w, r, proxy, id)
+		if !ok {
+			return
+		}
+		writeJSON(w, r, http.StatusOK, armoryRunFromDomain(run))
+	})
+
+	mux.HandleFunc("POST /armory/run/{id}/start", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseArmoryID(w, r)
+		if !ok {
+			return
+		}
+		armoryService, ok := armoryService(proxy)
+		if !ok || armoryService.Repo() == nil {
+			writeArmoryError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		run, ok := getArmoryRun(w, r, proxy, id)
+		if !ok {
+			return
+		}
+		if armoryRunIsActive(armoryService, id) {
+			writeArmoryError(w, r, http.StatusConflict, "run_active")
+			return
+		}
+		if run.Status != domain.ArmoryRunDraft {
+			writeArmoryError(w, r, http.StatusConflict, "not_a_draft")
+			return
+		}
+		if err := armoryService.StartRun(id); err != nil {
+			if armoryRunIsActive(armoryService, id) {
+				writeArmoryError(w, r, http.StatusConflict, "run_active")
+				return
+			}
+			writeArmoryError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		run, ok = getArmoryRun(w, r, proxy, id)
+		if !ok {
+			return
+		}
+		run.Status = domain.ArmoryRunInProgress
+		run.FinishedAt = nil
+		writeJSON(w, r, http.StatusOK, armoryRunFromDomain(run))
+	})
+
+	mux.HandleFunc("POST /armory/run/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseArmoryID(w, r)
+		if !ok {
+			return
+		}
+		armoryService, ok := armoryService(proxy)
+		if !ok || armoryService.Repo() == nil {
+			writeArmoryError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		if _, ok := getArmoryRun(w, r, proxy, id); !ok {
+			return
+		}
+		if !armoryRunIsActive(armoryService, id) {
+			writeArmoryError(w, r, http.StatusConflict, "run_not_active")
+			return
+		}
+		if err := armoryService.CancelRun(id); err != nil {
+			writeArmoryError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		run, ok := getArmoryRun(w, r, proxy, id)
+		if !ok {
+			return
+		}
+		writeJSON(w, r, http.StatusOK, armoryRunFromDomain(run))
+	})
+
+	mux.HandleFunc("DELETE /armory/run/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseArmoryID(w, r)
+		if !ok {
+			return
+		}
+		armoryService, ok := armoryService(proxy)
+		if !ok || armoryService.Repo() == nil {
+			writeArmoryError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		if _, ok := getArmoryRun(w, r, proxy, id); !ok {
+			return
+		}
+		if armoryRunIsActive(armoryService, id) {
+			writeArmoryError(w, r, http.StatusConflict, "run_active")
+			return
+		}
+		if err := armoryService.Repo().DeleteArmoryRun(id); err != nil {
+			writeArmoryRepositoryError(w, r, err)
+			return
+		}
+		response := armoryID{ID: id}
+		events.publish("armory.run.deleted", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
 }
 
-func armoryRepository(proxy *marasi.Proxy) (domain.ArmoryRepository, bool) {
+func armoryService(proxy *marasi.Proxy) (marasi.ArmoryService, bool) {
 	if proxy == nil {
 		return nil, false
 	}
-	armory, err := proxy.GetArmory()
-	if err != nil {
+	service, err := proxy.GetArmory()
+	return service, err == nil && service != nil
+}
+
+func armoryRepository(proxy *marasi.Proxy) (domain.ArmoryRepository, bool) {
+	armory, ok := armoryService(proxy)
+	if !ok {
 		return nil, false
 	}
 	repo := armory.Repo()
 	return repo, repo != nil
+}
+
+func decodeArmoryRunMutation(r *http.Request, create bool) (armoryRunMutation, error) {
+	if r.Body == nil {
+		return armoryRunMutation{}, errInvalidArmoryRequest
+	}
+	decoder := json.NewDecoder(r.Body)
+	var fields map[string]json.RawMessage
+	if err := decoder.Decode(&fields); err != nil || fields == nil {
+		return armoryRunMutation{}, errInvalidArmoryRequest
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return armoryRunMutation{}, errInvalidArmoryRequest
+	}
+	mutation := armoryRunMutation{UseHTTPS: true, MaxConcurrent: 10}
+	var attackTypeSet, wordlistsSet bool
+	for name, raw := range fields {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return armoryRunMutation{}, errInvalidArmoryRequest
+		}
+		switch name {
+		case "template_id":
+			var value uuid.UUID
+			if !create || json.Unmarshal(raw, &value) != nil || value == uuid.Nil {
+				return armoryRunMutation{}, errInvalidArmoryRequest
+			}
+			mutation.TemplateID = &value
+		case "raw_template":
+			var value string
+			if create || json.Unmarshal(raw, &value) != nil {
+				return armoryRunMutation{}, errInvalidArmoryRequest
+			}
+			mutation.RawTemplate = &value
+		case "attack_type":
+			if json.Unmarshal(raw, &mutation.AttackType) != nil || !validArmoryAttackType(mutation.AttackType) {
+				return armoryRunMutation{}, errInvalidArmoryRequest
+			}
+			attackTypeSet = true
+		case "wordlists":
+			if json.Unmarshal(raw, &mutation.Wordlists) != nil || mutation.Wordlists == nil {
+				return armoryRunMutation{}, errInvalidArmoryRequest
+			}
+			wordlistsSet = true
+		case "use_https":
+			if json.Unmarshal(raw, &mutation.UseHTTPS) != nil {
+				return armoryRunMutation{}, errInvalidArmoryRequest
+			}
+		case "max_concurrent":
+			if json.Unmarshal(raw, &mutation.MaxConcurrent) != nil || mutation.MaxConcurrent < 1 || mutation.MaxConcurrent > 100 {
+				return armoryRunMutation{}, errInvalidArmoryRequest
+			}
+		default:
+			return armoryRunMutation{}, errInvalidArmoryRequest
+		}
+	}
+	if create && mutation.TemplateID == nil || !create && mutation.RawTemplate == nil || !attackTypeSet || !wordlistsSet {
+		return armoryRunMutation{}, errInvalidArmoryRequest
+	}
+	return mutation, nil
+}
+
+func validArmoryAttackType(attackType domain.ArmoryAttackType) bool {
+	switch attackType {
+	case domain.ArmoryAttackHarpoon, domain.ArmoryAttackBroadside, domain.ArmoryAttackTandem, domain.ArmoryAttackMaelstrom:
+		return true
+	default:
+		return false
+	}
+}
+
+func (mutation armoryRunMutation) armoryRun(id uuid.UUID, snapshot string) *domain.ArmoryRun {
+	return &domain.ArmoryRun{
+		ID:               id,
+		TemplateID:       valueOrZero(mutation.TemplateID),
+		TemplateSnapshot: snapshot,
+		UseHTTPS:         mutation.UseHTTPS,
+		Wordlists:        mutation.Wordlists,
+		Status:           domain.ArmoryRunDraft,
+		AttackType:       mutation.AttackType,
+		MaxConcurrent:    mutation.MaxConcurrent,
+		CreatedAt:        time.Now(),
+	}
+}
+
+func valueOrZero(value *uuid.UUID) uuid.UUID {
+	if value == nil {
+		return uuid.Nil
+	}
+	return *value
+}
+
+func getArmoryRun(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, id uuid.UUID) (*domain.ArmoryRun, bool) {
+	repo, ok := armoryRepository(proxy)
+	if !ok {
+		writeArmoryError(w, r, http.StatusNotFound, "not_found")
+		return nil, false
+	}
+	run, err := repo.GetArmoryRun(id)
+	if err != nil {
+		writeArmoryRepositoryError(w, r, err)
+		return nil, false
+	}
+	if run == nil {
+		writeArmoryError(w, r, http.StatusNotFound, "not_found")
+		return nil, false
+	}
+	return run, true
+}
+
+func armoryRunIsActive(service marasi.ArmoryService, id uuid.UUID) bool {
+	for _, activeID := range service.ActiveRunIDs() {
+		if activeID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeArmoryTemplateMutation(r *http.Request, requireName bool) (armoryTemplateMutation, error) {
@@ -258,6 +599,26 @@ func armoryTemplateFromDomain(template *domain.ArmoryTemplate) armoryTemplate {
 	}
 }
 
+func armoryRunFromDomain(run *domain.ArmoryRun) armoryRun {
+	wordlists := append([]string(nil), run.Wordlists...)
+	if wordlists == nil {
+		wordlists = make([]string, 0)
+	}
+	return armoryRun{
+		ID:               run.ID,
+		TemplateID:       run.TemplateID,
+		TemplateSnapshot: run.TemplateSnapshot,
+		UseHTTPS:         run.UseHTTPS,
+		Wordlists:        wordlists,
+		Status:           run.Status,
+		AttackType:       run.AttackType,
+		MaxConcurrent:    run.MaxConcurrent,
+		CreatedAt:        run.CreatedAt,
+		StartedAt:        run.StartedAt,
+		FinishedAt:       run.FinishedAt,
+	}
+}
+
 func parseArmoryID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -274,7 +635,7 @@ func writeArmoryError(w http.ResponseWriter, r *http.Request, status int, code s
 }
 
 func writeArmoryRepositoryError(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, domain.ErrArmoryTemplateNotFound) {
+	if errors.Is(err, domain.ErrArmoryTemplateNotFound) || errors.Is(err, domain.ErrArmoryRunNotFound) {
 		writeArmoryError(w, r, http.StatusNotFound, "not_found")
 		return
 	}

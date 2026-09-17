@@ -10,6 +10,9 @@ import (
 // ErrArmoryTemplateNotFound means no Armory template has the requested ID.
 var ErrArmoryTemplateNotFound = errors.New("armory template not found")
 
+// ErrArmoryRunNotFound means no Armory run has the requested ID.
+var ErrArmoryRunNotFound = errors.New("armory run not found")
+
 // ArmoryAttackType identifies how payloads are applied to a template.
 type ArmoryAttackType string
 

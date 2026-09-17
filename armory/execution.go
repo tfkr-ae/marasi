@@ -130,7 +130,7 @@ func (manager *Manager) StartRun(runID uuid.UUID) error {
 	startedAt := time.Now()
 	run.Status = domain.ArmoryRunInProgress
 	run.StartedAt = &startedAt
-	if err := manager.repository.UpdateArmoryRun(run); err != nil {
+	if err := manager.updateRun(run); err != nil {
 		manager.removeExecution(execution)
 		execution.cancelFunc()
 		return err
@@ -168,7 +168,7 @@ func (manager *Manager) execute(execution *execution) {
 		execution.run.Status = domain.ArmoryRunCompleted
 	}
 
-	manager.repository.UpdateArmoryRun(execution.run)
+	manager.updateRun(execution.run)
 	manager.removeExecution(execution)
 	execution.cancelFunc()
 }

@@ -169,6 +169,9 @@ func (repo *Repository) GetArmoryRun(id uuid.UUID) (*domain.ArmoryRun, error) {
 	var run dbArmoryRun
 	query := `SELECT * FROM armory_run WHERE id = ?`
 	if err := repo.dbConn.Get(&run, query, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: %s", domain.ErrArmoryRunNotFound, id)
+		}
 		return nil, fmt.Errorf("getting armory run %s: %w", id, err)
 	}
 	return toDomainArmoryRun(&run), nil
@@ -233,7 +236,7 @@ func (repo *Repository) UpdateArmoryRun(run *domain.ArmoryRun) error {
 		return fmt.Errorf("getting updated armory run rows: %w", err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("armory run %s not found", run.ID)
+		return fmt.Errorf("%w: %s", domain.ErrArmoryRunNotFound, run.ID)
 	}
 	return nil
 }
@@ -249,7 +252,7 @@ func (repo *Repository) DeleteArmoryRun(id uuid.UUID) error {
 		return fmt.Errorf("getting deleted armory run rows: %w", err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("armory run %s not found", id)
+		return fmt.Errorf("%w: %s", domain.ErrArmoryRunNotFound, id)
 	}
 	return nil
 }

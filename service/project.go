@@ -53,6 +53,7 @@ type ProjectLifecycle struct {
 	lock             func(string) (func() error, error)
 	flushOpenProject func() error
 	opened           func(string)
+	armoryRunUpdated func(*domain.ArmoryRun)
 }
 
 // NewProjectLifecycle creates a lifecycle with no open project. Open must
@@ -247,10 +248,12 @@ func (lifecycle *ProjectLifecycle) prepareProject(ctx context.Context, path stri
 	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
-	resources.Armory, err = armory.NewManager(repository, lifecycle.wordlists, lifecycle.proxy.SendArmoryRequest)
+	armoryManager, err := armory.NewManager(repository, lifecycle.wordlists, lifecycle.proxy.SendArmoryRequest)
 	if err != nil {
 		return fail(fmt.Errorf("preparing armory manager: %w", err))
 	}
+	armoryManager.SetRunUpdated(lifecycle.armoryRunUpdated)
+	resources.Armory = armoryManager
 	return resources, nil
 }
 

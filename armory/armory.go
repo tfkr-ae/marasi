@@ -23,6 +23,8 @@ type Manager struct {
 	wordlists wordlist.Provider
 	// sendFunc sends rendered requests through the configured transport.
 	sendFunc SendRequestFunc
+	// runUpdated receives successful lifecycle writes.
+	runUpdated func(*domain.ArmoryRun)
 
 	// mu protects activeRuns.
 	mu sync.Mutex
@@ -98,4 +100,24 @@ func (manager *Manager) CancelRun(runID uuid.UUID) error {
 // Repo returns the repository used by the Armory manager.
 func (manager *Manager) Repo() domain.ArmoryRepository {
 	return manager.repository
+}
+
+// SetRunUpdated sets the callback for successful run lifecycle writes.
+func (manager *Manager) SetRunUpdated(callback func(*domain.ArmoryRun)) {
+	manager.mu.Lock()
+	manager.runUpdated = callback
+	manager.mu.Unlock()
+}
+
+func (manager *Manager) updateRun(run *domain.ArmoryRun) error {
+	if err := manager.repository.UpdateArmoryRun(run); err != nil {
+		return err
+	}
+	manager.mu.Lock()
+	callback := manager.runUpdated
+	manager.mu.Unlock()
+	if callback != nil {
+		callback(run)
+	}
+	return nil
 }
