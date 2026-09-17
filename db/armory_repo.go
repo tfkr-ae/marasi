@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -112,6 +113,9 @@ func (repo *Repository) GetArmoryTemplate(id uuid.UUID) (*domain.ArmoryTemplate,
 	var template dbArmoryTemplate
 	query := `SELECT id, name, description, raw_template FROM armory_template WHERE id = ?`
 	if err := repo.dbConn.Get(&template, query, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: %s", domain.ErrArmoryTemplateNotFound, id)
+		}
 		return nil, fmt.Errorf("getting armory template %s: %w", id, err)
 	}
 	return toDomainArmoryTemplate(&template), nil
@@ -139,7 +143,7 @@ func (repo *Repository) UpdateArmoryTemplate(template *domain.ArmoryTemplate) er
 		return fmt.Errorf("getting updated armory template rows: %w", err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("armory template %s not found", template.ID)
+		return fmt.Errorf("%w: %s", domain.ErrArmoryTemplateNotFound, template.ID)
 	}
 	return nil
 }
@@ -155,7 +159,7 @@ func (repo *Repository) DeleteArmoryTemplate(id uuid.UUID) error {
 		return fmt.Errorf("getting deleted armory template rows: %w", err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("armory template %s not found", id)
+		return fmt.Errorf("%w: %s", domain.ErrArmoryTemplateNotFound, id)
 	}
 	return nil
 }

@@ -62,6 +62,8 @@ var (
 	ErrReportingRepoNotFound = errors.New("reporting repo not found")
 	// ErrArmoryRepoNotFound is returned when the Armory repository is not found.
 	ErrArmoryRepoNotFound = errors.New("armory repo not found")
+	// ErrArmoryNotFound is returned when the Armory service is not found.
+	ErrArmoryNotFound = errors.New("armory service not found")
 	// ErrWordlistManagerNotSet is returned when the wordlist manager is not set.
 	ErrWordlistManagerNotSet = errors.New("wordlist manager not set")
 	// ErrWebSocketConnectionNotFound is returned when a live WebSocket cannot be located.
@@ -245,6 +247,15 @@ func (proxy *Proxy) GetArmoryRepo() (domain.ArmoryRepository, error) {
 		return nil, ErrArmoryRepoNotFound
 	}
 	return proxy.ArmoryRepo, nil
+}
+
+// GetArmory returns the Armory service.
+// It returns an error if the service is not set.
+func (proxy *Proxy) GetArmory() (ArmoryService, error) {
+	if proxy.Armory == nil {
+		return nil, ErrArmoryNotFound
+	}
+	return proxy.Armory, nil
 }
 
 // New creates a new Proxy instance with default configuration and applies any provided options.

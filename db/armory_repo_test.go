@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -58,6 +59,11 @@ func TestArmoryRepo_Templates(t *testing.T) {
 
 	first := armoryTestTemplate(t, repo, "First")
 	second := armoryTestTemplate(t, repo, "Second")
+	secondRun := armoryTestRun(t, repo, second)
+	requestID := testRequest(t, repo, nil)
+	if err := repo.CreateArmoryEntry(&domain.ArmoryEntry{RunID: secondRun.ID, RequestID: requestID}); err != nil {
+		t.Fatalf("creating armory entry: %v", err)
+	}
 
 	got, err := repo.GetArmoryTemplate(first.ID)
 	if err != nil {
@@ -99,6 +105,16 @@ func TestArmoryRepo_Templates(t *testing.T) {
 	if _, err := repo.GetArmoryTemplate(second.ID); err == nil {
 		t.Fatal("expected error getting deleted armory template")
 	}
+	if _, err := repo.GetArmoryRun(secondRun.ID); err == nil {
+		t.Fatal("expected template delete to cascade to its run")
+	}
+	entries, err := repo.GetArmoryEntries(secondRun.ID)
+	if err != nil {
+		t.Fatalf("getting entries after template delete: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected template delete to cascade to entries, got %+v", entries)
+	}
 }
 
 func TestArmoryRepo_TemplateNotFound(t *testing.T) {
@@ -106,6 +122,9 @@ func TestArmoryRepo_TemplateNotFound(t *testing.T) {
 	defer teardown()
 
 	template := &domain.ArmoryTemplate{ID: armoryTestUUID(t), Name: "Missing"}
+	if _, err := repo.GetArmoryTemplate(template.ID); !errors.Is(err, domain.ErrArmoryTemplateNotFound) {
+		t.Fatalf("expected ErrArmoryTemplateNotFound, got %v", err)
+	}
 	if err := repo.UpdateArmoryTemplate(template); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected not found update error, got %v", err)
 	}

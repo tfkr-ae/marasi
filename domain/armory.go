@@ -1,10 +1,14 @@
 package domain
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrArmoryTemplateNotFound means no Armory template has the requested ID.
+var ErrArmoryTemplateNotFound = errors.New("armory template not found")
 
 // ArmoryAttackType identifies how payloads are applied to a template.
 type ArmoryAttackType string
