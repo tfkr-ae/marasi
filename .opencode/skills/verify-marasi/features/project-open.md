@@ -15,7 +15,7 @@ Start a service first. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --inst
 
 ## Driving it with shell and curl
 
-Run `project open --name "$OTHER_PROJECT" --json`. Require `project` to be the canonical absolute path ending in `$OTHER_PROJECT.marasi`. Run `service status --json` and require the same `project` path with `status` `running`. Send one proxied request through the current `proxy_listener`, then `traffic list --path /proof.txt --json` and require the new project to contain that request rather than the previous project's history.
+Send one proxied request to `/before.txt`. Run `traffic list --path /before.txt --json` and require one row. Run `project open --name "$OTHER_PROJECT" --json`. Require `project` to be the canonical absolute path ending in `$OTHER_PROJECT.marasi`. Run `service status --json` and require the same `project` path with `status` `running`. Run `traffic list --path /before.txt --json` and require empty `items`. Send one proxied request to `/after.txt`, then `traffic list --path /after.txt --json` and require that new row with `/before.txt` still absent.
 
 ## Gotchas
 
