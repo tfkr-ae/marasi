@@ -89,8 +89,16 @@ func (repo *Repository) UpdateWaypoint(hostname string, override string) (bool, 
 	if current == override {
 		return false, nil
 	}
-	if _, err := repo.dbConn.Exec(`UPDATE waypoint SET override = ? WHERE hostname = ?`, override, hostname); err != nil {
+	result, err := repo.dbConn.Exec(`UPDATE waypoint SET override = ? WHERE hostname = ?`, override, hostname)
+	if err != nil {
 		return false, fmt.Errorf("updating waypoint for %s: %w", hostname, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("checking waypoint update for %s: %w", hostname, err)
+	}
+	if rowsAffected == 0 {
+		return false, domain.ErrNoWaypointForHostname
 	}
 	return true, nil
 }

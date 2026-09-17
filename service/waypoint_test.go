@@ -267,6 +267,92 @@ func TestWaypointControlRoutes(t *testing.T) {
 		}
 		assertNoWaypointEvent(t, subscriber)
 	})
+
+	t.Run("should return an internal error and no event when update or remove sync fails after persist", func(t *testing.T) {
+		for _, request := range []struct {
+			name   string
+			method string
+			path   string
+			body   string
+			want   map[string]string
+		}{
+			{
+				name:   "update",
+				method: http.MethodPost,
+				path:   "/waypoint/update",
+				body:   `{"hostname":"example.com:443","override":"127.0.0.1:9000"}`,
+				want:   map[string]string{"example.com:443": "127.0.0.1:9000"},
+			},
+			{
+				name:   "remove",
+				method: http.MethodDelete,
+				path:   "/waypoint",
+				body:   `{"hostname":"example.com:443"}`,
+				want:   map[string]string{},
+			},
+		} {
+			t.Run(request.name, func(t *testing.T) {
+				repo := &stubWaypointRepository{
+					items:    map[string]string{"example.com:443": "127.0.0.1:8080"},
+					getErrAt: 1,
+				}
+				server, proxy := newWaypointServer(t, repo)
+				subscriber := server.events.subscribe()
+				defer server.events.unsubscribe(subscriber)
+
+				response := requestWaypointPath(server, request.method, request.path, request.body)
+				assertWaypointError(t, response, http.StatusInternalServerError, "internal_server_error")
+				if len(repo.items) != len(request.want) {
+					t.Fatalf("\nwanted persisted waypoints:\n%v\ngot:\n%v", request.want, repo.items)
+				}
+				for hostname, override := range request.want {
+					if repo.items[hostname] != override {
+						t.Fatalf("\nwanted persisted waypoints:\n%v\ngot:\n%v", request.want, repo.items)
+					}
+				}
+				if len(proxy.Waypoints) != 0 {
+					t.Fatalf("\nwanted unchanged live map\ngot:\n%v", proxy.Waypoints)
+				}
+				assertNoWaypointEvent(t, subscriber)
+			})
+		}
+	})
+}
+
+func TestWaypointEventFrames(t *testing.T) {
+	repo := &stubWaypointRepository{items: map[string]string{"example.com:443": "127.0.0.1:8080"}}
+	server, _ := newWaypointServer(t, repo)
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	stream, reader := connectEventStream(t, httpServer.URL)
+	defer stream.Body.Close()
+
+	response := sendWaypointRequest(t, http.MethodPost, httpServer.URL+"/waypoint/update", `{"hostname":"example.com:443","override":"127.0.0.1:9000"}`)
+	response.Body.Close()
+	wantUpdated := "event: waypoint.updated\ndata: {\"items\":[{\"hostname\":\"example.com:443\",\"override\":\"127.0.0.1:9000\"}]}\n\n"
+	if got := readEventFrame(t, reader); got != wantUpdated {
+		t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantUpdated, got)
+	}
+
+	response = sendWaypointRequest(t, http.MethodDelete, httpServer.URL+"/waypoint", `{"hostname":"example.com:443"}`)
+	response.Body.Close()
+	wantRemoved := "event: waypoint.removed\ndata: {\"items\":[]}\n\n"
+	if got := readEventFrame(t, reader); got != wantRemoved {
+		t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantRemoved, got)
+	}
+}
+
+func sendWaypointRequest(t *testing.T, method, url, body string) *http.Response {
+	t.Helper()
+	request, err := http.NewRequest(method, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("creating waypoint request: %v", err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("sending waypoint request: %v", err)
+	}
+	return response
 }
 
 func newWaypointServer(t *testing.T, repo *stubWaypointRepository) (*Server, *marasi.Proxy) {

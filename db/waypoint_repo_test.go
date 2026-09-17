@@ -182,6 +182,29 @@ func TestWaypointRepo_UpdateWaypoint(t *testing.T) {
 			t.Fatalf("missing update inserted a waypoint: %v, %v", waypoints, getErr)
 		}
 	})
+
+	t.Run("should report not found when the row disappears before update", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		if err := repo.CreateWaypoint("marasi.app:443", "127.0.0.1:8080"); err != nil {
+			t.Fatalf("creating waypoint: %v", err)
+		}
+		if _, err := repo.dbConn.Exec(`
+			CREATE TRIGGER delete_waypoint_before_update
+			BEFORE UPDATE ON waypoint
+			BEGIN
+				DELETE FROM waypoint WHERE hostname = OLD.hostname;
+			END
+		`); err != nil {
+			t.Fatalf("creating concurrent-delete trigger: %v", err)
+		}
+
+		changed, err := repo.UpdateWaypoint("marasi.app:443", "127.0.0.1:9000")
+		if !errors.Is(err, domain.ErrNoWaypointForHostname) || changed {
+			t.Fatalf("\nwanted:\n%v and unchanged\ngot:\n%v and changed %t", domain.ErrNoWaypointForHostname, err, changed)
+		}
+	})
 }
 
 func TestWaypointRepo_DeleteWaypoint(t *testing.T) {
