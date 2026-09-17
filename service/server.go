@@ -336,6 +336,10 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 
 // ServeHTTP serves the instance control API.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet && invalidWordlistPath(r.URL.Path) {
+		writeWordlistError(w, r, http.StatusBadRequest, "invalid_wordlist_request")
+		return
+	}
 	s.mux.ServeHTTP(w, r)
 }
 

@@ -89,7 +89,7 @@ func TestArmoryTemplateControlAPI(t *testing.T) {
 		subscriber := server.events.subscribe()
 		defer server.events.unsubscribe(subscriber)
 
-		response := requestArmory(server, http.MethodPost, "/armory/template", `{"name":"Login"}`)
+		response := requestControlAPI(server, http.MethodPost, "/armory/template", `{"name":"Login"}`)
 		if response.Code != http.StatusOK {
 			t.Fatalf("\nwanted:\n200\ngot:\n%d %s", response.Code, response.Body.String())
 		}
@@ -112,7 +112,7 @@ func TestArmoryTemplateControlAPI(t *testing.T) {
 			t.Fatalf("\nwanted:\narmory.template.created %s\ngot:\n%s %s", want, event.name, event.data)
 		}
 
-		duplicate := requestArmory(server, http.MethodPost, "/armory/template", `{"name":"Login"}`)
+		duplicate := requestControlAPI(server, http.MethodPost, "/armory/template", `{"name":"Login"}`)
 		if duplicate.Code != http.StatusOK || len(repo.templates) != 2 {
 			t.Fatalf("\nwanted:\nduplicate template name accepted\ngot:\n%d with %d templates", duplicate.Code, len(repo.templates))
 		}
@@ -127,12 +127,12 @@ func TestArmoryTemplateControlAPI(t *testing.T) {
 		}}
 		server := newArmoryServer(repo)
 
-		response := requestArmory(server, http.MethodGet, "/armory/template", "")
+		response := requestControlAPI(server, http.MethodGet, "/armory/template", "")
 		want := `{"items":[{"id":"0193802f-f0e7-73d9-a764-06d21e367809","name":"Old","description":"oldest"},{"id":"01938032-1b17-7243-b035-e6a9f4645904","name":"New","description":"newest"}]}` + "\n"
-		assertArmoryResponse(t, response, http.StatusOK, want)
+		assertControlAPIResponse(t, response, http.StatusOK, want)
 
 		empty := newArmoryServer(&stubArmoryRepository{})
-		assertArmoryResponse(t, requestArmory(empty, http.MethodGet, "/armory/template", ""), http.StatusOK, "{\"items\":[]}\n")
+		assertControlAPIResponse(t, requestControlAPI(empty, http.MethodGet, "/armory/template", ""), http.StatusOK, "{\"items\":[]}\n")
 	})
 
 	t.Run("should get a template with raw template and reject an invalid id", func(t *testing.T) {
@@ -142,10 +142,10 @@ func TestArmoryTemplateControlAPI(t *testing.T) {
 		}}
 		server := newArmoryServer(repo)
 
-		response := requestArmory(server, http.MethodGet, "/armory/template/"+id.String(), "")
+		response := requestControlAPI(server, http.MethodGet, "/armory/template/"+id.String(), "")
 		want := `{"id":"01938032-1b17-7243-b035-e6a9f4645904","name":"Login","description":"Try variants","raw_template":"GET / HTTP/1.1\r\n\r\n"}` + "\n"
-		assertArmoryResponse(t, response, http.StatusOK, want)
-		assertArmoryResponse(t, requestArmory(server, http.MethodGet, "/armory/template/not-a-uuid", ""), http.StatusBadRequest, "{\"error\":\"bad_request\"}\n")
+		assertControlAPIResponse(t, response, http.StatusOK, want)
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/armory/template/not-a-uuid", ""), http.StatusBadRequest, "{\"error\":\"bad_request\"}\n")
 	})
 
 	t.Run("should update only supplied fields and publish the result", func(t *testing.T) {
@@ -157,9 +157,9 @@ func TestArmoryTemplateControlAPI(t *testing.T) {
 		subscriber := server.events.subscribe()
 		defer server.events.unsubscribe(subscriber)
 
-		response := requestArmory(server, http.MethodPost, "/armory/template/"+id.String(), `{"description":"","raw_template":""}`)
+		response := requestControlAPI(server, http.MethodPost, "/armory/template/"+id.String(), `{"description":"","raw_template":""}`)
 		want := `{"id":"01938032-1b17-7243-b035-e6a9f4645904","name":"Login","description":"","raw_template":""}`
-		assertArmoryResponse(t, response, http.StatusOK, want+"\n")
+		assertControlAPIResponse(t, response, http.StatusOK, want+"\n")
 		event := <-subscriber.events
 		if event.name != "armory.template.updated" || string(event.data) != want {
 			t.Fatalf("\nwanted:\narmory.template.updated %s\ngot:\n%s %s", want, event.name, event.data)
@@ -182,16 +182,16 @@ func TestArmoryTemplateControlAPI(t *testing.T) {
 		subscriber := server.events.subscribe()
 		defer server.events.unsubscribe(subscriber)
 
-		response := requestArmory(server, http.MethodDelete, "/armory/template/"+deletedID.String(), "")
+		response := requestControlAPI(server, http.MethodDelete, "/armory/template/"+deletedID.String(), "")
 		want := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809"}`
-		assertArmoryResponse(t, response, http.StatusOK, want+"\n")
+		assertControlAPIResponse(t, response, http.StatusOK, want+"\n")
 		event := <-subscriber.events
 		if event.name != "armory.template.deleted" || string(event.data) != want {
 			t.Fatalf("\nwanted:\narmory.template.deleted %s\ngot:\n%s %s", want, event.name, event.data)
 		}
 
-		response = requestArmory(server, http.MethodDelete, "/armory/template/"+activeID.String(), "")
-		assertArmoryResponse(t, response, http.StatusConflict, "{\"error\":\"template_has_active_run\"}\n")
+		response = requestControlAPI(server, http.MethodDelete, "/armory/template/"+activeID.String(), "")
+		assertControlAPIResponse(t, response, http.StatusConflict, "{\"error\":\"template_has_active_run\"}\n")
 		if repo.templates[activeID] == nil {
 			t.Fatal("active template was deleted")
 		}
@@ -216,7 +216,7 @@ func TestArmoryTemplateControlAPI(t *testing.T) {
 			`{"name":"Login","extra":true}`,
 			`{"name":"Login"} {}`,
 		} {
-			assertArmoryResponse(t, requestArmory(server, http.MethodPost, "/armory/template", body), http.StatusBadRequest, "{\"error\":\"invalid_armory_request\"}\n")
+			assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/armory/template", body), http.StatusBadRequest, "{\"error\":\"invalid_armory_request\"}\n")
 		}
 		for _, body := range []string{
 			`{"name":""}`,
@@ -226,7 +226,7 @@ func TestArmoryTemplateControlAPI(t *testing.T) {
 			`{"extra":true}`,
 			`{} {}`,
 		} {
-			assertArmoryResponse(t, requestArmory(server, http.MethodPost, "/armory/template/"+id.String(), body), http.StatusBadRequest, "{\"error\":\"invalid_armory_request\"}\n")
+			assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/armory/template/"+id.String(), body), http.StatusBadRequest, "{\"error\":\"invalid_armory_request\"}\n")
 		}
 	})
 
@@ -241,12 +241,12 @@ func TestArmoryTemplateControlAPI(t *testing.T) {
 			{method: http.MethodPost, body: `{}`},
 			{method: http.MethodDelete},
 		} {
-			assertArmoryResponse(t, requestArmory(server, request.method, "/armory/template/"+id.String(), request.body), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
+			assertControlAPIResponse(t, requestControlAPI(server, request.method, "/armory/template/"+id.String(), request.body), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
 		}
 
 		for _, proxy := range []*marasi.Proxy{{}, {Armory: &stubArmoryService{}}} {
 			server := newTestServer(proxy, func() {})
-			assertArmoryResponse(t, requestArmory(server, http.MethodGet, "/armory/template", ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
+			assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/armory/template", ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
 		}
 	})
 }
@@ -294,7 +294,7 @@ func newArmoryServer(repo domain.ArmoryRepository) *Server {
 	return newTestServer(proxy, func() {})
 }
 
-func requestArmory(server *Server, method, path, body string) *httptest.ResponseRecorder {
+func requestControlAPI(server *Server, method, path, body string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -321,7 +321,7 @@ func decodeResponse(t *testing.T, response *httptest.ResponseRecorder, target an
 	}
 }
 
-func assertArmoryResponse(t *testing.T, response *httptest.ResponseRecorder, status int, body string) {
+func assertControlAPIResponse(t *testing.T, response *httptest.ResponseRecorder, status int, body string) {
 	t.Helper()
 	if response.Code != status || response.Header().Get("Content-Type") != "application/json" || response.Body.String() != body {
 		t.Fatalf("\nwanted:\n%d application/json %s\ngot:\n%d %s %s", status, body, response.Code, response.Header().Get("Content-Type"), response.Body.String())

@@ -22,6 +22,7 @@ func addRoutes(mux *http.ServeMux, proxy *marasi.Proxy, chrome *Chrome, events *
 	addFindingRoutes(mux, proxy, events)
 	addArtifactRoutes(mux, proxy, events)
 	addArmoryRoutes(mux, proxy, events)
+	addWordlistRoutes(mux, proxy)
 	addChromeRoutes(mux, chrome)
 }
 
