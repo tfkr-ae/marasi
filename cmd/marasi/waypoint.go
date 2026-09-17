@@ -24,12 +24,22 @@ type waypointRequest struct {
 	Override string `json:"override"`
 }
 
+type waypointRemoveRequest struct {
+	Hostname string `json:"hostname"`
+}
+
 func init() {
 	waypointAddCmd.Flags().StringVar(&waypointHostname, "hostname", "", "Original host and port")
 	waypointAddCmd.Flags().StringVar(&waypointOverride, "override", "", "Override host and port")
 	waypointAddCmd.MarkFlagRequired("hostname")
 	waypointAddCmd.MarkFlagRequired("override")
-	waypointCmd.AddCommand(waypointListCmd, waypointAddCmd)
+	waypointUpdateCmd.Flags().StringVar(&waypointHostname, "hostname", "", "Original host and port")
+	waypointUpdateCmd.Flags().StringVar(&waypointOverride, "override", "", "Override host and port")
+	waypointUpdateCmd.MarkFlagRequired("hostname")
+	waypointUpdateCmd.MarkFlagRequired("override")
+	waypointRemoveCmd.Flags().StringVar(&waypointHostname, "hostname", "", "Original host and port")
+	waypointRemoveCmd.MarkFlagRequired("hostname")
+	waypointCmd.AddCommand(waypointListCmd, waypointAddCmd, waypointUpdateCmd, waypointRemoveCmd)
 	rootCmd.AddCommand(waypointCmd)
 }
 
@@ -77,7 +87,45 @@ var waypointAddCmd = &cobra.Command{
 	},
 }
 
+var waypointUpdateCmd = &cobra.Command{
+	Use:   "update",
+	Short: "Update a waypoint",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		body, err := json.Marshal(waypointRequest{Hostname: waypointHostname, Override: waypointOverride})
+		if err != nil {
+			return fmt.Errorf("encoding waypoint request: %w", err)
+		}
+		response, err := runWaypointRequestPath(cmd, http.MethodPost, "/waypoint/update", body, "updating waypoint")
+		if err != nil {
+			return err
+		}
+		return writeWaypointMutationResult(cmd, response, "waypoint "+strings.TrimSpace(waypointHostname)+" updated")
+	},
+}
+
+var waypointRemoveCmd = &cobra.Command{
+	Use:   "remove",
+	Short: "Remove a waypoint",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		body, err := json.Marshal(waypointRemoveRequest{Hostname: waypointHostname})
+		if err != nil {
+			return fmt.Errorf("encoding waypoint request: %w", err)
+		}
+		response, err := runWaypointRequest(cmd, http.MethodDelete, body, "removing waypoint")
+		if err != nil {
+			return err
+		}
+		return writeWaypointMutationResult(cmd, response, "waypoint "+strings.TrimSpace(waypointHostname)+" removed")
+	},
+}
+
 func runWaypointRequest(cmd *cobra.Command, method string, body []byte, operation string) ([]byte, error) {
+	return runWaypointRequestPath(cmd, method, "/waypoint", body, operation)
+}
+
+func runWaypointRequestPath(cmd *cobra.Command, method, path string, body []byte, operation string) ([]byte, error) {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -85,7 +133,7 @@ func runWaypointRequest(cmd *cobra.Command, method string, body []byte, operatio
 	if body != nil {
 		requestBody = bytes.NewReader(body)
 	}
-	request, err := http.NewRequestWithContext(ctx, method, "http://marasi/waypoint", requestBody)
+	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("creating waypoint request: %w", err)
 	}
@@ -110,6 +158,15 @@ func runWaypointRequest(cmd *cobra.Command, method string, body []byte, operatio
 		return nil, controlAPIError(operation, response.Status, responseBody)
 	}
 	return responseBody, nil
+}
+
+func writeWaypointMutationResult(cmd *cobra.Command, response []byte, confirmation string) error {
+	if jsonOutput {
+		_, err := cmd.OutOrStdout().Write(response)
+		return err
+	}
+	_, err := fmt.Fprintln(cmd.ErrOrStderr(), confirmation)
+	return err
 }
 
 func writeWaypointList(body []byte, stdout io.Writer) error {

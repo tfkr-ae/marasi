@@ -36,6 +36,24 @@ func TestWaypointCommands(t *testing.T) {
 			body:       `{"hostname":"example.com:443","override":"127.0.0.1:8080"}`,
 			wantStderr: "waypoint example.com:443 added\n",
 		},
+		{
+			name:       "should update a waypoint",
+			instance:   "update",
+			args:       []string{"waypoint", "update", "--hostname", "example.com:443", "--override", "127.0.0.1:9000"},
+			response:   `{"items":[{"hostname":"example.com:443","override":"127.0.0.1:9000"}]}` + "\n",
+			method:     http.MethodPost,
+			body:       `{"hostname":"example.com:443","override":"127.0.0.1:9000"}`,
+			wantStderr: "waypoint example.com:443 updated\n",
+		},
+		{
+			name:       "should remove a waypoint",
+			instance:   "remove",
+			args:       []string{"waypoint", "remove", "--hostname", "example.com:443"},
+			response:   `{"items":[]}` + "\n",
+			method:     http.MethodDelete,
+			body:       `{"hostname":"example.com:443"}`,
+			wantStderr: "waypoint example.com:443 removed\n",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			configDir := serviceConfigDir(t)
@@ -47,8 +65,12 @@ func TestWaypointCommands(t *testing.T) {
 				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 			}
 			got := sent.snapshot()
-			if got.Method != test.method || got.Path != "/waypoint" || got.Body != test.body || got.ContentType != requestContentType(test.body) {
-				t.Fatalf("\nwanted:\n%s /waypoint body %q content type %q\ngot:\n%s %s body %q content type %q", test.method, test.body, requestContentType(test.body), got.Method, got.Path, got.Body, got.ContentType)
+			wantPath := "/waypoint"
+			if test.instance == "update" {
+				wantPath = "/waypoint/update"
+			}
+			if got.Method != test.method || got.Path != wantPath || got.Body != test.body || got.ContentType != requestContentType(test.body) {
+				t.Fatalf("\nwanted:\n%s %s body %q content type %q\ngot:\n%s %s body %q content type %q", test.method, wantPath, test.body, requestContentType(test.body), got.Method, got.Path, got.Body, got.ContentType)
 			}
 			if stdout != test.wantStdout || stderr != test.wantStderr {
 				t.Fatalf("\nwanted:\nstdout %q, stderr %q\ngot:\nstdout %q, stderr %q", test.wantStdout, test.wantStderr, stdout, stderr)
@@ -64,6 +86,8 @@ func TestWaypointCommandContract(t *testing.T) {
 		for index, args := range [][]string{
 			{"waypoint", "list"},
 			{"waypoint", "add", "--hostname", "example.com:443", "--override", "127.0.0.1:8080"},
+			{"waypoint", "update", "--hostname", "example.com:443", "--override", "127.0.0.1:9000"},
+			{"waypoint", "remove", "--hostname", "example.com:443"},
 		} {
 			configDir := serviceConfigDir(t)
 			instanceName := "json-" + string(rune('a'+index))
@@ -89,6 +113,8 @@ func TestWaypointCommandContract(t *testing.T) {
 		}{
 			{[]string{"waypoint", "list"}, "listing waypoints"},
 			{[]string{"waypoint", "add", "--hostname", "example.com:443", "--override", "127.0.0.1:8080"}, "adding waypoint"},
+			{[]string{"waypoint", "update", "--hostname", "example.com:443", "--override", "127.0.0.1:9000"}, "updating waypoint"},
+			{[]string{"waypoint", "remove", "--hostname", "example.com:443"}, "removing waypoint"},
 		} {
 			configDir := serviceConfigDir(t)
 			startCannedControlAPI(t, configDir, "api", http.StatusConflict, `{"error":"waypoint_already_exists"}`)
@@ -106,6 +132,12 @@ func TestWaypointCommandContract(t *testing.T) {
 			{"waypoint", "add", "--hostname", "example.com:443"},
 			{"waypoint", "add", "--override", "127.0.0.1:8080"},
 			{"waypoint", "add", "extra", "--hostname", "example.com:443", "--override", "127.0.0.1:8080"},
+			{"waypoint", "update"},
+			{"waypoint", "update", "--hostname", "example.com:443"},
+			{"waypoint", "update", "--override", "127.0.0.1:9000"},
+			{"waypoint", "update", "extra", "--hostname", "example.com:443", "--override", "127.0.0.1:9000"},
+			{"waypoint", "remove"},
+			{"waypoint", "remove", "extra", "--hostname", "example.com:443"},
 		} {
 			commandArgs := append([]string{"--config-dir", configDir}, args...)
 			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
@@ -143,5 +175,22 @@ func TestWaypointCommandLifecycle(t *testing.T) {
 	want := "hostname: example.com:443\noverride: 127.0.0.1:8080\n"
 	if err != nil || stdout != want || stderr != "" {
 		t.Fatalf("listing waypoints: stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+	_, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "waypoint", "update", "--hostname", "example.com:443", "--override", "127.0.0.1:9000")
+	if err != nil || stderr != "waypoint example.com:443 updated\n" {
+		t.Fatalf("updating waypoint: stderr %q, error %v", stderr, err)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "waypoint", "list")
+	want = "hostname: example.com:443\noverride: 127.0.0.1:9000\n"
+	if err != nil || stdout != want || stderr != "" {
+		t.Fatalf("listing updated waypoint: stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+	_, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "waypoint", "remove", "--hostname", "example.com:443")
+	if err != nil || stderr != "waypoint example.com:443 removed\n" {
+		t.Fatalf("removing waypoint: stderr %q, error %v", stderr, err)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "waypoint", "list")
+	if err != nil || stdout != "" || stderr != "" {
+		t.Fatalf("listing removed waypoint: stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
 }

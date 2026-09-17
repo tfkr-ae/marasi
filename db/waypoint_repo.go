@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -11,7 +12,7 @@ var _ domain.WaypointRepository = (*Repository)(nil)
 
 var (
 	// ErrNoWaypointForHostname is returned when a waypoint is not found for a given hostname.
-	ErrNoWaypointForHostname = errors.New("hostname has no waypoint configured")
+	ErrNoWaypointForHostname = domain.ErrNoWaypointForHostname
 )
 
 // dbWaypoint represents a waypoint as stored in the database.
@@ -74,6 +75,24 @@ func (repo *Repository) CreateOrUpdateWaypoint(hostname string, override string)
 	}
 
 	return nil
+}
+
+// UpdateWaypoint changes an existing waypoint and reports whether the override changed.
+func (repo *Repository) UpdateWaypoint(hostname string, override string) (bool, error) {
+	var current string
+	if err := repo.dbConn.Get(&current, `SELECT override FROM waypoint WHERE hostname = ?`, hostname); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, domain.ErrNoWaypointForHostname
+		}
+		return false, fmt.Errorf("retrieving waypoint for %s: %w", hostname, err)
+	}
+	if current == override {
+		return false, nil
+	}
+	if _, err := repo.dbConn.Exec(`UPDATE waypoint SET override = ? WHERE hostname = ?`, override, hostname); err != nil {
+		return false, fmt.Errorf("updating waypoint for %s: %w", hostname, err)
+	}
+	return true, nil
 }
 
 // DeleteWaypoint removes the waypoint associated with the specified hostname.

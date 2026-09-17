@@ -16,6 +16,8 @@ type stubWaypointRepository struct {
 	items     map[string]string
 	getCalls  int
 	createErr error
+	updateErr error
+	deleteErr error
 	getErrAt  int
 }
 
@@ -58,7 +60,31 @@ func (repo *stubWaypointRepository) CreateOrUpdateWaypoint(hostname, override st
 	return nil
 }
 
-func (repo *stubWaypointRepository) DeleteWaypoint(string) error { return nil }
+func (repo *stubWaypointRepository) UpdateWaypoint(hostname, override string) (bool, error) {
+	if repo.updateErr != nil {
+		return false, repo.updateErr
+	}
+	current, exists := repo.items[hostname]
+	if !exists {
+		return false, domain.ErrNoWaypointForHostname
+	}
+	if current == override {
+		return false, nil
+	}
+	repo.items[hostname] = override
+	return true, nil
+}
+
+func (repo *stubWaypointRepository) DeleteWaypoint(hostname string) error {
+	if repo.deleteErr != nil {
+		return repo.deleteErr
+	}
+	if _, exists := repo.items[hostname]; !exists {
+		return domain.ErrNoWaypointForHostname
+	}
+	delete(repo.items, hostname)
+	return nil
+}
 
 func TestWaypointControlRoutes(t *testing.T) {
 	t.Run("should list waypoints in hostname order without publishing an event", func(t *testing.T) {
@@ -109,6 +135,74 @@ func TestWaypointControlRoutes(t *testing.T) {
 		assertNoWaypointEvent(t, subscriber)
 	})
 
+	t.Run("should update an override sync the live map and publish the resulting list", func(t *testing.T) {
+		repo := &stubWaypointRepository{items: map[string]string{
+			"a.example:80":  "127.0.0.1:8080",
+			"z.example:443": "127.0.0.1:9000",
+		}}
+		server, proxy := newWaypointServer(t, repo)
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		response := requestWaypointPath(server, http.MethodPost, "/waypoint/update", `{"hostname":" a.example:80 ","override":" [::1]:8443 "}`)
+		want := `{"items":[{"hostname":"a.example:80","override":"[::1]:8443"},{"hostname":"z.example:443","override":"127.0.0.1:9000"}]}`
+		assertWaypointResponse(t, response, http.StatusOK, want+"\n")
+		if proxy.Waypoints["a.example:80"] != "[::1]:8443" || repo.getCalls != 2 {
+			t.Fatalf("\nwanted:\nsynced updated waypoint before response\ngot:\nmap %v, get calls %d", proxy.Waypoints, repo.getCalls)
+		}
+		assertWaypointEvent(t, subscriber, "waypoint.updated", want)
+	})
+
+	t.Run("should return the current list without an event when the override is unchanged", func(t *testing.T) {
+		repo := &stubWaypointRepository{items: map[string]string{"example.com:443": "127.0.0.1:8080"}}
+		server, _ := newWaypointServer(t, repo)
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		response := requestWaypointPath(server, http.MethodPost, "/waypoint/update", `{"hostname":"example.com:443","override":"127.0.0.1:8080"}`)
+		assertWaypointResponse(t, response, http.StatusOK, `{"items":[{"hostname":"example.com:443","override":"127.0.0.1:8080"}]}`+"\n")
+		if repo.getCalls != 1 {
+			t.Fatalf("\nwanted:\none list read and no sync\ngot:\n%d reads", repo.getCalls)
+		}
+		assertNoWaypointEvent(t, subscriber)
+	})
+
+	t.Run("should remove a waypoint sync the live map and publish the remaining list", func(t *testing.T) {
+		repo := &stubWaypointRepository{items: map[string]string{
+			"a.example:80":  "127.0.0.1:8080",
+			"z.example:443": "127.0.0.1:9000",
+		}}
+		server, proxy := newWaypointServer(t, repo)
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		response := requestWaypointPath(server, http.MethodDelete, "/waypoint", `{"hostname":" z.example:443 "}`)
+		want := `{"items":[{"hostname":"a.example:80","override":"127.0.0.1:8080"}]}`
+		assertWaypointResponse(t, response, http.StatusOK, want+"\n")
+		if _, exists := proxy.Waypoints["z.example:443"]; exists || repo.getCalls != 2 {
+			t.Fatalf("\nwanted:\nsynced removal before response\ngot:\nmap %v, get calls %d", proxy.Waypoints, repo.getCalls)
+		}
+		assertWaypointEvent(t, subscriber, "waypoint.removed", want)
+	})
+
+	t.Run("should reject missing update and remove targets without publishing an event", func(t *testing.T) {
+		for _, request := range []struct {
+			method string
+			path   string
+			body   string
+		}{
+			{http.MethodPost, "/waypoint/update", `{"hostname":"missing.example:443","override":"127.0.0.1:8080"}`},
+			{http.MethodDelete, "/waypoint", `{"hostname":"missing.example:443"}`},
+		} {
+			server, _ := newWaypointServer(t, &stubWaypointRepository{})
+			subscriber := server.events.subscribe()
+			response := requestWaypointPath(server, request.method, request.path, request.body)
+			assertWaypointError(t, response, http.StatusNotFound, "not_found")
+			assertNoWaypointEvent(t, subscriber)
+			server.events.unsubscribe(subscriber)
+		}
+	})
+
 	t.Run("should reject invalid requests without publishing an event", func(t *testing.T) {
 		invalid := []string{
 			``, `null`, `{}`, `{"hostname":"example.com:443"}`, `{"override":"127.0.0.1:8080"}`,
@@ -120,10 +214,28 @@ func TestWaypointControlRoutes(t *testing.T) {
 			`{"hostname":"example.com:443","override":"127.0.0.1:8080","extra":true}`,
 			`{"hostname":"example.com:443","override":"127.0.0.1:8080"} {}`,
 		}
+		for _, path := range []string{"/waypoint", "/waypoint/update"} {
+			for _, body := range invalid {
+				server, _ := newWaypointServer(t, &stubWaypointRepository{})
+				subscriber := server.events.subscribe()
+				response := requestWaypointPath(server, http.MethodPost, path, body)
+				assertWaypointError(t, response, http.StatusBadRequest, "invalid_waypoint_request")
+				assertNoWaypointEvent(t, subscriber)
+				server.events.unsubscribe(subscriber)
+			}
+		}
+	})
+
+	t.Run("should reject invalid remove requests without publishing an event", func(t *testing.T) {
+		invalid := []string{
+			``, `null`, `{}`, `{"hostname":null}`, `{"hostname":" "}`, `{"hostname":"example.com"}`,
+			`{"hostname":"example.com:443","override":"127.0.0.1:8080"}`,
+			`{"hostname":"example.com:443"} {}`,
+		}
 		for _, body := range invalid {
 			server, _ := newWaypointServer(t, &stubWaypointRepository{})
 			subscriber := server.events.subscribe()
-			response := requestWaypoint(server, http.MethodPost, body)
+			response := requestWaypointPath(server, http.MethodDelete, "/waypoint", body)
 			assertWaypointError(t, response, http.StatusBadRequest, "invalid_waypoint_request")
 			assertNoWaypointEvent(t, subscriber)
 			server.events.unsubscribe(subscriber)
@@ -138,6 +250,8 @@ func TestWaypointControlRoutes(t *testing.T) {
 		server := newTestServer(proxy, func() {})
 		assertWaypointError(t, requestWaypoint(server, http.MethodGet, ""), http.StatusNotFound, "not_found")
 		assertWaypointError(t, requestWaypoint(server, http.MethodPost, `{"hostname":"example.com:443","override":"127.0.0.1:8080"}`), http.StatusNotFound, "not_found")
+		assertWaypointError(t, requestWaypointPath(server, http.MethodPost, "/waypoint/update", `{"hostname":"example.com:443","override":"127.0.0.1:8080"}`), http.StatusNotFound, "not_found")
+		assertWaypointError(t, requestWaypointPath(server, http.MethodDelete, "/waypoint", `{"hostname":"example.com:443"}`), http.StatusNotFound, "not_found")
 	})
 
 	t.Run("should return an internal error and no event when sync fails after persist", func(t *testing.T) {
@@ -166,7 +280,11 @@ func newWaypointServer(t *testing.T, repo *stubWaypointRepository) (*Server, *ma
 }
 
 func requestWaypoint(server *Server, method, body string) *httptest.ResponseRecorder {
-	request := httptest.NewRequest(method, "/waypoint", strings.NewReader(body))
+	return requestWaypointPath(server, method, "/waypoint", body)
+}
+
+func requestWaypointPath(server *Server, method, path, body string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	return response

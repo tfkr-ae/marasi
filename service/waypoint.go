@@ -26,6 +26,10 @@ type waypointRequest struct {
 	Override *string `json:"override"`
 }
 
+type waypointRemoveRequest struct {
+	Hostname *string `json:"hostname"`
+}
+
 var errInvalidWaypointRequest = errors.New("invalid waypoint request")
 
 func addWaypointRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
@@ -74,6 +78,67 @@ func addWaypointRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBro
 		events.publish("waypoint.added", response)
 		writeJSON(w, r, http.StatusOK, response)
 	})
+
+	mux.HandleFunc("POST /waypoint/update", func(w http.ResponseWriter, r *http.Request) {
+		waypoint, err := decodeWaypointRequest(r)
+		if err != nil {
+			writeWaypointError(w, r, http.StatusBadRequest, "invalid_waypoint_request")
+			return
+		}
+		repo, err := proxy.GetWaypointRepo()
+		if err != nil {
+			writeWaypointError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		changed, err := repo.UpdateWaypoint(waypoint.Hostname, waypoint.Override)
+		if err != nil {
+			writeWaypointRepositoryError(w, r, err)
+			return
+		}
+		if changed {
+			if err := proxy.SyncWaypoints(); err != nil {
+				writeWaypointError(w, r, http.StatusInternalServerError, "internal_server_error")
+				return
+			}
+		}
+		response, err := getWaypointList(repo)
+		if err != nil {
+			writeWaypointError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		if changed {
+			events.publish("waypoint.updated", response)
+		}
+		writeJSON(w, r, http.StatusOK, response)
+	})
+
+	mux.HandleFunc("DELETE /waypoint", func(w http.ResponseWriter, r *http.Request) {
+		hostname, err := decodeWaypointRemoveRequest(r)
+		if err != nil {
+			writeWaypointError(w, r, http.StatusBadRequest, "invalid_waypoint_request")
+			return
+		}
+		repo, err := proxy.GetWaypointRepo()
+		if err != nil {
+			writeWaypointError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		if err := repo.DeleteWaypoint(hostname); err != nil {
+			writeWaypointRepositoryError(w, r, err)
+			return
+		}
+		if err := proxy.SyncWaypoints(); err != nil {
+			writeWaypointError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		response, err := getWaypointList(repo)
+		if err != nil {
+			writeWaypointError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		events.publish("waypoint.removed", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
 }
 
 func decodeWaypointRequest(r *http.Request) (waypointSummary, error) {
@@ -103,6 +168,29 @@ func decodeWaypointRequest(r *http.Request) (waypointSummary, error) {
 	return waypointSummary{Hostname: hostname, Override: override}, nil
 }
 
+func decodeWaypointRemoveRequest(r *http.Request) (string, error) {
+	if r.Body == nil {
+		return "", errInvalidWaypointRequest
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request waypointRemoveRequest
+	if err := decoder.Decode(&request); err != nil || request.Hostname == nil {
+		return "", errInvalidWaypointRequest
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return "", errInvalidWaypointRequest
+	}
+	hostname := strings.TrimSpace(*request.Hostname)
+	if hostname == "" {
+		return "", errInvalidWaypointRequest
+	}
+	if _, _, err := net.SplitHostPort(hostname); err != nil {
+		return "", errInvalidWaypointRequest
+	}
+	return hostname, nil
+}
+
 func getWaypointList(repo domain.WaypointRepository) (waypointList, error) {
 	waypoints, err := repo.GetWaypoints()
 	if err != nil {
@@ -119,4 +207,12 @@ func writeWaypointError(w http.ResponseWriter, r *http.Request, status int, code
 	writeJSON(w, r, status, struct {
 		Error string `json:"error"`
 	}{Error: code})
+}
+
+func writeWaypointRepositoryError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, domain.ErrNoWaypointForHostname) {
+		writeWaypointError(w, r, http.StatusNotFound, "not_found")
+		return
+	}
+	writeWaypointError(w, r, http.StatusInternalServerError, "internal_server_error")
 }

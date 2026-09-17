@@ -151,6 +151,39 @@ func TestWaypointRepo_CreateOrUpdateWaypoint(t *testing.T) {
 	})
 }
 
+func TestWaypointRepo_UpdateWaypoint(t *testing.T) {
+	t.Run("should update only an existing waypoint and report whether it changed", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		if err := repo.CreateWaypoint("marasi.app:443", "127.0.0.1:8080"); err != nil {
+			t.Fatalf("creating waypoint: %v", err)
+		}
+		changed, err := repo.UpdateWaypoint("marasi.app:443", "127.0.0.1:9000")
+		if err != nil || !changed {
+			t.Fatalf("\nwanted:\nchanged without error\ngot:\nchanged %t, error %v", changed, err)
+		}
+		changed, err = repo.UpdateWaypoint("marasi.app:443", "127.0.0.1:9000")
+		if err != nil || changed {
+			t.Fatalf("\nwanted:\nunchanged without error\ngot:\nchanged %t, error %v", changed, err)
+		}
+	})
+
+	t.Run("should not insert a missing waypoint", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		changed, err := repo.UpdateWaypoint("missing.example:443", "127.0.0.1:9000")
+		if !errors.Is(err, domain.ErrNoWaypointForHostname) || changed {
+			t.Fatalf("\nwanted:\n%v and unchanged\ngot:\n%v and changed %t", domain.ErrNoWaypointForHostname, err, changed)
+		}
+		waypoints, getErr := repo.GetWaypoints()
+		if getErr != nil || len(waypoints) != 0 {
+			t.Fatalf("missing update inserted a waypoint: %v, %v", waypoints, getErr)
+		}
+	})
+}
+
 func TestWaypointRepo_DeleteWaypoint(t *testing.T) {
 	t.Run("should delete an existing waypoint", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
@@ -186,8 +219,8 @@ func TestWaypointRepo_DeleteWaypoint(t *testing.T) {
 
 		err := repo.DeleteWaypoint("marasi.app:443")
 
-		if !errors.Is(err, ErrNoWaypointForHostname) {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", ErrNoWaypointForHostname, err)
+		if !errors.Is(err, domain.ErrNoWaypointForHostname) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", domain.ErrNoWaypointForHostname, err)
 		}
 	})
 }
