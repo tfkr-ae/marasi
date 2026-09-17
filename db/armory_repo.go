@@ -272,6 +272,42 @@ func (repo *Repository) GetArmoryEntries(runID uuid.UUID) ([]*domain.ArmoryEntry
 	return result, nil
 }
 
+// ListArmoryRunTraffic returns an oldest-first page of traffic linked to a run.
+func (repo *Repository) ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+	query := `SELECT
+		request.id, request.scheme, request.method, request.host, request.path, request.requested_at,
+		request.status, request.status_code, request.content_type, request.length, request.responded_at,
+		json_remove(request.metadata, '$.prettified-request', '$.prettified-response') AS metadata
+		FROM armory_entry
+		JOIN request ON request.id = armory_entry.request_id
+		WHERE armory_entry.run_id = ?`
+	args := []any{runID}
+	if cursor != nil {
+		query += ` AND request.id > ?`
+		args = append(args, *cursor)
+	}
+	query += ` ORDER BY request.id ASC LIMIT ?`
+	args = append(args, limit+1)
+
+	rows := make([]*dbRequestResponseSummary, 0)
+	if err := repo.dbConn.Select(&rows, query, args...); err != nil {
+		return nil, nil, fmt.Errorf("listing traffic for armory run %s: %w", runID, err)
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	items := make([]*domain.RequestResponseSummary, len(rows))
+	for i, row := range rows {
+		items[i] = toDomainRequestResponseSummary(row)
+	}
+	if !hasMore {
+		return items, nil, nil
+	}
+	nextCursor := items[len(items)-1].ID
+	return items, &nextCursor, nil
+}
+
 // CreateArmoryEntry links a generated proxy request to an Armory run.
 func (repo *Repository) CreateArmoryEntry(entry *domain.ArmoryEntry) error {
 	query := `INSERT INTO armory_entry (run_id, request_id) VALUES (?, ?)`

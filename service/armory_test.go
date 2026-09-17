@@ -27,6 +27,7 @@ type stubArmoryRepository struct {
 	templates    map[uuid.UUID]*domain.ArmoryTemplate
 	runs         map[uuid.UUID]*domain.ArmoryRun
 	beforeDelete func()
+	listTraffic  func(uuid.UUID, *uuid.UUID, int) ([]*domain.RequestResponseSummary, *uuid.UUID, error)
 }
 
 func (repo *stubArmoryRepository) CreateArmoryTemplate(template *domain.ArmoryTemplate) error {
@@ -122,6 +123,10 @@ func (repo *stubArmoryRepository) DeleteArmoryRun(id uuid.UUID) error {
 	}
 	delete(repo.runs, id)
 	return nil
+}
+
+func (repo *stubArmoryRepository) ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+	return repo.listTraffic(runID, cursor, limit)
 }
 
 type stubArmoryService struct {
@@ -602,6 +607,64 @@ func TestArmoryRunControlAPI(t *testing.T) {
 			t.Fatalf("start failed: %d %s", started.Code, started.Body.String())
 		}
 		assertControlAPIResponse(t, deleted, http.StatusConflict, "{\"error\":\"run_active\"}\n")
+	})
+}
+
+func TestArmoryRunTrafficControlAPI(t *testing.T) {
+	runID := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+	cursor := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
+	nextCursor := uuid.MustParse("01938033-298e-73dc-b640-eb321b621154")
+	requestedAt := time.Date(2026, time.September, 17, 10, 30, 0, 0, time.UTC)
+
+	t.Run("should return a page using the requested cursor and limit", func(t *testing.T) {
+		repo := &stubArmoryRepository{runs: map[uuid.UUID]*domain.ArmoryRun{runID: {ID: runID}}}
+		repo.listTraffic = func(gotRunID uuid.UUID, gotCursor *uuid.UUID, gotLimit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+			if gotRunID != runID || gotCursor == nil || *gotCursor != cursor || gotLimit != 1 {
+				t.Fatalf("unexpected page request: run=%s cursor=%v limit=%d", gotRunID, gotCursor, gotLimit)
+			}
+			return []*domain.RequestResponseSummary{{
+				ID:          nextCursor,
+				Scheme:      "https",
+				Method:      "GET",
+				Host:        "example.com",
+				Path:        "/login",
+				StatusCode:  -1,
+				Metadata:    map[string]any{"armory_run_id": runID.String()},
+				RequestedAt: requestedAt,
+			}}, &nextCursor, nil
+		}
+		server := newArmoryServer(repo)
+
+		response := requestControlAPI(server, http.MethodGet, "/armory/run/"+runID.String()+"/traffic?limit=1&cursor="+cursor.String(), "")
+		want := fmt.Sprintf(`{"items":[{"id":%q,"scheme":"https","method":"GET","host":"example.com","path":"/login","status":"","status_code":-1,"content_type":"","length":"","metadata":{"armory_run_id":%q},"requested_at":"2026-09-17T10:30:00Z","responded_at":null}],"next_cursor":%q}`+"\n", nextCursor, runID, nextCursor)
+		assertControlAPIResponse(t, response, http.StatusOK, want)
+	})
+
+	t.Run("should return an empty default page", func(t *testing.T) {
+		repo := &stubArmoryRepository{runs: map[uuid.UUID]*domain.ArmoryRun{runID: {ID: runID}}}
+		repo.listTraffic = func(gotRunID uuid.UUID, gotCursor *uuid.UUID, gotLimit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+			if gotRunID != runID || gotCursor != nil || gotLimit != 200 {
+				t.Fatalf("unexpected default page request: run=%s cursor=%v limit=%d", gotRunID, gotCursor, gotLimit)
+			}
+			return nil, nil, nil
+		}
+		server := newArmoryServer(repo)
+
+		response := requestControlAPI(server, http.MethodGet, "/armory/run/"+runID.String()+"/traffic", "")
+		assertControlAPIResponse(t, response, http.StatusOK, "{\"items\":[],\"next_cursor\":null}\n")
+	})
+
+	t.Run("should reject invalid paging and return not found for a missing run", func(t *testing.T) {
+		repo := &stubArmoryRepository{runs: map[uuid.UUID]*domain.ArmoryRun{runID: {ID: runID}}, listTraffic: func(uuid.UUID, *uuid.UUID, int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+			t.Fatal("repository should not be called")
+			return nil, nil, nil
+		}}
+		server := newArmoryServer(repo)
+		for _, query := range []string{"?limit=0", "?limit=501", "?cursor=not-a-uuid"} {
+			assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/armory/run/"+runID.String()+"/traffic"+query, ""), http.StatusBadRequest, "{\"error\":\"bad_request\"}\n")
+		}
+		missingID := uuid.MustParse("01938034-41b0-7761-90c3-93bd0bb39baa")
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/armory/run/"+missingID.String()+"/traffic", ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
 	})
 }
 

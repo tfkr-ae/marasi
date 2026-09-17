@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -329,6 +330,28 @@ func addArmoryRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroad
 		writeJSON(w, r, http.StatusOK, armoryRunFromDomain(run))
 	})
 
+	mux.HandleFunc("GET /armory/run/{id}/traffic", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseArmoryID(w, r)
+		if !ok {
+			return
+		}
+		limit, cursor, ok := parseArmoryRunTrafficQuery(r)
+		if !ok {
+			writeArmoryError(w, r, http.StatusBadRequest, "bad_request")
+			return
+		}
+		if _, ok := getArmoryRun(w, r, proxy, id); !ok {
+			return
+		}
+		repo, _ := armoryRepository(proxy)
+		items, nextCursor, err := repo.ListArmoryRunTraffic(id, cursor, limit)
+		if err != nil {
+			writeArmoryError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		writeJSON(w, r, http.StatusOK, trafficListFromSummaries(items, nextCursor))
+	})
+
 	mux.HandleFunc("POST /armory/run/{id}/start", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := parseArmoryID(w, r)
 		if !ok {
@@ -640,6 +663,26 @@ func parseArmoryID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return id, true
+}
+
+func parseArmoryRunTrafficQuery(r *http.Request) (int, *uuid.UUID, bool) {
+	limit := 200
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 500 {
+			return 0, nil, false
+		}
+		limit = parsed
+	}
+	var cursor *uuid.UUID
+	if raw := r.URL.Query().Get("cursor"); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			return 0, nil, false
+		}
+		cursor = &parsed
+	}
+	return limit, cursor, true
 }
 
 func writeArmoryError(w http.ResponseWriter, r *http.Request, status int, code string) {
