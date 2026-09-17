@@ -17,6 +17,7 @@ func addRoutes(mux *http.ServeMux, proxy *marasi.Proxy, chrome *Chrome, events *
 	mux.Handle("/service/", http.StripPrefix("/service", serviceMux))
 	addTrafficRoutes(mux, proxy)
 	addLaunchpadRoutes(mux, proxy, events)
+	addWaypointRoutes(mux, proxy, events)
 	addTestCaseRoutes(mux, proxy, events)
 	addFindingRoutes(mux, proxy, events)
 	addArtifactRoutes(mux, proxy, events)

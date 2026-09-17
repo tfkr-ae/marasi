@@ -56,6 +56,8 @@ var (
 	ErrExtensionRepoNotFound = errors.New("extension repo not found")
 	// ErrLaunchpadRepoNotFound is returned when the launchpad repository is not found.
 	ErrLaunchpadRepoNotFound = errors.New("launchpad repo not found")
+	// ErrWaypointRepoNotFound is returned when the waypoint repository is not found.
+	ErrWaypointRepoNotFound = errors.New("waypoint repo not found")
 	// ErrReportingRepoNotFound is returned when the reporting repository is not found.
 	ErrReportingRepoNotFound = errors.New("reporting repo not found")
 	// ErrArmoryRepoNotFound is returned when the Armory repository is not found.
@@ -217,6 +219,14 @@ func (proxy *Proxy) GetLaunchpadRepo() (domain.LaunchpadRepository, error) {
 		return nil, ErrLaunchpadRepoNotFound
 	}
 	return proxy.LaunchpadRepo, nil
+}
+
+// GetWaypointRepo returns the waypoint repository.
+func (proxy *Proxy) GetWaypointRepo() (domain.WaypointRepository, error) {
+	if proxy.WaypointRepo == nil {
+		return nil, ErrWaypointRepoNotFound
+	}
+	return proxy.WaypointRepo, nil
 }
 
 // GetReportingRepo returns the reporting repository.

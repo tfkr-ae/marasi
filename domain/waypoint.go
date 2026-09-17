@@ -1,10 +1,18 @@
 package domain
 
+import "errors"
+
+// ErrWaypointAlreadyExists means a waypoint already uses the hostname.
+var ErrWaypointAlreadyExists = errors.New("waypoint already exists")
+
 // WaypointRepository defines the interface for managing Waypoints, which are rules for redirecting traffic.
 // Both hostname and override are expected to be in the "host:port" format.
 type WaypointRepository interface {
 	// GetWaypoints retrieves all configured waypoints from the repository.
 	GetWaypoints() ([]*Waypoint, error)
+
+	// CreateWaypoint inserts a waypoint without replacing an existing hostname.
+	CreateWaypoint(hostname string, override string) error
 
 	// CreateOrUpdateWaypoint creates a new waypoint or updates an existing one.
 	// If a waypoint for the given hostname already exists, its override value will be updated.

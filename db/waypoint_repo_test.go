@@ -28,11 +28,12 @@ func TestWaypointRepo_GetWaypoints(t *testing.T) {
 		defer teardown()
 
 		want := []*domain.Waypoint{
-			{Hostname: "marasi.app:443", Override: "127.0.0.1:8080"},
 			{Hostname: "api.marasi.app:80", Override: "127.0.0.1:9000"},
+			{Hostname: "marasi.app:443", Override: "127.0.0.1:8080"},
 		}
 
-		for _, waypoint := range want {
+		for index := len(want) - 1; index >= 0; index-- {
+			waypoint := want[index]
 			err := repo.CreateOrUpdateWaypoint(waypoint.Hostname, waypoint.Override)
 			if err != nil {
 				t.Fatalf("creating waypoints : %v", err)
@@ -50,6 +51,29 @@ func TestWaypointRepo_GetWaypoints(t *testing.T) {
 
 		if !reflect.DeepEqual(want, got) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
+		}
+	})
+}
+
+func TestWaypointRepo_CreateWaypoint(t *testing.T) {
+	t.Run("should insert without replacing an existing hostname", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		if err := repo.CreateWaypoint("marasi.app:443", "127.0.0.1:8080"); err != nil {
+			t.Fatalf("creating waypoint: %v", err)
+		}
+		err := repo.CreateWaypoint("marasi.app:443", "127.0.0.1:9000")
+		if !errors.Is(err, domain.ErrWaypointAlreadyExists) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", domain.ErrWaypointAlreadyExists, err)
+		}
+
+		got, err := repo.GetWaypoints()
+		if err != nil {
+			t.Fatalf("getting waypoints: %v", err)
+		}
+		if len(got) != 1 || got[0].Override != "127.0.0.1:8080" {
+			t.Fatalf("\nwanted:\noriginal waypoint\ngot:\n%v", got)
 		}
 	})
 }

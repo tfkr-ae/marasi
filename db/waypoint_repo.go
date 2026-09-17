@@ -31,7 +31,7 @@ func toDomainWaypoint(dbWaypoint *dbWaypoint) *domain.Waypoint {
 // GetWaypoints retrieves all configured waypoints from the database.
 func (repo *Repository) GetWaypoints() ([]*domain.Waypoint, error) {
 	var dbWaypoints []*dbWaypoint
-	query := `SELECT hostname, override FROM waypoint`
+	query := `SELECT hostname, override FROM waypoint ORDER BY hostname`
 
 	err := repo.dbConn.Select(&dbWaypoints, query)
 	if err != nil {
@@ -44,6 +44,22 @@ func (repo *Repository) GetWaypoints() ([]*domain.Waypoint, error) {
 	}
 
 	return domainWaypoints, nil
+}
+
+// CreateWaypoint inserts a waypoint without replacing an existing hostname.
+func (repo *Repository) CreateWaypoint(hostname string, override string) error {
+	result, err := repo.dbConn.Exec(`INSERT OR IGNORE INTO waypoint(hostname, override) VALUES (?, ?)`, hostname, override)
+	if err != nil {
+		return fmt.Errorf("creating waypoint for %s: %w", hostname, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking waypoint creation for %s: %w", hostname, err)
+	}
+	if rowsAffected == 0 {
+		return domain.ErrWaypointAlreadyExists
+	}
+	return nil
 }
 
 // CreateOrUpdateWaypoint creates a new waypoint or updates an existing one.
