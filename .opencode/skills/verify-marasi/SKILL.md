@@ -1,6 +1,6 @@
 ---
 name: verify-marasi
-description: Verify Marasi's CLI-driven proxy service when a change needs proof through a real launched instance, a proxied HTTP request, persisted traffic inspection, event subscription, launchpad replay, test-case control, finding control, artifact control, Chrome control, or waypoint control.
+description: Verify Marasi's CLI-driven proxy service when a change needs proof through a real launched instance, a proxied HTTP request, persisted traffic inspection, event subscription, launchpad replay, test-case control, finding control, artifact control, Chrome control, waypoint control, or Armory template and run control.
 ---
 
 # Verify Marasi
@@ -32,7 +32,7 @@ GOWORK=off make build VERSION="verify-${VERIFY_RUN_ID}"
 
 The start command exits after its detached child is ready. Readiness is a zero exit code and JSON containing the selected instance plus a non-empty `proxy_listener`, for example `{"instance":"verify-...","proxy_listener":"127.0.0.1:54321"}`.
 
-Verification needs no authentication, seed data, browser, or environment variables beyond those shown above. Marasi creates the project database, CA material, and default wordlists under the scratch config directory.
+Verification needs no authentication, seed data, browser, or environment variables beyond those shown above. Marasi creates the project database, CA material, and an empty `wordlists` directory under the scratch config directory. Armory runs need wordlist files you write there.
 
 Teardown only the selected instance:
 
