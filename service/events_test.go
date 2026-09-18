@@ -371,7 +371,7 @@ func TestListenerEvents(t *testing.T) {
 		defer stream.Body.Close()
 		requestListener(t, server, http.MethodPost, "/listener/start", `{"address":"127.0.0.1","port":0}`)
 		readEventFrame(t, reader)
-		proxy.cleanupErr = errors.New("flush failed")
+		proxy.cleanupErr = errors.New("closing WebSockets failed")
 
 		response := requestListener(t, server, http.MethodPost, "/listener/stop", "")
 		if response.Code != http.StatusOK || response.Body.String() != "{\"status\":\"inactive\",\"proxy_listener\":null}\n" {
@@ -383,7 +383,7 @@ func TestListenerEvents(t *testing.T) {
 		}
 	})
 
-	t.Run("should publish one updated event when replacement cleanup fails", func(t *testing.T) {
+	t.Run("should publish one updated event when WebSocket closure fails", func(t *testing.T) {
 		proxy := newListenerTestProxy()
 		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
@@ -394,10 +394,12 @@ func TestListenerEvents(t *testing.T) {
 		defer stream.Body.Close()
 		requestListener(t, server, http.MethodPost, "/listener/start", `{"address":"127.0.0.1","port":0}`)
 		readEventFrame(t, reader)
-		proxy.cleanupErr = errors.New("flush failed")
+		proxy.cleanupErr = errors.New("closing WebSockets failed")
 
 		response := requestListener(t, server, http.MethodPost, "/listener/update", `{"address":"127.0.0.1","port":0}`)
-		assertListenerError(t, response, http.StatusInternalServerError, "listener_cleanup_failed")
+		if response.Code != http.StatusOK {
+			t.Fatalf("updating listener: %d %s", response.Code, response.Body.String())
+		}
 		status := lifecycle.Status()
 		want := fmt.Sprintf("event: listener.updated\ndata: {\"status\":\"active\",\"proxy_listener\":%q}\n\n", statusAddress(t, status))
 		if got := readEventFrame(t, reader); got != want {

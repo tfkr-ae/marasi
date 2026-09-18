@@ -26,7 +26,6 @@ var (
 	ErrListenerAlreadyActive = errors.New("listener already active")
 	ErrListenerInactive      = errors.New("listener inactive")
 	ErrListenerUnavailable   = errors.New("listener unavailable")
-	ErrListenerCleanup       = errors.New("listener cleanup failed")
 	errListenerClosed        = errors.New("listener lifecycle closed")
 )
 
@@ -46,7 +45,6 @@ type listenerProxy interface {
 	GetListener(string, string) (net.Listener, error)
 	Serve(net.Listener) error
 	CloseWebSockets(int, string) error
-	CloseWebSocketsAndFlush() error
 	CloseTransport() error
 }
 
@@ -201,10 +199,8 @@ func (l *listenerLifecycle) run() {
 					request.result <- listenerResult{status: l.Status()}
 					continue
 				}
-				err := l.stopRun(current, false)
-				if closeErr := l.proxy.CloseWebSockets(marasiws.CloseGoingAway, ""); closeErr != nil {
-					fmt.Fprintf(l.logWriter, "closing WebSockets after proxy listener stop: %v\n", closeErr)
-				}
+				l.stopRun(current)
+				l.closeLiveWebSockets()
 				unexpected := current.state.Load() == listenerRunUnexpectedEnd
 				if unexpected {
 					l.logUnexpectedServe(current.serveErr)
@@ -217,7 +213,7 @@ func (l *listenerLifecycle) run() {
 				} else {
 					l.publishStopped(status, "requested")
 				}
-				request.result <- listenerResult{status: l.Status(), err: err}
+				request.result <- listenerResult{status: l.Status()}
 			case updateListener:
 				status, run, changed, err := l.update(current, request.settings)
 				if changed {
@@ -252,9 +248,7 @@ func (l *listenerLifecycle) run() {
 			}
 			current = nil
 			l.logUnexpectedServe(ended.err)
-			if err := l.proxy.CloseWebSocketsAndFlush(); err != nil {
-				fmt.Fprintf(l.logWriter, "cleaning up WebSockets after proxy listener failure: %v\n", err)
-			}
+			l.closeLiveWebSockets()
 			status := ListenerStatus{Status: ListenerInactive}
 			l.setStatus(status)
 			l.publishStopped(status, "failed")
@@ -315,12 +309,13 @@ func (l *listenerLifecycle) update(current *listenerRun, settings ListenerSettin
 		return ListenerStatus{}, current, false, err
 	}
 	actual := replacement.Addr().String()
-	cleanupErr := l.stopRun(current, true)
+	l.stopRun(current)
+	l.closeLiveWebSockets()
 	run, serveErr := l.serve(replacement)
 	if serveErr != nil {
-		return ListenerStatus{Status: ListenerInactive}, nil, true, errors.Join(cleanupErr, serveErr)
+		return ListenerStatus{Status: ListenerInactive}, nil, true, serveErr
 	}
-	return activeListenerStatus(actual), run, true, cleanupErr
+	return activeListenerStatus(actual), run, true, nil
 }
 
 func (l *listenerLifecycle) bind(endpoint string) (net.Listener, error) {
@@ -364,21 +359,19 @@ func (l *listenerLifecycle) serve(listener net.Listener) (*listenerRun, error) {
 	}
 }
 
-func (l *listenerLifecycle) stopRun(run *listenerRun, cleanup bool) error {
+func (l *listenerLifecycle) stopRun(run *listenerRun) {
 	run.state.CompareAndSwap(listenerRunServing, listenerRunExpectedClose)
 	closeErr := run.listener.Close()
 	if closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
 		fmt.Fprintf(l.logWriter, "closing proxy listener: %v\n", closeErr)
 	}
 	<-run.finished
-	if !cleanup {
-		return nil
+}
+
+func (l *listenerLifecycle) closeLiveWebSockets() {
+	if err := l.proxy.CloseWebSockets(marasiws.CloseGoingAway, ""); err != nil {
+		fmt.Fprintf(l.logWriter, "closing WebSockets: %v\n", err)
 	}
-	if err := l.proxy.CloseWebSocketsAndFlush(); err != nil {
-		fmt.Fprintf(l.logWriter, "cleaning up WebSockets after proxy listener stop: %v\n", err)
-		return listenerFailure{kind: ErrListenerCleanup, err: err}
-	}
-	return nil
 }
 
 func listenerEndpoint(settings ListenerSettings) (string, error) {

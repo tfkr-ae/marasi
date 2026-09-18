@@ -179,6 +179,38 @@ func TestListenerLifecycle(t *testing.T) {
 		}
 	})
 
+	t.Run("should close WebSockets without flushing during update", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		closeErr := errors.New("closing WebSockets failed")
+		proxy.cleanupErr = closeErr
+		var log bytes.Buffer
+		lifecycle := newListenerLifecycle(proxy, &log)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		started, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0))
+		if err != nil {
+			t.Fatalf("starting listener: %v", err)
+		}
+		oldAddress := statusAddress(t, started)
+
+		updated, err := lifecycle.Update(context.Background(), listenerSettings("127.0.0.1", 0))
+		if err != nil {
+			t.Fatalf("updating listener: %v", err)
+		}
+		calls, code, reason := proxy.webSocketClose()
+		if calls != 1 || code != marasiws.CloseGoingAway || reason != "" {
+			t.Fatalf("\nwanted:\n1 WebSocket close with %d and no reason\ngot:\n%d closes with %d and %q", marasiws.CloseGoingAway, calls, code, reason)
+		}
+		if proxy.cleanupCount() != 0 {
+			t.Fatalf("\nwanted:\nno flushing cleanup\ngot:\n%d cleanups", proxy.cleanupCount())
+		}
+		if updated.Status != ListenerActive || statusAddress(t, updated) == oldAddress {
+			t.Fatalf("\nwanted:\nactive replacement\ngot:\n%+v", updated)
+		}
+		if !bytes.Contains(log.Bytes(), []byte(closeErr.Error())) {
+			t.Fatalf("\nwanted:\nWebSocket close error in log\ngot:\n%s", log.String())
+		}
+	})
+
 	t.Run("should succeed when closing the listening socket returns an error", func(t *testing.T) {
 		proxy := newListenerTestProxy()
 		closeErr := errors.New("closing listener failed")
@@ -350,6 +382,168 @@ func TestListenerLifecycle(t *testing.T) {
 		if event.name != "listener.stopped" || !bytes.Contains(event.data, []byte(`"reason":"requested"`)) {
 			t.Fatalf("\nwanted:\nrequested listener stop event\ngot:\n%s %s", event.name, event.data)
 		}
+	})
+
+	t.Run("should wait for real WebSockets to close before serving a replacement", func(t *testing.T) {
+		originClose := make(chan marasiws.Frame, 1)
+		releaseOrigin := make(chan struct{})
+		origin := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			connection, buffered, err := response.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Errorf("hijacking origin connection: %v", err)
+				return
+			}
+			defer connection.Close()
+			key := request.Header.Get("Sec-WebSocket-Key")
+			accept := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+			_, err = fmt.Fprintf(buffered, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: %s\r\n\r\n", base64.StdEncoding.EncodeToString(accept[:]))
+			if err != nil {
+				t.Errorf("writing origin handshake: %v", err)
+				return
+			}
+			if err := buffered.Flush(); err != nil {
+				t.Errorf("flushing origin handshake: %v", err)
+				return
+			}
+			frame, err := marasiws.ReadFrame(buffered)
+			if err != nil {
+				t.Errorf("reading origin close: %v", err)
+				return
+			}
+			originClose <- frame
+			<-releaseOrigin
+		}))
+		defer origin.Close()
+
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		database, err := db.New(filepath.Join(t.TempDir(), "project.marasi"), logger)
+		if err != nil {
+			t.Fatalf("opening project: %v", err)
+		}
+		repository := db.NewProxyRepo(database)
+		extensions, err := repository.GetExtensions()
+		if err != nil {
+			t.Fatalf("getting default extensions: %v", err)
+		}
+		requestIDs := make(chan domain.ProxyRequest, 1)
+		proxy, err := marasi.New(
+			marasi.WithLogger(logger),
+			marasi.WithDefaultRepositories(repository),
+			marasi.WithExtensions(extensions),
+			marasi.WithRequestHandler(func(request domain.ProxyRequest) error {
+				requestIDs <- request
+				return nil
+			}),
+			marasi.WithResponseHandler(func(domain.ProxyResponse) error { return nil }),
+			marasi.WithLogHandler(func(domain.Log) error { return nil }),
+			marasi.WithBasePipeline(),
+			marasi.WithDefaultModifierPipeline(),
+		)
+		if err != nil {
+			t.Fatalf("creating proxy: %v", err)
+		}
+		lifecycle := newListenerLifecycle(proxy, io.Discard).(*listenerLifecycle)
+		t.Cleanup(func() {
+			close(releaseOrigin)
+			if err := lifecycle.Shutdown(); err != nil {
+				t.Fatalf("shutting down lifecycle: %v", err)
+			}
+		})
+		subscriber := lifecycle.events.subscribe()
+		defer lifecycle.events.unsubscribe(subscriber)
+		started, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0))
+		if err != nil {
+			t.Fatalf("starting listener: %v", err)
+		}
+		<-subscriber.events
+
+		client, err := net.DialTimeout("tcp", statusAddress(t, started), time.Second)
+		if err != nil {
+			t.Fatalf("dialing proxy: %v", err)
+		}
+		defer client.Close()
+		if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatalf("setting client deadline: %v", err)
+		}
+		buffered := bufio.NewReadWriter(bufio.NewReader(client), bufio.NewWriter(client))
+		originAddress := origin.Listener.Addr().String()
+		_, err = fmt.Fprintf(buffered, "GET %s/socket HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n", origin.URL, originAddress)
+		if err != nil {
+			t.Fatalf("writing upgrade request: %v", err)
+		}
+		if err := buffered.Flush(); err != nil {
+			t.Fatalf("flushing upgrade request: %v", err)
+		}
+		response, err := http.ReadResponse(buffered.Reader, &http.Request{Method: http.MethodGet})
+		if err != nil {
+			t.Fatalf("reading upgrade response: %v", err)
+		}
+		if response.StatusCode != http.StatusSwitchingProtocols {
+			t.Fatalf("\nwanted:\n101 Switching Protocols\ngot:\n%s", response.Status)
+		}
+		request := <-requestIDs
+		deadline := time.Now().Add(time.Second)
+		for {
+			if _, exists := proxy.WebSocketRegistry.GetByRequestID(request.ID); exists {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("timed out waiting for live WebSocket registration")
+			}
+			time.Sleep(time.Millisecond)
+		}
+
+		updateResult := make(chan struct {
+			status ListenerStatus
+			err    error
+		}, 1)
+		go func() {
+			status, updateErr := lifecycle.Update(context.Background(), listenerSettings("127.0.0.1", 0))
+			updateResult <- struct {
+				status ListenerStatus
+				err    error
+			}{status, updateErr}
+		}()
+		upstreamFrame := <-originClose
+		select {
+		case event := <-subscriber.events:
+			t.Fatalf("\nwanted:\nno updated event before WebSocket session ends\ngot:\n%s", event.name)
+		default:
+		}
+		select {
+		case result := <-updateResult:
+			if result.err != nil {
+				t.Fatalf("updating listener: %v", result.err)
+			}
+			if result.status.Status != ListenerActive || statusAddress(t, result.status) == statusAddress(t, started) {
+				t.Fatalf("\nwanted:\nactive replacement\ngot:\n%+v", result.status)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("\nwanted:\nUpdate to finish through the bounded WebSocket close fallback\ngot:\ntimeout")
+		}
+		clientFrame, err := marasiws.ReadFrame(buffered)
+		if err != nil {
+			t.Fatalf("reading client close: %v", err)
+		}
+		for peer, frame := range map[string]marasiws.Frame{"client": clientFrame, "upstream": upstreamFrame} {
+			code, reason, err := marasiws.ParseClosePayload(frame.Payload)
+			if err != nil || frame.Opcode != marasiws.OpClose || code != marasiws.CloseGoingAway || reason != "" {
+				t.Fatalf("\nwanted:\n%s close 1001 with no reason\ngot:\nopcode %d, code %d, reason %q, error %v", peer, frame.Opcode, code, reason, err)
+			}
+		}
+		event := <-subscriber.events
+		if event.name != "listener.updated" {
+			t.Fatalf("\nwanted:\nlistener updated event\ngot:\n%s %s", event.name, event.data)
+		}
+		if connection, err := net.DialTimeout("tcp", statusAddress(t, started), 50*time.Millisecond); err == nil {
+			connection.Close()
+			t.Fatal("\nwanted:\nold listener closed after Update\ngot:\naccepted connection")
+		}
+		connection, err := net.DialTimeout("tcp", statusAddress(t, lifecycle.Status()), time.Second)
+		if err != nil {
+			t.Fatalf("dialing replacement listener: %v", err)
+		}
+		connection.Close()
 	})
 
 	t.Run("should let accepted HTTP traffic continue without closing the project", func(t *testing.T) {
@@ -591,8 +785,9 @@ func TestListenerLifecycle(t *testing.T) {
 		if statusAddress(t, updated) == statusAddress(t, before) {
 			t.Fatalf("\nwanted:\nreplacement assigned endpoint\ngot:\n%s", statusAddress(t, updated))
 		}
-		if proxy.cleanupCount() != 1 {
-			t.Fatalf("\nwanted:\n1 WebSocket cleanup\ngot:\n%d", proxy.cleanupCount())
+		calls, code, reason := proxy.webSocketClose()
+		if calls != 1 || code != marasiws.CloseGoingAway || reason != "" || proxy.cleanupCount() != 0 {
+			t.Fatalf("\nwanted:\n1 WebSocket close with %d and no flush\ngot:\n%d closes with %d, %q, and %d cleanups", marasiws.CloseGoingAway, calls, code, reason, proxy.cleanupCount())
 		}
 	})
 
@@ -616,8 +811,9 @@ func TestListenerLifecycle(t *testing.T) {
 		if !errors.Is(err, ErrListenerUnavailable) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", ErrListenerUnavailable, err)
 		}
-		if statusAddress(t, status) != oldAddress || proxy.cleanupCount() != 0 {
-			t.Fatalf("\nwanted:\noriginal active listener without cleanup\ngot:\n%+v and %d cleanups", status, proxy.cleanupCount())
+		calls, _, _ := proxy.webSocketClose()
+		if statusAddress(t, status) != oldAddress || calls != 0 || proxy.cleanupCount() != 0 {
+			t.Fatalf("\nwanted:\noriginal active listener without cleanup\ngot:\n%+v, %d closes, and %d cleanups", status, calls, proxy.cleanupCount())
 		}
 		connection, err := net.DialTimeout("tcp", oldAddress, time.Second)
 		if err != nil {
@@ -800,7 +996,7 @@ func TestListenerLifecycle(t *testing.T) {
 		}
 	})
 
-	t.Run("should move forward after replacement cleanup fails", func(t *testing.T) {
+	t.Run("should succeed when WebSocket closure fails during update", func(t *testing.T) {
 		proxy := newListenerTestProxy()
 		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
@@ -809,12 +1005,12 @@ func TestListenerLifecycle(t *testing.T) {
 			t.Fatalf("starting listener: %v", err)
 		}
 		oldAddress := statusAddress(t, started)
-		proxy.cleanupErr = errors.New("flush failed")
+		proxy.cleanupErr = errors.New("closing WebSockets failed")
 		port := uint16(0)
 
 		updated, err := lifecycle.Update(context.Background(), listenerSettings("127.0.0.1", port))
-		if !errors.Is(err, ErrListenerCleanup) {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", ErrListenerCleanup, err)
+		if err != nil {
+			t.Fatalf("updating listener: %v", err)
 		}
 		newAddress := statusAddress(t, updated)
 		if newAddress == oldAddress || updated.Status != ListenerActive {
@@ -834,6 +1030,39 @@ func TestListenerLifecycle(t *testing.T) {
 		}
 	})
 
+	t.Run("should not publish a failed stop after requested stop or update", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		lifecycle := newListenerLifecycle(proxy, nil).(*listenerLifecycle)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		subscriber := lifecycle.events.subscribe()
+		defer lifecycle.events.unsubscribe(subscriber)
+		if _, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0)); err != nil {
+			t.Fatalf("starting listener: %v", err)
+		}
+		<-subscriber.events
+		if _, err := lifecycle.Stop(context.Background()); err != nil {
+			t.Fatalf("stopping listener: %v", err)
+		}
+		event := <-subscriber.events
+		if event.name != "listener.stopped" || !bytes.Contains(event.data, []byte(`"reason":"requested"`)) {
+			t.Fatalf("\nwanted:\nrequested listener stop event\ngot:\n%s %s", event.name, event.data)
+		}
+		assertNoListenerEvent(t, subscriber)
+
+		if _, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0)); err != nil {
+			t.Fatalf("restarting listener: %v", err)
+		}
+		<-subscriber.events
+		if _, err := lifecycle.Update(context.Background(), listenerSettings("127.0.0.1", 0)); err != nil {
+			t.Fatalf("updating listener: %v", err)
+		}
+		event = <-subscriber.events
+		if event.name != "listener.updated" {
+			t.Fatalf("\nwanted:\nlistener updated event\ngot:\n%s %s", event.name, event.data)
+		}
+		assertNoListenerEvent(t, subscriber)
+	})
+
 	t.Run("should recover after an unexpected serving failure", func(t *testing.T) {
 		proxy := newListenerTestProxy()
 		var log bytes.Buffer
@@ -848,8 +1077,12 @@ func TestListenerLifecycle(t *testing.T) {
 			t.Fatalf("failing listener: %v", err)
 		}
 		waitForListenerStatus(t, lifecycle, ListenerInactive)
-		if proxy.cleanupCount() != 1 || !bytes.Contains(log.Bytes(), []byte("proxy listener stopped unexpectedly")) {
-			t.Fatalf("\nwanted:\nfailure log and WebSocket cleanup\ngot:\n%s and %d cleanups", log.String(), proxy.cleanupCount())
+		calls, code, reason := proxy.webSocketClose()
+		if calls != 1 || code != marasiws.CloseGoingAway || reason != "" || proxy.cleanupCount() != 0 {
+			t.Fatalf("\nwanted:\n1 WebSocket close with %d and no flush\ngot:\n%d closes with %d, %q, and %d cleanups", marasiws.CloseGoingAway, calls, code, reason, proxy.cleanupCount())
+		}
+		if !bytes.Contains(log.Bytes(), []byte("proxy listener stopped unexpectedly")) {
+			t.Fatalf("\nwanted:\nfailure log\ngot:\n%s", log.String())
 		}
 		restarted, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0))
 		if err != nil {
@@ -1004,6 +1237,17 @@ func availablePort(t *testing.T) uint16 {
 		t.Fatalf("releasing available port: %v", err)
 	}
 	return port
+}
+
+func assertNoListenerEvent(t *testing.T, subscriber *eventSubscriber) {
+	t.Helper()
+	timer := time.NewTimer(50 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case event := <-subscriber.events:
+		t.Fatalf("\nwanted:\nno extra listener event\ngot:\n%s %s", event.name, event.data)
+	case <-timer.C:
+	}
 }
 
 func waitForListenerStatus(t *testing.T, lifecycle ListenerLifecycle, want ListenerState) {

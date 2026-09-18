@@ -220,8 +220,6 @@ func writeListenerError(w http.ResponseWriter, r *http.Request, err error) {
 		status, code = http.StatusConflict, "listener_inactive"
 	case errors.Is(err, ErrListenerUnavailable):
 		status, code = http.StatusConflict, "listener_unavailable"
-	case errors.Is(err, ErrListenerCleanup):
-		status, code = http.StatusInternalServerError, "listener_cleanup_failed"
 	}
 	writeJSON(w, r, status, struct {
 		Error string `json:"error"`
