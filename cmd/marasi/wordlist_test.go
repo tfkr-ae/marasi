@@ -2,8 +2,30 @@ package main
 
 import (
 	"net/http"
+	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestWordlistAddCommand(t *testing.T) {
+	binary := buildMarasi(t)
+	configDir := serviceConfigDir(t)
+	sent := startCannedControlAPI(t, configDir, "add", http.StatusOK, `{"items":[{"name":"passwords.txt","size":15}]}`+"\n")
+	workingDir := t.TempDir()
+
+	stdout, stderr, err := runMarasiInDir(binary, workingDir, "--config-dir", configDir, "--instance", "add", "wordlist", "add", "passwords.txt")
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	request := sent.snapshot()
+	wantBody := `{"path":"` + filepath.Join(workingDir, "passwords.txt") + `"}`
+	if request.Method != http.MethodPost || request.Path != "/wordlist" || request.Body != wantBody {
+		t.Fatalf("\nwanted:\nPOST /wordlist with body %s\ngot:\n%s %s with body %q", wantBody, request.Method, request.Path, request.Body)
+	}
+	if stdout != "" || stderr != "wordlist passwords.txt added\n" {
+		t.Fatalf("\nwanted:\nempty stdout, stderr %q\ngot:\nstdout %q, stderr %q", "wordlist passwords.txt added\n", stdout, stderr)
+	}
+}
 
 func TestWordlistListCommand(t *testing.T) {
 	binary := buildMarasi(t)
@@ -61,7 +83,7 @@ func TestWordlistCommandContract(t *testing.T) {
 	binary := buildMarasi(t)
 
 	t.Run("should pass successful responses through byte for byte in JSON mode", func(t *testing.T) {
-		for index, args := range [][]string{{"wordlist", "list"}, {"wordlist", "preview", "passwords.txt"}} {
+		for index, args := range [][]string{{"wordlist", "list"}, {"wordlist", "preview", "passwords.txt"}, {"wordlist", "add", "passwords.txt"}} {
 			configDir := serviceConfigDir(t)
 			instanceName := "json-" + string(rune('a'+index))
 			body := " {\n  \"unexpected\": true\n} "
@@ -72,6 +94,13 @@ func TestWordlistCommandContract(t *testing.T) {
 			if err != nil || stdout != body || stderr != "" {
 				t.Fatalf("\n%v wanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", args, body, stdout, stderr, err)
 			}
+		}
+	})
+
+	t.Run("should say add moves the source file", func(t *testing.T) {
+		stdout, stderr, err := runMarasi(binary, "wordlist", "add", "--help")
+		if err != nil || stderr != "" || !strings.Contains(stdout, "moved into the wordlists directory") {
+			t.Fatalf("\nwanted:\nhelp stating the source is moved\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
 		}
 	})
 
@@ -89,7 +118,7 @@ func TestWordlistCommandContract(t *testing.T) {
 
 	t.Run("should enforce command arguments", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		for _, args := range [][]string{{"wordlist", "list", "extra"}, {"wordlist", "preview"}, {"wordlist", "preview", "one", "two"}, {"wordlist", "preview", "one", "--limit", "nope"}} {
+		for _, args := range [][]string{{"wordlist", "list", "extra"}, {"wordlist", "preview"}, {"wordlist", "preview", "one", "two"}, {"wordlist", "preview", "one", "--limit", "nope"}, {"wordlist", "add"}, {"wordlist", "add", "one", "two"}} {
 			commandArgs := append([]string{"--config-dir", configDir}, args...)
 			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
 				t.Fatalf("\nwanted:\ninvalid invocation\ngot:\naccepted %v", args)

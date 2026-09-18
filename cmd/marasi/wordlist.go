@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -19,7 +21,7 @@ var wordlistPreviewLimit int
 
 func init() {
 	wordlistPreviewCmd.Flags().IntVar(&wordlistPreviewLimit, "limit", 20, "Number of entries to preview")
-	wordlistCmd.AddCommand(wordlistListCmd, wordlistPreviewCmd)
+	wordlistCmd.AddCommand(wordlistListCmd, wordlistPreviewCmd, wordlistAddCmd)
 	rootCmd.AddCommand(wordlistCmd)
 }
 
@@ -32,7 +34,7 @@ var wordlistPreviewCmd = &cobra.Command{
 		if cmd.Flags().Changed("limit") {
 			path += "?" + url.Values{"limit": {fmt.Sprint(wordlistPreviewLimit)}}.Encode()
 		}
-		body, err := runWordlistRequest(cmd, path, "previewing wordlist")
+		body, err := runWordlistRequest(cmd, http.MethodGet, path, "previewing wordlist", nil)
 		if err != nil {
 			return err
 		}
@@ -58,7 +60,7 @@ var wordlistListCmd = &cobra.Command{
 	Short: "List wordlists",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		body, err := runWordlistRequest(cmd, "/wordlist", "listing wordlists")
+		body, err := runWordlistRequest(cmd, http.MethodGet, "/wordlist", "listing wordlists", nil)
 		if err != nil {
 			return err
 		}
@@ -70,13 +72,49 @@ var wordlistListCmd = &cobra.Command{
 	},
 }
 
-func runWordlistRequest(cmd *cobra.Command, path, operation string) ([]byte, error) {
+var wordlistAddCmd = &cobra.Command{
+	Use:   "add PATH",
+	Short: "Add a wordlist",
+	Long:  "Add a wordlist. The source file is moved into the wordlists directory.",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := filepath.Abs(args[0])
+		if err != nil {
+			return fmt.Errorf("resolving wordlist path: %w", err)
+		}
+		requestBody, err := json.Marshal(struct {
+			Path string `json:"path"`
+		}{Path: path})
+		if err != nil {
+			return fmt.Errorf("encoding wordlist add request: %w", err)
+		}
+		response, err := runWordlistRequest(cmd, http.MethodPost, "/wordlist", "adding wordlist", requestBody)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(response)
+		} else {
+			_, err = fmt.Fprintf(cmd.ErrOrStderr(), "wordlist %s added\n", filepath.Base(path))
+		}
+		return err
+	},
+}
+
+func runWordlistRequest(cmd *cobra.Command, method, path, operation string, body []byte) ([]byte, error) {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi"+path, nil)
+	var requestBody io.Reader
+	if body != nil {
+		requestBody = bytes.NewReader(body)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("creating wordlist request: %w", err)
+	}
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
 	}
 	client := service.NewClient(instancePath + ".sock")
 	defer client.Close()

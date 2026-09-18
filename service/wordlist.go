@@ -1,10 +1,12 @@
 package service
 
 import (
+	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,7 +29,7 @@ type wordlistPreview struct {
 	Items []string `json:"items"`
 }
 
-func addWordlistRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
+func addWordlistRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	mux.HandleFunc("GET /wordlist", func(w http.ResponseWriter, r *http.Request) {
 		query, ok := parseWordlistQuery(r)
 		if !ok || len(query) != 0 {
@@ -39,17 +41,50 @@ func addWordlistRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 			writeWordlistError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
-		infos, err := provider.List()
+		response, err := listWordlists(provider)
 		if err != nil {
 			writeWordlistError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		items := make([]wordlistSummary, 0, len(infos))
-		for _, info := range infos {
-			items = append(items, wordlistSummary{Name: info.Name, Size: info.Size})
+		writeJSON(w, r, http.StatusOK, response)
+	})
+
+	mux.HandleFunc("POST /wordlist", func(w http.ResponseWriter, r *http.Request) {
+		path, ok := parseWordlistAddRequest(r)
+		if !ok {
+			writeWordlistError(w, r, http.StatusBadRequest, "invalid_wordlist_request")
+			return
 		}
-		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
-		writeJSON(w, r, http.StatusOK, wordlistList{Items: items})
+		provider, ok := wordlistProvider(proxy)
+		if !ok {
+			writeWordlistError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		manager, ok := provider.(interface{ Add(string) error })
+		if !ok {
+			writeWordlistError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		if err := manager.Add(path); err != nil {
+			switch {
+			case errors.Is(err, wordlist.ErrAlreadyExists):
+				writeWordlistError(w, r, http.StatusConflict, "wordlist_already_exists")
+			case errors.Is(err, wordlist.ErrInvalidSource):
+				writeWordlistError(w, r, http.StatusBadRequest, "invalid_wordlist_request")
+			case errors.Is(err, os.ErrNotExist):
+				writeWordlistError(w, r, http.StatusNotFound, "not_found")
+			default:
+				writeWordlistError(w, r, http.StatusInternalServerError, "internal_server_error")
+			}
+			return
+		}
+		response, err := listWordlists(provider)
+		if err != nil {
+			writeWordlistError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		events.publish("wordlist.added", response)
+		writeJSON(w, r, http.StatusOK, response)
 	})
 
 	mux.HandleFunc("GET /wordlist/", func(w http.ResponseWriter, r *http.Request) {
@@ -91,6 +126,38 @@ func addWordlistRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 	})
 }
 
+func listWordlists(provider wordlist.Provider) (wordlistList, error) {
+	infos, err := provider.List()
+	if err != nil {
+		return wordlistList{}, err
+	}
+	items := make([]wordlistSummary, 0, len(infos))
+	for _, info := range infos {
+		items = append(items, wordlistSummary{Name: info.Name, Size: info.Size})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	return wordlistList{Items: items}, nil
+}
+
+func parseWordlistAddRequest(r *http.Request) (string, bool) {
+	query, ok := parseWordlistQuery(r)
+	if !ok || len(query) != 0 {
+		return "", false
+	}
+	var request struct {
+		Path string `json:"path"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || request.Path == "" {
+		return "", false
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return "", false
+	}
+	return request.Path, true
+}
+
 func wordlistProvider(proxy *marasi.Proxy) (wordlist.Provider, bool) {
 	if proxy == nil {
 		return nil, false
@@ -100,7 +167,7 @@ func wordlistProvider(proxy *marasi.Proxy) (wordlist.Provider, bool) {
 }
 
 func parseWordlistPreviewRequest(r *http.Request, name string) (int, bool) {
-	if !validWordlistName(name) {
+	if !wordlist.ValidName(name) {
 		return 0, false
 	}
 	query, ok := parseWordlistQuery(r)
@@ -130,11 +197,7 @@ func invalidWordlistPath(path string) bool {
 	if !strings.HasPrefix(path, "/wordlist/") {
 		return false
 	}
-	return !validWordlistName(strings.TrimPrefix(path, "/wordlist/"))
-}
-
-func validWordlistName(name string) bool {
-	return name != "" && filepath.IsLocal(name) && filepath.Base(name) == name
+	return !wordlist.ValidName(strings.TrimPrefix(path, "/wordlist/"))
 }
 
 func writeWordlistError(w http.ResponseWriter, r *http.Request, status int, code string) {

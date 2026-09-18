@@ -2,6 +2,7 @@ package wordlist
 
 import (
 	"bufio"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +10,138 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestManagerAdd(t *testing.T) {
+	t.Run("should move a regular file into the wordlists directory", func(t *testing.T) {
+		manager, err := NewManager(t.TempDir())
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		source := filepath.Join(t.TempDir(), "passwords.txt")
+		if err = os.WriteFile(source, []byte("admin\npassword\n"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if err = manager.Add(source); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if _, err = os.Stat(source); !os.IsNotExist(err) {
+			t.Fatalf("\nwanted:\nsource removed\ngot:\n%v", err)
+		}
+		content, err := os.ReadFile(filepath.Join(manager.wordlistDir, "passwords.txt"))
+		if err != nil || string(content) != "admin\npassword\n" {
+			t.Fatalf("\nwanted:\nadded wordlist\ngot:\n%q, %v", content, err)
+		}
+	})
+
+	t.Run("should leave the source in place when the name already exists", func(t *testing.T) {
+		manager, err := NewManager(t.TempDir())
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		destination := filepath.Join(manager.wordlistDir, "passwords.txt")
+		if err = os.WriteFile(destination, []byte("existing"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		source := filepath.Join(t.TempDir(), "passwords.txt")
+		if err = os.WriteFile(source, []byte("new"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		err = manager.Add(source)
+		if !errors.Is(err, ErrAlreadyExists) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", ErrAlreadyExists, err)
+		}
+		if content, readErr := os.ReadFile(source); readErr != nil || string(content) != "new" {
+			t.Fatalf("\nwanted:\nsource left in place\ngot:\n%q, %v", content, readErr)
+		}
+		if content, readErr := os.ReadFile(destination); readErr != nil || string(content) != "existing" {
+			t.Fatalf("\nwanted:\nexisting wordlist unchanged\ngot:\n%q, %v", content, readErr)
+		}
+	})
+
+	t.Run("should let only one manager claim a destination name", func(t *testing.T) {
+		parentDir := t.TempDir()
+		first, err := NewManager(parentDir)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		second, err := NewManager(parentDir)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		firstSource := filepath.Join(t.TempDir(), "shared.txt")
+		secondSource := filepath.Join(t.TempDir(), "shared.txt")
+		if err = os.WriteFile(firstSource, []byte("first"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err = os.WriteFile(secondSource, []byte("second"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		start := make(chan struct{})
+		results := make(chan error, 2)
+		for index, add := range []func(string) error{first.Add, second.Add} {
+			source := []string{firstSource, secondSource}[index]
+			go func() {
+				<-start
+				results <- add(source)
+			}()
+		}
+		close(start)
+		firstErr, secondErr := <-results, <-results
+		if !((firstErr == nil && errors.Is(secondErr, ErrAlreadyExists)) || (secondErr == nil && errors.Is(firstErr, ErrAlreadyExists))) {
+			t.Fatalf("\nwanted:\none success and one %v\ngot:\n%v and %v", ErrAlreadyExists, firstErr, secondErr)
+		}
+	})
+
+	t.Run("should reject invalid sources", func(t *testing.T) {
+		manager, err := NewManager(t.TempDir())
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		outside := t.TempDir()
+		regular := filepath.Join(outside, "regular.txt")
+		if err = os.WriteFile(regular, []byte("word\n"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		inside := filepath.Join(manager.wordlistDir, "inside.txt")
+		if err = os.WriteFile(inside, []byte("word\n"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		invalid := []string{
+			"relative.txt",
+			outside,
+			inside,
+			filepath.Join(outside, "bad\x00name"),
+		}
+		if runtime.GOOS != "windows" {
+			symlink := filepath.Join(outside, "link.txt")
+			if err = os.Symlink(regular, symlink); err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			alias := filepath.Join(t.TempDir(), "alias")
+			if err = os.Symlink(manager.wordlistDir, alias); err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			invalid = append(invalid, symlink, filepath.Join(alias, "inside.txt"))
+		}
+
+		for _, source := range invalid {
+			t.Run(strings.ReplaceAll(source, string(filepath.Separator), "_"), func(t *testing.T) {
+				if addErr := manager.Add(source); !errors.Is(addErr, ErrInvalidSource) {
+					t.Fatalf("\nwanted:\n%v\ngot:\n%v for %q", ErrInvalidSource, addErr, source)
+				}
+			})
+		}
+
+		missing := filepath.Join(outside, "missing.txt")
+		if addErr := manager.Add(missing); !errors.Is(addErr, os.ErrNotExist) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", os.ErrNotExist, addErr)
+		}
+	})
+}
 
 func TestNewManager(t *testing.T) {
 	t.Run("should create wordlists directory", func(t *testing.T) {

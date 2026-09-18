@@ -6,8 +6,17 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
+)
+
+var (
+	// ErrAlreadyExists means the source basename is already a wordlist.
+	ErrAlreadyExists = errors.New("wordlist already exists")
+	// ErrInvalidSource means the source cannot be added as a wordlist.
+	ErrInvalidSource = errors.New("invalid wordlist source")
 )
 
 // Iterator reads a wordlist one entry at a time.
@@ -99,13 +108,137 @@ func (m *Manager) List() ([]Info, error) {
 	return wordlists, nil
 }
 
-// Open opens a regular wordlist file by name and returns an iterator for it.
-func (m *Manager) Open(name string) (Iterator, error) {
-	if name == "" {
-		return nil, errors.New("wordlist name cannot be empty")
+// Add moves a regular file into the managed directory under its basename.
+func (m *Manager) Add(source string) error {
+	if !filepath.IsAbs(source) {
+		return ErrInvalidSource
 	}
 
-	if !filepath.IsLocal(name) || filepath.Base(name) != name {
+	source = filepath.Clean(source)
+	name := filepath.Base(source)
+	if !ValidName(name) || pathWithin(m.wordlistDir, source) {
+		return ErrInvalidSource
+	}
+
+	info, err := os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("getting file info %s : %w", source, err)
+	}
+	if !info.Mode().IsRegular() {
+		return ErrInvalidSource
+	}
+	resolvedSource, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		return fmt.Errorf("resolving source wordlist %s : %w", source, err)
+	}
+	resolvedWordlistDir, err := filepath.EvalSymlinks(m.wordlistDir)
+	if err != nil {
+		return fmt.Errorf("resolving wordlist dir %s : %w", m.wordlistDir, err)
+	}
+	if pathWithin(resolvedWordlistDir, resolvedSource) {
+		return ErrInvalidSource
+	}
+
+	destination := filepath.Join(m.wordlistDir, name)
+	err = os.Link(source, destination)
+	if err == nil {
+		destinationInfo, statErr := os.Lstat(destination)
+		if statErr != nil || !destinationInfo.Mode().IsRegular() || !os.SameFile(info, destinationInfo) {
+			return errors.Join(ErrInvalidSource, statErr, os.Remove(destination))
+		}
+		currentSourceInfo, statErr := os.Lstat(source)
+		if statErr != nil || !currentSourceInfo.Mode().IsRegular() || !os.SameFile(destinationInfo, currentSourceInfo) {
+			return errors.Join(ErrInvalidSource, statErr, os.Remove(destination))
+		}
+		if err = os.Remove(source); err != nil {
+			return errors.Join(fmt.Errorf("removing source wordlist %s : %w", source, err), os.Remove(destination))
+		}
+		return nil
+	}
+	if errors.Is(err, os.ErrExist) {
+		return ErrAlreadyExists
+	}
+
+	return copyWordlist(source, destination, info)
+}
+
+func copyWordlist(source, destination string, sourceInfo os.FileInfo) (err error) {
+	sourceFile, err := os.Open(source)
+	if err != nil {
+		return fmt.Errorf("opening source wordlist %s : %w", source, err)
+	}
+	defer sourceFile.Close()
+	openedInfo, err := sourceFile.Stat()
+	if err != nil {
+		return fmt.Errorf("getting source wordlist info %s : %w", source, err)
+	}
+	currentSourceInfo, err := os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("getting source wordlist info %s : %w", source, err)
+	}
+	if !currentSourceInfo.Mode().IsRegular() || !os.SameFile(sourceInfo, openedInfo) || !os.SameFile(openedInfo, currentSourceInfo) {
+		return ErrInvalidSource
+	}
+
+	destinationFile, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, sourceInfo.Mode().Perm())
+	if errors.Is(err, os.ErrExist) {
+		return ErrAlreadyExists
+	}
+	if err != nil {
+		return fmt.Errorf("creating wordlist %s : %w", destination, err)
+	}
+
+	removeDestination := true
+	destinationClosed := false
+	defer func() {
+		if !destinationClosed {
+			closeErr := destinationFile.Close()
+			if err == nil && closeErr != nil {
+				err = fmt.Errorf("closing wordlist %s : %w", destination, closeErr)
+			}
+		}
+		if removeDestination {
+			err = errors.Join(err, os.Remove(destination))
+		}
+	}()
+
+	if _, err = io.Copy(destinationFile, sourceFile); err != nil {
+		return fmt.Errorf("copying wordlist %s : %w", destination, err)
+	}
+	if err = destinationFile.Sync(); err != nil {
+		return fmt.Errorf("syncing wordlist %s : %w", destination, err)
+	}
+	if err = destinationFile.Close(); err != nil {
+		return fmt.Errorf("closing wordlist %s : %w", destination, err)
+	}
+	destinationClosed = true
+	currentSourceInfo, err = os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("getting source wordlist info %s : %w", source, err)
+	}
+	if !currentSourceInfo.Mode().IsRegular() || !os.SameFile(openedInfo, currentSourceInfo) {
+		return ErrInvalidSource
+	}
+	if err = os.Remove(source); err != nil {
+		return fmt.Errorf("removing source wordlist %s : %w", source, err)
+	}
+	removeDestination = false
+	return nil
+}
+
+func pathWithin(parent, path string) bool {
+	relative, err := filepath.Rel(parent, path)
+	return err == nil && relative != ".." && !filepath.IsAbs(relative) && (relative == "." || !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
+}
+
+// ValidName reports whether name is one local filename.
+func ValidName(name string) bool {
+	return name != "" && !strings.ContainsRune(name, 0) && filepath.IsLocal(name) && filepath.Base(name) == name
+}
+
+// Open opens a regular wordlist file by name and returns an iterator for it.
+func (m *Manager) Open(name string) (Iterator, error) {
+	if !ValidName(name) {
 		return nil, errors.New("wordlist name invalid")
 	}
 
