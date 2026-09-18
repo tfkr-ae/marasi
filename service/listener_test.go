@@ -1,12 +1,19 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -15,17 +22,32 @@ import (
 
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/db"
+	"github.com/tfkr-ae/marasi/domain"
+	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
 type listenerTestProxy struct {
-	mu           sync.Mutex
-	served       chan net.Listener
-	cleanupCalls int
-	cleanupErr   error
-	closeCalls   int
-	current      net.Listener
-	bind         func(string, string) (net.Listener, error)
-	serve        func(net.Listener) error
+	mu                   sync.Mutex
+	served               chan net.Listener
+	cleanupCalls         int
+	cleanupErr           error
+	closeWebSocketCalls  int
+	closeWebSocketCode   int
+	closeWebSocketReason string
+	closeCalls           int
+	current              net.Listener
+	bind                 func(string, string) (net.Listener, error)
+	serve                func(net.Listener) error
+}
+
+type closeErrorListener struct {
+	net.Listener
+	err error
+}
+
+func (l closeErrorListener) Close() error {
+	_ = l.Listener.Close()
+	return l.err
 }
 
 func newListenerTestProxy() *listenerTestProxy {
@@ -74,6 +96,21 @@ func (p *listenerTestProxy) CloseWebSocketsAndFlush() error {
 	return p.cleanupErr
 }
 
+func (p *listenerTestProxy) CloseWebSockets(code int, reason string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closeWebSocketCalls++
+	p.closeWebSocketCode = code
+	p.closeWebSocketReason = reason
+	return p.cleanupErr
+}
+
+func (p *listenerTestProxy) webSocketClose() (int, int, string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.closeWebSocketCalls, p.closeWebSocketCode, p.closeWebSocketReason
+}
+
 func (p *listenerTestProxy) cleanupCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -112,6 +149,307 @@ func statusAddress(t *testing.T, status ListenerStatus) string {
 }
 
 func TestListenerLifecycle(t *testing.T) {
+	t.Run("should close WebSockets without flushing and ignore close errors", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		closeErr := errors.New("closing WebSockets failed")
+		proxy.cleanupErr = closeErr
+		var log bytes.Buffer
+		lifecycle := newListenerLifecycle(proxy, &log)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		if _, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0)); err != nil {
+			t.Fatalf("starting listener: %v", err)
+		}
+
+		status, err := lifecycle.Stop(context.Background())
+		if err != nil {
+			t.Fatalf("stopping listener: %v", err)
+		}
+		calls, code, reason := proxy.webSocketClose()
+		if calls != 1 || code != marasiws.CloseGoingAway || reason != "" {
+			t.Fatalf("\nwanted:\n1 WebSocket close with %d and no reason\ngot:\n%d closes with %d and %q", marasiws.CloseGoingAway, calls, code, reason)
+		}
+		if proxy.cleanupCount() != 0 {
+			t.Fatalf("\nwanted:\nno flushing cleanup\ngot:\n%d cleanups", proxy.cleanupCount())
+		}
+		if status.Status != ListenerInactive || status.ProxyListener != nil {
+			t.Fatalf("\nwanted:\ninactive status\ngot:\n%+v", status)
+		}
+		if !bytes.Contains(log.Bytes(), []byte(closeErr.Error())) {
+			t.Fatalf("\nwanted:\nWebSocket close error in log\ngot:\n%s", log.String())
+		}
+	})
+
+	t.Run("should succeed when closing the listening socket returns an error", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		closeErr := errors.New("closing listener failed")
+		proxy.bind = func(address, port string) (net.Listener, error) {
+			listener, err := net.Listen("tcp", net.JoinHostPort(address, port))
+			if err != nil {
+				return nil, err
+			}
+			return closeErrorListener{Listener: listener, err: closeErr}, nil
+		}
+		var log bytes.Buffer
+		lifecycle := newListenerLifecycle(proxy, &log)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		if _, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0)); err != nil {
+			t.Fatalf("starting listener: %v", err)
+		}
+
+		status, err := lifecycle.Stop(context.Background())
+		if err != nil {
+			t.Fatalf("stopping listener: %v", err)
+		}
+		if status.Status != ListenerInactive || status.ProxyListener != nil {
+			t.Fatalf("\nwanted:\ninactive status\ngot:\n%+v", status)
+		}
+		if !bytes.Contains(log.Bytes(), []byte(closeErr.Error())) {
+			t.Fatalf("\nwanted:\nlistener close error in log\ngot:\n%s", log.String())
+		}
+	})
+
+	t.Run("should wait for real WebSockets to close before publishing stopped", func(t *testing.T) {
+		originClose := make(chan marasiws.Frame, 1)
+		releaseOrigin := make(chan struct{})
+		origin := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			connection, buffered, err := response.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Errorf("hijacking origin connection: %v", err)
+				return
+			}
+			defer connection.Close()
+			key := request.Header.Get("Sec-WebSocket-Key")
+			accept := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+			_, err = fmt.Fprintf(buffered, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: %s\r\n\r\n", base64.StdEncoding.EncodeToString(accept[:]))
+			if err != nil {
+				t.Errorf("writing origin handshake: %v", err)
+				return
+			}
+			if err := buffered.Flush(); err != nil {
+				t.Errorf("flushing origin handshake: %v", err)
+				return
+			}
+			frame, err := marasiws.ReadFrame(buffered)
+			if err != nil {
+				t.Errorf("reading origin close: %v", err)
+				return
+			}
+			originClose <- frame
+			<-releaseOrigin
+		}))
+		defer origin.Close()
+
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		database, err := db.New(filepath.Join(t.TempDir(), "project.marasi"), logger)
+		if err != nil {
+			t.Fatalf("opening project: %v", err)
+		}
+		repository := db.NewProxyRepo(database)
+		extensions, err := repository.GetExtensions()
+		if err != nil {
+			t.Fatalf("getting default extensions: %v", err)
+		}
+		requestIDs := make(chan domain.ProxyRequest, 1)
+		proxy, err := marasi.New(
+			marasi.WithLogger(logger),
+			marasi.WithDefaultRepositories(repository),
+			marasi.WithExtensions(extensions),
+			marasi.WithRequestHandler(func(request domain.ProxyRequest) error {
+				requestIDs <- request
+				return nil
+			}),
+			marasi.WithResponseHandler(func(domain.ProxyResponse) error { return nil }),
+			marasi.WithLogHandler(func(domain.Log) error { return nil }),
+			marasi.WithBasePipeline(),
+			marasi.WithDefaultModifierPipeline(),
+		)
+		if err != nil {
+			t.Fatalf("creating proxy: %v", err)
+		}
+		lifecycle := newListenerLifecycle(proxy, io.Discard).(*listenerLifecycle)
+		t.Cleanup(func() {
+			close(releaseOrigin)
+			if err := lifecycle.Shutdown(); err != nil {
+				t.Fatalf("shutting down lifecycle: %v", err)
+			}
+		})
+		subscriber := lifecycle.events.subscribe()
+		defer lifecycle.events.unsubscribe(subscriber)
+		started, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0))
+		if err != nil {
+			t.Fatalf("starting listener: %v", err)
+		}
+		<-subscriber.events
+
+		client, err := net.DialTimeout("tcp", statusAddress(t, started), time.Second)
+		if err != nil {
+			t.Fatalf("dialing proxy: %v", err)
+		}
+		defer client.Close()
+		if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatalf("setting client deadline: %v", err)
+		}
+		buffered := bufio.NewReadWriter(bufio.NewReader(client), bufio.NewWriter(client))
+		originAddress := origin.Listener.Addr().String()
+		_, err = fmt.Fprintf(buffered, "GET %s/socket HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n", origin.URL, originAddress)
+		if err != nil {
+			t.Fatalf("writing upgrade request: %v", err)
+		}
+		if err := buffered.Flush(); err != nil {
+			t.Fatalf("flushing upgrade request: %v", err)
+		}
+		response, err := http.ReadResponse(buffered.Reader, &http.Request{Method: http.MethodGet})
+		if err != nil {
+			t.Fatalf("reading upgrade response: %v", err)
+		}
+		if response.StatusCode != http.StatusSwitchingProtocols {
+			t.Fatalf("\nwanted:\n101 Switching Protocols\ngot:\n%s", response.Status)
+		}
+		request := <-requestIDs
+		deadline := time.Now().Add(time.Second)
+		for {
+			if _, exists := proxy.WebSocketRegistry.GetByRequestID(request.ID); exists {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("timed out waiting for live WebSocket registration")
+			}
+			time.Sleep(time.Millisecond)
+		}
+
+		stopResult := make(chan error, 1)
+		go func() {
+			_, stopErr := lifecycle.Stop(context.Background())
+			stopResult <- stopErr
+		}()
+		upstreamFrame := <-originClose
+		select {
+		case event := <-subscriber.events:
+			t.Fatalf("\nwanted:\nno stopped event before WebSocket session ends\ngot:\n%s", event.name)
+		default:
+		}
+		select {
+		case err := <-stopResult:
+			if err != nil {
+				t.Fatalf("stopping listener: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("\nwanted:\nStop to finish through the bounded WebSocket close fallback\ngot:\ntimeout")
+		}
+		clientFrame, err := marasiws.ReadFrame(buffered)
+		if err != nil {
+			t.Fatalf("reading client close: %v", err)
+		}
+		for peer, frame := range map[string]marasiws.Frame{"client": clientFrame, "upstream": upstreamFrame} {
+			code, reason, err := marasiws.ParseClosePayload(frame.Payload)
+			if err != nil || frame.Opcode != marasiws.OpClose || code != marasiws.CloseGoingAway || reason != "" {
+				t.Fatalf("\nwanted:\n%s close 1001 with no reason\ngot:\nopcode %d, code %d, reason %q, error %v", peer, frame.Opcode, code, reason, err)
+			}
+		}
+		event := <-subscriber.events
+		if event.name != "listener.stopped" || !bytes.Contains(event.data, []byte(`"reason":"requested"`)) {
+			t.Fatalf("\nwanted:\nrequested listener stop event\ngot:\n%s %s", event.name, event.data)
+		}
+	})
+
+	t.Run("should let accepted HTTP traffic continue without closing the project", func(t *testing.T) {
+		requestStarted := make(chan struct{})
+		releaseResponse := make(chan struct{})
+		origin := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			if request.URL.Path == "/accepted-before-stop" {
+				close(requestStarted)
+				<-releaseResponse
+			}
+			_, _ = response.Write([]byte(request.URL.Path))
+		}))
+		defer origin.Close()
+
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		database, err := db.New(filepath.Join(t.TempDir(), "project.marasi"), logger)
+		if err != nil {
+			t.Fatalf("opening project: %v", err)
+		}
+		repository := db.NewProxyRepo(database)
+		extensions, err := repository.GetExtensions()
+		if err != nil {
+			t.Fatalf("getting default extensions: %v", err)
+		}
+		proxy, err := marasi.New(
+			marasi.WithLogger(logger),
+			marasi.WithDefaultRepositories(repository),
+			marasi.WithExtensions(extensions),
+			marasi.WithBasePipeline(),
+			marasi.WithDefaultModifierPipeline(),
+		)
+		if err != nil {
+			t.Fatalf("creating proxy: %v", err)
+		}
+		lifecycle := NewListenerLifecycle(proxy, io.Discard)
+		t.Cleanup(func() {
+			if err := lifecycle.Shutdown(); err != nil {
+				t.Fatalf("shutting down lifecycle: %v", err)
+			}
+		})
+		started, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0))
+		if err != nil {
+			t.Fatalf("starting listener: %v", err)
+		}
+		proxyURL := &url.URL{Scheme: "http", Host: statusAddress(t, started)}
+		transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+		defer transport.CloseIdleConnections()
+		client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+
+		firstResult := make(chan error, 1)
+		go func() {
+			response, requestErr := client.Get(origin.URL + "/accepted-before-stop")
+			if requestErr != nil {
+				firstResult <- requestErr
+				return
+			}
+			defer response.Body.Close()
+			body, readErr := io.ReadAll(response.Body)
+			if readErr == nil && string(body) != "/accepted-before-stop" {
+				readErr = fmt.Errorf("unexpected response body %q", body)
+			}
+			firstResult <- readErr
+		}()
+		<-requestStarted
+
+		if _, err := lifecycle.Stop(context.Background()); err != nil {
+			t.Fatalf("stopping listener: %v", err)
+		}
+		if connection, err := net.DialTimeout("tcp", statusAddress(t, started), 50*time.Millisecond); err == nil {
+			connection.Close()
+			t.Fatal("\nwanted:\nnew TCP connections rejected after Stop\ngot:\naccepted connection")
+		}
+		close(releaseResponse)
+		if err := <-firstResult; err != nil {
+			t.Fatalf("finishing accepted request: %v", err)
+		}
+
+		response, err := client.Get(origin.URL + "/keep-alive-after-stop")
+		if err != nil {
+			t.Fatalf("sending request on accepted keep-alive connection: %v", err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil || string(body) != "/keep-alive-after-stop" {
+			t.Fatalf("reading keep-alive response: %q, %v", body, err)
+		}
+
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			summaries, summaryErr := repository.GetRequestResponseSummary()
+			if summaryErr == nil && len(summaries) == 2 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("waiting for continued traffic persistence: %d rows, %v", len(summaries), summaryErr)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+
 	t.Run("should restart a real proxy without closing its open project", func(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 		proxy, err := marasi.New(marasi.WithLogger(logger))
@@ -181,8 +519,9 @@ func TestListenerLifecycle(t *testing.T) {
 		if stopped.Status != ListenerInactive || stopped.ProxyListener != nil {
 			t.Fatalf("\nwanted:\ninactive status\ngot:\n%+v", stopped)
 		}
-		if proxy.cleanupCount() != 1 {
-			t.Fatalf("\nwanted:\n1 WebSocket cleanup\ngot:\n%d", proxy.cleanupCount())
+		closeCalls, _, _ := proxy.webSocketClose()
+		if closeCalls != 1 || proxy.cleanupCount() != 0 {
+			t.Fatalf("\nwanted:\n1 WebSocket close without flushing\ngot:\n%d closes and %d cleanups", closeCalls, proxy.cleanupCount())
 		}
 		if proxy.closeCount() != 0 {
 			t.Fatalf("\nwanted:\nopen proxy and project\ngot:\n%d proxy closes", proxy.closeCount())
@@ -190,8 +529,9 @@ func TestListenerLifecycle(t *testing.T) {
 		if _, err := lifecycle.Stop(context.Background()); err != nil {
 			t.Fatalf("stopping inactive listener: %v", err)
 		}
-		if proxy.cleanupCount() != 1 {
-			t.Fatalf("\nwanted:\nidempotent stop without cleanup\ngot:\n%d cleanups", proxy.cleanupCount())
+		closeCalls, _, _ = proxy.webSocketClose()
+		if closeCalls != 1 || proxy.cleanupCount() != 0 {
+			t.Fatalf("\nwanted:\nidempotent stop without cleanup\ngot:\n%d closes and %d cleanups", closeCalls, proxy.cleanupCount())
 		}
 		if connection, err := net.DialTimeout("tcp", address, 50*time.Millisecond); err == nil {
 			connection.Close()
@@ -486,8 +826,8 @@ func TestListenerLifecycle(t *testing.T) {
 		}
 		connection.Close()
 		stopped, err := lifecycle.Stop(context.Background())
-		if !errors.Is(err, ErrListenerCleanup) {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", ErrListenerCleanup, err)
+		if err != nil {
+			t.Fatalf("stopping listener after WebSocket close failure: %v", err)
 		}
 		if stopped.Status != ListenerInactive || stopped.ProxyListener != nil {
 			t.Fatalf("\nwanted:\ninactive status after cleanup failure\ngot:\n%+v", stopped)

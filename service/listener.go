@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/tfkr-ae/marasi"
+	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
 // ListenerState is an externally visible proxy-listener state.
@@ -44,6 +45,7 @@ type ListenerStatus struct {
 type listenerProxy interface {
 	GetListener(string, string) (net.Listener, error)
 	Serve(net.Listener) error
+	CloseWebSockets(int, string) error
 	CloseWebSocketsAndFlush() error
 	CloseTransport() error
 }
@@ -199,7 +201,10 @@ func (l *listenerLifecycle) run() {
 					request.result <- listenerResult{status: l.Status()}
 					continue
 				}
-				err := l.stopRun(current, true)
+				err := l.stopRun(current, false)
+				if closeErr := l.proxy.CloseWebSockets(marasiws.CloseGoingAway, ""); closeErr != nil {
+					fmt.Fprintf(l.logWriter, "closing WebSockets after proxy listener stop: %v\n", closeErr)
+				}
 				unexpected := current.state.Load() == listenerRunUnexpectedEnd
 				if unexpected {
 					l.logUnexpectedServe(current.serveErr)
@@ -367,7 +372,7 @@ func (l *listenerLifecycle) stopRun(run *listenerRun, cleanup bool) error {
 	}
 	<-run.finished
 	if !cleanup {
-		return closeErr
+		return nil
 	}
 	if err := l.proxy.CloseWebSocketsAndFlush(); err != nil {
 		fmt.Fprintf(l.logWriter, "cleaning up WebSockets after proxy listener stop: %v\n", err)

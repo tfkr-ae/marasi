@@ -360,7 +360,7 @@ func TestListenerEvents(t *testing.T) {
 		}
 	})
 
-	t.Run("should publish requested stop when cleanup fails", func(t *testing.T) {
+	t.Run("should publish requested stop when WebSocket closure fails", func(t *testing.T) {
 		proxy := newListenerTestProxy()
 		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
@@ -374,7 +374,9 @@ func TestListenerEvents(t *testing.T) {
 		proxy.cleanupErr = errors.New("flush failed")
 
 		response := requestListener(t, server, http.MethodPost, "/listener/stop", "")
-		assertListenerError(t, response, http.StatusInternalServerError, "listener_cleanup_failed")
+		if response.Code != http.StatusOK || response.Body.String() != "{\"status\":\"inactive\",\"proxy_listener\":null}\n" {
+			t.Fatalf("\nwanted:\n200 inactive listener\ngot:\n%d %s", response.Code, response.Body.String())
+		}
 		want := "event: listener.stopped\ndata: {\"status\":\"inactive\",\"proxy_listener\":null,\"reason\":\"requested\"}\n\n"
 		if got := readEventFrame(t, reader); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)

@@ -521,7 +521,7 @@ func TestListenerControl(t *testing.T) {
 		}
 	})
 
-	t.Run("should map state bind and cleanup failures without exposing details", func(t *testing.T) {
+	t.Run("should map state and bind failures while logging WebSocket close errors", func(t *testing.T) {
 		proxy := newListenerTestProxy()
 		var log bytes.Buffer
 		lifecycle := newListenerLifecycle(proxy, &log)
@@ -558,7 +558,9 @@ func TestListenerControl(t *testing.T) {
 
 		proxy.cleanupErr = errors.New("secret cleanup detail")
 		response = requestListener(t, server, http.MethodPost, "/listener/stop", "")
-		assertListenerError(t, response, http.StatusInternalServerError, "listener_cleanup_failed")
+		if response.Code != http.StatusOK || response.Body.String() != "{\"status\":\"inactive\",\"proxy_listener\":null}\n" {
+			t.Fatalf("\nwanted:\n200 inactive listener\ngot:\n%d %s", response.Code, response.Body.String())
+		}
 		if !strings.Contains(log.String(), "secret cleanup detail") || strings.Contains(response.Body.String(), "secret cleanup detail") {
 			t.Fatalf("\nwanted:\ncleanup details only in instance log\ngot response:\n%s\ngot log:\n%s", response.Body.String(), log.String())
 		}
