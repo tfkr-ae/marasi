@@ -87,6 +87,45 @@ func addWordlistRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBro
 		writeJSON(w, r, http.StatusOK, response)
 	})
 
+	mux.HandleFunc("DELETE /wordlist/{name}", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		query, ok := parseWordlistQuery(r)
+		if !ok || len(query) != 0 || !wordlist.ValidName(name) {
+			writeWordlistError(w, r, http.StatusBadRequest, "invalid_wordlist_request")
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil || len(body) != 0 {
+			writeWordlistError(w, r, http.StatusBadRequest, "invalid_wordlist_request")
+			return
+		}
+		provider, ok := wordlistProvider(proxy)
+		if !ok {
+			writeWordlistError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		manager, ok := provider.(interface{ Remove(string) error })
+		if !ok {
+			writeWordlistError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		if err = manager.Remove(name); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				writeWordlistError(w, r, http.StatusNotFound, "not_found")
+			} else {
+				writeWordlistError(w, r, http.StatusInternalServerError, "internal_server_error")
+			}
+			return
+		}
+		response, err := listWordlists(provider)
+		if err != nil {
+			writeWordlistError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		events.publish("wordlist.removed", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
+
 	mux.HandleFunc("GET /wordlist/", func(w http.ResponseWriter, r *http.Request) {
 		writeWordlistError(w, r, http.StatusBadRequest, "invalid_wordlist_request")
 	})

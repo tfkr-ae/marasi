@@ -162,6 +162,17 @@ func (m *Manager) Add(source string) error {
 	return copyWordlist(source, destination, info)
 }
 
+// Remove deletes a wordlist by name from the managed directory.
+func (m *Manager) Remove(name string) error {
+	if !ValidName(name) {
+		return errors.New("wordlist name invalid")
+	}
+	if err := os.Remove(filepath.Join(m.wordlistDir, name)); err != nil {
+		return fmt.Errorf("removing wordlist %s : %w", name, err)
+	}
+	return nil
+}
+
 func copyWordlist(source, destination string, sourceInfo os.FileInfo) (err error) {
 	sourceFile, err := os.Open(source)
 	if err != nil {

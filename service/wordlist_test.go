@@ -53,6 +53,61 @@ func (iterator *stubWordlistIterator) Err() error   { return nil }
 func (iterator *stubWordlistIterator) Close() error { return nil }
 
 func TestWordlistControlAPI(t *testing.T) {
+	t.Run("should remove a wordlist and publish the resulting list", func(t *testing.T) {
+		parentDir := t.TempDir()
+		manager, err := wordlist.NewManager(parentDir)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		removedPath := filepath.Join(parentDir, "wordlists", "passwords.txt")
+		if err = os.WriteFile(removedPath, []byte("password\n"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err = os.WriteFile(filepath.Join(parentDir, "wordlists", "users.txt"), []byte("admin\n"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		server := newTestServer(&marasi.Proxy{WordlistManager: manager}, func() {})
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		response := requestControlAPI(server, http.MethodDelete, "/wordlist/passwords.txt", "")
+		want := `{"items":[{"name":"users.txt","size":6}]}`
+		assertControlAPIResponse(t, response, http.StatusOK, want+"\n")
+		if _, err = os.Stat(removedPath); !os.IsNotExist(err) {
+			t.Fatalf("\nwanted:\nwordlist removed\ngot:\n%v", err)
+		}
+		select {
+		case event := <-subscriber.events:
+			if event.name != "wordlist.removed" || string(event.data) != want {
+				t.Fatalf("\nwanted:\nwordlist.removed %s\ngot:\n%s %s", want, event.name, event.data)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\nwordlist.removed event\ngot:\nno event")
+		}
+	})
+
+	t.Run("should reject missing names and invalid remove requests", func(t *testing.T) {
+		manager, err := wordlist.NewManager(t.TempDir())
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		server := newTestServer(&marasi.Proxy{WordlistManager: manager}, func() {})
+
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodDelete, "/wordlist/missing.txt", ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
+		for _, request := range []struct {
+			path string
+			body string
+		}{
+			{path: "/wordlist/.."},
+			{path: "/wordlist/foo/../bar"},
+			{path: "/wordlist/%2E%2E"},
+			{path: "/wordlist/passwords.txt?extra=true"},
+			{path: "/wordlist/passwords.txt", body: "not empty"},
+		} {
+			assertControlAPIResponse(t, requestControlAPI(server, http.MethodDelete, request.path, request.body), http.StatusBadRequest, "{\"error\":\"invalid_wordlist_request\"}\n")
+		}
+	})
+
 	t.Run("should add a wordlist and publish the resulting list", func(t *testing.T) {
 		parentDir := t.TempDir()
 		manager, err := wordlist.NewManager(parentDir)

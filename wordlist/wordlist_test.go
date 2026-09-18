@@ -143,6 +143,45 @@ func TestManagerAdd(t *testing.T) {
 	})
 }
 
+func TestManagerRemove(t *testing.T) {
+	t.Run("should remove a wordlist while an open iterator keeps reading", func(t *testing.T) {
+		manager, err := NewManager(t.TempDir())
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		path := filepath.Join(manager.wordlistDir, "passwords.txt")
+		if err = os.WriteFile(path, []byte("admin\npassword\n"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		iterator, err := manager.Open("passwords.txt")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer iterator.Close()
+
+		if err = manager.Remove("passwords.txt"); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if _, err = os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("\nwanted:\nwordlist removed\ngot:\n%v", err)
+		}
+		if _, err = manager.Open("passwords.txt"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", os.ErrNotExist, err)
+		}
+		var entries []string
+		for iterator.Scan() {
+			entries = append(entries, iterator.Text())
+		}
+		if err = iterator.Err(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := []string{"admin", "password"}
+		if !reflect.DeepEqual(entries, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, entries)
+		}
+	})
+}
+
 func TestNewManager(t *testing.T) {
 	t.Run("should create wordlists directory", func(t *testing.T) {
 		parentDir := t.TempDir()

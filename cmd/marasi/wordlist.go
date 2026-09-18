@@ -21,7 +21,7 @@ var wordlistPreviewLimit int
 
 func init() {
 	wordlistPreviewCmd.Flags().IntVar(&wordlistPreviewLimit, "limit", 20, "Number of entries to preview")
-	wordlistCmd.AddCommand(wordlistListCmd, wordlistPreviewCmd, wordlistAddCmd)
+	wordlistCmd.AddCommand(wordlistListCmd, wordlistPreviewCmd, wordlistAddCmd, wordlistRemoveCmd)
 	rootCmd.AddCommand(wordlistCmd)
 }
 
@@ -97,6 +97,24 @@ var wordlistAddCmd = &cobra.Command{
 		} else {
 			_, err = fmt.Fprintf(cmd.ErrOrStderr(), "wordlist %s added\n", filepath.Base(path))
 		}
+		return err
+	},
+}
+
+var wordlistRemoveCmd = &cobra.Command{
+	Use:   "remove NAME",
+	Short: "Remove a wordlist",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		body, err := runWordlistRequest(cmd, http.MethodDelete, "/wordlist/"+url.PathEscape(args[0]), "removing wordlist", nil)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "wordlist %s removed\n", args[0])
 		return err
 	},
 }
