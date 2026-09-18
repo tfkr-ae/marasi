@@ -2,6 +2,7 @@ package service
 
 import (
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -12,8 +13,8 @@ import (
 
 // trafficList is the GET /traffic response body.
 type trafficList struct {
-	Items      []trafficSummary `json:"items"`       // newest-first page
-	NextCursor *uuid.UUID       `json:"next_cursor"` // last item id when an older page exists
+	Items      []trafficSummary `json:"items"`
+	NextCursor *uuid.UUID       `json:"next_cursor"` // oldest item id when an older page exists
 }
 
 // trafficSummary is one request/response pair in a traffic list page.
@@ -79,6 +80,7 @@ func addTrafficRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
+		slices.Reverse(items)
 		writeJSON(w, r, http.StatusOK, trafficListFromSummaries(items, nextCursor))
 	})
 	mux.HandleFunc("GET /traffic/{id}", func(w http.ResponseWriter, r *http.Request) {

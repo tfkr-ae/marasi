@@ -15,9 +15,9 @@ import (
 )
 
 func TestTrafficListCommand(t *testing.T) {
-	t.Run("should print aligned rows for the newest page", func(t *testing.T) {
+	t.Run("should print the newest page oldest first", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"0193802f-f0e7-73d9-a764-06d21e367809","scheme":"https","method":"GET","host":"example.com","path":"/a","status":"200 OK","status_code":200,"content_type":"application/json","length":"12","metadata":{"foo":"bar"},"requested_at":"2026-01-02T03:04:05Z","responded_at":"2026-01-02T03:04:06Z"},{"id":"01938032-1b17-7243-b035-e6a9f4645904","scheme":"https","method":"POST","host":"example.com","path":"/login","status":"401 Unauthorized","status_code":401,"content_type":"text/plain","length":"45","metadata":{},"requested_at":"2026-01-02T03:04:04Z","responded_at":"2026-01-02T03:04:05Z"}],"next_cursor":null}`)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","scheme":"https","method":"POST","host":"example.com","path":"/login","status":"401 Unauthorized","status_code":401,"content_type":"text/plain","length":"45","metadata":{},"requested_at":"2026-01-02T03:04:04Z","responded_at":"2026-01-02T03:04:05Z"},{"id":"0193802f-f0e7-73d9-a764-06d21e367809","scheme":"https","method":"GET","host":"example.com","path":"/a","status":"200 OK","status_code":200,"content_type":"application/json","length":"12","metadata":{"foo":"bar"},"requested_at":"2026-01-02T03:04:05Z","responded_at":"2026-01-02T03:04:06Z"}],"next_cursor":null}`)
 
 		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "list")
 		if err != nil {
@@ -27,7 +27,7 @@ func TestTrafficListCommand(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "limit=200" {
 			t.Fatalf("\nwanted:\nGET /traffic?limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
-		want := "0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /a      200  12\n01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /login  401  45\n"
+		want := "01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /login  401  45\n0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /a      200  12\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
