@@ -29,7 +29,7 @@ var (
 	errListenerClosed        = errors.New("listener lifecycle closed")
 )
 
-// ListenerSettings contains optional proxy-listener endpoint overrides.
+// ListenerSettings contains a complete proxy-listener endpoint.
 type ListenerSettings struct {
 	Address *string
 	Port    *uint16
@@ -181,16 +181,15 @@ func (l *listenerLifecycle) mutate(ctx context.Context, operation listenerOperat
 }
 
 func (l *listenerLifecycle) run() {
-	var retained string
 	var current *listenerRun
 	for {
 		select {
 		case request := <-l.requests:
 			switch request.operation {
 			case startListener:
-				status, run, endpoint, err := l.start(current, retained, request.settings)
+				status, run, err := l.start(current, request.settings)
 				if err == nil {
-					current, retained = run, endpoint
+					current = run
 					l.setStatus(status)
 					l.events.publish("listener.started", status)
 				}
@@ -215,16 +214,21 @@ func (l *listenerLifecycle) run() {
 				}
 				request.result <- listenerResult{status: l.Status(), err: err}
 			case updateListener:
-				status, run, endpoint, changed, err := l.update(current, retained, request.settings)
+				status, run, changed, err := l.update(current, request.settings)
 				if changed {
-					if current.state.Load() == listenerRunUnexpectedEnd {
+					unexpected := current.state.Load() == listenerRunUnexpectedEnd
+					if unexpected {
 						l.logUnexpectedServe(current.serveErr)
 						inactive := ListenerStatus{Status: ListenerInactive}
 						l.publishStopped(inactive, "failed")
 					}
-					current, retained = run, endpoint
+					current = run
 					l.setStatus(status)
-					l.events.publish("listener.updated", status)
+					if run != nil {
+						l.events.publish("listener.updated", status)
+					} else if !unexpected {
+						l.publishStopped(status, "failed")
+					}
 				}
 				request.result <- listenerResult{status: l.Status(), err: err}
 			case shutdownListener:
@@ -269,42 +273,49 @@ func (l *listenerLifecycle) publishStopped(status ListenerStatus, reason string)
 	}{Status: status.Status, ProxyListener: status.ProxyListener, Reason: reason})
 }
 
-func (l *listenerLifecycle) start(current *listenerRun, retained string, settings ListenerSettings) (ListenerStatus, *listenerRun, string, error) {
+func (l *listenerLifecycle) start(current *listenerRun, settings ListenerSettings) (ListenerStatus, *listenerRun, error) {
 	if current != nil {
-		return ListenerStatus{}, nil, retained, ErrListenerAlreadyActive
+		return ListenerStatus{}, nil, ErrListenerAlreadyActive
 	}
-	endpoint, err := applyListenerSettings(retained, settings)
+	endpoint, err := listenerEndpoint(settings)
 	if err != nil {
-		return ListenerStatus{}, nil, retained, err
+		return ListenerStatus{}, nil, err
 	}
 	listener, err := l.bind(endpoint)
 	if err != nil {
-		return ListenerStatus{}, nil, retained, err
+		return ListenerStatus{}, nil, err
 	}
 	actual := listener.Addr().String()
-	run := l.serve(listener)
-	return activeListenerStatus(actual), run, actual, nil
+	run, err := l.serve(listener)
+	if err != nil {
+		return ListenerStatus{}, nil, err
+	}
+	return activeListenerStatus(actual), run, nil
 }
 
-func (l *listenerLifecycle) update(current *listenerRun, retained string, settings ListenerSettings) (ListenerStatus, *listenerRun, string, bool, error) {
+func (l *listenerLifecycle) update(current *listenerRun, settings ListenerSettings) (ListenerStatus, *listenerRun, bool, error) {
 	if current == nil {
-		return ListenerStatus{}, nil, retained, false, ErrListenerInactive
+		return ListenerStatus{}, nil, false, ErrListenerInactive
 	}
-	endpoint, err := applyListenerSettings(retained, settings)
+	endpoint, err := listenerEndpoint(settings)
 	if err != nil {
-		return ListenerStatus{}, current, retained, false, err
+		return ListenerStatus{}, current, false, err
 	}
-	if endpoint == retained {
-		return activeListenerStatus(retained), current, retained, false, nil
+	currentEndpoint := current.listener.Addr().String()
+	if endpoint == currentEndpoint {
+		return activeListenerStatus(currentEndpoint), current, false, nil
 	}
 	replacement, err := l.bind(endpoint)
 	if err != nil {
-		return ListenerStatus{}, current, retained, false, err
+		return ListenerStatus{}, current, false, err
 	}
 	actual := replacement.Addr().String()
 	cleanupErr := l.stopRun(current, true)
-	run := l.serve(replacement)
-	return activeListenerStatus(actual), run, actual, true, cleanupErr
+	run, serveErr := l.serve(replacement)
+	if serveErr != nil {
+		return ListenerStatus{Status: ListenerInactive}, nil, true, errors.Join(cleanupErr, serveErr)
+	}
+	return activeListenerStatus(actual), run, true, cleanupErr
 }
 
 func (l *listenerLifecycle) bind(endpoint string) (net.Listener, error) {
@@ -320,7 +331,7 @@ func (l *listenerLifecycle) bind(endpoint string) (net.Listener, error) {
 	return listener, nil
 }
 
-func (l *listenerLifecycle) serve(listener net.Listener) *listenerRun {
+func (l *listenerLifecycle) serve(listener net.Listener) (*listenerRun, error) {
 	ready := &listenerReadyListener{Listener: listener, started: make(chan struct{})}
 	run := &listenerRun{listener: listener, started: ready.started, finished: make(chan struct{})}
 	go func() {
@@ -332,9 +343,20 @@ func (l *listenerLifecycle) serve(listener net.Listener) *listenerRun {
 	}()
 	select {
 	case <-run.started:
+		return run, nil
 	case <-run.finished:
+		select {
+		case <-run.started:
+			return run, nil
+		default:
+		}
+		listener.Close()
+		err := run.serveErr
+		if err == nil {
+			err = errors.New("proxy serving stopped before readiness")
+		}
+		return run, listenerFailure{kind: ErrListenerUnavailable, err: err}
 	}
-	return run
 }
 
 func (l *listenerLifecycle) stopRun(run *listenerRun, cleanup bool) error {
@@ -354,25 +376,11 @@ func (l *listenerLifecycle) stopRun(run *listenerRun, cleanup bool) error {
 	return nil
 }
 
-func applyListenerSettings(retained string, settings ListenerSettings) (string, error) {
-	var address, port string
-	if retained != "" {
-		var err error
-		address, port, err = net.SplitHostPort(retained)
-		if err != nil {
-			return "", listenerFailure{kind: ErrListenerUnavailable, err: err}
-		}
-	}
-	if settings.Address != nil {
-		address = *settings.Address
-	}
-	if settings.Port != nil {
-		port = strconv.FormatUint(uint64(*settings.Port), 10)
-	}
-	if address == "" || port == "" {
+func listenerEndpoint(settings ListenerSettings) (string, error) {
+	if settings.Address == nil || *settings.Address == "" || settings.Port == nil {
 		return "", ErrListenerUnavailable
 	}
-	return net.JoinHostPort(address, port), nil
+	return net.JoinHostPort(*settings.Address, strconv.FormatUint(uint64(*settings.Port), 10)), nil
 }
 
 type listenerFailure struct {

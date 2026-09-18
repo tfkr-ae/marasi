@@ -48,6 +48,9 @@ var listenerStartCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		settings := listenerSettings(cmd, listenerStartAddress, listenerStartPort)
+		if settings.Address == nil || settings.Port == nil {
+			return errors.New("listener start requires --address and --port")
+		}
 		return runListenerCommand(cmd, settings)
 	},
 }
@@ -67,8 +70,8 @@ var listenerUpdateCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		settings := listenerSettings(cmd, listenerUpdateAddress, listenerUpdatePort)
-		if settings.Address == nil && settings.Port == nil {
-			return errors.New("listener update requires --address or --port")
+		if settings.Address == nil || settings.Port == nil {
+			return errors.New("listener update requires --address and --port")
 		}
 		return runListenerCommand(cmd, settings)
 	},

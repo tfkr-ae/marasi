@@ -106,7 +106,7 @@ func (s *Server) serveListenerStart(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	settings, err := decodeListenerSettings(r, false)
+	settings, err := decodeListenerSettings(r)
 	if err != nil {
 		writeListenerError(w, r, err)
 		return
@@ -146,7 +146,7 @@ func (s *Server) serveListenerUpdate(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	settings, err := decodeListenerSettings(r, true)
+	settings, err := decodeListenerSettings(r)
 	if err != nil {
 		writeListenerError(w, r, err)
 		return
@@ -161,19 +161,13 @@ func (s *Server) serveListenerUpdate(w http.ResponseWriter, r *http.Request) {
 
 var errInvalidListenerRequest = errors.New("invalid listener request")
 
-func decodeListenerSettings(r *http.Request, requireField bool) (ListenerSettings, error) {
+func decodeListenerSettings(r *http.Request) (ListenerSettings, error) {
 	if r.Body == nil {
-		if requireField {
-			return ListenerSettings{}, errInvalidListenerRequest
-		}
-		return ListenerSettings{}, nil
+		return ListenerSettings{}, errInvalidListenerRequest
 	}
 	decoder := json.NewDecoder(r.Body)
 	var fields map[string]json.RawMessage
 	if err := decoder.Decode(&fields); err != nil {
-		if errors.Is(err, io.EOF) && !requireField {
-			return ListenerSettings{}, nil
-		}
 		return ListenerSettings{}, errInvalidListenerRequest
 	}
 	if fields == nil {
@@ -182,7 +176,7 @@ func decodeListenerSettings(r *http.Request, requireField bool) (ListenerSetting
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return ListenerSettings{}, errInvalidListenerRequest
 	}
-	if requireField && len(fields) == 0 {
+	if len(fields) != 2 {
 		return ListenerSettings{}, errInvalidListenerRequest
 	}
 	var settings ListenerSettings
@@ -207,6 +201,9 @@ func decodeListenerSettings(r *http.Request, requireField bool) (ListenerSetting
 		default:
 			return ListenerSettings{}, errInvalidListenerRequest
 		}
+	}
+	if settings.Address == nil || settings.Port == nil {
+		return ListenerSettings{}, errInvalidListenerRequest
 	}
 	return settings, nil
 }

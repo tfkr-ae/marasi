@@ -90,6 +90,19 @@ func listenerSettings(address string, port uint16) ListenerSettings {
 	return ListenerSettings{Address: &address, Port: &port}
 }
 
+func endpointSettings(t *testing.T, status ListenerStatus) ListenerSettings {
+	t.Helper()
+	address, portText, err := net.SplitHostPort(statusAddress(t, status))
+	if err != nil {
+		t.Fatalf("splitting listener endpoint: %v", err)
+	}
+	port, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil {
+		t.Fatalf("parsing listener port: %v", err)
+	}
+	return listenerSettings(address, uint16(port))
+}
+
 func statusAddress(t *testing.T, status ListenerStatus) string {
 	t.Helper()
 	if status.ProxyListener == nil {
@@ -120,32 +133,28 @@ func TestListenerLifecycle(t *testing.T) {
 			}
 		})
 
-		started, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0))
+		_, err = lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0))
 		if err != nil {
 			t.Fatalf("starting listener: %v", err)
 		}
-		endpoint := statusAddress(t, started)
 		if _, err := lifecycle.Stop(context.Background()); err != nil {
 			t.Fatalf("stopping listener: %v", err)
 		}
 		if _, err := repository.GetExtensions(); err != nil {
 			t.Fatalf("reading the open project after listener stop: %v", err)
 		}
-		restarted, err := lifecycle.Start(context.Background(), ListenerSettings{})
+		restarted, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0))
 		if err != nil {
 			t.Fatalf("restarting listener: %v", err)
 		}
-		if got := statusAddress(t, restarted); got != endpoint {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", endpoint, got)
-		}
-		connection, err := net.DialTimeout("tcp", endpoint, time.Second)
+		connection, err := net.DialTimeout("tcp", statusAddress(t, restarted), time.Second)
 		if err != nil {
 			t.Fatalf("dialing restarted proxy listener: %v", err)
 		}
 		connection.Close()
 	})
 
-	t.Run("should stop and restart on the retained assigned endpoint", func(t *testing.T) {
+	t.Run("should require a complete endpoint after stop", func(t *testing.T) {
 		proxy := newListenerTestProxy()
 		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
@@ -189,30 +198,23 @@ func TestListenerLifecycle(t *testing.T) {
 			t.Fatal("\nwanted:\nclosed listener\ngot:\naccepted connection")
 		}
 
-		restarted, err := lifecycle.Start(context.Background(), ListenerSettings{})
+		host := "127.0.0.1"
+		for _, settings := range []ListenerSettings{{}, {Address: &host}} {
+			status, err := lifecycle.Start(context.Background(), settings)
+			if !errors.Is(err, ErrListenerUnavailable) || status.Status != ListenerInactive || status.ProxyListener != nil {
+				t.Fatalf("\nwanted:\ninactive status and %v\ngot:\n%+v and %v", ErrListenerUnavailable, status, err)
+			}
+		}
+		restarted, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", uint16(mustPort(t, port))))
 		if err != nil {
-			t.Fatalf("restarting listener: %v", err)
+			t.Fatalf("restarting listener with a complete endpoint: %v", err)
 		}
 		if got := statusAddress(t, restarted); got != address {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", address, got)
 		}
-		if host, gotPort, err := net.SplitHostPort(statusAddress(t, lifecycle.Status())); err != nil || host != "127.0.0.1" || gotPort != strconv.Itoa(mustPort(t, port)) {
-			t.Fatalf("\nwanted:\nretained active endpoint\ngot:\n%+v (%v)", lifecycle.Status(), err)
-		}
-		if _, err := lifecycle.Stop(context.Background()); err != nil {
-			t.Fatalf("stopping restarted listener: %v", err)
-		}
-		host := "127.0.0.1"
-		partial, err := lifecycle.Start(context.Background(), ListenerSettings{Address: &host})
-		if err != nil {
-			t.Fatalf("starting listener with a partial override: %v", err)
-		}
-		if got := statusAddress(t, partial); got != address {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", address, got)
-		}
 	})
 
-	t.Run("should enforce states and apply partial updates", func(t *testing.T) {
+	t.Run("should enforce states and require complete updates", func(t *testing.T) {
 		proxy := newListenerTestProxy()
 		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
@@ -229,16 +231,20 @@ func TestListenerLifecycle(t *testing.T) {
 
 		before := lifecycle.Status()
 		address := "127.0.0.1"
-		unchanged, err := lifecycle.Update(context.Background(), ListenerSettings{Address: &address})
+		incomplete, err := lifecycle.Update(context.Background(), ListenerSettings{Address: &address})
+		if !errors.Is(err, ErrListenerUnavailable) || statusAddress(t, incomplete) != statusAddress(t, before) {
+			t.Fatalf("\nwanted:\nactive status and %v\ngot:\n%+v and %v", ErrListenerUnavailable, incomplete, err)
+		}
+		unchanged, err := lifecycle.Update(context.Background(), endpointSettings(t, before))
 		if err != nil {
-			t.Fatalf("updating unchanged listener: %v", err)
+			t.Fatalf("updating with the unchanged endpoint: %v", err)
 		}
 		if statusAddress(t, unchanged) != statusAddress(t, before) || proxy.cleanupCount() != 0 {
 			t.Fatalf("\nwanted:\nunchanged listener without cleanup\ngot:\n%+v and %d cleanups", unchanged, proxy.cleanupCount())
 		}
 
 		port := uint16(0)
-		updated, err := lifecycle.Update(context.Background(), ListenerSettings{Port: &port})
+		updated, err := lifecycle.Update(context.Background(), listenerSettings("127.0.0.1", port))
 		if err != nil {
 			t.Fatalf("updating listener port: %v", err)
 		}
@@ -266,7 +272,7 @@ func TestListenerLifecycle(t *testing.T) {
 		defer occupied.Close()
 		port := uint16(occupied.Addr().(*net.TCPAddr).Port)
 
-		status, err := lifecycle.Update(context.Background(), ListenerSettings{Port: &port})
+		status, err := lifecycle.Update(context.Background(), listenerSettings("127.0.0.1", port))
 		if !errors.Is(err, ErrListenerUnavailable) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", ErrListenerUnavailable, err)
 		}
@@ -278,6 +284,180 @@ func TestListenerLifecycle(t *testing.T) {
 			t.Fatalf("dialing preserved listener: %v", err)
 		}
 		connection.Close()
+	})
+
+	t.Run("should remain inactive when serving fails before start readiness", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		serveErr := errors.New("serve failed before readiness")
+		proxy.serve = func(net.Listener) error { return serveErr }
+		lifecycle := newListenerLifecycle(proxy, nil).(*listenerLifecycle)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		subscriber := lifecycle.events.subscribe()
+		defer lifecycle.events.unsubscribe(subscriber)
+
+		status, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0))
+		if !errors.Is(err, ErrListenerUnavailable) || !errors.Is(err, serveErr) {
+			t.Fatalf("\nwanted:\nserving failure classified as %v\ngot:\n%v", ErrListenerUnavailable, err)
+		}
+		if status.Status != ListenerInactive || status.ProxyListener != nil || lifecycle.Status().Status != ListenerInactive {
+			t.Fatalf("\nwanted:\ninactive status\ngot:\n%+v and %+v", status, lifecycle.Status())
+		}
+		select {
+		case event := <-subscriber.events:
+			t.Fatalf("\nwanted:\nno success event\ngot:\n%s", event.name)
+		default:
+		}
+	})
+
+	t.Run("should not report start success before serving reaches the accept loop", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		serveEntered := make(chan struct{})
+		enterAccept := make(chan struct{})
+		proxy.serve = func(listener net.Listener) error {
+			close(serveEntered)
+			<-enterAccept
+			_, err := listener.Accept()
+			return err
+		}
+		lifecycle := newListenerLifecycle(proxy, nil)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		started := make(chan error, 1)
+		go func() {
+			_, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0))
+			started <- err
+		}()
+		<-serveEntered
+		select {
+		case err := <-started:
+			t.Fatalf("\nwanted:\nstart to wait for the accept loop\ngot:\n%v", err)
+		default:
+		}
+		close(enterAccept)
+		if err := <-started; err != nil {
+			t.Fatalf("starting ready listener: %v", err)
+		}
+	})
+
+	t.Run("should remain inactive when replacement serving fails before readiness", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		lifecycle := newListenerLifecycle(proxy, nil).(*listenerLifecycle)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		subscriber := lifecycle.events.subscribe()
+		defer lifecycle.events.unsubscribe(subscriber)
+		started, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0))
+		if err != nil {
+			t.Fatalf("starting listener: %v", err)
+		}
+		oldAddress := statusAddress(t, started)
+		<-subscriber.events
+		serveErr := errors.New("replacement failed before readiness")
+		proxy.serve = func(net.Listener) error { return serveErr }
+
+		status, err := lifecycle.Update(context.Background(), listenerSettings("127.0.0.1", 0))
+		if !errors.Is(err, ErrListenerUnavailable) || !errors.Is(err, serveErr) {
+			t.Fatalf("\nwanted:\nreplacement serving failure classified as %v\ngot:\n%v", ErrListenerUnavailable, err)
+		}
+		if status.Status != ListenerInactive || status.ProxyListener != nil || lifecycle.Status().Status != ListenerInactive {
+			t.Fatalf("\nwanted:\ninactive status\ngot:\n%+v and %+v", status, lifecycle.Status())
+		}
+		if connection, dialErr := net.DialTimeout("tcp", oldAddress, 50*time.Millisecond); dialErr == nil {
+			connection.Close()
+			t.Fatal("\nwanted:\nold listener to remain closed\ngot:\naccepted connection")
+		}
+		event := <-subscriber.events
+		if event.name != "listener.stopped" || !bytes.Contains(event.data, []byte(`"reason":"failed"`)) {
+			t.Fatalf("\nwanted:\nfailed listener stop event\ngot:\n%s %s", event.name, event.data)
+		}
+	})
+
+	t.Run("should not report update success before replacement serving reaches the accept loop", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		lifecycle := newListenerLifecycle(proxy, nil)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		if _, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0)); err != nil {
+			t.Fatalf("starting listener: %v", err)
+		}
+		serveEntered := make(chan struct{})
+		enterAccept := make(chan struct{})
+		proxy.serve = func(listener net.Listener) error {
+			close(serveEntered)
+			<-enterAccept
+			_, err := listener.Accept()
+			return err
+		}
+		updated := make(chan error, 1)
+		go func() {
+			_, err := lifecycle.Update(context.Background(), listenerSettings("127.0.0.1", 0))
+			updated <- err
+		}()
+		<-serveEntered
+		select {
+		case err := <-updated:
+			t.Fatalf("\nwanted:\nupdate to wait for the replacement accept loop\ngot:\n%v", err)
+		default:
+		}
+		close(enterAccept)
+		if err := <-updated; err != nil {
+			t.Fatalf("updating to ready listener: %v", err)
+		}
+	})
+
+	t.Run("should publish one failed stop when the old and replacement serving runs fail", func(t *testing.T) {
+		proxy := newListenerTestProxy()
+		secondBind := make(chan struct{})
+		releaseBind := make(chan struct{})
+		bindCalls := 0
+		proxy.bind = func(address, port string) (net.Listener, error) {
+			bindCalls++
+			if bindCalls == 2 {
+				close(secondBind)
+				<-releaseBind
+			}
+			return net.Listen("tcp", net.JoinHostPort(address, port))
+		}
+		firstServeEnded := make(chan struct{})
+		serveCalls := 0
+		proxy.serve = func(listener net.Listener) error {
+			serveCalls++
+			if serveCalls == 1 {
+				_, err := listener.Accept()
+				close(firstServeEnded)
+				return err
+			}
+			return errors.New("replacement failed before readiness")
+		}
+		lifecycle := newListenerLifecycle(proxy, nil).(*listenerLifecycle)
+		t.Cleanup(func() { lifecycle.Shutdown() })
+		subscriber := lifecycle.events.subscribe()
+		defer lifecycle.events.unsubscribe(subscriber)
+		if _, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0)); err != nil {
+			t.Fatalf("starting listener: %v", err)
+		}
+		<-subscriber.events
+		old := <-proxy.served
+		updated := make(chan error, 1)
+		go func() {
+			_, err := lifecycle.Update(context.Background(), listenerSettings("127.0.0.1", 0))
+			updated <- err
+		}()
+		<-secondBind
+		if err := old.Close(); err != nil {
+			t.Fatalf("failing old listener: %v", err)
+		}
+		<-firstServeEnded
+		close(releaseBind)
+		if err := <-updated; !errors.Is(err, ErrListenerUnavailable) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", ErrListenerUnavailable, err)
+		}
+		event := <-subscriber.events
+		if event.name != "listener.stopped" || !bytes.Contains(event.data, []byte(`"reason":"failed"`)) {
+			t.Fatalf("\nwanted:\none failed listener stop event\ngot:\n%s %s", event.name, event.data)
+		}
+		select {
+		case event := <-subscriber.events:
+			t.Fatalf("\nwanted:\nno duplicate event\ngot:\n%s %s", event.name, event.data)
+		default:
+		}
 	})
 
 	t.Run("should move forward after replacement cleanup fails", func(t *testing.T) {
@@ -292,7 +472,7 @@ func TestListenerLifecycle(t *testing.T) {
 		proxy.cleanupErr = errors.New("flush failed")
 		port := uint16(0)
 
-		updated, err := lifecycle.Update(context.Background(), ListenerSettings{Port: &port})
+		updated, err := lifecycle.Update(context.Background(), listenerSettings("127.0.0.1", port))
 		if !errors.Is(err, ErrListenerCleanup) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", ErrListenerCleanup, err)
 		}
@@ -319,7 +499,7 @@ func TestListenerLifecycle(t *testing.T) {
 		var log bytes.Buffer
 		lifecycle := newListenerLifecycle(proxy, &log)
 		t.Cleanup(func() { lifecycle.Shutdown() })
-		started, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0))
+		_, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0))
 		if err != nil {
 			t.Fatalf("starting listener: %v", err)
 		}
@@ -331,13 +511,11 @@ func TestListenerLifecycle(t *testing.T) {
 		if proxy.cleanupCount() != 1 || !bytes.Contains(log.Bytes(), []byte("proxy listener stopped unexpectedly")) {
 			t.Fatalf("\nwanted:\nfailure log and WebSocket cleanup\ngot:\n%s and %d cleanups", log.String(), proxy.cleanupCount())
 		}
-		restarted, err := lifecycle.Start(context.Background(), ListenerSettings{})
+		restarted, err := lifecycle.Start(context.Background(), listenerSettings("127.0.0.1", 0))
 		if err != nil {
 			t.Fatalf("restarting listener: %v", err)
 		}
-		if statusAddress(t, restarted) != statusAddress(t, started) {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", statusAddress(t, started), statusAddress(t, restarted))
-		}
+		statusAddress(t, restarted)
 	})
 
 	t.Run("should cancel waiting work but finish a transition after it starts", func(t *testing.T) {
@@ -421,12 +599,12 @@ func TestListenerLifecycle(t *testing.T) {
 		firstResult := make(chan error, 1)
 		secondResult := make(chan error, 1)
 		go func() {
-			_, err := lifecycle.Update(context.Background(), ListenerSettings{Port: &firstPort})
+			_, err := lifecycle.Update(context.Background(), listenerSettings("127.0.0.1", firstPort))
 			firstResult <- err
 		}()
 		<-blocked
 		go func() {
-			_, err := lifecycle.Update(context.Background(), ListenerSettings{Port: &secondPort})
+			_, err := lifecycle.Update(context.Background(), listenerSettings("127.0.0.1", secondPort))
 			secondResult <- err
 		}()
 		time.Sleep(10 * time.Millisecond)

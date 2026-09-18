@@ -27,32 +27,6 @@ func TestListenerCommand(t *testing.T) {
 		wantStderr string
 	}{
 		{
-			name:       "should start with no overrides",
-			args:       []string{"listener", "start"},
-			response:   `{"status":"active","proxy_listener":"127.0.0.1:53142"}` + "\n",
-			method:     http.MethodPost,
-			path:       "/listener/start",
-			wantStderr: "proxy listener started on 127.0.0.1:53142\n",
-		},
-		{
-			name:       "should start with only an address override",
-			args:       []string{"listener", "start", "--address", "localhost"},
-			response:   `{"status":"active","proxy_listener":"127.0.0.1:8080"}` + "\n",
-			method:     http.MethodPost,
-			path:       "/listener/start",
-			body:       `{"address":"localhost"}`,
-			wantStderr: "proxy listener started on 127.0.0.1:8080\n",
-		},
-		{
-			name:       "should start with only a port override",
-			args:       []string{"listener", "start", "--port", "0"},
-			response:   `{"status":"active","proxy_listener":"127.0.0.1:53141"}` + "\n",
-			method:     http.MethodPost,
-			path:       "/listener/start",
-			body:       `{"port":0}`,
-			wantStderr: "proxy listener started on 127.0.0.1:53141\n",
-		},
-		{
 			name:       "should start with address and port overrides",
 			args:       []string{"listener", "start", "--address", "localhost", "--port", "8081"},
 			response:   `{"status":"active","proxy_listener":"127.0.0.1:8081"}` + "\n",
@@ -62,21 +36,12 @@ func TestListenerCommand(t *testing.T) {
 			wantStderr: "proxy listener started on 127.0.0.1:8081\n",
 		},
 		{
-			name:       "should update only the supplied address",
-			args:       []string{"listener", "update", "--address", "localhost"},
-			response:   `{"status":"active","proxy_listener":"127.0.0.1:8080"}` + "\n",
-			method:     http.MethodPost,
-			path:       "/listener/update",
-			body:       `{"address":"localhost"}`,
-			wantStderr: "proxy listener updated to 127.0.0.1:8080\n",
-		},
-		{
-			name:       "should update only the supplied port",
-			args:       []string{"listener", "update", "--port", "0"},
+			name:       "should update with an address and port",
+			args:       []string{"listener", "update", "--address", "localhost", "--port", "0"},
 			response:   `{"status":"active","proxy_listener":"127.0.0.1:53143"}` + "\n",
 			method:     http.MethodPost,
 			path:       "/listener/update",
-			body:       `{"port":0}`,
+			body:       `{"address":"localhost","port":0}`,
 			wantStderr: "proxy listener updated to 127.0.0.1:53143\n",
 		},
 		{
@@ -193,8 +158,8 @@ func TestListenerCommand(t *testing.T) {
 			body := " {\n  \"unexpected\": true\n} "
 			startCannedControlAPI(t, configDir, "named", http.StatusOK, body)
 			args := []string{"--config-dir", configDir, "--instance", "named", "listener", command, "--json"}
-			if command == "update" {
-				args = append(args, "--port", "8080")
+			if command == "start" || command == "update" {
+				args = append(args, "--address", "127.0.0.1", "--port", "8080")
 			}
 
 			stdout, stderr, err := runMarasi(binary, args...)
@@ -210,20 +175,30 @@ func TestListenerCommand(t *testing.T) {
 		assertJSONCommandError(t, stdout, stderr, err, "instance work is not running")
 
 		startCannedControlAPI(t, configDir, "api", http.StatusConflict, `{"error":"listener_inactive"}`)
-		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "api", "listener", "update", "--port", "8080", "--json")
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "api", "listener", "update", "--address", "127.0.0.1", "--port", "8080", "--json")
 		assertJSONCommandError(t, stdout, stderr, err, "updating proxy listener: listener_inactive")
 
 		startCannedControlAPI(t, configDir, "malformed", http.StatusBadGateway, `{`)
-		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "malformed", "listener", "start", "--json")
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "malformed", "listener", "start", "--address", "127.0.0.1", "--port", "0", "--json")
 		assertJSONCommandError(t, stdout, stderr, err, "starting proxy listener: 502 Bad Gateway")
+
+		configDir = serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "unavailable", http.StatusConflict, `{"error":"listener_unavailable"}`)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "unavailable", "listener", "start", "--address", "127.0.0.1", "--port", "0", "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "starting proxy listener: listener_unavailable")
 	})
 
 	t.Run("should reject arguments, missing update flags, and invalid ports", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		for _, args := range [][]string{
 			{"listener", "start", "extra"},
+			{"listener", "start"},
+			{"listener", "start", "--address", "127.0.0.1"},
+			{"listener", "start", "--port", "0"},
 			{"listener", "stop", "extra"},
 			{"listener", "update"},
+			{"listener", "update", "--address", "127.0.0.1"},
+			{"listener", "update", "--port", "0"},
 			{"listener", "status", "extra"},
 			{"listener", "address", "extra"},
 			{"listener", "start", "--port", "-1"},
@@ -235,6 +210,28 @@ func TestListenerCommand(t *testing.T) {
 			commandArgs := append([]string{"--config-dir", configDir}, args...)
 			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
 				t.Fatalf("\nwanted:\ninvalid invocation\ngot:\naccepted %v", args)
+			}
+		}
+	})
+
+	t.Run("should require complete start and update endpoints before calling the API", func(t *testing.T) {
+		for _, test := range []struct {
+			args []string
+			want string
+		}{
+			{args: []string{"listener", "start"}, want: "listener start requires --address and --port"},
+			{args: []string{"listener", "start", "--address", "127.0.0.1"}, want: "listener start requires --address and --port"},
+			{args: []string{"listener", "start", "--port", "0"}, want: "listener start requires --address and --port"},
+			{args: []string{"listener", "update"}, want: "listener update requires --address and --port"},
+			{args: []string{"listener", "update", "--address", "127.0.0.1"}, want: "listener update requires --address and --port"},
+			{args: []string{"listener", "update", "--port", "0"}, want: "listener update requires --address and --port"},
+		} {
+			configDir := serviceConfigDir(t)
+			sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{}`)
+			args := append([]string{"--config-dir", configDir, "--instance", "work"}, test.args...)
+			stdout, stderr, err := runMarasi(binary, args...)
+			if err == nil || stdout != "" || !strings.Contains(stderr, test.want) || sent.snapshot().Method != "" {
+				t.Fatalf("\nwanted:\n%q before an API request\ngot:\nstdout %q, stderr %q, error %v, request %+v", test.want, stdout, stderr, err, sent.snapshot())
 			}
 		}
 	})
@@ -331,12 +328,12 @@ func TestListenerCommandLifecycle(t *testing.T) {
 	if err != nil || statusStdout != "status: inactive\nproxy listener: inactive\n" {
 		t.Fatalf("inactive status: stdout %q, error %v", statusStdout, err)
 	}
-	_, startStderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "listener", "start", "--port", "0")
+	_, startStderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "listener", "start", "--address", "127.0.0.1", "--port", "0")
 	if err != nil {
 		t.Fatalf("restarting listener: %v", err)
 	}
 	restartedAddress := strings.TrimSpace(strings.TrimPrefix(startStderr, "proxy listener started on "))
-	_, updateStderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "listener", "update", "--port", "0")
+	_, updateStderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "listener", "update", "--address", "127.0.0.1", "--port", "0")
 	if err != nil {
 		t.Fatalf("updating listener: %v", err)
 	}
