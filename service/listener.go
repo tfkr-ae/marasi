@@ -58,11 +58,9 @@ const (
 )
 
 type listenerRequest struct {
-	ctx       context.Context
 	operation listenerOperation
 	settings  ListenerSettings
 	result    chan listenerResult
-	state     *atomic.Uint32
 }
 
 type listenerResult struct {
@@ -122,7 +120,7 @@ func newListenerLifecycle(proxy listenerProxy, logWriter io.Writer) ListenerLife
 		proxy:      proxy,
 		logWriter:  logWriter,
 		events:     newEventBroadcaster(),
-		requests:   make(chan listenerRequest, 64),
+		requests:   make(chan listenerRequest),
 		serveEnded: make(chan listenerServeResult, 1),
 		done:       make(chan struct{}),
 		status:     ListenerStatus{Status: ListenerInactive},
@@ -156,8 +154,7 @@ func (l *listenerLifecycle) Update(ctx context.Context, settings ListenerSetting
 // Shutdown closes the proxy through its established full-service cleanup path.
 func (l *listenerLifecycle) Shutdown() error {
 	result := make(chan listenerResult, 1)
-	state := &atomic.Uint32{}
-	request := listenerRequest{ctx: context.Background(), operation: shutdownListener, result: result, state: state}
+	request := listenerRequest{operation: shutdownListener, result: result}
 	select {
 	case l.requests <- request:
 		return (<-result).err
@@ -167,9 +164,11 @@ func (l *listenerLifecycle) Shutdown() error {
 }
 
 func (l *listenerLifecycle) mutate(ctx context.Context, operation listenerOperation, settings ListenerSettings) (ListenerStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return l.Status(), err
+	}
 	result := make(chan listenerResult, 1)
-	state := &atomic.Uint32{}
-	request := listenerRequest{ctx: ctx, operation: operation, settings: settings, result: result, state: state}
+	request := listenerRequest{operation: operation, settings: settings, result: result}
 	select {
 	case l.requests <- request:
 	case <-ctx.Done():
@@ -177,25 +176,9 @@ func (l *listenerLifecycle) mutate(ctx context.Context, operation listenerOperat
 	case <-l.done:
 		return l.Status(), errListenerClosed
 	}
-	select {
-	case response := <-result:
-		return response.status, response.err
-	case <-ctx.Done():
-		if state.CompareAndSwap(listenerRequestWaiting, listenerRequestCanceled) {
-			return l.Status(), ctx.Err()
-		}
-		response := <-result
-		return response.status, response.err
-	case <-l.done:
-		return l.Status(), errListenerClosed
-	}
+	response := <-result
+	return response.status, response.err
 }
-
-const (
-	listenerRequestWaiting uint32 = iota
-	listenerRequestStarted
-	listenerRequestCanceled
-)
 
 func (l *listenerLifecycle) run() {
 	var retained string
@@ -203,13 +186,6 @@ func (l *listenerLifecycle) run() {
 	for {
 		select {
 		case request := <-l.requests:
-			if err := request.ctx.Err(); err != nil || !request.state.CompareAndSwap(listenerRequestWaiting, listenerRequestStarted) {
-				if err == nil {
-					err = context.Canceled
-				}
-				request.result <- listenerResult{status: l.Status(), err: err}
-				continue
-			}
 			switch request.operation {
 			case startListener:
 				status, run, endpoint, err := l.start(current, retained, request.settings)

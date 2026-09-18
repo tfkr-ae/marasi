@@ -340,7 +340,7 @@ func TestListenerLifecycle(t *testing.T) {
 		}
 	})
 
-	t.Run("should cancel queued work but finish a transition after it starts", func(t *testing.T) {
+	t.Run("should cancel waiting work but finish a transition after it starts", func(t *testing.T) {
 		proxy := newListenerTestProxy()
 		entered := make(chan struct{}, 2)
 		release := make(chan struct{})
@@ -361,26 +361,36 @@ func TestListenerLifecycle(t *testing.T) {
 		<-entered
 		cancelFirst()
 
-		queuedContext, cancelQueued := context.WithCancel(context.Background())
-		queuedResult := make(chan error, 1)
+		waitingContext, cancelWaiting := context.WithCancel(context.Background())
+		waitingResult := make(chan error, 1)
 		go func() {
-			_, err := lifecycle.Update(queuedContext, ListenerSettings{})
-			queuedResult <- err
+			_, err := lifecycle.Stop(waitingContext)
+			waitingResult <- err
 		}()
 		time.Sleep(10 * time.Millisecond)
-		cancelQueued()
+		cancelWaiting()
 		select {
-		case err := <-queuedResult:
+		case err := <-waitingResult:
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.Canceled, err)
 			}
 		case <-time.After(time.Second):
-			t.Fatal("\nwanted:\nprompt queued cancellation\ngot:\ntimeout")
+			t.Fatal("\nwanted:\nprompt waiting cancellation\ngot:\ntimeout")
 		}
 		close(release)
 
 		if err := <-firstResult; err != nil {
 			t.Fatalf("\nwanted:\ncompleted started transition\ngot:\n%v", err)
+		}
+		if status := lifecycle.Status(); status.Status != ListenerActive {
+			t.Fatalf("\nwanted:\ncanceled stop never to run\ngot:\n%+v", status)
+		}
+
+		canceledContext, cancel := context.WithCancel(context.Background())
+		cancel()
+		status, err := lifecycle.Stop(canceledContext)
+		if !errors.Is(err, context.Canceled) || status.Status != ListenerActive {
+			t.Fatalf("\nwanted:\npre-canceled stop rejected with active status\ngot:\n%+v and %v", status, err)
 		}
 	})
 
