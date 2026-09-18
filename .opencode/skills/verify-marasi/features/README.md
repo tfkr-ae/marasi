@@ -16,6 +16,7 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Artifact | `artifact upload`, `artifact get`, `artifact download`, `artifact delete` | [artifact](artifact.md) |
 | Chrome | `chrome path add`, `chrome path list`, `chrome path remove`, `chrome profile add`, `chrome profile list`, `chrome profile remove`, `chrome start` | [chrome](chrome.md) |
 | Waypoint | `waypoint list`, `waypoint add`, `waypoint update`, `waypoint remove` | [waypoint](waypoint.md) |
+| Wordlist | `wordlist list`, `wordlist preview`, `wordlist add`, `wordlist remove` | [wordlist](wordlist.md) |
 | Armory | `armory template create`, `armory template list`, `armory template get`, `armory template update`, `armory template delete`, `armory run validate`, `armory run create`, `armory run list`, `armory run get`, `armory run start`, `armory run cancel`, `armory run traffic`, `armory run delete` | [armory](armory.md) |
 
-When a change touches one row, read that feature file and cover every affected entry point. The bundled helper proves service lifecycle, one HTTP capture, live `events` subscription, filtered listing, and detail inspection. It does not cover every listener transition, `listener address`, HTTPS interception, pagination, project open, launchpad, test cases, findings, artifacts, Chrome, waypoints, or Armory.
+When a change touches one row, read that feature file and cover every affected entry point. The bundled helper proves service lifecycle, one HTTP capture, live `events` subscription, filtered listing, and detail inspection. It does not cover every listener transition, `listener address`, HTTPS interception, pagination, project open, launchpad, test cases, findings, artifacts, Chrome, waypoints, wordlists, or Armory.

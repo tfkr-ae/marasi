@@ -5,7 +5,7 @@ Users store raw HTTP templates in the open project, create runs against those te
 ## Sub-features
 
 - Create a template with `armory template create --name` and optional `--description` / `--raw-file`.
-- List templates newest first with `armory template list`.
+- List templates oldest first with `armory template list`.
 - Read one template with `armory template get`.
 - Change name, description, or raw template with `armory template update`.
 - Delete a template with `armory template delete`.
@@ -21,7 +21,7 @@ Users store raw HTTP templates in the open project, create runs against those te
 
 ## How to get to it (user POV)
 
-Start a service first. Put wordlist files in `$VERIFY_CONFIG_DIR/wordlists`. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANCE" armory template create --name Lifecycle --raw-file request.raw`. Create a run from that template id, then `armory run start`.
+Start a service first. Put wordlist files in `$VERIFY_CONFIG_DIR/wordlists`, or move them there with `wordlist add`. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANCE" armory template create --name Lifecycle --raw-file request.raw`. Create a run from that template id, then `armory run start`.
 
 ## Driving it with shell and curl
 
@@ -30,11 +30,11 @@ Write `$VERIFY_CONFIG_DIR/wordlists/users.txt` with one line `payload`. Write a 
 ## Gotchas
 
 - Template `--name` is required and must be non-empty. Update requires `--name`, `--description`, or `--raw-file`.
-- `--attack-type` is `harpoon`, `broadside`, `tandem`, or `maelstrom`. `--wordlist` is repeatable and names files under `$VERIFY_CONFIG_DIR/wordlists`. The service creates that directory empty; it does not seed wordlist files.
+- `--attack-type` is `harpoon`, `broadside`, `tandem`, or `maelstrom`. `--wordlist` is repeatable and names files under `$VERIFY_CONFIG_DIR/wordlists`. The service creates that directory empty; it does not seed wordlist files. `wordlist add` moves a source file there.
 - `--http` sends generated requests as HTTP. Omit it and Marasi uses HTTPS.
 - Validate needs `--raw-file` or piped stdin. A TTY stdin fails. Create uses the stored template, not stdin.
-- `armory run list` requires `--template`. Traffic listing accepts `--limit` and `--cursor` like `traffic list`.
+- `armory run list` requires `--template`. Traffic listing accepts `--limit` and `--cursor`, but rows are oldest first. `traffic list` pages newest remaining rows.
 - Start sends through the proxy listener and stamps `metadata.armory_run_id`. A one-payload harpoon can finish before you read `armory run get`. Retry get and traffic until the path appears.
-- Cancel of a run that is not `in_progress` returns `run_not_active`.
+- Cancel of a run that is not `in_progress` returns `run_not_active`. Cancel signals the active run and returns immediately. The JSON body may still show `in_progress`. Retry `armory run get` until status is no longer `in_progress`.
 - Duplicate start of an already started run fails. Templates and runs belong to the currently open project.
 - Template and run mutations publish `armory.template.created`, `armory.template.updated`, `armory.template.deleted`, `armory.run.created`, `armory.run.updated`, and `armory.run.deleted`. Subscribe with `events` before the mutation; the stream has no replay.
