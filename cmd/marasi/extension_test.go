@@ -161,6 +161,45 @@ func TestExtensionCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("should call a function and write success on stderr", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		response := `{"status":"called"}` + "\n"
+		sent := startCannedControlAPI(t, configDir, "call", http.StatusOK, response)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "call", "extension", "call", workshopID, "poke")
+		got := sent.snapshot()
+		wantBody := `{"function":"poke"}`
+		if err != nil || stdout != "" || stderr != "extension "+workshopID+" called poke\n" || got.Method != http.MethodPost || got.Path != "/extension/"+workshopID+"/call" || got.Body != wantBody {
+			t.Fatalf("\nwanted:\nPOST %s body %q, empty stdout, success on stderr\ngot:\n%s %s body %q, stdout %q, stderr %q, error %v", "/extension/"+workshopID+"/call", wantBody, got.Method, got.Path, got.Body, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should send --args as a JSON array", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		response := `{"status":"called"}` + "\n"
+		sent := startCannedControlAPI(t, configDir, "call-args", http.StatusOK, response)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "call-args", "extension", "call", workshopID, "poke", "--args", `["hello",1,{"key":"val"}]`)
+		got := sent.snapshot()
+		wantBody := `{"function":"poke","args":["hello",1,{"key":"val"}]}`
+		if err != nil || stdout != "" || stderr != "extension "+workshopID+" called poke\n" || got.Method != http.MethodPost || got.Path != "/extension/"+workshopID+"/call" || got.Body != wantBody {
+			t.Fatalf("\nwanted:\nPOST %s body %q, empty stdout, success on stderr\ngot:\n%s %s body %q, stdout %q, stderr %q, error %v", "/extension/"+workshopID+"/call", wantBody, got.Method, got.Path, got.Body, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should reject invalid --args before the request", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		for i, raw := range []string{"{", `{"key":"val"}`, `"hello"`, "1", "null"} {
+			name := "call-bad-args-" + string(rune('a'+i))
+			sent := startCannedControlAPI(t, configDir, name, http.StatusOK, `{"status":"called"}`+"\n")
+			stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", name, "extension", "call", workshopID, "poke", "--args", raw)
+			got := sent.snapshot()
+			if err == nil || stdout != "" || stderr == "" || got.Method != "" || got.Path != "" || got.Body != "" {
+				t.Fatalf("\nwanted:\nCLI error before request for --args %q\ngot:\n%s %s body %q, stdout %q, stderr %q, error %v", raw, got.Method, got.Path, got.Body, stdout, stderr, err)
+			}
+		}
+	})
+
 	t.Run("should leave empty logs silent", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startCannedControlAPI(t, configDir, "empty-logs", http.StatusOK, `{"items":[]}`+"\n")
@@ -192,6 +231,10 @@ func TestExtensionCommands(t *testing.T) {
 			{"extension", "settings", "get", workshopID, "--json"},
 			{"--json", "extension", "settings", "set", workshopID, "--file", settingsFile},
 			{"extension", "settings", "set", workshopID, "--file", settingsFile, "--json"},
+			{"--json", "extension", "call", workshopID, "poke"},
+			{"extension", "call", workshopID, "poke", "--json"},
+			{"--json", "extension", "call", workshopID, "poke", "--args", `["hello"]`},
+			{"extension", "call", workshopID, "poke", "--args", `["hello"]`, "--json"},
 		} {
 			configDir := serviceConfigDir(t)
 			body := " {\n  \"unexpected\": true\n} "
@@ -220,6 +263,9 @@ func TestExtensionCommands(t *testing.T) {
 			{"extension", "settings", "set"},
 			{"extension", "settings", "set", workshopID},
 			{"extension", "settings", "set", workshopID, "extra"},
+			{"extension", "call"},
+			{"extension", "call", workshopID},
+			{"extension", "call", workshopID, "poke", "extra"},
 		} {
 			commandArgs := append([]string{"--config-dir", configDir}, args...)
 			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
@@ -265,6 +311,10 @@ func TestExtensionCommands(t *testing.T) {
 		}
 		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "settings-set-api", "extension", "settings", "set", workshopID, "--file", settingsFile, "--json")
 		assertJSONCommandError(t, stdout, stderr, err, "setting extension settings: not_found")
+
+		startCannedControlAPI(t, configDir, "call-api", http.StatusNotFound, `{"error":"function_not_found"}`)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "call-api", "extension", "call", workshopID, "poke", "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "calling extension: function_not_found")
 	})
 }
 
@@ -410,4 +460,29 @@ func TestExtensionCommandLifecycle(t *testing.T) {
 	if err != nil || stderr != "" || stdout != `{"settings":{}}`+"\n" {
 		t.Fatalf("clearing workshop settings as JSON: stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
+
+	callLua := `function poke(msg)
+  print(msg)
+end`
+	if err := os.WriteFile(luaFile, []byte(callLua), 0o600); err != nil {
+		t.Fatalf("writing call lua: %v", err)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "update", workshopID, "--file", luaFile)
+	if err != nil || stdout != "" || stderr != "extension "+workshopID+" updated\n" {
+		t.Fatalf("updating workshop for call: stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "call", workshopID, "poke", "--args", `["from-cli"]`)
+	if err != nil || stdout != "" || stderr != "extension "+workshopID+" called poke\n" {
+		t.Fatalf("calling workshop poke: stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "logs", workshopID)
+	if err != nil || stderr != "" || !strings.Contains(stdout, "from-cli") {
+		t.Fatalf("listing workshop logs after call: stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "call", workshopID, "poke", "--json")
+	if err != nil || stderr != "" || stdout != `{"status":"called"}`+"\n" {
+		t.Fatalf("calling workshop as JSON: stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "call", workshopID, "missing", "--json")
+	assertJSONCommandError(t, stdout, stderr, err, "calling extension: function_not_found")
 }

@@ -18,12 +18,14 @@ import (
 
 var extensionUpdateFile string
 var extensionSettingsFile string
+var extensionCallArgs string
 
 func init() {
 	extensionUpdateCmd.Flags().StringVar(&extensionUpdateFile, "file", "", "Read lua from a file")
 	extensionSettingsSetCmd.Flags().StringVar(&extensionSettingsFile, "file", "", "Read settings JSON from a file")
+	extensionCallCmd.Flags().StringVar(&extensionCallArgs, "args", "", "JSON array of arguments")
 	extensionSettingsCmd.AddCommand(extensionSettingsGetCmd, extensionSettingsSetCmd)
-	extensionCmd.AddCommand(extensionListCmd, extensionGetCmd, extensionUpdateCmd, extensionLogsCmd, extensionSettingsCmd)
+	extensionCmd.AddCommand(extensionListCmd, extensionGetCmd, extensionUpdateCmd, extensionLogsCmd, extensionSettingsCmd, extensionCallCmd)
 	rootCmd.AddCommand(extensionCmd)
 }
 
@@ -160,6 +162,59 @@ var extensionSettingsSetCmd = &cobra.Command{
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "extension %s settings updated\n", args[0])
 		return err
 	},
+}
+
+var extensionCallCmd = &cobra.Command{
+	Use:   "call UUID FUNCTION",
+	Short: "Call an extension function",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		payload, err := encodeExtensionCall(cmd, args[1])
+		if err != nil {
+			return err
+		}
+		body, err := runExtensionRequest(cmd, http.MethodPost, "/extension/"+args[0]+"/call", "calling extension", payload)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "extension %s called %s\n", args[0], args[1])
+		return err
+	},
+}
+
+func encodeExtensionCall(cmd *cobra.Command, function string) ([]byte, error) {
+	request := struct {
+		Function string `json:"function"`
+		Args     []any  `json:"args,omitempty"`
+	}{Function: function}
+	if cmd.Flags().Changed("args") {
+		args, err := parseExtensionCallArgs(extensionCallArgs)
+		if err != nil {
+			return nil, err
+		}
+		request.Args = args
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("encoding extension call: %w", err)
+	}
+	return payload, nil
+}
+
+func parseExtensionCallArgs(raw string) ([]any, error) {
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return nil, fmt.Errorf("decoding extension args: %w", err)
+	}
+	args, ok := value.([]any)
+	if !ok {
+		return nil, errors.New("extension args must be a JSON array")
+	}
+	return args, nil
 }
 
 func readExtensionInput(cmd *cobra.Command, path, fileErr, stdinErr, missing string) (string, error) {

@@ -441,6 +441,109 @@ end`)
 		}
 		assertNoExtensionEvent(t, subscriber)
 	})
+
+	t.Run("should call a global function and return called without publishing", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `processed = 0
+function processRequest(request)
+  processed = processed + 1
+end
+function poke()
+  poked = true
+end`)
+		server := newTestServer(&marasi.Proxy{
+			Extensions:    []*extensions.Runtime{runtime},
+			ExtensionRepo: repo,
+		}, func() {})
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		response := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/call", `{"function":"poke"}`)
+		assertControlAPIResponse(t, response, http.StatusOK, `{"status":"called"}`+"\n")
+		if got := runtime.GetGlobal("poked"); got != true {
+			t.Fatalf("\nwanted:\npoke to set poked true\ngot:\n%v", got)
+		}
+		if got := runtime.GetGlobal("processed"); got != float64(0) {
+			t.Fatalf("\nwanted:\nprocessRequest left uncalled\ngot:\n%v", got)
+		}
+		assertNoExtensionEvent(t, subscriber)
+	})
+
+	t.Run("should push json args in order and treat omitted args as none", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `function poke(s, n, tbl)
+  got_s = s
+  got_n = n
+  got_key = tbl.key
+end
+function count(...)
+  argc = select("#", ...)
+end`)
+		server := newTestServer(&marasi.Proxy{
+			Extensions:    []*extensions.Runtime{runtime},
+			ExtensionRepo: repo,
+		}, func() {})
+
+		response := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/call", `{"function":"poke","args":["hello",2,{"key":"val"}]}`)
+		assertControlAPIResponse(t, response, http.StatusOK, `{"status":"called"}`+"\n")
+		if runtime.GetGlobal("got_s") != "hello" || runtime.GetGlobal("got_n") != float64(2) || runtime.GetGlobal("got_key") != "val" {
+			t.Fatalf("\nwanted:\nhello, 2, val\ngot:\n%v %v %v", runtime.GetGlobal("got_s"), runtime.GetGlobal("got_n"), runtime.GetGlobal("got_key"))
+		}
+
+		omitted := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/call", `{"function":"count"}`)
+		assertControlAPIResponse(t, omitted, http.StatusOK, `{"status":"called"}`+"\n")
+		if runtime.GetGlobal("argc") != float64(0) {
+			t.Fatalf("\nwanted:\nomitted args to pass none\ngot:\n%v", runtime.GetGlobal("argc"))
+		}
+
+		empty := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/call", `{"function":"count","args":[]}`)
+		assertControlAPIResponse(t, empty, http.StatusOK, `{"status":"called"}`+"\n")
+		if runtime.GetGlobal("argc") != float64(0) {
+			t.Fatalf("\nwanted:\nempty args to pass none\ngot:\n%v", runtime.GetGlobal("argc"))
+		}
+	})
+
+	t.Run("should reject a missing function, lua errors, missing ids, and invalid call bodies without publishing", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `function boom()
+  error("nope")
+end
+function poke()
+end`)
+		server := newTestServer(&marasi.Proxy{
+			Extensions:    []*extensions.Runtime{runtime},
+			ExtensionRepo: repo,
+		}, func() {})
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		missingFn := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/call", `{"function":"nope"}`)
+		assertControlAPIResponse(t, missingFn, http.StatusNotFound, `{"error":"function_not_found"}`+"\n")
+
+		luaErr := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/call", `{"function":"boom"}`)
+		assertControlAPIResponse(t, luaErr, http.StatusBadRequest, `{"error":"lua_error"}`+"\n")
+
+		missing := requestControlAPI(server, http.MethodPost, "/extension/01937d13-9632-75b1-9e73-c5129b06fa8c/call", `{"function":"poke"}`)
+		assertControlAPIResponse(t, missing, http.StatusNotFound, `{"error":"not_found"}`+"\n")
+
+		malformed := requestControlAPI(server, http.MethodPost, "/extension/not-a-uuid/call", `{"function":"poke"}`)
+		assertControlAPIResponse(t, malformed, http.StatusBadRequest, `{"error":"bad_request"}`+"\n")
+
+		for _, body := range []string{
+			`{}`,
+			`{"function":""}`,
+			`{"function":null}`,
+			`{"function":"poke","extra":true}`,
+			`{"function":"poke"}{"extra":true}`,
+			`{"function":"poke","args":null}`,
+			`{"function":"poke","args":{}}`,
+			`{"function":"poke","args":"hello"}`,
+			`{"function":"poke","args":1}`,
+			`[]`,
+			``,
+		} {
+			response := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/call", body)
+			assertControlAPIResponse(t, response, http.StatusBadRequest, `{"error":"invalid_extension_request"}`+"\n")
+		}
+		assertNoExtensionEvent(t, subscriber)
+	})
 }
 
 func assertNoExtensionEvent(t *testing.T, subscriber *eventSubscriber) {
