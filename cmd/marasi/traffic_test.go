@@ -714,6 +714,7 @@ type cannedControlRequest struct {
 	RawQuery    string
 	Body        string
 	ContentType string
+	history     []cannedControlRequest
 }
 
 func (got *cannedControlRequest) snapshot() cannedControlRequest {
@@ -728,13 +729,31 @@ func (got *cannedControlRequest) snapshot() cannedControlRequest {
 	}
 }
 
+func (got *cannedControlRequest) requests() []cannedControlRequest {
+	got.mu.Lock()
+	defer got.mu.Unlock()
+	out := make([]cannedControlRequest, len(got.history))
+	copy(out, got.history)
+	return out
+}
+
 func (got *cannedControlRequest) reset() {
 	got.mu.Lock()
 	defer got.mu.Unlock()
 	got.Method, got.Path, got.RawQuery, got.Body, got.ContentType = "", "", "", "", ""
+	got.history = nil
 }
 
 func startCannedControlAPI(t *testing.T, configDir, name string, status int, body string) *cannedControlRequest {
+	t.Helper()
+	return startCannedControlAPIHandler(t, configDir, name, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		io.WriteString(w, body)
+	})
+}
+
+func startCannedControlAPIHandler(t *testing.T, configDir, name string, handle http.HandlerFunc) *cannedControlRequest {
 	t.Helper()
 	socketPath, lockPath, err := instanceResourcePaths(configDir, name)
 	if err != nil {
@@ -753,10 +772,15 @@ func startCannedControlAPI(t *testing.T, configDir, name string, status int, bod
 		got.RawQuery = r.URL.RawQuery
 		got.Body = string(requestBody)
 		got.ContentType = r.Header.Get("Content-Type")
+		got.history = append(got.history, cannedControlRequest{
+			Method:      got.Method,
+			Path:        got.Path,
+			RawQuery:    got.RawQuery,
+			Body:        got.Body,
+			ContentType: got.ContentType,
+		})
 		got.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		io.WriteString(w, body)
+		handle(w, r)
 	})}
 	go server.Serve(listener)
 	t.Cleanup(func() {
