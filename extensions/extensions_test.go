@@ -80,8 +80,14 @@ func (m *mockExtensionRepo) GetExtensions() ([]*domain.Extension, error) { retur
 func (m *mockExtensionRepo) GetExtensionByName(name string) (*domain.Extension, error) {
 	return nil, nil
 }
+func (m *mockExtensionRepo) GetExtensionByUUID(id uuid.UUID) (*domain.Extension, error) {
+	return nil, nil
+}
 func (m *mockExtensionRepo) GetExtensionLuaCodeByName(name string) (string, error)       { return "", nil }
 func (m *mockExtensionRepo) UpdateExtensionLuaCodeByName(name string, code string) error { return nil }
+func (m *mockExtensionRepo) UpdateExtensionLuaCodeByUUID(id uuid.UUID, code string) error {
+	return nil
+}
 
 func (m *mockExtensionRepo) GetExtensionSettingsByUUID(id uuid.UUID) (map[string]any, error) {
 	if settings, ok := m.settingsStore[id]; ok {

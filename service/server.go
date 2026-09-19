@@ -369,7 +369,8 @@ func persistsToOpenProject(method, path string) bool {
 	case strings.HasPrefix(path, "/waypoint"),
 		strings.HasPrefix(path, "/test-case"),
 		strings.HasPrefix(path, "/finding"),
-		strings.HasPrefix(path, "/artifact"):
+		strings.HasPrefix(path, "/artifact"),
+		strings.HasPrefix(path, "/extension"):
 		return true
 	case strings.HasPrefix(path, "/armory"):
 		return !strings.HasSuffix(path, "/validate")

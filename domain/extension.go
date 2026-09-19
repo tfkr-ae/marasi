@@ -17,7 +17,9 @@ type ExtensionRepository interface {
 	// It returns an error if no extension with the specified name is found.
 	GetExtensionByName(name string) (*Extension, error)
 
-
+	// GetExtensionByUUID retrieves a single extension by its UUID.
+	// It returns an error if no extension with the specified UUID is found.
+	GetExtensionByUUID(id uuid.UUID) (*Extension, error)
 
 	// GetExtensionLuaCodeByName retrieves the Lua source code for a specific extension by its name.
 	// It returns an error if the extension is not found.
@@ -26,6 +28,10 @@ type ExtensionRepository interface {
 	// UpdateExtensionLuaCodeByName updates the Lua source code for a specific extension identified by its name.
 	// It returns an error if the extension is not found.
 	UpdateExtensionLuaCodeByName(name string, code string) error
+
+	// UpdateExtensionLuaCodeByUUID updates the Lua source code for a specific extension identified by its UUID.
+	// It returns an error if the extension is not found.
+	UpdateExtensionLuaCodeByUUID(id uuid.UUID, code string) error
 
 	// GetExtensionSettingsByUUID retrieves the settings for a specific extension using its UUID.
 	// Extension settings are returned as a map[string]any, allowing for flexible configuration.

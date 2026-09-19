@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -72,6 +73,19 @@ func (repo *Repository) GetExtensionByName(name string) (*domain.Extension, erro
 	return toDomainExtension(&dbExt), nil
 }
 
+// GetExtensionByUUID implements the domain.ExtensionRepository interface.
+func (repo *Repository) GetExtensionByUUID(id uuid.UUID) (*domain.Extension, error) {
+	var dbExt dbExtension
+	query := `SELECT * FROM extensions WHERE id = ?`
+
+	err := repo.dbConn.Get(&dbExt, query, id)
+	if err != nil {
+		return nil, fmt.Errorf("fetching extension %s: %w", id, err)
+	}
+
+	return toDomainExtension(&dbExt), nil
+}
+
 // GetExtensionLuaCodeByName implements the domain.ExtensionRepository interface.
 // It retrieves the Lua source code of an extension by its name.
 func (repo *Repository) GetExtensionLuaCodeByName(name string) (string, error) {
@@ -95,6 +109,25 @@ func (repo *Repository) UpdateExtensionLuaCodeByName(name string, code string) e
 
 	if err != nil {
 		return fmt.Errorf("updating extension %s code: %v", name, err)
+	}
+
+	return nil
+}
+
+// UpdateExtensionLuaCodeByUUID implements the domain.ExtensionRepository interface.
+func (repo *Repository) UpdateExtensionLuaCodeByUUID(id uuid.UUID, code string) error {
+	query := `UPDATE extensions SET lua_content = ?, update_at = ? WHERE id = ?`
+
+	result, err := repo.dbConn.Exec(query, code, time.Now().UTC(), id)
+	if err != nil {
+		return fmt.Errorf("updating extension %s code: %w", id, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("updating extension %s code: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("updating extension %s code: %w", id, sql.ErrNoRows)
 	}
 
 	return nil

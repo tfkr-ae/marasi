@@ -2,6 +2,10 @@ package service
 
 import (
 	"cmp"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"slices"
 	"time"
@@ -31,7 +35,22 @@ type extensionDetail struct {
 	Settings   map[string]any `json:"settings"`
 }
 
-func addExtensionRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
+type extensionLogItem struct {
+	Time time.Time `json:"time"`
+	Text string    `json:"text"`
+}
+
+type extensionLogs struct {
+	Items []extensionLogItem `json:"items"`
+}
+
+type extensionUpdateRequest struct {
+	LuaContent *string `json:"lua_content"`
+}
+
+var errInvalidExtensionRequest = errors.New("invalid extension request")
+
+func addExtensionRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	mux.HandleFunc("GET /extension", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, r, http.StatusOK, extensionList{Items: listExtensionSummaries(proxy)})
 	})
@@ -44,6 +63,63 @@ func addExtensionRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 		runtime := findExtensionRuntime(proxy, id)
 		if runtime == nil {
 			writeExtensionError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		writeJSON(w, r, http.StatusOK, extensionDetailFromRuntime(runtime))
+	})
+
+	mux.HandleFunc("GET /extension/{id}/logs", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseExtensionID(w, r)
+		if !ok {
+			return
+		}
+		runtime := findExtensionRuntime(proxy, id)
+		if runtime == nil {
+			writeExtensionError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		writeJSON(w, r, http.StatusOK, extensionLogsFromRuntime(runtime))
+	})
+
+	mux.HandleFunc("POST /extension/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseExtensionID(w, r)
+		if !ok {
+			return
+		}
+		runtime := findExtensionRuntime(proxy, id)
+		if runtime == nil {
+			writeExtensionError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		lua, err := decodeExtensionUpdate(r)
+		if err != nil {
+			writeExtensionError(w, r, http.StatusBadRequest, "invalid_extension_request")
+			return
+		}
+		repo, err := proxy.GetExtensionRepo()
+		if err != nil {
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		if err := repo.UpdateExtensionLuaCodeByUUID(id, lua); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeExtensionError(w, r, http.StatusNotFound, "not_found")
+				return
+			}
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		stored, err := repo.GetExtensionByUUID(id)
+		if err != nil {
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		runtime.Data.LuaContent = stored.LuaContent
+		runtime.Data.Enabled = stored.Enabled
+		runtime.Data.UpdatedAt = stored.UpdatedAt
+		events.publish("extension.updated", extensionSummaryFromRuntime(runtime))
+		if err := runtime.ExecuteLua(lua); err != nil {
+			writeExtensionError(w, r, http.StatusBadRequest, "lua_error")
 			return
 		}
 		writeJSON(w, r, http.StatusOK, extensionDetailFromRuntime(runtime))
@@ -85,6 +161,14 @@ func extensionDetailFromRuntime(runtime *extensions.Runtime) extensionDetail {
 	}
 }
 
+func extensionLogsFromRuntime(runtime *extensions.Runtime) extensionLogs {
+	items := make([]extensionLogItem, 0, len(runtime.Logs))
+	for _, entry := range runtime.Logs {
+		items = append(items, extensionLogItem{Time: entry.Time, Text: entry.Text})
+	}
+	return extensionLogs{Items: items}
+}
+
 func findExtensionRuntime(proxy *marasi.Proxy, id uuid.UUID) *extensions.Runtime {
 	for _, runtime := range proxy.Extensions {
 		if runtime.Data.ID == id {
@@ -92,6 +176,22 @@ func findExtensionRuntime(proxy *marasi.Proxy, id uuid.UUID) *extensions.Runtime
 		}
 	}
 	return nil
+}
+
+func decodeExtensionUpdate(r *http.Request) (string, error) {
+	if r.Body == nil {
+		return "", errInvalidExtensionRequest
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request extensionUpdateRequest
+	if err := decoder.Decode(&request); err != nil || request.LuaContent == nil {
+		return "", errInvalidExtensionRequest
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return "", errInvalidExtensionRequest
+	}
+	return *request.LuaContent, nil
 }
 
 func parseExtensionID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {

@@ -79,6 +79,37 @@ func TestExtensionRepo_GetExtensionByName(t *testing.T) {
 	})
 }
 
+func TestExtensionRepo_GetExtensionByUUID(t *testing.T) {
+	t.Run("should return a seeded extension by uuid", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		ext, err := repo.GetExtensionByUUID(compassID)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if ext.ID != compassID || ext.Name != "compass" {
+			t.Fatalf("\nwanted:\ncompass %s\ngot:\n%s %s", compassID, ext.Name, ext.ID)
+		}
+		if !strings.Contains(ext.LuaContent, "marasi:scope()") {
+			t.Fatalf("\nwanted:\nlua containing marasi:scope()\ngot:\n%s", ext.LuaContent)
+		}
+	})
+
+	t.Run("should return an error for a missing uuid", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		_, err := repo.GetExtensionByUUID(uuid.MustParse("00000000-0000-0000-0000-000000000001"))
+		if err == nil {
+			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !strings.Contains(err.Error(), "no rows") {
+			t.Fatalf("\nwanted:\nerror containing 'no rows'\ngot:\n%v", err)
+		}
+	})
+}
+
 func TestExtensionRepo_GetExtensionLuaCodeByName(t *testing.T) {
 	t.Run("should return lua code for a specific extension", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
@@ -103,6 +134,63 @@ func TestExtensionRepo_GetExtensionLuaCodeByName(t *testing.T) {
 			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
 		}
 
+		if !strings.Contains(err.Error(), "no rows") {
+			t.Fatalf("\nwanted:\nerror containing 'no rows'\ngot:\n%v", err)
+		}
+	})
+}
+
+func TestExtensionRepo_UpdateExtensionLuaCodeByUUID(t *testing.T) {
+	t.Run("should persist lua and bump update_at", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		before, err := repo.GetExtensionByUUID(workshopID)
+		if err != nil {
+			t.Fatalf("getting workshop: %v", err)
+		}
+
+		wantCode := `print("updated")`
+		if err := repo.UpdateExtensionLuaCodeByUUID(workshopID, wantCode); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		after, err := repo.GetExtensionByUUID(workshopID)
+		if err != nil {
+			t.Fatalf("getting updated workshop: %v", err)
+		}
+		if after.LuaContent != wantCode {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantCode, after.LuaContent)
+		}
+		if !after.UpdatedAt.After(before.UpdatedAt) {
+			t.Fatalf("\nwanted:\nupdated_at after %v\ngot:\n%v", before.UpdatedAt, after.UpdatedAt)
+		}
+	})
+
+	t.Run("should allow empty lua content", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		if err := repo.UpdateExtensionLuaCodeByUUID(workshopID, ""); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		after, err := repo.GetExtensionByUUID(workshopID)
+		if err != nil {
+			t.Fatalf("getting updated workshop: %v", err)
+		}
+		if after.LuaContent != "" {
+			t.Fatalf("\nwanted:\nempty lua\ngot:\n%s", after.LuaContent)
+		}
+	})
+
+	t.Run("should return an error when no row matches", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		err := repo.UpdateExtensionLuaCodeByUUID(uuid.MustParse("00000000-0000-0000-0000-000000000001"), "code")
+		if err == nil {
+			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
+		}
 		if !strings.Contains(err.Error(), "no rows") {
 			t.Fatalf("\nwanted:\nerror containing 'no rows'\ngot:\n%v", err)
 		}
