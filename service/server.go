@@ -346,7 +346,36 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeWordlistError(w, r, http.StatusBadRequest, "invalid_wordlist_request")
 		return
 	}
+	if s.projects != nil && persistsToOpenProject(r.Method, r.URL.Path) {
+		release, err := s.projects.Admit(r.Context())
+		if err != nil {
+			writeJSON(w, r, http.StatusInternalServerError, struct {
+				Error string `json:"error"`
+			}{Error: "internal_server_error"})
+			return
+		}
+		defer release()
+	}
 	s.mux.ServeHTTP(w, r)
+}
+
+func persistsToOpenProject(method, path string) bool {
+	if method == http.MethodGet || method == http.MethodHead {
+		return false
+	}
+	switch {
+	case strings.HasPrefix(path, "/launchpad"):
+		return !strings.HasSuffix(path, "/launch")
+	case strings.HasPrefix(path, "/waypoint"),
+		strings.HasPrefix(path, "/test-case"),
+		strings.HasPrefix(path, "/finding"),
+		strings.HasPrefix(path, "/artifact"):
+		return true
+	case strings.HasPrefix(path, "/armory"):
+		return !strings.HasSuffix(path, "/validate")
+	default:
+		return false
+	}
 }
 
 // HandleRequest publishes a traffic.request event. It always returns nil so

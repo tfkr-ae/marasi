@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -154,6 +157,28 @@ func TestProjectOpen(t *testing.T) {
 		}
 	})
 
+	t.Run("should refuse open when intercepts are queued", func(t *testing.T) {
+		server, lifecycle, dir, current := newProjectOpenServer(t)
+		intercepted := &marasi.Intercepted{Type: "request", Channel: make(chan marasi.InterceptionTuple)}
+		lifecycle.proxy.InterceptedQueue = []*marasi.Intercepted{intercepted}
+		target := canonicalProjectPath(t, filepath.Join(dir, "queued.marasi"))
+		response := requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(target))
+		assertProjectError(t, response, http.StatusConflict, "project_busy")
+		wantCurrent := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null}\n", current)
+		status := requestListener(t, server, http.MethodGet, "/service/status", "")
+		if status.Code != http.StatusOK || status.Body.String() != wantCurrent {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%d %s", wantCurrent, status.Code, status.Body.String())
+		}
+		if len(lifecycle.proxy.InterceptedQueue) != 1 || lifecycle.proxy.InterceptedQueue[0] != intercepted {
+			t.Fatal("\nwanted:\nqueued intercept left untouched\ngot:\nqueue changed")
+		}
+		select {
+		case <-intercepted.Channel:
+			t.Fatal("\nwanted:\nintercept still waiting\ngot:\nopen finished the intercept")
+		default:
+		}
+	})
+
 	t.Run("should keep the current project when an open is cancelled", func(t *testing.T) {
 		server, lifecycle, dir, current := newProjectOpenServer(t)
 		target := canonicalProjectPath(t, filepath.Join(dir, "canceled.marasi"))
@@ -230,6 +255,102 @@ func TestProjectOpen(t *testing.T) {
 			t.Fatalf("\nwanted:\none concurrent target\ngot:\n%s", got)
 		}
 	})
+
+	t.Run("should wait to persist until the new project is published", func(t *testing.T) {
+		lifecycle, proxy, dir := newTestProjectLifecycle(t)
+		current := canonicalProjectPath(t, filepath.Join(dir, "current.marasi"))
+		if err := lifecycle.Open(context.Background(), current); err != nil {
+			t.Fatalf("opening current project: %v", err)
+		}
+		server := NewServer(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, lifecycle, func() {}, "dev", "default", current)
+		target := canonicalProjectPath(t, filepath.Join(dir, "target.marasi"))
+		release, err := lifecycle.Admit(context.Background())
+		if err != nil {
+			t.Fatalf("admitting work: %v", err)
+		}
+		openResult := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			openResult <- requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(target))
+		}()
+		deadline := time.Now().Add(time.Second)
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+			extra, err := lifecycle.Admit(ctx)
+			cancel()
+			if errors.Is(err, context.DeadlineExceeded) {
+				break
+			}
+			if extra != nil {
+				extra()
+			}
+			if time.Now().After(deadline) {
+				release()
+				t.Fatal("open did not pause project work")
+			}
+		}
+		createResult := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			createResult <- requestLaunchpad(server, http.MethodPost, "/launchpad", `{"name":"During"}`)
+		}()
+		select {
+		case got := <-createResult:
+			release()
+			t.Fatalf("\nwanted:\ncreate waiting through handoff\ngot:\n%d %s", got.Code, got.Body.String())
+		case <-time.After(50 * time.Millisecond):
+		}
+		if names := launchpadNamesInProject(t, target); len(names) != 0 {
+			release()
+			t.Fatalf("\nwanted:\nno launchpad in new project before publication\ngot:\n%v", names)
+		}
+		list := requestLaunchpad(server, http.MethodGet, "/launchpad", "")
+		if list.Code != http.StatusOK || list.Body.String() != "{\"items\":[]}\n" {
+			release()
+			t.Fatalf("\nwanted:\nempty launchpads on the old project\ngot:\n%d %s", list.Code, list.Body.String())
+		}
+		status := requestListener(t, server, http.MethodGet, "/service/status", "")
+		wantCurrent := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null}\n", current)
+		if status.Code != http.StatusOK || status.Body.String() != wantCurrent {
+			release()
+			t.Fatalf("\nwanted:\n%s\ngot:\n%d %s", wantCurrent, status.Code, status.Body.String())
+		}
+		release()
+		openResponse := <-openResult
+		if openResponse.Code != http.StatusOK {
+			t.Fatalf("opening target: %d %s", openResponse.Code, openResponse.Body.String())
+		}
+		createResponse := <-createResult
+		if createResponse.Code != http.StatusOK || !strings.Contains(createResponse.Body.String(), `"name":"During"`) {
+			t.Fatalf("\nwanted:\ncreated During after publication\ngot:\n%d %s", createResponse.Code, createResponse.Body.String())
+		}
+		if err := lifecycle.Shutdown(); err != nil {
+			t.Fatalf("shutting down: %v", err)
+		}
+		if names := launchpadNamesInProject(t, current); len(names) != 0 {
+			t.Fatalf("\nwanted:\nno launchpad in old project\ngot:\n%v", names)
+		}
+		if names := launchpadNamesInProject(t, target); len(names) != 1 || names[0] != "During" {
+			t.Fatalf("\nwanted:\nDuring in new project\ngot:\n%v", names)
+		}
+	})
+}
+
+func launchpadNamesInProject(t *testing.T, path string) []string {
+	t.Helper()
+	connection, err := db.New(path, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("opening %s: %v", path, err)
+	}
+	repository := db.NewProxyRepo(connection)
+	t.Cleanup(func() { _ = repository.Close() })
+	launchpads, err := repository.GetLaunchpads()
+	if err != nil {
+		t.Fatalf("listing launchpads in %s: %v", path, err)
+	}
+	names := make([]string, 0, len(launchpads))
+	for _, launchpad := range launchpads {
+		names = append(names, launchpad.Name)
+	}
+	return names
 }
 
 func TestProjectEvents(t *testing.T) {

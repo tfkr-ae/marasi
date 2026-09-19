@@ -115,7 +115,7 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 	targetProject := &openProject{path: path, resources: resources, unlock: unlock}
 
 	old := lifecycle.openProject()
-	if projectBusy(old) {
+	if lifecycle.projectBusy(old) {
 		return errors.Join(ErrProjectBusy, cleanupPreparedProject(path, true, resources, unlock))
 	}
 
@@ -124,7 +124,7 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 		return errors.Join(err, cleanupPreparedProject(path, true, resources, unlock))
 	}
 	defer unblock()
-	if projectBusy(old) {
+	if lifecycle.projectBusy(old) {
 		return errors.Join(ErrProjectBusy, cleanupPreparedProject(path, true, resources, unlock))
 	}
 	if err := ctx.Err(); err != nil {
@@ -151,8 +151,11 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 	return nil
 }
 
-func projectBusy(project *openProject) bool {
-	return project != nil && project.resources.Armory != nil && len(project.resources.Armory.ActiveRunIDs()) != 0
+func (lifecycle *ProjectLifecycle) projectBusy(project *openProject) bool {
+	if project != nil && project.resources.Armory != nil && len(project.resources.Armory.ActiveRunIDs()) != 0 {
+		return true
+	}
+	return len(lifecycle.proxy.InterceptedQueue) != 0
 }
 
 // Admit admits project-bound work and returns its matching release operation.

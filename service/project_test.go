@@ -377,6 +377,34 @@ func TestProjectLifecycle(t *testing.T) {
 		}
 	})
 
+	t.Run("should retain the old project when intercepts are queued", func(t *testing.T) {
+		lifecycle, proxy, dir := newTestProjectLifecycle(t)
+		oldPath := canonicalProjectPath(t, filepath.Join(dir, "old.marasi"))
+		target := canonicalProjectPath(t, filepath.Join(dir, "target.marasi"))
+		if err := lifecycle.Open(context.Background(), oldPath); err != nil {
+			t.Fatalf("opening old project: %v", err)
+		}
+		intercepted := &marasi.Intercepted{Type: "request", Channel: make(chan marasi.InterceptionTuple)}
+		proxy.InterceptedQueue = []*marasi.Intercepted{intercepted}
+		if err := lifecycle.Open(context.Background(), target); !errors.Is(err, ErrProjectBusy) {
+			t.Fatalf("\nwanted:\nproject busy\ngot:\n%v", err)
+		}
+		if lifecycle.Path() != oldPath {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", oldPath, lifecycle.Path())
+		}
+		if len(proxy.InterceptedQueue) != 1 || proxy.InterceptedQueue[0] != intercepted {
+			t.Fatal("\nwanted:\nqueued intercept left untouched\ngot:\nqueue changed")
+		}
+		select {
+		case <-intercepted.Channel:
+			t.Fatal("\nwanted:\nintercept still waiting\ngot:\nopen finished the intercept")
+		default:
+		}
+		if _, err := acquireProjectOwnership(oldPath); !errors.Is(err, ErrProjectAlreadyOpen) {
+			t.Fatalf("\nwanted:\nold project still owned\ngot:\n%v", err)
+		}
+	})
+
 	t.Run("should flush the old project before publication", func(t *testing.T) {
 		lifecycle, _, dir := newTestProjectLifecycle(t)
 		oldPath := canonicalProjectPath(t, filepath.Join(dir, "old.marasi"))
