@@ -48,21 +48,6 @@ type checkpointFlags struct {
 var errInvalidCheckpointRequest = errors.New("invalid checkpoint request")
 
 func addCheckpointRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
-	if proxy != nil {
-		if proxy.OnIntercept == nil {
-			proxy.OnIntercept = func(item domain.CheckpointItem) error {
-				events.publish("checkpoint.held", checkpointItemFromDomain(item))
-				return nil
-			}
-		}
-		if proxy.OnWebSocketIntercept == nil {
-			proxy.OnWebSocketIntercept = func(message domain.WebSocketMessage) error {
-				events.publish("checkpoint.held", checkpointItemFromDomain(checkpointItemFromWebSocket(message)))
-				return nil
-			}
-		}
-	}
-
 	mux.HandleFunc("GET /checkpoint", func(w http.ResponseWriter, r *http.Request) {
 		kind, err := parseCheckpointKind(r)
 		if err != nil {

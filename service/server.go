@@ -75,6 +75,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		}
 	}
 	addRoutes(mux, proxy, chrome, events, server.serveStatus, func() {
+		server.dropPendingCheckpoint()
 		server.Close()
 		stop()
 	})
@@ -391,6 +392,31 @@ func (s *Server) HandleRequest(request domain.ProxyRequest) error {
 func (s *Server) HandleResponse(response domain.ProxyResponse) error {
 	s.events.publishResponse(response)
 	return nil
+}
+
+// HandleIntercept publishes checkpoint.held after an item is pending. It always
+// returns nil so notify cannot drop the hold or wait for subscribers.
+func (s *Server) HandleIntercept(item domain.CheckpointItem) error {
+	s.events.publish("checkpoint.held", checkpointItemFromDomain(item))
+	return nil
+}
+
+// HandleWebSocketIntercept publishes checkpoint.held after a WebSocket item is
+// pending. It always returns nil so notify cannot drop the hold or wait for subscribers.
+func (s *Server) HandleWebSocketIntercept(message domain.WebSocketMessage) error {
+	s.events.publish("checkpoint.held", checkpointItemFromDomain(checkpointItemFromWebSocket(message)))
+	return nil
+}
+
+func (s *Server) dropPendingCheckpoint() {
+	if s.proxy == nil {
+		return
+	}
+	items := s.proxy.CheckpointItems()
+	s.proxy.DropAllCheckpoint()
+	for _, item := range items {
+		s.events.publish("checkpoint.dropped", checkpointResolvedEvent{ID: item.ID, Type: item.Type})
+	}
 }
 
 // Close closes active event streams.

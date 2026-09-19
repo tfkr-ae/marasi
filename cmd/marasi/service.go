@@ -311,6 +311,8 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	if handlerErr := proxy.WithOptions(
 		marasi.WithRequestHandler(serviceServer.HandleRequest),
 		marasi.WithResponseHandler(serviceServer.HandleResponse),
+		marasi.WithInterceptHandler(serviceServer.HandleIntercept),
+		marasi.WithWebSocketInterceptHandler(serviceServer.HandleWebSocketIntercept),
 	); handlerErr != nil {
 		return fmt.Errorf("installing traffic event handlers: %w", handlerErr)
 	}

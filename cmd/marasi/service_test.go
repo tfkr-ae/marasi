@@ -2396,6 +2396,134 @@ func TestStartService(t *testing.T) {
 		}
 	})
 
+	t.Run("should hold a checkpoint item after startup and drop it on stop", func(t *testing.T) {
+		originHit := make(chan struct{}, 1)
+		origin := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			select {
+			case originHit <- struct{}{}:
+			default:
+			}
+		}))
+		defer origin.Close()
+
+		configDir := serviceConfigDir(t)
+		projectPath := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		instancePath := filepath.Join(configDir, "instances", "work")
+		ctx, cancel := context.WithCancel(context.Background())
+		output := &lineWriter{lines: make(chan string, 1)}
+		result := make(chan error, 1)
+		go func() {
+			result <- startService(ctx, configDir, projectPath, instancePath, "127.0.0.1", 0, output)
+		}()
+		finished := false
+		defer func() {
+			if !finished {
+				cancel()
+				<-result
+			}
+		}()
+
+		var line string
+		select {
+		case line = <-output.lines:
+		case err := <-result:
+			finished = true
+			t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("\nwanted:\nproxy startup message\ngot:\ntimeout")
+		}
+		const prefix = "proxy listener started on "
+		if !strings.HasPrefix(line, prefix) {
+			t.Fatalf("\nwanted:\n%s<address>\ngot:\n%s", prefix, line)
+		}
+		proxyAddress := strings.TrimPrefix(line, prefix)
+		socketPath := instancePath + ".sock"
+
+		status, body := doInstanceRequest(t, socketPath, http.MethodPost, "/checkpoint/intercept", `{"intercept":true}`)
+		if status != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d %s", http.StatusOK, status, body)
+		}
+
+		_, reader, closeEvents := connectInstanceEvents(t, socketPath)
+		defer closeEvents()
+
+		parsedProxyURL, err := url.Parse("http://" + proxyAddress)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		proxied := make(chan error, 1)
+		go func() {
+			transport := &http.Transport{Proxy: http.ProxyURL(parsedProxyURL)}
+			defer transport.CloseIdleConnections()
+			client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+			response, err := client.Get(origin.URL + "/held")
+			if err != nil {
+				proxied <- err
+				return
+			}
+			_, _ = io.Copy(io.Discard, response.Body)
+			response.Body.Close()
+			proxied <- nil
+		}()
+
+		eventName, eventData := readControlEvent(t, reader)
+		if eventName != "checkpoint.held" {
+			t.Fatalf("\nwanted:\ncheckpoint.held\ngot:\n%s %s", eventName, eventData)
+		}
+		var held struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+			Raw  string `json:"raw"`
+		}
+		if err := json.Unmarshal([]byte(eventData), &held); err != nil || held.ID == "" || held.Type != "request" || held.Raw == "" {
+			t.Fatalf("\nwanted:\nheld request object\ngot:\n%s (%v)", eventData, err)
+		}
+		status, body = doInstanceRequest(t, socketPath, http.MethodGet, "/checkpoint/"+held.ID, "")
+		if status != http.StatusOK || body != eventData+"\n" {
+			t.Fatalf("\nwanted:\n200 %s\\n\ngot:\n%d %s", eventData, status, body)
+		}
+
+		otherPath, err := resolveProjectPath(filepath.Join(configDir, "projects", "other.marasi"))
+		if err != nil {
+			t.Fatalf("resolving other project: %v", err)
+		}
+		status, body = doInstanceRequest(t, socketPath, http.MethodPost, "/project/open", fmt.Sprintf(`{"path":%q}`, otherPath))
+		if status != http.StatusConflict || body != `{"error":"project_busy"}`+"\n" {
+			t.Fatalf("\nwanted:\n409 project_busy\ngot:\n%d %s", status, body)
+		}
+		status, body = doInstanceRequest(t, socketPath, http.MethodGet, "/checkpoint/"+held.ID, "")
+		if status != http.StatusOK {
+			t.Fatalf("\nwanted:\npending item left untouched\ngot:\n%d %s", status, body)
+		}
+
+		stopErr := make(chan error, 1)
+		go func() {
+			stopErr <- stopService(context.Background(), instancePath)
+		}()
+		eventName, eventData = readControlEvent(t, reader)
+		wantDropped := fmt.Sprintf(`{"id":"%s","type":"request"}`, held.ID)
+		if eventName != "checkpoint.dropped" || eventData != wantDropped {
+			t.Fatalf("\nwanted:\ncheckpoint.dropped %s\ngot:\n%s %s", wantDropped, eventName, eventData)
+		}
+		if err := <-stopErr; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := <-result; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		finished = true
+		select {
+		case <-proxied:
+		case <-time.After(2 * time.Second):
+			t.Fatal("\nwanted:\nheld connection released on stop\ngot:\ntimeout")
+		}
+		select {
+		case <-originHit:
+			t.Fatal("\nwanted:\ndropped checkpoint item\ngot:\norigin request")
+		default:
+		}
+	})
+
 }
 
 func testCanceledStart(t *testing.T, signal os.Signal, asJSON bool) {
@@ -2614,6 +2742,26 @@ func waitForPath(t *testing.T, path string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func doInstanceRequest(t *testing.T, socketPath, method, path, body string) (int, string) {
+	t.Helper()
+	client := service.NewClient(socketPath)
+	defer client.Close()
+	request, err := http.NewRequest(method, "http://marasi"+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("creating instance request: %v", err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("sending instance request: %v", err)
+	}
+	payload, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil {
+		t.Fatalf("reading instance response: %v", readErr)
+	}
+	return response.StatusCode, string(payload)
 }
 
 func connectInstanceEvents(t *testing.T, socketPath string) (*http.Response, *bufio.Reader, func()) {
