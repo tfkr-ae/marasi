@@ -40,8 +40,8 @@ func TestLaunchpadRepo_GetLaunchpads(t *testing.T) {
 		}
 
 		want := []*domain.Launchpad{
-			{ID: launchpadIDTwo, Name: "Test Launchpad 2", Description: "Test Description"},
 			{ID: launchpadIDOne, Name: "Test Launchpad 1", Description: "Test Description"},
+			{ID: launchpadIDTwo, Name: "Test Launchpad 2", Description: "Test Description"},
 		}
 
 		got, err := repo.GetLaunchpads()

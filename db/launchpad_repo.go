@@ -30,7 +30,7 @@ func toDomainLaunchpad(dbLaunchpad *dbLaunchpad) *domain.Launchpad {
 // GetLaunchpads retrieves all launchpads from the database.
 func (repo *Repository) GetLaunchpads() ([]*domain.Launchpad, error) {
 	var dbLaunchpads []*dbLaunchpad
-	query := `SELECT * FROM launchpad ORDER BY id DESC`
+	query := `SELECT * FROM launchpad ORDER BY id ASC`
 
 	err := repo.dbConn.Select(&dbLaunchpads, query)
 	if err != nil {
