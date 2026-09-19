@@ -274,6 +274,9 @@ func OverrideWaypointsModifier(proxy *Proxy, req *http.Request) error {
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
 func CompassRequestModifier(proxy *Proxy, req *http.Request) error {
 	if compassExt, ok := proxy.GetExtension("compass"); ok {
+		if !compassExt.Data.Enabled {
+			return nil
+		}
 		err := compassExt.CallRequestHandler(req)
 		if err != nil {
 			proxy.WriteLog("ERROR", fmt.Sprintf("Running processRequest : %s", err.Error()), core.LogWithExtensionID(compassExt.Data.ID))
@@ -304,7 +307,7 @@ func ExtensionsRequestModifier(proxy *Proxy, req *http.Request) error {
 	req.Header.Del("x-extension-id")
 
 	for _, ext := range proxy.Extensions {
-		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" {
+		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" && ext.Data.Enabled {
 			if extensionID != ext.Data.ID.String() {
 				err := ext.CallRequestHandler(req)
 				if err != nil {
@@ -334,6 +337,9 @@ func ExtensionsRequestModifier(proxy *Proxy, req *http.Request) error {
 // response is intercepted regardless of the `processResponse` or `proxy.InterceptFlag`
 func CheckpointRequestModifier(proxy *Proxy, req *http.Request) error {
 	if checkpointExt, ok := proxy.GetExtension("checkpoint"); ok {
+		if !checkpointExt.Data.Enabled {
+			return nil
+		}
 		shouldIntercept, err := checkpointExt.ShouldInterceptRequest(req)
 		if err != nil {
 			if reqID, ok := core.RequestIDFromContext(req.Context()); ok {
@@ -713,6 +719,9 @@ func CompressedResponseModifier(proxy *Proxy, res *http.Response) error {
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
 func CompassResponseModifier(proxy *Proxy, res *http.Response) error {
 	if compassExt, ok := proxy.GetExtension("compass"); ok {
+		if !compassExt.Data.Enabled {
+			return nil
+		}
 		err := compassExt.CallResponseHandler(res)
 		if err != nil {
 			proxy.WriteLog("ERROR", fmt.Sprintf("Running processResponse : %s", err.Error()), core.LogWithExtensionID(compassExt.Data.ID))
@@ -735,7 +744,7 @@ func CompassResponseModifier(proxy *Proxy, res *http.Response) error {
 // After `processResponse`, it will check if the request is passed through (nil), skipped (`ErrSkipPipeline`), or dropped (`ErrDropped`).
 func ExtensionsResponseModifier(proxy *Proxy, res *http.Response) error {
 	for _, ext := range proxy.Extensions {
-		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" {
+		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" && ext.Data.Enabled {
 			if extensionID, ok := core.ExtensionIDFromContext(res.Request.Context()); !ok || extensionID != ext.Data.ID.String() {
 				err := ext.CallResponseHandler(res)
 				if err != nil {
@@ -764,6 +773,9 @@ func ExtensionsResponseModifier(proxy *Proxy, res *http.Response) error {
 // on the user action.
 func CheckpointResponseModifier(proxy *Proxy, res *http.Response) error {
 	if checkpointExt, ok := proxy.GetExtension("checkpoint"); ok {
+		if !checkpointExt.Data.Enabled {
+			return nil
+		}
 		shouldIntercept, err := checkpointExt.ShouldInterceptResponse(res)
 		if err != nil {
 			if reqID, ok := core.RequestIDFromContext(res.Request.Context()); ok {

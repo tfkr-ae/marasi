@@ -171,6 +171,7 @@ func newTestProxy(t *testing.T, exts ...*domain.Extension) *Proxy {
 			ID:         ext.ID,
 			Name:       ext.Name,
 			LuaContent: ext.LuaContent,
+			Enabled:    true,
 		}
 		err := proxy.WithOptions(WithExtension(ext, extensions.ExtensionWithLogHandler(onLogHandler)))
 		if err != nil {
@@ -578,6 +579,30 @@ func TestCompassRequestModifier(t *testing.T) {
 
 		if !errors.Is(err, ErrExtensionNotFound) {
 			t.Fatalf("wanted: %q\ngot: %v", ErrExtensionNotFound, err)
+		}
+	})
+
+	t.Run("disabled compass should skip scope filtering without returning ErrExtensionNotFound", func(t *testing.T) {
+		proxy := newTestProxy(t, testExtensions["compass"])
+		compassExt, ok := proxy.GetExtension("compass")
+		if !ok {
+			t.Fatalf("getting compass extension")
+		}
+		compassExt.Data.Enabled = false
+		req := httptest.NewRequest(http.MethodGet, "https://www.blocked.com/examplePage", nil)
+
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context : %v", err)
+		}
+		defer remove()
+
+		err = CompassRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		if skip, ok := core.SkipFlagFromContext(req.Context()); ok && skip {
+			t.Errorf("expected skipflag to not be set")
 		}
 	})
 }
@@ -1126,6 +1151,27 @@ func TestExtensionsRequestModifier(t *testing.T) {
 			t.Errorf("expected x-workshop-ran header to be set to overwritten, but got : %q", req.Header.Get("x-workshop-ran"))
 		}
 	})
+
+	t.Run("disabled workshop should not set processRequest headers", func(t *testing.T) {
+		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"])
+		workshop, ok := proxy.GetExtension("workshop")
+		if !ok {
+			t.Fatalf("getting workshop extension")
+		}
+		workshop.Data.Enabled = false
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+
+		err := ExtensionsRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		if req.Header.Get("x-workshop-ran") == "true" {
+			t.Errorf("expected x-workshop-ran header to not be set but got %q", req.Header.Get("x-workshop-ran"))
+		}
+		if req.Header.Get("x-testExtension-ran") != "true" {
+			t.Errorf("expected x-testExtension-ran header to be set to true but got %q", req.Header.Get("x-testExtension-ran"))
+		}
+	})
 }
 
 // TODO need to review these once the InterceptedQueue is refactored
@@ -1594,6 +1640,39 @@ func TestCheckpointRequestModifier(t *testing.T) {
 		}
 		if len(proxy.InterceptedQueue) != 1 {
 			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
+		}
+	})
+
+	t.Run("disabled checkpoint should not intercept HTTP", func(t *testing.T) {
+		proxy := newTestProxy(t, testExtensions["checkpoint"])
+		updateExtension(t, proxy, "checkpoint", `
+			function interceptRequest(request)
+				return true
+			end
+		`)
+		checkpoint, ok := proxy.GetExtension("checkpoint")
+		if !ok {
+			t.Fatalf("getting checkpoint extension")
+		}
+		checkpoint.Data.Enabled = false
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context : %v", err)
+		}
+		defer remove()
+
+		err = SetupRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("running SetupRequestModifier : %v", err)
+		}
+
+		err = CheckpointRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		if len(proxy.InterceptedQueue) != 0 {
+			t.Fatalf("expected intercept queue to be empty, but got length %d", len(proxy.InterceptedQueue))
 		}
 	})
 }
@@ -2884,6 +2963,34 @@ func TestCompassResponseModifier(t *testing.T) {
 			t.Errorf("expected skipflag to be set in context and to be equal to true")
 		}
 	})
+
+	t.Run("disabled compass should skip scope filtering without returning ErrExtensionNotFound", func(t *testing.T) {
+		proxy := newTestProxy(t, testExtensions["compass"])
+		compassExt, ok := proxy.GetExtension("compass")
+		if !ok {
+			t.Fatalf("getting compass extension")
+		}
+		compassExt.Data.Enabled = false
+		req := httptest.NewRequest(http.MethodGet, "https://www.blocked.com/examplePage", nil)
+
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context : %v", err)
+		}
+		defer remove()
+
+		res := &http.Response{
+			Request: req,
+		}
+
+		err = CompassResponseModifier(proxy, res)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		if skip, ok := core.SkipFlagFromContext(res.Request.Context()); ok && skip {
+			t.Errorf("expected skipflag to not be set")
+		}
+	})
 }
 
 func TestExtensionsResponseModifier(t *testing.T) {
@@ -3130,6 +3237,39 @@ func TestExtensionsResponseModifier(t *testing.T) {
 			t.Errorf("expected x-workshop-ran-response header to not be set but got %q", res.Header.Get("x-workshop-ran-response"))
 		}
 
+		if res.Header.Get("x-testExtension-ran-response") != "true" {
+			t.Errorf("expected x-testExtension-ran-response header to be set to true but got %q", res.Header.Get("x-testExtension-ran-response"))
+		}
+	})
+
+	t.Run("disabled workshop should not set processResponse headers", func(t *testing.T) {
+		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"])
+		workshop, ok := proxy.GetExtension("workshop")
+		if !ok {
+			t.Fatalf("getting workshop extension")
+		}
+		workshop.Data.Enabled = false
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+		*req = *core.ContextWithExtensionID(req, "")
+
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context : %v", err)
+		}
+		defer remove()
+
+		res := &http.Response{
+			Header:  make(http.Header),
+			Request: req,
+		}
+
+		err = ExtensionsResponseModifier(proxy, res)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		if res.Header.Get("x-workshop-ran-response") == "true" {
+			t.Errorf("expected x-workshop-ran-response header to not be set but got %q", res.Header.Get("x-workshop-ran-response"))
+		}
 		if res.Header.Get("x-testExtension-ran-response") != "true" {
 			t.Errorf("expected x-testExtension-ran-response header to be set to true but got %q", res.Header.Get("x-testExtension-ran-response"))
 		}
@@ -3529,6 +3669,43 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		}
 		if len(proxy.InterceptedQueue) != 1 {
 			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
+		}
+	})
+
+	t.Run("disabled checkpoint should not intercept HTTP", func(t *testing.T) {
+		proxy := newTestProxy(t, testExtensions["checkpoint"])
+		updateExtension(t, proxy, "checkpoint", `
+			function interceptResponse(response)
+				return true
+			end
+		`)
+		checkpoint, ok := proxy.GetExtension("checkpoint")
+		if !ok {
+			t.Fatalf("getting checkpoint extension")
+		}
+		checkpoint.Data.Enabled = false
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context : %v", err)
+		}
+		defer remove()
+
+		err = SetupRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("setting up request: %v", err)
+		}
+		res := &http.Response{
+			Header:  make(http.Header),
+			Request: req,
+		}
+
+		err = CheckpointResponseModifier(proxy, res)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		if len(proxy.InterceptedQueue) != 0 {
+			t.Fatalf("expected intercept queue to be empty, but got length %d", len(proxy.InterceptedQueue))
 		}
 	})
 }

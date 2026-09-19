@@ -96,6 +96,10 @@ func (m *mockExtensionRepo) GetExtensionSettingsByUUID(id uuid.UUID) (map[string
 	return make(map[string]any), nil
 }
 
+func (m *mockExtensionRepo) SetExtensionEnabledByUUID(id uuid.UUID, enabled bool) error {
+	return nil
+}
+
 func (m *mockExtensionRepo) SetExtensionSettingsByUUID(id uuid.UUID, settings map[string]any) error {
 	if m.forceSetError {
 		return errors.New("forced set error")

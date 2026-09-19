@@ -40,6 +40,10 @@ type ExtensionRepository interface {
 	// SetExtensionSettingsByUUID sets the settings for a specific extension using its UUID.
 	// Extension settings are provided as a map[string]any.
 	SetExtensionSettingsByUUID(id uuid.UUID, settings map[string]any) error
+
+	// SetExtensionEnabledByUUID sets the enabled flag for a specific extension using its UUID.
+	// It returns an error if the extension is not found.
+	SetExtensionEnabledByUUID(id uuid.UUID, enabled bool) error
 }
 
 // Extension represents the domain model for a Lua-based extension in Marasi.

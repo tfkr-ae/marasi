@@ -61,6 +61,10 @@ type extensionCallRequest struct {
 	Args     json.RawMessage `json:"args"`
 }
 
+type extensionEnableRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
 type extensionCallResult struct {
 	Status string `json:"status"`
 }
@@ -174,6 +178,40 @@ func addExtensionRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBr
 			return
 		}
 		writeJSON(w, r, http.StatusOK, extensionCallResult{Status: "called"})
+	})
+
+	mux.HandleFunc("POST /extension/{id}/enable", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseExtensionID(w, r)
+		if !ok {
+			return
+		}
+		runtime := findExtensionRuntime(proxy, id)
+		if runtime == nil {
+			writeExtensionError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		enabled, err := decodeExtensionEnable(r)
+		if err != nil {
+			writeExtensionError(w, r, http.StatusBadRequest, "invalid_extension_request")
+			return
+		}
+		repo, err := proxy.GetExtensionRepo()
+		if err != nil {
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		if err := repo.SetExtensionEnabledByUUID(id, enabled); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeExtensionError(w, r, http.StatusNotFound, "not_found")
+				return
+			}
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		runtime.Data.Enabled = enabled
+		summary := extensionSummaryFromRuntime(runtime)
+		events.publish("extension.enabled", summary)
+		writeJSON(w, r, http.StatusOK, summary)
 	})
 
 	mux.HandleFunc("POST /extension/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -326,6 +364,22 @@ func decodeExtensionCall(r *http.Request) (string, []any, error) {
 		return "", nil, errInvalidExtensionRequest
 	}
 	return *request.Function, args, nil
+}
+
+func decodeExtensionEnable(r *http.Request) (bool, error) {
+	if r.Body == nil {
+		return false, errInvalidExtensionRequest
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request extensionEnableRequest
+	if err := decoder.Decode(&request); err != nil || request.Enabled == nil {
+		return false, errInvalidExtensionRequest
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return false, errInvalidExtensionRequest
+	}
+	return *request.Enabled, nil
 }
 
 func decodeExtensionUpdate(r *http.Request) (string, error) {

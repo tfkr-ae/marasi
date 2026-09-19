@@ -544,6 +544,138 @@ end`)
 		}
 		assertNoExtensionEvent(t, subscriber)
 	})
+
+	t.Run("should persist enabled, update the runtime, return the list item, and publish", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `function poke()
+  poked = true
+end`)
+		server := newTestServer(&marasi.Proxy{
+			Extensions:    []*extensions.Runtime{runtime},
+			ExtensionRepo: repo,
+		}, func() {})
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		response := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/enable", `{"enabled":false}`)
+		if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/json" || !strings.HasSuffix(response.Body.String(), "\n") {
+			t.Fatalf("\nwanted:\n200 application/json with trailing newline\ngot:\n%d %s %s", response.Code, response.Header().Get("Content-Type"), response.Body.String())
+		}
+
+		var summary extensionSummary
+		if err := json.Unmarshal(response.Body.Bytes(), &summary); err != nil {
+			t.Fatalf("decoding enable response: %v", err)
+		}
+		if summary.ID != runtime.Data.ID || summary.Name != "workshop" || summary.Enabled {
+			t.Fatalf("\nwanted:\nworkshop list item enabled false\ngot:\n%+v", summary)
+		}
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decoding enable fields: %v", err)
+		}
+		if _, ok := payload["lua_content"]; ok {
+			t.Fatalf("\nwanted:\nlist item without lua_content\ngot:\n%s", response.Body.String())
+		}
+		if _, ok := payload["settings"]; ok {
+			t.Fatalf("\nwanted:\nlist item without settings\ngot:\n%s", response.Body.String())
+		}
+		if _, ok := payload["logs"]; ok {
+			t.Fatalf("\nwanted:\nlist item without logs\ngot:\n%s", response.Body.String())
+		}
+
+		stored, err := repo.GetExtensionByUUID(runtime.Data.ID)
+		if err != nil {
+			t.Fatalf("getting persisted workshop: %v", err)
+		}
+		if stored.Enabled || runtime.Data.Enabled {
+			t.Fatalf("\nwanted:\npersisted and loaded enabled false\ngot:\nrepo %v runtime %v", stored.Enabled, runtime.Data.Enabled)
+		}
+
+		event := <-subscriber.events
+		if event.name != "extension.enabled" || string(event.data) != strings.TrimSuffix(response.Body.String(), "\n") {
+			t.Fatalf("\nwanted:\nextension.enabled %s\ngot:\n%s %s", strings.TrimSuffix(response.Body.String(), "\n"), event.name, event.data)
+		}
+
+		enabled := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/enable", `{"enabled":true}`)
+		if enabled.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n200\ngot:\n%d %s", enabled.Code, enabled.Body.String())
+		}
+		if err := json.Unmarshal(enabled.Body.Bytes(), &summary); err != nil {
+			t.Fatalf("decoding re-enable response: %v", err)
+		}
+		if !summary.Enabled || !runtime.Data.Enabled {
+			t.Fatalf("\nwanted:\nenabled true\ngot:\nsummary %v runtime %v", summary.Enabled, runtime.Data.Enabled)
+		}
+	})
+
+	t.Run("should keep get update call logs and settings working on a disabled extension", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `function poke()
+  poked = true
+end`)
+		runtime.Data.Enabled = false
+		if err := repo.SetExtensionEnabledByUUID(runtime.Data.ID, false); err != nil {
+			t.Fatalf("disabling workshop: %v", err)
+		}
+		server := newTestServer(&marasi.Proxy{
+			Extensions:    []*extensions.Runtime{runtime},
+			ExtensionRepo: repo,
+		}, func() {})
+
+		get := requestControlAPI(server, http.MethodGet, "/extension/"+runtime.Data.ID.String(), "")
+		if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), `"enabled":false`) {
+			t.Fatalf("\nwanted:\nGET disabled workshop\ngot:\n%d %s", get.Code, get.Body.String())
+		}
+
+		logs := requestControlAPI(server, http.MethodGet, "/extension/"+runtime.Data.ID.String()+"/logs", "")
+		assertControlAPIResponse(t, logs, http.StatusOK, `{"items":[]}`+"\n")
+
+		settings := requestControlAPI(server, http.MethodGet, "/extension/"+runtime.Data.ID.String()+"/settings", "")
+		assertControlAPIResponse(t, settings, http.StatusOK, `{"settings":{}}`+"\n")
+
+		set := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/settings", `{"settings":{"theme":"dark"}}`)
+		assertControlAPIResponse(t, set, http.StatusOK, `{"settings":{"theme":"dark"}}`+"\n")
+
+		call := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/call", `{"function":"poke"}`)
+		assertControlAPIResponse(t, call, http.StatusOK, `{"status":"called"}`+"\n")
+		if runtime.GetGlobal("poked") != true {
+			t.Fatalf("\nwanted:\npoke to run while disabled\ngot:\n%v", runtime.GetGlobal("poked"))
+		}
+
+		update := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String(), `{"lua_content":"print(1)"}`)
+		if update.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\nupdate while disabled\ngot:\n%d %s", update.Code, update.Body.String())
+		}
+	})
+
+	t.Run("should reject a missing id and invalid enable bodies without publishing", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `print("ready")`)
+		server := newTestServer(&marasi.Proxy{
+			Extensions:    []*extensions.Runtime{runtime},
+			ExtensionRepo: repo,
+		}, func() {})
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		missing := requestControlAPI(server, http.MethodPost, "/extension/01937d13-9632-75b1-9e73-c5129b06fa8c/enable", `{"enabled":false}`)
+		assertControlAPIResponse(t, missing, http.StatusNotFound, `{"error":"not_found"}`+"\n")
+
+		malformed := requestControlAPI(server, http.MethodPost, "/extension/not-a-uuid/enable", `{"enabled":false}`)
+		assertControlAPIResponse(t, malformed, http.StatusBadRequest, `{"error":"bad_request"}`+"\n")
+
+		for _, body := range []string{
+			`{}`,
+			`{"enabled":null}`,
+			`{"enabled":"true"}`,
+			`{"enabled":1}`,
+			`{"enabled":true,"extra":true}`,
+			`{"enabled":false}{"extra":true}`,
+			`[]`,
+			``,
+		} {
+			response := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/enable", body)
+			assertControlAPIResponse(t, response, http.StatusBadRequest, `{"error":"invalid_extension_request"}`+"\n")
+		}
+		assertNoExtensionEvent(t, subscriber)
+	})
 }
 
 func assertNoExtensionEvent(t *testing.T, subscriber *eventSubscriber) {

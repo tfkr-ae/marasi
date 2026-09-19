@@ -265,6 +265,69 @@ func TestExtensionRepo_GetExtensionSettingsByUUID(t *testing.T) {
 	})
 }
 
+func TestExtensionRepo_SetExtensionEnabledByUUID(t *testing.T) {
+	t.Run("should persist enabled false and true", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		before, err := repo.GetExtensionByUUID(workshopID)
+		if err != nil {
+			t.Fatalf("getting workshop: %v", err)
+		}
+		if !before.Enabled {
+			t.Fatalf("wanted seeded workshop enabled")
+		}
+
+		if err := repo.SetExtensionEnabledByUUID(workshopID, false); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		after, err := repo.GetExtensionByUUID(workshopID)
+		if err != nil {
+			t.Fatalf("getting disabled workshop: %v", err)
+		}
+		if after.Enabled {
+			t.Fatalf("\nwanted:\nenabled false\ngot:\ntrue")
+		}
+
+		if err := repo.SetExtensionEnabledByUUID(workshopID, true); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		restored, err := repo.GetExtensionByUUID(workshopID)
+		if err != nil {
+			t.Fatalf("getting restored workshop: %v", err)
+		}
+		if !restored.Enabled {
+			t.Fatalf("\nwanted:\nenabled true\ngot:\nfalse")
+		}
+	})
+
+	t.Run("should succeed when the flag is already the stored value", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		if err := repo.SetExtensionEnabledByUUID(workshopID, true); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		after, err := repo.GetExtensionByUUID(workshopID)
+		if err != nil || !after.Enabled {
+			t.Fatalf("\nwanted:\nenabled true\ngot:\n%v %v", after.Enabled, err)
+		}
+	})
+
+	t.Run("should return an error when no row matches", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		err := repo.SetExtensionEnabledByUUID(uuid.MustParse("00000000-0000-0000-0000-000000000001"), false)
+		if err == nil {
+			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !strings.Contains(err.Error(), "no rows") {
+			t.Fatalf("\nwanted:\nerror containing 'no rows'\ngot:\n%v", err)
+		}
+	})
+}
+
 func TestExtensionRepo_SetExtensionSettingsByUUID(t *testing.T) {
 	t.Run("should set settings for an existing extension", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)

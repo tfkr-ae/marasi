@@ -25,7 +25,7 @@ func init() {
 	extensionSettingsSetCmd.Flags().StringVar(&extensionSettingsFile, "file", "", "Read settings JSON from a file")
 	extensionCallCmd.Flags().StringVar(&extensionCallArgs, "args", "", "JSON array of arguments")
 	extensionSettingsCmd.AddCommand(extensionSettingsGetCmd, extensionSettingsSetCmd)
-	extensionCmd.AddCommand(extensionListCmd, extensionGetCmd, extensionUpdateCmd, extensionLogsCmd, extensionSettingsCmd, extensionCallCmd)
+	extensionCmd.AddCommand(extensionListCmd, extensionGetCmd, extensionUpdateCmd, extensionLogsCmd, extensionSettingsCmd, extensionCallCmd, extensionEnableCmd, extensionDisableCmd)
 	rootCmd.AddCommand(extensionCmd)
 }
 
@@ -184,6 +184,43 @@ var extensionCallCmd = &cobra.Command{
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "extension %s called %s\n", args[0], args[1])
 		return err
 	},
+}
+
+var extensionEnableCmd = &cobra.Command{
+	Use:   "enable UUID",
+	Short: "Enable an extension",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runExtensionEnableDisable(cmd, args[0], true, "enabling extension", "enabled")
+	},
+}
+
+var extensionDisableCmd = &cobra.Command{
+	Use:   "disable UUID",
+	Short: "Disable an extension",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runExtensionEnableDisable(cmd, args[0], false, "disabling extension", "disabled")
+	},
+}
+
+func runExtensionEnableDisable(cmd *cobra.Command, id string, enabled bool, operation, state string) error {
+	payload, err := json.Marshal(struct {
+		Enabled bool `json:"enabled"`
+	}{Enabled: enabled})
+	if err != nil {
+		return fmt.Errorf("encoding extension %s: %w", state, err)
+	}
+	body, err := runExtensionRequest(cmd, http.MethodPost, "/extension/"+id+"/enable", operation, payload)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		_, err = cmd.OutOrStdout().Write(body)
+		return err
+	}
+	_, err = fmt.Fprintf(cmd.ErrOrStderr(), "extension %s %s\n", id, state)
+	return err
 }
 
 func encodeExtensionCall(cmd *cobra.Command, function string) ([]byte, error) {

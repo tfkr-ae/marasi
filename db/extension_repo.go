@@ -167,3 +167,22 @@ func (repo *Repository) SetExtensionSettingsByUUID(id uuid.UUID, settings map[st
 
 	return nil
 }
+
+// SetExtensionEnabledByUUID implements the domain.ExtensionRepository interface.
+func (repo *Repository) SetExtensionEnabledByUUID(id uuid.UUID, enabled bool) error {
+	query := `UPDATE extensions SET enabled = ? WHERE id = ?`
+
+	result, err := repo.dbConn.Exec(query, enabled, id)
+	if err != nil {
+		return fmt.Errorf("updating enabled for extension %s: %w", id, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("updating enabled for extension %s: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("updating enabled for extension %s: %w", id, sql.ErrNoRows)
+	}
+
+	return nil
+}

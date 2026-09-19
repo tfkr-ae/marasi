@@ -187,6 +187,32 @@ func TestExtensionCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("should enable an extension and write success on stderr", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		response := `{"id":"` + workshopID + `","name":"workshop","enabled":true}` + "\n"
+		sent := startCannedControlAPI(t, configDir, "enable", http.StatusOK, response)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "enable", "extension", "enable", workshopID)
+		got := sent.snapshot()
+		wantBody := `{"enabled":true}`
+		if err != nil || stdout != "" || stderr != "extension "+workshopID+" enabled\n" || got.Method != http.MethodPost || got.Path != "/extension/"+workshopID+"/enable" || got.Body != wantBody {
+			t.Fatalf("\nwanted:\nPOST %s body %q, empty stdout, success on stderr\ngot:\n%s %s body %q, stdout %q, stderr %q, error %v", "/extension/"+workshopID+"/enable", wantBody, got.Method, got.Path, got.Body, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should disable an extension and write success on stderr", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		response := `{"id":"` + workshopID + `","name":"workshop","enabled":false}` + "\n"
+		sent := startCannedControlAPI(t, configDir, "disable", http.StatusOK, response)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "disable", "extension", "disable", workshopID)
+		got := sent.snapshot()
+		wantBody := `{"enabled":false}`
+		if err != nil || stdout != "" || stderr != "extension "+workshopID+" disabled\n" || got.Method != http.MethodPost || got.Path != "/extension/"+workshopID+"/enable" || got.Body != wantBody {
+			t.Fatalf("\nwanted:\nPOST %s body %q, empty stdout, success on stderr\ngot:\n%s %s body %q, stdout %q, stderr %q, error %v", "/extension/"+workshopID+"/enable", wantBody, got.Method, got.Path, got.Body, stdout, stderr, err)
+		}
+	})
+
 	t.Run("should reject invalid --args before the request", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		for i, raw := range []string{"{", `{"key":"val"}`, `"hello"`, "1", "null"} {
@@ -235,6 +261,10 @@ func TestExtensionCommands(t *testing.T) {
 			{"extension", "call", workshopID, "poke", "--json"},
 			{"--json", "extension", "call", workshopID, "poke", "--args", `["hello"]`},
 			{"extension", "call", workshopID, "poke", "--args", `["hello"]`, "--json"},
+			{"--json", "extension", "enable", workshopID},
+			{"extension", "enable", workshopID, "--json"},
+			{"--json", "extension", "disable", workshopID},
+			{"extension", "disable", workshopID, "--json"},
 		} {
 			configDir := serviceConfigDir(t)
 			body := " {\n  \"unexpected\": true\n} "
@@ -266,6 +296,10 @@ func TestExtensionCommands(t *testing.T) {
 			{"extension", "call"},
 			{"extension", "call", workshopID},
 			{"extension", "call", workshopID, "poke", "extra"},
+			{"extension", "enable"},
+			{"extension", "enable", workshopID, "extra"},
+			{"extension", "disable"},
+			{"extension", "disable", workshopID, "extra"},
 		} {
 			commandArgs := append([]string{"--config-dir", configDir}, args...)
 			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
@@ -315,6 +349,14 @@ func TestExtensionCommands(t *testing.T) {
 		startCannedControlAPI(t, configDir, "call-api", http.StatusNotFound, `{"error":"function_not_found"}`)
 		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "call-api", "extension", "call", workshopID, "poke", "--json")
 		assertJSONCommandError(t, stdout, stderr, err, "calling extension: function_not_found")
+
+		startCannedControlAPI(t, configDir, "enable-api", http.StatusNotFound, `{"error":"not_found"}`)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "enable-api", "extension", "enable", workshopID, "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "enabling extension: not_found")
+
+		startCannedControlAPI(t, configDir, "disable-api", http.StatusNotFound, `{"error":"not_found"}`)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "disable-api", "extension", "disable", workshopID, "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "disabling extension: not_found")
 	})
 }
 
@@ -485,4 +527,40 @@ end`
 	}
 	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "call", workshopID, "missing", "--json")
 	assertJSONCommandError(t, stdout, stderr, err, "calling extension: function_not_found")
+
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "disable", workshopID)
+	if err != nil || stdout != "" || stderr != "extension "+workshopID+" disabled\n" {
+		t.Fatalf("disabling workshop: stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "list")
+	wantDisabled := compassID + " compass enabled\n" + checkpointID + " checkpoint enabled\n" + workshopID + " workshop disabled\n"
+	if err != nil || stdout != wantDisabled || stderr != "" {
+		t.Fatalf("listing after disable: stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "get", workshopID)
+	if err != nil || stderr != "" || stdout == "" {
+		t.Fatalf("getting disabled workshop: stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "call", workshopID, "poke", "--json")
+	if err != nil || stderr != "" || stdout != `{"status":"called"}`+"\n" {
+		t.Fatalf("calling disabled workshop: stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "enable", workshopID, "--json")
+	if err != nil || stderr != "" {
+		t.Fatalf("enabling workshop as JSON: stderr %q, error %v", stderr, err)
+	}
+	var enabled struct {
+		ID      string `json:"id"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &enabled); err != nil {
+		t.Fatalf("decoding enable response: %v", err)
+	}
+	if enabled.ID != workshopID || !enabled.Enabled {
+		t.Fatalf("wanted workshop enabled, got %#v", enabled)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "list")
+	if err != nil || stdout != wantList || stderr != "" {
+		t.Fatalf("listing after enable: stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
 }
