@@ -153,9 +153,16 @@ func (repo *Repository) SetExtensionSettingsByUUID(id uuid.UUID, settings map[st
 	dbSettings := Metadata(settings)
 	query := `UPDATE extensions SET settings = ? WHERE id = ?`
 
-	_, err := repo.dbConn.Exec(query, dbSettings, id)
+	result, err := repo.dbConn.Exec(query, dbSettings, id)
 	if err != nil {
 		return fmt.Errorf("updating settings for extension %s: %w", id, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("updating settings for extension %s: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("updating settings for extension %s: %w", id, sql.ErrNoRows)
 	}
 
 	return nil

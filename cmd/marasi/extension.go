@@ -17,10 +17,13 @@ import (
 )
 
 var extensionUpdateFile string
+var extensionSettingsFile string
 
 func init() {
 	extensionUpdateCmd.Flags().StringVar(&extensionUpdateFile, "file", "", "Read lua from a file")
-	extensionCmd.AddCommand(extensionListCmd, extensionGetCmd, extensionUpdateCmd, extensionLogsCmd)
+	extensionSettingsSetCmd.Flags().StringVar(&extensionSettingsFile, "file", "", "Read settings JSON from a file")
+	extensionSettingsCmd.AddCommand(extensionSettingsGetCmd, extensionSettingsSetCmd)
+	extensionCmd.AddCommand(extensionListCmd, extensionGetCmd, extensionUpdateCmd, extensionLogsCmd, extensionSettingsCmd)
 	rootCmd.AddCommand(extensionCmd)
 }
 
@@ -68,7 +71,7 @@ var extensionUpdateCmd = &cobra.Command{
 	Short: "Update extension lua",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		lua, err := readExtensionLua(cmd)
+		lua, err := readExtensionInput(cmd, extensionUpdateFile, "reading lua file", "reading lua from stdin", "extension update requires --file or piped stdin")
 		if err != nil {
 			return err
 		}
@@ -108,11 +111,62 @@ var extensionLogsCmd = &cobra.Command{
 	},
 }
 
-func readExtensionLua(cmd *cobra.Command) (string, error) {
-	if cmd.Flags().Changed("file") {
-		raw, err := os.ReadFile(extensionUpdateFile)
+var extensionSettingsCmd = &cobra.Command{
+	Use:   "settings",
+	Short: "Get or set extension settings",
+}
+
+var extensionSettingsGetCmd = &cobra.Command{
+	Use:   "get UUID",
+	Short: "Get extension settings",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		body, err := runExtensionRequest(cmd, http.MethodGet, "/extension/"+args[0]+"/settings", "getting extension settings", nil)
 		if err != nil {
-			return "", fmt.Errorf("reading lua file: %w", err)
+			return err
+		}
+		_, err = cmd.OutOrStdout().Write(body)
+		return err
+	},
+}
+
+var extensionSettingsSetCmd = &cobra.Command{
+	Use:   "set UUID",
+	Short: "Replace extension settings",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		raw, err := readExtensionInput(cmd, extensionSettingsFile, "reading settings file", "reading settings from stdin", "extension settings set requires --file or piped stdin")
+		if err != nil {
+			return err
+		}
+		var settings map[string]any
+		if err := json.Unmarshal([]byte(raw), &settings); err != nil {
+			return fmt.Errorf("decoding extension settings: %w", err)
+		}
+		payload, err := json.Marshal(struct {
+			Settings map[string]any `json:"settings"`
+		}{Settings: settings})
+		if err != nil {
+			return fmt.Errorf("encoding extension settings: %w", err)
+		}
+		body, err := runExtensionRequest(cmd, http.MethodPost, "/extension/"+args[0]+"/settings", "setting extension settings", payload)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "extension %s settings updated\n", args[0])
+		return err
+	},
+}
+
+func readExtensionInput(cmd *cobra.Command, path, fileErr, stdinErr, missing string) (string, error) {
+	if cmd.Flags().Changed("file") {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", fileErr, err)
 		}
 		return string(raw), nil
 	}
@@ -123,12 +177,12 @@ func readExtensionLua(cmd *cobra.Command) (string, error) {
 			return "", fmt.Errorf("checking stdin: %w", err)
 		}
 		if info.Mode()&os.ModeCharDevice != 0 {
-			return "", errors.New("extension update requires --file or piped stdin")
+			return "", errors.New(missing)
 		}
 	}
 	raw, err := io.ReadAll(stdin)
 	if err != nil {
-		return "", fmt.Errorf("reading lua from stdin: %w", err)
+		return "", fmt.Errorf("%s: %w", stdinErr, err)
 	}
 	return string(raw), nil
 }

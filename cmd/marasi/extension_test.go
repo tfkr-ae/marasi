@@ -114,6 +114,53 @@ func TestExtensionCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("should print settings get as the API body", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		response := `{"settings":{"theme":"dark"}}` + "\n"
+		sent := startCannedControlAPI(t, configDir, "settings-get", http.StatusOK, response)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "settings-get", "extension", "settings", "get", workshopID)
+		got := sent.snapshot()
+		if err != nil || stdout != response || stderr != "" || got.Method != http.MethodGet || got.Path != "/extension/"+workshopID+"/settings" || got.Body != "" {
+			t.Fatalf("\nwanted:\nGET settings body on stdout\ngot:\n%s %s body %q, stdout %q, stderr %q, error %v", got.Method, got.Path, got.Body, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should set settings from a file and write success on stderr", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		settingsFile := filepath.Join(t.TempDir(), "settings.json")
+		if err := os.WriteFile(settingsFile, []byte(`{"theme":"dark"}`), 0o600); err != nil {
+			t.Fatalf("writing settings file: %v", err)
+		}
+		response := `{"settings":{"theme":"dark"}}` + "\n"
+		sent := startCannedControlAPI(t, configDir, "settings-set", http.StatusOK, response)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "settings-set", "extension", "settings", "set", workshopID, "--file", settingsFile)
+		got := sent.snapshot()
+		wantBody := `{"settings":{"theme":"dark"}}`
+		if err != nil || stdout != "" || stderr != "extension "+workshopID+" settings updated\n" || got.Method != http.MethodPost || got.Path != "/extension/"+workshopID+"/settings" || got.Body != wantBody {
+			t.Fatalf("\nwanted:\nPOST %s body %q, empty stdout, success on stderr\ngot:\n%s %s body %q, stdout %q, stderr %q, error %v", "/extension/"+workshopID+"/settings", wantBody, got.Method, got.Path, got.Body, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should set settings from piped stdin", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		settings := []byte(`{"theme":"light"}`)
+		body := `{"settings":{"theme":"light"}}` + "\n"
+		sent := startCannedControlAPI(t, configDir, "settings-stdin", http.StatusOK, body)
+		var stdout, stderr bytes.Buffer
+		command := exec.Command(binary, "--config-dir", configDir, "--instance", "settings-stdin", "extension", "settings", "set", workshopID)
+		command.Stdin = bytes.NewReader(settings)
+		command.Stdout = &stdout
+		command.Stderr = &stderr
+		err := command.Run()
+		got := sent.snapshot()
+		wantBody := `{"settings":{"theme":"light"}}`
+		if err != nil || stdout.String() != "" || stderr.String() != "extension "+workshopID+" settings updated\n" || got.Body != wantBody {
+			t.Fatalf("\nwanted:\nbody %q and success on stderr\ngot:\nbody %q, stdout %q, stderr %q, error %v", wantBody, got.Body, stdout.String(), stderr.String(), err)
+		}
+	})
+
 	t.Run("should leave empty logs silent", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startCannedControlAPI(t, configDir, "empty-logs", http.StatusOK, `{"items":[]}`+"\n")
@@ -128,6 +175,10 @@ func TestExtensionCommands(t *testing.T) {
 		if err := os.WriteFile(luaFile, []byte("print(1)"), 0o600); err != nil {
 			t.Fatalf("writing lua file: %v", err)
 		}
+		settingsFile := filepath.Join(t.TempDir(), "settings.json")
+		if err := os.WriteFile(settingsFile, []byte(`{"theme":"dark"}`), 0o600); err != nil {
+			t.Fatalf("writing settings file: %v", err)
+		}
 		for _, args := range [][]string{
 			{"--json", "extension", "list"},
 			{"extension", "list", "--json"},
@@ -137,6 +188,10 @@ func TestExtensionCommands(t *testing.T) {
 			{"extension", "update", workshopID, "--file", luaFile, "--json"},
 			{"--json", "extension", "logs", workshopID},
 			{"extension", "logs", workshopID, "--json"},
+			{"--json", "extension", "settings", "get", workshopID},
+			{"extension", "settings", "get", workshopID, "--json"},
+			{"--json", "extension", "settings", "set", workshopID, "--file", settingsFile},
+			{"extension", "settings", "set", workshopID, "--file", settingsFile, "--json"},
 		} {
 			configDir := serviceConfigDir(t)
 			body := " {\n  \"unexpected\": true\n} "
@@ -160,6 +215,11 @@ func TestExtensionCommands(t *testing.T) {
 			{"extension", "update", workshopID, "extra"},
 			{"extension", "logs"},
 			{"extension", "logs", workshopID, "extra"},
+			{"extension", "settings", "get"},
+			{"extension", "settings", "get", workshopID, "extra"},
+			{"extension", "settings", "set"},
+			{"extension", "settings", "set", workshopID},
+			{"extension", "settings", "set", workshopID, "extra"},
 		} {
 			commandArgs := append([]string{"--config-dir", configDir}, args...)
 			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
@@ -193,6 +253,18 @@ func TestExtensionCommands(t *testing.T) {
 		startCannedControlAPI(t, configDir, "logs-api", http.StatusNotFound, `{"error":"not_found"}`)
 		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "logs-api", "extension", "logs", workshopID, "--json")
 		assertJSONCommandError(t, stdout, stderr, err, "listing extension logs: not_found")
+
+		startCannedControlAPI(t, configDir, "settings-get-api", http.StatusNotFound, `{"error":"not_found"}`)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "settings-get-api", "extension", "settings", "get", workshopID, "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "getting extension settings: not_found")
+
+		startCannedControlAPI(t, configDir, "settings-set-api", http.StatusNotFound, `{"error":"not_found"}`)
+		settingsFile := filepath.Join(t.TempDir(), "settings.json")
+		if err := os.WriteFile(settingsFile, []byte(`{"theme":"dark"}`), 0o600); err != nil {
+			t.Fatalf("writing settings file: %v", err)
+		}
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "settings-set-api", "extension", "settings", "set", workshopID, "--file", settingsFile, "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "setting extension settings: not_found")
 	})
 }
 
@@ -311,5 +383,31 @@ func TestExtensionCommandLifecycle(t *testing.T) {
 	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "logs", workshopID)
 	if err != nil || stderr != "" || !strings.Contains(stdout, "lifecycle") {
 		t.Fatalf("listing workshop logs: stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "settings", "get", workshopID)
+	if err != nil || stderr != "" || stdout != `{"settings":{}}`+"\n" {
+		t.Fatalf("getting empty workshop settings: stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+
+	settingsFile := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(settingsFile, []byte(`{"theme":"dark","count":1}`), 0o600); err != nil {
+		t.Fatalf("writing settings file: %v", err)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "settings", "set", workshopID, "--file", settingsFile)
+	if err != nil || stdout != "" || stderr != "extension "+workshopID+" settings updated\n" {
+		t.Fatalf("setting workshop settings: stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "settings", "get", workshopID)
+	if err != nil || stderr != "" || stdout != `{"settings":{"count":1,"theme":"dark"}}`+"\n" {
+		t.Fatalf("getting workshop settings: stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+
+	if err := os.WriteFile(settingsFile, []byte(`{}`), 0o600); err != nil {
+		t.Fatalf("writing empty settings: %v", err)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "settings", "set", workshopID, "--file", settingsFile, "--json")
+	if err != nil || stderr != "" || stdout != `{"settings":{}}`+"\n" {
+		t.Fatalf("clearing workshop settings as JSON: stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -274,6 +275,144 @@ end`)
 		}
 	})
 
+	t.Run("should get settings as an envelope", func(t *testing.T) {
+		id := uuid.MustParse("01937d13-9632-7f84-add5-14ec2c2c7f43")
+		server := newTestServer(&marasi.Proxy{Extensions: []*extensions.Runtime{
+			{Data: &domain.Extension{ID: id, Name: "workshop", Settings: map[string]any{"theme": "dark"}}},
+		}}, func() {})
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		response := requestControlAPI(server, http.MethodGet, "/extension/"+id.String()+"/settings", "")
+		assertControlAPIResponse(t, response, http.StatusOK, `{"settings":{"theme":"dark"}}`+"\n")
+		assertNoExtensionEvent(t, subscriber)
+	})
+
+	t.Run("should encode missing settings as an empty object envelope", func(t *testing.T) {
+		id := uuid.MustParse("01937d13-9632-72aa-83b9-c10ea1abbdd6")
+		server := newTestServer(&marasi.Proxy{Extensions: []*extensions.Runtime{
+			{Data: &domain.Extension{ID: id, Name: "compass"}},
+		}}, func() {})
+
+		response := requestControlAPI(server, http.MethodGet, "/extension/"+id.String()+"/settings", "")
+		assertControlAPIResponse(t, response, http.StatusOK, `{"settings":{}}`+"\n")
+	})
+
+	t.Run("should replace settings, return the stored envelope, and publish", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `print("ready")`)
+		server := newTestServer(&marasi.Proxy{
+			Extensions:    []*extensions.Runtime{runtime},
+			ExtensionRepo: repo,
+		}, func() {})
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		response := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/settings", `{"settings":{"count":1,"theme":"dark"}}`)
+		want := `{"settings":{"count":1,"theme":"dark"}}` + "\n"
+		assertControlAPIResponse(t, response, http.StatusOK, want)
+
+		stored, err := repo.GetExtensionSettingsByUUID(runtime.Data.ID)
+		if err != nil {
+			t.Fatalf("getting stored settings: %v", err)
+		}
+		if !reflect.DeepEqual(stored, map[string]any{"count": float64(1), "theme": "dark"}) {
+			t.Fatalf("\nwanted:\nstored theme dark count 1\ngot:\n%v", stored)
+		}
+
+		get := requestControlAPI(server, http.MethodGet, "/extension/"+runtime.Data.ID.String()+"/settings", "")
+		if get.Body.String() != response.Body.String() {
+			t.Fatalf("\nwanted:\nGET to match replace body\ngot:\n%s", get.Body.String())
+		}
+
+		event := <-subscriber.events
+		if event.name != "extension.settings.updated" || string(event.data) != `{"settings":{"count":1,"theme":"dark"}}` {
+			t.Fatalf("\nwanted:\nextension.settings.updated %s\ngot:\n%s %s", want, event.name, event.data)
+		}
+	})
+
+	t.Run("should clear settings with an empty object", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `print("ready")`)
+		if err := repo.SetExtensionSettingsByUUID(runtime.Data.ID, map[string]any{"theme": "dark"}); err != nil {
+			t.Fatalf("seeding settings: %v", err)
+		}
+		runtime.Data.Settings = map[string]any{"theme": "dark"}
+		server := newTestServer(&marasi.Proxy{
+			Extensions:    []*extensions.Runtime{runtime},
+			ExtensionRepo: repo,
+		}, func() {})
+
+		response := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/settings", `{"settings":{}}`)
+		assertControlAPIResponse(t, response, http.StatusOK, `{"settings":{}}`+"\n")
+
+		stored, err := repo.GetExtensionSettingsByUUID(runtime.Data.ID)
+		if err != nil || len(stored) != 0 {
+			t.Fatalf("\nwanted:\nempty stored settings\ngot:\n%v %v", stored, err)
+		}
+	})
+
+	t.Run("should let lua settings get read the write without a reload", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `print("ready")`)
+		server := newTestServer(&marasi.Proxy{
+			Extensions:    []*extensions.Runtime{runtime},
+			ExtensionRepo: repo,
+		}, func() {})
+
+		response := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/settings", `{"settings":{"theme":"dark"}}`)
+		assertControlAPIResponse(t, response, http.StatusOK, `{"settings":{"theme":"dark"}}`+"\n")
+
+		if err := runtime.ExecuteLua(`got = marasi.settings:get()`); err != nil {
+			t.Fatalf("running settings get: %v", err)
+		}
+		if !reflect.DeepEqual(runtime.GetGlobal("got"), map[string]any{"theme": "dark"}) {
+			t.Fatalf("\nwanted:\nlua get {theme:dark}\ngot:\n%#v", runtime.GetGlobal("got"))
+		}
+	})
+
+	t.Run("should reject a missing id and invalid settings bodies without publishing", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `print("ready")`)
+		server := newTestServer(&marasi.Proxy{
+			Extensions:    []*extensions.Runtime{runtime},
+			ExtensionRepo: repo,
+		}, func() {})
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		missing := requestControlAPI(server, http.MethodPost, "/extension/01937d13-9632-75b1-9e73-c5129b06fa8c/settings", `{"settings":{"theme":"dark"}}`)
+		assertControlAPIResponse(t, missing, http.StatusNotFound, `{"error":"not_found"}`+"\n")
+
+		malformed := requestControlAPI(server, http.MethodPost, "/extension/not-a-uuid/settings", `{"settings":{"theme":"dark"}}`)
+		assertControlAPIResponse(t, malformed, http.StatusBadRequest, `{"error":"bad_request"}`+"\n")
+
+		for _, body := range []string{
+			`{}`,
+			`{"settings":null}`,
+			`{"settings":[]}`,
+			`{"settings":"dark"}`,
+			`{"settings":1}`,
+			`{"settings":{"theme":"dark"},"extra":true}`,
+			`{"settings":{"theme":"dark"}}{"extra":true}`,
+			`[]`,
+			``,
+		} {
+			response := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/settings", body)
+			assertControlAPIResponse(t, response, http.StatusBadRequest, `{"error":"invalid_extension_request"}`+"\n")
+		}
+		assertNoExtensionEvent(t, subscriber)
+	})
+
+	t.Run("should reject missing and malformed ids when reading settings", func(t *testing.T) {
+		id := uuid.MustParse("01937d13-9632-72aa-83b9-c10ea1abbdd6")
+		server := newTestServer(&marasi.Proxy{Extensions: []*extensions.Runtime{
+			{Data: &domain.Extension{ID: id, Name: "compass", Settings: map[string]any{}}},
+		}}, func() {})
+
+		missing := requestControlAPI(server, http.MethodGet, "/extension/01937d13-9632-75b1-9e73-c5129b06fa8c/settings", "")
+		assertControlAPIResponse(t, missing, http.StatusNotFound, `{"error":"not_found"}`+"\n")
+
+		malformed := requestControlAPI(server, http.MethodGet, "/extension/not-a-uuid/settings", "")
+		assertControlAPIResponse(t, malformed, http.StatusBadRequest, `{"error":"bad_request"}`+"\n")
+	})
+
 	t.Run("should reject a missing id and invalid update bodies without publishing", func(t *testing.T) {
 		repo, runtime := preparedWorkshop(t, `print("ready")`)
 		server := newTestServer(&marasi.Proxy{
@@ -329,7 +468,7 @@ func preparedWorkshop(t *testing.T, lua string) (domain.ExtensionRepository, *ex
 	}
 	stored.LuaContent = lua
 	runtime := &extensions.Runtime{Data: stored}
-	if err := runtime.PrepareState(nil, nil); err != nil {
+	if err := runtime.PrepareState(&marasi.Proxy{ExtensionRepo: repo}, nil); err != nil {
 		t.Fatalf("preparing workshop: %v", err)
 	}
 	return repo, runtime

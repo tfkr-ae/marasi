@@ -319,16 +319,16 @@ func TestExtensionRepo_SetExtensionSettingsByUUID(t *testing.T) {
 		}
 	})
 
-	t.Run("should not fail for a non-existent uuid", func(t *testing.T) {
+	t.Run("should return an error when no row matches", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 
-		nonExistentID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
-		settings := map[string]any{"key": "value"}
-
-		err := repo.SetExtensionSettingsByUUID(nonExistentID, settings)
-		if err != nil {
-			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		err := repo.SetExtensionSettingsByUUID(uuid.MustParse("00000000-0000-0000-0000-000000000001"), map[string]any{"key": "value"})
+		if err == nil {
+			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !strings.Contains(err.Error(), "no rows") {
+			t.Fatalf("\nwanted:\nerror containing 'no rows'\ngot:\n%v", err)
 		}
 	})
 }
