@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 )
@@ -159,8 +158,8 @@ func TestProjectOpen(t *testing.T) {
 
 	t.Run("should refuse open when intercepts are queued", func(t *testing.T) {
 		server, lifecycle, dir, current := newProjectOpenServer(t)
-		intercepted := &marasi.Intercepted{Type: "request", Channel: make(chan marasi.InterceptionTuple)}
-		lifecycle.proxy.InterceptedQueue = []*marasi.Intercepted{intercepted}
+		release := holdPendingWebSocket(t, lifecycle.proxy)
+		defer release()
 		target := canonicalProjectPath(t, filepath.Join(dir, "queued.marasi"))
 		response := requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(target))
 		assertProjectError(t, response, http.StatusConflict, "project_busy")
@@ -169,13 +168,8 @@ func TestProjectOpen(t *testing.T) {
 		if status.Code != http.StatusOK || status.Body.String() != wantCurrent {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%d %s", wantCurrent, status.Code, status.Body.String())
 		}
-		if len(lifecycle.proxy.InterceptedQueue) != 1 || lifecycle.proxy.InterceptedQueue[0] != intercepted {
+		if !lifecycle.proxy.HasPendingCheckpoint() {
 			t.Fatal("\nwanted:\nqueued intercept left untouched\ngot:\nqueue changed")
-		}
-		select {
-		case <-intercepted.Channel:
-			t.Fatal("\nwanted:\nintercept still waiting\ngot:\nopen finished the intercept")
-		default:
 		}
 	})
 

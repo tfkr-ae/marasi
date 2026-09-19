@@ -155,7 +155,7 @@ func (lifecycle *ProjectLifecycle) projectBusy(project *openProject) bool {
 	if project != nil && project.resources.Armory != nil && len(project.resources.Armory.ActiveRunIDs()) != 0 {
 		return true
 	}
-	return len(lifecycle.proxy.InterceptedQueue) != 0
+	return lifecycle.proxy.HasPendingCheckpoint()
 }
 
 // Admit admits project-bound work and returns its matching release operation.

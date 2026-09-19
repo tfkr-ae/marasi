@@ -1610,6 +1610,23 @@ func testProxyWebSocketIntegration(
 		t.Fatalf("creating proxy: %v", proxyErr)
 	}
 	proxy.SetWebSocketIntercept(intercept)
+	if intercept && !interceptHandler {
+		stopForward := make(chan struct{})
+		defer close(stopForward)
+		go func() {
+			for {
+				select {
+				case <-stopForward:
+					return
+				default:
+					for _, message := range proxy.GetPendingWebSocketInterceptions() {
+						_ = proxy.ForwardCheckpoint(message.ID, CheckpointForward{})
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}
+		}()
+	}
 
 	proxyListener, listenerErr := proxy.GetListener("127.0.0.1", "0")
 	if listenerErr != nil {

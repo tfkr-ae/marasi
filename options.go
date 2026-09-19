@@ -163,8 +163,8 @@ func WithExtensions(exts []*domain.Extension, options ...func(*extensions.Runtim
 	}
 }
 
-// WithInterceptHandler takes a handler function that will be executed on each intercept (Request / Response)
-func WithInterceptHandler(handler func(intercepted *Intercepted) error) func(*Proxy) error {
+// WithInterceptHandler takes a handler function that will be executed after a Checkpoint item is pending.
+func WithInterceptHandler(handler func(item domain.CheckpointItem) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		if proxy.OnIntercept != nil {
 			return errors.New("proxy already has an intercept handler defined")

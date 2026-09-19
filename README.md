@@ -78,13 +78,8 @@ proxy.WithOptions(
         // Handle log messages
         return nil
     }),
-    marasi.WithInterceptHandler(func(intercepted *marasi.Intercepted) error {
-        switch intercepted.Type {
-        case "request":
-        // Handle Request interception
-        case "response":
-        // Handle Response interception
-        }
+    marasi.WithInterceptHandler(func(item domain.CheckpointItem) error {
+        // Item is already pending. Forward or drop by id.
         return nil
     }),
 )

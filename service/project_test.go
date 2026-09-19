@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/domain"
+	marasiws "github.com/tfkr-ae/marasi/websocket"
 	"github.com/tfkr-ae/marasi/wordlist"
 )
 
@@ -40,6 +41,38 @@ func newTestProjectLifecycle(t *testing.T) (*ProjectLifecycle, *marasi.Proxy, st
 	lifecycle := NewProjectLifecycle(proxy, configDir, manager, logger)
 	t.Cleanup(func() { _ = lifecycle.Shutdown() })
 	return lifecycle, proxy, configDir
+}
+
+func holdPendingWebSocket(t *testing.T, proxy *marasi.Proxy) func() {
+	t.Helper()
+	id, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("creating message id: %v", err)
+	}
+	message := &marasiws.Message{ID: id, ConnectionID: uuid.New()}
+	done := make(chan struct{})
+	go func() {
+		_ = proxy.WebSocketInterceptor.Intercept(message, nil)
+		close(done)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if proxy.HasPendingCheckpoint() {
+			return func() {
+				if err := proxy.DropCheckpoint(id); err != nil {
+					t.Fatalf("dropping websocket hold: %v", err)
+				}
+				select {
+				case <-done:
+				case <-time.After(2 * time.Second):
+					t.Fatal("timed out releasing websocket hold")
+				}
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for websocket hold")
+	return nil
 }
 
 func canonicalProjectPath(t *testing.T, path string) string {
@@ -384,21 +417,16 @@ func TestProjectLifecycle(t *testing.T) {
 		if err := lifecycle.Open(context.Background(), oldPath); err != nil {
 			t.Fatalf("opening old project: %v", err)
 		}
-		intercepted := &marasi.Intercepted{Type: "request", Channel: make(chan marasi.InterceptionTuple)}
-		proxy.InterceptedQueue = []*marasi.Intercepted{intercepted}
+		release := holdPendingWebSocket(t, proxy)
+		defer release()
 		if err := lifecycle.Open(context.Background(), target); !errors.Is(err, ErrProjectBusy) {
 			t.Fatalf("\nwanted:\nproject busy\ngot:\n%v", err)
 		}
 		if lifecycle.Path() != oldPath {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", oldPath, lifecycle.Path())
 		}
-		if len(proxy.InterceptedQueue) != 1 || proxy.InterceptedQueue[0] != intercepted {
+		if !proxy.HasPendingCheckpoint() {
 			t.Fatal("\nwanted:\nqueued intercept left untouched\ngot:\nqueue changed")
-		}
-		select {
-		case <-intercepted.Channel:
-			t.Fatal("\nwanted:\nintercept still waiting\ngot:\nopen finished the intercept")
-		default:
 		}
 		if _, err := acquireProjectOwnership(oldPath); !errors.Is(err, ErrProjectAlreadyOpen) {
 			t.Fatalf("\nwanted:\nold project still owned\ngot:\n%v", err)

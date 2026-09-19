@@ -83,16 +83,15 @@ const (
 // extension management, database operations, and TLS handling. It serves as the central coordinator
 // for the Marasi proxy server.
 type Proxy struct {
-	martianProxy     *martian.Proxy                       // The underlying martian.Proxy
-	ConfigDir        string                               // The configuration directory (defaults to the marasi folder under the user configuration directory)
-	Config           *Config                              // The marasi proxy configuration (separate from the GUI config)
-	Modifiers        *fifo.Group                          // Modifier group pipeline
-	DBWriteChannel   chan any                             // DB Write Channel
-	InterceptedQueue []*Intercepted                       // Queue of intercepted requests / responses
-	OnRequest        func(req domain.ProxyRequest) error  // Function to be ran on each request - used by the GUI application to handle the new requests
-	OnResponse       func(res domain.ProxyResponse) error // Function to be ran on each response - used by the GUI application to handle the new responses
-	OnIntercept      func(intercepted *Intercepted) error // Function to be ran on each intercept - used by the GUI application to handle the new intercepted items
-	OnLog            func(log domain.Log) error           // Function to be ran on each log event - used by the GUI application to handle new log entries
+	martianProxy   *martian.Proxy                       // The underlying martian.Proxy
+	ConfigDir      string                               // The configuration directory (defaults to the marasi folder under the user configuration directory)
+	Config         *Config                              // The marasi proxy configuration (separate from the GUI config)
+	Modifiers      *fifo.Group                          // Modifier group pipeline
+	DBWriteChannel chan any                             // DB Write Channel
+	OnRequest      func(req domain.ProxyRequest) error  // Function to be ran on each request - used by the GUI application to handle the new requests
+	OnResponse     func(res domain.ProxyResponse) error // Function to be ran on each response - used by the GUI application to handle the new responses
+	OnIntercept    func(item domain.CheckpointItem) error
+	OnLog          func(log domain.Log) error // Function to be ran on each log event - used by the GUI application to handle new log entries
 	// OnWebSocketOpen is called when a WebSocket connection opens.
 	OnWebSocketOpen func(domain.WebSocketConnection) error
 	// OnWebSocketMessage is called for each processed WebSocket message.
@@ -112,11 +111,12 @@ type Proxy struct {
 	MarasiClientTLSConfig *tls.Config           // TLSConfig for the proxy.Client
 	Scope                 *compass.Scope        // Proxy scope configuration through Compass
 	Waypoints             map[string]string     // Map of host:port overrides
-	InterceptFlag         bool                  // Global intercept flag
 	// WebSocketRegistry tracks live WebSocket connections.
 	WebSocketRegistry *marasiws.Registry
 	// WebSocketInterceptor pauses WebSocket messages for manual inspection.
 	WebSocketInterceptor *marasiws.Interceptor
+	checkpoint           *checkpointState
+	httpIntercept        atomic.Bool
 	webSocketIntercept   atomic.Bool
 	webSocketLifecycleMu sync.RWMutex
 	webSocketSessions    sync.WaitGroup
@@ -277,10 +277,10 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 		Client:               &http.Client{},
 		Scope:                compass.NewScope(true),
 		Waypoints:            make(map[string]string),
-		InterceptFlag:        false,
 		Logger:               slog.Default(),
 		WebSocketRegistry:    marasiws.NewRegistry(),
 		WebSocketInterceptor: marasiws.NewInterceptor(),
+		checkpoint:           newCheckpointState(),
 		launchpadWS:          make(map[io.Closer]struct{}),
 		admitWork: func(context.Context) (func(), error) {
 			return func() {}, nil
@@ -356,21 +356,6 @@ func (proxy *Proxy) GetExtension(name string) (*extensions.Runtime, bool) {
 		}
 	}
 	return nil, false
-}
-
-// InterceptionTuple contains the user's decision when an intercepted item is resumed,
-// indicating whether to continue and whether to intercept the corresponding response.
-type InterceptionTuple struct {
-	Resume                  bool // Whether to resume the intercepted item
-	ShouldInterceptResponse bool // Whether to intercept the corresponding response
-}
-
-// Intercepted represents a request or response that has been intercepted for manual inspection
-// and modification before being allowed to continue.
-type Intercepted struct {
-	Type    string                 // "request" or "response"
-	Raw     string                 // Raw HTTP data that can be modified
-	Channel chan InterceptionTuple // Channel for receiving user decisions
 }
 
 // Waypoint represents a hostname override mapping, allowing requests to specific hosts
@@ -732,9 +717,7 @@ func (proxy *Proxy) close(closeDatabase bool) error {
 	proxy.listenerMu.Unlock()
 
 	proxy.closeLaunchpadWebSockets()
-	if proxy.WebSocketInterceptor != nil {
-		proxy.WebSocketInterceptor.CancelAll()
-	}
+	proxy.DropAllCheckpoint()
 	webSocketErr := proxy.CloseWebSocketsAndFlush()
 	<-proxy.martianCloseDone
 	var databaseErr error

@@ -36,7 +36,11 @@ func (proxy *Proxy) ResolveWebSocketInterception(
 	if proxy.WebSocketInterceptor == nil {
 		return errors.New("websocket interceptor not configured")
 	}
-	return proxy.WebSocketInterceptor.Resolve(messageID, decision)
+	err := proxy.WebSocketInterceptor.Resolve(messageID, decision)
+	if err == nil {
+		proxy.forgetCheckpoint(messageID)
+	}
+	return err
 }
 
 // GetWebSocketConnection returns live connection state for an upgrade request ID.
