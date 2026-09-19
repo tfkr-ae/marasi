@@ -14,10 +14,11 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Test case | `test-case create`, `test-case list`, `test-case get`, `test-case update`, `test-case delete`, `test-case link`, `test-case unlink`, `test-case checklist` | [test case](test-case.md) |
 | Finding | `finding create`, `finding list`, `finding get`, `finding update`, `finding delete`, `finding link`, `finding unlink` | [finding](finding.md) |
 | Artifact | `artifact upload`, `artifact get`, `artifact download`, `artifact delete` | [artifact](artifact.md) |
+| Checkpoint | `checkpoint list`, `checkpoint get`, `checkpoint forward`, `checkpoint drop`, `checkpoint intercept`, `checkpoint websocket-intercept` | [checkpoint](checkpoint.md) |
 | Chrome | `chrome path add`, `chrome path list`, `chrome path remove`, `chrome profile add`, `chrome profile list`, `chrome profile remove`, `chrome start` | [chrome](chrome.md) |
 | Waypoint | `waypoint list`, `waypoint add`, `waypoint update`, `waypoint remove` | [waypoint](waypoint.md) |
 | Wordlist | `wordlist list`, `wordlist preview`, `wordlist add`, `wordlist remove` | [wordlist](wordlist.md) |
 | Armory | `armory template create`, `armory template list`, `armory template get`, `armory template update`, `armory template delete`, `armory run validate`, `armory run create`, `armory run list`, `armory run get`, `armory run start`, `armory run cancel`, `armory run traffic`, `armory run delete` | [armory](armory.md) |
 | Extension | `extension list`, `extension get`, `extension update`, `extension logs`, `extension settings get`, `extension settings set`, `extension call`, `extension enable`, `extension disable` | [extension](extension.md) |
 
-When a change touches one row, read that feature file and cover every affected entry point. The bundled helper proves service lifecycle, one HTTP capture, live `events` subscription, filtered listing, and detail inspection. It does not cover every listener transition, `listener address`, HTTPS interception, pagination, project open, launchpad, test cases, findings, artifacts, Chrome, waypoints, wordlists, Armory, or extensions.
+When a change touches one row, read that feature file and cover every affected entry point. The bundled helper proves service lifecycle, one HTTP capture, live `events` subscription, filtered listing, and detail inspection. It does not cover every listener transition, `listener address`, HTTPS interception, pagination, project open, launchpad, test cases, findings, artifacts, Checkpoint, Chrome, waypoints, wordlists, Armory, or extensions.

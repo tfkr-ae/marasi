@@ -22,5 +22,6 @@ Send one proxied request to `/before.txt`. Run `traffic list --path /before.txt 
 - `--name` and `--path` are mutually exclusive and one is required.
 - `--name` uses `$configDir/projects/<name>.marasi`, same as `service start --project-name`. `--path` must end in `.marasi`.
 - A project has an exclusive lock. Opening a project another instance already holds fails.
+- Opening fails with `project_busy` while a Checkpoint item is pending or an Armory run is `in_progress`. Forward or drop held items and wait for Armory to leave `in_progress` first.
 - After a switch, `traffic list` and `traffic get` no longer see the previous project's rows.
 - `service status` `project` becomes the new path. The launch doctor check against `$VERIFY_PROJECT` no longer matches, even though the instance is still ours.
