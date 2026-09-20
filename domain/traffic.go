@@ -79,6 +79,11 @@ type TrafficRepository interface {
 	// It returns an error if no note is found.
 	DeleteNote(requestID uuid.UUID) error
 
+	// ListNotes returns a newest-first page of summaries that have a non-empty note.
+	// A nil cursor starts at the newest row. nextCursor is the last returned
+	// item's id when another older page exists, otherwise nil.
+	ListNotes(cursor *uuid.UUID, limit int) (items []*RequestResponseSummary, nextCursor *uuid.UUID, err error)
+
 	// SearchByMetadata retrieves requests where the value at the specified JSON path matches the provided value.
 	SearchByMetadata(path string, value any) ([]*RequestResponseSummary, error)
 }
@@ -141,5 +146,5 @@ type RequestResponseSummary struct {
 	Metadata    map[string]any
 	RequestedAt time.Time
 	RespondedAt time.Time
-	// TODO CHECK IF NOTE WILL BE ADDED
+	Note        string
 }

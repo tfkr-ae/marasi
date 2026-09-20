@@ -64,6 +64,11 @@ type dbRequestResponseSummary struct {
 	Metadata Metadata `db:"metadata"`
 }
 
+type dbNoteSummary struct {
+	dbRequestResponseSummary
+	Note string `db:"note"`
+}
+
 // fromDomainProxyRequest converts a domain.ProxyRequest into a dbRequestResponse for database insertion.
 func fromDomainProxyRequest(preq *domain.ProxyRequest) *dbRequestResponse {
 	return &dbRequestResponse{
@@ -484,6 +489,50 @@ func (repo *Repository) DeleteNote(requestID uuid.UUID) error {
 		return fmt.Errorf("deleting note for request %s: %w", requestID, sql.ErrNoRows)
 	}
 	return nil
+}
+
+// ListNotes returns a newest-first page of summaries that have a non-empty note.
+func (repo *Repository) ListNotes(cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+	query := `SELECT
+			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
+			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
+			  json_remove(r.metadata, '$.prettified-request', '$.prettified-response') AS metadata,
+			  n.note
+			  FROM request r
+			  INNER JOIN notes n ON r.id = n.request_id
+			  WHERE n.note IS NOT NULL AND n.note != ''`
+	args := make([]any, 0, 2)
+	if cursor != nil {
+		query += ` AND r.id < ?`
+		args = append(args, *cursor)
+	}
+	query += ` ORDER BY r.id DESC LIMIT ?`
+	args = append(args, limit+1)
+
+	var rows []*dbNoteSummary
+	err := repo.dbConn.Select(&rows, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listing notes: %w", err)
+	}
+
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+
+	items := make([]*domain.RequestResponseSummary, len(rows))
+	for i, row := range rows {
+		item := toDomainRequestResponseSummary(&row.dbRequestResponseSummary)
+		item.Note = row.Note
+		items[i] = item
+	}
+
+	var nextCursor *uuid.UUID
+	if hasMore {
+		id := items[len(items)-1].ID
+		nextCursor = &id
+	}
+	return items, nextCursor, nil
 }
 
 // SearchByMetadata retrieves requests where the value at the specified JSON path matches the provided value.

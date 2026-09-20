@@ -7,25 +7,55 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi/service"
 )
 
 var notesSetFile string
+var notesListLimit string
+var notesListCursor string
+
+const notesDisplayLimit = 40
 
 func init() {
 	notesSetCmd.Flags().StringVar(&notesSetFile, "file", "", "Read the note from a file")
-	notesCmd.AddCommand(notesSetCmd, notesClearCmd)
+	notesListCmd.Flags().StringVar(&notesListLimit, "limit", "200", "Page size")
+	notesListCmd.Flags().StringVar(&notesListCursor, "cursor", "", "Fetch the next older page")
+	notesCmd.AddCommand(notesListCmd, notesSetCmd, notesClearCmd)
 	rootCmd.AddCommand(notesCmd)
 }
 
 var notesCmd = &cobra.Command{
 	Use:   "notes",
 	Short: "Manage notes for a service instance",
+}
+
+var notesListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List request/response pairs that have a note",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		query := url.Values{}
+		query.Set("limit", notesListLimit)
+		if notesListCursor != "" {
+			query.Set("cursor", notesListCursor)
+		}
+		body, err := runNotesRequest(cmd, http.MethodGet, "/notes?"+query.Encode(), "listing notes", nil)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		return writeNotesListHuman(body, cmd.OutOrStdout(), cmd.ErrOrStderr())
+	},
 }
 
 var notesSetCmd = &cobra.Command{
@@ -131,6 +161,44 @@ func noteStdinPresent(cmd *cobra.Command) (bool, error) {
 		return false, fmt.Errorf("checking stdin: %w", err)
 	}
 	return info.Mode()&os.ModeCharDevice == 0, nil
+}
+
+func writeNotesListHuman(body []byte, stdout, stderr io.Writer) error {
+	var page struct {
+		Items []struct {
+			ID         string `json:"id"`
+			Method     string `json:"method"`
+			Host       string `json:"host"`
+			Path       string `json:"path"`
+			StatusCode int    `json:"status_code"`
+			Length     string `json:"length"`
+			Note       string `json:"note"`
+		} `json:"items"`
+		NextCursor *string `json:"next_cursor"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return fmt.Errorf("decoding notes list: %w", err)
+	}
+
+	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	for _, item := range page.Items {
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n", item.ID, item.Method, item.Host, truncateDisplay(item.Path, notesDisplayLimit), item.StatusCode, item.Length, truncateDisplay(item.Note, notesDisplayLimit))
+	}
+	if err := writer.Flush(); err != nil {
+		return err
+	}
+	if page.NextCursor != nil {
+		fmt.Fprintf(stderr, "next_cursor=%s\n", *page.NextCursor)
+	}
+	return nil
+}
+
+func truncateDisplay(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) > limit {
+		return string(runes[:limit-3]) + "..."
+	}
+	return value
 }
 
 func runNotesRequest(cmd *cobra.Command, method, path, operation string, payload []byte) ([]byte, error) {

@@ -176,6 +176,35 @@ func (s *stubTrafficRepository) DeleteNote(id uuid.UUID) error {
 	return nil
 }
 
+func (s *stubTrafficRepository) ListNotes(cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+	items := s.items
+	if items == nil {
+		items = []*domain.RequestResponseSummary{}
+	}
+	matched := make([]*domain.RequestResponseSummary, 0, len(items))
+	for _, item := range items {
+		if cursor != nil && item.ID.String() >= cursor.String() {
+			continue
+		}
+		note := item.Note
+		if note == "" && s.notes != nil {
+			note = s.notes[item.ID]
+		}
+		if note == "" {
+			continue
+		}
+		copy := *item
+		copy.Note = note
+		matched = append(matched, &copy)
+	}
+	if limit < len(matched) {
+		matched = matched[:limit]
+		id := matched[len(matched)-1].ID
+		return matched, &id, nil
+	}
+	return matched, s.nextCursor, nil
+}
+
 func (s *stubTrafficRepository) ListTraffic(cursor *uuid.UUID, limit int, filter domain.TrafficListFilter) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
 	items := s.items
 	if items == nil {

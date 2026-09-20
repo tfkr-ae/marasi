@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestNotesCommands(t *testing.T) {
@@ -202,5 +204,155 @@ func TestNotesCommandContract(t *testing.T) {
 		if err != nil || stderr != "" || stdout == "" {
 			t.Fatalf("\nwanted:\nhelp on stdout\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
 		}
+	})
+}
+
+func TestNotesListCommand(t *testing.T) {
+	binary := buildMarasi(t)
+
+	t.Run("should print the newest page in JSON item order", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","scheme":"https","method":"POST","host":"example.com","path":"/login","status":"401 Unauthorized","status_code":401,"content_type":"text/plain","length":"45","metadata":{},"requested_at":"2026-01-02T03:04:04Z","responded_at":"2026-01-02T03:04:05Z","note":"newer note"},{"id":"0193802f-f0e7-73d9-a764-06d21e367809","scheme":"https","method":"GET","host":"example.com","path":"/a","status":"200 OK","status_code":200,"content_type":"application/json","length":"12","metadata":{"foo":"bar"},"requested_at":"2026-01-02T03:04:05Z","responded_at":"2026-01-02T03:04:06Z","note":"older note"}],"next_cursor":null}`)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "notes", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		got := sent.snapshot()
+		if got.Method != http.MethodGet || got.Path != "/notes" || got.RawQuery != "limit=200" {
+			t.Fatalf("\nwanted:\nGET /notes?limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
+		}
+		want := "01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /login  401  45  newer note\n0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /a      200  12  older note\n"
+		if stdout != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+		}
+	})
+
+	t.Run("should truncate long paths and notes before aligning the row", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"0193802f-f0e7-73d9-a764-06d21e367809","method":"GET","host":"example.com","path":"/12345678901234567890123456789012345678901234567890","status_code":200,"length":"12","note":"01234567890123456789012345678901234567890123456789"},{"id":"01938032-1b17-7243-b035-e6a9f4645904","method":"POST","host":"example.com","path":"/short","status_code":404,"length":"45","note":"short"}],"next_cursor":null}`)
+
+		stdout, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "notes", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := "0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /123456789012345678901234567890123456...  200  12  0123456789012345678901234567890123456...\n01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /short                                    404  45  short\n"
+		if stdout != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
+		}
+	})
+
+	t.Run("should truncate long notes without splitting utf-8 characters", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"0193802f-f0e7-73d9-a764-06d21e367809","method":"GET","host":"example.com","path":"/a","status_code":200,"length":"12","note":"012345678901234567890123456789012345😀XYZQ"}],"next_cursor":null}`)
+
+		stdout, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "notes", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := "0193802f-f0e7-73d9-a764-06d21e367809  GET  example.com  /a  200  12  012345678901234567890123456789012345😀...\n"
+		if stdout != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
+		}
+		if !utf8.ValidString(stdout) {
+			t.Fatalf("\nwanted:\nvalid utf-8\ngot:\n%s", stdout)
+		}
+	})
+
+	t.Run("should write next_cursor to stderr when another page exists", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","method":"GET","host":"example.com","path":"/a","status_code":200,"length":"12","note":"keep"}],"next_cursor":"0193802f-f0e7-73d9-a764-06d21e367809"}`)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "notes", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := "01938032-1b17-7243-b035-e6a9f4645904  GET  example.com  /a  200  12  keep\n"
+		if stdout != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
+		}
+		if stderr != "next_cursor=0193802f-f0e7-73d9-a764-06d21e367809\n" {
+			t.Fatalf("\nwanted:\nnext_cursor=0193802f-f0e7-73d9-a764-06d21e367809\ngot:\n%s", stderr)
+		}
+	})
+
+	t.Run("should print the control API list body with --json", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		body := `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","method":"GET","host":"example.com","path":"/a","status_code":200,"length":"12","note":"keep"}],"next_cursor":"0193802f-f0e7-73d9-a764-06d21e367809"}`
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+
+		for _, args := range [][]string{
+			{"--json", "notes", "list"},
+			{"notes", "list", "--json"},
+		} {
+			commandArgs := append([]string{"--config-dir", configDir, "--instance", "work"}, args...)
+			stdout, stderr, err := runMarasi(binary, commandArgs...)
+			if err != nil || stdout != body || stderr != "" {
+				t.Fatalf("\n%v wanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", args, body, stdout, stderr, err)
+			}
+		}
+	})
+
+	t.Run("should print no rows for an empty page", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "notes", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if stdout != "" {
+			t.Fatalf("\nwanted:\nno rows\ngot:\n%s", stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+		}
+	})
+
+	t.Run("should send --limit and --cursor as query parameters", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+
+		_, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "notes", "list", "--limit", "10", "--cursor", "0193802f-f0e7-73d9-a764-06d21e367809")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		got := sent.snapshot()
+		if got.Method != http.MethodGet || got.Path != "/notes" || got.RawQuery != "cursor=0193802f-f0e7-73d9-a764-06d21e367809&limit=10" {
+			t.Fatalf("\nwanted:\nGET /notes?cursor=...&limit=10\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
+		}
+	})
+
+	t.Run("should fail and name the instance when the control listener is missing", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "notes", "list")
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if stdout != "" {
+			t.Fatalf("\nwanted:\nno stdout\ngot:\n%s", stdout)
+		}
+		if !strings.Contains(stderr, "instance work is not running") {
+			t.Fatalf("\nwanted:\nstderr naming work\ngot:\n%s", stderr)
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "notes", "list", "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "instance work is not running")
+	})
+
+	t.Run("should normalize a JSON control API error", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"bad_request"}`)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "notes", "list", "--json", "--limit", "0")
+		got := sent.snapshot()
+		if got.RawQuery != "limit=0" {
+			t.Fatalf("\nwanted:\nlimit=0\ngot:\n%s", got.RawQuery)
+		}
+		assertJSONCommandError(t, stdout, stderr, err, "listing notes: bad_request")
 	})
 }

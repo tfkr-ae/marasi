@@ -5,9 +5,11 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 type noteBody struct {
@@ -15,9 +17,37 @@ type noteBody struct {
 	Note string    `json:"note"`
 }
 
+type noteList struct {
+	Items      []noteListItem `json:"items"`
+	NextCursor *uuid.UUID     `json:"next_cursor"`
+}
+
+type noteListItem struct {
+	trafficSummary
+	Note string `json:"note"`
+}
+
 var errInvalidNoteRequest = errors.New("invalid note request")
 
 func addNoteRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+	mux.HandleFunc("GET /notes", func(w http.ResponseWriter, r *http.Request) {
+		limit, cursor, ok := parseNotesListQuery(r)
+		if !ok {
+			writeNoteError(w, r, http.StatusBadRequest, "bad_request")
+			return
+		}
+		repo, err := proxy.GetTrafficRepo()
+		if err != nil {
+			writeNoteError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		items, nextCursor, err := repo.ListNotes(cursor, limit)
+		if err != nil {
+			writeNoteError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		writeJSON(w, r, http.StatusOK, noteListFromSummaries(items, nextCursor))
+	})
 	mux.HandleFunc("PUT /notes/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := parseNoteID(w, r)
 		if !ok {
@@ -74,6 +104,37 @@ func addNoteRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadca
 		events.publish("note.deleted", response)
 		writeJSON(w, r, http.StatusOK, response)
 	})
+}
+
+func parseNotesListQuery(r *http.Request) (int, *uuid.UUID, bool) {
+	limit := 200
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 500 {
+			return 0, nil, false
+		}
+		limit = parsed
+	}
+	var cursor *uuid.UUID
+	if raw := r.URL.Query().Get("cursor"); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			return 0, nil, false
+		}
+		cursor = &parsed
+	}
+	return limit, cursor, true
+}
+
+func noteListFromSummaries(items []*domain.RequestResponseSummary, nextCursor *uuid.UUID) noteList {
+	list := make([]noteListItem, 0, len(items))
+	for _, item := range items {
+		list = append(list, noteListItem{
+			trafficSummary: trafficSummaryFromDomain(item),
+			Note:           item.Note,
+		})
+	}
+	return noteList{Items: list, NextCursor: nextCursor}
 }
 
 func parseNoteID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
