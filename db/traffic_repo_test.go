@@ -699,6 +699,52 @@ func TestTrafficRepo_NoteTriggers(t *testing.T) {
 	})
 }
 
+func TestTrafficRepo_DeleteNote(t *testing.T) {
+	t.Run("should remove the note row and leave has_note absent", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		reqID := testRequest(t, repo, nil)
+		if err := repo.UpdateNote(reqID, "clear me"); err != nil {
+			t.Fatalf("updating note: %v", err)
+		}
+
+		if err := repo.DeleteNote(reqID); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		_, err := repo.GetNote(reqID)
+		if err == nil {
+			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !errors.Is(err, sql.ErrNoRows) && !strings.Contains(err.Error(), "no rows") {
+			t.Fatalf("\nwanted:\nsql.ErrNoRows\ngot:\n%v", err)
+		}
+
+		meta, err := repo.GetMetadata(reqID)
+		if err != nil {
+			t.Fatalf("getting metadata: %v", err)
+		}
+		if _, ok := meta["has_note"]; ok {
+			t.Fatalf("\nwanted:\n'has_note' key to be removed\ngot:\nkey still exists")
+		}
+	})
+
+	t.Run("should return an error when no note row exists", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		reqID := testRequest(t, repo, nil)
+		err := repo.DeleteNote(reqID)
+		if err == nil {
+			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !errors.Is(err, sql.ErrNoRows) && !strings.Contains(err.Error(), "no rows") {
+			t.Fatalf("\nwanted:\nsql.ErrNoRows\ngot:\n%v", err)
+		}
+	})
+}
+
 func TestTrafficRepo_SearchByMetadata(t *testing.T) {
 	t.Run("should return matching requests", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)

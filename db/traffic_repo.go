@@ -470,6 +470,22 @@ func (repo *Repository) UpdateNote(requestID uuid.UUID, note string) error {
 	return nil
 }
 
+// DeleteNote removes the note row for a request ID.
+func (repo *Repository) DeleteNote(requestID uuid.UUID) error {
+	result, err := repo.dbConn.Exec(`DELETE FROM notes WHERE request_id = ?`, requestID)
+	if err != nil {
+		return fmt.Errorf("deleting note for request %s: %w", requestID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("deleting note for request %s: %w", requestID, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("deleting note for request %s: %w", requestID, sql.ErrNoRows)
+	}
+	return nil
+}
+
 // SearchByMetadata retrieves requests where the value at the specified JSON path matches the provided value.
 func (repo *Repository) SearchByMetadata(path string, value any) ([]*domain.RequestResponseSummary, error) {
 	var dbSummary []*dbRequestResponseSummary

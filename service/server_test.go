@@ -44,6 +44,7 @@ type stubTrafficRepository struct {
 	row        *domain.RequestResponseRow
 	items      []*domain.RequestResponseSummary
 	nextCursor *uuid.UUID
+	notes      map[uuid.UUID]string
 }
 
 type stubLaunchpadRepository struct {
@@ -130,6 +131,30 @@ func (s *stubTrafficRepository) GetRequestResponseRow(id uuid.UUID) (*domain.Req
 		return s.row, nil
 	}
 	return nil, errors.New("not found")
+}
+
+func (s *stubTrafficRepository) GetNote(id uuid.UUID) (string, error) {
+	note, ok := s.notes[id]
+	if !ok {
+		return "", errors.New("not found")
+	}
+	return note, nil
+}
+
+func (s *stubTrafficRepository) UpdateNote(id uuid.UUID, note string) error {
+	if s.notes == nil {
+		s.notes = make(map[uuid.UUID]string)
+	}
+	s.notes[id] = note
+	return nil
+}
+
+func (s *stubTrafficRepository) DeleteNote(id uuid.UUID) error {
+	if _, ok := s.notes[id]; !ok {
+		return errors.New("not found")
+	}
+	delete(s.notes, id)
+	return nil
 }
 
 func (s *stubTrafficRepository) ListTraffic(cursor *uuid.UUID, limit int, filter domain.TrafficListFilter) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {

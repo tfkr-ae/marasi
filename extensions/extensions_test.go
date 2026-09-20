@@ -216,6 +216,17 @@ func (m *mockTrafficRepo) UpdateNote(id uuid.UUID, note string) error {
 	return nil
 }
 
+func (m *mockTrafficRepo) DeleteNote(id uuid.UUID) error {
+	if m.forceError {
+		return errors.New("forced repo error")
+	}
+	if _, ok := m.noteStore[id]; !ok {
+		return errors.New("note not found")
+	}
+	delete(m.noteStore, id)
+	return nil
+}
+
 func (m *mockTrafficRepo) SearchByMetadata(path string, value any) ([]*domain.RequestResponseSummary, error) {
 	if m.forceError {
 		return nil, errors.New("forced repo error")
