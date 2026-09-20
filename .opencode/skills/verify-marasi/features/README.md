@@ -7,7 +7,8 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Service lifecycle | `service start`, `service status`, `service stop` | [service lifecycle](service-lifecycle.md) |
 | Proxy listener control | `listener status`, `listener address`, `listener stop`, `listener start`, `listener update` | [proxy listener control](proxy-listener-control.md) |
 | HTTP traffic capture | Configure a client with `proxy_listener`, then make HTTP or HTTPS requests | [HTTP traffic capture](http-traffic-capture.md) |
-| Captured traffic inspection | `traffic list`, list filters and pagination, `traffic get` | [captured traffic inspection](captured-traffic-inspection.md) |
+| Captured traffic inspection | `traffic list`, list filters and pagination, `traffic get`, `traffic metadata get`, `traffic metadata update` | [captured traffic inspection](captured-traffic-inspection.md) |
+| Notes | `notes set`, `notes list`, list pagination, `notes clear` | [notes](notes.md) |
 | Project open | `project open --name`, `project open --path`, `project switch` | [project open](project-open.md) |
 | Events | `events` | [events](events.md) |
 | Launchpad | `launchpad create`, `launchpad list`, `launchpad get`, `launchpad update`, `launchpad link`, `launchpad launch` | [launchpad](launchpad.md) |
@@ -21,4 +22,4 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Armory | `armory template create`, `armory template list`, `armory template get`, `armory template update`, `armory template delete`, `armory run validate`, `armory run create`, `armory run list`, `armory run get`, `armory run start`, `armory run cancel`, `armory run traffic`, `armory run delete` | [armory](armory.md) |
 | Extension | `extension list`, `extension get`, `extension update`, `extension logs`, `extension settings get`, `extension settings set`, `extension call`, `extension enable`, `extension disable` | [extension](extension.md) |
 
-When a change touches one row, read that feature file and cover every affected entry point. The bundled helper proves service lifecycle, one HTTP capture, live `events` subscription, filtered listing, and detail inspection. It does not cover every listener transition, `listener address`, HTTPS interception, pagination, project open, launchpad, test cases, findings, artifacts, Checkpoint, Chrome, waypoints, wordlists, Armory, or extensions.
+When a change touches one row, read that feature file and cover every affected entry point. The bundled helper proves service lifecycle, one HTTP capture, live `events` subscription, filtered listing, and detail inspection. It does not cover every listener transition, `listener address`, HTTPS interception, pagination, project open, launchpad, test cases, findings, artifacts, notes, metadata, Checkpoint, Chrome, waypoints, wordlists, Armory, or extensions.

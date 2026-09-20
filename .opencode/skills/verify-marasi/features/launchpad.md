@@ -5,7 +5,7 @@ Users group captured traffic into named launchpads in the open project and fire 
 ## Sub-features
 
 - Create an empty pad with `launchpad create --name`.
-- List pads newest first with `launchpad list`.
+- List pads oldest first with `launchpad list`.
 - Read one pad and its linked traffic with `launchpad get`.
 - Rename or describe a pad with `launchpad update`.
 - Attach an existing request UUID with `launchpad link --request`.

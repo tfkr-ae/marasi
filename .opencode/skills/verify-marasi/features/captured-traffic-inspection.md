@@ -8,6 +8,8 @@ Users list stored request/response pairs and open one pair to inspect its metada
 - Filter by exact host, exact method, exact status code, or path prefix.
 - Limit page size and continue with `--cursor`.
 - Read one pair by UUID with `traffic get "$TRAFFIC_ID"`.
+- Read one pair's metadata with `traffic metadata get "$TRAFFIC_ID"`.
+- Replace one pair's metadata with `traffic metadata update "$TRAFFIC_ID" --file` or piped stdin.
 - Choose human-readable or `--json` output.
 
 ## How to get to it (user POV)
@@ -16,7 +18,7 @@ Send traffic through a running instance, then run `dist/marasi --config-dir "$VE
 
 ## Driving it with shell and curl
 
-Create at least one known proxied request. Run `traffic list --path /proof.txt --status-code 200 --limit 1 --json`, require exactly the expected path and status, and save its UUID. Run `traffic get "$TRAFFIC_ID" --json`; require the same ID, `GET`, path, response status 200, and raw request and response data. For filter or pagination changes, create distinct requests and prove both matching and non-matching cases plus every returned cursor.
+Create at least one known proxied request. Run `traffic list --path /proof.txt --status-code 200 --limit 1 --json`, require exactly the expected path and status, and save its UUID. Run `traffic get "$TRAFFIC_ID" --json`; require the same ID, `GET`, path, response status 200, and raw request and response data. Run `traffic metadata get "$TRAFFIC_ID" --json` and require the stored metadata object. Replace it with `traffic metadata update "$TRAFFIC_ID" --file "$META_FILE" --json`, then get again and require the new keys. For filter or pagination changes, create distinct requests and prove both matching and non-matching cases plus every returned cursor.
 
 ## Gotchas
 
@@ -25,3 +27,5 @@ Create at least one known proxied request. Run `traffic list --path /proof.txt -
 - `--path` is a prefix filter, while method and status code are exact filters.
 - Human output writes `next_cursor=$NEXT_CURSOR` to stderr. JSON keeps it in `next_cursor`.
 - `traffic get` requires a UUID. Invalid IDs fail before repository lookup.
+- `traffic metadata update` requires `--file` or piped stdin with a non-empty JSON object body. A TTY stdin fails.
+- Metadata replaces the stored object. `traffic metadata get` returns the current object plus `has_note`.
