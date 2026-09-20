@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ var trafficListStatusCode string
 var trafficListPath string
 var trafficListLimit string
 var trafficListCursor string
+var trafficMetadataUpdateFile string
 
 const trafficPathDisplayLimit = 40
 
@@ -34,7 +36,9 @@ func init() {
 	trafficListCmd.Flags().StringVar(&trafficListPath, "path", "", "Keep pairs whose path starts with this prefix")
 	trafficListCmd.Flags().StringVar(&trafficListLimit, "limit", "200", "Page size")
 	trafficListCmd.Flags().StringVar(&trafficListCursor, "cursor", "", "Fetch the next older page")
-	trafficCmd.AddCommand(trafficListCmd, trafficGetCmd)
+	trafficMetadataUpdateCmd.Flags().StringVar(&trafficMetadataUpdateFile, "file", "", "Read the metadata JSON from a file")
+	trafficMetadataCmd.AddCommand(trafficMetadataGetCmd, trafficMetadataUpdateCmd)
+	trafficCmd.AddCommand(trafficListCmd, trafficGetCmd, trafficMetadataCmd)
 	rootCmd.AddCommand(trafficCmd)
 }
 
@@ -64,6 +68,47 @@ var trafficGetCmd = &cobra.Command{
 		defer cancel()
 
 		return getTraffic(ctx, instancePath, instance, jsonOutput, args[0], cmd.OutOrStdout())
+	},
+}
+
+var trafficMetadataCmd = &cobra.Command{
+	Use:   "metadata",
+	Short: "Get or replace metadata for a request/response pair",
+}
+
+var trafficMetadataGetCmd = &cobra.Command{
+	Use:   "get uuid",
+	Short: "Get metadata for a request/response pair",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		body, err := runTrafficMetadataRequest(cmd, http.MethodGet, "/traffic/"+args[0]+"/metadata", "getting metadata", nil)
+		if err != nil {
+			return err
+		}
+		_, err = cmd.OutOrStdout().Write(body)
+		return err
+	},
+}
+
+var trafficMetadataUpdateCmd = &cobra.Command{
+	Use:   "update uuid",
+	Short: "Replace metadata for a request/response pair",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		payload, err := readTrafficMetadataUpdate(cmd)
+		if err != nil {
+			return err
+		}
+		body, err := runTrafficMetadataRequest(cmd, http.MethodPut, "/traffic/"+args[0]+"/metadata", "updating metadata", payload)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "metadata %s updated\n", args[0])
+		return err
 	},
 }
 
@@ -291,4 +336,84 @@ func writeTrafficRaw(stdout io.Writer, side string, raw []byte) error {
 	}
 	_, err := fmt.Fprintf(stdout, "%s raw: %d bytes, not utf-8\n", side, len(raw))
 	return err
+}
+
+func readTrafficMetadataUpdate(cmd *cobra.Command) ([]byte, error) {
+	fileSet := cmd.Flags().Changed("file")
+	stdinPresent, err := trafficMetadataStdinPresent(cmd)
+	if err != nil {
+		return nil, err
+	}
+	if fileSet && stdinPresent {
+		return nil, errors.New("traffic metadata update requires exactly one of --file or piped stdin")
+	}
+	if !fileSet && !stdinPresent {
+		return nil, errors.New("traffic metadata update requires --file or piped stdin")
+	}
+	var raw []byte
+	if fileSet {
+		var err error
+		raw, err = os.ReadFile(trafficMetadataUpdateFile)
+		if err != nil {
+			return nil, fmt.Errorf("reading metadata file: %w", err)
+		}
+	} else {
+		var err error
+		raw, err = io.ReadAll(cmd.InOrStdin())
+		if err != nil {
+			return nil, fmt.Errorf("reading metadata from stdin: %w", err)
+		}
+	}
+	if len(raw) == 0 {
+		return nil, errors.New("traffic metadata update requires a non-empty body")
+	}
+	return raw, nil
+}
+
+func trafficMetadataStdinPresent(cmd *cobra.Command) (bool, error) {
+	stdin := cmd.InOrStdin()
+	file, ok := stdin.(*os.File)
+	if !ok {
+		return true, nil
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false, fmt.Errorf("checking stdin: %w", err)
+	}
+	return info.Mode()&os.ModeCharDevice == 0, nil
+}
+
+func runTrafficMetadataRequest(cmd *cobra.Command, method, path, operation string, payload []byte) ([]byte, error) {
+	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	var requestBody io.Reader
+	if payload != nil {
+		requestBody = bytes.NewReader(payload)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("creating metadata request: %w", err)
+	}
+	if payload != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	client := service.NewClient(instancePath + ".sock")
+	defer client.Close()
+	response, err := client.Do(request)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("instance %s is not running", instance)
+	}
+	body, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil || closeErr != nil {
+		return nil, errors.Join(wrapError("reading metadata response", readErr), wrapError("closing metadata response", closeErr))
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, controlAPIError(operation, response.Status, body)
+	}
+	return body, nil
 }

@@ -133,6 +133,25 @@ func (s *stubTrafficRepository) GetRequestResponseRow(id uuid.UUID) (*domain.Req
 	return nil, errors.New("not found")
 }
 
+func (s *stubTrafficRepository) GetMetadata(id uuid.UUID) (map[string]any, error) {
+	if s.row != nil && s.row.Request.ID == id {
+		if s.row.Metadata == nil {
+			return map[string]any{}, nil
+		}
+		return s.row.Metadata, nil
+	}
+	return nil, errors.New("not found")
+}
+
+func (s *stubTrafficRepository) UpdateMetadata(metadata map[string]any, ids ...uuid.UUID) error {
+	for _, id := range ids {
+		if s.row != nil && s.row.Request.ID == id {
+			s.row.Metadata = metadata
+		}
+	}
+	return nil
+}
+
 func (s *stubTrafficRepository) GetNote(id uuid.UUID) (string, error) {
 	note, ok := s.notes[id]
 	if !ok {
