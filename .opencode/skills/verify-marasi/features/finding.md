@@ -24,7 +24,7 @@ Run `finding create --title "Broken access control" --severity High --test-case 
 ## Gotchas
 
 - `--title` is required on create and must be non-empty. Update requires at least one changed flag.
-- `--severity` is `Critical`, `High`, `Medium`, `Low`, `Informational`, or empty. `--test-case` and `--clear-test-case` cannot be used together on update.
+- `--severity` is `Critical`, `High`, `Medium`, `Low`, `Informational`, or empty. Matching ignores case. The stored value uses that spelling. `--test-case` and `--clear-test-case` cannot be used together on update.
 - A related test case id must already exist in the open project.
 - Duplicate link of the same request to the same finding returns a conflict.
 - Link, unlink, get, and delete look up ids in the currently open project. After `project open`, previous finding and request ids are not visible.

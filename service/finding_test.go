@@ -149,6 +149,30 @@ func TestFindingControlAPI(t *testing.T) {
 		}
 	})
 
+	t.Run("stores the canonical severity regardless of case", func(t *testing.T) {
+		for _, test := range []struct {
+			in   string
+			want string
+		}{
+			{in: "high", want: "High"},
+			{in: "CRITICAL", want: "Critical"},
+			{in: "medium", want: "Medium"},
+			{in: "LoW", want: "Low"},
+			{in: "informational", want: "Informational"},
+		} {
+			repo := &stubFindingRepository{}
+			server := newTestServer(&marasi.Proxy{ReportingRepo: repo}, func() {})
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/finding", strings.NewReader(`{"title":"Broken access control","severity":"`+test.in+`"}`)))
+			var saved *domain.Finding
+			for _, saved = range repo.findings {
+			}
+			if response.Code != http.StatusOK || saved == nil || saved.Severity != test.want || !strings.Contains(response.Body.String(), `"severity":"`+test.want+`"`) {
+				t.Fatalf("severity %q wanted %q, got %d %s saved %+v", test.in, test.want, response.Code, response.Body.String(), saved)
+			}
+		}
+	})
+
 	t.Run("creates a title-only finding without a default severity", func(t *testing.T) {
 		repo := &stubFindingRepository{}
 		server := newTestServer(&marasi.Proxy{ReportingRepo: repo}, func() {})
@@ -232,7 +256,7 @@ func TestFindingControlAPI(t *testing.T) {
 	t.Run("rejects invalid writes and missing related test cases", func(t *testing.T) {
 		server := newTestServer(&marasi.Proxy{ReportingRepo: &stubFindingRepository{}}, func() {})
 		for _, body := range []string{
-			`{}`, `{"title":""}`, `{"title":null}`, `{"title":"x","severity":"high"}`,
+			`{}`, `{"title":""}`, `{"title":null}`, `{"title":"x","severity":"urgent"}`,
 			`{"title":"x","severity":null}`, `{"title":"x","test_case_id":""}`,
 			`{"title":"x","requests":[]}`, `{"title":"x"} {}`, `{`,
 		} {

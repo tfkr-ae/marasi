@@ -419,6 +419,23 @@ func TestArmoryRunControlAPI(t *testing.T) {
 	rawTemplate := "GET /?value=@@value@@ HTTP/1.1\r\nHost: example.com\r\n\r\n"
 	createdAt := time.Date(2026, time.September, 17, 10, 30, 0, 0, time.UTC)
 
+	t.Run("should store a canonical attack type regardless of case", func(t *testing.T) {
+		repo := &stubArmoryRepository{templates: map[uuid.UUID]*domain.ArmoryTemplate{
+			templateID: {ID: templateID, RawTemplate: rawTemplate},
+		}}
+		server := newTestServer(&marasi.Proxy{Armory: &stubArmoryService{repo: repo}}, func() {})
+		response := requestControlAPI(server, http.MethodPost, "/armory/run", fmt.Sprintf(`{"template_id":%q,"attack_type":"Harpoon","wordlists":["passwords.txt"]}`, templateID))
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n200\ngot:\n%d %s", response.Code, response.Body.String())
+		}
+		var created armoryRun
+		decodeResponse(t, response, &created)
+		stored := repo.runs[created.ID]
+		if created.AttackType != domain.ArmoryAttackHarpoon || stored == nil || stored.AttackType != domain.ArmoryAttackHarpoon {
+			t.Fatalf("\nwanted:\nstored harpoon\ngot:\nresponse %s stored %+v", created.AttackType, stored)
+		}
+	})
+
 	t.Run("should create a validated draft from a template using defaults", func(t *testing.T) {
 		repo := &stubArmoryRepository{templates: map[uuid.UUID]*domain.ArmoryTemplate{
 			templateID: {ID: templateID, Name: "Login", RawTemplate: rawTemplate},

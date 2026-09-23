@@ -505,9 +505,15 @@ func decodeArmoryRunMutation(r *http.Request, create bool) (armoryRunMutation, e
 			}
 			mutation.RawTemplate = &value
 		case "attack_type":
-			if json.Unmarshal(raw, &mutation.AttackType) != nil || !validArmoryAttackType(mutation.AttackType) {
+			var value string
+			if json.Unmarshal(raw, &value) != nil {
 				return armoryRunMutation{}, errInvalidArmoryRequest
 			}
+			attackType, ok := domain.ParseArmoryAttackType(value)
+			if !ok {
+				return armoryRunMutation{}, errInvalidArmoryRequest
+			}
+			mutation.AttackType = attackType
 			attackTypeSet = true
 		case "wordlists":
 			if json.Unmarshal(raw, &mutation.Wordlists) != nil || mutation.Wordlists == nil {
@@ -530,15 +536,6 @@ func decodeArmoryRunMutation(r *http.Request, create bool) (armoryRunMutation, e
 		return armoryRunMutation{}, errInvalidArmoryRequest
 	}
 	return mutation, nil
-}
-
-func validArmoryAttackType(attackType domain.ArmoryAttackType) bool {
-	switch attackType {
-	case domain.ArmoryAttackHarpoon, domain.ArmoryAttackBroadside, domain.ArmoryAttackTandem, domain.ArmoryAttackMaelstrom:
-		return true
-	default:
-		return false
-	}
 }
 
 func (mutation armoryRunMutation) armoryRun(id uuid.UUID, snapshot string) *domain.ArmoryRun {

@@ -82,6 +82,17 @@ func TestArmoryCommandOptions(t *testing.T) {
 	binary := buildMarasi(t)
 	templateID := "0193802f-f0e7-73d9-a764-06d21e367809"
 
+	t.Run("should accept attack type regardless of case", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"id":"x"}`)
+		if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "armory", "run", "create", "--template", templateID, "--attack-type", "Harpoon"); err != nil {
+			t.Fatal(err)
+		}
+		if got := sent.snapshot().Body; got != `{"template_id":"`+templateID+`","attack_type":"harpoon","wordlists":[]}` {
+			t.Fatalf("\nwanted:\ncanonical attack type\ngot:\n%s", got)
+		}
+	})
+
 	t.Run("should omit server-defaulted run fields", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"id":"x"}`)

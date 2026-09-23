@@ -246,10 +246,8 @@ var armoryRunTrafficCmd = &cobra.Command{
 }
 
 func armoryRunFlagsRequest(cmd *cobra.Command) (armoryRunRequest, error) {
-	attackType := domain.ArmoryAttackType(armoryRunAttackType)
-	switch attackType {
-	case domain.ArmoryAttackHarpoon, domain.ArmoryAttackBroadside, domain.ArmoryAttackTandem, domain.ArmoryAttackMaelstrom:
-	default:
+	attackType, ok := domain.ParseArmoryAttackType(armoryRunAttackType)
+	if !ok {
 		return armoryRunRequest{}, errors.New("--attack-type must be harpoon, broadside, tandem, or maelstrom")
 	}
 	request := armoryRunRequest{AttackType: attackType, Wordlists: armoryRunWordlists}

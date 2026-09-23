@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +27,21 @@ const (
 	// ArmoryAttackMaelstrom generates every combination of its payload sets.
 	ArmoryAttackMaelstrom ArmoryAttackType = "maelstrom"
 )
+
+// ParseArmoryAttackType returns the canonical attack type for value, ignoring case.
+func ParseArmoryAttackType(value string) (ArmoryAttackType, bool) {
+	for _, attackType := range []ArmoryAttackType{
+		ArmoryAttackHarpoon,
+		ArmoryAttackBroadside,
+		ArmoryAttackTandem,
+		ArmoryAttackMaelstrom,
+	} {
+		if strings.EqualFold(string(attackType), value) {
+			return attackType, true
+		}
+	}
+	return "", false
+}
 
 // ArmoryRunStatus identifies the lifecycle state of an Armory run.
 type ArmoryRunStatus string

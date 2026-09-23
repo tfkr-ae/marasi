@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -300,9 +301,14 @@ func decodeFindingMutation(r *http.Request) (findingMutation, error) {
 				return findingMutation{}, err
 			}
 		case "severity":
-			if err := json.Unmarshal(raw, &mutation.Severity); err != nil || mutation.Severity == nil || !validFindingSeverity(*mutation.Severity) {
+			if err := json.Unmarshal(raw, &mutation.Severity); err != nil || mutation.Severity == nil {
 				return findingMutation{}, errors.New("invalid finding severity")
 			}
+			canonical, ok := canonicalFindingSeverity(*mutation.Severity)
+			if !ok {
+				return findingMutation{}, errors.New("invalid finding severity")
+			}
+			*mutation.Severity = canonical
 		case "cvss_vector":
 			if err := json.Unmarshal(raw, &mutation.CVSSVector); err != nil {
 				return findingMutation{}, err
@@ -340,12 +346,22 @@ func decodeFindingMutation(r *http.Request) (findingMutation, error) {
 	return mutation, nil
 }
 
-func validFindingSeverity(severity string) bool {
-	switch severity {
-	case "", "Critical", "High", "Medium", "Low", "Informational":
-		return true
+func canonicalFindingSeverity(severity string) (string, bool) {
+	switch {
+	case severity == "":
+		return "", true
+	case strings.EqualFold(severity, "Critical"):
+		return "Critical", true
+	case strings.EqualFold(severity, "High"):
+		return "High", true
+	case strings.EqualFold(severity, "Medium"):
+		return "Medium", true
+	case strings.EqualFold(severity, "Low"):
+		return "Low", true
+	case strings.EqualFold(severity, "Informational"):
+		return "Informational", true
 	default:
-		return false
+		return "", false
 	}
 }
 
