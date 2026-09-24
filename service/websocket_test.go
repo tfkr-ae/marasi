@@ -215,6 +215,25 @@ func TestWebSocketMessageList(t *testing.T) {
 			t.Fatalf("\nwanted:\n400 bad_request for %s\ngot:\n%d %s", rawQuery, res.StatusCode, body)
 		}
 	}
+	for _, rawQuery := range []string{"limit=1&ignored=%ZZ", "limit=1&ignored=a;b"} {
+		req, err := http.NewRequest(http.MethodGet, path, nil)
+		if err != nil {
+			t.Fatalf("creating message page request: %v", err)
+		}
+		req.URL.RawQuery = rawQuery
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("getting page with unknown parameter: %v", err)
+		}
+		body, err := io.ReadAll(res.Body)
+		res.Body.Close()
+		if err != nil {
+			t.Fatalf("reading page with unknown parameter: %v", err)
+		}
+		if res.StatusCode != http.StatusOK || string(body) != "{\"items\":[],\"next_cursor\":null}\n" {
+			t.Fatalf("\nwanted:\n200 empty page for %s\ngot:\n%d %s", rawQuery, res.StatusCode, body)
+		}
+	}
 	assertWebSocketControlResponse(t, path+"/"+uuid.New().String(), http.StatusNotFound, []byte("404 page not found\n"))
 	wrongMethod, err := http.Post(path, "application/json", nil)
 	if err != nil {

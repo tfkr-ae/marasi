@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -141,7 +142,15 @@ func addWebSocketRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 }
 
 func parseWebSocketPage(r *http.Request) (int, *uuid.UUID, error) {
-	query, err := url.ParseQuery(r.URL.RawQuery)
+	var pageFields []string
+	for _, field := range strings.Split(r.URL.RawQuery, "&") {
+		name, _, _ := strings.Cut(field, "=")
+		key, err := url.QueryUnescape(name)
+		if err == nil && (key == "limit" || key == "cursor") {
+			pageFields = append(pageFields, field)
+		}
+	}
+	query, err := url.ParseQuery(strings.Join(pageFields, "&"))
 	if err != nil {
 		return 0, nil, err
 	}
