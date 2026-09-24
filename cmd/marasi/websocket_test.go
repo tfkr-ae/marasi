@@ -215,6 +215,67 @@ func TestWebSocketInjectCommand(t *testing.T) {
 	})
 }
 
+func TestWebSocketCloseCommand(t *testing.T) {
+	const id = "0193802f-f0e7-73d9-a764-06d21e367809"
+	const body = `{"id":"` + id + `","state":"closed","close_code":1000}` + "\n"
+	binary := buildMarasi(t)
+
+	for _, test := range []struct {
+		name  string
+		flags []string
+		body  string
+		json  bool
+	}{
+		{name: "should omit flags and print success on stderr", body: `{}`},
+		{name: "should send an explicit zero code", flags: []string{"--code", "0"}, body: `{"code":0}`},
+		{name: "should send a code without local validation", flags: []string{"--code", "1005"}, body: `{"code":1005}`},
+		{name: "should send a reason only", flags: []string{"--reason", "done"}, body: `{"reason":"done"}`},
+		{name: "should send both flags and pass through JSON", flags: []string{"--code", "3001", "--reason", "bye", "--json"}, body: `{"code":3001,"reason":"bye"}`, json: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+			args := append([]string{"--config-dir", configDir, "--instance", "work", "websocket", "close", id}, test.flags...)
+			stdout, stderr, err := runMarasi(binary, args...)
+			wantStdout, wantStderr := "", "websocket "+id+" closed\n"
+			if test.json {
+				wantStdout, wantStderr = body, ""
+			}
+			if err != nil || stdout != wantStdout || stderr != wantStderr {
+				t.Fatalf("\nwanted:\nstdout %q stderr %q and no error\ngot:\nstdout %q stderr %q error %v", wantStdout, wantStderr, stdout, stderr, err)
+			}
+			got := sent.snapshot()
+			if got.Method != http.MethodPost || got.Path != "/websocket/"+id+"/close" || got.Body != test.body || got.ContentType != "application/json" || len(sent.requests()) != 1 {
+				t.Fatalf("\nwanted:\nPOST close with %s\ngot:\n%+v", test.body, got)
+			}
+		})
+	}
+
+	t.Run("should allow --json before the command", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+		stdout, stderr, err := runMarasi(binary, "--json", "--config-dir", configDir, "--instance", "work", "websocket", "close", id)
+		if err != nil || stdout != body || stderr != "" {
+			t.Fatalf("\nwanted:\nunchanged API body on stdout\ngot:\n%q %q %v", stdout, stderr, err)
+		}
+	})
+
+	t.Run("should report API failures with the close operation", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusConflict, `{"error":"websocket_not_open"}`)
+		stdout, stderr, err := runMarasi(binary, "--json", "--config-dir", configDir, "--instance", "work", "websocket", "close", id)
+		assertJSONCommandError(t, stdout, stderr, err, "closing websocket connection: websocket_not_open")
+	})
+
+	t.Run("should name a missing instance", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "websocket", "close", id)
+		if err == nil || stdout != "" || !strings.Contains(stderr, "instance work is not running") {
+			t.Fatalf("\nwanted:\nmissing instance on stderr\ngot:\n%q %q %v", stdout, stderr, err)
+		}
+	})
+}
+
 func TestWebSocketGetCommands(t *testing.T) {
 	const (
 		connectionID = "0193802f-f0e7-73d9-a764-06d21e367809"

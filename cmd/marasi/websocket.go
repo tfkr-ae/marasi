@@ -27,7 +27,9 @@ func init() {
 	websocketInjectCmd.Flags().StringVar(&websocketInjectDirection, "direction", "", "Origin of the frame: client or server")
 	websocketInjectCmd.Flags().IntVar(&websocketInjectOpcode, "opcode", 0, "WebSocket frame opcode (0-15)")
 	websocketInjectCmd.Flags().StringVar(&websocketInjectFile, "file", "", "Read frame bytes from a file")
-	websocketCmd.AddCommand(websocketListCmd, websocketGetCmd, websocketMessagesCmd, websocketInjectCmd)
+	websocketCloseCmd.Flags().IntVar(&websocketCloseCode, "code", 0, "WebSocket close code")
+	websocketCloseCmd.Flags().StringVar(&websocketCloseReason, "reason", "", "WebSocket close reason")
+	websocketCmd.AddCommand(websocketListCmd, websocketGetCmd, websocketMessagesCmd, websocketInjectCmd, websocketCloseCmd)
 	rootCmd.AddCommand(websocketCmd)
 	trafficCmd.AddCommand(trafficWebSocketCmd)
 }
@@ -44,6 +46,37 @@ var websocketMessagesCursor string
 var websocketInjectDirection string
 var websocketInjectOpcode int
 var websocketInjectFile string
+var websocketCloseCode int
+var websocketCloseReason string
+
+var websocketCloseCmd = &cobra.Command{
+	Use:   "close CONNECTION_ID",
+	Short: "Close a live WebSocket connection",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		request := make(map[string]any)
+		if cmd.Flags().Changed("code") {
+			request["code"] = websocketCloseCode
+		}
+		if cmd.Flags().Changed("reason") {
+			request["reason"] = websocketCloseReason
+		}
+		payload, err := json.Marshal(request)
+		if err != nil {
+			return fmt.Errorf("encoding websocket close: %w", err)
+		}
+		body, err := runCheckpointRequest(cmd, http.MethodPost, "/websocket/"+url.PathEscape(args[0])+"/close", "closing websocket connection", payload)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "websocket %s closed\n", args[0])
+		return err
+	},
+}
 
 var websocketInjectCmd = &cobra.Command{
 	Use:   "inject CONNECTION_ID",

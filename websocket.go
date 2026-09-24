@@ -217,14 +217,15 @@ func (proxy *Proxy) runWebSocketSessionWithRelease(connection *marasiws.Connecti
 		closedRecord.CloseCode = 1006
 	}
 
+	connection.PublishClosedRecord(closedRecord)
+	if proxy.OnWebSocketClose != nil {
+		_ = proxy.OnWebSocketClose(closedRecord)
+	}
+
 	proxy.DBWriteChannel <- &domain.WebSocketConnectionUpdate{
 		Connection: closedRecord,
 	}
 	proxy.updateWebSocketRequestState(connection.RequestID, closedRecord.State)
-
-	if proxy.OnWebSocketClose != nil {
-		_ = proxy.OnWebSocketClose(closedRecord)
-	}
 
 	return runErr
 }

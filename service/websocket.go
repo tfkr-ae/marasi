@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
@@ -55,6 +56,50 @@ type webSocketMessageList struct {
 }
 
 func addWebSocketRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
+	mux.HandleFunc("POST /websocket/{connection_id}/close", func(w http.ResponseWriter, r *http.Request) {
+		id, err := uuid.Parse(r.PathValue("connection_id"))
+		if err != nil {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
+		code, reason, err := decodeWebSocketClose(r)
+		if err != nil {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_websocket_request"})
+			return
+		}
+		var live *marasiws.Connection
+		var ok bool
+		if proxy.WebSocketRegistry != nil {
+			live, ok = proxy.WebSocketRegistry.Get(id)
+		}
+		if !ok {
+			if proxy.WebSocketRepo == nil {
+				writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+				return
+			}
+			if _, err := proxy.WebSocketRepo.GetConnection(id); err != nil {
+				writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+				return
+			}
+			writeJSON(w, r, http.StatusConflict, map[string]string{"error": "websocket_not_open"})
+			return
+		}
+		if err := live.StartClose(code, reason); errors.Is(err, marasiws.ErrConnectionClosed) {
+			writeJSON(w, r, http.StatusConflict, map[string]string{"error": "websocket_not_open"})
+			return
+		} else if err != nil {
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+			return
+		}
+		// Frame writes can fail even though the relay still produces a closed record.
+		select {
+		case record := <-live.ClosedRecord():
+			writeJSON(w, r, http.StatusOK, webSocketConnectionFromDomain(record))
+		case <-time.After(marasiws.CloseHandshakeTimeout + 100*time.Millisecond):
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+		}
+	})
+
 	mux.HandleFunc("POST /websocket/{connection_id}/inject", func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(r.PathValue("connection_id"))
 		if err != nil {
@@ -184,6 +229,50 @@ func addWebSocketRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 		}
 		writeJSON(w, r, http.StatusOK, webSocketConnectionFromDomain(*connection))
 	})
+}
+
+func decodeWebSocketClose(r *http.Request) (int, string, error) {
+	invalid := errors.New("invalid websocket request")
+	code := marasiws.CloseNormalClosure
+	var reason string
+	decoder := json.NewDecoder(r.Body)
+	var fields map[string]json.RawMessage
+	if err := decoder.Decode(&fields); err != nil {
+		if errors.Is(err, io.EOF) {
+			return code, reason, nil
+		}
+		return 0, "", invalid
+	}
+	if fields == nil {
+		return 0, "", invalid
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return 0, "", invalid
+	}
+	for name, raw := range fields {
+		if !utf8.Valid(raw) || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return 0, "", invalid
+		}
+		switch name {
+		case "code":
+			if err := json.Unmarshal(raw, &code); err != nil {
+				return 0, "", invalid
+			}
+		case "reason":
+			if err := json.Unmarshal(raw, &reason); err != nil {
+				return 0, "", invalid
+			}
+		default:
+			return 0, "", invalid
+		}
+	}
+	if code == 0 {
+		code = marasiws.CloseNormalClosure
+	}
+	if _, err := marasiws.EncodeClosePayload(code, reason); err != nil {
+		return 0, "", invalid
+	}
+	return code, reason, nil
 }
 
 func decodeWebSocketInject(r *http.Request) (string, int, []byte, error) {
