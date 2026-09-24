@@ -478,6 +478,9 @@ func (r *websocketRepositoryStub) GetConnectionByRequestID(uuid.UUID) (*domain.W
 func (r *websocketRepositoryStub) ListConnections(*uuid.UUID, int) ([]*domain.WebSocketConnection, *uuid.UUID, error) {
 	return nil, nil, nil
 }
+func (r *websocketRepositoryStub) ListMessages(uuid.UUID, *uuid.UUID, int) ([]*domain.WebSocketMessage, *uuid.UUID, error) {
+	return nil, nil, nil
+}
 func (r *websocketRepositoryStub) InsertMessage(*domain.WebSocketMessage) error { return nil }
 func (r *websocketRepositoryStub) GetMessage(uuid.UUID) (*domain.WebSocketMessage, error) {
 	if len(r.messages) == 0 {

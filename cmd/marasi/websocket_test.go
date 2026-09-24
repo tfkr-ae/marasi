@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"net/http"
 	"strings"
 	"testing"
@@ -217,6 +218,80 @@ func TestWebSocketGetCommands(t *testing.T) {
 					t.Fatalf("\nwanted:\nno stdout and %q on stderr\ngot:\nstdout %q\nstderr %q", test.want, stdout, stderr)
 				}
 			})
+		}
+	})
+}
+
+func TestWebSocketMessagesCommand(t *testing.T) {
+	const (
+		connectionID = "0193802f-f0e7-73d9-a764-06d21e367809"
+		cursor       = "0193802f-f0e7-73d9-a764-06d21e36780a"
+		firstID      = "0193802f-f0e7-73d9-a764-06d21e36780b"
+		secondID     = "0193802f-f0e7-73d9-a764-06d21e36780c"
+	)
+	longText := strings.Repeat("é", 81)
+	body := `{"items":[{"id":"` + firstID + `","direction":"client","opcode":1,"payload":"` + base64.StdEncoding.EncodeToString([]byte(longText)) + `"},{"id":"` + secondID + `","direction":"server","opcode":9,"payload":""}],"next_cursor":"` + secondID + `"}` + "\n"
+
+	t.Run("should request a page and print UTF-8 text and binary previews", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "websocket", "messages", connectionID, "--limit", "2", "--cursor", cursor)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		got := sent.snapshot()
+		if got.Method != http.MethodGet || got.Path != "/websocket/"+connectionID+"/message" || got.RawQuery != "cursor="+cursor+"&limit=2" || got.Body != "" {
+			t.Fatalf("\nwanted:\nGET /websocket/%s/message?cursor=%s&limit=2, no body\ngot:\n%s %s?%s body %q", connectionID, cursor, got.Method, got.Path, got.RawQuery, got.Body)
+		}
+		want := firstID + "  client  1  " + strings.Repeat("é", 80) + "\n" + secondID + "  server  9  binary 0 bytes\n"
+		if stdout != want || stderr != "next_cursor="+secondID+"\n" {
+			t.Fatalf("\nwanted:\nstdout %q\nstderr %q\ngot:\nstdout %q\nstderr %q", want, "next_cursor="+secondID+"\n", stdout, stderr)
+		}
+	})
+
+	t.Run("should preview invalid text bytes as binary and send the default limit", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"`+firstID+`","direction":"client","opcode":1,"payload":"/w=="}],"next_cursor":null}`+"\n")
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "websocket", "messages", connectionID)
+		if err != nil || stdout != firstID+"  client  1  binary 1 bytes\n" || stderr != "" {
+			t.Fatalf("\nwanted:\nbinary 1 byte preview and empty stderr\ngot:\nstdout %q stderr %q error %v", stdout, stderr, err)
+		}
+		if got := sent.snapshot(); got.RawQuery != "limit=200" {
+			t.Fatalf("\nwanted:\nlimit=200\ngot:\n%s", got.RawQuery)
+		}
+	})
+
+	for _, position := range []string{"before", "after"} {
+		t.Run("should pass the API body through with --json "+position+" the subcommand", func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+			args := []string{"--config-dir", configDir, "--instance", "work"}
+			if position == "before" {
+				args = append(args, "--json")
+			}
+			args = append(args, "websocket", "messages", connectionID)
+			if position == "after" {
+				args = append(args, "--json")
+			}
+			stdout, stderr, err := runMarasi(buildMarasi(t), args...)
+			if err != nil || stdout != body || stderr != "" {
+				t.Fatalf("\nwanted:\nstdout %q and empty stderr\ngot:\nstdout %q stderr %q error %v", body, stdout, stderr, err)
+			}
+		})
+	}
+
+	t.Run("should use listing websocket messages for API errors", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"bad_request"}`)
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "websocket", "messages", connectionID, "--json", "--limit", "0")
+		assertJSONCommandError(t, stdout, stderr, err, "listing websocket messages: bad_request")
+	})
+
+	t.Run("should name a missing instance", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "websocket", "messages", connectionID)
+		if err == nil || !strings.Contains(err.Error(), "instance work is not running") || stdout != "" || !strings.Contains(stderr, "instance work is not running") {
+			t.Fatalf("\nwanted:\nmissing instance named on stderr\ngot:\nstdout %q stderr %q error %v", stdout, stderr, err)
 		}
 	})
 }

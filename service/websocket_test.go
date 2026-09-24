@@ -167,6 +167,189 @@ func TestWebSocketConnectionList(t *testing.T) {
 	})
 }
 
+func TestWebSocketMessageList(t *testing.T) {
+	control, originURL, proxyAddress := newWebSocketControlFixture(t)
+	stream, events := connectEventStream(t, control.URL)
+	defer stream.Body.Close()
+	connection, request := upgradeWebSocketThroughProxy(t, proxyAddress, originURL)
+	t.Cleanup(func() { connection.Close() })
+	response, err := http.ReadResponse(bufio.NewReader(connection), request)
+	if err != nil {
+		t.Fatalf("reading websocket upgrade response: %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("\nwanted:\n101 upgrade\ngot:\n%d", response.StatusCode)
+	}
+	var opened struct {
+		ID        uuid.UUID `json:"id"`
+		RequestID uuid.UUID `json:"request_id"`
+	}
+	if err := json.Unmarshal([]byte(readWebSocketEventData(t, events, "websocket.opened")), &opened); err != nil {
+		t.Fatalf("decoding websocket.opened: %v", err)
+	}
+	path := control.URL + "/websocket/" + opened.ID.String() + "/message"
+	waitForWebSocketState(t, control.URL+"/websocket/"+opened.ID.String(), "open")
+	assertWebSocketControlResponse(t, path, http.StatusOK, []byte("{\"items\":[],\"next_cursor\":null}\n"))
+	assertWebSocketControlResponse(t, control.URL+"/websocket/"+uuid.New().String()+"/message", http.StatusNotFound, []byte("{\"error\":\"not_found\"}\n"))
+	assertWebSocketControlResponse(t, control.URL+"/websocket/not-a-uuid/message", http.StatusBadRequest, []byte("{\"error\":\"bad_request\"}\n"))
+	for _, query := range []string{"limit=0", "limit=501", "limit=abc", "limit=", "cursor=bad", "cursor="} {
+		assertWebSocketControlResponse(t, path+"?"+query, http.StatusBadRequest, []byte("{\"error\":\"bad_request\"}\n"))
+	}
+	assertWebSocketControlResponse(t, path+"/"+uuid.New().String(), http.StatusNotFound, []byte("404 page not found\n"))
+
+	t.Run("should store an unreassembled fragment and an empty control frame", func(t *testing.T) {
+		for _, frame := range []marasiws.Frame{
+			{Fin: false, Opcode: marasiws.OpText, Payload: []byte("first")},
+			{Fin: true, Opcode: marasiws.OpPing},
+		} {
+			if err := marasiws.WriteFrame(connection, frame, true); err != nil {
+				t.Fatalf("writing websocket frame: %v", err)
+			}
+		}
+		fragment := readWebSocketEventData(t, events, "websocket.message")
+		ping := readWebSocketEventData(t, events, "websocket.message")
+		var first, second struct {
+			ID           uuid.UUID      `json:"id"`
+			ConnectionID uuid.UUID      `json:"connection_id"`
+			RequestID    uuid.UUID      `json:"request_id"`
+			Direction    string         `json:"direction"`
+			Opcode       int            `json:"opcode"`
+			Fin          bool           `json:"fin"`
+			Payload      string         `json:"payload"`
+			IsBinary     bool           `json:"is_binary"`
+			CreatedAt    string         `json:"created_at"`
+			Metadata     map[string]any `json:"metadata"`
+		}
+		if err := json.Unmarshal([]byte(fragment), &first); err != nil {
+			t.Fatalf("decoding fragment event: %v", err)
+		}
+		if err := json.Unmarshal([]byte(ping), &second); err != nil {
+			t.Fatalf("decoding ping event: %v", err)
+		}
+		if first.ID == uuid.Nil || first.ConnectionID != opened.ID || first.RequestID != opened.RequestID || first.Direction != "client" || first.Opcode != 1 || first.Fin || first.Payload != "Zmlyc3Q=" || first.IsBinary || first.CreatedAt == "" || len(first.Metadata) != 0 {
+			t.Fatalf("\nwanted:\nclient text fragment with its own ID and base64 payload\ngot:\n%s", fragment)
+		}
+		if second.ID == uuid.Nil || second.ID == first.ID || second.ConnectionID != opened.ID || second.RequestID != opened.RequestID || second.Direction != "client" || second.Opcode != 9 || !second.Fin || second.Payload != "" || second.IsBinary || second.CreatedAt == "" || len(second.Metadata) != 0 {
+			t.Fatalf("\nwanted:\nempty client ping with full message fields\ngot:\n%s", ping)
+		}
+		if _, err := time.Parse(time.RFC3339, first.CreatedAt); err != nil {
+			t.Fatalf("invalid message timestamp %q: %v", first.CreatedAt, err)
+		}
+
+		// The event precedes the asynchronous database flush.
+		var page []byte
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			res, err := http.Get(path + "?limit=1&ignored=yes")
+			if err != nil {
+				t.Fatalf("getting message page: %v", err)
+			}
+			page, err = io.ReadAll(res.Body)
+			res.Body.Close()
+			if err != nil {
+				t.Fatalf("reading message page: %v", err)
+			}
+			if string(page) == fmt.Sprintf(`{"items":[%s],"next_cursor":"%s"}`+"\n", ping, second.ID) {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		want := fmt.Sprintf(`{"items":[%s],"next_cursor":"%s"}`+"\n", ping, second.ID)
+		if string(page) != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, page)
+		}
+		assertWebSocketControlResponse(t, path+"?limit=1&cursor="+second.ID.String(), http.StatusOK, []byte(fmt.Sprintf(`{"items":[%s],"next_cursor":null}`+"\n", fragment)))
+		assertWebSocketControlResponse(t, path+"?cursor="+uuid.Nil.String(), http.StatusOK, []byte("{\"items\":[],\"next_cursor\":null}\n"))
+	})
+
+	t.Run("should publish a dropped frame only after Checkpoint resolves it", func(t *testing.T) {
+		if err := marasiws.WriteFrame(connection, marasiws.Frame{Fin: true, Opcode: marasiws.OpContinuation, Payload: []byte(" last")}, true); err != nil {
+			t.Fatalf("finishing fragment: %v", err)
+		}
+		continuation := readWebSocketEventData(t, events, "websocket.message")
+		var continued struct {
+			ID uuid.UUID `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(continuation), &continued); err != nil {
+			t.Fatalf("decoding continuation: %v", err)
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			res, err := http.Get(path + "?limit=1")
+			if err != nil {
+				t.Fatalf("getting continuation page: %v", err)
+			}
+			body, err := io.ReadAll(res.Body)
+			res.Body.Close()
+			if err != nil {
+				t.Fatalf("reading continuation page: %v", err)
+			}
+			if string(body) == fmt.Sprintf(`{"items":[%s],"next_cursor":"%s"}`+"\n", continuation, continued.ID) {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		res, err := http.Post(control.URL+"/checkpoint/websocket-intercept", "application/json", strings.NewReader(`{"websocket_intercept":true}`))
+		if err != nil {
+			t.Fatalf("enabling websocket Checkpoint: %v", err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("\nwanted:\n200 enabling Checkpoint\ngot:\n%d", res.StatusCode)
+		}
+		if err := marasiws.WriteFrame(connection, marasiws.Frame{Fin: true, Opcode: marasiws.OpText, Payload: []byte("drop me")}, true); err != nil {
+			t.Fatalf("sending held frame: %v", err)
+		}
+		held := readWebSocketEventData(t, events, "checkpoint.held")
+		var item struct {
+			ID uuid.UUID `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(held), &item); err != nil || item.ID == uuid.Nil {
+			t.Fatalf("\nwanted:\ncheckpoint.held with a message ID\ngot:\n%s, %v", held, err)
+		}
+		// While held, the message has not been stored or published as websocket.message.
+		assertWebSocketControlResponse(t, path+"?limit=1", http.StatusOK, []byte(fmt.Sprintf(`{"items":[%s],"next_cursor":"%s"}`+"\n", continuation, continued.ID)))
+		res, err = http.Post(control.URL+"/checkpoint/"+item.ID.String()+"/drop", "application/json", nil)
+		if err != nil {
+			t.Fatalf("dropping held frame: %v", err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("\nwanted:\n200 dropping frame\ngot:\n%d", res.StatusCode)
+		}
+		dropped := readWebSocketEventData(t, events, "websocket.message")
+		var message struct {
+			ID       uuid.UUID      `json:"id"`
+			Payload  string         `json:"payload"`
+			Metadata map[string]any `json:"metadata"`
+		}
+		if err := json.Unmarshal([]byte(dropped), &message); err != nil {
+			t.Fatalf("decoding dropped event: %v", err)
+		}
+		if message.ID != item.ID || message.Payload != "ZHJvcCBtZQ==" || message.Metadata["dropped"] != true {
+			t.Fatalf("\nwanted:\nstored dropped frame with held ID and original payload\ngot:\n%s", dropped)
+		}
+		deadline = time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			res, err := http.Get(path + "?limit=1")
+			if err != nil {
+				t.Fatalf("reading dropped message: %v", err)
+			}
+			body, err := io.ReadAll(res.Body)
+			res.Body.Close()
+			if err != nil {
+				t.Fatalf("reading dropped page: %v", err)
+			}
+			if string(body) == fmt.Sprintf(`{"items":[%s],"next_cursor":"%s"}`+"\n", dropped, item.ID) {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("dropped websocket.message was not saved: %s", dropped)
+	})
+}
+
 func newWebSocketControlFixture(t *testing.T) (*httptest.Server, string, string) {
 	t.Helper()
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -235,6 +418,7 @@ func newWebSocketControlFixture(t *testing.T) (*httptest.Server, string, string)
 		marasi.WithRequestHandler(server.HandleRequest),
 		marasi.WithResponseHandler(server.HandleResponse),
 		marasi.WithWebSocketOpenHandler(server.HandleWebSocketOpen),
+		marasi.WithWebSocketMessageHandler(server.HandleWebSocketMessage),
 		marasi.WithWebSocketCloseHandler(server.HandleWebSocketClose),
 		marasi.WithWebSocketInterceptHandler(server.HandleWebSocketIntercept),
 	); err != nil {

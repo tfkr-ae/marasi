@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os/signal"
 	"syscall"
 	"text/tabwriter"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi/service"
@@ -19,7 +21,9 @@ import (
 func init() {
 	websocketListCmd.Flags().StringVar(&websocketListLimit, "limit", "200", "Page size")
 	websocketListCmd.Flags().StringVar(&websocketListCursor, "cursor", "", "Fetch the next older page")
-	websocketCmd.AddCommand(websocketListCmd, websocketGetCmd)
+	websocketMessagesCmd.Flags().StringVar(&websocketMessagesLimit, "limit", "200", "Page size")
+	websocketMessagesCmd.Flags().StringVar(&websocketMessagesCursor, "cursor", "", "Fetch the next older page")
+	websocketCmd.AddCommand(websocketListCmd, websocketGetCmd, websocketMessagesCmd)
 	rootCmd.AddCommand(websocketCmd)
 	trafficCmd.AddCommand(trafficWebSocketCmd)
 }
@@ -31,6 +35,8 @@ var websocketCmd = &cobra.Command{
 
 var websocketListLimit string
 var websocketListCursor string
+var websocketMessagesLimit string
+var websocketMessagesCursor string
 
 var websocketListCmd = &cobra.Command{
 	Use:   "list",
@@ -107,6 +113,80 @@ var websocketGetCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return getWebSocketConnection(cmd, "/websocket/"+args[0], "getting websocket connection")
+	},
+}
+
+var websocketMessagesCmd = &cobra.Command{
+	Use:   "messages CONNECTION_ID",
+	Short: "List stored WebSocket messages",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		query := url.Values{"limit": {websocketMessagesLimit}}
+		if websocketMessagesCursor != "" {
+			query.Set("cursor", websocketMessagesCursor)
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/websocket/"+args[0]+"/message?"+query.Encode(), nil)
+		if err != nil {
+			return fmt.Errorf("creating websocket messages request: %w", err)
+		}
+		client := service.NewClient(instancePath + ".sock")
+		defer client.Close()
+		response, err := client.Do(request)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("instance %s is not running", instance)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		closeErr := response.Body.Close()
+		if readErr != nil || closeErr != nil {
+			return errors.Join(wrapError("reading websocket messages response", readErr), wrapError("closing websocket messages response", closeErr))
+		}
+		if response.StatusCode != http.StatusOK {
+			return controlAPIError("listing websocket messages", response.Status, body)
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		var page struct {
+			Items []struct {
+				ID        string `json:"id"`
+				Direction string `json:"direction"`
+				Opcode    int    `json:"opcode"`
+				Payload   string `json:"payload"`
+			} `json:"items"`
+			NextCursor *string `json:"next_cursor"`
+		}
+		if err := json.Unmarshal(body, &page); err != nil {
+			return fmt.Errorf("decoding websocket messages: %w", err)
+		}
+		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+		for _, message := range page.Items {
+			payload, err := base64.StdEncoding.DecodeString(message.Payload)
+			if err != nil {
+				return fmt.Errorf("decoding websocket message payload: %w", err)
+			}
+			preview := fmt.Sprintf("binary %d bytes", len(payload))
+			if message.Opcode == 1 && utf8.Valid(payload) {
+				runes := []rune(string(payload))
+				if len(runes) > 80 {
+					runes = runes[:80]
+				}
+				preview = string(runes)
+			}
+			fmt.Fprintf(writer, "%s\t%s\t%d\t%s\n", message.ID, message.Direction, message.Opcode, preview)
+		}
+		if err := writer.Flush(); err != nil {
+			return err
+		}
+		if page.NextCursor != nil {
+			_, err = fmt.Fprintf(cmd.ErrOrStderr(), "next_cursor=%s\n", *page.NextCursor)
+		}
+		return err
 	},
 }
 
