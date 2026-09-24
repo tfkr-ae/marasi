@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"text/tabwriter"
 	"unicode/utf8"
@@ -127,7 +128,7 @@ var websocketMessagesCmd = &cobra.Command{
 		if websocketMessagesCursor != "" {
 			query.Set("cursor", websocketMessagesCursor)
 		}
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/websocket/"+args[0]+"/message?"+query.Encode(), nil)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/websocket/"+url.PathEscape(args[0])+"/message?"+query.Encode(), nil)
 		if err != nil {
 			return fmt.Errorf("creating websocket messages request: %w", err)
 		}
@@ -176,7 +177,8 @@ var websocketMessagesCmd = &cobra.Command{
 				if len(runes) > 80 {
 					runes = runes[:80]
 				}
-				preview = string(runes)
+				quoted := strconv.Quote(string(runes))
+				preview = quoted[1 : len(quoted)-1]
 			}
 			fmt.Fprintf(writer, "%s\t%s\t%d\t%s\n", message.ID, message.Direction, message.Opcode, preview)
 		}

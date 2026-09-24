@@ -196,7 +196,34 @@ func TestWebSocketMessageList(t *testing.T) {
 	for _, query := range []string{"limit=0", "limit=501", "limit=abc", "limit=", "cursor=bad", "cursor="} {
 		assertWebSocketControlResponse(t, path+"?"+query, http.StatusBadRequest, []byte("{\"error\":\"bad_request\"}\n"))
 	}
+	for _, rawQuery := range []string{"limit=%ZZ", "cursor=%ZZ"} {
+		req, err := http.NewRequest(http.MethodGet, path, nil)
+		if err != nil {
+			t.Fatalf("creating message page request: %v", err)
+		}
+		req.URL.RawQuery = rawQuery
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("getting malformed message page: %v", err)
+		}
+		body, err := io.ReadAll(res.Body)
+		res.Body.Close()
+		if err != nil {
+			t.Fatalf("reading malformed message page: %v", err)
+		}
+		if res.StatusCode != http.StatusBadRequest || string(body) != "{\"error\":\"bad_request\"}\n" {
+			t.Fatalf("\nwanted:\n400 bad_request for %s\ngot:\n%d %s", rawQuery, res.StatusCode, body)
+		}
+	}
 	assertWebSocketControlResponse(t, path+"/"+uuid.New().String(), http.StatusNotFound, []byte("404 page not found\n"))
+	wrongMethod, err := http.Post(path, "application/json", nil)
+	if err != nil {
+		t.Fatalf("posting to message list: %v", err)
+	}
+	wrongMethod.Body.Close()
+	if wrongMethod.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("\nwanted:\n405 for POST /message\ngot:\n%d", wrongMethod.StatusCode)
+	}
 
 	t.Run("should store an unreassembled fragment and an empty control frame", func(t *testing.T) {
 		for _, frame := range []marasiws.Frame{
@@ -210,16 +237,15 @@ func TestWebSocketMessageList(t *testing.T) {
 		fragment := readWebSocketEventData(t, events, "websocket.message")
 		ping := readWebSocketEventData(t, events, "websocket.message")
 		var first, second struct {
-			ID           uuid.UUID      `json:"id"`
-			ConnectionID uuid.UUID      `json:"connection_id"`
-			RequestID    uuid.UUID      `json:"request_id"`
-			Direction    string         `json:"direction"`
-			Opcode       int            `json:"opcode"`
-			Fin          bool           `json:"fin"`
-			Payload      string         `json:"payload"`
-			IsBinary     bool           `json:"is_binary"`
-			CreatedAt    string         `json:"created_at"`
-			Metadata     map[string]any `json:"metadata"`
+			ID           uuid.UUID `json:"id"`
+			ConnectionID uuid.UUID `json:"connection_id"`
+			RequestID    uuid.UUID `json:"request_id"`
+			Direction    string    `json:"direction"`
+			Opcode       int       `json:"opcode"`
+			Fin          bool      `json:"fin"`
+			Payload      string    `json:"payload"`
+			IsBinary     bool      `json:"is_binary"`
+			CreatedAt    string    `json:"created_at"`
 		}
 		if err := json.Unmarshal([]byte(fragment), &first); err != nil {
 			t.Fatalf("decoding fragment event: %v", err)
@@ -227,10 +253,10 @@ func TestWebSocketMessageList(t *testing.T) {
 		if err := json.Unmarshal([]byte(ping), &second); err != nil {
 			t.Fatalf("decoding ping event: %v", err)
 		}
-		if first.ID == uuid.Nil || first.ConnectionID != opened.ID || first.RequestID != opened.RequestID || first.Direction != "client" || first.Opcode != 1 || first.Fin || first.Payload != "Zmlyc3Q=" || first.IsBinary || first.CreatedAt == "" || len(first.Metadata) != 0 {
+		if first.ID == uuid.Nil || first.ConnectionID != opened.ID || first.RequestID != opened.RequestID || first.Direction != "client" || first.Opcode != 1 || first.Fin || first.Payload != "Zmlyc3Q=" || first.IsBinary || first.CreatedAt == "" || !strings.Contains(fragment, `"metadata":{}`) {
 			t.Fatalf("\nwanted:\nclient text fragment with its own ID and base64 payload\ngot:\n%s", fragment)
 		}
-		if second.ID == uuid.Nil || second.ID == first.ID || second.ConnectionID != opened.ID || second.RequestID != opened.RequestID || second.Direction != "client" || second.Opcode != 9 || !second.Fin || second.Payload != "" || second.IsBinary || second.CreatedAt == "" || len(second.Metadata) != 0 {
+		if second.ID == uuid.Nil || second.ID == first.ID || second.ConnectionID != opened.ID || second.RequestID != opened.RequestID || second.Direction != "client" || second.Opcode != 9 || !second.Fin || second.Payload != "" || second.IsBinary || second.CreatedAt == "" || !strings.Contains(ping, `"metadata":{}`) {
 			t.Fatalf("\nwanted:\nempty client ping with full message fields\ngot:\n%s", ping)
 		}
 		if _, err := time.Parse(time.RFC3339, first.CreatedAt); err != nil {
@@ -274,21 +300,26 @@ func TestWebSocketMessageList(t *testing.T) {
 		if err := json.Unmarshal([]byte(continuation), &continued); err != nil {
 			t.Fatalf("decoding continuation: %v", err)
 		}
+		wantContinuation := fmt.Sprintf(`{"items":[%s],"next_cursor":"%s"}`+"\n", continuation, continued.ID)
+		var lastPage []byte
 		deadline := time.Now().Add(3 * time.Second)
 		for time.Now().Before(deadline) {
 			res, err := http.Get(path + "?limit=1")
 			if err != nil {
 				t.Fatalf("getting continuation page: %v", err)
 			}
-			body, err := io.ReadAll(res.Body)
+			lastPage, err = io.ReadAll(res.Body)
 			res.Body.Close()
 			if err != nil {
 				t.Fatalf("reading continuation page: %v", err)
 			}
-			if string(body) == fmt.Sprintf(`{"items":[%s],"next_cursor":"%s"}`+"\n", continuation, continued.ID) {
+			if string(lastPage) == wantContinuation {
 				break
 			}
 			time.Sleep(time.Millisecond)
+		}
+		if string(lastPage) != wantContinuation {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantContinuation, lastPage)
 		}
 		res, err := http.Post(control.URL+"/checkpoint/websocket-intercept", "application/json", strings.NewReader(`{"websocket_intercept":true}`))
 		if err != nil {
@@ -309,7 +340,7 @@ func TestWebSocketMessageList(t *testing.T) {
 			t.Fatalf("\nwanted:\ncheckpoint.held with a message ID\ngot:\n%s, %v", held, err)
 		}
 		// While held, the message has not been stored or published as websocket.message.
-		assertWebSocketControlResponse(t, path+"?limit=1", http.StatusOK, []byte(fmt.Sprintf(`{"items":[%s],"next_cursor":"%s"}`+"\n", continuation, continued.ID)))
+		assertWebSocketControlResponse(t, path+"?limit=1", http.StatusOK, []byte(wantContinuation))
 		res, err = http.Post(control.URL+"/checkpoint/"+item.ID.String()+"/drop", "application/json", nil)
 		if err != nil {
 			t.Fatalf("dropping held frame: %v", err)

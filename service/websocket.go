@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -140,7 +141,10 @@ func addWebSocketRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 }
 
 func parseWebSocketPage(r *http.Request) (int, *uuid.UUID, error) {
-	query := r.URL.Query()
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return 0, nil, err
+	}
 	limit := 200
 	if values, present := query["limit"]; present {
 		parsed, err := strconv.Atoi(values[0])

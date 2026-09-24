@@ -261,6 +261,27 @@ func TestWebSocketMessagesCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("should keep control characters inside one text preview row", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"`+firstID+`","direction":"client","opcode":1,"payload":"`+base64.StdEncoding.EncodeToString([]byte("hello\tthere\nworld"))+`"}],"next_cursor":null}`+"\n")
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "websocket", "messages", connectionID)
+		if err != nil || stderr != "" || stdout != firstID+`  client  1  hello\tthere\nworld`+"\n" {
+			t.Fatalf("\nwanted:\none row with escaped tab and newline\ngot:\nstdout %q stderr %q error %v", stdout, stderr, err)
+		}
+	})
+
+	t.Run("should keep the connection argument inside the message path", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"bad_request"}`)
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "websocket", "messages", connectionID+"#")
+		if err == nil {
+			t.Fatal("\nwanted:\nAPI bad_request\ngot:\nnil")
+		}
+		if got := sent.snapshot(); got.Path != "/websocket/"+connectionID+"#/message" {
+			t.Fatalf("\nwanted:\ninvalid ID sent to message route\ngot:\n%s", got.Path)
+		}
+	})
+
 	for _, position := range []string{"before", "after"} {
 		t.Run("should pass the API body through with --json "+position+" the subcommand", func(t *testing.T) {
 			configDir := serviceConfigDir(t)
