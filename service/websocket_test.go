@@ -105,6 +105,68 @@ func TestWebSocketConnectionControlRoutesAndEvents(t *testing.T) {
 	assertWebSocketControlResponse(t, control.URL+"/traffic/"+opened.RequestID.String()+"/websocket", http.StatusOK, closedBody)
 }
 
+func TestWebSocketConnectionList(t *testing.T) {
+	control, originURL, proxyAddress := newWebSocketControlFixture(t)
+
+	t.Run("should return an empty page", func(t *testing.T) {
+		assertWebSocketControlResponse(t, control.URL+"/websocket", http.StatusOK, []byte("{\"items\":[],\"next_cursor\":null}\n"))
+	})
+
+	t.Run("should reject invalid paging and ignore unknown parameters", func(t *testing.T) {
+		for _, query := range []string{"limit=0", "limit=501", "limit=abc", "limit=1.5", "limit=", "cursor=bad", "cursor="} {
+			assertWebSocketControlResponse(t, control.URL+"/websocket?"+query, http.StatusBadRequest, []byte("{\"error\":\"bad_request\"}\n"))
+		}
+		assertWebSocketControlResponse(t, control.URL+"/websocket?state=closed", http.StatusOK, []byte("{\"items\":[],\"next_cursor\":null}\n"))
+	})
+
+	t.Run("should page saved open closed and error connections by id", func(t *testing.T) {
+		stream, events := connectEventStream(t, control.URL)
+		defer stream.Body.Close()
+		var ids []uuid.UUID
+		var bodies []string
+		for i := range 3 {
+			connection, request := upgradeWebSocketThroughProxy(t, proxyAddress, originURL)
+			t.Cleanup(func() { connection.Close() })
+			response, err := http.ReadResponse(bufio.NewReader(connection), request)
+			if err != nil {
+				t.Fatalf("\nwanted:\nwebsocket upgrade response\ngot:\n%v", err)
+			}
+			response.Body.Close()
+			if response.StatusCode != http.StatusSwitchingProtocols {
+				t.Fatalf("\nwanted:\n101 upgrade\ngot:\n%d", response.StatusCode)
+			}
+			var opened struct {
+				ID uuid.UUID `json:"id"`
+			}
+			if err := json.Unmarshal([]byte(readWebSocketEventData(t, events, "websocket.opened")), &opened); err != nil {
+				t.Fatalf("\nwanted:\ndecoded websocket.opened event\ngot:\n%v", err)
+			}
+			ids = append(ids, opened.ID)
+			path := control.URL + "/websocket/" + opened.ID.String()
+			waitForWebSocketState(t, path, "open")
+			if i == 1 {
+				if err := marasiws.WriteFrame(connection, marasiws.Frame{Fin: true, Opcode: marasiws.OpClose, Payload: []byte{0x03, 0xe8}}, true); err != nil {
+					t.Fatalf("\nwanted:\nwebsocket close frame sent\ngot:\n%v", err)
+				}
+				bodies = append(bodies, strings.TrimSpace(string(waitForWebSocketState(t, path, "closed"))))
+			} else if i == 2 {
+				connection.Close()
+				bodies = append(bodies, strings.TrimSpace(string(waitForWebSocketState(t, path, "error"))))
+			} else {
+				bodies = append(bodies, strings.TrimSpace(string(waitForWebSocketState(t, path, "open"))))
+			}
+		}
+		if !(ids[0].String() < ids[1].String() && ids[1].String() < ids[2].String()) {
+			t.Fatalf("\nwanted:\nascending connection IDs from sequential upgrades\ngot:\n%v", ids)
+		}
+		firstPage := fmt.Sprintf(`{"items":[%s,%s],"next_cursor":"%s"}`+"\n", bodies[2], bodies[1], ids[1])
+		assertWebSocketControlResponse(t, control.URL+"/websocket?limit=2&state=open", http.StatusOK, []byte(firstPage))
+		assertWebSocketControlResponse(t, control.URL+"/websocket?limit=2&cursor="+ids[1].String(), http.StatusOK, []byte(fmt.Sprintf(`{"items":[%s],"next_cursor":null}`+"\n", bodies[0])))
+		assertWebSocketControlResponse(t, control.URL+"/websocket?cursor="+uuid.Nil.String(), http.StatusOK, []byte("{\"items\":[],\"next_cursor\":null}\n"))
+		assertWebSocketControlResponse(t, control.URL+"/websocket", http.StatusOK, []byte(fmt.Sprintf(`{"items":[%s,%s,%s],"next_cursor":null}`+"\n", bodies[2], bodies[1], bodies[0])))
+	})
+}
+
 func newWebSocketControlFixture(t *testing.T) (*httptest.Server, string, string) {
 	t.Helper()
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

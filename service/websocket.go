@@ -2,6 +2,7 @@ package service
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,7 +23,48 @@ type webSocketConnectionResponse struct {
 	CloseReason string     `json:"close_reason"`
 }
 
+type webSocketConnectionList struct {
+	Items      []webSocketConnectionResponse `json:"items"`
+	NextCursor *uuid.UUID                    `json:"next_cursor"`
+}
+
 func addWebSocketRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
+	mux.HandleFunc("GET /websocket", func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		limit := 200
+		if values, present := query["limit"]; present {
+			parsed, err := strconv.Atoi(values[0])
+			if err != nil || parsed < 1 || parsed > 500 {
+				writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+				return
+			}
+			limit = parsed
+		}
+		var cursor *uuid.UUID
+		if values, present := query["cursor"]; present {
+			parsed, err := uuid.Parse(values[0])
+			if err != nil {
+				writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+				return
+			}
+			cursor = &parsed
+		}
+		if proxy.WebSocketRepo == nil {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		connections, nextCursor, err := proxy.WebSocketRepo.ListConnections(cursor, limit)
+		if err != nil {
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+			return
+		}
+		items := make([]webSocketConnectionResponse, len(connections))
+		for i, connection := range connections {
+			items[i] = webSocketConnectionFromDomain(*connection)
+		}
+		writeJSON(w, r, http.StatusOK, webSocketConnectionList{Items: items, NextCursor: nextCursor})
+	})
+
 	mux.HandleFunc("GET /websocket/{connection_id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(r.PathValue("connection_id"))
 		if err != nil {

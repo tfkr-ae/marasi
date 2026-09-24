@@ -199,6 +199,39 @@ func (repo *Repository) GetConnectionByRequestID(requestID uuid.UUID) (*domain.W
 	return toDomainWebSocketConnection(&row), nil
 }
 
+// ListConnections returns a newest-first page of connections older than cursor.
+func (repo *Repository) ListConnections(cursor *uuid.UUID, limit int) ([]*domain.WebSocketConnection, *uuid.UUID, error) {
+	query := `SELECT id, request_id, state, transport, host, path,
+					 started_at, closed_at, close_code, close_reason
+			  FROM websocket_connections`
+	var args []any
+	if cursor != nil {
+		query += ` WHERE id < ?`
+		args = append(args, *cursor)
+	}
+	query += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit+1)
+
+	var rows []dbWebSocketConnection
+	if err := repo.dbConn.Select(&rows, query, args...); err != nil {
+		return nil, nil, fmt.Errorf("listing websocket connections: %w", err)
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	items := make([]*domain.WebSocketConnection, len(rows))
+	for i := range rows {
+		items[i] = toDomainWebSocketConnection(&rows[i])
+	}
+	var nextCursor *uuid.UUID
+	if hasMore {
+		id := items[len(items)-1].ID
+		nextCursor = &id
+	}
+	return items, nextCursor, nil
+}
+
 func (repo *Repository) InsertMessage(msg *domain.WebSocketMessage) error {
 	row := fromDomainWebSocketMessage(msg)
 	query := `INSERT INTO websocket_messages(

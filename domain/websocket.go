@@ -66,6 +66,7 @@ type WebSocketRepository interface {
 	UpdateConnection(conn *WebSocketConnection) error
 	GetConnection(id uuid.UUID) (*WebSocketConnection, error)
 	GetConnectionByRequestID(requestID uuid.UUID) (*WebSocketConnection, error)
+	ListConnections(cursor *uuid.UUID, limit int) ([]*WebSocketConnection, *uuid.UUID, error)
 	InsertMessage(msg *WebSocketMessage) error
 	GetMessage(id uuid.UUID) (*WebSocketMessage, error)
 	GetMessages(connectionID uuid.UUID) ([]*WebSocketMessage, error)
