@@ -2,13 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWebSocketListCommand(t *testing.T) {
@@ -104,7 +107,7 @@ func TestWebSocketInjectCommand(t *testing.T) {
 		return []string{"--config-dir", configDir, "--instance", "work", "websocket", "inject", id}
 	}
 
-	t.Run("should send an empty frame without reading terminal stdin", func(t *testing.T) {
+	t.Run("should send an empty frame with character-device stdin", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 		args := append(baseArgs(configDir), "--direction", "client", "--opcode", "9")
@@ -115,6 +118,34 @@ func TestWebSocketInjectCommand(t *testing.T) {
 		got := sent.snapshot()
 		if got.Method != http.MethodPost || got.Path != "/websocket/"+id+"/inject" || got.Body != `{"direction":"client","opcode":9,"payload":""}` || got.ContentType != "application/json" || len(sent.requests()) != 1 {
 			t.Fatalf("\nwanted:\nPOST inject empty frame once\ngot:\n%+v", got)
+		}
+	})
+
+	t.Run("should not block reading an open terminal", func(t *testing.T) {
+		if runtime.GOOS != "darwin" {
+			t.Skip("uses the macOS script command to allocate a terminal")
+		}
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+		stdin, keepOpen, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("creating open terminal input: %v", err)
+		}
+		t.Cleanup(func() { stdin.Close(); keepOpen.Close() })
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		t.Cleanup(cancel)
+		args := append([]string{"-q", "/dev/null", binary}, append(baseArgs(configDir), "--direction", "client", "--opcode", "9")...)
+		command := exec.CommandContext(ctx, "script", args...)
+		command.Stdin = stdin
+		var terminal bytes.Buffer
+		command.Stdout = &terminal
+		command.Stderr = &terminal
+		err = command.Run()
+		if ctx.Err() != nil || err != nil {
+			t.Fatalf("\nwanted:\ninjection to complete while terminal stays open\ngot:\n%q %v %v", terminal.String(), err, ctx.Err())
+		}
+		if got := sent.snapshot(); got.Method != http.MethodPost || got.Path != "/websocket/"+id+"/inject" || got.Body != `{"direction":"client","opcode":9,"payload":""}` {
+			t.Fatalf("\nwanted:\nPOST empty frame from open terminal\ngot:\n%+v", got)
 		}
 	})
 
