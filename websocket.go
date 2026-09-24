@@ -85,20 +85,20 @@ func (proxy *Proxy) InjectWebSocketMessage(
 	direction string,
 	opcode int,
 	payload []byte,
-) error {
+) (domain.WebSocketMessage, error) {
 	if proxy.WebSocketRegistry == nil {
-		return fmt.Errorf("%w: %s", ErrWebSocketConnectionNotFound, requestID)
+		return domain.WebSocketMessage{}, fmt.Errorf("%w: %s", ErrWebSocketConnectionNotFound, requestID)
 	}
 	connection, exists := proxy.WebSocketRegistry.GetByRequestID(requestID)
 	if !exists {
-		return fmt.Errorf("%w: %s", ErrWebSocketConnectionNotFound, requestID)
+		return domain.WebSocketMessage{}, fmt.Errorf("%w: %s", ErrWebSocketConnectionNotFound, requestID)
 	}
 
 	switch direction {
 	case marasiws.DirectionFromClient, marasiws.DirectionFromServer:
 		return connection.Inject(direction, opcode, payload)
 	default:
-		return fmt.Errorf("%w: %q", ErrWebSocketDirection, direction)
+		return domain.WebSocketMessage{}, fmt.Errorf("%w: %q", ErrWebSocketDirection, direction)
 	}
 }
 

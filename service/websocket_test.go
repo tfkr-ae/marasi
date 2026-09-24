@@ -25,7 +25,7 @@ import (
 )
 
 func TestWebSocketConnectionControlRoutesAndEvents(t *testing.T) {
-	control, originURL, proxyAddress := newWebSocketControlFixture(t)
+	control, originURL, proxyAddress, _ := newWebSocketControlFixture(t)
 	stream, events := connectEventStream(t, control.URL)
 	defer stream.Body.Close()
 
@@ -106,7 +106,7 @@ func TestWebSocketConnectionControlRoutesAndEvents(t *testing.T) {
 }
 
 func TestWebSocketConnectionList(t *testing.T) {
-	control, originURL, proxyAddress := newWebSocketControlFixture(t)
+	control, originURL, proxyAddress, _ := newWebSocketControlFixture(t)
 
 	t.Run("should return an empty page", func(t *testing.T) {
 		assertWebSocketControlResponse(t, control.URL+"/websocket", http.StatusOK, []byte("{\"items\":[],\"next_cursor\":null}\n"))
@@ -168,7 +168,7 @@ func TestWebSocketConnectionList(t *testing.T) {
 }
 
 func TestWebSocketMessageList(t *testing.T) {
-	control, originURL, proxyAddress := newWebSocketControlFixture(t)
+	control, originURL, proxyAddress, _ := newWebSocketControlFixture(t)
 	stream, events := connectEventStream(t, control.URL)
 	defer stream.Body.Close()
 	connection, request := upgradeWebSocketThroughProxy(t, proxyAddress, originURL)
@@ -400,7 +400,272 @@ func TestWebSocketMessageList(t *testing.T) {
 	})
 }
 
-func newWebSocketControlFixture(t *testing.T) (*httptest.Server, string, string) {
+func TestWebSocketInject(t *testing.T) {
+	upstreamFrames := make(chan marasiws.Frame, 4)
+	control, originURL, proxyAddress, proxy := newWebSocketControlFixture(t, upstreamFrames)
+	stream, events := connectEventStream(t, control.URL)
+	t.Cleanup(func() { stream.Body.Close() })
+	connection, request := upgradeWebSocketThroughProxy(t, proxyAddress, originURL)
+	t.Cleanup(func() { connection.Close() })
+	upgrade, err := http.ReadResponse(bufio.NewReader(connection), request)
+	if err != nil {
+		t.Fatalf("reading websocket upgrade response: %v", err)
+	}
+	upgrade.Body.Close()
+	if upgrade.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("\nwanted:\n101 upgrade\ngot:\n%d", upgrade.StatusCode)
+	}
+	var opened struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(readWebSocketEventData(t, events, "websocket.opened")), &opened); err != nil {
+		t.Fatalf("decoding opened connection: %v", err)
+	}
+	path := "/websocket/" + opened.ID.String() + "/inject"
+	waitForWebSocketState(t, control.URL+"/websocket/"+opened.ID.String(), "open")
+
+	t.Run("should inject client and server frames and return the stored message", func(t *testing.T) {
+		for _, test := range []struct {
+			direction string
+			opcode    int
+			payload   string
+		}{
+			{direction: "client", opcode: 1, payload: "aGVsbG8="},
+			{direction: "server", opcode: 2, payload: "AAEC"},
+		} {
+			body := fmt.Sprintf(`{"direction":%q,"opcode":%d,"payload":%q}`, test.direction, test.opcode, test.payload)
+			response, err := http.Post(control.URL+path, "application/json", strings.NewReader(body))
+			if err != nil {
+				t.Fatalf("injecting %s frame: %v", test.direction, err)
+			}
+			stored, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			if err != nil {
+				t.Fatalf("reading injection response: %v", err)
+			}
+			event := readWebSocketEventData(t, events, "websocket.message")
+			if response.StatusCode != http.StatusOK || string(stored) != event+"\n" {
+				t.Fatalf("\nwanted:\n200 and message event %s\ngot:\n%d %s", event, response.StatusCode, stored)
+			}
+			var message struct {
+				ConnectionID uuid.UUID      `json:"connection_id"`
+				Direction    string         `json:"direction"`
+				Opcode       int            `json:"opcode"`
+				Payload      string         `json:"payload"`
+				Metadata     map[string]any `json:"metadata"`
+			}
+			if err := json.Unmarshal(stored, &message); err != nil {
+				t.Fatalf("decoding injected message: %v", err)
+			}
+			if message.ConnectionID != opened.ID || message.Direction != test.direction || message.Opcode != test.opcode || message.Payload != test.payload || message.Metadata["injected"] != true {
+				t.Fatalf("\nwanted:\n%s opcode %d payload %q and injected metadata\ngot:\n%s", test.direction, test.opcode, test.payload, stored)
+			}
+			if test.direction == "client" {
+				select {
+				case frame := <-upstreamFrames:
+					if !frame.Masked || string(frame.Payload) != "hello" {
+						t.Fatalf("\nwanted:\nmasked upstream hello\ngot:\n%+v", frame)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("upstream did not receive injected frame")
+				}
+			} else {
+				frame, err := marasiws.ReadFrame(connection)
+				if err != nil || frame.Masked || string(frame.Payload) != string([]byte{0, 1, 2}) {
+					t.Fatalf("\nwanted:\nunmasked browser frame with binary payload\ngot:\n%+v, %v", frame, err)
+				}
+			}
+		}
+	})
+
+	t.Run("should reject malformed input and distinguish missing from non-live connections", func(t *testing.T) {
+		for _, body := range []string{`{}`, `null`, `{"direction":"client"}`, `{"direction":"sideways","opcode":1}`, `{"direction":"client","opcode":-1}`, `{"direction":"client","opcode":16}`, `{"direction":"client","opcode":1.5}`, `{"direction":"client","opcode":null}`, `{"direction":null,"opcode":1}`, `{"direction":"client","opcode":1,"payload":null}`, `{"direction":"client","opcode":1,"payload":"bad!"}`, `{"direction":"client","opcode":1,"payload":[1,2]}`, `{"direction":"client","opcode":1,"extra":true}`, `{"direction":"client","opcode":1} {}`} {
+			response, err := http.Post(control.URL+path, "application/json", strings.NewReader(body))
+			if err != nil {
+				t.Fatalf("posting %s: %v", body, err)
+			}
+			got, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			if err != nil || response.StatusCode != http.StatusBadRequest || string(got) != "{\"error\":\"invalid_websocket_request\"}\n" {
+				t.Fatalf("\nwanted:\n400 invalid_websocket_request for %s\ngot:\n%d %s, %v", body, response.StatusCode, got, err)
+			}
+		}
+		assertWebSocketInjectError(t, control.URL+"/websocket/not-a-uuid/inject", `{}`, http.StatusBadRequest, "bad_request")
+		assertWebSocketInjectError(t, control.URL+"/websocket/"+uuid.New().String()+"/inject", `{"direction":"client","opcode":1}`, http.StatusNotFound, "not_found")
+		live, exists := proxy.WebSocketRegistry.Get(opened.ID)
+		if !exists {
+			t.Fatal("opened connection missing from live registry")
+		}
+		proxy.WebSocketRegistry.Remove(opened.ID)
+		t.Cleanup(func() {
+			if _, exists := proxy.WebSocketRegistry.Get(opened.ID); !exists {
+				_ = proxy.WebSocketRegistry.Add(live)
+			}
+		})
+		assertWebSocketInjectError(t, control.URL+path, `{"direction":"client","opcode":1}`, http.StatusConflict, "websocket_not_open")
+		if err := proxy.WebSocketRegistry.Add(live); err != nil {
+			t.Fatalf("restoring live connection: %v", err)
+		}
+	})
+
+	t.Run("should send an empty frame when payload is omitted", func(t *testing.T) {
+		response, err := http.Post(control.URL+path, "application/json", strings.NewReader(`{"direction":"client","opcode":9}`))
+		if err != nil {
+			t.Fatalf("injecting empty ping: %v", err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"payload":""`) {
+			t.Fatalf("\nwanted:\n200 with empty payload\ngot:\n%d %s, %v", response.StatusCode, body, err)
+		}
+		readWebSocketEventData(t, events, "websocket.message")
+		select {
+		case frame := <-upstreamFrames:
+			if frame.Opcode != marasiws.OpPing || len(frame.Payload) != 0 {
+				t.Fatalf("\nwanted:\nempty ping upstream\ngot:\n%+v", frame)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("upstream did not receive empty ping")
+		}
+	})
+
+	t.Run("should block for Checkpoint then return the edited or dropped stored message", func(t *testing.T) {
+		response, err := http.Post(control.URL+"/checkpoint/websocket-intercept", "application/json", strings.NewReader(`{"websocket_intercept":true}`))
+		if err != nil {
+			t.Fatalf("enabling Checkpoint: %v", err)
+		}
+		response.Body.Close()
+		for _, test := range []struct {
+			name    string
+			resolve string
+			payload string
+			dropped bool
+		}{
+			{name: "forward", resolve: "/forward", payload: "ZWRpdGVk"},
+			{name: "drop", resolve: "/drop", payload: "aG9sZA==", dropped: true},
+		} {
+			t.Run("should "+test.name, func(t *testing.T) {
+				result := make(chan *http.Response, 1)
+				failures := make(chan error, 1)
+				go func() {
+					res, err := http.Post(control.URL+path, "application/json", strings.NewReader(`{"direction":"client","opcode":1,"payload":"aG9sZA=="}`))
+					if err != nil {
+						failures <- err
+						return
+					}
+					result <- res
+				}()
+				held := readWebSocketEventData(t, events, "checkpoint.held")
+				var item struct {
+					ID uuid.UUID `json:"id"`
+				}
+				if err := json.Unmarshal([]byte(held), &item); err != nil || item.ID == uuid.Nil {
+					t.Fatalf("decoding held message %s: %v", held, err)
+				}
+				select {
+				case res := <-result:
+					res.Body.Close()
+					t.Fatal("inject returned before Checkpoint resolved the frame")
+				case err := <-failures:
+					t.Fatalf("inject failed before resolution: %v", err)
+				default:
+				}
+				resolutionBody := `{}`
+				if !test.dropped {
+					resolutionBody = `{"payload":"ZWRpdGVk"}`
+				}
+				resolved, err := http.Post(control.URL+"/checkpoint/"+item.ID.String()+test.resolve, "application/json", strings.NewReader(resolutionBody))
+				if err != nil {
+					t.Fatalf("resolving held frame: %v", err)
+				}
+				resolved.Body.Close()
+				if resolved.StatusCode != http.StatusOK {
+					t.Fatalf("\nwanted:\n200 resolving Checkpoint\ngot:\n%d", resolved.StatusCode)
+				}
+				var injection *http.Response
+				select {
+				case injection = <-result:
+				case err := <-failures:
+					t.Fatalf("injecting after resolution: %v", err)
+				case <-time.After(3 * time.Second):
+					t.Fatal("inject did not return after resolution")
+				}
+				body, err := io.ReadAll(injection.Body)
+				injection.Body.Close()
+				if err != nil {
+					t.Fatalf("reading inject response: %v", err)
+				}
+				event := readWebSocketEventData(t, events, "websocket.message")
+				if injection.StatusCode != http.StatusOK || string(body) != event+"\n" {
+					t.Fatalf("\nwanted:\n200 stored message %s\ngot:\n%d %s", event, injection.StatusCode, body)
+				}
+				var message struct {
+					ID       uuid.UUID      `json:"id"`
+					Payload  string         `json:"payload"`
+					Metadata map[string]any `json:"metadata"`
+				}
+				if err := json.Unmarshal(body, &message); err != nil {
+					t.Fatalf("decoding inject response: %v", err)
+				}
+				if message.ID != item.ID || message.Payload != test.payload || message.Metadata["injected"] != true || (message.Metadata["dropped"] == true) != test.dropped {
+					t.Fatalf("\nwanted:\nheld ID %s, payload %s, dropped %t\ngot:\n%s", item.ID, test.payload, test.dropped, body)
+				}
+				wantPage := fmt.Sprintf(`{"items":[%s],"next_cursor":`, strings.TrimSpace(string(body)))
+				var page []byte
+				deadline := time.Now().Add(3 * time.Second)
+				for time.Now().Before(deadline) {
+					res, err := http.Get(control.URL + "/websocket/" + opened.ID.String() + "/message?limit=1")
+					if err != nil {
+						t.Fatalf("reading message list: %v", err)
+					}
+					page, err = io.ReadAll(res.Body)
+					res.Body.Close()
+					if err != nil {
+						t.Fatalf("reading message page: %v", err)
+					}
+					if res.StatusCode == http.StatusOK && strings.HasPrefix(string(page), wantPage) {
+						break
+					}
+					time.Sleep(time.Millisecond)
+				}
+				if !strings.HasPrefix(string(page), wantPage) {
+					t.Fatalf("\nwanted:\nmessage list containing injected frame %s\ngot:\n%s", body, page)
+				}
+				select {
+				case frame := <-upstreamFrames:
+					if test.dropped || string(frame.Payload) != "edited" {
+						t.Fatalf("\nwanted:\n%s upstream frame\ngot:\n%+v", test.name, frame)
+					}
+				case <-time.After(100 * time.Millisecond):
+					if !test.dropped {
+						t.Fatal("forwarded frame did not reach upstream")
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("should reject injection after the connection closes", func(t *testing.T) {
+		connection.Close()
+		waitForWebSocketState(t, control.URL+"/websocket/"+opened.ID.String(), "error")
+		assertWebSocketInjectError(t, control.URL+path, `{"direction":"client","opcode":1}`, http.StatusConflict, "websocket_not_open")
+	})
+}
+
+func assertWebSocketInjectError(t *testing.T, endpoint, request string, status int, code string) {
+	t.Helper()
+	response, err := http.Post(endpoint, "application/json", strings.NewReader(request))
+	if err != nil {
+		t.Fatalf("posting inject request: %v", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode != status || string(body) != fmt.Sprintf(`{"error":%q}`+"\n", code) {
+		t.Fatalf("\nwanted:\n%d %s\ngot:\n%d %s, %v", status, code, response.StatusCode, body, err)
+	}
+}
+
+func newWebSocketControlFixture(t *testing.T, upstreamFrames ...chan marasiws.Frame) (*httptest.Server, string, string, *marasi.Proxy) {
 	t.Helper()
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hijacker, ok := w.(http.Hijacker)
@@ -425,6 +690,9 @@ func newWebSocketControlFixture(t *testing.T) (*httptest.Server, string, string)
 			if err != nil {
 				return
 			}
+			if len(upstreamFrames) != 0 && frame.Opcode != marasiws.OpClose {
+				upstreamFrames[0] <- frame
+			}
 			if frame.Opcode == marasiws.OpClose {
 				_ = marasiws.WriteFrame(buffered, frame, false)
 				_ = buffered.Flush()
@@ -432,6 +700,7 @@ func newWebSocketControlFixture(t *testing.T) (*httptest.Server, string, string)
 			}
 		}
 	}))
+	t.Cleanup(origin.Close)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dbConnection, err := db.New(filepath.Join(t.TempDir(), "project.marasi"), logger)
@@ -495,7 +764,7 @@ func newWebSocketControlFixture(t *testing.T) (*httptest.Server, string, string)
 		}
 	})
 
-	return control, origin.URL, net.JoinHostPort(proxy.Addr, proxy.Port)
+	return control, origin.URL, net.JoinHostPort(proxy.Addr, proxy.Port), proxy
 }
 
 func upgradeWebSocketThroughProxy(t *testing.T, proxyAddress, originURL string) (net.Conn, *http.Request) {

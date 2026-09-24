@@ -1,7 +1,11 @@
 package service
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -11,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/domain"
+	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
 type webSocketConnectionResponse struct {
@@ -50,6 +55,46 @@ type webSocketMessageList struct {
 }
 
 func addWebSocketRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
+	mux.HandleFunc("POST /websocket/{connection_id}/inject", func(w http.ResponseWriter, r *http.Request) {
+		id, err := uuid.Parse(r.PathValue("connection_id"))
+		if err != nil {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
+		direction, opcode, payload, err := decodeWebSocketInject(r)
+		if err != nil {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_websocket_request"})
+			return
+		}
+		if proxy.WebSocketRepo == nil {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		connection, err := proxy.WebSocketRepo.GetConnection(id)
+		if err != nil {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		if proxy.WebSocketRegistry == nil {
+			writeJSON(w, r, http.StatusConflict, map[string]string{"error": "websocket_not_open"})
+			return
+		}
+		if _, live := proxy.WebSocketRegistry.Get(id); !live {
+			writeJSON(w, r, http.StatusConflict, map[string]string{"error": "websocket_not_open"})
+			return
+		}
+		message, err := proxy.InjectWebSocketMessage(connection.RequestID, direction, opcode, payload)
+		if errors.Is(err, marasi.ErrWebSocketConnectionNotFound) || errors.Is(err, marasiws.ErrConnectionClosed) {
+			writeJSON(w, r, http.StatusConflict, map[string]string{"error": "websocket_not_open"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+			return
+		}
+		writeJSON(w, r, http.StatusOK, webSocketMessageFromDomain(message, connection.RequestID))
+	})
+
 	mux.HandleFunc("GET /websocket", func(w http.ResponseWriter, r *http.Request) {
 		limit, cursor, err := parseWebSocketPage(r)
 		if err != nil {
@@ -139,6 +184,58 @@ func addWebSocketRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 		}
 		writeJSON(w, r, http.StatusOK, webSocketConnectionFromDomain(*connection))
 	})
+}
+
+func decodeWebSocketInject(r *http.Request) (string, int, []byte, error) {
+	invalid := errors.New("invalid websocket request")
+	decoder := json.NewDecoder(r.Body)
+	var fields map[string]json.RawMessage
+	if err := decoder.Decode(&fields); err != nil || fields == nil {
+		return "", 0, nil, invalid
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return "", 0, nil, invalid
+	}
+	var direction string
+	var opcode int
+	var payload []byte
+	if len(fields) < 2 || len(fields) > 3 {
+		return "", 0, nil, invalid
+	}
+	for name, raw := range fields {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return "", 0, nil, invalid
+		}
+		switch name {
+		case "direction":
+			if err := json.Unmarshal(raw, &direction); err != nil || direction != "client" && direction != "server" {
+				return "", 0, nil, invalid
+			}
+		case "opcode":
+			if err := json.Unmarshal(raw, &opcode); err != nil || opcode < 0 || opcode > 15 {
+				return "", 0, nil, invalid
+			}
+		case "payload":
+			var encoded string
+			if err := json.Unmarshal(raw, &encoded); err != nil {
+				return "", 0, nil, invalid
+			}
+			var err error
+			payload, err = base64.StdEncoding.DecodeString(encoded)
+			if err != nil {
+				return "", 0, nil, invalid
+			}
+		default:
+			return "", 0, nil, invalid
+		}
+	}
+	if _, ok := fields["direction"]; !ok {
+		return "", 0, nil, invalid
+	}
+	if _, ok := fields["opcode"]; !ok {
+		return "", 0, nil, invalid
+	}
+	return direction, opcode, payload, nil
 }
 
 func parseWebSocketPage(r *http.Request) (int, *uuid.UUID, error) {

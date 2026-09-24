@@ -24,7 +24,10 @@ func init() {
 	websocketListCmd.Flags().StringVar(&websocketListCursor, "cursor", "", "Fetch the next older page")
 	websocketMessagesCmd.Flags().StringVar(&websocketMessagesLimit, "limit", "200", "Page size")
 	websocketMessagesCmd.Flags().StringVar(&websocketMessagesCursor, "cursor", "", "Fetch the next older page")
-	websocketCmd.AddCommand(websocketListCmd, websocketGetCmd, websocketMessagesCmd)
+	websocketInjectCmd.Flags().StringVar(&websocketInjectDirection, "direction", "", "Origin of the frame: client or server")
+	websocketInjectCmd.Flags().IntVar(&websocketInjectOpcode, "opcode", 0, "WebSocket frame opcode (0-15)")
+	websocketInjectCmd.Flags().StringVar(&websocketInjectFile, "file", "", "Read frame bytes from a file")
+	websocketCmd.AddCommand(websocketListCmd, websocketGetCmd, websocketMessagesCmd, websocketInjectCmd)
 	rootCmd.AddCommand(websocketCmd)
 	trafficCmd.AddCommand(trafficWebSocketCmd)
 }
@@ -38,6 +41,66 @@ var websocketListLimit string
 var websocketListCursor string
 var websocketMessagesLimit string
 var websocketMessagesCursor string
+var websocketInjectDirection string
+var websocketInjectOpcode int
+var websocketInjectFile string
+
+var websocketInjectCmd = &cobra.Command{
+	Use:   "inject CONNECTION_ID",
+	Short: "Inject a frame into a live WebSocket connection",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if !cmd.Flags().Changed("direction") || websocketInjectDirection != "client" && websocketInjectDirection != "server" {
+			return errors.New("websocket inject --direction must be client or server")
+		}
+		if !cmd.Flags().Changed("opcode") || websocketInjectOpcode < 0 || websocketInjectOpcode > 15 {
+			return errors.New("websocket inject --opcode must be an integer from 0 to 15")
+		}
+		var raw []byte
+		var err error
+		if cmd.Flags().Changed("file") {
+			raw, err = os.ReadFile(websocketInjectFile)
+			if err != nil {
+				return fmt.Errorf("reading websocket file: %w", err)
+			}
+		} else {
+			stdin := cmd.InOrStdin()
+			if file, ok := stdin.(*os.File); ok {
+				info, err := file.Stat()
+				if err != nil {
+					return fmt.Errorf("checking stdin: %w", err)
+				}
+				if info.Mode()&os.ModeCharDevice != 0 {
+					stdin = nil
+				}
+			}
+			if stdin != nil {
+				raw, err = io.ReadAll(stdin)
+				if err != nil {
+					return fmt.Errorf("reading websocket from stdin: %w", err)
+				}
+			}
+		}
+		payload, err := json.Marshal(struct {
+			Direction string `json:"direction"`
+			Opcode    int    `json:"opcode"`
+			Payload   string `json:"payload"`
+		}{websocketInjectDirection, websocketInjectOpcode, base64.StdEncoding.EncodeToString(raw)})
+		if err != nil {
+			return fmt.Errorf("encoding websocket injection: %w", err)
+		}
+		body, err := runCheckpointRequest(cmd, http.MethodPost, "/websocket/"+url.PathEscape(args[0])+"/inject", "injecting websocket message", payload)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "websocket %s injected\n", args[0])
+		return err
+	},
+}
 
 var websocketListCmd = &cobra.Command{
 	Use:   "list",

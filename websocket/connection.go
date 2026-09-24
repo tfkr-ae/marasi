@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // ErrConnectionClosed is returned when operating on a closed connection.
@@ -287,9 +288,9 @@ func (c *Connection) SendToClient(frame Frame) error {
 
 // Inject sends a frame as if it originated from direction.
 // Injected messages are marked with metadata["injected"] = true.
-func (c *Connection) Inject(direction string, opcode int, payload []byte) error {
+func (c *Connection) Inject(direction string, opcode int, payload []byte) (domain.WebSocketMessage, error) {
 	if c.isClosed() {
-		return ErrConnectionClosed
+		return domain.WebSocketMessage{}, ErrConnectionClosed
 	}
 
 	var writeFrame func(Frame) error
@@ -299,7 +300,7 @@ func (c *Connection) Inject(direction string, opcode int, payload []byte) error 
 	case DirectionFromServer:
 		writeFrame = c.writeToClient
 	default:
-		return fmt.Errorf("invalid websocket inject direction: %q", direction)
+		return domain.WebSocketMessage{}, fmt.Errorf("invalid websocket inject direction: %q", direction)
 	}
 
 	message, err := NewMessage(c.ID, c.RequestID, direction, Frame{
@@ -308,24 +309,25 @@ func (c *Connection) Inject(direction string, opcode int, payload []byte) error 
 		Payload: append([]byte(nil), payload...),
 	})
 	if err != nil {
-		return fmt.Errorf("creating injected websocket message: %w", err)
+		return domain.WebSocketMessage{}, fmt.Errorf("creating injected websocket message: %w", err)
 	}
 	message.Metadata["injected"] = true
 
 	if c.process != nil {
 		if err := c.process(message); err != nil {
-			return fmt.Errorf("processing injected websocket message: %w", err)
+			return domain.WebSocketMessage{}, fmt.Errorf("processing injected websocket message: %w", err)
 		}
 	}
+	stored := message.ToDomain()
 	if message.Dropped {
-		return nil
+		return stored, nil
 	}
 
 	if err := writeFrame(message.Frame); err != nil {
-		return fmt.Errorf("writing injected websocket frame: %w", err)
+		return domain.WebSocketMessage{}, fmt.Errorf("writing injected websocket frame: %w", err)
 	}
 
-	return nil
+	return stored, nil
 }
 
 // Close sends close frames to both peers and shuts the connection down.

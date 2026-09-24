@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -88,6 +92,94 @@ func TestWebSocketListCommand(t *testing.T) {
 			if err == nil || len(sent.requests()) != 0 {
 				t.Fatalf("\nwanted:\nargument error without API request\ngot:\nerror %v requests %+v", err, sent.requests())
 			}
+		}
+	})
+}
+
+func TestWebSocketInjectCommand(t *testing.T) {
+	const id = "0193802f-f0e7-73d9-a764-06d21e367809"
+	const body = `{"id":"0193802f-f0e7-73d9-a764-06d21e367810","connection_id":"` + id + `","payload":""}` + "\n"
+	binary := buildMarasi(t)
+	baseArgs := func(configDir string) []string {
+		return []string{"--config-dir", configDir, "--instance", "work", "websocket", "inject", id}
+	}
+
+	t.Run("should send an empty frame without reading terminal stdin", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+		args := append(baseArgs(configDir), "--direction", "client", "--opcode", "9")
+		stdout, stderr, err := runMarasi(binary, args...)
+		if err != nil || stdout != "" || stderr != "websocket "+id+" injected\n" {
+			t.Fatalf("\nwanted:\nempty stdout and injection on stderr\ngot:\n%q %q %v", stdout, stderr, err)
+		}
+		got := sent.snapshot()
+		if got.Method != http.MethodPost || got.Path != "/websocket/"+id+"/inject" || got.Body != `{"direction":"client","opcode":9,"payload":""}` || got.ContentType != "application/json" || len(sent.requests()) != 1 {
+			t.Fatalf("\nwanted:\nPOST inject empty frame once\ngot:\n%+v", got)
+		}
+	})
+
+	t.Run("should base64-encode piped bytes and pass the JSON response through", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+		args := append(baseArgs(configDir), "--direction", "server", "--opcode", "2", "--json")
+		command := exec.Command(binary, args...)
+		command.Stdin = bytes.NewReader([]byte{0, 1, 255})
+		var stdout, stderr bytes.Buffer
+		command.Stdout, command.Stderr = &stdout, &stderr
+		if err := command.Run(); err != nil || stdout.String() != body || stderr.String() != "" {
+			t.Fatalf("\nwanted:\nAPI body on stdout with empty stderr\ngot:\n%q %q %v", stdout.String(), stderr.String(), err)
+		}
+		if got := sent.snapshot(); got.Body != `{"direction":"server","opcode":2,"payload":"AAH/"}` {
+			t.Fatalf("\nwanted:\nbase64 piped bytes\ngot:\n%+v", got)
+		}
+	})
+
+	t.Run("should prefer file bytes to piped bytes", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+		file := filepath.Join(t.TempDir(), "frame.bin")
+		if err := os.WriteFile(file, []byte("from file"), 0o600); err != nil {
+			t.Fatalf("writing frame file: %v", err)
+		}
+		args := append([]string{"--json"}, append(baseArgs(configDir), "--direction", "client", "--opcode", "1", "--file", file)...)
+		command := exec.Command(binary, args...)
+		command.Stdin = bytes.NewReader([]byte("from pipe"))
+		var stdout, stderr bytes.Buffer
+		command.Stdout, command.Stderr = &stdout, &stderr
+		if err := command.Run(); err != nil || stdout.String() != body || stderr.String() != "" {
+			t.Fatalf("\nwanted:\nAPI body on stdout with empty stderr\ngot:\n%q %q %v", stdout.String(), stderr.String(), err)
+		}
+		if got := sent.snapshot(); got.Body != `{"direction":"client","opcode":1,"payload":"ZnJvbSBmaWxl"}` {
+			t.Fatalf("\nwanted:\nbase64 file bytes\ngot:\n%+v", got)
+		}
+	})
+
+	t.Run("should reject missing or bad flags before dialing", func(t *testing.T) {
+		for _, flags := range [][]string{{}, {"--direction", "client"}, {"--opcode", "1"}, {"--direction", "other", "--opcode", "1"}, {"--direction", "client", "--opcode", "-1"}, {"--direction", "client", "--opcode", "16"}, {"--direction", "client", "--opcode", "bad"}} {
+			configDir := serviceConfigDir(t)
+			sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+			args := append(baseArgs(configDir), flags...)
+			stdout, _, err := runMarasi(binary, args...)
+			if err == nil || stdout != "" || len(sent.requests()) != 0 {
+				t.Fatalf("\nwanted:\nflag error before dialing for %v\ngot:\nstdout %q error %v requests %+v", flags, stdout, err, sent.requests())
+			}
+		}
+	})
+
+	t.Run("should use the injection operation for JSON API errors", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusConflict, `{"error":"websocket_not_open"}`)
+		args := append(baseArgs(configDir), "--direction", "client", "--opcode", "1", "--json")
+		stdout, stderr, err := runMarasi(binary, args...)
+		assertJSONCommandError(t, stdout, stderr, err, "injecting websocket message: websocket_not_open")
+	})
+
+	t.Run("should name an unreachable instance", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		args := append(baseArgs(configDir), "--direction", "client", "--opcode", "1")
+		stdout, stderr, err := runMarasi(binary, args...)
+		if err == nil || stdout != "" || !strings.Contains(stderr, "instance work is not running") {
+			t.Fatalf("\nwanted:\nmissing instance error\ngot:\n%q %q %v", stdout, stderr, err)
 		}
 	})
 }
