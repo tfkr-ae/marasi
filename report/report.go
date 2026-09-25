@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"text/template"
 	"time"
 
@@ -185,7 +186,7 @@ func (g *Generator) ListTemplateDetails() ([]TemplateInfo, error) {
 }
 
 // AddTemplate moves a regular file into the templates directory under its basename.
-func (g *Generator) AddTemplate(source string) error {
+func (g *Generator) AddTemplate(source string) (err error) {
 	if !filepath.IsAbs(source) {
 		return ErrInvalidTemplateSource
 	}
@@ -228,58 +229,108 @@ func (g *Generator) AddTemplate(source string) error {
 		return fmt.Errorf("checking report template %s: %w", destination, err)
 	}
 
-	sourceFile, err := os.Open(source)
+	stageDir, err := os.MkdirTemp(filepath.Dir(source), ".marasi-report-*")
 	if err != nil {
-		return fmt.Errorf("opening report template source %s: %w", source, err)
+		return fmt.Errorf("creating report template staging dir: %w", err)
 	}
-	defer sourceFile.Close()
-	openedInfo, err := sourceFile.Stat()
-	if err != nil {
-		return fmt.Errorf("getting report template source info %s: %w", source, err)
-	}
-	currentInfo, err := os.Lstat(source)
-	if err != nil {
-		return fmt.Errorf("getting report template source info %s: %w", source, err)
-	}
-	if !currentInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) || !os.SameFile(openedInfo, currentInfo) {
-		return ErrInvalidTemplateSource
-	}
+	defer os.Remove(stageDir)
+	staged := filepath.Join(stageDir, name)
+	var publishedInfo os.FileInfo
+	sourceStaged := false
+	// Leave a published destination in place on error; another writer may have replaced it.
+	defer func() {
+		if err == nil || !sourceStaged {
+			return
+		}
+		if restoreErr := os.Link(staged, source); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("report template source remains at %s: %w", staged, restoreErr))
+			return
+		}
+		err = errors.Join(err, os.Remove(staged))
+	}()
 
-	destinationFile, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
-	if errors.Is(err, os.ErrExist) {
+	linkErr := os.Link(source, destination)
+	if errors.Is(linkErr, os.ErrExist) {
 		return ErrTemplateAlreadyExists
 	}
-	if err != nil {
-		return fmt.Errorf("creating report template %s: %w", destination, err)
+	if linkErr != nil && !errors.Is(linkErr, syscall.EXDEV) {
+		return fmt.Errorf("linking report template %s: %w", destination, linkErr)
 	}
-	removeDestination := true
-	defer func() {
-		if removeDestination {
-			os.Remove(destination)
+	if linkErr == nil {
+		publishedInfo = info
+	} else {
+		sourceFile, err := os.Open(source)
+		if err != nil {
+			return fmt.Errorf("opening report template source %s: %w", source, err)
 		}
-	}()
-	if _, err = io.Copy(destinationFile, sourceFile); err != nil {
-		destinationFile.Close()
-		return fmt.Errorf("copying report template %s: %w", destination, err)
+		defer sourceFile.Close()
+		openedInfo, err := sourceFile.Stat()
+		if err != nil {
+			return fmt.Errorf("getting report template source info %s: %w", source, err)
+		}
+		if !os.SameFile(info, openedInfo) {
+			return ErrInvalidTemplateSource
+		}
+		destinationFile, err := os.CreateTemp(g.templatesDir, ".marasi-report-*")
+		if err != nil {
+			return fmt.Errorf("staging report template %s: %w", destination, err)
+		}
+		defer os.Remove(destinationFile.Name())
+		if _, err = io.Copy(destinationFile, sourceFile); err != nil {
+			destinationFile.Close()
+			return fmt.Errorf("copying report template %s: %w", destination, err)
+		}
+		if err = destinationFile.Sync(); err != nil {
+			destinationFile.Close()
+			return fmt.Errorf("syncing report template %s: %w", destination, err)
+		}
+		if err = destinationFile.Close(); err != nil {
+			return fmt.Errorf("closing report template %s: %w", destination, err)
+		}
+		if err := os.Chmod(destinationFile.Name(), info.Mode().Perm()); err != nil {
+			return fmt.Errorf("setting report template permissions %s: %w", destination, err)
+		}
+		publishedInfo, err = os.Lstat(destinationFile.Name())
+		if err != nil {
+			return fmt.Errorf("getting staged report template info %s: %w", destination, err)
+		}
+		if err := os.Link(destinationFile.Name(), destination); errors.Is(err, os.ErrExist) {
+			publishedInfo = nil
+			return ErrTemplateAlreadyExists
+		} else if err != nil {
+			publishedInfo = nil
+			return fmt.Errorf("publishing report template %s: %w", destination, err)
+		}
 	}
-	if err = destinationFile.Sync(); err != nil {
-		destinationFile.Close()
-		return fmt.Errorf("syncing report template %s: %w", destination, err)
+	current, err := os.Lstat(destination)
+	if err != nil {
+		return fmt.Errorf("getting published report template info %s: %w", destination, err)
 	}
-	if err = destinationFile.Close(); err != nil {
-		return fmt.Errorf("closing report template %s: %w", destination, err)
+	if !os.SameFile(publishedInfo, current) || linkErr == nil && !os.SameFile(info, current) {
+		return ErrInvalidTemplateSource
 	}
-	currentInfo, err = os.Lstat(source)
+	currentSource, err := os.Lstat(source)
 	if err != nil {
 		return fmt.Errorf("getting report template source info %s: %w", source, err)
 	}
-	if !currentInfo.Mode().IsRegular() || !os.SameFile(openedInfo, currentInfo) {
+	if !currentSource.Mode().IsRegular() || !os.SameFile(info, currentSource) {
 		return ErrInvalidTemplateSource
 	}
-	if err = os.Remove(source); err != nil {
-		return fmt.Errorf("removing report template source %s: %w", source, err)
+	if err := os.Rename(source, staged); err != nil {
+		return fmt.Errorf("staging report template source %s: %w", source, err)
 	}
-	removeDestination = false
+	sourceStaged = true
+	stagedInfo, err := os.Lstat(staged)
+	if err != nil {
+		return fmt.Errorf("getting staged report template info %s: %w", staged, err)
+	}
+	if !stagedInfo.Mode().IsRegular() || !os.SameFile(info, stagedInfo) {
+		return ErrInvalidTemplateSource
+	}
+	if err := os.Remove(staged); err != nil {
+		return fmt.Errorf("removing staged report template %s: %w", staged, err)
+	}
+	sourceStaged = false
 	return nil
 }
 
@@ -288,6 +339,12 @@ func (g *Generator) AddTemplate(source string) error {
 // name must be a local filename. Absolute paths, parent-directory references,
 // and subdirectories are rejected.
 func (g *Generator) LoadTemplate(name string) ([]byte, error) {
+	if name != strings.TrimSpace(name) && filepath.IsLocal(name) && filepath.Base(name) == name {
+		data, err := os.ReadFile(filepath.Join(g.templatesDir, name))
+		if err == nil || !errors.Is(err, os.ErrNotExist) {
+			return data, err
+		}
+	}
 	templateName := strings.TrimSpace(name)
 
 	if templateName == "" {
@@ -318,6 +375,16 @@ func (g *Generator) LoadTemplate(name string) ([]byte, error) {
 // and subdirectories are rejected. An existing template with the same name is
 // overwritten.
 func (g *Generator) SaveTemplate(name string, data []byte) error {
+	if name != strings.TrimSpace(name) && filepath.IsLocal(name) && filepath.Base(name) == name {
+		if _, err := os.Lstat(filepath.Join(g.templatesDir, name)); err == nil {
+			if err := os.WriteFile(filepath.Join(g.templatesDir, name), data, 0600); err != nil {
+				return fmt.Errorf("writing template %s: %w", name, err)
+			}
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
 	templateName := strings.TrimSpace(name)
 
 	if templateName == "" {

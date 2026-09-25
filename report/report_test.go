@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -399,8 +400,115 @@ func TestGeneratorAddTemplate(t *testing.T) {
 	if content, err := os.ReadFile(conflicting); err != nil || string(content) != "new" {
 		t.Fatalf("conflicting source changed: %q, %v", content, err)
 	}
+	entries, err := os.ReadDir(filepath.Dir(conflicting))
+	if err != nil || len(entries) != 1 || entries[0].Name() != "a.md" {
+		t.Fatalf("conflict left staging files: %v, %v", entries, err)
+	}
 	if content, err := os.ReadFile(filepath.Join(dir, "a.md")); err != nil || string(content) != "{{invalid" {
 		t.Fatalf("existing template changed: %q, %v", content, err)
+	}
+}
+
+func TestGeneratorAddTemplatePreservesFilename(t *testing.T) {
+	configDir := t.TempDir()
+	generator, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), " custom.md ")
+	if err := os.WriteFile(source, []byte("exact name"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := generator.SaveTemplate("custom.md", []byte("other template")); err != nil {
+		t.Fatal(err)
+	}
+	if err := generator.AddTemplate(source); err != nil {
+		t.Fatal(err)
+	}
+	content, err := generator.LoadTemplate(" custom.md ")
+	if err != nil || string(content) != "exact name" {
+		t.Fatalf("cannot load added filename: %q, %v", content, err)
+	}
+	if err := generator.SaveTemplate(" custom.md ", []byte("edited")); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{" custom.md ": "edited", "custom.md": "other template"} {
+		content, err := generator.LoadTemplate(name)
+		if err != nil || string(content) != want {
+			t.Fatalf("saving %q changed the wrong file: %q, %v", name, content, err)
+		}
+	}
+}
+
+func TestGeneratorAddTemplatePublishedWhole(t *testing.T) {
+	configDir := t.TempDir()
+	writer, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "large.md")
+	data := make([]byte, 16<<20)
+	for i := range data {
+		data[i] = 'x'
+	}
+	if err := os.WriteFile(source, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- writer.AddTemplate(source) }()
+	for {
+		items, err := reader.ListTemplateDetails()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range items {
+			if item.Name == "large.md" && item.Size != int64(len(data)) {
+				t.Fatalf("reader saw incomplete template: %d of %d bytes", item.Size, len(data))
+			}
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+			content, err := reader.LoadTemplate("large.md")
+			if err != nil || !reflect.DeepEqual(content, data) {
+				t.Fatalf("published template is incomplete: %d bytes, %v", len(content), err)
+			}
+			return
+		default:
+			runtime.Gosched()
+		}
+	}
+}
+
+func TestGeneratorAddTemplateUnreadableFile(t *testing.T) {
+	configDir := t.TempDir()
+	generator, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "unreadable.md")
+	if err := os.WriteFile(source, []byte("bytes"), 0000); err != nil {
+		t.Fatal(err)
+	}
+	if file, err := os.Open(source); err == nil {
+		file.Close()
+		t.Skip("this user can read files without read permission")
+	}
+	if err := generator.AddTemplate(source); err != nil {
+		t.Fatalf("regular file could not be moved: %v", err)
+	}
+	if _, err := os.Lstat(source); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source still exists: %v", err)
+	}
+	info, err := os.Lstat(filepath.Join(configDir, "templates", "unreadable.md"))
+	if err != nil || !info.Mode().IsRegular() || info.Size() != 5 {
+		t.Fatalf("destination not moved intact: %v, %v", info, err)
 	}
 }
 
