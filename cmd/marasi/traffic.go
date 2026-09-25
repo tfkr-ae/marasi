@@ -256,13 +256,17 @@ func getTraffic(ctx context.Context, instancePath, instanceName string, asJSON b
 }
 
 // controlAPIError formats a control API failure.
-// A JSON string error field is preferred over status.
+// A JSON string error field is preferred over status. A message is appended when the API sends one.
 func controlAPIError(operation, status string, body []byte) error {
 	var payload struct {
-		Error json.RawMessage `json:"error"`
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
 	}
 	var message string
 	if json.Unmarshal(body, &payload) == nil && json.Unmarshal(payload.Error, &message) == nil {
+		if payload.Message != "" {
+			return fmt.Errorf("%s: %s: %s", operation, message, payload.Message)
+		}
 		return fmt.Errorf("%s: %s", operation, message)
 	}
 	return fmt.Errorf("%s: %s", operation, status)
