@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/report"
@@ -103,4 +104,56 @@ func addReportRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroad
 		events.publish("report.template.added", response)
 		writeJSON(w, r, http.StatusOK, response)
 	})
+
+	mux.HandleFunc("DELETE /report/template/{name}", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		query, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil || len(query) != 0 || !report.ValidTemplateName(name) {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_report_template_request"})
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil || len(body) != 0 {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_report_template_request"})
+			return
+		}
+		if proxy == nil {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		generator, ok := proxy.ReportGenerator.(interface {
+			RemoveTemplate(string) error
+			ListTemplateDetails() ([]report.TemplateInfo, error)
+		})
+		if !ok {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		if err := generator.RemoveTemplate(name); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			} else {
+				writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+			}
+			return
+		}
+		items, err := generator.ListTemplateDetails()
+		if err != nil {
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+			return
+		}
+		response := struct {
+			Items []report.TemplateInfo `json:"items"`
+		}{Items: items}
+		events.publish("report.template.removed", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
+}
+
+func invalidReportTemplatePath(path string) bool {
+	const prefix = "/report/template/"
+	if !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	return !report.ValidTemplateName(strings.TrimPrefix(path, prefix))
 }

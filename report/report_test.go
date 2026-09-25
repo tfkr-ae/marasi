@@ -409,6 +409,78 @@ func TestGeneratorAddTemplate(t *testing.T) {
 	}
 }
 
+func TestGeneratorRemoveTemplate(t *testing.T) {
+	configDir := t.TempDir()
+	generator, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(configDir, "templates")
+	if err := os.WriteFile(filepath.Join(dir, "dropped.md"), []byte("dropped"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, " custom.md "), []byte("spaced"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "custom.md"), []byte("plain"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "target.md")
+	if err := os.WriteFile(target, []byte("target"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(configDir, "secret.md")
+	if err := os.WriteFile(outside, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := generator.RemoveTemplate("dropped.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "dropped.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("hand-dropped template still exists: %v", err)
+	}
+	if err := generator.RemoveTemplate("default_template.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "default_template.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("default template still exists: %v", err)
+	}
+	if err := generator.RemoveTemplate("link.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "link.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("symlink still exists: %v", err)
+	}
+	if content, err := os.ReadFile(target); err != nil || string(content) != "target" {
+		t.Fatalf("symlink target changed: %q, %v", content, err)
+	}
+	if err := generator.RemoveTemplate(" custom.md "); err != nil {
+		t.Fatal(err)
+	}
+	if content, err := os.ReadFile(filepath.Join(dir, "custom.md")); err != nil || string(content) != "plain" {
+		t.Fatalf("removing a spaced name deleted the wrong file: %q, %v", content, err)
+	}
+
+	if err := generator.RemoveTemplate("missing.md"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("wanted missing template, got %v", err)
+	}
+	for _, name := range []string{"", ".", "..", "nested/file.md", "/tmp/x.md", "a\x00b", "../secret.md"} {
+		if err := generator.RemoveTemplate(name); !errors.Is(err, ErrInvalidTemplateName) {
+			t.Errorf("name %q: wanted invalid name, got %v", name, err)
+		}
+	}
+	if content, err := os.ReadFile(outside); err != nil || string(content) != "secret" {
+		t.Fatalf("invalid name deleted outside the templates directory: %q, %v", content, err)
+	}
+	if content, err := os.ReadFile(filepath.Join(dir, "custom.md")); err != nil || string(content) != "plain" {
+		t.Fatalf("invalid name deleted a template: %q, %v", content, err)
+	}
+}
+
 func TestGeneratorAddTemplatePreservesFilename(t *testing.T) {
 	configDir := t.TempDir()
 	generator, err := NewGenerator(nil, WithConfigDir(configDir))

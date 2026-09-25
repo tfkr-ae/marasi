@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
 
 func init() {
-	reportTemplateCmd.AddCommand(reportTemplateListCmd, reportTemplateAddCmd)
+	reportTemplateCmd.AddCommand(reportTemplateListCmd, reportTemplateAddCmd, reportTemplateRemoveCmd)
 	reportCmd.AddCommand(reportTemplateCmd)
 	rootCmd.AddCommand(reportCmd)
 }
@@ -76,6 +77,24 @@ var reportTemplateAddCmd = &cobra.Command{
 		} else {
 			_, err = fmt.Fprintf(cmd.ErrOrStderr(), "report template %s added\n", filepath.Base(path))
 		}
+		return err
+	},
+}
+
+var reportTemplateRemoveCmd = &cobra.Command{
+	Use:   "remove NAME",
+	Short: "Remove a report template",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		body, err := runControlRequest(cmd, http.MethodDelete, "/report/template/"+url.PathEscape(args[0]), "removing report template", nil)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "report template %s removed\n", args[0])
 		return err
 	},
 }

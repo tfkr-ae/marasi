@@ -48,6 +48,7 @@ var _ domain.ReportGenerator = (*Generator)(nil)
 var (
 	ErrTemplateAlreadyExists = errors.New("report template already exists")
 	ErrInvalidTemplateSource = errors.New("invalid report template source")
+	ErrInvalidTemplateName   = errors.New("invalid report template name")
 )
 
 // Repository defines the database methods used by report template functions.
@@ -331,6 +332,24 @@ func (g *Generator) AddTemplate(source string) (err error) {
 		return fmt.Errorf("removing staged report template %s: %w", staged, err)
 	}
 	sourceStaged = false
+	return nil
+}
+
+// ValidTemplateName reports whether name is one local filename.
+// "." is local, but it names the templates directory itself.
+func ValidTemplateName(name string) bool {
+	return name != "." && !strings.ContainsRune(name, 0) && filepath.IsLocal(name) && filepath.Base(name) == name
+}
+
+// RemoveTemplate deletes the named templates-directory entry.
+// It does not follow a symlink.
+func (g *Generator) RemoveTemplate(name string) error {
+	if !ValidTemplateName(name) {
+		return ErrInvalidTemplateName
+	}
+	if err := os.Remove(filepath.Join(g.templatesDir, name)); err != nil {
+		return fmt.Errorf("removing report template %s: %w", name, err)
+	}
 	return nil
 }
 

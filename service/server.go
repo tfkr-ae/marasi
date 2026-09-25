@@ -347,6 +347,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeWordlistError(w, r, http.StatusBadRequest, "invalid_wordlist_request")
 		return
 	}
+	if r.Method == http.MethodDelete && invalidReportTemplatePath(r.URL.Path) {
+		writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_report_template_request"})
+		return
+	}
 	if s.projects != nil && persistsToOpenProject(r.Method, r.URL.Path) {
 		release, err := s.projects.Admit(r.Context())
 		if err != nil {
