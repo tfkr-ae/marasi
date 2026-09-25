@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -42,6 +43,11 @@ import (
 var defaultTemplate string
 
 var _ domain.ReportGenerator = (*Generator)(nil)
+
+var (
+	ErrTemplateAlreadyExists = errors.New("report template already exists")
+	ErrInvalidTemplateSource = errors.New("invalid report template source")
+)
 
 // Repository defines the database methods used by report template functions.
 type Repository interface {
@@ -176,6 +182,105 @@ func (g *Generator) ListTemplateDetails() ([]TemplateInfo, error) {
 		}
 	}
 	return items, nil
+}
+
+// AddTemplate moves a regular file into the templates directory under its basename.
+func (g *Generator) AddTemplate(source string) error {
+	if !filepath.IsAbs(source) {
+		return ErrInvalidTemplateSource
+	}
+	source = filepath.Clean(source)
+	name := filepath.Base(source)
+	if !filepath.IsLocal(name) || filepath.Base(name) != name || strings.HasPrefix(name, ".") || strings.ContainsRune(name, 0) {
+		return ErrInvalidTemplateSource
+	}
+
+	within := func(parent, path string) bool {
+		rel, err := filepath.Rel(parent, path)
+		return err == nil && rel != ".." && !filepath.IsAbs(rel) && (rel == "." || !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+	}
+	if within(g.templatesDir, source) {
+		return ErrInvalidTemplateSource
+	}
+
+	info, err := os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("getting report template source info %s: %w", source, err)
+	}
+	if !info.Mode().IsRegular() {
+		return ErrInvalidTemplateSource
+	}
+	resolvedSource, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		return fmt.Errorf("resolving report template source %s: %w", source, err)
+	}
+	resolvedDir, err := filepath.EvalSymlinks(g.templatesDir)
+	if err != nil {
+		return fmt.Errorf("resolving templates dir %s: %w", g.templatesDir, err)
+	}
+	if within(resolvedDir, resolvedSource) {
+		return ErrInvalidTemplateSource
+	}
+	destination := filepath.Join(g.templatesDir, name)
+	if _, err := os.Lstat(destination); err == nil {
+		return ErrTemplateAlreadyExists
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("checking report template %s: %w", destination, err)
+	}
+
+	sourceFile, err := os.Open(source)
+	if err != nil {
+		return fmt.Errorf("opening report template source %s: %w", source, err)
+	}
+	defer sourceFile.Close()
+	openedInfo, err := sourceFile.Stat()
+	if err != nil {
+		return fmt.Errorf("getting report template source info %s: %w", source, err)
+	}
+	currentInfo, err := os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("getting report template source info %s: %w", source, err)
+	}
+	if !currentInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) || !os.SameFile(openedInfo, currentInfo) {
+		return ErrInvalidTemplateSource
+	}
+
+	destinationFile, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+	if errors.Is(err, os.ErrExist) {
+		return ErrTemplateAlreadyExists
+	}
+	if err != nil {
+		return fmt.Errorf("creating report template %s: %w", destination, err)
+	}
+	removeDestination := true
+	defer func() {
+		if removeDestination {
+			os.Remove(destination)
+		}
+	}()
+	if _, err = io.Copy(destinationFile, sourceFile); err != nil {
+		destinationFile.Close()
+		return fmt.Errorf("copying report template %s: %w", destination, err)
+	}
+	if err = destinationFile.Sync(); err != nil {
+		destinationFile.Close()
+		return fmt.Errorf("syncing report template %s: %w", destination, err)
+	}
+	if err = destinationFile.Close(); err != nil {
+		return fmt.Errorf("closing report template %s: %w", destination, err)
+	}
+	currentInfo, err = os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("getting report template source info %s: %w", source, err)
+	}
+	if !currentInfo.Mode().IsRegular() || !os.SameFile(openedInfo, currentInfo) {
+		return ErrInvalidTemplateSource
+	}
+	if err = os.Remove(source); err != nil {
+		return fmt.Errorf("removing report template source %s: %w", source, err)
+	}
+	removeDestination = false
+	return nil
 }
 
 // LoadTemplate reads a template from the configured templates directory.
