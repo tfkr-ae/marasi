@@ -262,7 +262,8 @@ var websocketMessagesCmd = &cobra.Command{
 			return fmt.Errorf("decoding websocket messages: %w", err)
 		}
 		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-		for _, message := range page.Items {
+		for i := len(page.Items) - 1; i >= 0; i-- {
+			message := page.Items[i]
 			payload, err := base64.StdEncoding.DecodeString(message.Payload)
 			if err != nil {
 				return fmt.Errorf("decoding websocket message payload: %w", err)

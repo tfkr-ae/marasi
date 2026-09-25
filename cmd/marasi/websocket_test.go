@@ -410,16 +410,16 @@ func TestWebSocketMessagesCommand(t *testing.T) {
 	const (
 		connectionID = "0193802f-f0e7-73d9-a764-06d21e367809"
 		cursor       = "0193802f-f0e7-73d9-a764-06d21e36780a"
-		firstID      = "0193802f-f0e7-73d9-a764-06d21e36780b"
-		secondID     = "0193802f-f0e7-73d9-a764-06d21e36780c"
+		firstID      = "0193802f-f0e7-73d9-a764-06d21e36780c"
+		secondID     = "0193802f-f0e7-73d9-a764-06d21e36780b"
 	)
 	longText := strings.Repeat("é", 81)
 	body := `{"items":[{"id":"` + firstID + `","direction":"client","opcode":1,"payload":"` + base64.StdEncoding.EncodeToString([]byte(longText)) + `"},{"id":"` + secondID + `","direction":"server","opcode":9,"payload":""}],"next_cursor":"` + secondID + `"}` + "\n"
 
-	t.Run("should request a page and print UTF-8 text and binary previews", func(t *testing.T) {
+	t.Run("should request a page and print oldest message first", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
-		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "websocket", "messages", connectionID, "--limit", "2", "--cursor", cursor)
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "websocket", "messages", connectionID, "--limit", "2", "--cursor", cursor)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -427,7 +427,7 @@ func TestWebSocketMessagesCommand(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/websocket/"+connectionID+"/message" || got.RawQuery != "cursor="+cursor+"&limit=2" || got.Body != "" {
 			t.Fatalf("\nwanted:\nGET /websocket/%s/message?cursor=%s&limit=2, no body\ngot:\n%s %s?%s body %q", connectionID, cursor, got.Method, got.Path, got.RawQuery, got.Body)
 		}
-		want := firstID + "  client  1  " + strings.Repeat("é", 80) + "\n" + secondID + "  server  9  binary 0 bytes\n"
+		want := secondID + "  server  9  binary 0 bytes\n" + firstID + "  client  1  " + strings.Repeat("é", 80) + "\n"
 		if stdout != want || stderr != "next_cursor="+secondID+"\n" {
 			t.Fatalf("\nwanted:\nstdout %q\nstderr %q\ngot:\nstdout %q\nstderr %q", want, "next_cursor="+secondID+"\n", stdout, stderr)
 		}
