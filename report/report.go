@@ -72,6 +72,12 @@ type Generator struct {
 	templatesDir string
 }
 
+// TemplateInfo describes a regular file in the templates directory.
+type TemplateInfo struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
 // NewGenerator creates a Generator using repo and applies each option in order.
 //
 // It returns the first error produced by an option.
@@ -148,6 +154,28 @@ func (g *Generator) ListTemplates() ([]string, error) {
 	}
 
 	return templates, nil
+}
+
+// ListTemplateDetails returns regular report templates with their sizes, sorted by name.
+func (g *Generator) ListTemplateDetails() ([]TemplateInfo, error) {
+	entries, err := os.ReadDir(g.templatesDir)
+	if err != nil {
+		return nil, fmt.Errorf("reading templates dir %s: %w", g.templatesDir, err)
+	}
+	items := make([]TemplateInfo, 0, len(entries))
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, fmt.Errorf("reading template info %s: %w", entry.Name(), err)
+		}
+		if info.Mode().IsRegular() {
+			items = append(items, TemplateInfo{Name: entry.Name(), Size: info.Size()})
+		}
+	}
+	return items, nil
 }
 
 // LoadTemplate reads a template from the configured templates directory.

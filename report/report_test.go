@@ -301,6 +301,55 @@ func TestGeneratorListTemplates(t *testing.T) {
 	})
 }
 
+func TestGeneratorListTemplateDetails(t *testing.T) {
+	configDir := t.TempDir()
+	generator, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(configDir, "templates")
+	for name, content := range map[string]string{
+		"a.md": "alpha", ".hidden.md": "hidden", "z.md": "",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "nested"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "a.md"), filepath.Join(dir, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := generator.ListTemplateDetails()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []TemplateInfo{
+		{Name: "a.md", Size: 5},
+		{Name: "default_template.md", Size: int64(len(defaultTemplate))},
+		{Name: "z.md", Size: 0},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("wanted details %v, got %v", want, got)
+	}
+
+	if err := os.Remove(filepath.Join(dir, "a.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "z.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "default_template.md")); err != nil {
+		t.Fatal(err)
+	}
+	got, err = generator.ListTemplateDetails()
+	if err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("wanted empty non-nil list, got %v, %v", got, err)
+	}
+}
+
 func TestGeneratorLoadTemplate(t *testing.T) {
 	t.Run("should load template", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)

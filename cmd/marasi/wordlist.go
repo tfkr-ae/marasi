@@ -34,7 +34,7 @@ var wordlistPreviewCmd = &cobra.Command{
 		if cmd.Flags().Changed("limit") {
 			path += "?" + url.Values{"limit": {fmt.Sprint(wordlistPreviewLimit)}}.Encode()
 		}
-		body, err := runWordlistRequest(cmd, http.MethodGet, path, "previewing wordlist", nil)
+		body, err := runControlRequest(cmd, http.MethodGet, path, "previewing wordlist", nil)
 		if err != nil {
 			return err
 		}
@@ -60,7 +60,7 @@ var wordlistListCmd = &cobra.Command{
 	Short: "List wordlists",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		body, err := runWordlistRequest(cmd, http.MethodGet, "/wordlist", "listing wordlists", nil)
+		body, err := runControlRequest(cmd, http.MethodGet, "/wordlist", "listing wordlists", nil)
 		if err != nil {
 			return err
 		}
@@ -68,7 +68,7 @@ var wordlistListCmd = &cobra.Command{
 			_, err = cmd.OutOrStdout().Write(body)
 			return err
 		}
-		return writeWordlistList(body, cmd.OutOrStdout())
+		return writeSizedList(body, cmd.OutOrStdout())
 	},
 }
 
@@ -88,7 +88,7 @@ var wordlistAddCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("encoding wordlist add request: %w", err)
 		}
-		response, err := runWordlistRequest(cmd, http.MethodPost, "/wordlist", "adding wordlist", requestBody)
+		response, err := runControlRequest(cmd, http.MethodPost, "/wordlist", "adding wordlist", requestBody)
 		if err != nil {
 			return err
 		}
@@ -106,7 +106,7 @@ var wordlistRemoveCmd = &cobra.Command{
 	Short: "Remove a wordlist",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		body, err := runWordlistRequest(cmd, http.MethodDelete, "/wordlist/"+url.PathEscape(args[0]), "removing wordlist", nil)
+		body, err := runControlRequest(cmd, http.MethodDelete, "/wordlist/"+url.PathEscape(args[0]), "removing wordlist", nil)
 		if err != nil {
 			return err
 		}
@@ -119,7 +119,7 @@ var wordlistRemoveCmd = &cobra.Command{
 	},
 }
 
-func runWordlistRequest(cmd *cobra.Command, method, path, operation string, body []byte) ([]byte, error) {
+func runControlRequest(cmd *cobra.Command, method, path, operation string, body []byte) ([]byte, error) {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -129,7 +129,7 @@ func runWordlistRequest(cmd *cobra.Command, method, path, operation string, body
 	}
 	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
 	if err != nil {
-		return nil, fmt.Errorf("creating wordlist request: %w", err)
+		return nil, fmt.Errorf("creating control request: %w", err)
 	}
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
@@ -146,7 +146,7 @@ func runWordlistRequest(cmd *cobra.Command, method, path, operation string, body
 	body, readErr := io.ReadAll(response.Body)
 	closeErr := response.Body.Close()
 	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(wrapError("reading wordlist response", readErr), wrapError("closing wordlist response", closeErr))
+		return nil, errors.Join(wrapError("reading control response", readErr), wrapError("closing control response", closeErr))
 	}
 	if response.StatusCode != http.StatusOK {
 		return nil, controlAPIError(operation, response.Status, body)
@@ -154,7 +154,7 @@ func runWordlistRequest(cmd *cobra.Command, method, path, operation string, body
 	return body, nil
 }
 
-func writeWordlistList(body []byte, stdout io.Writer) error {
+func writeSizedList(body []byte, stdout io.Writer) error {
 	var response struct {
 		Items []struct {
 			Name string `json:"name"`
@@ -162,7 +162,7 @@ func writeWordlistList(body []byte, stdout io.Writer) error {
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
-		return fmt.Errorf("decoding wordlist list: %w", err)
+		return fmt.Errorf("decoding list: %w", err)
 	}
 	for index, item := range response.Items {
 		if index > 0 {
