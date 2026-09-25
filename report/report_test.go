@@ -225,6 +225,47 @@ func TestGeneratorRestoreDefaultTemplate(t *testing.T) {
 	}
 }
 
+func TestGeneratorRestoreDefaultTemplateLeavesOtherTemplates(t *testing.T) {
+	configDir := t.TempDir()
+	generator, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(configDir, "templates")
+	other := filepath.Join(dir, "custom.md")
+	if err := os.WriteFile(other, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "default_template.md"), []byte("edited"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RestoreDefaultTemplate(generator); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "default_template.md"))
+	if err != nil || string(got) != defaultTemplate {
+		t.Fatalf("default not restored: %q, %v", got, err)
+	}
+	if content, err := os.ReadFile(other); err != nil || string(content) != "keep" {
+		t.Fatalf("other template changed: %q, %v", content, err)
+	}
+
+	if err := os.Remove(filepath.Join(dir, "default_template.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := RestoreDefaultTemplate(generator); err != nil {
+		t.Fatal(err)
+	}
+	got, err = os.ReadFile(filepath.Join(dir, "default_template.md"))
+	if err != nil || string(got) != defaultTemplate {
+		t.Fatalf("missing default not created: %q, %v", got, err)
+	}
+	if content, err := os.ReadFile(other); err != nil || string(content) != "keep" {
+		t.Fatalf("other template changed after recreate: %q, %v", content, err)
+	}
+}
+
 func TestGeneratorListTemplates(t *testing.T) {
 	t.Run("should list templates with default template first", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)

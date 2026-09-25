@@ -148,6 +148,44 @@ func addReportRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroad
 		events.publish("report.template.removed", response)
 		writeJSON(w, r, http.StatusOK, response)
 	})
+
+	mux.HandleFunc("POST /report/template/restore", func(w http.ResponseWriter, r *http.Request) {
+		query, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil || len(query) != 0 {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_report_template_request"})
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil || len(body) != 0 {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_report_template_request"})
+			return
+		}
+		if proxy == nil {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		generator, ok := proxy.ReportGenerator.(interface {
+			ListTemplateDetails() ([]report.TemplateInfo, error)
+		})
+		if !ok {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		if err := report.RestoreDefaultTemplate(proxy.ReportGenerator); err != nil {
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+			return
+		}
+		items, err := generator.ListTemplateDetails()
+		if err != nil {
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+			return
+		}
+		response := struct {
+			Items []report.TemplateInfo `json:"items"`
+		}{Items: items}
+		events.publish("report.template.restored", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
 }
 
 func invalidReportTemplatePath(path string) bool {

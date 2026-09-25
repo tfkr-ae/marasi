@@ -12,7 +12,7 @@ import (
 )
 
 func init() {
-	reportTemplateCmd.AddCommand(reportTemplateListCmd, reportTemplateAddCmd, reportTemplateRemoveCmd)
+	reportTemplateCmd.AddCommand(reportTemplateListCmd, reportTemplateAddCmd, reportTemplateRemoveCmd, reportTemplateRestoreCmd)
 	reportCmd.AddCommand(reportTemplateCmd)
 	rootCmd.AddCommand(reportCmd)
 }
@@ -95,6 +95,24 @@ var reportTemplateRemoveCmd = &cobra.Command{
 			return err
 		}
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "report template %s removed\n", args[0])
+		return err
+	},
+}
+
+var reportTemplateRestoreCmd = &cobra.Command{
+	Use:   "restore",
+	Short: "Restore the default report template",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		body, err := runControlRequest(cmd, http.MethodPost, "/report/template/restore", "restoring report template", nil)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "report template default_template.md restored\n")
 		return err
 	},
 }

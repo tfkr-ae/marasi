@@ -118,3 +118,31 @@ func TestReportTemplateRemoveCommandFailure(t *testing.T) {
 	stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "report-remove-error", "--json", "report", "template", "remove", "missing.md")
 	assertJSONCommandError(t, stdout, stderr, err, "removing report template: not_found")
 }
+
+func TestReportTemplateRestoreCommand(t *testing.T) {
+	binary := buildMarasi(t)
+	configDir := serviceConfigDir(t)
+	body := "{\"items\":[{\"name\":\"default_template.md\",\"size\":8433}]}\n"
+	sent := startCannedControlAPI(t, configDir, "report-restore", http.StatusOK, body)
+
+	stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "report-restore", "report", "template", "restore")
+	if err != nil || stdout != "" || stderr != "report template default_template.md restored\n" {
+		t.Fatalf("unexpected human result: %q, %q, %v", stdout, stderr, err)
+	}
+	request := sent.snapshot()
+	if request.Method != http.MethodPost || request.Path != "/report/template/restore" || request.Body != "" {
+		t.Fatalf("wanted POST /report/template/restore with empty body, got %s %s with %q", request.Method, request.Path, request.Body)
+	}
+	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "report-restore", "--json", "report", "template", "restore")
+	if err != nil || stdout != body || stderr != "" {
+		t.Fatalf("unexpected JSON result: %q, %q, %v", stdout, stderr, err)
+	}
+}
+
+func TestReportTemplateRestoreCommandFailure(t *testing.T) {
+	binary := buildMarasi(t)
+	configDir := serviceConfigDir(t)
+	startCannedControlAPI(t, configDir, "report-restore-error", http.StatusNotFound, `{"error":"not_found"}`)
+	stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "report-restore-error", "--json", "report", "template", "restore")
+	assertJSONCommandError(t, stdout, stderr, err, "restoring report template: not_found")
+}

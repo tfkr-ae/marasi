@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -222,4 +223,79 @@ func TestReportTemplateRemoveControlAPI(t *testing.T) {
 		t.Fatalf("wrong event: %s %s", event.name, event.data)
 	}
 	assertControlAPIResponse(t, requestControlAPI(newTestServer(&marasi.Proxy{}, func() {}), http.MethodDelete, "/report/template/z.md", ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
+}
+
+func TestReportTemplateRestoreControlAPI(t *testing.T) {
+	configDir := t.TempDir()
+	generator, err := report.NewGenerator(nil, report.WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(configDir, "templates")
+	embedded, err := os.ReadFile(filepath.Join(dir, "default_template.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "z.md"), []byte("zz"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := newTestServer(&marasi.Proxy{ReportGenerator: generator}, func() {})
+	subscriber := server.events.subscribe()
+	defer server.events.unsubscribe(subscriber)
+
+	want := fmt.Sprintf("{\"items\":[{\"name\":\"default_template.md\",\"size\":%d},{\"name\":\"z.md\",\"size\":2}]}", len(embedded))
+	assertRestored := func() {
+		t.Helper()
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/report/template/restore", ""), http.StatusOK, want+"\n")
+		got, err := os.ReadFile(filepath.Join(dir, "default_template.md"))
+		if err != nil || string(got) != string(embedded) {
+			t.Fatalf("default not restored: %q, %v", got, err)
+		}
+		if content, err := os.ReadFile(filepath.Join(dir, "z.md")); err != nil || string(content) != "zz" {
+			t.Fatalf("other template changed: %q, %v", content, err)
+		}
+		if event := <-subscriber.events; event.name != "report.template.restored" || string(event.data) != want {
+			t.Fatalf("wrong event: %s %s", event.name, event.data)
+		}
+		select {
+		case event := <-subscriber.events:
+			t.Fatalf("restore also emitted %s", event.name)
+		default:
+		}
+	}
+
+	assertRestored()
+
+	if err := os.WriteFile(filepath.Join(dir, "default_template.md"), []byte("edited"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	assertRestored()
+
+	if err := os.Remove(filepath.Join(dir, "default_template.md")); err != nil {
+		t.Fatal(err)
+	}
+	assertRestored()
+
+	for _, request := range []struct{ path, body string }{
+		{"/report/template/restore?extra=true", ""},
+		{"/report/template/restore?bad=%zz", ""},
+		{"/report/template/restore", "not empty"},
+		{"/report/template/restore", "{}"},
+	} {
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, request.path, request.body), http.StatusBadRequest, "{\"error\":\"invalid_report_template_request\"}\n")
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "default_template.md"))
+	if err != nil || string(got) != string(embedded) {
+		t.Fatalf("rejected restore changed the default: %q, %v", got, err)
+	}
+	if content, err := os.ReadFile(filepath.Join(dir, "z.md")); err != nil || string(content) != "zz" {
+		t.Fatalf("rejected restore changed another template: %q, %v", content, err)
+	}
+	select {
+	case event := <-subscriber.events:
+		t.Fatalf("rejected restore emitted %s", event.name)
+	default:
+	}
+
+	assertControlAPIResponse(t, requestControlAPI(newTestServer(&marasi.Proxy{}, func() {}), http.MethodPost, "/report/template/restore", ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
 }
