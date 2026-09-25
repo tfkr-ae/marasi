@@ -25,7 +25,7 @@ Run `launchpad create --name Login --description variants --json` and save `id`.
 - `--name` is required on create and must be non-empty. Update requires `--name` or `--description`.
 - Launch needs `--scheme http` or `https`, and either `--raw-file` or piped stdin. A TTY stdin fails. The raw bytes must be parseable HTTP with a non-empty `Host` and a header/body blank line. Use CRLF.
 - The working copy is the raw bytes you supply. Linked members are not replayed and are not required to launch.
-- Launch returns `{"status":"launched"}` before the new traffic row is visible. Retry `launchpad get` and `traffic list` until the launched path appears.
+- Launch returns `{"status":"launched"}` after the proxied round trip. The new traffic row is inserted and auto-linked concurrently, so it may not be visible yet. Retry `launchpad get` and `traffic list` until the launched path appears.
 - Launch sends through the proxy listener, persists a new traffic row, and auto-links that row to the pad.
-- Link and launch look up ids in the currently open project. After `project open`, previous pads and request ids are not visible.
+- Link and launch look up ids in the currently open project. After opening a different project, previous pads and request ids are not visible. Opening the current path does not hide them.
 - Duplicate link of the same request to the same pad returns a conflict.

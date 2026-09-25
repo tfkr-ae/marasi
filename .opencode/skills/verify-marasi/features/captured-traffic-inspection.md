@@ -28,4 +28,4 @@ Create at least one known proxied request. Run `traffic list --path /proof.txt -
 - Human output writes `next_cursor=$NEXT_CURSOR` to stderr. JSON keeps it in `next_cursor`.
 - `traffic get` requires a UUID. Invalid IDs fail before repository lookup.
 - `traffic metadata update` requires `--file` or piped stdin with a non-empty JSON object body. A TTY stdin fails.
-- Metadata replaces the stored object. `traffic metadata get` returns the current object plus `has_note`.
+- Metadata update replaces client-owned keys. It drops a submitted `has_note`, `prettified-request`, or `prettified-response`, keeps any previous prettified bodies, and sets `has_note` only when a note exists. `traffic metadata get` returns that object with prettified keys removed. It does not add `has_note` when no note exists.

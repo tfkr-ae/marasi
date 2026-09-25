@@ -20,8 +20,9 @@ Send one proxied request to `/before.txt`. Run `traffic list --path /before.txt 
 ## Gotchas
 
 - `--name` and `--path` are mutually exclusive and one is required.
-- `--name` uses `$configDir/projects/<name>.marasi`, same as `service start --project-name`. `--path` must end in `.marasi`.
-- A project has an exclusive lock. Opening a project another instance already holds fails.
-- Opening fails with `project_busy` while a Checkpoint item is pending or an Armory run is `in_progress`. Forward or drop held items and wait for Armory to leave `in_progress` first.
+- `--name` uses `$configDir/projects/<name>.marasi`, same as `service start --project-name`. The name is trimmed, and one trailing `.marasi` suffix is stripped. `--path` must end in `.marasi`.
+- Opening the path that is already open succeeds and does not clear traffic.
+- A project has an exclusive lock. Opening a project another instance already holds fails. With `--json` the error is `opening project: project_already_open`.
+- Opening fails with `opening project: project_busy` while a Checkpoint item is pending or an Armory run is `in_progress`. Human output says `409 Conflict` and does not include the code. Forward or drop held items and wait for Armory to leave `in_progress` first.
 - After a switch, `traffic list` and `traffic get` no longer see the previous project's rows.
 - `service status` `project` becomes the new path. The launch doctor check against `$VERIFY_PROJECT` no longer matches, even though the instance is still ours.

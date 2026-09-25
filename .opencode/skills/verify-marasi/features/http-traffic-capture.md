@@ -12,7 +12,7 @@ Marasi accepts an HTTP client's connection on its assigned proxy listener, forwa
 
 ## How to get to it (user POV)
 
-Start a service and read `proxy_listener` from `service status`. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANCE" events` and wait for `: connected` on stderr before sending traffic. Configure the HTTP client's proxy setting to `http://$PROXY_LISTENER`, then make a request normally. For `curl` requests to localhost, clear proxy bypass with `--noproxy ''`.
+Start a service and read `proxy_listener` from `service status --json`. Without `--json` the label is `proxy listener:`. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANCE" events` and wait for `: connected` on stderr before sending traffic. Configure the HTTP client's proxy setting to `http://$PROXY_LISTENER`, then make a request normally. For `curl` requests to localhost, clear proxy bypass with `--noproxy ''`.
 
 ## Driving it with shell and curl
 
@@ -24,4 +24,5 @@ Start a local HTTP origin that returns a unique body. Start `events` first and w
 - The helper covers HTTP. Changes to certificates, CONNECT handling, or TLS interception need a separate HTTPS drive. Trust `$VERIFY_CONFIG_DIR/marasi_cert.pem` with `curl --cacert` and send an `https://` request through the proxy. The origin certificate must be trusted by the proxy's outbound transport. A self-signed local origin returns 502; use a publicly trusted host.
 - `events` is live and has no replay. Subscribe before the request. stderr is `: connected`; stdout is `event-name json`.
 - A successful origin response alone does not prove capture. The events CLI, traffic CLI, and database row are required evidence.
+- `traffic get --json` base64-encodes `request.raw` and `response.raw`. Headers and body are inside those raw messages, not separate fields.
 - The local origin is a real production boundary. Do not replace Marasi's proxy or repository with test doubles.

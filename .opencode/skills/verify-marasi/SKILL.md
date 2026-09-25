@@ -1,6 +1,6 @@
 ---
 name: verify-marasi
-description: Verify Marasi's CLI-driven proxy service when a change needs proof through a real launched instance, a proxied HTTP request, persisted traffic inspection, traffic metadata and note control, event subscription, launchpad replay, test-case control, finding control, artifact control, Checkpoint control, Chrome control, waypoint control, wordlist control, Armory template and run control, or extension control.
+description: Verify Marasi's CLI-driven proxy service when a change needs proof through a real launched instance, a proxied HTTP request, persisted traffic inspection, traffic metadata and note control, event subscription, launchpad replay, test-case control, finding control, artifact control, Checkpoint control, Chrome control, waypoint control, wordlist control, Armory template and run control, extension control, report template and export control, or WebSocket connection control.
 ---
 
 # Verify Marasi
@@ -78,7 +78,7 @@ For the complete recipe, run the bundled executable helper:
 
 It builds Marasi, starts an isolated instance and local origin, checks service identity, subscribes with `events`, proxies one request, inspects the live events and the stored request/response pair through the CLI, checks the SQLite project side effect, writes evidence, and cleans up.
 
-Read `features/README.md` before choosing coverage. A proof is incomplete if the mapped feature has another user entry point that the run ignores.
+Read `features/README.md` before choosing coverage. A proof is incomplete if the mapped feature has another user entry point that the run ignores. The bundled helper does not cover report templates, report export, or WebSocket connections.
 
 ## Evidence
 

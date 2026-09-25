@@ -24,4 +24,4 @@ Run `artifact upload --test-case "$TEST_CASE_ID" --file "$PROOF_FILE" --json` an
 - `--mime` is optional. When omitted, Marasi uses the file extension, or `application/octet-stream`.
 - `artifact download` rejects `--json`. With no `--output`, it writes the filename in the current directory.
 - The parent test case or finding must exist in the currently open project.
-- After `project open`, previous artifact ids are not visible.
+- After opening a different project, previous artifact ids are not visible. Opening the current path does not hide them.

@@ -25,8 +25,9 @@ Run `checkpoint list --json` and require `items` `[]` with `intercept` and `webs
 
 ## Gotchas
 
-- `checkpoint intercept on` holds HTTP requests and the matching responses. After a request forward, a `response` item appears until you forward or drop it. `--intercept-response` is for holding the response when global intercept is off.
-- This CLI is not the seeded Lua extension named `checkpoint`. That extension's `interceptRequest` / `interceptResponse` return false by default.
+- `checkpoint intercept on` holds plain HTTP requests and the matching responses. `CONNECT` is skipped, so an `https://` client does not pause. After a request forward, a `response` item appears until you forward or drop it.
+- `--intercept-response` on a request forward holds that response even when global intercept is off. With the seeded script, a request is held only while `checkpoint intercept` is on, or after you change `interceptRequest`. While intercept is on, the matching response is held anyway.
+- This CLI is not the seeded Lua extension named `checkpoint`. That extension's `interceptRequest` / `interceptResponse` return false by default. If that extension is disabled, `checkpoint intercept on` can report `intercept` true and hold nothing. Leave it enabled.
 - `--kind` must be `http` or `websocket`. `http` includes `request` and `response` items and skips `websocket`.
 - Human list prints `id type` lines and is silent when empty. Human get writes decoded HTTP bytes or the WebSocket payload. Human intercept/forward/drop confirm on stderr. `--json` list, forward, drop, and flag commands print the full list plus both flags.
 - Forward with a TTY and no `--file` sends the original bytes. `--file` or a non-TTY stdin replaces them. A TTY stdin is not an edit.

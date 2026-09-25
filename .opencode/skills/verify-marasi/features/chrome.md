@@ -27,8 +27,8 @@ Point `--path` at an executable stub when you need start proof without a GUI Chr
 - Duplicate path or profile returns a conflict. Removing a missing path or profile returns not found.
 - `chrome start` with no `--profile` uses `default-profile` even if that name is not registered. Any other `--profile` must already exist.
 - Start requires an active proxy listener. An inactive listener returns a conflict.
-- Custom paths are tried before OS defaults. A stub at `--path` replaces the Chrome binary the same way a local origin replaces an external website.
-- Start launches a detached process and returns `{"status":"started","profile":...}` without waiting for the process to write flags or load a page. Retry until the stub args file or profile directory appears. It does not publish an events frame.
-- Launched Chrome sets `--proxy-bypass-list=<-loopback>`, so localhost is not sent through Marasi.
+- Custom paths for this OS are tried before OS defaults, and only if `LookPath` accepts the file. A non-executable stub is skipped and an OS Chrome path is used instead. An executable stub replaces the Chrome binary the same way a local origin replaces an external website.
+- Start returns `{"status":"started","profile":...}` without waiting for flags or a page. The browser stays a child of the service. It is not a new session. Marasi does not write an args file or create the profile directory. The stub must record its own argv. It does not publish an events frame.
+- Launched Chrome sets `--proxy-bypass-list=<-loopback>`. That removes Chrome's implicit localhost bypass, so localhost is sent through Marasi.
 - Path and profile mutations publish `chrome.path.added`, `chrome.path.removed`, `chrome.profile.added`, and `chrome.profile.removed`.
 - Kill any process started from this run's `chrome_profiles` directory during cleanup.

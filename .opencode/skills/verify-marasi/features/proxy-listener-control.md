@@ -1,6 +1,6 @@
 # Proxy listener control
 
-Users can stop, restart, move, and inspect the TCP listener of a running service without closing its project or control socket.
+Users can stop, start again, move, and inspect the TCP listener of a running service without closing its project or control socket. There is no `listener restart` command.
 
 ## Sub-features
 
@@ -22,7 +22,7 @@ Use `listener status --json` and require `status` `active` plus an assigned `pro
 ## Gotchas
 
 - `listener start` and `listener update` require both `--address` and `--port`. A partial flag set fails before the API. There is no retained last endpoint to fill in.
-- Starting an already active listener returns a conflict. Updating an inactive listener also returns a conflict.
+- Starting an already active listener fails. With `--json` the error is `starting proxy listener: listener_already_active`. Updating an inactive listener fails with `updating proxy listener: listener_inactive`. Human output includes `409 Conflict` and does not include those codes.
 - Stopping an already inactive listener succeeds. `listener address` fails while inactive.
 - Stop the service in cleanup even when the proxy listener is already inactive.
 - Assigned port numbers are evidence values, not constants. Never reuse one in another run.
