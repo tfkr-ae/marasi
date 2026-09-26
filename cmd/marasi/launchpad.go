@@ -72,7 +72,7 @@ var launchpadCreateCmd = &cobra.Command{
 
 var launchpadListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List launchpads newest-first",
+	Short: "List launchpads oldest-first",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return runLaunchpadCommand(cmd, "list", "", launchpadRequest{})
