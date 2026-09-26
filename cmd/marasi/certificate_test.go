@@ -114,7 +114,7 @@ func TestCertificateCommandLifecycle(t *testing.T) {
 	}
 	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "certificate", "get", "--format", "der")
 	if err != nil || stdout != string(certificate.Raw) || stderr != "" {
-		t.Fatalf("DER certificate output: stdout %q, stderr %q, error %v", stdout, stderr, err)
+		t.Fatalf("DER CA certificate output: stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
 
 	var jsonOutput string
@@ -124,18 +124,18 @@ func TestCertificateCommandLifecycle(t *testing.T) {
 	} {
 		stdout, stderr, err = runMarasi(binary, args...)
 		if err != nil || stderr != "" || !strings.HasSuffix(stdout, "\n") || strings.Count(stdout, "\n") != 1 {
-			t.Fatalf("JSON certificate output: stdout %q, stderr %q, error %v", stdout, stderr, err)
+			t.Fatalf("JSON CA certificate output: stdout %q, stderr %q, error %v", stdout, stderr, err)
 		}
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(stdout), &fields); err != nil {
-			t.Fatalf("decoding certificate JSON fields: %v", err)
+			t.Fatalf("decoding CA certificate JSON fields: %v", err)
 		}
 		if len(fields) != 6 {
-			t.Fatalf("certificate JSON has %d fields, want exactly six: %s", len(fields), stdout)
+			t.Fatalf("CA certificate JSON has %d fields, want exactly six: %s", len(fields), stdout)
 		}
 		for _, key := range []string{"pem", "subject", "issuer", "not_before", "not_after", "spki_hash"} {
 			if _, ok := fields[key]; !ok {
-				t.Fatalf("certificate JSON is missing %q: %s", key, stdout)
+				t.Fatalf("CA certificate JSON is missing %q: %s", key, stdout)
 			}
 		}
 		var got struct {
@@ -147,13 +147,13 @@ func TestCertificateCommandLifecycle(t *testing.T) {
 			SPKIHash  string    `json:"spki_hash"`
 		}
 		if err := json.Unmarshal([]byte(stdout), &got); err != nil {
-			t.Fatalf("decoding certificate JSON: %v", err)
+			t.Fatalf("decoding CA certificate JSON: %v", err)
 		}
 		spkiHash := sha256.Sum256(certificate.RawSubjectPublicKeyInfo)
 		if got.PEM != string(wantPEM) || got.Subject != certificate.Subject.String() || got.Issuer != certificate.Issuer.String() ||
 			!got.NotBefore.Equal(certificate.NotBefore) || !got.NotAfter.Equal(certificate.NotAfter) ||
 			got.SPKIHash != base64.StdEncoding.EncodeToString(spkiHash[:]) {
-			t.Fatalf("certificate JSON does not describe the published CA: %#v", got)
+			t.Fatalf("CA certificate JSON does not describe the published CA: %#v", got)
 		}
 		if jsonOutput != "" && stdout != jsonOutput {
 			t.Fatalf("JSON flag position changed the control response: first %q, second %q", jsonOutput, stdout)
@@ -170,7 +170,7 @@ func TestCertificateCommandLifecycle(t *testing.T) {
 
 	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "certificate", "get")
 	if err != nil || stdout != string(wantPEM) || stderr != "" {
-		t.Fatalf("getting certificate with proxy listener stopped: stdout %q, stderr %q, error %v", stdout, stderr, err)
+		t.Fatalf("getting CA certificate with proxy listener stopped: stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
 
 	replacementKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -208,16 +208,16 @@ func TestCertificateCommandLifecycle(t *testing.T) {
 
 	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "certificate", "get")
 	if err != nil || stdout != string(wantPEM) || stderr != "" {
-		t.Fatalf("first instance after certificate files changed: stdout %q, stderr %q, error %v", stdout, stderr, err)
+		t.Fatalf("first instance after CA certificate files changed: stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
 	startNamedInstance(t, binary, configDir, "other", "--project-name", "certificate-two")
 	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "other", "certificate", "get")
 	if err != nil || stdout != string(replacementPEM) || stderr != "" {
-		t.Fatalf("second instance after certificate files changed: stdout %q, stderr %q, error %v", stdout, stderr, err)
+		t.Fatalf("second instance after CA certificate files changed: stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
 	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "certificate", "get")
 	if err != nil || stdout != string(wantPEM) || stderr != "" {
-		t.Fatalf("first instance after second start: stdout %q, stderr %q, error %v", stdout, stderr, err)
+		t.Fatalf("first instance after second CA certificate loads: stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
 
 	if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop"); err != nil {
@@ -227,7 +227,7 @@ func TestCertificateCommandLifecycle(t *testing.T) {
 		t.Fatalf("waiting for events command after service stop: %v", err)
 	}
 	if eventsOutput.Len() != 0 {
-		t.Fatalf("certificate reads emitted events: %s", eventsOutput.String())
+		t.Fatalf("CA certificate reads emitted events: %s", eventsOutput.String())
 	}
 
 	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "certificate", "get")
