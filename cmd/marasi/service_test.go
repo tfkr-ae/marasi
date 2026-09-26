@@ -2170,8 +2170,8 @@ func TestStartService(t *testing.T) {
 			t.Fatalf("\nwanted:\nproxied /events-path\ngot:\n%s", got)
 		}
 
-		requestName, requestData := readControlEvent(t, reader)
-		responseName, responseData := readControlEvent(t, reader)
+		requestName, requestData := readControlEventSkippingLogs(t, reader, "traffic.request")
+		responseName, responseData := readControlEventSkippingLogs(t, reader, "traffic.response")
 		if requestName != "traffic.request" || responseName != "traffic.response" {
 			t.Fatalf("\nwanted:\ntraffic.request then traffic.response\ngot:\n%s then %s", requestName, responseName)
 		}
@@ -2466,7 +2466,7 @@ func TestStartService(t *testing.T) {
 			proxied <- nil
 		}()
 
-		eventName, eventData := readControlEvent(t, reader)
+		eventName, eventData := readControlEventSkippingLogs(t, reader, "checkpoint.held")
 		if eventName != "checkpoint.held" {
 			t.Fatalf("\nwanted:\ncheckpoint.held\ngot:\n%s %s", eventName, eventData)
 		}
@@ -2500,7 +2500,7 @@ func TestStartService(t *testing.T) {
 		go func() {
 			stopErr <- stopService(context.Background(), instancePath)
 		}()
-		eventName, eventData = readControlEvent(t, reader)
+		eventName, eventData = readControlEventSkippingLogs(t, reader, "checkpoint.dropped")
 		wantDropped := fmt.Sprintf(`{"id":"%s","type":"request"}`, held.ID)
 		if eventName != "checkpoint.dropped" || eventData != wantDropped {
 			t.Fatalf("\nwanted:\ncheckpoint.dropped %s\ngot:\n%s %s", wantDropped, eventName, eventData)
@@ -2845,4 +2845,17 @@ func readControlEvent(t *testing.T, reader *bufio.Reader) (string, string) {
 		t.Fatal("\nwanted:\ntraffic event\ngot:\ntimeout")
 	}
 	return "", ""
+}
+
+func readControlEventSkippingLogs(t *testing.T, reader *bufio.Reader, want string) (string, string) {
+	t.Helper()
+	for {
+		name, data := readControlEvent(t, reader)
+		if name == want {
+			return name, data
+		}
+		if name != "log.added" {
+			t.Fatalf("wanted %s event, got %s %s", want, name, data)
+		}
+	}
 }

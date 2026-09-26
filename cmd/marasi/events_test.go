@@ -43,14 +43,14 @@ func TestEventsCommand(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startCannedEventAPI(t, configDir, "work", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, ": connected\n\n: heartbeat\n\n: ignored\n\nevent: traffic.request\ndata: { \"id\" : 1 }  \n\nevent: future.event\ndata: [ 1, 2 ]\n\n")
+			fmt.Fprint(w, ": connected\n\n: heartbeat\n\n: ignored\n\nevent: traffic.request\ndata: { \"id\" : 1 }  \n\nevent: log.added\ndata: [ 1, 2 ]\n\n")
 		})
 
 		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "events")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if stdout != "traffic.request { \"id\" : 1 }  \nfuture.event [ 1, 2 ]\n" {
+		if stdout != "traffic.request { \"id\" : 1 }  \nlog.added [ 1, 2 ]\n" {
 			t.Fatalf("\nwanted:\npreserved known and unknown events\ngot:\n%s", stdout)
 		}
 		if stderr != ": connected\n" {

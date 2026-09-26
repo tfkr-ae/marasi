@@ -65,6 +65,9 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 				Project string `json:"project"`
 			}{Project: path})
 		}
+		projects.logAdded = func(entry *domain.Log) {
+			events.publish("log.added", proxyLogFromDomain(entry))
+		}
 		projects.armoryRunUpdated = publishArmoryRunUpdated
 	}
 	if proxy != nil {

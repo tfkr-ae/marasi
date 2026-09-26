@@ -2,11 +2,16 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
 )
 
@@ -17,6 +22,7 @@ func addRoutes(mux *http.ServeMux, proxy *marasi.Proxy, chrome *Chrome, events *
 	mux.Handle("/service/", http.StripPrefix("/service", serviceMux))
 	addCertificateRoutes(mux, proxy)
 	addTrafficRoutes(mux, proxy, events)
+	addLogRoutes(mux, proxy)
 	addWebSocketRoutes(mux, proxy)
 	addNoteRoutes(mux, proxy, events)
 	addCheckpointRoutes(mux, proxy, events)
@@ -56,4 +62,36 @@ func writeJSON[T any](w http.ResponseWriter, r *http.Request, status int, value 
 	if err := encode(w, r, status, value); err != nil {
 		fmt.Fprintf(os.Stderr, "encoding response: %v\n", err)
 	}
+}
+
+func parseNewestFirstPage(r *http.Request) (int, *uuid.UUID, error) {
+	var pageFields []string
+	for _, field := range strings.Split(r.URL.RawQuery, "&") {
+		name, _, _ := strings.Cut(field, "=")
+		key, err := url.QueryUnescape(name)
+		if err == nil && (key == "limit" || key == "cursor") {
+			pageFields = append(pageFields, field)
+		}
+	}
+	query, err := url.ParseQuery(strings.Join(pageFields, "&"))
+	if err != nil {
+		return 0, nil, err
+	}
+	limit := 200
+	if values, present := query["limit"]; present {
+		parsed, err := strconv.Atoi(values[0])
+		if err != nil || parsed < 1 || parsed > 500 {
+			return 0, nil, errors.New("invalid limit")
+		}
+		limit = parsed
+	}
+	var cursor *uuid.UUID
+	if values, present := query["cursor"]; present {
+		parsed, err := uuid.Parse(values[0])
+		if err != nil {
+			return 0, nil, err
+		}
+		cursor = &parsed
+	}
+	return limit, cursor, nil
 }

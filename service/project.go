@@ -53,6 +53,7 @@ type ProjectLifecycle struct {
 	lock             func(string) (func() error, error)
 	flushOpenProject func() error
 	opened           func(string)
+	logAdded         func(*domain.Log)
 	armoryRunUpdated func(*domain.ArmoryRun)
 }
 
@@ -136,11 +137,14 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 
 	lifecycle.proxy.SetProjectResources(resources)
 	lifecycle.setOpen(targetProject)
+	if old != nil && lifecycle.opened != nil {
+		lifecycle.opened(path)
+	}
+	if repository, ok := resources.Repository.(*eventLogRepository); ok {
+		repository.startPublishing()
+	}
 	if old == nil {
 		return nil
-	}
-	if lifecycle.opened != nil {
-		lifecycle.opened(path)
 	}
 	if err := closeProject(old); err != nil {
 		if lifecycle.logger != nil {
@@ -149,6 +153,40 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 		return errors.Join(ErrProjectCleanup, err)
 	}
 	return nil
+}
+
+type eventLogRepository struct {
+	marasi.RepositoryProvider
+	mu         sync.Mutex
+	onStored   func(*domain.Log)
+	publishing bool
+	pending    []*domain.Log
+}
+
+func (repository *eventLogRepository) InsertLog(entry *domain.Log) error {
+	if err := repository.RepositoryProvider.InsertLog(entry); err != nil {
+		return err
+	}
+	repository.mu.Lock()
+	if !repository.publishing {
+		repository.pending = append(repository.pending, entry)
+		repository.mu.Unlock()
+		return nil
+	}
+	repository.mu.Unlock()
+	repository.onStored(entry)
+	return nil
+}
+
+func (repository *eventLogRepository) startPublishing() {
+	repository.mu.Lock()
+	repository.publishing = true
+	pending := repository.pending
+	repository.pending = nil
+	repository.mu.Unlock()
+	for _, entry := range pending {
+		repository.onStored(entry)
+	}
 }
 
 func (lifecycle *ProjectLifecycle) projectBusy(project *openProject) bool {
@@ -202,7 +240,11 @@ func (lifecycle *ProjectLifecycle) prepareProject(ctx context.Context, path stri
 		return marasi.ProjectResources{}, fmt.Errorf("opening project: %w", err)
 	}
 	repository := db.NewProxyRepo(connection)
-	resources := marasi.ProjectResources{Repository: repository, Scope: compass.NewScope(true)}
+	logRepository := &eventLogRepository{
+		RepositoryProvider: repository,
+		onStored:           lifecycle.publishLogAdded,
+	}
+	resources := marasi.ProjectResources{Repository: logRepository, Scope: compass.NewScope(true)}
 	fail := func(err error) (marasi.ProjectResources, error) {
 		return resources, err
 	}
@@ -229,7 +271,7 @@ func (lifecycle *ProjectLifecycle) prepareProject(ctx context.Context, path stri
 	extensionService := stagedExtensionService{
 		configDir:  lifecycle.configDir,
 		client:     lifecycle.proxy.Client,
-		repository: repository,
+		repository: logRepository,
 		scope:      resources.Scope,
 	}
 	resources.Extensions = make([]*extensions.Runtime, 0, len(storedExtensions))
@@ -258,6 +300,12 @@ func (lifecycle *ProjectLifecycle) prepareProject(ctx context.Context, path stri
 	armoryManager.SetRunUpdated(lifecycle.armoryRunUpdated)
 	resources.Armory = armoryManager
 	return resources, nil
+}
+
+func (lifecycle *ProjectLifecycle) publishLogAdded(entry *domain.Log) {
+	if lifecycle.logAdded != nil {
+		lifecycle.logAdded(entry)
+	}
 }
 
 type stagedExtensionService struct {

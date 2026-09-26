@@ -7,9 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/url"
-	"strconv"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -141,7 +138,7 @@ func addWebSocketRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 	})
 
 	mux.HandleFunc("GET /websocket", func(w http.ResponseWriter, r *http.Request) {
-		limit, cursor, err := parseWebSocketPage(r)
+		limit, cursor, err := parseNewestFirstPage(r)
 		if err != nil {
 			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
 			return
@@ -168,7 +165,7 @@ func addWebSocketRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
 			return
 		}
-		limit, cursor, err := parseWebSocketPage(r)
+		limit, cursor, err := parseNewestFirstPage(r)
 		if err != nil {
 			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
 			return
@@ -325,38 +322,6 @@ func decodeWebSocketInject(r *http.Request) (string, int, []byte, error) {
 		return "", 0, nil, invalid
 	}
 	return direction, opcode, payload, nil
-}
-
-func parseWebSocketPage(r *http.Request) (int, *uuid.UUID, error) {
-	var pageFields []string
-	for _, field := range strings.Split(r.URL.RawQuery, "&") {
-		name, _, _ := strings.Cut(field, "=")
-		key, err := url.QueryUnescape(name)
-		if err == nil && (key == "limit" || key == "cursor") {
-			pageFields = append(pageFields, field)
-		}
-	}
-	query, err := url.ParseQuery(strings.Join(pageFields, "&"))
-	if err != nil {
-		return 0, nil, err
-	}
-	limit := 200
-	if values, present := query["limit"]; present {
-		parsed, err := strconv.Atoi(values[0])
-		if err != nil || parsed < 1 || parsed > 500 {
-			return 0, nil, errors.New("invalid limit")
-		}
-		limit = parsed
-	}
-	var cursor *uuid.UUID
-	if values, present := query["cursor"]; present {
-		parsed, err := uuid.Parse(values[0])
-		if err != nil {
-			return 0, nil, err
-		}
-		cursor = &parsed
-	}
-	return limit, cursor, nil
 }
 
 func webSocketMessageFromDomain(message domain.WebSocketMessage, requestID uuid.UUID) webSocketMessageResponse {

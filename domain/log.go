@@ -13,6 +13,8 @@ type LogRepository interface {
 	InsertLog(log *Log) error
 	// GetLogs retrieves all log entries from the repository.
 	GetLogs() ([]*Log, error)
+	// ListLogs returns a newest-first page of logs older than cursor.
+	ListLogs(cursor *uuid.UUID, limit int) ([]*Log, *uuid.UUID, error)
 }
 
 // Log represents a single log entry, containing information about an event that occurred in the application.
