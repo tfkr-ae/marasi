@@ -217,15 +217,28 @@ func TestServiceListCommand(t *testing.T) {
 			}
 		}
 
+		alphaStatus := fmt.Sprintf("status: running\nversion: dev\ninstance: alpha\nproject: %s\nproxy listener: inactive\n", project)
+		zetaStatus := fmt.Sprintf("status: running\nversion: 13.09.2026\ninstance: zeta\nproject: %s\nproxy listener: 127.0.0.1:8080\n", project)
+		want := alphaStatus + "\n" + zetaStatus
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", strings.Repeat("x", 120), "service", "list")
-		want := fmt.Sprintf("status: running\nversion: dev\ninstance: alpha\nproject: %s\nproxy listener: inactive\n\nstatus: running\nversion: 13.09.2026\ninstance: zeta\nproject: %s\nproxy listener: 127.0.0.1:8080\n", project, project)
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
-		for name, response := range map[string]*cannedControlRequest{"alpha": alpha, "zeta": zeta} {
-			got := response.snapshot()
+		for _, instance := range []struct {
+			name     string
+			response *cannedControlRequest
+			want     string
+		}{
+			{name: "alpha", response: alpha, want: alphaStatus},
+			{name: "zeta", response: zeta, want: zetaStatus},
+		} {
+			got := instance.response.snapshot()
 			if got.Method != http.MethodGet || got.Path != "/service/status" || got.RawQuery != "" {
-				t.Errorf("%s: wanted GET /service/status, got %s %s?%s", name, got.Method, got.Path, got.RawQuery)
+				t.Errorf("%s: wanted GET /service/status, got %s %s?%s", instance.name, got.Method, got.Path, got.RawQuery)
+			}
+			statusStdout, statusStderr, statusErr := runMarasi(binary, "--config-dir", configDir, "--instance", instance.name, "service", "status")
+			if statusErr != nil || statusStdout != instance.want || statusStderr != "" {
+				t.Errorf("%s: service status wanted stdout %q, empty stderr, nil error; got stdout %q, stderr %q, error %v", instance.name, instance.want, statusStdout, statusStderr, statusErr)
 			}
 		}
 	})
@@ -354,5 +367,28 @@ func TestServiceListCommand(t *testing.T) {
 		if err != nil || stderr != "" || !strings.Contains(stdout, "List service instances") || strings.HasPrefix(stdout, "{") {
 			t.Fatalf("wanted human help in JSON mode, got stdout %q, stderr %q, error %v", stdout, stderr, err)
 		}
+	})
+
+	t.Run("should report an unreadable instances directory", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		instancesDir := filepath.Join(configDir, "instances")
+		if err := os.Mkdir(instancesDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(instancesDir, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(instancesDir, 0700) })
+		if _, err := os.ReadDir(instancesDir); !os.IsPermission(err) {
+			t.Skipf("mode 000 does not prevent reading this directory: %v", err)
+		}
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "service", "list")
+		if err == nil || stdout != "" || !strings.Contains(stderr, instancesDir) {
+			t.Fatalf("wanted a read error naming %q and no rows, got stdout %q, stderr %q, error %v", instancesDir, stdout, stderr, err)
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--json", "--config-dir", configDir, "service", "list")
+		assertJSONCommandError(t, stdout, stderr, err, instancesDir)
 	})
 }

@@ -182,54 +182,54 @@ func listServiceInstances(ctx context.Context, configDir string, asJSON bool, st
 			client.Close()
 			return fmt.Errorf("creating service status request: %w", err)
 		}
-		response, err := client.Do(request)
-		if err != nil {
+		response, requestErr := client.Do(request)
+		if requestErr != nil {
 			client.Close()
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			var dialError *net.OpError
-			if errors.As(err, &dialError) && dialError.Op == "dial" {
+			if errors.As(requestErr, &dialError) && dialError.Op == "dial" {
 				continue
 			}
 		}
 
 		var body []byte
-		if response != nil {
-			body, err = io.ReadAll(response.Body)
+		var statusOutput strings.Builder
+		running := false
+		if requestErr == nil {
+			var readErr error
+			body, readErr = io.ReadAll(response.Body)
 			closeErr := response.Body.Close()
 			client.Close()
-			if err != nil || closeErr != nil {
-				body = nil
+			if response.StatusCode == http.StatusOK && readErr == nil && closeErr == nil {
+				running = writeServiceStatusHuman(body, &statusOutput) == nil
 			}
-		}
-		running := response != nil && response.StatusCode == http.StatusOK && err == nil && writeServiceStatusHuman(body, io.Discard) == nil
-		if running {
-			items = append(items, json.RawMessage(body))
-			if !asJSON {
-				if human.Len() != 0 {
-					human.WriteByte('\n')
-				}
-				if err := writeServiceStatusHuman(body, &human); err != nil {
-					return err
-				}
-			}
-			continue
 		}
 
-		item, err := json.Marshal(struct {
-			Status   string `json:"status"`
-			Instance string `json:"instance"`
-		}{Status: "unhealthy", Instance: name})
-		if err != nil {
-			return fmt.Errorf("encoding unhealthy service instance: %w", err)
+		var item json.RawMessage
+		if running {
+			item = json.RawMessage(body)
+		} else {
+			var err error
+			item, err = json.Marshal(struct {
+				Status   string `json:"status"`
+				Instance string `json:"instance"`
+			}{Status: "unhealthy", Instance: name})
+			if err != nil {
+				return fmt.Errorf("encoding unhealthy service instance: %w", err)
+			}
 		}
 		items = append(items, item)
 		if !asJSON {
 			if human.Len() != 0 {
 				human.WriteByte('\n')
 			}
-			fmt.Fprintf(&human, "status: unhealthy\ninstance: %s\n", name)
+			if running {
+				human.WriteString(statusOutput.String())
+			} else {
+				fmt.Fprintf(&human, "status: unhealthy\ninstance: %s\n", name)
+			}
 		}
 	}
 
