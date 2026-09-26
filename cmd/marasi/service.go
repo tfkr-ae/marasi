@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,7 +83,7 @@ func init() {
 	startCmd.Flags().StringVar(&proxyAddress, "address", "127.0.0.1", "Proxy listener address")
 	proxyPort = 8080
 	startCmd.Flags().Var(&proxyPort, "port", "Proxy listener port")
-	serviceCmd.AddCommand(startCmd, stopCmd, statusCmd)
+	serviceCmd.AddCommand(startCmd, stopCmd, statusCmd, listServiceInstancesCmd)
 	rootCmd.AddCommand(serviceCmd)
 }
 
@@ -144,6 +145,106 @@ var statusCmd = &cobra.Command{
 
 		return getServiceStatus(ctx, instancePath, filepath.Base(instancePath), jsonOutput, cmd.OutOrStdout())
 	},
+}
+
+var listServiceInstancesCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List service instances",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return listServiceInstances(cmd.Context(), configDir, jsonOutput, cmd.OutOrStdout())
+	},
+}
+
+func listServiceInstances(ctx context.Context, configDir string, asJSON bool, stdout io.Writer) error {
+	instancesDir := filepath.Join(configDir, "instances")
+	entries, err := os.ReadDir(instancesDir)
+	if errors.Is(err, os.ErrNotExist) {
+		entries = nil
+	} else if err != nil {
+		return fmt.Errorf("reading service instances directory %q: %w", instancesDir, err)
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".sock") {
+			names = append(names, strings.TrimSuffix(entry.Name(), ".sock"))
+		}
+	}
+	sort.Strings(names)
+
+	items := make([]json.RawMessage, 0, len(names))
+	var human strings.Builder
+	for _, name := range names {
+		client := service.NewClient(filepath.Join(instancesDir, name+".sock"))
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/service/status", nil)
+		if err != nil {
+			client.Close()
+			return fmt.Errorf("creating service status request: %w", err)
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			client.Close()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			var dialError *net.OpError
+			if errors.As(err, &dialError) && dialError.Op == "dial" {
+				continue
+			}
+		}
+
+		var body []byte
+		if response != nil {
+			body, err = io.ReadAll(response.Body)
+			closeErr := response.Body.Close()
+			client.Close()
+			if err != nil || closeErr != nil {
+				body = nil
+			}
+		}
+		running := response != nil && response.StatusCode == http.StatusOK && err == nil && writeServiceStatusHuman(body, io.Discard) == nil
+		if running {
+			items = append(items, json.RawMessage(body))
+			if !asJSON {
+				if human.Len() != 0 {
+					human.WriteByte('\n')
+				}
+				if err := writeServiceStatusHuman(body, &human); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+
+		item, err := json.Marshal(struct {
+			Status   string `json:"status"`
+			Instance string `json:"instance"`
+		}{Status: "unhealthy", Instance: name})
+		if err != nil {
+			return fmt.Errorf("encoding unhealthy service instance: %w", err)
+		}
+		items = append(items, item)
+		if !asJSON {
+			if human.Len() != 0 {
+				human.WriteByte('\n')
+			}
+			fmt.Fprintf(&human, "status: unhealthy\ninstance: %s\n", name)
+		}
+	}
+
+	if asJSON {
+		if err := json.NewEncoder(stdout).Encode(struct {
+			Items []json.RawMessage `json:"items"`
+		}{Items: items}); err != nil {
+			return fmt.Errorf("writing service instances: %w", err)
+		}
+		return nil
+	}
+	if _, err := io.WriteString(stdout, human.String()); err != nil {
+		return fmt.Errorf("writing service instances: %w", err)
+	}
+	return nil
 }
 
 // getServiceStatus queries and prints the selected service instance's status.

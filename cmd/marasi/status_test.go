@@ -197,3 +197,162 @@ func TestServiceStatusCommand(t *testing.T) {
 		}
 	})
 }
+
+func TestServiceListCommand(t *testing.T) {
+	binary := buildMarasi(t)
+
+	t.Run("should list running instances by name and ignore --instance", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		canonicalConfigDir, err := filepath.EvalSymlinks(configDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		project := filepath.Join(canonicalConfigDir, "scratchpad.marasi")
+		alpha := startCannedControlAPI(t, configDir, "alpha", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","instance":"alpha","project":%q,"proxy_listener":null}`, project))
+		zeta := startCannedControlAPI(t, configDir, "zeta", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"13.09.2026","instance":"zeta","project":%q,"proxy_listener":"127.0.0.1:8080"}`, project))
+		instancesDir := filepath.Join(configDir, "instances")
+		for _, name := range []string{"orphan.lock", "orphan.log"} {
+			if err := os.WriteFile(filepath.Join(instancesDir, name), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", strings.Repeat("x", 120), "service", "list")
+		want := fmt.Sprintf("status: running\nversion: dev\ninstance: alpha\nproject: %s\nproxy listener: inactive\n\nstatus: running\nversion: 13.09.2026\ninstance: zeta\nproject: %s\nproxy listener: 127.0.0.1:8080\n", project, project)
+		if err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+		for name, response := range map[string]*cannedControlRequest{"alpha": alpha, "zeta": zeta} {
+			got := response.snapshot()
+			if got.Method != http.MethodGet || got.Path != "/service/status" || got.RawQuery != "" {
+				t.Errorf("%s: wanted GET /service/status, got %s %s?%s", name, got.Method, got.Path, got.RawQuery)
+			}
+		}
+	})
+
+	t.Run("should omit stale sockets and mark unreadable status responses unhealthy", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		canonicalConfigDir, err := filepath.EvalSymlinks(configDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		project := filepath.Join(canonicalConfigDir, "scratchpad.marasi")
+		startCannedControlAPI(t, configDir, "bad", http.StatusInternalServerError, `{"error":"internal_server_error"}`)
+		startCannedControlAPIHandler(t, configDir, "dropped", func(w http.ResponseWriter, _ *http.Request) {
+			connection, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Errorf("hijacking control connection: %v", err)
+				return
+			}
+			connection.Close()
+		})
+		startCannedControlAPI(t, configDir, "garbage", http.StatusOK, `{"unexpected":true}`)
+		startCannedControlAPI(t, configDir, "running", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","instance":"running","project":%q,"proxy_listener":null}`, project))
+		if err := os.WriteFile(filepath.Join(configDir, "instances", "stale.sock"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "service", "list")
+		want := fmt.Sprintf("status: unhealthy\ninstance: bad\n\nstatus: unhealthy\ninstance: dropped\n\nstatus: unhealthy\ninstance: garbage\n\nstatus: running\nversion: dev\ninstance: running\nproject: %s\nproxy listener: inactive\n", project)
+		if err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should omit a socket removed before its dial", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		canonicalConfigDir, err := filepath.EvalSymlinks(configDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		project := filepath.Join(canonicalConfigDir, "scratchpad.marasi")
+		zetaSocketPath, _, err := instanceResourcePaths(configDir, "zeta")
+		if err != nil {
+			t.Fatal(err)
+		}
+		startCannedControlAPI(t, configDir, "zeta", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","instance":"zeta","project":%q,"proxy_listener":null}`, project))
+		startCannedControlAPIHandler(t, configDir, "alpha", func(w http.ResponseWriter, _ *http.Request) {
+			if err := os.Remove(zetaSocketPath); err != nil {
+				t.Errorf("removing zeta socket: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"status":"running","version":"dev","instance":"alpha","project":%q,"proxy_listener":null}`, project)
+		})
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "service", "list")
+		want := fmt.Sprintf("status: running\nversion: dev\ninstance: alpha\nproject: %s\nproxy listener: inactive\n", project)
+		if err != nil || stdout != want || stderr != "" {
+			t.Fatalf("wanted stdout %q, empty stderr, nil error; got stdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should print one JSON items object with both row shapes", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		canonicalConfigDir, err := filepath.EvalSymlinks(configDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		project := filepath.Join(canonicalConfigDir, "scratchpad.marasi")
+		startCannedControlAPI(t, configDir, "broken", http.StatusInternalServerError, `{"error":"internal_server_error"}`)
+		startCannedControlAPI(t, configDir, "running", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","instance":"running","project":%q,"proxy_listener":null}`, project))
+		want := fmt.Sprintf("{\"items\":[{\"status\":\"unhealthy\",\"instance\":\"broken\"},{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"running\",\"project\":%q,\"proxy_listener\":null}]}\n", project)
+		for _, args := range [][]string{
+			{"--json", "--config-dir", configDir, "service", "list"},
+			{"--config-dir", configDir, "service", "list", "--json"},
+		} {
+			stdout, stderr, err := runMarasi(binary, args...)
+			if err != nil || stdout != want || stderr != "" {
+				t.Fatalf("%v: wanted stdout %q, empty stderr, nil error; got stdout %q, stderr %q, error %v", args, want, stdout, stderr, err)
+			}
+		}
+	})
+
+	t.Run("should treat a missing instances directory as an empty list without creating it", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		instancesDir := filepath.Join(configDir, "instances")
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "service", "list")
+		if err != nil || stdout != "" || stderr != "" {
+			t.Fatalf("wanted empty success, got stdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		if _, err := os.Stat(instancesDir); !os.IsNotExist(err) {
+			t.Fatalf("wanted no instances directory, got stat error %v", err)
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--json", "--config-dir", configDir, "service", "list")
+		if err != nil || stdout != "{\"items\":[]}\n" || stderr != "" {
+			t.Fatalf("wanted empty JSON list, got stdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+	})
+
+	t.Run("should report directory read failures and reject invalid invocations before scanning", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		instancesDir := filepath.Join(configDir, "instances")
+		if err := os.WriteFile(instancesDir, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "service", "list")
+		if err == nil || stdout != "" || !strings.Contains(stderr, instancesDir) {
+			t.Fatalf("wanted directory error naming %q and no rows, got stdout %q, stderr %q, error %v", instancesDir, stdout, stderr, err)
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--json", "--config-dir", configDir, "service", "list")
+		assertJSONCommandError(t, stdout, stderr, err, instancesDir)
+
+		for _, args := range [][]string{
+			{"--config-dir", configDir, "service", "list", "extra"},
+			{"--config-dir", configDir, "service", "list", "--project", "scratchpad"},
+		} {
+			stdout, stderr, err = runMarasi(binary, args...)
+			if err == nil || stdout != "" || strings.Contains(stderr, instancesDir) {
+				t.Fatalf("%v should fail before reading %q, got stdout %q, stderr %q, error %v", args, instancesDir, stdout, stderr, err)
+			}
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--json", "--config-dir", configDir, "service", "list", "--help")
+		if err != nil || stderr != "" || !strings.Contains(stdout, "List service instances") || strings.HasPrefix(stdout, "{") {
+			t.Fatalf("wanted human help in JSON mode, got stdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+	})
+}

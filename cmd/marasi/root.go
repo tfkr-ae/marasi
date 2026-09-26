@@ -116,9 +116,12 @@ func init() {
 }
 
 // prepareInstancePath resolves --config-dir and --instance into instancePath.
-func prepareInstancePath(*cobra.Command, []string) error {
+func prepareInstancePath(cmd *cobra.Command, _ []string) error {
 	if configDir == "" {
 		return fmt.Errorf("config dir is empty")
+	}
+	if cmd == listServiceInstancesCmd {
+		return nil
 	}
 
 	path, err := resolveInstancePath(configDir, instance)
