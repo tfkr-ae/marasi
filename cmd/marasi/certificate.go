@@ -12,7 +12,7 @@ import (
 )
 
 func init() {
-	certificateGetCmd.Flags().String("format", "pem", "Certificate output format: pem or der")
+	certificateGetCmd.Flags().String("format", "pem", "CA certificate output format: pem or der")
 	certificateCmd.AddCommand(certificateGetCmd)
 	rootCmd.AddCommand(certificateCmd)
 }
