@@ -10,6 +10,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -24,13 +27,79 @@ func init() {
 	projectOpenCmd.Flags().StringVar(&projectOpenName, "name", "", "Project name under the default projects directory")
 	projectOpenCmd.MarkFlagsMutuallyExclusive("path", "name")
 	projectOpenCmd.MarkFlagsOneRequired("path", "name")
-	projectCmd.AddCommand(projectOpenCmd)
+	projectCmd.AddCommand(projectListCmd, projectOpenCmd)
 	rootCmd.AddCommand(projectCmd)
 }
 
 var projectCmd = &cobra.Command{
 	Use:   "project",
-	Short: "Manage a service instance's open project",
+	Short: "Manage projects",
+}
+
+type projectListItem struct {
+	Name    string `json:"name"`
+	Project string `json:"project"`
+}
+
+var projectListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List named projects",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		items, err := listProjects(configDir)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
+				Items []projectListItem `json:"items"`
+			}{Items: items})
+		}
+		for _, item := range items {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", item.Name, item.Project); err != nil {
+				return fmt.Errorf("writing project list: %w", err)
+			}
+		}
+		return nil
+	},
+}
+
+func listProjects(configDir string) ([]projectListItem, error) {
+	projectsDir := filepath.Join(configDir, "projects")
+	entries, err := os.ReadDir(projectsDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return []projectListItem{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading projects directory %s: %w", projectsDir, err)
+	}
+
+	items := make([]projectListItem, 0, len(entries))
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".marasi") {
+			continue
+		}
+		path := filepath.Join(projectsDir, entry.Name())
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("checking project %s: %w", path, err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		canonicalPath, err := service.ResolveProjectPath(path)
+		if err != nil {
+			return nil, fmt.Errorf("resolving project %s: %w", path, err)
+		}
+		items = append(items, projectListItem{
+			Name:    strings.TrimSuffix(entry.Name(), ".marasi"),
+			Project: canonicalPath,
+		})
+	}
+	slices.SortFunc(items, func(left, right projectListItem) int {
+		return strings.Compare(left.Name, right.Name)
+	})
+	return items, nil
 }
 
 var projectOpenCmd = &cobra.Command{

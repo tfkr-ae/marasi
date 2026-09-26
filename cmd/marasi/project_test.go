@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -258,6 +259,209 @@ func TestProjectCommand(t *testing.T) {
 		command.Env = append(os.Environ(), "GOWORK=off", "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=0")
 		if combined, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("\nwanted:\nwindows cross-compile\ngot:\n%s\n%v", combined, err)
+		}
+	})
+}
+
+func TestProjectListCommand(t *testing.T) {
+	binary := buildMarasi(t)
+
+	t.Run("should list regular projects by name without requiring an instance", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		projectsDir := filepath.Join(configDir, "projects")
+		if err := os.Mkdir(projectsDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"zeta", "alpha"} {
+			if err := os.WriteFile(filepath.Join(projectsDir, name+".marasi"), []byte(name), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Mkdir(filepath.Join(projectsDir, "folder.marasi"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(projectsDir, "ignored.txt"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		alpha, err := filepath.EvalSymlinks(filepath.Join(projectsDir, "alpha.marasi"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		zeta, err := filepath.EvalSymlinks(filepath.Join(projectsDir, "zeta.marasi"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "../ignored", "project", "list")
+		want := fmt.Sprintf("alpha %s\nzeta %s\n", alpha, zeta)
+		if err != nil || stdout != want || stderr != "" {
+			t.Fatalf("wanted stdout %q, empty stderr, and nil error; got stdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "project", "list", "--json")
+		wantJSON := fmt.Sprintf("{\"items\":[{\"name\":\"alpha\",\"project\":%q},{\"name\":\"zeta\",\"project\":%q}]}\n", alpha, zeta)
+		if err != nil || stdout != wantJSON || stderr != "" {
+			t.Fatalf("wanted stdout %q, empty stderr, and nil error; got stdout %q, stderr %q, error %v", wantJSON, stdout, stderr, err)
+		}
+		for _, name := range []string{"alpha", "zeta"} {
+			if _, err := os.Stat(filepath.Join(projectsDir, name+".marasi.lock")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("project list created a lock for %s: %v", name, err)
+			}
+		}
+	})
+
+	t.Run("should treat a missing projects directory as an empty list without creating it", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		projectsDir := filepath.Join(configDir, "projects")
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "../ignored", "project", "list")
+		if err != nil || stdout != "" || stderr != "" {
+			t.Fatalf("wanted empty output and nil error, got stdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		if _, err := os.Stat(projectsDir); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("project list created %s: %v", projectsDir, err)
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--json", "--config-dir", configDir, "project", "list")
+		if err != nil || stdout != "{\"items\":[]}\n" || stderr != "" {
+			t.Fatalf("wanted empty JSON list and empty stderr, got stdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		if _, err := os.Stat(projectsDir); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("project list created %s: %v", projectsDir, err)
+		}
+	})
+
+	t.Run("should list symlink names with canonical paths and retain duplicate targets", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		projectsDir := filepath.Join(configDir, "projects")
+		if err := os.Mkdir(projectsDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		targetDir := t.TempDir()
+		target := filepath.Join(targetDir, "target.marasi")
+		if err := os.WriteFile(target, []byte("target"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(projectsDir, "inside.marasi"), []byte("inside"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Join(projectsDir, "folder.marasi"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Join(targetDir, "target-directory"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		for name, path := range map[string]string{
+			"alias.marasi":          target,
+			"alias-copy.marasi":     target,
+			"directory-link.marasi": filepath.Join(targetDir, "target-directory"),
+		} {
+			if err := os.Symlink(path, filepath.Join(projectsDir, name)); err != nil {
+				t.Skipf("creating symlink: %v", err)
+			}
+		}
+		canonicalTarget, err := filepath.EvalSymlinks(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inside, err := filepath.EvalSymlinks(filepath.Join(projectsDir, "inside.marasi"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "project", "list")
+		want := fmt.Sprintf("alias %s\nalias-copy %s\ninside %s\n", canonicalTarget, canonicalTarget, inside)
+		if err != nil || stdout != want || stderr != "" {
+			t.Fatalf("wanted stdout %q, empty stderr, and nil error; got stdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "project", "list", "--json")
+		wantJSON := fmt.Sprintf("{\"items\":[{\"name\":\"alias\",\"project\":%q},{\"name\":\"alias-copy\",\"project\":%q},{\"name\":\"inside\",\"project\":%q}]}\n", canonicalTarget, canonicalTarget, inside)
+		if err != nil || stdout != wantJSON || stderr != "" {
+			t.Fatalf("wanted stdout %q, empty stderr, and nil error; got stdout %q, stderr %q, error %v", wantJSON, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should fail without printing rows for broken and invalid-target symlinks", func(t *testing.T) {
+		t.Run("broken symlink", func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			projectsDir := filepath.Join(configDir, "projects")
+			if err := os.Mkdir(projectsDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(projectsDir, "a-valid.marasi"), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			broken := filepath.Join(projectsDir, "z-broken.marasi")
+			if err := os.Symlink(filepath.Join(t.TempDir(), "missing.marasi"), broken); err != nil {
+				t.Skipf("creating symlink: %v", err)
+			}
+			stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "project", "list")
+			if err == nil || stdout != "" || !strings.Contains(stderr, broken) {
+				t.Fatalf("wanted failure naming %s and no rows, got stdout %q, stderr %q, error %v", broken, stdout, stderr, err)
+			}
+			stdout, stderr, err = runMarasi(binary, "--json", "--config-dir", configDir, "project", "list")
+			assertJSONCommandError(t, stdout, stderr, err, broken)
+		})
+
+		t.Run("target without project suffix", func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			projectsDir := filepath.Join(configDir, "projects")
+			if err := os.Mkdir(projectsDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(projectsDir, "a-valid.marasi"), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			outside := filepath.Join(t.TempDir(), "outside.txt")
+			if err := os.WriteFile(outside, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			invalid := filepath.Join(projectsDir, "z-invalid.marasi")
+			if err := os.Symlink(outside, invalid); err != nil {
+				t.Skipf("creating symlink: %v", err)
+			}
+			stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "project", "list")
+			if err == nil || stdout != "" || !strings.Contains(stderr, invalid) {
+				t.Fatalf("wanted failure naming %s and no rows, got stdout %q, stderr %q, error %v", invalid, stdout, stderr, err)
+			}
+		})
+	})
+
+	t.Run("should name an unreadable projects directory", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		projectsDir := filepath.Join(configDir, "projects")
+		if err := os.Mkdir(projectsDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(projectsDir, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(projectsDir, 0700) })
+		if _, err := os.ReadDir(projectsDir); !os.IsPermission(err) {
+			t.Skipf("mode 000 does not prevent reading this directory: %v", err)
+		}
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "project", "list")
+		if err == nil || stdout != "" || !strings.Contains(stderr, projectsDir) {
+			t.Fatalf("wanted failure naming %s and no rows, got stdout %q, stderr %q, error %v", projectsDir, stdout, stderr, err)
+		}
+		stdout, stderr, err = runMarasi(binary, "--json", "--config-dir", configDir, "project", "list")
+		assertJSONCommandError(t, stdout, stderr, err, projectsDir)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "project", "list", "extra")
+		if err == nil || stdout != "" || strings.Contains(stderr, projectsDir) {
+			t.Fatalf("wanted argument failure before reading %s, got stdout %q, stderr %q, error %v", projectsDir, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should keep help human-readable and reject command-local flags", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "project", "list", "extra")
+		if err == nil || stdout != "" || !strings.Contains(stderr, "extra") {
+			t.Fatalf("wanted a no-arguments error, got stdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		stdout, stderr, err = runMarasi(binary, "--json", "--config-dir", configDir, "project", "list", "--help")
+		if err != nil || stderr != "" || !strings.Contains(stdout, "List named projects") || strings.HasPrefix(stdout, "{") {
+			t.Fatalf("wanted human-readable help in JSON mode, got stdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		if _, _, err := runMarasi(binary, "--config-dir", configDir, "project", "list", "-x"); err == nil {
+			t.Fatal("project list accepted a command-local short flag")
 		}
 	})
 }

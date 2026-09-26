@@ -120,7 +120,7 @@ func prepareInstancePath(cmd *cobra.Command, _ []string) error {
 	if configDir == "" {
 		return fmt.Errorf("config dir is empty")
 	}
-	if cmd == listServiceInstancesCmd {
+	if cmd == listServiceInstancesCmd || cmd == projectListCmd {
 		return nil
 	}
 
