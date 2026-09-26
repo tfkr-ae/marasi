@@ -7,6 +7,7 @@ Marasi users start a named detached proxy service for a named project, inspect i
 - Start an instance with `service start`.
 - Inspect version, instance, project, and proxy-listener identity with `service status`.
 - Stop the selected instance with `service stop`.
+- List instances in the config directory with `service list`.
 - Select isolated state with global `--config-dir` and `--instance` flags.
 - Choose the project with `--project-name` or `--project`.
 - Request machine-readable output with `--json`.
@@ -17,7 +18,7 @@ Build `dist/marasi`, then run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --i
 
 ## Driving it with shell and curl
 
-Run `service start --project-name "$VERIFY_PROJECT" --address 127.0.0.1 --port 0 --json`. Start JSON is only `instance` and `proxy_listener`. Then `service status --json`. Match `instance` to `$VERIFY_INSTANCE`, `status` to `running`, and `version` to the build `VERSION`. Require `project` to be the canonical absolute path of `$VERIFY_CONFIG_DIR/projects/$VERIFY_PROJECT.marasi`. Require `proxy_listener` to contain `127.0.0.1` and an assigned decimal port, and to equal the start value. Run `service stop --json` and require its `instance` to equal `$VERIFY_INSTANCE` and its `status` to equal `stopped`. A second `service status --json` must exit non-zero with `{"error":"instance $VERIFY_INSTANCE is not running"}`.
+Run `service start --project-name "$VERIFY_PROJECT" --address 127.0.0.1 --port 0 --json`. Start JSON is only `instance` and `proxy_listener`. Then `service status --json`. Match `instance` to `$VERIFY_INSTANCE`, `status` to `running`, and `version` to the build `VERSION`. Require `project` to be the canonical absolute path of `$VERIFY_CONFIG_DIR/projects/$VERIFY_PROJECT.marasi`. Require `proxy_listener` to contain `127.0.0.1` and an assigned decimal port, and to equal the start value. Run `service list --json` and require one item whose `instance` equals `$VERIFY_INSTANCE` and whose `status` is `running`. Run `service stop --json` and require its `instance` to equal `$VERIFY_INSTANCE` and its `status` to equal `stopped`. A second `service status --json` must exit non-zero with `{"error":"instance $VERIFY_INSTANCE is not running"}`.
 
 ## Gotchas
 
@@ -29,3 +30,4 @@ Run `service start --project-name "$VERIFY_PROJECT" --address 127.0.0.1 --port 0
 - The config directory contains the instance socket, log, project database, generated CA material, and wordlists. Use a new scratch directory under a short path such as `/tmp/mv.XXXXXX`. Marasi rejects the socket path when its byte length plus one exceeds 104.
 - A project has an exclusive lock. Unique project names avoid colliding with another instance.
 - A parent `go.work` can exclude this worktree. Build with `GOWORK=off`.
+- `service list` scans `$configDir/instances` for sockets and queries each for status. It reports running instances with their status body and unreachable sockets as `status` `unhealthy`. It never starts or stops instances.

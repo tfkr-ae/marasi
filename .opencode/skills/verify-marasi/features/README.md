@@ -4,12 +4,12 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 
 | Feature | User entry points | Proof file |
 | --- | --- | --- |
-| Service lifecycle | `service start`, `service status`, `service stop` | [service lifecycle](service-lifecycle.md) |
+| Service lifecycle | `service start`, `service status`, `service stop`, `service list` | [service lifecycle](service-lifecycle.md) |
 | Proxy listener control | `listener status`, `listener address`, `listener stop`, `listener start`, `listener update` | [proxy listener control](proxy-listener-control.md) |
 | HTTP traffic capture | Configure a client with `proxy_listener`, then make HTTP or HTTPS requests | [HTTP traffic capture](http-traffic-capture.md) |
 | Captured traffic inspection | `traffic list`, list filters and pagination, `traffic get`, `traffic metadata get`, `traffic metadata update` | [captured traffic inspection](captured-traffic-inspection.md) |
 | Notes | `notes set`, `notes list`, list pagination, `notes clear` | [notes](notes.md) |
-| Project open | `project open --name`, `project open --path`, `project switch` | [project open](project-open.md) |
+| Project open | `project open --name`, `project open --path`, `project switch`, `project list` | [project open](project-open.md) |
 | Events | `events` | [events](events.md) |
 | Launchpad | `launchpad create`, `launchpad list`, `launchpad get`, `launchpad update`, `launchpad link`, `launchpad launch` | [launchpad](launchpad.md) |
 | Test case | `test-case create`, `test-case list`, `test-case get`, `test-case update`, `test-case delete`, `test-case link`, `test-case unlink`, `test-case checklist` | [test case](test-case.md) |
@@ -23,5 +23,7 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Extension | `extension list`, `extension get`, `extension update`, `extension logs`, `extension settings get`, `extension settings set`, `extension call`, `extension enable`, `extension disable` | [extension](extension.md) |
 | Report | `report template list`, `report template add`, `report template remove`, `report template restore`, `report export` | [report](report.md) |
 | WebSocket | `websocket list`, `websocket get`, `websocket messages`, `traffic websocket`, `websocket inject`, `websocket close` | [websocket](websocket.md) |
+| Proxy logs | `logs`, list pagination with `--limit` and `--cursor` | [proxy logs](logs.md) |
+| CA certificate | `certificate get`, `--format pem` or `der` | [CA certificate](certificate.md) |
 
-When a change touches one row, read that feature file and cover every affected entry point. The bundled helper proves service lifecycle, one HTTP capture, live `events` subscription, filtered listing, and detail inspection. It does not cover every listener transition, `listener address`, HTTPS interception, pagination, project open, launchpad, test cases, findings, artifacts, notes, metadata, Checkpoint, Chrome, waypoints, wordlists, Armory, extensions, report templates, report export, or WebSocket connections.
+When a change touches one row, read that feature file and cover every affected entry point. The bundled helper proves service lifecycle, one HTTP capture, live `events` subscription, filtered listing, and detail inspection. It does not cover every listener transition, `listener address`, HTTPS interception, pagination, `service list`, project open, project list, launchpad, test cases, findings, artifacts, notes, metadata, Checkpoint, Chrome, waypoints, wordlists, Armory, extensions, report templates, report export, WebSocket connections, proxy logs, or CA certificate fetch.

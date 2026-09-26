@@ -7,6 +7,7 @@ Users switch a running instance to another project without stopping the service 
 - Open by name with `project open --name`.
 - Open by `.marasi` path with `project open --path`.
 - Use `project switch` as an alias for `project open`.
+- List named projects with `project list`.
 - Choose human-readable or `--json` output.
 
 ## How to get to it (user POV)
@@ -15,7 +16,7 @@ Start a service first. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --inst
 
 ## Driving it with shell and curl
 
-Send one proxied request to `/before.txt`. Run `traffic list --path /before.txt --json` and require one row. Run `project open --name "$OTHER_PROJECT" --json`. Require `project` to be the canonical absolute path ending in `$OTHER_PROJECT.marasi`. Run `service status --json` and require the same `project` path with `status` `running`. Run `traffic list --path /before.txt --json` and require empty `items`. Send one proxied request to `/after.txt`, then `traffic list --path /after.txt --json` and require that new row with `/before.txt` still absent.
+Send one proxied request to `/before.txt`. Run `traffic list --path /before.txt --json` and require one row. Run `project open --name "$OTHER_PROJECT" --json`. Require `project` to be the canonical absolute path ending in `$OTHER_PROJECT.marasi`. Run `service status --json` and require the same `project` path with `status` `running`. Run `traffic list --path /before.txt --json` and require empty `items`. Send one proxied request to `/after.txt`, then `traffic list --path /after.txt --json` and require that new row with `/before.txt` still absent. Run `project list --json` and require items for both `$VERIFY_PROJECT` and `$OTHER_PROJECT`, each with `name` and canonical `project` path in name order.
 
 ## Gotchas
 
@@ -26,3 +27,4 @@ Send one proxied request to `/before.txt`. Run `traffic list --path /before.txt 
 - Opening fails with `opening project: project_busy` while a Checkpoint item is pending or an Armory run is `in_progress`. Human output says `409 Conflict` and does not include the code. Forward or drop held items and wait for Armory to leave `in_progress` first.
 - After a switch, `traffic list` and `traffic get` no longer see the previous project's rows.
 - `service status` `project` becomes the new path. The launch doctor check against `$VERIFY_PROJECT` no longer matches, even though the instance is still ours.
+- `project list` is local. It reads `$configDir/projects/*.marasi` without contacting the service, skips non-regular files, and prints name order. It works even when no instance is running.
