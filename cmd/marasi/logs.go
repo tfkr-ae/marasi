@@ -24,7 +24,11 @@ var logsCmd = &cobra.Command{
 	Short: "List proxy logs",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		body, err := runControlRequest(cmd, http.MethodGet, "/logs?"+logsQuery(), "listing logs", nil)
+		query, err := logsQuery()
+		if err != nil {
+			return err
+		}
+		body, err := runControlRequest(cmd, http.MethodGet, "/logs?"+query, "listing logs", nil)
 		if err != nil {
 			return err
 		}
@@ -36,12 +40,16 @@ var logsCmd = &cobra.Command{
 	},
 }
 
-func logsQuery() string {
-	query := url.Values{"limit": {logsLimit}}
-	if logsCursor != "" {
-		query.Set("cursor", logsCursor)
+func logsQuery() (string, error) {
+	limit, err := parsePageLimit(logsLimit)
+	if err != nil {
+		return "", err
 	}
-	return query.Encode()
+	query := url.Values{"limit": {limit}}
+	if err := setCursorQuery(query, logsCursor); err != nil {
+		return "", err
+	}
+	return query.Encode(), nil
 }
 
 func writeProxyLogsHuman(body []byte, stdout, stderr io.Writer) error {

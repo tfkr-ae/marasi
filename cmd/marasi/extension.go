@@ -56,7 +56,11 @@ var extensionGetCmd = &cobra.Command{
 	Short: "Get one extension",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		body, err := runExtensionRequest(cmd, http.MethodGet, "/extension/"+args[0], "getting extension", nil)
+		path, err := serviceIDPath("/extension/", args[0], "")
+		if err != nil {
+			return err
+		}
+		body, err := runExtensionRequest(cmd, http.MethodGet, path, "getting extension", nil)
 		if err != nil {
 			return err
 		}
@@ -83,7 +87,11 @@ var extensionUpdateCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("encoding extension update: %w", err)
 		}
-		body, err := runExtensionRequest(cmd, http.MethodPost, "/extension/"+args[0], "updating extension", payload)
+		path, err := serviceIDPath("/extension/", args[0], "")
+		if err != nil {
+			return err
+		}
+		body, err := runExtensionRequest(cmd, http.MethodPost, path, "updating extension", payload)
 		if err != nil {
 			return err
 		}
@@ -101,7 +109,11 @@ var extensionLogsCmd = &cobra.Command{
 	Short: "List extension print logs",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		body, err := runExtensionRequest(cmd, http.MethodGet, "/extension/"+args[0]+"/logs", "listing extension logs", nil)
+		path, err := serviceIDPath("/extension/", args[0], "/logs")
+		if err != nil {
+			return err
+		}
+		body, err := runExtensionRequest(cmd, http.MethodGet, path, "listing extension logs", nil)
 		if err != nil {
 			return err
 		}
@@ -123,7 +135,11 @@ var extensionSettingsGetCmd = &cobra.Command{
 	Short: "Get extension settings",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		body, err := runExtensionRequest(cmd, http.MethodGet, "/extension/"+args[0]+"/settings", "getting extension settings", nil)
+		path, err := serviceIDPath("/extension/", args[0], "/settings")
+		if err != nil {
+			return err
+		}
+		body, err := runExtensionRequest(cmd, http.MethodGet, path, "getting extension settings", nil)
 		if err != nil {
 			return err
 		}
@@ -151,7 +167,11 @@ var extensionSettingsSetCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("encoding extension settings: %w", err)
 		}
-		body, err := runExtensionRequest(cmd, http.MethodPost, "/extension/"+args[0]+"/settings", "setting extension settings", payload)
+		path, err := serviceIDPath("/extension/", args[0], "/settings")
+		if err != nil {
+			return err
+		}
+		body, err := runExtensionRequest(cmd, http.MethodPost, path, "setting extension settings", payload)
 		if err != nil {
 			return err
 		}
@@ -173,7 +193,11 @@ var extensionCallCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runExtensionRequest(cmd, http.MethodPost, "/extension/"+args[0]+"/call", "calling extension", payload)
+		path, err := serviceIDPath("/extension/", args[0], "/call")
+		if err != nil {
+			return err
+		}
+		body, err := runExtensionRequest(cmd, http.MethodPost, path, "calling extension", payload)
 		if err != nil {
 			return err
 		}
@@ -211,7 +235,11 @@ func runExtensionEnableDisable(cmd *cobra.Command, id string, enabled bool, oper
 	if err != nil {
 		return fmt.Errorf("encoding extension %s: %w", state, err)
 	}
-	body, err := runExtensionRequest(cmd, http.MethodPost, "/extension/"+id+"/enable", operation, payload)
+	path, err := serviceIDPath("/extension/", id, "/enable")
+	if err != nil {
+		return err
+	}
+	body, err := runExtensionRequest(cmd, http.MethodPost, path, operation, payload)
 	if err != nil {
 		return err
 	}

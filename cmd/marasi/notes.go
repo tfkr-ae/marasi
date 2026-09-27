@@ -42,10 +42,14 @@ var notesListCmd = &cobra.Command{
 	Short: "List request/response pairs that have a note",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		limit, err := parsePageLimit(notesListLimit)
+		if err != nil {
+			return err
+		}
 		query := url.Values{}
-		query.Set("limit", notesListLimit)
-		if notesListCursor != "" {
-			query.Set("cursor", notesListCursor)
+		query.Set("limit", limit)
+		if err := setCursorQuery(query, notesListCursor); err != nil {
+			return err
 		}
 		body, err := runNotesRequest(cmd, http.MethodGet, "/notes?"+query.Encode(), "listing notes", nil)
 		if err != nil {
@@ -64,6 +68,10 @@ var notesSetCmd = &cobra.Command{
 	Short: "Set the note on a request/response pair",
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := serviceIDPath("/notes/", args[0], "")
+		if err != nil {
+			return err
+		}
 		note, err := readNoteSetText(cmd, args)
 		if err != nil {
 			return err
@@ -74,7 +82,7 @@ var notesSetCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("encoding note request: %w", err)
 		}
-		body, err := runNotesRequest(cmd, http.MethodPut, "/notes/"+args[0], "setting note", payload)
+		body, err := runNotesRequest(cmd, http.MethodPut, path, "setting note", payload)
 		if err != nil {
 			return err
 		}
@@ -92,7 +100,11 @@ var notesClearCmd = &cobra.Command{
 	Short: "Clear the note on a request/response pair",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		body, err := runNotesRequest(cmd, http.MethodDelete, "/notes/"+args[0], "clearing note", nil)
+		path, err := serviceIDPath("/notes/", args[0], "")
+		if err != nil {
+			return err
+		}
+		body, err := runNotesRequest(cmd, http.MethodDelete, path, "clearing note", nil)
 		if err != nil {
 			return err
 		}

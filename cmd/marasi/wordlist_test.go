@@ -122,8 +122,18 @@ func TestWordlistCommandContract(t *testing.T) {
 		}
 	})
 
-	t.Run("should report control API errors for invalid names and limits", func(t *testing.T) {
-		for index, args := range [][]string{{"wordlist", "preview", "../passwords.txt"}, {"wordlist", "preview", "passwords.txt", "--limit", "0"}, {"wordlist", "preview", "passwords.txt", "--limit", "101"}} {
+	t.Run("should reject an invalid wordlist name before calling the service", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "invalid-name", http.StatusBadRequest, `{"error":"invalid_wordlist_request"}`)
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "invalid-name", "--json", "wordlist", "preview", "../passwords.txt")
+		assertJSONCommandError(t, stdout, stderr, err, `invalid wordlist name "../passwords.txt"`)
+		if sent.snapshot().Path != "" {
+			t.Fatalf("\nwanted:\nno request\ngot:\n%s %s", sent.snapshot().Method, sent.snapshot().Path)
+		}
+	})
+
+	t.Run("should report control API errors for invalid limits", func(t *testing.T) {
+		for index, args := range [][]string{{"wordlist", "preview", "passwords.txt", "--limit", "0"}, {"wordlist", "preview", "passwords.txt", "--limit", "101"}} {
 			configDir := serviceConfigDir(t)
 			instanceName := "invalid-" + string(rune('a'+index))
 			startCannedControlAPI(t, configDir, instanceName, http.StatusBadRequest, `{"error":"invalid_wordlist_request"}`)

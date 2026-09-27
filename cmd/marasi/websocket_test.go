@@ -82,7 +82,7 @@ func TestWebSocketListCommand(t *testing.T) {
 	t.Run("should use the listing operation for API errors", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"bad_request"}`)
-		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "websocket", "list", "--json", "--limit", "0")
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "websocket", "list", "--json")
 		assertJSONCommandError(t, stdout, stderr, err, "listing websocket connections: bad_request")
 	})
 
@@ -454,15 +454,15 @@ func TestWebSocketMessagesCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("should keep the connection argument inside the message path", func(t *testing.T) {
+	t.Run("should reject a connection id that is not a uuid before building the message path", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"bad_request"}`)
-		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "websocket", "messages", connectionID+"#")
-		if err == nil {
-			t.Fatal("\nwanted:\nAPI bad_request\ngot:\nnil")
+		_, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "websocket", "messages", connectionID+"#")
+		if err == nil || !strings.Contains(stderr, `invalid uuid "`+connectionID+`#"`) {
+			t.Fatalf("\nwanted:\ninvalid uuid\ngot:\nstderr %q error %v", stderr, err)
 		}
-		if got := sent.snapshot(); got.Path != "/websocket/"+connectionID+"#/message" {
-			t.Fatalf("\nwanted:\ninvalid ID sent to message route\ngot:\n%s", got.Path)
+		if got := sent.snapshot(); got.Path != "" {
+			t.Fatalf("\nwanted:\nno request\ngot:\n%s", got.Path)
 		}
 	})
 
@@ -488,7 +488,7 @@ func TestWebSocketMessagesCommand(t *testing.T) {
 	t.Run("should use listing websocket messages for API errors", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"bad_request"}`)
-		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "websocket", "messages", connectionID, "--json", "--limit", "0")
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "websocket", "messages", connectionID, "--json")
 		assertJSONCommandError(t, stdout, stderr, err, "listing websocket messages: bad_request")
 	})
 

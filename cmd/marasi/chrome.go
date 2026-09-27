@@ -10,7 +10,9 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -116,7 +118,11 @@ var chromeProfileRemoveCmd = &cobra.Command{
 	Short: "Remove a Chrome profile",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runChromeMutation(cmd, http.MethodDelete, "/chrome/profile/"+url.PathEscape(args[0]), "removing chrome profile", nil, "chrome profile "+args[0]+" removed")
+		name, err := chromeProfileSegment(args[0])
+		if err != nil {
+			return err
+		}
+		return runChromeMutation(cmd, http.MethodDelete, "/chrome/profile/"+name, "removing chrome profile", nil, "chrome profile "+args[0]+" removed")
 	},
 }
 
@@ -258,4 +264,11 @@ func writeChromeProfiles(body []byte, stdout io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func chromeProfileSegment(name string) (string, error) {
+	if name == "" || strings.ContainsRune(name, 0) || !filepath.IsLocal(name) || filepath.Base(name) != name {
+		return "", fmt.Errorf("invalid chrome profile name %q", name)
+	}
+	return url.PathEscape(name), nil
 }

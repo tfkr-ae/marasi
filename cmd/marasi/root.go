@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
@@ -155,6 +157,55 @@ func resolveInstancePath(configDir, name string) (string, error) {
 	}
 
 	return resolvedPath, nil
+}
+
+// parseServiceID checks that raw is a UUID and returns its canonical form.
+func parseServiceID(raw string) (string, error) {
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid uuid %q", raw)
+	}
+	return id.String(), nil
+}
+
+// serviceIDPath inserts a parsed UUID between prefix and suffix.
+func serviceIDPath(prefix, raw, suffix string) (string, error) {
+	id, err := parseServiceID(raw)
+	if err != nil {
+		return "", err
+	}
+	return prefix + id + suffix, nil
+}
+
+// parsePageLimit checks that raw is a page size the service accepts.
+func parsePageLimit(raw string) (string, error) {
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed < 1 || parsed > 500 {
+		return "", fmt.Errorf("invalid limit %q", raw)
+	}
+	return strconv.Itoa(parsed), nil
+}
+
+// parseStatusCode checks that raw is an integer status code.
+func parseStatusCode(raw string) (string, error) {
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid status code %q", raw)
+	}
+	return strconv.Itoa(parsed), nil
+}
+
+// setCursorQuery sets cursor when raw is non-empty, after parsing it as a UUID.
+func setCursorQuery(query url.Values, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	id, err := parseServiceID(raw)
+	if err != nil {
+		return err
+	}
+	query.Set("cursor", id)
+	return nil
 }
 
 // defaultConfigDir returns the per-user Marasi config directory, or empty if it cannot be determined.

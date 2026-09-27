@@ -61,9 +61,13 @@ var artifactUploadCmd = &cobra.Command{
 		if artifactUploadFile == "" {
 			return errors.New("artifact upload requires --file")
 		}
-		parent, parentID := "test-case", artifactUploadTestCase
+		parent, rawParentID := "test-case", artifactUploadTestCase
 		if artifactUploadFinding != "" {
-			parent, parentID = "finding", artifactUploadFinding
+			parent, rawParentID = "finding", artifactUploadFinding
+		}
+		parentID, err := parseServiceID(rawParentID)
+		if err != nil {
+			return err
 		}
 		mimeType := artifactUploadMIME
 		if mimeType == "" {
@@ -132,6 +136,10 @@ func runArtifactUpload(cmd *cobra.Command, parent, parentID, path, mimeType stri
 }
 
 func runArtifactGet(cmd *cobra.Command, id string) error {
+	id, err := parseServiceID(id)
+	if err != nil {
+		return err
+	}
 	ctx, cancel := artifactCommandContext(cmd)
 	defer cancel()
 	response, err := controlArtifactRequest(ctx, instancePath, instance, jsonOutput, http.MethodGet, "/artifact/"+id, "", nil, "getting artifact")
@@ -151,6 +159,10 @@ func runArtifactGet(cmd *cobra.Command, id string) error {
 }
 
 func runArtifactDownload(cmd *cobra.Command, id, output string) error {
+	id, err := parseServiceID(id)
+	if err != nil {
+		return err
+	}
 	ctx, cancel := artifactCommandContext(cmd)
 	defer cancel()
 	metadataBody, err := controlArtifactRequest(ctx, instancePath, instance, false, http.MethodGet, "/artifact/"+id, "", nil, "getting artifact")
@@ -176,6 +188,10 @@ func runArtifactDownload(cmd *cobra.Command, id, output string) error {
 }
 
 func runArtifactDelete(cmd *cobra.Command, id string) error {
+	id, err := parseServiceID(id)
+	if err != nil {
+		return err
+	}
 	ctx, cancel := artifactCommandContext(cmd)
 	defer cancel()
 	response, err := controlArtifactRequest(ctx, instancePath, instance, jsonOutput, http.MethodDelete, "/artifact/"+id, "", nil, "deleting artifact")

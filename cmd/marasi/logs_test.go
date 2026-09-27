@@ -95,7 +95,7 @@ func TestLogsCommand(t *testing.T) {
 	t.Run("should format JSON control API errors by operation", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"bad_request"}`)
-		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "logs", "--json", "--limit", "0")
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "logs", "--json")
 		assertJSONCommandError(t, stdout, stderr, err, "listing logs: bad_request")
 	})
 

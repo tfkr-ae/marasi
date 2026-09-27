@@ -63,7 +63,11 @@ var checkpointGetCmd = &cobra.Command{
 	Short: "Get one Checkpoint item",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		body, err := runCheckpointRequest(cmd, http.MethodGet, "/checkpoint/"+args[0], "getting checkpoint item", nil)
+		path, err := serviceIDPath("/checkpoint/", args[0], "")
+		if err != nil {
+			return err
+		}
+		body, err := runCheckpointRequest(cmd, http.MethodGet, path, "getting checkpoint item", nil)
 		if err != nil {
 			return err
 		}
@@ -84,7 +88,11 @@ var checkpointForwardCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runCheckpointRequest(cmd, http.MethodPost, "/checkpoint/"+args[0]+"/forward", "forwarding checkpoint item", payload)
+		path, err := serviceIDPath("/checkpoint/", args[0], "/forward")
+		if err != nil {
+			return err
+		}
+		body, err := runCheckpointRequest(cmd, http.MethodPost, path, "forwarding checkpoint item", payload)
 		if err != nil {
 			return err
 		}
@@ -102,7 +110,11 @@ var checkpointDropCmd = &cobra.Command{
 	Short: "Drop a Checkpoint item",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		body, err := runCheckpointRequest(cmd, http.MethodPost, "/checkpoint/"+args[0]+"/drop", "dropping checkpoint item", nil)
+		path, err := serviceIDPath("/checkpoint/", args[0], "/drop")
+		if err != nil {
+			return err
+		}
+		body, err := runCheckpointRequest(cmd, http.MethodPost, path, "dropping checkpoint item", nil)
 		if err != nil {
 			return err
 		}
@@ -164,7 +176,11 @@ func encodeCheckpointForward(cmd *cobra.Command, id string) ([]byte, error) {
 		InterceptResponse bool    `json:"intercept_response,omitempty"`
 	}{InterceptResponse: checkpointInterceptResponse}
 	if edited {
-		item, err := runCheckpointRequest(cmd, http.MethodGet, "/checkpoint/"+id, "forwarding checkpoint item", nil)
+		path, err := serviceIDPath("/checkpoint/", id, "")
+		if err != nil {
+			return nil, err
+		}
+		item, err := runCheckpointRequest(cmd, http.MethodGet, path, "forwarding checkpoint item", nil)
 		if err != nil {
 			return nil, err
 		}

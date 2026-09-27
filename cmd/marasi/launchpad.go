@@ -213,14 +213,23 @@ func controlLaunchpad(ctx context.Context, instancePath, instanceName string, as
 	switch action {
 	case "create":
 		method, operation = http.MethodPost, "creating launchpad"
-	case "get":
-		path, operation = path+"/"+id, "getting launchpad"
-	case "update":
-		method, path, operation = http.MethodPost, path+"/"+id, "updating launchpad"
-	case "link":
-		method, path, operation = http.MethodPost, path+"/"+id+"/link", "linking launchpad request"
-	case "launch":
-		method, path, operation = http.MethodPost, path+"/"+id+"/launch", "launching launchpad request"
+	case "get", "update", "link", "launch":
+		suffix := ""
+		switch action {
+		case "get":
+			operation = "getting launchpad"
+		case "update":
+			method, operation = http.MethodPost, "updating launchpad"
+		case "link":
+			method, suffix, operation = http.MethodPost, "/link", "linking launchpad request"
+		case "launch":
+			method, suffix, operation = http.MethodPost, "/launch", "launching launchpad request"
+		}
+		parsed, err := serviceIDPath("/launchpad/", id, suffix)
+		if err != nil {
+			return nil, err
+		}
+		path = parsed
 	}
 	if method == http.MethodPost {
 		encoded, err := json.Marshal(payload)

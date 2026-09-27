@@ -109,7 +109,11 @@ var armoryTemplateListCmd = &cobra.Command{
 var armoryTemplateGetCmd = &cobra.Command{
 	Use: "get uuid", Short: "Get an Armory template", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runArmoryCommand(cmd, http.MethodGet, "/armory/template/"+args[0], nil, "getting Armory template", writeArmoryTemplateHuman, "")
+		path, err := serviceIDPath("/armory/template/", args[0], "")
+		if err != nil {
+			return err
+		}
+		return runArmoryCommand(cmd, http.MethodGet, path, nil, "getting Armory template", writeArmoryTemplateHuman, "")
 	},
 }
 
@@ -157,28 +161,44 @@ var armoryTemplateUpdateCmd = &cobra.Command{
 		if request.Name == nil && request.Description == nil && request.RawTemplate == nil {
 			return errors.New("armory template update requires --name, --description, or --raw-file")
 		}
-		return runArmoryCommand(cmd, http.MethodPost, "/armory/template/"+args[0], request, "updating Armory template", nil, "armory template %s updated successfully\n")
+		path, err := serviceIDPath("/armory/template/", args[0], "")
+		if err != nil {
+			return err
+		}
+		return runArmoryCommand(cmd, http.MethodPost, path, request, "updating Armory template", nil, "armory template %s updated successfully\n")
 	},
 }
 
 var armoryTemplateDeleteCmd = &cobra.Command{
 	Use: "delete uuid", Short: "Delete an Armory template", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runArmoryCommand(cmd, http.MethodDelete, "/armory/template/"+args[0], nil, "deleting Armory template", nil, "armory template %s deleted successfully\n")
+		path, err := serviceIDPath("/armory/template/", args[0], "")
+		if err != nil {
+			return err
+		}
+		return runArmoryCommand(cmd, http.MethodDelete, path, nil, "deleting Armory template", nil, "armory template %s deleted successfully\n")
 	},
 }
 
 var armoryRunListCmd = &cobra.Command{
 	Use: "list", Short: "List runs for an Armory template", Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return runArmoryCommand(cmd, http.MethodGet, "/armory/template/"+armoryRunTemplate+"/run", nil, "listing Armory runs", writeArmoryRunListHuman, "")
+		path, err := serviceIDPath("/armory/template/", armoryRunTemplate, "/run")
+		if err != nil {
+			return err
+		}
+		return runArmoryCommand(cmd, http.MethodGet, path, nil, "listing Armory runs", writeArmoryRunListHuman, "")
 	},
 }
 
 var armoryRunGetCmd = &cobra.Command{
 	Use: "get uuid", Short: "Get an Armory run", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runArmoryCommand(cmd, http.MethodGet, "/armory/run/"+args[0], nil, "getting Armory run", writeArmoryRunHuman, "")
+		path, err := serviceIDPath("/armory/run/", args[0], "")
+		if err != nil {
+			return err
+		}
+		return runArmoryCommand(cmd, http.MethodGet, path, nil, "getting Armory run", writeArmoryRunHuman, "")
 	},
 }
 
@@ -213,32 +233,52 @@ var armoryRunValidateCmd = &cobra.Command{
 var armoryRunStartCmd = &cobra.Command{
 	Use: "start uuid", Short: "Start an Armory run", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runArmoryCommand(cmd, http.MethodPost, "/armory/run/"+args[0]+"/start", nil, "starting Armory run", nil, "armory run %s started successfully\n")
+		path, err := serviceIDPath("/armory/run/", args[0], "/start")
+		if err != nil {
+			return err
+		}
+		return runArmoryCommand(cmd, http.MethodPost, path, nil, "starting Armory run", nil, "armory run %s started successfully\n")
 	},
 }
 
 var armoryRunCancelCmd = &cobra.Command{
 	Use: "cancel uuid", Short: "Cancel an Armory run", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runArmoryCommand(cmd, http.MethodPost, "/armory/run/"+args[0]+"/cancel", nil, "cancelling Armory run", nil, "armory run %s cancelled successfully\n")
+		path, err := serviceIDPath("/armory/run/", args[0], "/cancel")
+		if err != nil {
+			return err
+		}
+		return runArmoryCommand(cmd, http.MethodPost, path, nil, "cancelling Armory run", nil, "armory run %s cancelled successfully\n")
 	},
 }
 
 var armoryRunDeleteCmd = &cobra.Command{
 	Use: "delete uuid", Short: "Delete an Armory run", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runArmoryCommand(cmd, http.MethodDelete, "/armory/run/"+args[0], nil, "deleting Armory run", nil, "armory run %s deleted successfully\n")
+		path, err := serviceIDPath("/armory/run/", args[0], "")
+		if err != nil {
+			return err
+		}
+		return runArmoryCommand(cmd, http.MethodDelete, path, nil, "deleting Armory run", nil, "armory run %s deleted successfully\n")
 	},
 }
 
 var armoryRunTrafficCmd = &cobra.Command{
 	Use: "traffic uuid", Short: "List traffic for an Armory run", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		query := url.Values{"limit": {armoryRunTrafficLimit}}
-		if armoryRunTrafficCursor != "" {
-			query.Set("cursor", armoryRunTrafficCursor)
+		id, err := parseServiceID(args[0])
+		if err != nil {
+			return err
 		}
-		path := "/armory/run/" + args[0] + "/traffic?" + query.Encode()
+		limit, err := parsePageLimit(armoryRunTrafficLimit)
+		if err != nil {
+			return err
+		}
+		query := url.Values{"limit": {limit}}
+		if err := setCursorQuery(query, armoryRunTrafficCursor); err != nil {
+			return err
+		}
+		path := "/armory/run/" + id + "/traffic?" + query.Encode()
 		return runArmoryCommand(cmd, http.MethodGet, path, nil, "listing Armory run traffic", func(body []byte, stdout io.Writer) error {
 			return writeTrafficListHuman(body, stdout, cmd.ErrOrStderr())
 		}, "")

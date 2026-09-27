@@ -65,7 +65,11 @@ var websocketCloseCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("encoding websocket close: %w", err)
 		}
-		body, err := runCheckpointRequest(cmd, http.MethodPost, "/websocket/"+url.PathEscape(args[0])+"/close", "closing websocket connection", payload)
+		path, err := serviceIDPath("/websocket/", args[0], "/close")
+		if err != nil {
+			return err
+		}
+		body, err := runCheckpointRequest(cmd, http.MethodPost, path, "closing websocket connection", payload)
 		if err != nil {
 			return err
 		}
@@ -122,7 +126,11 @@ var websocketInjectCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("encoding websocket injection: %w", err)
 		}
-		body, err := runCheckpointRequest(cmd, http.MethodPost, "/websocket/"+url.PathEscape(args[0])+"/inject", "injecting websocket message", payload)
+		path, err := serviceIDPath("/websocket/", args[0], "/inject")
+		if err != nil {
+			return err
+		}
+		body, err := runCheckpointRequest(cmd, http.MethodPost, path, "injecting websocket message", payload)
 		if err != nil {
 			return err
 		}
@@ -142,9 +150,13 @@ var websocketListCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		query := url.Values{"limit": {websocketListLimit}}
-		if websocketListCursor != "" {
-			query.Set("cursor", websocketListCursor)
+		limit, err := parsePageLimit(websocketListLimit)
+		if err != nil {
+			return err
+		}
+		query := url.Values{"limit": {limit}}
+		if err := setCursorQuery(query, websocketListCursor); err != nil {
+			return err
 		}
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/websocket?"+query.Encode(), nil)
 		if err != nil {
@@ -209,7 +221,11 @@ var websocketGetCmd = &cobra.Command{
 	Short: "Get one WebSocket connection",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return getWebSocketConnection(cmd, "/websocket/"+args[0], "getting websocket connection")
+		path, err := serviceIDPath("/websocket/", args[0], "")
+		if err != nil {
+			return err
+		}
+		return getWebSocketConnection(cmd, path, "getting websocket connection")
 	},
 }
 
@@ -220,11 +236,19 @@ var websocketMessagesCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		query := url.Values{"limit": {websocketMessagesLimit}}
-		if websocketMessagesCursor != "" {
-			query.Set("cursor", websocketMessagesCursor)
+		id, err := parseServiceID(args[0])
+		if err != nil {
+			return err
 		}
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/websocket/"+url.PathEscape(args[0])+"/message?"+query.Encode(), nil)
+		limit, err := parsePageLimit(websocketMessagesLimit)
+		if err != nil {
+			return err
+		}
+		query := url.Values{"limit": {limit}}
+		if err := setCursorQuery(query, websocketMessagesCursor); err != nil {
+			return err
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/websocket/"+id+"/message?"+query.Encode(), nil)
 		if err != nil {
 			return fmt.Errorf("creating websocket messages request: %w", err)
 		}
@@ -294,7 +318,11 @@ var trafficWebSocketCmd = &cobra.Command{
 	Short: "Get the WebSocket connection opened by a traffic pair",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return getWebSocketConnection(cmd, "/traffic/"+args[0]+"/websocket", "getting traffic websocket")
+		path, err := serviceIDPath("/traffic/", args[0], "/websocket")
+		if err != nil {
+			return err
+		}
+		return getWebSocketConnection(cmd, path, "getting traffic websocket")
 	},
 }
 

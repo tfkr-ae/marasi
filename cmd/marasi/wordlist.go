@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi/service"
+	"github.com/tfkr-ae/marasi/wordlist"
 )
 
 var wordlistPreviewLimit int
@@ -30,7 +31,10 @@ var wordlistPreviewCmd = &cobra.Command{
 	Short: "Preview a wordlist",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		path := "/wordlist/" + url.PathEscape(args[0])
+		path, err := wordlistNamePath(args[0])
+		if err != nil {
+			return err
+		}
 		if cmd.Flags().Changed("limit") {
 			path += "?" + url.Values{"limit": {fmt.Sprint(wordlistPreviewLimit)}}.Encode()
 		}
@@ -106,7 +110,11 @@ var wordlistRemoveCmd = &cobra.Command{
 	Short: "Remove a wordlist",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		body, err := runControlRequest(cmd, http.MethodDelete, "/wordlist/"+url.PathEscape(args[0]), "removing wordlist", nil)
+		path, err := wordlistNamePath(args[0])
+		if err != nil {
+			return err
+		}
+		body, err := runControlRequest(cmd, http.MethodDelete, path, "removing wordlist", nil)
 		if err != nil {
 			return err
 		}
@@ -190,4 +198,11 @@ func writeWordlistPreview(body []byte, stdout io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func wordlistNamePath(name string) (string, error) {
+	if !wordlist.ValidName(name) {
+		return "", fmt.Errorf("invalid wordlist name %q", name)
+	}
+	return "/wordlist/" + url.PathEscape(name), nil
 }

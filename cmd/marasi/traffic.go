@@ -55,7 +55,11 @@ var trafficListCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return listTraffic(ctx, instancePath, instance, jsonOutput, trafficListQuery(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+		query, err := trafficListQuery()
+		if err != nil {
+			return err
+		}
+		return listTraffic(ctx, instancePath, instance, jsonOutput, query, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
@@ -81,7 +85,11 @@ var trafficMetadataGetCmd = &cobra.Command{
 	Short: "Get metadata for a request/response pair",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		body, err := runTrafficMetadataRequest(cmd, http.MethodGet, "/traffic/"+args[0]+"/metadata", "getting metadata", nil)
+		path, err := serviceIDPath("/traffic/", args[0], "/metadata")
+		if err != nil {
+			return err
+		}
+		body, err := runTrafficMetadataRequest(cmd, http.MethodGet, path, "getting metadata", nil)
 		if err != nil {
 			return err
 		}
@@ -99,7 +107,11 @@ var trafficMetadataUpdateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runTrafficMetadataRequest(cmd, http.MethodPut, "/traffic/"+args[0]+"/metadata", "updating metadata", payload)
+		path, err := serviceIDPath("/traffic/", args[0], "/metadata")
+		if err != nil {
+			return err
+		}
+		body, err := runTrafficMetadataRequest(cmd, http.MethodPut, path, "updating metadata", payload)
 		if err != nil {
 			return err
 		}
@@ -113,9 +125,13 @@ var trafficMetadataUpdateCmd = &cobra.Command{
 }
 
 // trafficListQuery encodes the traffic list flags as a query string.
-func trafficListQuery() string {
+func trafficListQuery() (string, error) {
+	limit, err := parsePageLimit(trafficListLimit)
+	if err != nil {
+		return "", err
+	}
 	query := url.Values{}
-	query.Set("limit", trafficListLimit)
+	query.Set("limit", limit)
 	if trafficListHost != "" {
 		query.Set("host", trafficListHost)
 	}
@@ -123,15 +139,19 @@ func trafficListQuery() string {
 		query.Set("method", trafficListMethod)
 	}
 	if trafficListStatusCode != "" {
-		query.Set("status_code", trafficListStatusCode)
+		statusCode, err := parseStatusCode(trafficListStatusCode)
+		if err != nil {
+			return "", err
+		}
+		query.Set("status_code", statusCode)
 	}
 	if trafficListPath != "" {
 		query.Set("path", trafficListPath)
 	}
-	if trafficListCursor != "" {
-		query.Set("cursor", trafficListCursor)
+	if err := setCursorQuery(query, trafficListCursor); err != nil {
+		return "", err
 	}
-	return query.Encode()
+	return query.Encode(), nil
 }
 
 // listTraffic prints one page of traffic for the instance.
@@ -214,6 +234,10 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 
 // getTraffic prints one request/response pair.
 func getTraffic(ctx context.Context, instancePath, instanceName string, asJSON bool, id string, stdout io.Writer) error {
+	id, err := parseServiceID(id)
+	if err != nil {
+		return err
+	}
 	socketPath := instancePath + ".sock"
 	client := service.NewClient(socketPath)
 	defer client.Close()

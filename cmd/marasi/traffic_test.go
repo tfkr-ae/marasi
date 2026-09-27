@@ -147,13 +147,13 @@ func TestTrafficListCommand(t *testing.T) {
 		body := `{"error":"bad_request"}`
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, body)
 
-		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--cursor", "not-a-uuid")
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list")
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
 		got := sent.snapshot()
-		if got.RawQuery != "cursor=not-a-uuid&limit=200" {
-			t.Fatalf("\nwanted:\ncursor=not-a-uuid&limit=200\ngot:\n%s", got.RawQuery)
+		if got.RawQuery != "limit=200" {
+			t.Fatalf("\nwanted:\nlimit=200\ngot:\n%s", got.RawQuery)
 		}
 		if stdout != "" {
 			t.Fatalf("\nwanted:\nno stdout\ngot:\n%s", stdout)
@@ -171,10 +171,10 @@ func TestTrafficListCommand(t *testing.T) {
 		body := `{"error":"bad_request"}`
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, body)
 
-		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "list", "--json", "--limit", "0")
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "list", "--json")
 		got := sent.snapshot()
-		if got.RawQuery != "limit=0" {
-			t.Fatalf("\nwanted:\nlimit=0\ngot:\n%s", got.RawQuery)
+		if got.RawQuery != "limit=200" {
+			t.Fatalf("\nwanted:\nlimit=200\ngot:\n%s", got.RawQuery)
 		}
 		assertJSONCommandError(t, stdout, stderr, err, "listing traffic: bad_request")
 	})

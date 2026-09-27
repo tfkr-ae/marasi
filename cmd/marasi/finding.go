@@ -236,12 +236,20 @@ func controlFinding(ctx context.Context, instancePath, instanceName string, asJS
 	switch action {
 	case "create":
 		method, operation = http.MethodPost, "creating finding"
-	case "get":
-		path, operation = path+"/"+id, "getting finding"
-	case "update":
-		method, path, operation = http.MethodPost, path+"/"+id, "updating finding"
-	case "delete":
-		method, path, operation = http.MethodDelete, path+"/"+id, "deleting finding"
+	case "get", "update", "delete":
+		parsed, err := serviceIDPath("/finding/", id, "")
+		if err != nil {
+			return nil, err
+		}
+		path = parsed
+		switch action {
+		case "get":
+			operation = "getting finding"
+		case "update":
+			method, operation = http.MethodPost, "updating finding"
+		case "delete":
+			method, operation = http.MethodDelete, "deleting finding"
+		}
 	}
 	if method == http.MethodPost {
 		encoded, err := json.Marshal(payload)

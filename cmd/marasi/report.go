@@ -117,6 +117,9 @@ var reportTemplateRemoveCmd = &cobra.Command{
 	Short: "Remove a report template",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if !report.ValidTemplateName(args[0]) {
+			return fmt.Errorf("invalid report template name %q", args[0])
+		}
 		body, err := runControlRequest(cmd, http.MethodDelete, "/report/template/"+url.PathEscape(args[0]), "removing report template", nil)
 		if err != nil {
 			return err

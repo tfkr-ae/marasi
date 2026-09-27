@@ -362,10 +362,10 @@ func TestNotesListCommand(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"bad_request"}`)
 
-		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "notes", "list", "--json", "--limit", "0")
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "notes", "list", "--json")
 		got := sent.snapshot()
-		if got.RawQuery != "limit=0" {
-			t.Fatalf("\nwanted:\nlimit=0\ngot:\n%s", got.RawQuery)
+		if got.RawQuery != "limit=200" {
+			t.Fatalf("\nwanted:\nlimit=200\ngot:\n%s", got.RawQuery)
 		}
 		assertJSONCommandError(t, stdout, stderr, err, "listing notes: bad_request")
 	})

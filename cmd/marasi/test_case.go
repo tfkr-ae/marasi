@@ -200,13 +200,17 @@ func runTrafficMembershipCommand(cmd *cobra.Command, resource, parentID, request
 }
 
 func controlTrafficMembership(ctx context.Context, instancePath, instanceName string, asJSON bool, resource, parentID, requestID string, link bool) ([]byte, error) {
+	parent, err := parseServiceID(parentID)
+	if err != nil {
+		return nil, err
+	}
 	method := http.MethodDelete
-	path := "/" + resource + "/" + parentID + "/traffic/" + requestID
+	path := "/" + resource + "/" + parent + "/traffic/"
 	operation := "unlinking request"
 	var body io.Reader
 	if link {
 		method = http.MethodPost
-		path = "/" + resource + "/" + parentID + "/traffic"
+		path = "/" + resource + "/" + parent + "/traffic"
 		operation = "linking request"
 		encoded, err := json.Marshal(struct {
 			ID string `json:"id"`
@@ -215,6 +219,12 @@ func controlTrafficMembership(ctx context.Context, instancePath, instanceName st
 			return nil, fmt.Errorf("encoding traffic link: %w", err)
 		}
 		body = bytes.NewReader(encoded)
+	} else {
+		request, err := parseServiceID(requestID)
+		if err != nil {
+			return nil, err
+		}
+		path += request
 	}
 	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, body)
 	if err != nil {
@@ -284,14 +294,22 @@ func controlTestCase(ctx context.Context, instancePath, instanceName string, asJ
 	switch action {
 	case "create":
 		method, operation = http.MethodPost, "creating test case"
-	case "get":
-		path, operation = path+"/"+id, "getting test case"
-	case "update":
-		method, path, operation = http.MethodPost, path+"/"+id, "updating test case"
-	case "delete":
-		method, path, operation = http.MethodDelete, path+"/"+id, "deleting test case"
 	case "checklist":
 		path, operation = path+"/checklist", "listing test case checklist"
+	case "get", "update", "delete":
+		parsed, err := serviceIDPath("/test-case/", id, "")
+		if err != nil {
+			return nil, err
+		}
+		path = parsed
+		switch action {
+		case "get":
+			operation = "getting test case"
+		case "update":
+			method, operation = http.MethodPost, "updating test case"
+		case "delete":
+			method, operation = http.MethodDelete, "deleting test case"
+		}
 	}
 	if method == http.MethodPost {
 		encoded, err := json.Marshal(payload)
