@@ -37,27 +37,27 @@ type chromeStartRequest struct {
 }
 
 func init() {
-	chromePathAddCmd.Flags().StringVar(&chromePathValue, "path", "", "Chrome executable path")
-	chromePathAddCmd.Flags().StringVar(&chromePathOS, "os", runtime.GOOS, "Operating system")
+	chromePathAddCmd.Flags().StringVar(&chromePathValue, "path", "", "Path to the Chrome executable. Required")
+	chromePathAddCmd.Flags().StringVar(&chromePathOS, "os", runtime.GOOS, "Operating system: darwin, linux, or windows")
 	chromePathAddCmd.MarkFlagRequired("path")
-	chromePathRemoveCmd.Flags().StringVar(&chromePathValue, "path", "", "Chrome executable path")
-	chromePathRemoveCmd.Flags().StringVar(&chromePathOS, "os", runtime.GOOS, "Operating system")
+	chromePathRemoveCmd.Flags().StringVar(&chromePathValue, "path", "", "Path to the Chrome executable. Required")
+	chromePathRemoveCmd.Flags().StringVar(&chromePathOS, "os", runtime.GOOS, "Operating system: darwin, linux, or windows")
 	chromePathRemoveCmd.MarkFlagRequired("path")
 	chromePathCmd.AddCommand(chromePathAddCmd, chromePathRemoveCmd, chromePathListCmd)
 	chromeProfileCmd.AddCommand(chromeProfileAddCmd, chromeProfileRemoveCmd, chromeProfileListCmd)
-	chromeStartCmd.Flags().StringVar(&chromeStartProfile, "profile", "", "Chrome profile name")
+	chromeStartCmd.Flags().StringVar(&chromeStartProfile, "profile", "", "Chrome profile name to start")
 	chromeCmd.AddCommand(chromePathCmd, chromeProfileCmd, chromeStartCmd)
 	rootCmd.AddCommand(chromeCmd)
 }
 
 var chromeCmd = &cobra.Command{
 	Use:   "chrome",
-	Short: "Manage Chrome for a service instance",
+	Short: "Start Chrome and manage its paths and profiles",
 }
 
 var chromePathCmd = &cobra.Command{
 	Use:   "path",
-	Short: "Manage Chrome executable paths",
+	Short: "Add, remove, and list Chrome executable paths",
 }
 
 var chromePathAddCmd = &cobra.Command{
@@ -97,7 +97,7 @@ var chromePathListCmd = &cobra.Command{
 
 var chromeProfileCmd = &cobra.Command{
 	Use:   "profile",
-	Short: "Manage Chrome profiles",
+	Short: "Add, remove, and list Chrome profiles",
 }
 
 var chromeProfileAddCmd = &cobra.Command{

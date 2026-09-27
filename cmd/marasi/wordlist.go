@@ -21,7 +21,7 @@ import (
 var wordlistPreviewLimit int
 
 func init() {
-	wordlistPreviewCmd.Flags().IntVar(&wordlistPreviewLimit, "limit", 20, "Number of entries to preview")
+	wordlistPreviewCmd.Flags().IntVar(&wordlistPreviewLimit, "limit", 20, "Number of entries to print, from 1 to 100")
 	wordlistCmd.AddCommand(wordlistListCmd, wordlistPreviewCmd, wordlistAddCmd, wordlistRemoveCmd)
 	rootCmd.AddCommand(wordlistCmd)
 }
@@ -52,11 +52,9 @@ var wordlistPreviewCmd = &cobra.Command{
 
 var wordlistCmd = &cobra.Command{
 	Use:   "wordlist",
-	Short: "Manage wordlists for a service instance",
+	Short: "List, add, preview, and remove wordlists",
 	Args:  cobra.NoArgs,
-	RunE: func(*cobra.Command, []string) error {
-		return errors.New("wordlist requires a subcommand")
-	},
+	RunE:  showSubcommandHelp,
 }
 
 var wordlistListCmd = &cobra.Command{

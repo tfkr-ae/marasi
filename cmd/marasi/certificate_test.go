@@ -30,11 +30,11 @@ func TestCertificateCommandLifecycle(t *testing.T) {
 	})
 
 	stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "certificate")
-	if err == nil || stdout != "" || !strings.Contains(stderr, "certificate requires a subcommand") {
+	if err == nil || stderr != "" || !strings.Contains(stdout, "Available Commands:") || !strings.Contains(stdout, "marasi certificate [command]") {
 		t.Fatalf("certificate without a subcommand: stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
 	stdout, stderr, err = runMarasi(binary, "--json", "--config-dir", configDir, "certificate")
-	assertJSONCommandError(t, stdout, stderr, err, "certificate requires a subcommand")
+	assertJSONCommandError(t, stdout, stderr, err, "marasi certificate: choose get")
 	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "certificate", "--format", "der")
 	if err == nil || stdout != "" || !strings.Contains(stderr, "unknown flag: --format") {
 		t.Fatalf("certificate group format flag: stdout %q, stderr %q, error %v", stdout, stderr, err)

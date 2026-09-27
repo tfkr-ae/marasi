@@ -14,8 +14,8 @@ var logsLimit string
 var logsCursor string
 
 func init() {
-	logsCmd.Flags().StringVar(&logsLimit, "limit", "200", "Page size")
-	logsCmd.Flags().StringVar(&logsCursor, "cursor", "", "Fetch the next older page")
+	logsCmd.Flags().StringVar(&logsLimit, "limit", "200", "Maximum number of items to return, from 1 to 500")
+	logsCmd.Flags().StringVar(&logsCursor, "cursor", "", "UUID of the last item, used to fetch the next older page")
 	rootCmd.AddCommand(logsCmd)
 }
 

@@ -22,8 +22,8 @@ var checkpointForwardFile string
 var checkpointInterceptResponse bool
 
 func init() {
-	checkpointListCmd.Flags().StringVar(&checkpointKind, "kind", "", "Filter by http or websocket")
-	checkpointForwardCmd.Flags().StringVar(&checkpointForwardFile, "file", "", "Read edited bytes from a file")
+	checkpointListCmd.Flags().StringVar(&checkpointKind, "kind", "", "Keep only http or websocket items")
+	checkpointForwardCmd.Flags().StringVar(&checkpointForwardFile, "file", "", "Read edited bytes from a file. If omitted, use piped stdin. If stdin is not piped, forward the original bytes")
 	checkpointForwardCmd.Flags().BoolVar(&checkpointInterceptResponse, "intercept-response", false, "Hold the matching response")
 	checkpointCmd.AddCommand(checkpointListCmd, checkpointGetCmd, checkpointForwardCmd, checkpointDropCmd, checkpointInterceptCmd, checkpointWebsocketInterceptCmd)
 	rootCmd.AddCommand(checkpointCmd)
@@ -31,7 +31,7 @@ func init() {
 
 var checkpointCmd = &cobra.Command{
 	Use:   "checkpoint",
-	Short: "Manage Checkpoint for a service instance",
+	Short: "Hold, forward, and drop intercepted traffic",
 }
 
 var checkpointListCmd = &cobra.Command{

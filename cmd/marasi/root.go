@@ -113,8 +113,42 @@ func recognizedJSONMode(args []string) bool {
 func init() {
 	cobra.EnableTraverseRunHooks = true
 	rootCmd.PersistentFlags().StringVar(&configDir, "config-dir", defaultConfigDir(), "Marasi config directory")
-	rootCmd.PersistentFlags().StringVar(&instance, "instance", "default", "Instance name")
+	rootCmd.PersistentFlags().StringVar(&instance, "instance", "default", "Service instance name")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Print command output as JSON")
+}
+
+// showSubcommandHelp prints command help when a group command is run with no subcommand.
+// With --json, it returns an error that names the subcommands.
+func showSubcommandHelp(cmd *cobra.Command, _ []string) error {
+	err := fmt.Errorf("%s: choose %s", cmd.CommandPath(), subcommandChoice(cmd))
+	if jsonOutput {
+		return err
+	}
+	cmd.SilenceErrors = true
+	if helpErr := cmd.Help(); helpErr != nil {
+		return helpErr
+	}
+	return err
+}
+
+// subcommandChoice lists available subcommands in help order.
+func subcommandChoice(cmd *cobra.Command) string {
+	var names []string
+	for _, child := range cmd.Commands() {
+		if child.IsAvailableCommand() {
+			names = append(names, child.Name())
+		}
+	}
+	switch len(names) {
+	case 0:
+		return "a subcommand"
+	case 1:
+		return names[0]
+	case 2:
+		return names[0] + " or " + names[1]
+	default:
+		return strings.Join(names[:len(names)-1], ", ") + ", or " + names[len(names)-1]
+	}
 }
 
 // prepareInstancePath resolves --config-dir and --instance into instancePath.

@@ -40,20 +40,20 @@ type testCaseRequest struct {
 }
 
 func init() {
-	testCaseCreateCmd.Flags().StringVar(&testCaseCreateTitle, "title", "", "Test case title")
+	testCaseCreateCmd.Flags().StringVar(&testCaseCreateTitle, "title", "", "Test case title. Required")
 	testCaseCreateCmd.Flags().StringVar(&testCaseCreateDescription, "description", "", "Test case description")
 	testCaseCreateCmd.Flags().StringVar(&testCaseCreateCategory, "category", "", "Test case category")
-	testCaseCreateCmd.Flags().StringSliceVar(&testCaseCreateTags, "tag", nil, "Test case tag")
+	testCaseCreateCmd.Flags().StringSliceVar(&testCaseCreateTags, "tag", nil, "Tag. Repeat the flag to set more than one")
 	testCaseCreateCmd.Flags().StringVar(&testCaseCreateNote, "note", "", "Test case note")
 	testCaseCreateCmd.MarkFlagRequired("title")
 	testCaseUpdateCmd.Flags().StringVar(&testCaseUpdateTitle, "title", "", "Test case title")
 	testCaseUpdateCmd.Flags().StringVar(&testCaseUpdateDescription, "description", "", "Test case description")
 	testCaseUpdateCmd.Flags().StringVar(&testCaseUpdateCategory, "category", "", "Test case category")
-	testCaseUpdateCmd.Flags().StringSliceVar(&testCaseUpdateTags, "tag", nil, "Test case tag")
+	testCaseUpdateCmd.Flags().StringSliceVar(&testCaseUpdateTags, "tag", nil, "Tag. Repeat the flag to set more than one")
 	testCaseUpdateCmd.Flags().StringVar(&testCaseUpdateNote, "note", "", "Test case note")
-	testCaseLinkCmd.Flags().StringVar(&testCaseLinkRequest, "request", "", "Request UUID")
+	testCaseLinkCmd.Flags().StringVar(&testCaseLinkRequest, "request", "", "UUID of the request/response pair")
 	testCaseLinkCmd.MarkFlagRequired("request")
-	testCaseUnlinkCmd.Flags().StringVar(&testCaseUnlinkRequest, "request", "", "Request UUID")
+	testCaseUnlinkCmd.Flags().StringVar(&testCaseUnlinkRequest, "request", "", "UUID of the request/response pair")
 	testCaseUnlinkCmd.MarkFlagRequired("request")
 	testCaseCmd.AddCommand(testCaseCreateCmd, testCaseListCmd, testCaseGetCmd, testCaseUpdateCmd, testCaseDeleteCmd, testCaseLinkCmd, testCaseUnlinkCmd, testCaseChecklistCmd)
 	rootCmd.AddCommand(testCaseCmd)
@@ -61,7 +61,7 @@ func init() {
 
 var testCaseCmd = &cobra.Command{
 	Use:   "test-case",
-	Short: "Manage test cases for a service instance",
+	Short: "Create, list, and link test cases",
 }
 
 var testCaseCreateCmd = &cobra.Command{
@@ -99,7 +99,7 @@ var testCaseListCmd = &cobra.Command{
 }
 
 var testCaseGetCmd = &cobra.Command{
-	Use:   "get uuid",
+	Use:   "get UUID",
 	Short: "Get one test case",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -117,7 +117,7 @@ var testCaseChecklistCmd = &cobra.Command{
 }
 
 var testCaseUpdateCmd = &cobra.Command{
-	Use:   "update uuid",
+	Use:   "update UUID",
 	Short: "Update a test case",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -148,7 +148,7 @@ var testCaseUpdateCmd = &cobra.Command{
 }
 
 var testCaseDeleteCmd = &cobra.Command{
-	Use:   "delete uuid",
+	Use:   "delete UUID",
 	Short: "Delete a test case",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -157,7 +157,7 @@ var testCaseDeleteCmd = &cobra.Command{
 }
 
 var testCaseLinkCmd = &cobra.Command{
-	Use:   "link uuid",
+	Use:   "link UUID",
 	Short: "Link traffic to a test case",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -166,7 +166,7 @@ var testCaseLinkCmd = &cobra.Command{
 }
 
 var testCaseUnlinkCmd = &cobra.Command{
-	Use:   "unlink uuid",
+	Use:   "unlink UUID",
 	Short: "Unlink traffic from a test case",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

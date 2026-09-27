@@ -21,9 +21,9 @@ var extensionSettingsFile string
 var extensionCallArgs string
 
 func init() {
-	extensionUpdateCmd.Flags().StringVar(&extensionUpdateFile, "file", "", "Read lua from a file")
-	extensionSettingsSetCmd.Flags().StringVar(&extensionSettingsFile, "file", "", "Read settings JSON from a file")
-	extensionCallCmd.Flags().StringVar(&extensionCallArgs, "args", "", "JSON array of arguments")
+	extensionUpdateCmd.Flags().StringVar(&extensionUpdateFile, "file", "", "Read Lua from a file. If omitted, read Lua from stdin")
+	extensionSettingsSetCmd.Flags().StringVar(&extensionSettingsFile, "file", "", "Read settings JSON from a file. If omitted, read JSON from stdin")
+	extensionCallCmd.Flags().StringVar(&extensionCallArgs, "args", "", "JSON array of arguments passed to FUNCTION")
 	extensionSettingsCmd.AddCommand(extensionSettingsGetCmd, extensionSettingsSetCmd)
 	extensionCmd.AddCommand(extensionListCmd, extensionGetCmd, extensionUpdateCmd, extensionLogsCmd, extensionSettingsCmd, extensionCallCmd, extensionEnableCmd, extensionDisableCmd)
 	rootCmd.AddCommand(extensionCmd)
@@ -31,7 +31,7 @@ func init() {
 
 var extensionCmd = &cobra.Command{
 	Use:   "extension",
-	Short: "Manage extensions for a service instance",
+	Short: "List, update, and call extensions",
 }
 
 var extensionListCmd = &cobra.Command{
@@ -74,7 +74,8 @@ var extensionGetCmd = &cobra.Command{
 
 var extensionUpdateCmd = &cobra.Command{
 	Use:   "update UUID",
-	Short: "Update extension lua",
+	Short: "Replace an extension's Lua source",
+	Long:  "Replace an extension's Lua source. Pass --file or piped stdin.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		lua, err := readExtensionInput(cmd, extensionUpdateFile, "reading lua file", "reading lua from stdin", "extension update requires --file or piped stdin")
@@ -151,6 +152,7 @@ var extensionSettingsGetCmd = &cobra.Command{
 var extensionSettingsSetCmd = &cobra.Command{
 	Use:   "set UUID",
 	Short: "Replace extension settings",
+	Long:  "Replace extension settings from a JSON object. Pass --file or piped stdin.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		raw, err := readExtensionInput(cmd, extensionSettingsFile, "reading settings file", "reading settings from stdin", "extension settings set requires --file or piped stdin")

@@ -34,9 +34,9 @@ func init() {
 	trafficListCmd.Flags().StringVar(&trafficListMethod, "method", "", "Keep only this exact method")
 	trafficListCmd.Flags().StringVar(&trafficListStatusCode, "status-code", "", "Keep only this exact status code")
 	trafficListCmd.Flags().StringVar(&trafficListPath, "path", "", "Keep pairs whose path starts with this prefix")
-	trafficListCmd.Flags().StringVar(&trafficListLimit, "limit", "200", "Page size")
-	trafficListCmd.Flags().StringVar(&trafficListCursor, "cursor", "", "Fetch the next older page")
-	trafficMetadataUpdateCmd.Flags().StringVar(&trafficMetadataUpdateFile, "file", "", "Read the metadata JSON from a file")
+	trafficListCmd.Flags().StringVar(&trafficListLimit, "limit", "200", "Maximum number of items to return, from 1 to 500")
+	trafficListCmd.Flags().StringVar(&trafficListCursor, "cursor", "", "UUID of the last item, used to fetch the next older page")
+	trafficMetadataUpdateCmd.Flags().StringVar(&trafficMetadataUpdateFile, "file", "", "Read the metadata JSON from a file instead of stdin")
 	trafficMetadataCmd.AddCommand(trafficMetadataGetCmd, trafficMetadataUpdateCmd)
 	trafficCmd.AddCommand(trafficListCmd, trafficGetCmd, trafficMetadataCmd)
 	rootCmd.AddCommand(trafficCmd)
@@ -44,7 +44,7 @@ func init() {
 
 var trafficCmd = &cobra.Command{
 	Use:   "traffic",
-	Short: "Inspect traffic for a service instance",
+	Short: "List and get captured traffic",
 }
 
 var trafficListCmd = &cobra.Command{
@@ -64,7 +64,7 @@ var trafficListCmd = &cobra.Command{
 }
 
 var trafficGetCmd = &cobra.Command{
-	Use:   "get uuid",
+	Use:   "get UUID",
 	Short: "Get one request/response pair",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -81,7 +81,7 @@ var trafficMetadataCmd = &cobra.Command{
 }
 
 var trafficMetadataGetCmd = &cobra.Command{
-	Use:   "get uuid",
+	Use:   "get UUID",
 	Short: "Get metadata for a request/response pair",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -99,8 +99,9 @@ var trafficMetadataGetCmd = &cobra.Command{
 }
 
 var trafficMetadataUpdateCmd = &cobra.Command{
-	Use:   "update uuid",
+	Use:   "update UUID",
 	Short: "Replace metadata for a request/response pair",
+	Long:  "Replace metadata for a request/response pair. Pass exactly one of --file and piped stdin.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		payload, err := readTrafficMetadataUpdate(cmd)

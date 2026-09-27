@@ -46,25 +46,25 @@ type findingRequest struct {
 }
 
 func init() {
-	findingCreateCmd.Flags().StringVar(&findingCreateTitle, "title", "", "Finding title")
-	findingCreateCmd.Flags().StringVar(&findingCreateSeverity, "severity", "", "Finding severity")
-	findingCreateCmd.Flags().StringVar(&findingCreateCVSSVector, "cvss-vector", "", "Finding CVSS vector")
+	findingCreateCmd.Flags().StringVar(&findingCreateTitle, "title", "", "Finding title. Required")
+	findingCreateCmd.Flags().StringVar(&findingCreateSeverity, "severity", "", "Severity: Critical, High, Medium, Low, or Informational")
+	findingCreateCmd.Flags().StringVar(&findingCreateCVSSVector, "cvss-vector", "", "CVSS vector string")
 	findingCreateCmd.Flags().Float64Var(&findingCreateCVSSScore, "cvss-score", 0, "Finding CVSS score")
-	findingCreateCmd.Flags().StringVar(&findingCreateWriteUp, "writeup", "", "Finding writeup")
-	findingCreateCmd.Flags().StringVar(&findingCreateTreatmentPlan, "treatment-plan", "", "Finding treatment plan")
+	findingCreateCmd.Flags().StringVar(&findingCreateWriteUp, "writeup", "", "Write-up text")
+	findingCreateCmd.Flags().StringVar(&findingCreateTreatmentPlan, "treatment-plan", "", "Treatment plan text")
 	findingCreateCmd.Flags().StringVar(&findingCreateTestCase, "test-case", "", "Related test case UUID")
 	findingCreateCmd.MarkFlagRequired("title")
-	findingUpdateCmd.Flags().StringVar(&findingUpdateTitle, "title", "", "Finding title")
-	findingUpdateCmd.Flags().StringVar(&findingUpdateSeverity, "severity", "", "Finding severity")
-	findingUpdateCmd.Flags().StringVar(&findingUpdateCVSSVector, "cvss-vector", "", "Finding CVSS vector")
+	findingUpdateCmd.Flags().StringVar(&findingUpdateTitle, "title", "", "Replacement title")
+	findingUpdateCmd.Flags().StringVar(&findingUpdateSeverity, "severity", "", "Severity: Critical, High, Medium, Low, or Informational")
+	findingUpdateCmd.Flags().StringVar(&findingUpdateCVSSVector, "cvss-vector", "", "CVSS vector string")
 	findingUpdateCmd.Flags().Float64Var(&findingUpdateCVSSScore, "cvss-score", 0, "Finding CVSS score")
-	findingUpdateCmd.Flags().StringVar(&findingUpdateWriteUp, "writeup", "", "Finding writeup")
-	findingUpdateCmd.Flags().StringVar(&findingUpdateTreatmentPlan, "treatment-plan", "", "Finding treatment plan")
-	findingUpdateCmd.Flags().StringVar(&findingUpdateTestCase, "test-case", "", "Related test case UUID")
-	findingUpdateCmd.Flags().BoolVar(&findingUpdateClearTestCase, "clear-test-case", false, "Clear the related test case")
-	findingLinkCmd.Flags().StringVar(&findingLinkRequest, "request", "", "Request UUID")
+	findingUpdateCmd.Flags().StringVar(&findingUpdateWriteUp, "writeup", "", "Write-up text")
+	findingUpdateCmd.Flags().StringVar(&findingUpdateTreatmentPlan, "treatment-plan", "", "Treatment plan text")
+	findingUpdateCmd.Flags().StringVar(&findingUpdateTestCase, "test-case", "", "Related test case UUID. Do not set this with --clear-test-case")
+	findingUpdateCmd.Flags().BoolVar(&findingUpdateClearTestCase, "clear-test-case", false, "Clear the related test case. Do not set this with --test-case")
+	findingLinkCmd.Flags().StringVar(&findingLinkRequest, "request", "", "UUID of the request/response pair")
 	findingLinkCmd.MarkFlagRequired("request")
-	findingUnlinkCmd.Flags().StringVar(&findingUnlinkRequest, "request", "", "Request UUID")
+	findingUnlinkCmd.Flags().StringVar(&findingUnlinkRequest, "request", "", "UUID of the request/response pair")
 	findingUnlinkCmd.MarkFlagRequired("request")
 	findingCmd.AddCommand(findingCreateCmd, findingListCmd, findingGetCmd, findingUpdateCmd, findingDeleteCmd, findingLinkCmd, findingUnlinkCmd)
 	rootCmd.AddCommand(findingCmd)
@@ -72,7 +72,7 @@ func init() {
 
 var findingCmd = &cobra.Command{
 	Use:   "finding",
-	Short: "Manage findings for a service instance",
+	Short: "Create findings and link them to traffic",
 }
 
 var findingCreateCmd = &cobra.Command{
@@ -99,7 +99,7 @@ var findingListCmd = &cobra.Command{
 }
 
 var findingGetCmd = &cobra.Command{
-	Use:   "get uuid",
+	Use:   "get UUID",
 	Short: "Get one finding",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -108,7 +108,7 @@ var findingGetCmd = &cobra.Command{
 }
 
 var findingUpdateCmd = &cobra.Command{
-	Use:   "update uuid",
+	Use:   "update UUID",
 	Short: "Update a finding",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -153,7 +153,7 @@ var findingUpdateCmd = &cobra.Command{
 }
 
 var findingDeleteCmd = &cobra.Command{
-	Use:   "delete uuid",
+	Use:   "delete UUID",
 	Short: "Delete a finding",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -162,7 +162,7 @@ var findingDeleteCmd = &cobra.Command{
 }
 
 var findingLinkCmd = &cobra.Command{
-	Use:   "link uuid",
+	Use:   "link UUID",
 	Short: "Link traffic to a finding",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -171,7 +171,7 @@ var findingLinkCmd = &cobra.Command{
 }
 
 var findingUnlinkCmd = &cobra.Command{
-	Use:   "unlink uuid",
+	Use:   "unlink UUID",
 	Short: "Unlink traffic from a finding",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

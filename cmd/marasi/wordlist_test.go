@@ -115,6 +115,15 @@ func TestWordlistCommandContract(t *testing.T) {
 		}
 	})
 
+	t.Run("should print help when wordlist has no subcommand", func(t *testing.T) {
+		stdout, stderr, err := runMarasi(binary, "wordlist")
+		if err == nil || stderr != "" || !strings.Contains(stdout, "Available Commands:") || !strings.Contains(stdout, "marasi wordlist [command]") {
+			t.Fatalf("\nwanted:\nhelp for wordlist\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		stdout, stderr, err = runMarasi(binary, "--json", "wordlist")
+		assertJSONCommandError(t, stdout, stderr, err, "marasi wordlist: choose add, list, preview, or remove")
+	})
+
 	t.Run("should say add moves the source file", func(t *testing.T) {
 		stdout, stderr, err := runMarasi(binary, "wordlist", "add", "--help")
 		if err != nil || stderr != "" || !strings.Contains(stdout, "moved into the wordlists directory") {

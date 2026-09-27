@@ -20,15 +20,15 @@ import (
 )
 
 func init() {
-	websocketListCmd.Flags().StringVar(&websocketListLimit, "limit", "200", "Page size")
-	websocketListCmd.Flags().StringVar(&websocketListCursor, "cursor", "", "Fetch the next older page")
-	websocketMessagesCmd.Flags().StringVar(&websocketMessagesLimit, "limit", "200", "Page size")
-	websocketMessagesCmd.Flags().StringVar(&websocketMessagesCursor, "cursor", "", "Fetch the next older page")
-	websocketInjectCmd.Flags().StringVar(&websocketInjectDirection, "direction", "", "Origin of the frame: client or server")
-	websocketInjectCmd.Flags().IntVar(&websocketInjectOpcode, "opcode", 0, "WebSocket frame opcode (0-15)")
-	websocketInjectCmd.Flags().StringVar(&websocketInjectFile, "file", "", "Read frame bytes from a file")
-	websocketCloseCmd.Flags().IntVar(&websocketCloseCode, "code", 0, "WebSocket close code")
-	websocketCloseCmd.Flags().StringVar(&websocketCloseReason, "reason", "", "WebSocket close reason")
+	websocketListCmd.Flags().StringVar(&websocketListLimit, "limit", "200", "Maximum number of items to return, from 1 to 500")
+	websocketListCmd.Flags().StringVar(&websocketListCursor, "cursor", "", "UUID of the last item, used to fetch the next older page")
+	websocketMessagesCmd.Flags().StringVar(&websocketMessagesLimit, "limit", "200", "Maximum number of items to return, from 1 to 500")
+	websocketMessagesCmd.Flags().StringVar(&websocketMessagesCursor, "cursor", "", "UUID of the last item, used to fetch the next older page")
+	websocketInjectCmd.Flags().StringVar(&websocketInjectDirection, "direction", "", "Frame direction: client or server. Required")
+	websocketInjectCmd.Flags().IntVar(&websocketInjectOpcode, "opcode", 0, "WebSocket opcode from 0 to 15. Required")
+	websocketInjectCmd.Flags().StringVar(&websocketInjectFile, "file", "", "Read frame bytes from a file. If omitted, use piped stdin or an empty payload")
+	websocketCloseCmd.Flags().IntVar(&websocketCloseCode, "code", 0, "WebSocket close status code. Omit to leave it unset")
+	websocketCloseCmd.Flags().StringVar(&websocketCloseReason, "reason", "", "Close reason text")
 	websocketCmd.AddCommand(websocketListCmd, websocketGetCmd, websocketMessagesCmd, websocketInjectCmd, websocketCloseCmd)
 	rootCmd.AddCommand(websocketCmd)
 	trafficCmd.AddCommand(trafficWebSocketCmd)
@@ -36,7 +36,7 @@ func init() {
 
 var websocketCmd = &cobra.Command{
 	Use:   "websocket",
-	Short: "Inspect WebSocket connections",
+	Short: "Inspect, inject, and close WebSocket connections",
 }
 
 var websocketListLimit string

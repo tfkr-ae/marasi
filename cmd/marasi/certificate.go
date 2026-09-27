@@ -19,11 +19,9 @@ func init() {
 
 var certificateCmd = &cobra.Command{
 	Use:   "certificate",
-	Short: "Fetch a service instance's CA certificate",
+	Short: "Get the instance CA certificate",
 	Args:  cobra.NoArgs,
-	RunE: func(*cobra.Command, []string) error {
-		return errors.New("certificate requires a subcommand")
-	},
+	RunE:  showSubcommandHelp,
 }
 
 var certificateGetCmd = &cobra.Command{

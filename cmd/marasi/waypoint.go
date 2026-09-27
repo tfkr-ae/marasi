@@ -29,15 +29,15 @@ type waypointRemoveRequest struct {
 }
 
 func init() {
-	waypointAddCmd.Flags().StringVar(&waypointHostname, "hostname", "", "Original host and port")
-	waypointAddCmd.Flags().StringVar(&waypointOverride, "override", "", "Override host and port")
+	waypointAddCmd.Flags().StringVar(&waypointHostname, "hostname", "", "Host and port to match")
+	waypointAddCmd.Flags().StringVar(&waypointOverride, "override", "", "Host and port to use instead")
 	waypointAddCmd.MarkFlagRequired("hostname")
 	waypointAddCmd.MarkFlagRequired("override")
-	waypointUpdateCmd.Flags().StringVar(&waypointHostname, "hostname", "", "Original host and port")
-	waypointUpdateCmd.Flags().StringVar(&waypointOverride, "override", "", "Override host and port")
+	waypointUpdateCmd.Flags().StringVar(&waypointHostname, "hostname", "", "Host and port to match")
+	waypointUpdateCmd.Flags().StringVar(&waypointOverride, "override", "", "Host and port to use instead")
 	waypointUpdateCmd.MarkFlagRequired("hostname")
 	waypointUpdateCmd.MarkFlagRequired("override")
-	waypointRemoveCmd.Flags().StringVar(&waypointHostname, "hostname", "", "Original host and port")
+	waypointRemoveCmd.Flags().StringVar(&waypointHostname, "hostname", "", "Host and port to match")
 	waypointRemoveCmd.MarkFlagRequired("hostname")
 	waypointCmd.AddCommand(waypointListCmd, waypointAddCmd, waypointUpdateCmd, waypointRemoveCmd)
 	rootCmd.AddCommand(waypointCmd)
@@ -45,7 +45,7 @@ func init() {
 
 var waypointCmd = &cobra.Command{
 	Use:   "waypoint",
-	Short: "Manage waypoints for a service instance",
+	Short: "Map a host and port to another host and port",
 }
 
 var waypointListCmd = &cobra.Command{

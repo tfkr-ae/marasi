@@ -77,24 +77,24 @@ const (
 )
 
 func init() {
-	startCmd.Flags().StringVar(&requestedProjectPath, "project", "", "Project path")
-	startCmd.Flags().StringVar(&projectName, "project-name", "", "Project name under the default projects directory")
+	startCmd.Flags().StringVar(&requestedProjectPath, "project", "", "Project directory. Do not set this with --project-name")
+	startCmd.Flags().StringVar(&projectName, "project-name", "", "Project name under the default projects directory. Defaults to scratchpad when omitted")
 	startCmd.MarkFlagsMutuallyExclusive("project", "project-name")
-	startCmd.Flags().StringVar(&proxyAddress, "address", "127.0.0.1", "Proxy listener address")
+	startCmd.Flags().StringVar(&proxyAddress, "address", "127.0.0.1", "Proxy listener host or IP, without a port")
 	proxyPort = 8080
-	startCmd.Flags().Var(&proxyPort, "port", "Proxy listener port")
+	startCmd.Flags().Var(&proxyPort, "port", "Proxy listener TCP port")
 	serviceCmd.AddCommand(startCmd, stopCmd, statusCmd, listServiceInstancesCmd)
 	rootCmd.AddCommand(serviceCmd)
 }
 
 var serviceCmd = &cobra.Command{
 	Use:   "service",
-	Short: "Manage marasi services",
+	Short: "Start, stop, and list service instances",
 }
 
 var startCmd = &cobra.Command{
 	Use:     "start",
-	Short:   "Start a marasi instance",
+	Short:   "Start a service instance",
 	PreRunE: prepareProjectPath,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -109,7 +109,7 @@ var startCmd = &cobra.Command{
 
 var stopCmd = &cobra.Command{
 	Use:   "stop",
-	Short: "Stop a marasi instance",
+	Short: "Stop a service instance",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -137,7 +137,7 @@ var stopCmd = &cobra.Command{
 
 var statusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Report a marasi instance's status",
+	Short: "Print a service instance's status",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)

@@ -40,10 +40,10 @@ func init() {
 	launchpadCreateCmd.MarkFlagRequired("name")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateName, "name", "", "Launchpad name")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateDescription, "description", "", "Launchpad description")
-	launchpadLinkCmd.Flags().StringVar(&launchpadLinkRequest, "request", "", "Request UUID")
+	launchpadLinkCmd.Flags().StringVar(&launchpadLinkRequest, "request", "", "UUID of the request/response pair")
 	launchpadLinkCmd.MarkFlagRequired("request")
-	launchpadLaunchCmd.Flags().StringVar(&launchpadLaunchScheme, "scheme", "", "Request scheme (http or https)")
-	launchpadLaunchCmd.Flags().StringVar(&launchpadLaunchRawFile, "raw-file", "", "Read the raw HTTP request from a file")
+	launchpadLaunchCmd.Flags().StringVar(&launchpadLaunchScheme, "scheme", "", "Request scheme: http or https. Required")
+	launchpadLaunchCmd.Flags().StringVar(&launchpadLaunchRawFile, "raw-file", "", "Read the raw HTTP request from a file. If omitted, read it from stdin")
 	launchpadLaunchCmd.MarkFlagRequired("scheme")
 	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadLaunchCmd)
 	rootCmd.AddCommand(launchpadCmd)
@@ -51,7 +51,7 @@ func init() {
 
 var launchpadCmd = &cobra.Command{
 	Use:   "launchpad",
-	Short: "Manage launchpads for a service instance",
+	Short: "Create launchpads and send raw HTTP requests",
 }
 
 var launchpadCreateCmd = &cobra.Command{
@@ -80,7 +80,7 @@ var launchpadListCmd = &cobra.Command{
 }
 
 var launchpadGetCmd = &cobra.Command{
-	Use:   "get uuid",
+	Use:   "get UUID",
 	Short: "Get one launchpad",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -89,7 +89,7 @@ var launchpadGetCmd = &cobra.Command{
 }
 
 var launchpadUpdateCmd = &cobra.Command{
-	Use:   "update uuid",
+	Use:   "update UUID",
 	Short: "Update a launchpad",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -111,7 +111,7 @@ var launchpadUpdateCmd = &cobra.Command{
 }
 
 var launchpadLinkCmd = &cobra.Command{
-	Use:   "link uuid",
+	Use:   "link UUID",
 	Short: "Link a traffic pair to a launchpad",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -120,8 +120,9 @@ var launchpadLinkCmd = &cobra.Command{
 }
 
 var launchpadLaunchCmd = &cobra.Command{
-	Use:   "launch uuid",
-	Short: "Launch a raw request from a working copy",
+	Use:   "launch UUID",
+	Short: "Send a raw HTTP working copy",
+	Long:  "Send a raw HTTP working copy for a launchpad. Pass --raw-file or piped stdin. Set --scheme to http or https.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if launchpadLaunchScheme != "http" && launchpadLaunchScheme != "https" {

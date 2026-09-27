@@ -23,8 +23,8 @@ var projectOpenPath string
 var projectOpenName string
 
 func init() {
-	projectOpenCmd.Flags().StringVar(&projectOpenPath, "path", "", "Project path")
-	projectOpenCmd.Flags().StringVar(&projectOpenName, "name", "", "Project name under the default projects directory")
+	projectOpenCmd.Flags().StringVar(&projectOpenPath, "path", "", "Project directory. Set this or --name, not both")
+	projectOpenCmd.Flags().StringVar(&projectOpenName, "name", "", "Project name under the default projects directory. Set this or --path, not both")
 	projectOpenCmd.MarkFlagsMutuallyExclusive("path", "name")
 	projectOpenCmd.MarkFlagsOneRequired("path", "name")
 	projectCmd.AddCommand(projectListCmd, projectOpenCmd)
@@ -33,7 +33,7 @@ func init() {
 
 var projectCmd = &cobra.Command{
 	Use:   "project",
-	Short: "Manage projects",
+	Short: "List projects and open one in an instance",
 }
 
 type projectListItem struct {

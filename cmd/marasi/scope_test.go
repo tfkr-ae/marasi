@@ -63,11 +63,11 @@ func TestScopeCheckCommand(t *testing.T) {
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{}`)
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "scope")
-		if err == nil || stdout != "" || !strings.Contains(stderr, "scope requires a subcommand") || len(sent.requests()) != 0 {
-			t.Fatalf("\nwanted:\nsubcommand error before dialing\ngot:\nstdout %q, stderr %q, error %v, requests %#v", stdout, stderr, err, sent.requests())
+		if err == nil || stderr != "" || !strings.Contains(stdout, "Available Commands:") || !strings.Contains(stdout, "marasi scope [command]") || len(sent.requests()) != 0 {
+			t.Fatalf("\nwanted:\nhelp before dialing\ngot:\nstdout %q, stderr %q, error %v, requests %#v", stdout, stderr, err, sent.requests())
 		}
 		stdout, stderr, err = runMarasi(binary, "--json", "--config-dir", configDir, "--instance", "work", "scope")
-		assertJSONCommandError(t, stdout, stderr, err, "scope requires a subcommand")
+		assertJSONCommandError(t, stdout, stderr, err, "marasi scope: choose check")
 		if len(sent.requests()) != 0 {
 			t.Fatalf("\nwanted:\nno requests\ngot:\n%#v", sent.requests())
 		}

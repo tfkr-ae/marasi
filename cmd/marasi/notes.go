@@ -26,15 +26,15 @@ const notesDisplayLimit = 40
 
 func init() {
 	notesSetCmd.Flags().StringVar(&notesSetFile, "file", "", "Read the note from a file")
-	notesListCmd.Flags().StringVar(&notesListLimit, "limit", "200", "Page size")
-	notesListCmd.Flags().StringVar(&notesListCursor, "cursor", "", "Fetch the next older page")
+	notesListCmd.Flags().StringVar(&notesListLimit, "limit", "200", "Maximum number of items to return, from 1 to 500")
+	notesListCmd.Flags().StringVar(&notesListCursor, "cursor", "", "UUID of the last item, used to fetch the next older page")
 	notesCmd.AddCommand(notesListCmd, notesSetCmd, notesClearCmd)
 	rootCmd.AddCommand(notesCmd)
 }
 
 var notesCmd = &cobra.Command{
 	Use:   "notes",
-	Short: "Manage notes for a service instance",
+	Short: "List, set, and clear notes on traffic",
 }
 
 var notesListCmd = &cobra.Command{
@@ -64,8 +64,9 @@ var notesListCmd = &cobra.Command{
 }
 
 var notesSetCmd = &cobra.Command{
-	Use:   "set uuid [text]",
+	Use:   "set UUID [TEXT]",
 	Short: "Set the note on a request/response pair",
+	Long:  "Set the note on a request/response pair. Pass exactly one of TEXT, --file, or piped stdin.",
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path, err := serviceIDPath("/notes/", args[0], "")
@@ -96,7 +97,7 @@ var notesSetCmd = &cobra.Command{
 }
 
 var notesClearCmd = &cobra.Command{
-	Use:   "clear uuid",
+	Use:   "clear UUID",
 	Short: "Clear the note on a request/response pair",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

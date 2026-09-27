@@ -35,24 +35,25 @@ type artifactMetadata struct {
 }
 
 func init() {
-	artifactUploadCmd.Flags().StringVar(&artifactUploadTestCase, "test-case", "", "Test case UUID")
-	artifactUploadCmd.Flags().StringVar(&artifactUploadFinding, "finding", "", "Finding UUID")
+	artifactUploadCmd.Flags().StringVar(&artifactUploadTestCase, "test-case", "", "Test case UUID. Set this or --finding, not both")
+	artifactUploadCmd.Flags().StringVar(&artifactUploadFinding, "finding", "", "Finding UUID. Set this or --test-case, not both")
 	artifactUploadCmd.Flags().StringVar(&artifactUploadFile, "file", "", "File to upload")
-	artifactUploadCmd.Flags().StringVar(&artifactUploadMIME, "mime", "", "Artifact MIME type")
+	artifactUploadCmd.Flags().StringVar(&artifactUploadMIME, "mime", "", "MIME type. Defaults from the file extension")
 	artifactUploadCmd.MarkFlagRequired("file")
-	artifactDownloadCmd.Flags().StringVar(&artifactDownloadOutput, "output", "", "Output path")
+	artifactDownloadCmd.Flags().StringVar(&artifactDownloadOutput, "output", "", "File to write. Defaults to the artifact file name in the current directory")
 	artifactCmd.AddCommand(artifactUploadCmd, artifactGetCmd, artifactDownloadCmd, artifactDeleteCmd)
 	rootCmd.AddCommand(artifactCmd)
 }
 
 var artifactCmd = &cobra.Command{
 	Use:   "artifact",
-	Short: "Manage artifacts for a service instance",
+	Short: "Upload and download files for findings and test cases",
 }
 
 var artifactUploadCmd = &cobra.Command{
 	Use:   "upload",
-	Short: "Upload an artifact",
+	Short: "Upload a file for a test case or a finding",
+	Long:  "Upload a file. Set exactly one of --test-case or --finding.",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		if (artifactUploadTestCase == "") == (artifactUploadFinding == "") {
@@ -81,7 +82,7 @@ var artifactUploadCmd = &cobra.Command{
 }
 
 var artifactGetCmd = &cobra.Command{
-	Use:   "get uuid",
+	Use:   "get UUID",
 	Short: "Get artifact metadata",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -90,7 +91,7 @@ var artifactGetCmd = &cobra.Command{
 }
 
 var artifactDownloadCmd = &cobra.Command{
-	Use:   "download uuid",
+	Use:   "download UUID",
 	Short: "Download an artifact",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -102,7 +103,7 @@ var artifactDownloadCmd = &cobra.Command{
 }
 
 var artifactDeleteCmd = &cobra.Command{
-	Use:   "delete uuid",
+	Use:   "delete UUID",
 	Short: "Delete an artifact",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

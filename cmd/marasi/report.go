@@ -31,17 +31,17 @@ var (
 
 func init() {
 	reportTemplateCmd.AddCommand(reportTemplateListCmd, reportTemplateAddCmd, reportTemplateRemoveCmd, reportTemplateRestoreCmd)
-	reportExportCmd.Flags().StringVar(&reportExportTitle, "title", "", "Report title")
-	reportExportCmd.Flags().StringVar(&reportExportClient, "client", "", "Client name")
-	reportExportCmd.Flags().StringVar(&reportExportType, "type", "", "Assessment type")
-	reportExportCmd.Flags().StringVar(&reportExportScope, "scope", "", "Assessment scope")
-	reportExportCmd.Flags().StringVar(&reportExportAssessor, "assessor", "", "Assessor")
+	reportExportCmd.Flags().StringVar(&reportExportTitle, "title", "", "Title written into the report")
+	reportExportCmd.Flags().StringVar(&reportExportClient, "client", "", "Client name written into the report")
+	reportExportCmd.Flags().StringVar(&reportExportType, "type", "", "Assessment type written into the report")
+	reportExportCmd.Flags().StringVar(&reportExportScope, "scope", "", "Assessment scope written into the report")
+	reportExportCmd.Flags().StringVar(&reportExportAssessor, "assessor", "", "Assessor name written into the report")
 	reportExportCmd.Flags().StringVar(&reportExportStart, "start", "", "Assessment start date (YYYY-MM-DD)")
 	reportExportCmd.Flags().StringVar(&reportExportEnd, "end", "", "Assessment end date (YYYY-MM-DD)")
 	reportExportCmd.Flags().BoolVar(&reportExportDraft, "draft", true, "Mark the report as a draft")
-	reportExportCmd.Flags().IntVar(&reportExportTruncate, "truncate", 0, "Maximum body length in bytes")
-	reportExportCmd.Flags().BoolVar(&reportExportIncludeTestCases, "include-test-cases", true, "Include test cases")
-	reportExportCmd.Flags().StringVar(&reportExportOutput, "output", "", "Output path")
+	reportExportCmd.Flags().IntVar(&reportExportTruncate, "truncate", 0, "Maximum body length in bytes. 0 does not truncate")
+	reportExportCmd.Flags().BoolVar(&reportExportIncludeTestCases, "include-test-cases", true, "Include test cases in the report")
+	reportExportCmd.Flags().StringVar(&reportExportOutput, "output", "", "File to write. If omitted, uses the title with the template extension, or the template file name when the title is empty")
 	reportExportCmd.MarkFlagRequired("start")
 	reportExportCmd.MarkFlagRequired("end")
 	reportCmd.AddCommand(reportTemplateCmd, reportExportCmd)
@@ -50,20 +50,16 @@ func init() {
 
 var reportCmd = &cobra.Command{
 	Use:   "report",
-	Short: "Manage reports for a service instance",
+	Short: "Export a report and manage report templates",
 	Args:  cobra.NoArgs,
-	RunE: func(*cobra.Command, []string) error {
-		return errors.New("report requires a subcommand")
-	},
+	RunE:  showSubcommandHelp,
 }
 
 var reportTemplateCmd = &cobra.Command{
 	Use:   "template",
-	Short: "Manage report templates for a service instance",
+	Short: "Add, list, remove, and restore report templates",
 	Args:  cobra.NoArgs,
-	RunE: func(*cobra.Command, []string) error {
-		return errors.New("report template requires a subcommand")
-	},
+	RunE:  showSubcommandHelp,
 }
 
 var reportTemplateListCmd = &cobra.Command{
@@ -152,8 +148,8 @@ var reportTemplateRestoreCmd = &cobra.Command{
 }
 
 var reportExportCmd = &cobra.Command{
-	Use:   "export NAME",
-	Short: "Export a report",
+	Use:   "export TEMPLATE",
+	Short: "Export a report from a template",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if _, err := time.Parse("2006-01-02", reportExportStart); err != nil {

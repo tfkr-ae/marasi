@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,15 +16,13 @@ func init() {
 
 var scopeCmd = &cobra.Command{
 	Use:   "scope",
-	Short: "Check URLs against a service instance's scope",
+	Short: "Check whether a URL is in scope",
 	Args:  cobra.NoArgs,
-	RunE: func(*cobra.Command, []string) error {
-		return errors.New("scope requires a subcommand")
-	},
+	RunE:  showSubcommandHelp,
 }
 
 var scopeCheckCmd = &cobra.Command{
-	Use:   "check <url>",
+	Use:   "check URL",
 	Short: "Check whether a URL is in scope",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

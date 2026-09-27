@@ -28,10 +28,10 @@ type listenerRequest struct {
 }
 
 func init() {
-	listenerStartCmd.Flags().StringVar(&listenerStartAddress, "address", "", "Proxy listener address")
-	listenerStartCmd.Flags().Var(&listenerStartPort, "port", "Proxy listener port")
-	listenerUpdateCmd.Flags().StringVar(&listenerUpdateAddress, "address", "", "Proxy listener address")
-	listenerUpdateCmd.Flags().Var(&listenerUpdatePort, "port", "Proxy listener port")
+	listenerStartCmd.Flags().StringVar(&listenerStartAddress, "address", "", "Host or IP, without a port")
+	listenerStartCmd.Flags().Var(&listenerStartPort, "port", "TCP port")
+	listenerUpdateCmd.Flags().StringVar(&listenerUpdateAddress, "address", "", "Host or IP, without a port")
+	listenerUpdateCmd.Flags().Var(&listenerUpdatePort, "port", "TCP port")
 	listenerCmd.AddCommand(listenerStartCmd, listenerStopCmd, listenerUpdateCmd, listenerStatusCmd)
 	listenerCmd.AddCommand(listenerAddressCmd)
 	rootCmd.AddCommand(listenerCmd)
@@ -39,7 +39,7 @@ func init() {
 
 var listenerCmd = &cobra.Command{
 	Use:   "listener",
-	Short: "Manage a service instance's proxy listener",
+	Short: "Start, stop, and update the proxy listener",
 }
 
 var listenerStartCmd = &cobra.Command{
@@ -79,7 +79,7 @@ var listenerUpdateCmd = &cobra.Command{
 
 var listenerStatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Report the proxy listener's status",
+	Short: "Print the proxy listener status",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return runListenerCommand(cmd, listenerRequest{})

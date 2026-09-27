@@ -63,7 +63,7 @@ type armoryRunResponse struct {
 }
 
 func init() {
-	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateName, "name", "", "Template name")
+	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateName, "name", "", "Template name. Required")
 	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateDescription, "description", "", "Template description")
 	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateRawFile, "raw-file", "", "Read the raw template from a file")
 	armoryTemplateCreateCmd.MarkFlagRequired("name")
@@ -74,9 +74,9 @@ func init() {
 	armoryRunListCmd.MarkFlagRequired("template")
 	addArmoryRunFlags(armoryRunCreateCmd, true)
 	addArmoryRunFlags(armoryRunValidateCmd, false)
-	armoryRunValidateCmd.Flags().StringVar(&armoryRunRawFile, "raw-file", "", "Read the raw template from a file")
-	armoryRunTrafficCmd.Flags().StringVar(&armoryRunTrafficLimit, "limit", "200", "Page size")
-	armoryRunTrafficCmd.Flags().StringVar(&armoryRunTrafficCursor, "cursor", "", "Fetch the next page")
+	armoryRunValidateCmd.Flags().StringVar(&armoryRunRawFile, "raw-file", "", "Read the raw template from a file. If omitted, read it from stdin")
+	armoryRunTrafficCmd.Flags().StringVar(&armoryRunTrafficLimit, "limit", "200", "Maximum number of items to return, from 1 to 500")
+	armoryRunTrafficCmd.Flags().StringVar(&armoryRunTrafficCursor, "cursor", "", "UUID of the last item, used to fetch the next page")
 	armoryTemplateCmd.AddCommand(armoryTemplateListCmd, armoryTemplateGetCmd, armoryTemplateCreateCmd, armoryTemplateUpdateCmd, armoryTemplateDeleteCmd)
 	armoryRunCmd.AddCommand(armoryRunListCmd, armoryRunGetCmd, armoryRunCreateCmd, armoryRunValidateCmd, armoryRunStartCmd, armoryRunCancelCmd, armoryRunDeleteCmd, armoryRunTrafficCmd)
 	armoryCmd.AddCommand(armoryTemplateCmd, armoryRunCmd)
@@ -88,16 +88,16 @@ func addArmoryRunFlags(cmd *cobra.Command, includeTemplate bool) {
 		cmd.Flags().StringVar(&armoryRunTemplate, "template", "", "Template UUID")
 		cmd.MarkFlagRequired("template")
 	}
-	cmd.Flags().StringVar(&armoryRunAttackType, "attack-type", "", "Attack type")
-	cmd.Flags().StringArrayVar(&armoryRunWordlists, "wordlist", nil, "Wordlist name (repeatable)")
+	cmd.Flags().StringVar(&armoryRunAttackType, "attack-type", "", "Attack type: harpoon, broadside, tandem, or maelstrom")
+	cmd.Flags().StringArrayVar(&armoryRunWordlists, "wordlist", nil, "Wordlist name. Repeat the flag to set more than one")
 	cmd.Flags().BoolVar(&armoryRunHTTP, "http", false, "Use HTTP instead of HTTPS")
-	cmd.Flags().IntVar(&armoryRunMaxConcurrent, "max-concurrent", 0, "Maximum concurrent requests")
+	cmd.Flags().IntVar(&armoryRunMaxConcurrent, "max-concurrent", 0, "Maximum concurrent requests, from 1 to 100. Omit to use 10")
 	cmd.MarkFlagRequired("attack-type")
 }
 
-var armoryCmd = &cobra.Command{Use: "armory", Short: "Manage Armory templates and runs"}
-var armoryTemplateCmd = &cobra.Command{Use: "template", Short: "Manage Armory templates"}
-var armoryRunCmd = &cobra.Command{Use: "run", Short: "Manage Armory runs"}
+var armoryCmd = &cobra.Command{Use: "armory", Short: "Create Armory templates and runs"}
+var armoryTemplateCmd = &cobra.Command{Use: "template", Short: "Create and edit Armory templates"}
+var armoryRunCmd = &cobra.Command{Use: "run", Short: "Create, start, and cancel Armory runs"}
 
 var armoryTemplateListCmd = &cobra.Command{
 	Use: "list", Short: "List Armory templates", Args: cobra.NoArgs,
@@ -107,7 +107,7 @@ var armoryTemplateListCmd = &cobra.Command{
 }
 
 var armoryTemplateGetCmd = &cobra.Command{
-	Use: "get uuid", Short: "Get an Armory template", Args: cobra.ExactArgs(1),
+	Use: "get UUID", Short: "Get an Armory template", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path, err := serviceIDPath("/armory/template/", args[0], "")
 		if err != nil {
@@ -139,7 +139,7 @@ var armoryTemplateCreateCmd = &cobra.Command{
 }
 
 var armoryTemplateUpdateCmd = &cobra.Command{
-	Use: "update uuid", Short: "Update an Armory template", Args: cobra.ExactArgs(1),
+	Use: "update UUID", Short: "Update an Armory template", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var request armoryTemplateRequest
 		if cmd.Flags().Changed("name") {
@@ -170,7 +170,7 @@ var armoryTemplateUpdateCmd = &cobra.Command{
 }
 
 var armoryTemplateDeleteCmd = &cobra.Command{
-	Use: "delete uuid", Short: "Delete an Armory template", Args: cobra.ExactArgs(1),
+	Use: "delete UUID", Short: "Delete an Armory template", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path, err := serviceIDPath("/armory/template/", args[0], "")
 		if err != nil {
@@ -192,7 +192,7 @@ var armoryRunListCmd = &cobra.Command{
 }
 
 var armoryRunGetCmd = &cobra.Command{
-	Use: "get uuid", Short: "Get an Armory run", Args: cobra.ExactArgs(1),
+	Use: "get UUID", Short: "Get an Armory run", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path, err := serviceIDPath("/armory/run/", args[0], "")
 		if err != nil {
@@ -231,7 +231,7 @@ var armoryRunValidateCmd = &cobra.Command{
 }
 
 var armoryRunStartCmd = &cobra.Command{
-	Use: "start uuid", Short: "Start an Armory run", Args: cobra.ExactArgs(1),
+	Use: "start UUID", Short: "Start an Armory run", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path, err := serviceIDPath("/armory/run/", args[0], "/start")
 		if err != nil {
@@ -242,7 +242,7 @@ var armoryRunStartCmd = &cobra.Command{
 }
 
 var armoryRunCancelCmd = &cobra.Command{
-	Use: "cancel uuid", Short: "Cancel an Armory run", Args: cobra.ExactArgs(1),
+	Use: "cancel UUID", Short: "Cancel an Armory run", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path, err := serviceIDPath("/armory/run/", args[0], "/cancel")
 		if err != nil {
@@ -253,7 +253,7 @@ var armoryRunCancelCmd = &cobra.Command{
 }
 
 var armoryRunDeleteCmd = &cobra.Command{
-	Use: "delete uuid", Short: "Delete an Armory run", Args: cobra.ExactArgs(1),
+	Use: "delete UUID", Short: "Delete an Armory run", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path, err := serviceIDPath("/armory/run/", args[0], "")
 		if err != nil {
@@ -264,7 +264,7 @@ var armoryRunDeleteCmd = &cobra.Command{
 }
 
 var armoryRunTrafficCmd = &cobra.Command{
-	Use: "traffic uuid", Short: "List traffic for an Armory run", Args: cobra.ExactArgs(1),
+	Use: "traffic UUID", Short: "List traffic for an Armory run", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		id, err := parseServiceID(args[0])
 		if err != nil {
