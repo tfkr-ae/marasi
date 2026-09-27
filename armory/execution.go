@@ -168,8 +168,8 @@ func (manager *Manager) execute(execution *execution) {
 		execution.run.Status = domain.ArmoryRunCompleted
 	}
 
-	manager.updateRun(execution.run)
 	manager.removeExecution(execution)
+	manager.updateRun(execution.run)
 	execution.cancelFunc()
 }
 
