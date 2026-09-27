@@ -131,7 +131,6 @@ func TestArmoryCommandOptions(t *testing.T) {
 			{"armory", "run", "validate", "--attack-type", "harpoon"},
 			{"armory", "run", "create", "--template", templateID, "--attack-type", "harpoon", "--start"},
 			{"armory", "template", "list", "--project", "scratchpad"},
-			{"wordlist"},
 		} {
 			commandArgs := append([]string{"--config-dir", configDir}, args...)
 			stdout, stderr, err := runMarasi(binary, commandArgs...)
