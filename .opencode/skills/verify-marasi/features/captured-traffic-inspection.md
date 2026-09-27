@@ -10,7 +10,7 @@ Users list stored request/response pairs and open one pair to inspect its metada
 - Read one pair by UUID with `traffic get "$TRAFFIC_ID"`.
 - Read one pair's metadata with `traffic metadata get "$TRAFFIC_ID"`.
 - Replace one pair's metadata with `traffic metadata update "$TRAFFIC_ID" --file` or piped stdin.
-- Choose human-readable or `--json` output.
+- Choose human-readable or `--json` output for `traffic list`, `traffic get`, and `traffic metadata update`. `traffic metadata get` always returns the stored JSON object.
 
 ## How to get to it (user POV)
 

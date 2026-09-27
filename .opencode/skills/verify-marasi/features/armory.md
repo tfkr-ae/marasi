@@ -32,6 +32,7 @@ Write `$VERIFY_CONFIG_DIR/wordlists/users.txt` with one line `payload`. Write a 
 - Template `--name` is required and must be non-empty. Update requires `--name`, `--description`, or `--raw-file`.
 - `--attack-type` is `harpoon`, `broadside`, `tandem`, or `maelstrom`. Matching ignores case. The stored value uses that spelling. `--wordlist` is repeatable and names files under `$VERIFY_CONFIG_DIR/wordlists`. The service creates that directory empty; it does not seed wordlist files. `wordlist add` moves a source file there.
 - `--http` sends generated requests as HTTP. Omit it and Marasi uses HTTPS.
+- `armory run create` accepts `--max-concurrent 1` through `100`. Omit it and the run uses `10`.
 - Validate needs `--raw-file` or piped stdin. A TTY stdin fails. Create uses the stored template, not stdin. Validate and start reject a template that is not a complete HTTP request with a non-empty `Host` and a header-terminating blank line. A run also needs at least one `@@` payload position. Harpoon and broadside need exactly one wordlist; tandem and maelstrom need one wordlist per template position.
 - `armory run list` requires `--template`. Traffic listing accepts `--limit` and `--cursor`, but rows are oldest first. `traffic list` pages newest remaining rows.
 - Start sends through the proxy listener and stamps `metadata.armory_run_id`. A one-payload harpoon can finish before you read `armory run get`. Retry get and traffic until the path appears.

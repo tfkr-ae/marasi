@@ -20,7 +20,7 @@ Start a service first. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --inst
 
 ## Driving it with shell and curl
 
-Run `test-case create --title "Auth bypass" --category Access --tag auth --note first --json` and save `id`. Run `test-case list --json` and require that id. Run `test-case update "$TEST_CASE_ID" --note replay --json`. Link a captured request with `test-case link "$TEST_CASE_ID" --request "$TRAFFIC_ID" --json`. Run `test-case get "$TEST_CASE_ID" --json` and require note `replay` plus that traffic id in `items`. Run `test-case checklist --json` and require a non-empty `title` and `items` whose members have `title` and `category` but no `id`. Unlink with `test-case unlink "$TEST_CASE_ID" --request "$TRAFFIC_ID" --json`, then `test-case delete "$TEST_CASE_ID" --json`.
+Run `test-case create --title "Auth bypass" --category Access --tag auth --note first --json` and save `id`. Run `test-case list --json` and require that id. Run `test-case update "$TEST_CASE_ID" --note replay --json`. Link a captured request with `test-case link "$TEST_CASE_ID" --request "$TRAFFIC_ID" --json`. Run `test-case get "$TEST_CASE_ID" --json` and require note `replay` plus that traffic id in `items`. Run `test-case checklist --json` and require a non-empty `title` and `items` whose members have `title`, `description`, and `category` but no `id`. Unlink with `test-case unlink "$TEST_CASE_ID" --request "$TRAFFIC_ID" --json`, then `test-case delete "$TEST_CASE_ID" --json`.
 
 ## Gotchas
 
