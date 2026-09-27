@@ -23,4 +23,5 @@ go.work
 .DS_Store
 
 # Local verification evidence
+.agents/verification-artifacts/
 .opencode/verification-artifacts/

@@ -73,7 +73,7 @@ Use shell commands for the CLI and `curl` for the proxy. Prefer `--json` because
 For the complete recipe, run the bundled executable helper:
 
 ```bash
-.opencode/skills/verify-marasi/scripts/verify-traffic.sh
+.agents/skills/verify-marasi/scripts/verify-traffic.sh
 ```
 
 It builds Marasi, starts an isolated instance and local origin, checks service identity, subscribes with `events`, proxies one request, inspects the live events and the stored request/response pair through the CLI, checks the SQLite project side effect, writes evidence, and cleans up.
@@ -85,7 +85,7 @@ Read `features/README.md` before choosing coverage. A proof is incomplete if the
 The helper writes each proof to:
 
 ```text
-.opencode/verification-artifacts/verify-marasi/$RUN_ID/
+.agents/verification-artifacts/verify-marasi/$RUN_ID/
 ```
 
 Keep at least `actions.log`, `launch.json`, `doctor.json`, `events-stderr.txt`, `events-stdout.txt`, `response-headers.txt`, `response-body.txt`, `traffic-list.json`, `traffic-detail.json`, `database-state.txt`, `service.log`, `cleanup.json`, and `result.txt`. `result.txt` is valid only when it says `PASS`.
@@ -114,11 +114,11 @@ The evidence directory is separate from `$VERIFY_CONFIG_DIR`; cleanup must leave
 `scripts/verify-traffic.sh` is executable and has no third-party dependencies beyond the repo's Go toolchain, Bash, `curl`, and Python 3. Invoke it from any directory inside the checkout:
 
 ```bash
-.opencode/skills/verify-marasi/scripts/verify-traffic.sh
+.agents/skills/verify-marasi/scripts/verify-traffic.sh
 ```
 
 Set `VERIFY_ARTIFACT_ROOT` to redirect evidence without changing scratch-state isolation:
 
 ```bash
-VERIFY_ARTIFACT_ROOT="$PWD/my-proof" .opencode/skills/verify-marasi/scripts/verify-traffic.sh
+VERIFY_ARTIFACT_ROOT="$PWD/my-proof" .agents/skills/verify-marasi/scripts/verify-traffic.sh
 ```

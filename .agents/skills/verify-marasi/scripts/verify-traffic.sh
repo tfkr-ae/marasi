@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-ARTIFACT_ROOT="${VERIFY_ARTIFACT_ROOT:-$ROOT/.opencode/verification-artifacts/verify-marasi}"
+ARTIFACT_ROOT="${VERIFY_ARTIFACT_ROOT:-$ROOT/.agents/verification-artifacts/verify-marasi}"
 EVIDENCE_DIR="$ARTIFACT_ROOT/$RUN_ID"
 SCRATCH_DIR="$(mktemp -d /tmp/mv.XXXXXX)"
 CONFIG_DIR="$SCRATCH_DIR"
