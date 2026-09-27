@@ -272,7 +272,7 @@ func writeLaunchpadListHuman(body []byte, stdout io.Writer) error {
 	}
 	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	for _, item := range response.Items {
-		fmt.Fprintf(writer, "%s\t%s\t%s\n", item.ID, item.Name, item.Description)
+		fmt.Fprintf(writer, "%s\t%s\t%s\n", item.ID, truncateDisplay(item.Name, trafficPathDisplayLimit), truncateDisplay(item.Description, trafficPathDisplayLimit))
 	}
 	return writer.Flush()
 }

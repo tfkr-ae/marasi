@@ -245,6 +245,20 @@ func TestNotesListCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("should keep a note with breaks on one row", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"0193802f-f0e7-73d9-a764-06d21e367809","method":"GET","host":"example.com","path":"/a","status_code":200,"length":"12","note":"keep\nthis\tok"}],"next_cursor":null}`)
+
+		stdout, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "notes", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := "0193802f-f0e7-73d9-a764-06d21e367809  GET  example.com  /a  200  12  keep this ok\n"
+		if stdout != want || strings.Count(stdout, "\n") != 1 {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, stdout)
+		}
+	})
+
 	t.Run("should truncate long notes without splitting utf-8 characters", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"0193802f-f0e7-73d9-a764-06d21e367809","method":"GET","host":"example.com","path":"/a","status_code":200,"length":"12","note":"012345678901234567890123456789012345😀XYZQ"}],"next_cursor":null}`)

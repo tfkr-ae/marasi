@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 
@@ -194,6 +195,14 @@ func writeNotesListHuman(body []byte, stdout, stderr io.Writer) error {
 }
 
 func truncateDisplay(value string, limit int) string {
+	value = strings.Map(func(r rune) rune {
+		switch r {
+		case '\n', '\r', '\t', '\f':
+			return ' '
+		default:
+			return r
+		}
+	}, value)
 	runes := []rune(value)
 	if len(runes) > limit {
 		return string(runes[:limit-3]) + "..."

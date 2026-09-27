@@ -345,7 +345,7 @@ func writeTestCaseListHuman(body []byte, stdout io.Writer) error {
 	}
 	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	for _, item := range response.Items {
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", item.ID, item.Title, item.Category, strings.Join(item.Tags, ","), item.CreatedAt)
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", item.ID, truncateDisplay(item.Title, trafficPathDisplayLimit), truncateDisplay(item.Category, trafficPathDisplayLimit), truncateDisplay(strings.Join(item.Tags, ","), trafficPathDisplayLimit), item.CreatedAt)
 	}
 	return writer.Flush()
 }
@@ -379,7 +379,7 @@ func writeTestCaseChecklistHuman(body []byte, stdout io.Writer) error {
 	}
 	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	for _, item := range response.Items {
-		fmt.Fprintf(writer, "%s\t%s\n", item.Title, item.Category)
+		fmt.Fprintf(writer, "%s\t%s\n", truncateDisplay(item.Title, trafficPathDisplayLimit), truncateDisplay(item.Category, trafficPathDisplayLimit))
 	}
 	return writer.Flush()
 }
