@@ -10,7 +10,7 @@ Users page the running instance's proxy log entries and continue with a cursor.
 
 ## How to get to it (user POV)
 
-Start a service first. A proxied request does not by itself add a log row. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANCE" logs` after start, or after `listener start` / `listener update`, which each write a startup line.
+Start a service first. A proxied request does not by itself add a log row. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANCE" logs` after start. A later startup line is written only when the listener binds: `listener update` when the requested endpoint differs from the bound one, or `listener start` after the listener is inactive. `listener start` while the listener is already active fails and adds no row.
 
 ## Driving it with shell and curl
 
@@ -18,7 +18,7 @@ After start, `logs --json` must contain an `INFO` item whose `message` is `Maras
 
 ## Gotchas
 
-- A successful proxy does not insert a proxy log and does not set `request_id`. The startup line is written when the listener binds. Another row needs another `GetListener`, such as `listener start` or `listener update`, not another curl.
+- A successful proxy does not insert a proxy log and does not set `request_id`. The startup line is written when the listener binds. `listener start` binds only when the listener is inactive. `listener update` binds only when the requested endpoint differs from the bound one; `--port 0` differs from an already assigned port. Another curl does not add a row.
 - Pages are newest id first. The service accepts `--limit` 1 through 500 and defaults to 200. `--cursor` must be a UUID.
 - Log entries belong to the currently open project file. `project open` to a different project switches the log view; reopening the same path keeps its rows.
 - Human output prints the page oldest first. `--json` keeps the newest-first order with `next_cursor`.

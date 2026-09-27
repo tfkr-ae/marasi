@@ -87,7 +87,7 @@ Capture one HTTP exchange:
 
 WebSocket features need a real local WebSocket server and a client that holds the upgraded connection through the proxy. Checkpoint, launchpad, Armory, and waypoints are proven only when the origin or the stored traffic changes. Each feature file is the recipe.
 
-Stop the `events` subscriber you started before cleanup. After `: connected`, SIGINT is a zero exit on Unix when the process can receive it. See `features/events.md`. Windows cannot deliver that signal to another process. Foreground Ctrl-C is the equivalent.
+Stop the `events` subscriber you started before cleanup. After `: connected`, SIGINT is a zero exit on Unix, including when the job inherited SIGINT ignored. See `features/events.md`. Windows cannot deliver that signal to another process. Foreground Ctrl-C is the equivalent.
 
 ## Evidence
 

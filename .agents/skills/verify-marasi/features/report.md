@@ -8,7 +8,7 @@ Users keep report templates for a running instance and export a rendered report 
 - Move a source file into the templates directory with `report template add PATH`.
 - Remove a template with `report template remove NAME`.
 - Restore the embedded default with `report template restore`.
-- Render a template to a file with `report export NAME --start YYYY-MM-DD --end YYYY-MM-DD`.
+- Render a template to a file with `report export NAME --start YYYY-MM-DD --end YYYY-MM-DD`. Optional metadata flags are `--title`, `--client`, `--type`, `--scope`, and `--assessor`.
 - Choose human-readable or `--json` output.
 
 ## How to get to it (user POV)
@@ -25,7 +25,7 @@ Run `report template list --json` and require an item whose `name` is `default_t
 - The default template is `$VERIFY_CONFIG_DIR/templates/default_template.md`. A doctor-checked start has already installed it. Templates live under the config directory, not the open project. `project open` does not hide them. Findings and test cases in an export do follow the open project.
 - List is filename order. It omits hidden files, directories, and symlinks. It does not put `default_template.md` first.
 - Remove may delete `default_template.md`. Restore overwrites an edited default and recreates a missing one. Other templates are left alone.
-- `--start` and `--end` are required and must be `YYYY-MM-DD`. `--draft` defaults true. `--include-test-cases` defaults true. `--truncate` defaults `0`. CLI flags are `--draft`, `--truncate`, and `--include-test-cases`, not the JSON names `is_draft`, `truncate_length`, and `include_test_cases`.
+- `--start` and `--end` are required and must be `YYYY-MM-DD`. `--draft` defaults true. `--include-test-cases` defaults true. `--truncate` defaults `0`. `--title`, `--client`, `--type`, `--scope`, and `--assessor` are written into the template metadata. CLI flags are `--draft`, `--truncate`, `--include-test-cases`, `--title`, `--client`, `--type`, `--scope`, and `--assessor`, not the JSON names `is_draft`, `truncate_length`, and `include_test_cases`.
 - Export writes the rendered bytes to a file. Human stdout is that absolute path. `--json` prints `{"path":...}`, not the report. With no `--output`, the name is `--title` plus the template extension when the title does not already end with that extension, or the template basename when `--title` is empty, in the current directory. A failed export does not replace an existing output file.
 - Add, remove, and restore publish `report.template.added`, `report.template.removed`, and `report.template.restored`. List and export do not. Subscribe with `events` before the mutation; the stream has no replay.
 - Human add, remove, and restore print a confirmation to stderr. `--json` add, remove, and restore print the full list.

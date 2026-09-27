@@ -20,7 +20,7 @@ Run `artifact upload --test-case "$TEST_CASE_ID" --file "$PROOF_FILE" --json` an
 
 ## Gotchas
 
-- Upload requires `--file` and exactly one of `--test-case` or `--finding`. A body over 20 MiB fails with `too_large`.
+- Upload requires `--file` and exactly one of `--test-case` or `--finding`. A body over 20 MiB fails. With `--json` the error is `uploading artifact: too_large`. Human output is `uploading artifact: 400 Bad Request` and does not include `too_large`.
 - `--mime` is optional. When omitted, Marasi uses the file extension, or `application/octet-stream`.
 - `artifact download` rejects `--json`. With no `--output`, it writes the filename in the current directory.
 - The parent test case or finding must exist in the currently open project.

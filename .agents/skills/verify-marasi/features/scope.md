@@ -23,4 +23,4 @@ Run `scope check "example.com/path?q=1"` and require `tested_url: https://exampl
 - `compass_enabled: false` does not disable filtering. The verdict still applies the scope rules.
 - `scope check` never mutates rules and publishes no event.
 - Bare `scope` requires the `check` subcommand. `scope check` takes exactly one positional URL; there is no `--url` flag.
-- An empty or unparseable URL fails with `checking scope: bad_request`. A missing instance fails before dialing with `instance $VERIFY_INSTANCE is not running`.
+- An empty or unparseable URL fails with `checking scope: bad_request`. A missing instance fails with `instance $VERIFY_INSTANCE is not running`.

@@ -24,7 +24,7 @@ Run `service start --project-name "$VERIFY_PROJECT" --address 127.0.0.1 --port 0
 
 - `service start` launches a detached child. The start command exiting does not mean the service stopped.
 - Port `0` asks the OS for an unused proxy port and is the safe choice for parallel verification.
-- `--project-name` selects `$configDir/projects/<name>.marasi`. `--project` is a file path that must end in `.marasi`. The flags are mutually exclusive.
+- `--project-name` selects `$configDir/projects/<name>.marasi`. The name is trimmed, and one trailing `.marasi` suffix is stripped. `--project` is a file path that must end in `.marasi`. The flags are mutually exclusive.
 - Omitting both project flags opens `$configDir/projects/scratchpad.marasi`.
 - Status `project` is that resolved absolute path, not the name passed to `--project-name`. On macOS `/tmp` canonicalizes through `/private/tmp`.
 - The config directory contains the instance socket, log, project database, generated CA material, and wordlists. Use the short absolute scratch directory from Launch. Marasi rejects the socket path when its byte length plus one exceeds 104.

@@ -10,7 +10,7 @@ Users list stored request/response pairs and open one pair to inspect its metada
 - Read one pair by UUID with `traffic get "$TRAFFIC_ID"`.
 - Read one pair's metadata with `traffic metadata get "$TRAFFIC_ID"`.
 - Replace one pair's metadata with `traffic metadata update "$TRAFFIC_ID" --file` or piped stdin.
-- Choose human-readable or `--json` output for `traffic list`, `traffic get`, and `traffic metadata update`. `traffic metadata get` always returns the stored JSON object.
+- Choose human-readable or `--json` output for `traffic list`, `traffic get`, and `traffic metadata update`. `traffic metadata get` always returns JSON, without `prettified-request` or `prettified-response`.
 
 ## How to get to it (user POV)
 
@@ -29,4 +29,4 @@ Send two distinct proxied requests, for example `GET /proof.txt` returning 200 a
 - `traffic get` requires a UUID. Invalid IDs fail before repository lookup.
 - `traffic metadata update` requires `--file` or piped stdin with a non-empty JSON object body. A TTY stdin fails.
 - `--limit` must be 1 through 500. The default is 200.
-- Metadata update replaces client-owned keys. It drops a submitted `has_note`, `prettified-request`, or `prettified-response`, keeps any previous prettified bodies, and sets `has_note` to JSON boolean `true` only when a note already exists. `notes set` is a different writer: it stores `has_note` as the JSON number `1`. `traffic metadata get` returns the stored value. It does not add `has_note` when no note exists.
+- Metadata update replaces client-owned keys. It drops a submitted `has_note`, `prettified-request`, or `prettified-response`, keeps any previous prettified bodies in storage, and sets `has_note` to JSON boolean `true` only when a note already exists. `notes set` is a different writer: it stores `has_note` as the JSON number `1`. `traffic metadata get` omits `prettified-request` and `prettified-response`. It does not add `has_note` when no note exists.
