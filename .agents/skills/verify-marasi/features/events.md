@@ -23,7 +23,7 @@ Start `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANC
 - Human mode writes `: connected` to stderr and `name <json>` lines to stdout. `--json` writes NDJSON `{"event":...,"data":...}` to stdout and omits the connected comment.
 - Heartbeat comments are dropped. Only named SSE events are printed.
 - If the instance is not running, the command fails with `instance $VERIFY_INSTANCE is not running`.
-- After `: connected`, SIGINT is success. Closing before that comment fails. A non-interactive shell ignores SIGINT for background jobs, so `events &` then `kill -INT` does not stop the subscriber. Enable job control with `set -m`, or run `events` in the foreground, before sending SIGINT.
+- After `: connected`, SIGINT or SIGTERM is a zero exit. Closing before that comment fails. A non-interactive background job inherits SIGINT ignored. `set -m` does not undo that without a controlling terminal, so `events &` then `kill -INT` hangs. Run `events` in the foreground, or start it with SIGINT restored to the default disposition, before sending SIGINT. Windows cannot deliver `os.Interrupt` to another process. Foreground Ctrl-C is the equivalent.
 - `traffic.response` has `id`, `status`, `status_code`, `content_type`, `length`, `metadata`, and `responded_at`. It has no `path`.
 - Checkpoint event names are `checkpoint.held`, `checkpoint.forwarded`, `checkpoint.dropped`, and `checkpoint.updated`.
 - WebSocket event names are `websocket.opened`, `websocket.message`, and `websocket.closed`.

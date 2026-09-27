@@ -1,6 +1,6 @@
 # Marasi verification feature map
 
-The primary surface is the `marasi` CLI. It controls a detached proxy service through a per-instance Unix socket. The control API and Go library are secondary surfaces and do not replace CLI proof for these features.
+The primary surface is the `marasi` CLI. It controls a detached proxy service through a per-instance Unix-domain socket, including on Windows. Launch, doctor, isolate, and cleanup are in [SKILL.md](../SKILL.md). The control API and Go library are secondary surfaces and do not replace CLI proof for these features.
 
 | Feature | User entry points | Proof file |
 | --- | --- | --- |
@@ -27,4 +27,4 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Proxy logs | `logs`, list pagination with `--limit` and `--cursor` | [proxy logs](logs.md) |
 | CA certificate | `certificate get`, `--format pem` or `der` | [CA certificate](certificate.md) |
 
-When a change touches one row, read that feature file and cover every affected entry point. The bundled helper proves service lifecycle, one HTTP capture, live `events` subscription, filtered listing, and detail inspection. It does not cover every listener transition, `listener address`, HTTPS interception, pagination, `service list`, project open, project list, launchpad, test cases, findings, artifacts, notes, metadata, Checkpoint, Chrome, waypoints, wordlists, Armory, extensions, report templates, report export, WebSocket connections, proxy logs, or CA certificate fetch.
+When a change touches one row, read that feature file and cover every entry point it names. There is no bundled script. A command that inspects or acts on captured traffic is proven only after real client traffic has gone through the proxy.

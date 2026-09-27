@@ -21,7 +21,7 @@ Run `wordlist list --json` and require `{"items":[]}`. Write a source file outsi
 
 ## Gotchas
 
-- `wordlist add` moves the source file. The path must be a regular file outside the wordlists directory. The stored name is the basename.
+- `wordlist add` moves the source file, including when the source is on another drive. The path must be a regular file outside the wordlists directory. The stored name is the basename.
 - List is ordered by name. Preview default `--limit` is 20. The server rejects values outside 1 to 100.
 - Add and remove publish `wordlist.added` and `wordlist.removed`. Subscribe with `events` before the mutation; the stream has no replay.
 - Wordlists live under the config directory, not the open project. `project open` does not hide them.

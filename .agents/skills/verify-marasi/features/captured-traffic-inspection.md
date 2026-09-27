@@ -18,7 +18,7 @@ Send traffic through a running instance, then run `dist/marasi --config-dir "$VE
 
 ## Driving it with shell and curl
 
-Create at least one known proxied request. Run `traffic list --path /proof.txt --status-code 200 --limit 1 --json`, require exactly the expected path and status, and save its UUID. Run `traffic get "$TRAFFIC_ID" --json`; require the same ID, `GET`, path, response status 200, and raw request and response data. Run `traffic metadata get "$TRAFFIC_ID" --json` and require the stored metadata object. Replace it with `traffic metadata update "$TRAFFIC_ID" --file "$META_FILE" --json`, then get again and require the new keys. For filter or pagination changes, create distinct requests and prove both matching and non-matching cases plus every returned cursor.
+Send two distinct proxied requests, for example `GET /proof.txt` returning 200 and `POST /other` returning 404. Run `traffic list --host "$HOST" --method GET --path /proof --status-code 200 --limit 1 --json` and require that one row. A host filter that omits the origin port, and a method/status pair that matches nothing, must return empty `items`. `traffic list --limit 1 --json` is the newest row. Pass its `next_cursor` to a second `--limit 1` page and require the older row and `next_cursor` null. Run `traffic get "$TRAFFIC_ID" --json` and base64-decode `request.raw` and `response.raw`. Require the method, path, status, and origin body inside those bytes. `traffic metadata get` on a fresh row is `{}`. `traffic metadata update --file` with `{"phase":"two","has_note":false,"prettified-request":"client","prettified-response":"client"}`, then get again, must return only `{"phase":"two"}`.
 
 ## Gotchas
 
@@ -28,4 +28,5 @@ Create at least one known proxied request. Run `traffic list --path /proof.txt -
 - Human output writes `next_cursor=$NEXT_CURSOR` to stderr. JSON keeps it in `next_cursor`.
 - `traffic get` requires a UUID. Invalid IDs fail before repository lookup.
 - `traffic metadata update` requires `--file` or piped stdin with a non-empty JSON object body. A TTY stdin fails.
-- Metadata update replaces client-owned keys. It drops a submitted `has_note`, `prettified-request`, or `prettified-response`, keeps any previous prettified bodies, and sets `has_note` only when a note exists. `traffic metadata get` returns that object with prettified keys removed. It does not add `has_note` when no note exists.
+- `--limit` must be 1 through 500. The default is 200.
+- Metadata update replaces client-owned keys. It drops a submitted `has_note`, `prettified-request`, or `prettified-response`, keeps any previous prettified bodies, and sets `has_note` to JSON boolean `true` only when a note already exists. `notes set` is a different writer: it stores `has_note` as the JSON number `1`. `traffic metadata get` returns the stored value. It does not add `has_note` when no note exists.

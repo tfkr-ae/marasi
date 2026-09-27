@@ -27,7 +27,7 @@ Run `service start --project-name "$VERIFY_PROJECT" --address 127.0.0.1 --port 0
 - `--project-name` selects `$configDir/projects/<name>.marasi`. `--project` is a file path that must end in `.marasi`. The flags are mutually exclusive.
 - Omitting both project flags opens `$configDir/projects/scratchpad.marasi`.
 - Status `project` is that resolved absolute path, not the name passed to `--project-name`. On macOS `/tmp` canonicalizes through `/private/tmp`.
-- The config directory contains the instance socket, log, project database, generated CA material, and wordlists. Use a new scratch directory under a short path such as `/tmp/mv.XXXXXX`. Marasi rejects the socket path when its byte length plus one exceeds 104.
+- The config directory contains the instance socket, log, project database, generated CA material, and wordlists. Use the short absolute scratch directory from Launch. Marasi rejects the socket path when its byte length plus one exceeds 104.
 - A project has an exclusive lock. Unique project names avoid colliding with another instance.
 - A parent `go.work` can exclude this worktree. Build with `GOWORK=off`.
-- `service list` scans `$configDir/instances` for sockets and queries each for status. It reports running instances with their status body and connected-but-unreadable sockets as `status` `unhealthy`. Sockets that refuse the connection are omitted. It never starts or stops instances.
+- `service list --json` is `{"items":[...]}`. A running item is that instance's status body. Any other socket that is not a dial failure is `{"status":"unhealthy","instance":"<name>"}`, including a readable error or garbage JSON. Dial failures are omitted. List never starts or stops instances.

@@ -5,13 +5,25 @@ description: Verify Marasi's CLI-driven proxy service when a change needs proof 
 
 # Verify Marasi
 
-Marasi's primary user surface is the `marasi` CLI. It launches a detached HTTP/HTTPS proxy service and talks to its control API through a Unix socket. The HTTP control API and Go library are secondary surfaces.
+Marasi's primary user surface is the `marasi` CLI. It launches a detached HTTP/HTTPS proxy and talks to that process over a Unix-domain socket on every OS, including Windows. The HTTP control API and Go library are secondary. Drive with the `marasi` commands in this file and in `features/`. Do not wrap them.
 
-Use a fresh config directory, instance name, project name, and port `0` for every run. This is what makes parallel runs safe. Never point verification at the default config directory or an instance you did not start.
+## Isolate
+
+Every run gets its own config directory, instance name, project name, and proxy port `0`. Parallel runs are safe only when those four differ. Never use the default config directory or an instance you did not start.
+
+The default config directory is `os.UserConfigDir()/Marasi`: `$XDG_CONFIG_HOME/Marasi` or `$HOME/.config/Marasi` on Linux, `~/Library/Application Support/Marasi` on macOS, `%AppData%\Marasi` on Windows.
+
+The control socket is `<config-dir>/instances/<instance>.sock`. Marasi rejects that path when its byte length plus one exceeds 104. Use a short absolute config directory. A relative `--config-dir` can work on Linux and fail on Windows, because Windows AF_UNIX requires an absolute path. A long Windows temp path trips the 104-byte check sooner than `/tmp`.
+
+`--project-name` selects `$configDir/projects/<name>.marasi`. A project has an exclusive lock. Unique project names avoid colliding with another instance.
+
+A parent `go.work` can exclude this worktree. Build with `GOWORK=off`.
 
 ## Launch
 
-Run from the repository root. The parent checkout may contain a `go.work` that excludes this worktree, so keep `GOWORK=off` on Go and Make commands.
+Run from the repository root.
+
+Linux and macOS:
 
 ```bash
 export VERIFY_RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
@@ -30,19 +42,17 @@ GOWORK=off make build VERSION="verify-${VERIFY_RUN_ID}"
   --json
 ```
 
-The start command exits after its detached child is ready. Readiness is a zero exit code and JSON containing the selected instance plus a non-empty `proxy_listener`, for example `{"instance":"verify-...","proxy_listener":"127.0.0.1:54321"}`.
+`make build` writes `dist/marasi` with no `.exe`. `make windows-amd64` writes `dist/marasi-windows-amd64.exe`. On Windows, build with the same `VERSION` and invoke that binary. The subcommands do not change.
 
-Verification needs no authentication, seed data, browser, or environment variables beyond those shown above. Marasi creates the project database, CA material, and an empty `wordlists` directory under the scratch config directory. Armory runs need files in that directory. `wordlist add` moves a source file there; writing the file yourself also works.
+Windows scratch directory: create a short absolute directory yourself, for example under `C:\mv`, and set `VERIFY_CONFIG_DIR`, `VERIFY_INSTANCE`, and `VERIFY_PROJECT` to unique values. Do not use `/tmp` or a path that makes the socket longer than 104 bytes. `%TEMP%` is often too long.
 
-Teardown only the selected instance:
+The start command exits after its detached child is ready. Readiness is a zero exit code and JSON `{"instance":"<VERIFY_INSTANCE>","proxy_listener":"127.0.0.1:<port>"}`. `instance` is the `--instance` flag, not the version and not the project name. The port is the OS-assigned port, not `0`.
 
-```bash
-./dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANCE" service stop --json
-```
+Unix detach is a new session. Windows detach is a new process group with `DETACHED_PROCESS`. Both wait on the same stdin handshake. A Windows detached child does not receive console Ctrl+C. Stop it with `service stop`.
+
+Verification needs no authentication, seed data, or browser. Marasi creates the project database, CA material, an empty `wordlists` directory, and `templates/default_template.md` under the scratch config directory.
 
 ## Doctor
-
-Run this read-only check first whenever output, connectivity, or state looks wrong:
 
 ```bash
 ./dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANCE" service status --json
@@ -53,72 +63,54 @@ Drive the instance only when the command exits zero and reports all of the follo
 - `status` is `running`.
 - `version` is `verify-$VERIFY_RUN_ID`.
 - `instance` equals `$VERIFY_INSTANCE`.
-- `project` is the canonical absolute path of the file `$VERIFY_CONFIG_DIR/projects/$VERIFY_PROJECT.marasi`. On macOS that path is under `/private/tmp` even when the config directory was created as `/tmp/mv.XXXXXX`.
+- `project` is the canonical absolute path of `$VERIFY_CONFIG_DIR/projects/$VERIFY_PROJECT.marasi`. On macOS `/tmp` becomes `/private/tmp`. Linux `/tmp` usually stays `/tmp`. Windows canonicalization can change junctions and uses backslashes. Compare with the platform real path, not the string passed to `--config-dir`.
 - `proxy_listener` is `127.0.0.1` with a non-empty assigned decimal port.
 
-This status comes from the service reached through this run's private Unix socket. The unique config directory and instance name identify the process as ours. If any identity field differs, stop. Do not drive or stop that instance.
+This status comes from the service reached through this run's private socket. If any identity field differs, stop. Do not drive or stop that instance.
+
+After `project open` to a different project, `project` no longer matches `$VERIFY_PROJECT`. The instance is still ours when `instance` and `version` match. Doctor against the opened project path from that point.
 
 ## Drive
 
-Use shell commands for the CLI and `curl` for the proxy. Prefer `--json` because the field names are the CLI's stable handles. Use these commands to capture a real HTTP request through the assigned proxy:
+Use the same `--config-dir` and `--instance` on every command. Prefer `--json`. Use `curl` for proxy traffic. Read `features/README.md` and the feature file before choosing coverage. A proof is incomplete if that file has another user entry point the run ignores.
 
-1. Get `proxy_listener` from `service status --json`.
+Commands that inspect, list, filter, replay, or otherwise act on captured traffic are not proven against an empty project. Send real client traffic through `proxy_listener`, then run the `marasi` command and assert on the traffic or state that command changes.
+
+Capture one HTTP exchange:
+
+1. Read `proxy_listener` from `service status --json`.
 2. Start a local HTTP origin on `127.0.0.1` with a port assigned by the OS.
-3. Subscribe with `events` and wait for `: connected` on stderr. The stream has no replay.
-4. Send `curl --noproxy '' --proxy "http://$PROXY_LISTENER" "http://127.0.0.1:$ORIGIN_PORT/proof.txt"`.
-5. Require `events` stdout to print `traffic.request` then `traffic.response` for that exchange.
-6. Find the request with `traffic list --path /proof.txt --status-code 200 --json`.
-7. Pass its `id` to `traffic get "$TRAFFIC_ID" --json`. The event `id` fields must match.
+3. Run `events` and wait for `: connected` on stderr before the request. The stream has no replay. Human stdout is `event-name json`.
+4. `curl --noproxy '' --proxy "http://$PROXY_LISTENER" "http://127.0.0.1:$ORIGIN_PORT/proof.txt"`. `--noproxy ''` is required. `NO_PROXY` often bypasses localhost.
+5. Require events stdout to print `traffic.request` then `traffic.response` for that exchange, with the same `id`.
+6. `traffic list --path /proof.txt --status-code 200 --json`, then `traffic get` that `id`. The event `id` must match. `request.raw` and `response.raw` are base64.
 
-For the complete recipe, run the bundled executable helper:
+WebSocket features need a real local WebSocket server and a client that holds the upgraded connection through the proxy. Checkpoint, launchpad, Armory, and waypoints are proven only when the origin or the stored traffic changes. Each feature file is the recipe.
 
-```bash
-.agents/skills/verify-marasi/scripts/verify-traffic.sh
-```
-
-It builds Marasi, starts an isolated instance and local origin, checks service identity, subscribes with `events`, proxies one request, inspects the live events and the stored request/response pair through the CLI, checks the SQLite project side effect, writes evidence, and cleans up.
-
-Read `features/README.md` before choosing coverage. A proof is incomplete if the mapped feature has another user entry point that the run ignores. The bundled helper does not cover report templates, report export, or WebSocket connections.
+Stop the `events` subscriber you started before cleanup. After `: connected`, SIGINT is a zero exit on Unix when the process can receive it. See `features/events.md`. Windows cannot deliver that signal to another process. Foreground Ctrl-C is the equivalent.
 
 ## Evidence
 
-The helper writes each proof to:
+Write the run's proof to:
 
 ```text
-.agents/verification-artifacts/verify-marasi/$RUN_ID/
+.agents/verification-artifacts/verify-marasi/$VERIFY_RUN_ID/
 ```
 
-Keep at least `actions.log`, `launch.json`, `doctor.json`, `events-stderr.txt`, `events-stdout.txt`, `response-headers.txt`, `response-body.txt`, `traffic-list.json`, `traffic-detail.json`, `database-state.txt`, `service.log`, `cleanup.json`, and `result.txt`. `result.txt` is valid only when it says `PASS`.
+Keep the launch JSON, doctor JSON, the curl response, events stdout and stderr, `traffic list`, and `traffic get` for a capture proof. Keep the command output you asserted on for every other feature. `result.txt` is valid only when it says `PASS`.
 
-A valid proof exercises the real CLI, detached service, proxy listener, and a normal HTTP origin. It captures the request action and the returned body, then confirms the same request through `events`, `traffic list`, `traffic get`, and the persisted SQLite `request` row. Internal setters and test-only endpoints do not count. Keep both the action and resulting state. Mocks are acceptable only at an existing production boundary. The local origin used here replaces an external website, not Marasi internals.
-
-Marasi has no dry-run mode in this path. The helper observes the project database and request row rather than inferring safety from a mode name.
+A valid proof exercises the real CLI, the detached service, the proxy listener, and a normal origin or WebSocket peer. Internal setters and test-only endpoints do not count. A local origin or WebSocket peer replaces an external website, not Marasi internals.
 
 ## Cleanup
 
-Interrupt the `events` subscriber first, stop the exact instance created by the run, then terminate the recorded local-origin PID and remove only that run's scratch config directory. Never kill by process name.
+Stop only the instance this run started. Never kill by process name.
 
 ```bash
-kill -INT "$EVENTS_PID"
-wait "$EVENTS_PID" 2>/dev/null || true
 ./dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANCE" service stop --json
-kill "$ORIGIN_PID"
-wait "$ORIGIN_PID" 2>/dev/null || true
-rm -rf "$VERIFY_CONFIG_DIR"
 ```
 
-The evidence directory is separate from `$VERIFY_CONFIG_DIR`; cleanup must leave it intact. Run cleanup after failed attempts too. If the environment variables no longer identify a run you created, inspect rather than guessing.
+Interrupt the `events` subscriber first if it is still attached. Then stop the instance. Then terminate the recorded PIDs for the local origin, WebSocket peer, and client this run started, and remove only `$VERIFY_CONFIG_DIR`. On Unix that is `kill` of those PIDs. On Windows, stop those recorded PIDs. Do not match a process name.
 
-## Helpers
+`service stop` removes the socket, not the log. On Windows, removing the config directory can fail while the child still holds the log. Wait until `service status` reports the instance is not running, then remove the directory.
 
-`scripts/verify-traffic.sh` is executable and has no third-party dependencies beyond the repo's Go toolchain, Bash, `curl`, and Python 3. Invoke it from any directory inside the checkout:
-
-```bash
-.agents/skills/verify-marasi/scripts/verify-traffic.sh
-```
-
-Set `VERIFY_ARTIFACT_ROOT` to redirect evidence without changing scratch-state isolation:
-
-```bash
-VERIFY_ARTIFACT_ROOT="$PWD/my-proof" .agents/skills/verify-marasi/scripts/verify-traffic.sh
-```
+The evidence directory is separate from `$VERIFY_CONFIG_DIR`. Cleanup leaves it intact. Run cleanup after failed attempts too. If the variables no longer identify a run you created, inspect rather than guessing.
