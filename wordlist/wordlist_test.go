@@ -11,6 +11,32 @@ import (
 	"testing"
 )
 
+func TestCopyWordlist(t *testing.T) {
+	t.Run("should copy a wordlist and remove the source", func(t *testing.T) {
+		sourceDir := t.TempDir()
+		source := filepath.Join(sourceDir, "words.txt")
+		if err := os.WriteFile(source, []byte("admin\n"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		info, err := os.Lstat(source)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		destination := filepath.Join(t.TempDir(), "words.txt")
+
+		if err = copyWordlist(source, destination, info); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if _, err = os.Stat(source); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("\nwanted:\nsource removed\ngot:\n%v", err)
+		}
+		content, err := os.ReadFile(destination)
+		if err != nil || string(content) != "admin\n" {
+			t.Fatalf("\nwanted:\ncopied wordlist\ngot:\n%q, %v", content, err)
+		}
+	})
+}
+
 func TestManagerAdd(t *testing.T) {
 	t.Run("should move a regular file into the wordlists directory", func(t *testing.T) {
 		manager, err := NewManager(t.TempDir())

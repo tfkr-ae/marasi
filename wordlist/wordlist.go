@@ -230,6 +230,9 @@ func copyWordlist(source, destination string, sourceInfo os.FileInfo) (err error
 	if !currentSourceInfo.Mode().IsRegular() || !os.SameFile(openedInfo, currentSourceInfo) {
 		return ErrInvalidSource
 	}
+	if err = sourceFile.Close(); err != nil {
+		return fmt.Errorf("closing source wordlist %s : %w", source, err)
+	}
 	if err = os.Remove(source); err != nil {
 		return fmt.Errorf("removing source wordlist %s : %w", source, err)
 	}

@@ -30,6 +30,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -254,7 +255,7 @@ func (g *Generator) AddTemplate(source string) (err error) {
 	if errors.Is(linkErr, os.ErrExist) {
 		return ErrTemplateAlreadyExists
 	}
-	if linkErr != nil && !errors.Is(linkErr, syscall.EXDEV) {
+	if linkErr != nil && !crossDeviceLink(linkErr) {
 		return fmt.Errorf("linking report template %s: %w", destination, linkErr)
 	}
 	if linkErr == nil {
@@ -302,6 +303,9 @@ func (g *Generator) AddTemplate(source string) (err error) {
 			publishedInfo = nil
 			return fmt.Errorf("publishing report template %s: %w", destination, err)
 		}
+		if err = sourceFile.Close(); err != nil {
+			return fmt.Errorf("closing report template source %s: %w", source, err)
+		}
 	}
 	current, err := os.Lstat(destination)
 	if err != nil {
@@ -333,6 +337,18 @@ func (g *Generator) AddTemplate(source string) (err error) {
 	}
 	sourceStaged = false
 	return nil
+}
+
+// windowsNotSameDevice is Win32 ERROR_NOT_SAME_DEVICE. os.Link returns it
+// instead of syscall.EXDEV when the source and destination are on different drives.
+const windowsNotSameDevice syscall.Errno = 17
+
+func crossDeviceLink(err error) bool {
+	if errors.Is(err, syscall.EXDEV) {
+		return true
+	}
+	var errno syscall.Errno
+	return runtime.GOOS == "windows" && errors.As(err, &errno) && errno == windowsNotSameDevice
 }
 
 // ValidTemplateName reports whether name is one local filename.

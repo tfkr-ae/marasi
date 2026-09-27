@@ -42,7 +42,10 @@ type chromeStartResponse struct {
 	Profile string `json:"profile"`
 }
 
-const chromeLockPollDelay = 10 * time.Millisecond
+const (
+	chromeLockPollDelay  = 10 * time.Millisecond
+	chromeConfigLockFile = "marasi_config.lock"
+)
 
 var (
 	ErrInvalidChromeRequest       = errors.New("invalid chrome request")
@@ -480,8 +483,8 @@ func (c *Chrome) withConfig(ctx context.Context, operation func() error) (result
 }
 
 func (c *Chrome) acquireConfigLock(ctx context.Context) (*os.File, error) {
-	path := filepath.Join(c.proxy.ConfigDir, "marasi_config.yaml")
-	lock, err := os.OpenFile(path, os.O_RDWR, 0600)
+	path := filepath.Join(c.proxy.ConfigDir, chromeConfigLockFile)
+	lock, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("opening chrome config lock %s: %w", path, err)
 	}

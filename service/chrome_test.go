@@ -282,10 +282,33 @@ func TestChromeProcessAdd(t *testing.T) {
 }
 
 func TestChromeLockCancellation(t *testing.T) {
+	t.Run("should reread the config while another handle locks the yaml file", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Windows denies a read of a byte-range locked file, so this lock is held on the sidecar instead")
+		}
+		configDir := t.TempDir()
+		module := NewChrome(newChromeTestProxy(t, configDir), &statusListener{status: ListenerStatus{Status: ListenerInactive}}, io.Discard)
+		yamlLock, err := os.OpenFile(filepath.Join(configDir, "marasi_config.yaml"), os.O_RDWR, 0600)
+		if err != nil {
+			t.Fatalf("opening config file: %v", err)
+		}
+		defer yamlLock.Close()
+		if err := filelock.TryLock(yamlLock); err != nil {
+			t.Fatalf("locking config file: %v", err)
+		}
+		defer filelock.Unlock(yamlLock)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		if _, err = module.Paths(ctx); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+	})
+
 	t.Run("should honor cancellation while waiting for the config file lock", func(t *testing.T) {
 		configDir := t.TempDir()
 		module := NewChrome(newChromeTestProxy(t, configDir), &statusListener{status: ListenerStatus{Status: ListenerInactive}}, io.Discard)
-		lock, err := os.OpenFile(filepath.Join(configDir, "marasi_config.yaml"), os.O_RDWR, 0600)
+		lock, err := os.OpenFile(filepath.Join(configDir, chromeConfigLockFile), os.O_RDWR|os.O_CREATE, 0600)
 		if err != nil {
 			t.Fatalf("opening config lock: %v", err)
 		}

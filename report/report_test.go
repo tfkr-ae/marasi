@@ -393,6 +393,38 @@ func TestGeneratorListTemplateDetails(t *testing.T) {
 	}
 }
 
+func TestGeneratorAddTemplateAcrossDevices(t *testing.T) {
+	other := os.Getenv("MARASI_OTHER_VOLUME")
+	if other == "" {
+		t.Skip("MARASI_OTHER_VOLUME is not set")
+	}
+	sourceDir := filepath.Join(other, "marasi-report-src")
+	if err := os.MkdirAll(sourceDir, 0700); err != nil {
+		t.Fatalf("creating source dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(sourceDir) })
+	source := filepath.Join(sourceDir, "other.md")
+	if err := os.WriteFile(source, []byte("from other\n"), 0600); err != nil {
+		t.Fatalf("writing source: %v", err)
+	}
+	configDir := t.TempDir()
+	generator, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = generator.AddTemplate(source); err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	if _, err = os.Lstat(source); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("\nwanted:\nsource removed\ngot:\n%v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(generator.templatesDir, "other.md"))
+	if err != nil || string(content) != "from other\n" {
+		t.Fatalf("\nwanted:\ncopied template\ngot:\n%q, %v", content, err)
+	}
+}
+
 func TestGeneratorAddTemplate(t *testing.T) {
 	configDir := t.TempDir()
 	generator, err := NewGenerator(nil, WithConfigDir(configDir))
