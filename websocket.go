@@ -222,10 +222,10 @@ func (proxy *Proxy) runWebSocketSessionWithRelease(connection *marasiws.Connecti
 		_ = proxy.OnWebSocketClose(closedRecord)
 	}
 
+	proxy.updateWebSocketRequestState(connection.RequestID, closedRecord.State)
 	proxy.DBWriteChannel <- &domain.WebSocketConnectionUpdate{
 		Connection: closedRecord,
 	}
-	proxy.updateWebSocketRequestState(connection.RequestID, closedRecord.State)
 
 	return runErr
 }
