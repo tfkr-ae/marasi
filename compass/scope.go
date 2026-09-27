@@ -187,3 +187,34 @@ func (s *Scope) Matches(input interface{}) bool {
 	// Default behavior
 	return s.DefaultAllow
 }
+
+// MatchesWithRule determines whether input is in scope and returns the first
+// matching rule, if any.
+func (s *Scope) MatchesWithRule(request *http.Request) (bool, *Rule) {
+	host, url := request.Host, request.URL.String()
+	for _, rule := range s.ExcludeRules {
+		if rule.matches(host, url) {
+			matched := rule
+			return false, &matched
+		}
+	}
+
+	for _, rule := range s.IncludeRules {
+		if rule.matches(host, url) {
+			matched := rule
+			return true, &matched
+		}
+	}
+	return s.DefaultAllow, nil
+}
+
+func (rule Rule) matches(host, url string) bool {
+	switch rule.MatchType {
+	case "host":
+		return rule.Pattern.MatchString(host)
+	case "url":
+		return rule.Pattern.MatchString(url)
+	default:
+		return false
+	}
+}
