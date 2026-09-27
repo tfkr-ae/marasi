@@ -42,7 +42,7 @@ GOWORK=off make build VERSION="verify-${VERIFY_RUN_ID}"
   --json
 ```
 
-`make build` writes `dist/marasi` with no `.exe`. `make windows-amd64` writes `dist/marasi-windows-amd64.exe`. On Windows, build with the same `VERSION` and invoke that binary. The subcommands do not change.
+`make build` writes `dist/marasi` with no `.exe`. `make windows-amd64` writes `dist/marasi-windows-amd64.exe`. On Windows, invoke a binary built on that machine or copied in from another machine. Building there is not required. The subcommands do not change. Doctor still requires `version` to be `verify-$VERIFY_RUN_ID`, so the binary you invoke must have been built with that `VERSION`.
 
 Windows scratch directory: create a short absolute directory yourself, for example under `C:\mv`, and set `VERIFY_CONFIG_DIR`, `VERIFY_INSTANCE`, and `VERIFY_PROJECT` to unique values. Do not use `/tmp` or a path that makes the socket longer than 104 bytes. `%TEMP%` is often too long.
 
