@@ -6,7 +6,7 @@ Users subscribe to a running instance and print live named events until the stre
 
 - Subscribe with `events`.
 - Print `traffic.request` and `traffic.response` for proxied exchanges.
-- Print listener, project, launchpad, test-case, finding, artifact, note, metadata, checkpoint, Chrome path/profile, waypoint, wordlist, Armory template/run, extension, WebSocket, and report-template events from those CLI operations.
+- Print listener, project, launchpad, test-case, finding, artifact, note, metadata, checkpoint, Chrome path/profile, waypoint, wordlist, Armory template/run, extension, WebSocket, report-template, and log (`log.added`) events from those CLI operations.
 - Choose human-readable or `--json` output.
 
 ## How to get to it (user POV)

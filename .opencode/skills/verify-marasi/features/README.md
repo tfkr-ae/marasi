@@ -23,6 +23,7 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Extension | `extension list`, `extension get`, `extension update`, `extension logs`, `extension settings get`, `extension settings set`, `extension call`, `extension enable`, `extension disable` | [extension](extension.md) |
 | Report | `report template list`, `report template add`, `report template remove`, `report template restore`, `report export` | [report](report.md) |
 | WebSocket | `websocket list`, `websocket get`, `websocket messages`, `traffic websocket`, `websocket inject`, `websocket close` | [websocket](websocket.md) |
+| Scope check | `scope check` | [scope check](scope.md) |
 | Proxy logs | `logs`, list pagination with `--limit` and `--cursor` | [proxy logs](logs.md) |
 | CA certificate | `certificate get`, `--format pem` or `der` | [CA certificate](certificate.md) |
 

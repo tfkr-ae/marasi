@@ -30,4 +30,4 @@ Run `service start --project-name "$VERIFY_PROJECT" --address 127.0.0.1 --port 0
 - The config directory contains the instance socket, log, project database, generated CA material, and wordlists. Use a new scratch directory under a short path such as `/tmp/mv.XXXXXX`. Marasi rejects the socket path when its byte length plus one exceeds 104.
 - A project has an exclusive lock. Unique project names avoid colliding with another instance.
 - A parent `go.work` can exclude this worktree. Build with `GOWORK=off`.
-- `service list` scans `$configDir/instances` for sockets and queries each for status. It reports running instances with their status body and unreachable sockets as `status` `unhealthy`. It never starts or stops instances.
+- `service list` scans `$configDir/instances` for sockets and queries each for status. It reports running instances with their status body and connected-but-unreadable sockets as `status` `unhealthy`. Sockets that refuse the connection are omitted. It never starts or stops instances.

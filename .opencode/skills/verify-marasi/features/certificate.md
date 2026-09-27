@@ -21,4 +21,4 @@ Run `certificate get --json` and require a non-empty `pem` starting with `-----B
 - `certificate` requires the `get` subcommand.
 - `--format` must be `pem` or `der` and defaults to `pem`.
 - `--json` returns the certificate envelope. Human `pem` prints only the PEM block. Human `der` writes raw certificate bytes.
-- The certificate belongs to the running instance. Restarting the service can rotate it.
+- The certificate belongs to the running instance. Restarting the service reloads the same `$VERIFY_CONFIG_DIR/marasi_cert.pem`; a different certificate appears only under a fresh config directory or after those CA files change.

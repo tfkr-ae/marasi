@@ -22,7 +22,7 @@ Create at least one known proxied request. Run `traffic list --path /proof.txt -
 
 ## Gotchas
 
-- Each page is the newest remaining rows, oldest first within the page. `--limit 1` is still the newest match. `next_cursor` is the oldest id of the current page. Never assume a stable UUID or timestamp.
+- Each page is the newest remaining rows, oldest first within the page. `--limit 1` is still the newest match. `next_cursor` is the oldest id of the current page when an older page remains, otherwise `null` (JSON) or absent (human stderr). Never assume a stable UUID or timestamp.
 - `--host` is exact and may include the origin port for a non-default port.
 - `--path` is a prefix filter, while method and status code are exact filters.
 - Human output writes `next_cursor=$NEXT_CURSOR` to stderr. JSON keeps it in `next_cursor`.

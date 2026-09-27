@@ -19,6 +19,6 @@ Send one proxied request so the log has rows. Run `logs --json` and require `ite
 ## Gotchas
 
 - Pages are newest first. The service accepts `--limit` 1 through 500 and defaults to 200. `--cursor` must be a UUID.
-- Log entries belong to the running instance. `project open` does not clear them.
+- Log entries belong to the currently open project file. `project open` to a different project switches the log view; reopening the same path keeps its rows.
 - Human output prints the page oldest first. `--json` keeps the newest-first order with `next_cursor`.
 - A missing log store returns not found. An unhealthy instance is not a log page.

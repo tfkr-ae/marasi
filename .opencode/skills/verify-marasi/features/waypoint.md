@@ -21,7 +21,7 @@ Run `waypoint list --json` and require `{"items":[]}`. Run `waypoint add --hostn
 ## Gotchas
 
 - `--hostname` and `--override` are required on add and update. `--hostname` is required on remove. Both values must be `host:port`.
-- Duplicate add of the same hostname fails. With `--json` the error is `adding waypoint: waypoint_already_exists`. Update or remove of a missing hostname fails with `updating waypoint: not_found` or `removing waypoint: not_found`. Human output includes the HTTP status and does not include those codes.
+- Duplicate add of the same hostname fails. With `--json` the error is `adding waypoint: waypoint_already_exists`. Update or remove of a missing hostname fails with `updating waypoint: not_found` or `removing waypoint: not_found`. Human output shows the same `operation: code` text without a bare HTTP status.
 - JSON add, update, and remove return the full list. Human add, update, and remove confirm on stderr. List is ordered by hostname, not insertion time.
 - Add and remove publish `waypoint.added` and `waypoint.removed`. Update publishes `waypoint.updated` only when the override changes. An unchanged override returns the list and publishes nothing. Subscribe with `events` before the mutation; the stream has no replay.
 - Waypoints belong to the currently open project. After opening a different project, previous hostnames are not visible and no longer override traffic. Opening the current path does not hide them.
