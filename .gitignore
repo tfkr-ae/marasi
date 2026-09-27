@@ -24,4 +24,3 @@ go.work
 
 # Local verification evidence
 .agents/verification-artifacts/
-.opencode/verification-artifacts/
