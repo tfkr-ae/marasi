@@ -47,7 +47,7 @@ type checkpointFlags struct {
 
 var errInvalidCheckpointRequest = errors.New("invalid checkpoint request")
 
-func addCheckpointRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+func addCheckpointRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	mux.HandleFunc("GET /checkpoint", func(w http.ResponseWriter, r *http.Request) {
 		kind, err := parseCheckpointKind(r)
 		if err != nil {

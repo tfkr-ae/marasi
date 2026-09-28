@@ -201,7 +201,8 @@ func (proxy *Proxy) DropCheckpoint(id uuid.UUID) error {
 }
 
 // DropAllCheckpoint unblocks every pending HTTP and WebSocket item as drop.
-func (proxy *Proxy) DropAllCheckpoint() {
+// It returns the items it actually removed.
+func (proxy *Proxy) DropAllCheckpoint() []domain.CheckpointItem {
 	var httpPending []*pendingHTTP
 	if proxy.checkpoint != nil {
 		proxy.checkpoint.mu.Lock()
@@ -216,12 +217,17 @@ func (proxy *Proxy) DropAllCheckpoint() {
 		proxy.checkpoint.mu.Unlock()
 	}
 
+	removed := make([]domain.CheckpointItem, 0, len(httpPending))
 	for _, pending := range httpPending {
+		removed = append(removed, cloneCheckpointItem(pending.item))
 		close(pending.done)
 	}
 	if proxy.WebSocketInterceptor != nil {
-		proxy.WebSocketInterceptor.CancelAll()
+		for _, message := range proxy.WebSocketInterceptor.CancelAll() {
+			removed = append(removed, checkpointItemFromWebSocket(message))
+		}
 	}
+	return removed
 }
 
 func (proxy *Proxy) holdHTTPRequest(id uuid.UUID, raw []byte, req *http.Request) (httpHoldResult, error) {

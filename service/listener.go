@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/domain"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
@@ -94,6 +95,7 @@ type ListenerLifecycle interface {
 	Stop(context.Context) (ListenerStatus, error)
 	Update(context.Context, ListenerSettings) (ListenerStatus, error)
 	Shutdown() error
+	controlEvents() (*eventBroadcaster, io.Writer)
 }
 
 type listenerLifecycle struct {
@@ -108,11 +110,11 @@ type listenerLifecycle struct {
 }
 
 // NewListenerLifecycle creates an inactive proxy-listener lifecycle.
-func NewListenerLifecycle(proxy *marasi.Proxy, logWriter io.Writer) ListenerLifecycle {
+func NewListenerLifecycle(proxy *marasi.Proxy, logWriter io.Writer) *listenerLifecycle {
 	return newListenerLifecycle(proxy, logWriter)
 }
 
-func newListenerLifecycle(proxy listenerProxy, logWriter io.Writer) ListenerLifecycle {
+func newListenerLifecycle(proxy listenerProxy, logWriter io.Writer) *listenerLifecycle {
 	if logWriter == nil {
 		logWriter = io.Discard
 	}
@@ -149,6 +151,32 @@ func (l *listenerLifecycle) Stop(ctx context.Context) (ListenerStatus, error) {
 // Update replaces an active proxy listener after first binding its replacement.
 func (l *listenerLifecycle) Update(ctx context.Context, settings ListenerSettings) (ListenerStatus, error) {
 	return l.mutate(ctx, updateListener, settings)
+}
+
+func (l *listenerLifecycle) controlEvents() (*eventBroadcaster, io.Writer) {
+	if l == nil {
+		return nil, nil
+	}
+	return l.events, l.logWriter
+}
+
+// BindProject installs project event callbacks before the first Open.
+// The manager created by Open then publishes through those callbacks.
+func (l *listenerLifecycle) BindProject(projects *ProjectLifecycle) {
+	if l == nil || projects == nil {
+		return
+	}
+	projects.opened = func(path string) {
+		l.events.publish("project.opened", struct {
+			Project string `json:"project"`
+		}{Project: path})
+	}
+	projects.logAdded = func(entry *domain.Log) {
+		l.events.publish("log.added", proxyLogFromDomain(entry))
+	}
+	projects.armoryRunUpdated = func(run *domain.ArmoryRun) {
+		l.events.publish("armory.run.updated", armoryRunFromDomain(run))
+	}
 }
 
 // Shutdown closes the proxy through its established full-service cleanup path.
@@ -339,7 +367,10 @@ func (l *listenerLifecycle) serve(listener net.Listener) (*listenerRun, error) {
 		run.serveErr = err
 		run.state.CompareAndSwap(listenerRunServing, listenerRunUnexpectedEnd)
 		close(run.finished)
-		l.serveEnded <- listenerServeResult{run: run, err: err}
+		select {
+		case l.serveEnded <- listenerServeResult{run: run, err: err}:
+		case <-l.done:
+		}
 	}()
 	select {
 	case <-run.started:

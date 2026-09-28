@@ -29,7 +29,7 @@ type noteListItem struct {
 
 var errInvalidNoteRequest = errors.New("invalid note request")
 
-func addNoteRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+func addNoteRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	mux.HandleFunc("GET /notes", func(w http.ResponseWriter, r *http.Request) {
 		limit, cursor, ok := parseNotesListQuery(r)
 		if !ok {

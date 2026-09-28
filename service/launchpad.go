@@ -40,7 +40,7 @@ type launchpadLink struct {
 
 var errInvalidLaunchpadRequest = errors.New("invalid launchpad request")
 
-func addLaunchpadRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	mux.HandleFunc("GET /launchpad", func(w http.ResponseWriter, r *http.Request) {
 		repo, err := proxy.GetLaunchpadRepo()
 		if err != nil {
@@ -147,7 +147,9 @@ func addLaunchpadRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBr
 		writeJSON(w, r, http.StatusOK, response)
 	})
 
-	mux.HandleFunc("POST /launchpad/{id}/launch", func(w http.ResponseWriter, r *http.Request) {
+	// Launch sends through the proxy, which admits on its own. Holding this
+	// handler's admission across that call deadlocks a project handoff.
+	raw.HandleFunc("POST /launchpad/{id}/launch", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := parseLaunchpadID(w, r)
 		if !ok {
 			return

@@ -52,7 +52,7 @@ type webSocketMessageList struct {
 	NextCursor *uuid.UUID                 `json:"next_cursor"`
 }
 
-func addWebSocketRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
+func addWebSocketRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifecycle, proxy *marasi.Proxy) {
 	mux.HandleFunc("POST /websocket/{connection_id}/close", func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(r.PathValue("connection_id"))
 		if err != nil {
@@ -97,7 +97,13 @@ func addWebSocketRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 		}
 	})
 
-	mux.HandleFunc("POST /websocket/{connection_id}/inject", func(w http.ResponseWriter, r *http.Request) {
+	// Inject can run extension callbacks that send through the proxy. Release first.
+	raw.HandleFunc("POST /websocket/{connection_id}/inject", func(w http.ResponseWriter, r *http.Request) {
+		release, admitted := admitProjectWork(projects, w, r)
+		if !admitted {
+			return
+		}
+		defer release()
 		id, err := uuid.Parse(r.PathValue("connection_id"))
 		if err != nil {
 			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
@@ -125,6 +131,7 @@ func addWebSocketRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
 			writeJSON(w, r, http.StatusConflict, map[string]string{"error": "websocket_not_open"})
 			return
 		}
+		release()
 		message, err := proxy.InjectWebSocketMessage(connection.RequestID, direction, opcode, payload)
 		if errors.Is(err, marasi.ErrWebSocketConnectionNotFound) || errors.Is(err, marasiws.ErrConnectionClosed) {
 			writeJSON(w, r, http.StatusConflict, map[string]string{"error": "websocket_not_open"})

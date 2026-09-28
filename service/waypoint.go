@@ -32,7 +32,7 @@ type waypointRemoveRequest struct {
 
 var errInvalidWaypointRequest = errors.New("invalid waypoint request")
 
-func addWaypointRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+func addWaypointRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	mux.HandleFunc("GET /waypoint", func(w http.ResponseWriter, r *http.Request) {
 		repo, err := proxy.GetWaypointRepo()
 		if err != nil {

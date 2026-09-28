@@ -72,7 +72,7 @@ type armoryRunMutation struct {
 
 var errInvalidArmoryRequest = errors.New("invalid armory request")
 
-func addArmoryRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	var runMutationMu sync.Mutex
 	mux.HandleFunc("GET /armory/template", func(w http.ResponseWriter, r *http.Request) {
 		repo, ok := armoryRepository(proxy)
@@ -388,8 +388,6 @@ func addArmoryRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroad
 		if !ok {
 			return
 		}
-		run.Status = domain.ArmoryRunInProgress
-		run.FinishedAt = nil
 		writeJSON(w, r, http.StatusOK, armoryRunFromDomain(run))
 	})
 

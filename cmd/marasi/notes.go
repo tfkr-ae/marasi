@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,13 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"github.com/tfkr-ae/marasi/service"
 )
 
 var notesSetFile string
@@ -51,7 +47,7 @@ var notesListCmd = &cobra.Command{
 		if err := setCursorQuery(query, notesListCursor); err != nil {
 			return err
 		}
-		body, err := runNotesRequest(cmd, http.MethodGet, "/notes?"+query.Encode(), "listing notes", nil)
+		body, err := runControlRequest(cmd, http.MethodGet, "/notes?"+query.Encode(), "listing notes", nil)
 		if err != nil {
 			return err
 		}
@@ -83,7 +79,7 @@ var notesSetCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("encoding note request: %w", err)
 		}
-		body, err := runNotesRequest(cmd, http.MethodPut, path, "setting note", payload)
+		body, err := runControlRequest(cmd, http.MethodPut, path, "setting note", payload)
 		if err != nil {
 			return err
 		}
@@ -105,7 +101,7 @@ var notesClearCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runNotesRequest(cmd, http.MethodDelete, path, "clearing note", nil)
+		body, err := runControlRequest(cmd, http.MethodDelete, path, "clearing note", nil)
 		if err != nil {
 			return err
 		}
@@ -221,39 +217,4 @@ func truncateDisplay(value string, limit int) string {
 		return string(runes[:limit-3]) + "..."
 	}
 	return value
-}
-
-func runNotesRequest(cmd *cobra.Command, method, path, operation string, payload []byte) ([]byte, error) {
-	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
-	var requestBody io.Reader
-	if payload != nil {
-		requestBody = bytes.NewReader(payload)
-	}
-	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("creating note request: %w", err)
-	}
-	if payload != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("instance %s is not running", instance)
-	}
-	body, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(wrapError("reading note response", readErr), wrapError("closing note response", closeErr))
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, controlAPIError(operation, response.Status, body)
-	}
-	return body, nil
 }

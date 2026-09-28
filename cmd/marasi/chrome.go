@@ -1,22 +1,16 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 
 	"github.com/spf13/cobra"
-	"github.com/tfkr-ae/marasi/service"
 )
 
 var chromePathValue string
@@ -83,7 +77,7 @@ var chromePathListCmd = &cobra.Command{
 	Short: "List Chrome executable paths",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		body, err := runChromeRequest(cmd, http.MethodGet, "/chrome/path", "listing chrome paths", nil)
+		body, err := runControlRequest(cmd, http.MethodGet, "/chrome/path", "listing chrome paths", nil)
 		if err != nil {
 			return err
 		}
@@ -131,7 +125,7 @@ var chromeProfileListCmd = &cobra.Command{
 	Short: "List Chrome profiles",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		body, err := runChromeRequest(cmd, http.MethodGet, "/chrome/profile", "listing chrome profiles", nil)
+		body, err := runControlRequest(cmd, http.MethodGet, "/chrome/profile", "listing chrome profiles", nil)
 		if err != nil {
 			return err
 		}
@@ -156,7 +150,7 @@ var chromeStartCmd = &cobra.Command{
 				return fmt.Errorf("encoding chrome start request: %w", err)
 			}
 		}
-		response, err := runChromeRequest(cmd, http.MethodPost, "/chrome/start", "starting chrome", body)
+		response, err := runControlRequest(cmd, http.MethodPost, "/chrome/start", "starting chrome", body)
 		if err != nil {
 			return err
 		}
@@ -184,7 +178,7 @@ func runChromePathCommand(cmd *cobra.Command, method, operation, confirmation st
 }
 
 func runChromeMutation(cmd *cobra.Command, method, path, operation string, body []byte, confirmation string) error {
-	response, err := runChromeRequest(cmd, method, path, operation, body)
+	response, err := runControlRequest(cmd, method, path, operation, body)
 	if err != nil {
 		return err
 	}
@@ -194,41 +188,6 @@ func runChromeMutation(cmd *cobra.Command, method, path, operation string, body 
 		_, err = fmt.Fprintln(cmd.ErrOrStderr(), confirmation)
 	}
 	return err
-}
-
-func runChromeRequest(cmd *cobra.Command, method, path, operation string, body []byte) ([]byte, error) {
-	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
-	var requestBody io.Reader
-	if body != nil {
-		requestBody = bytes.NewReader(body)
-	}
-	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("creating chrome request: %w", err)
-	}
-	if body != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("instance %s is not running", instance)
-	}
-	responseBody, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(wrapError("reading chrome response", readErr), wrapError("closing chrome response", closeErr))
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, controlAPIError(operation, response.Status, responseBody)
-	}
-	return responseBody, nil
 }
 
 func writeChromePaths(body []byte, stdout io.Writer) error {

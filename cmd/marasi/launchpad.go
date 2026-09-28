@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -11,11 +10,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"github.com/tfkr-ae/marasi/service"
 )
 
 var launchpadCreateName string
@@ -66,7 +65,7 @@ var launchpadCreateCmd = &cobra.Command{
 		if cmd.Flags().Changed("description") {
 			request.Description = &launchpadCreateDescription
 		}
-		return runLaunchpadCommand(cmd, "create", "", request)
+		return runLaunchpadCommand(cmd, http.MethodPost, "/launchpad", "creating launchpad", "create", request)
 	},
 }
 
@@ -75,7 +74,7 @@ var launchpadListCmd = &cobra.Command{
 	Short: "List launchpads oldest-first",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return runLaunchpadCommand(cmd, "list", "", launchpadRequest{})
+		return runLaunchpadCommand(cmd, http.MethodGet, "/launchpad", "listing launchpads", "list", launchpadRequest{})
 	},
 }
 
@@ -84,7 +83,11 @@ var launchpadGetCmd = &cobra.Command{
 	Short: "Get one launchpad",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runLaunchpadCommand(cmd, "get", args[0], launchpadRequest{})
+		path, err := serviceIDPath("/launchpad/", args[0], "")
+		if err != nil {
+			return err
+		}
+		return runLaunchpadCommand(cmd, http.MethodGet, path, "getting launchpad", "get", launchpadRequest{})
 	},
 }
 
@@ -106,7 +109,11 @@ var launchpadUpdateCmd = &cobra.Command{
 		if request.Name == nil && request.Description == nil {
 			return errors.New("launchpad update requires --name or --description")
 		}
-		return runLaunchpadCommand(cmd, "update", args[0], request)
+		path, err := serviceIDPath("/launchpad/", args[0], "")
+		if err != nil {
+			return err
+		}
+		return runLaunchpadCommand(cmd, http.MethodPost, path, "updating launchpad", "update", request)
 	},
 }
 
@@ -115,7 +122,11 @@ var launchpadLinkCmd = &cobra.Command{
 	Short: "Link a traffic pair to a launchpad",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runLaunchpadCommand(cmd, "link", args[0], launchpadRequest{RequestID: &launchpadLinkRequest})
+		path, err := serviceIDPath("/launchpad/", args[0], "/link")
+		if err != nil {
+			return err
+		}
+		return runLaunchpadCommand(cmd, http.MethodPost, path, "linking launchpad request", "link", launchpadRequest{RequestID: &launchpadLinkRequest})
 	},
 }
 
@@ -152,18 +163,34 @@ var launchpadLaunchCmd = &cobra.Command{
 			}
 		}
 		encoded := base64.StdEncoding.EncodeToString(raw)
-		return runLaunchpadCommand(cmd, "launch", args[0], launchpadRequest{Raw: &encoded, Scheme: &launchpadLaunchScheme})
+		path, err := serviceIDPath("/launchpad/", args[0], "/launch")
+		if err != nil {
+			return err
+		}
+		return runLaunchpadCommand(cmd, http.MethodPost, path, "launching launchpad request", "launch", launchpadRequest{Raw: &encoded, Scheme: &launchpadLaunchScheme})
 	},
 }
 
-func runLaunchpadCommand(cmd *cobra.Command, action, id string, body launchpadRequest) error {
+func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action string, body launchpadRequest) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	response, err := controlLaunchpad(ctx, instancePath, instance, jsonOutput, action, id, body)
+	var requestBody io.Reader
+	if method == http.MethodPost {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("encoding launchpad request: %w", err)
+		}
+		requestBody = bytes.NewReader(encoded)
+	}
+	called, err := callInstance(ctx, method, path, "application/json", requestBody)
 	if err != nil {
 		return err
 	}
+	if err := rejectInstanceStatus(operation, called, jsonOutput); err != nil {
+		return err
+	}
+	response := called.Body
 	if jsonOutput {
 		_, err = cmd.OutOrStdout().Write(response)
 		return err
@@ -199,74 +226,11 @@ func runLaunchpadCommand(cmd *cobra.Command, action, id string, body launchpadRe
 		if err := json.Unmarshal(response, &result); err != nil || result.Status != "launched" {
 			return errors.New("decoding launchpad response")
 		}
-		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "launchpad %s launched successfully\n", id)
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "launchpad %s launched successfully\n", strings.TrimSuffix(strings.TrimPrefix(path, "/launchpad/"), "/launch"))
 		return err
 	default:
 		return fmt.Errorf("unsupported launchpad action %q", action)
 	}
-}
-
-func controlLaunchpad(ctx context.Context, instancePath, instanceName string, asJSON bool, action, id string, payload launchpadRequest) ([]byte, error) {
-	method := http.MethodGet
-	path := "/launchpad"
-	operation := "listing launchpads"
-	var requestBody io.Reader
-	switch action {
-	case "create":
-		method, operation = http.MethodPost, "creating launchpad"
-	case "get", "update", "link", "launch":
-		suffix := ""
-		switch action {
-		case "get":
-			operation = "getting launchpad"
-		case "update":
-			method, operation = http.MethodPost, "updating launchpad"
-		case "link":
-			method, suffix, operation = http.MethodPost, "/link", "linking launchpad request"
-		case "launch":
-			method, suffix, operation = http.MethodPost, "/launch", "launching launchpad request"
-		}
-		parsed, err := serviceIDPath("/launchpad/", id, suffix)
-		if err != nil {
-			return nil, err
-		}
-		path = parsed
-	}
-	if method == http.MethodPost {
-		encoded, err := json.Marshal(payload)
-		if err != nil {
-			return nil, fmt.Errorf("encoding launchpad request: %w", err)
-		}
-		requestBody = bytes.NewReader(encoded)
-	}
-	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("creating launchpad request: %w", err)
-	}
-	if requestBody != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("instance %s is not running", instanceName)
-	}
-	body, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(wrapError("reading launchpad response", readErr), wrapError("closing launchpad response", closeErr))
-	}
-	if response.StatusCode != http.StatusOK {
-		if asJSON {
-			return nil, controlAPIError(operation, response.Status, body)
-		}
-		return nil, fmt.Errorf("%s: %s", operation, response.Status)
-	}
-	return body, nil
 }
 
 func writeLaunchpadListHuman(body []byte, stdout io.Writer) error {

@@ -16,7 +16,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi/domain"
-	"github.com/tfkr-ae/marasi/service"
 )
 
 var armoryTemplateCreateName string
@@ -336,7 +335,7 @@ func readArmoryRawFile(path string) (string, error) {
 func runArmoryCommand(cmd *cobra.Command, method, path string, payload any, operation string, human func([]byte, io.Writer) error, successFormat string) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	body, err := controlArmoryRequest(ctx, instancePath, instance, jsonOutput, method, path, payload, operation)
+	body, err := controlArmoryRequest(ctx, jsonOutput, method, path, payload, operation)
 	if err != nil {
 		return err
 	}
@@ -359,7 +358,7 @@ func runArmoryCommand(cmd *cobra.Command, method, path string, payload any, oper
 	return err
 }
 
-func controlArmoryRequest(ctx context.Context, instancePath, instanceName string, asJSON bool, method, path string, payload any, operation string) ([]byte, error) {
+func controlArmoryRequest(ctx context.Context, asJSON bool, method, path string, payload any, operation string) ([]byte, error) {
 	var requestBody io.Reader
 	if payload != nil {
 		encoded, err := json.Marshal(payload)
@@ -368,34 +367,14 @@ func controlArmoryRequest(ctx context.Context, instancePath, instanceName string
 		}
 		requestBody = bytes.NewReader(encoded)
 	}
-	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
+	response, err := callInstance(ctx, method, path, "application/json", requestBody)
 	if err != nil {
-		return nil, fmt.Errorf("creating Armory request: %w", err)
+		return nil, err
 	}
-	if requestBody != nil {
-		request.Header.Set("Content-Type", "application/json")
+	if err := rejectInstanceStatus(operation, response, asJSON); err != nil {
+		return nil, err
 	}
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("instance %s is not running", instanceName)
-	}
-	body, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(wrapError("reading Armory response", readErr), wrapError("closing Armory response", closeErr))
-	}
-	if response.StatusCode != http.StatusOK {
-		if asJSON {
-			return nil, controlAPIError(operation, response.Status, body)
-		}
-		return nil, fmt.Errorf("%s: %s", operation, response.Status)
-	}
-	return body, nil
+	return response.Body, nil
 }
 
 func writeArmoryTemplateListHuman(body []byte, stdout io.Writer) error {

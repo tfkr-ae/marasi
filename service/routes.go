@@ -15,28 +15,72 @@ import (
 	"github.com/tfkr-ae/marasi"
 )
 
+// routeMux registers control handlers. Project-bound registrars receive an
+// admitting mux so each of those routes takes the project gate.
+type routeMux interface {
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}
+
+type admittingMux struct {
+	*http.ServeMux
+	projects *ProjectLifecycle
+}
+
+func admitProjectWork(projects *ProjectLifecycle, w http.ResponseWriter, r *http.Request) (func(), bool) {
+	if projects == nil {
+		return func() {}, true
+	}
+	release, err := projects.Admit(r.Context())
+	if err != nil {
+		writeJSON(w, r, http.StatusInternalServerError, struct {
+			Error string `json:"error"`
+		}{Error: "internal_server_error"})
+		return nil, false
+	}
+	return release, true
+}
+
+func (m admittingMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	if m.projects == nil {
+		m.ServeMux.HandleFunc(pattern, handler)
+		return
+	}
+	m.ServeMux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+		release, err := m.projects.Admit(r.Context())
+		if err != nil {
+			writeJSON(w, r, http.StatusInternalServerError, struct {
+				Error string `json:"error"`
+			}{Error: "internal_server_error"})
+			return
+		}
+		defer release()
+		handler(w, r)
+	})
+}
+
 // addRoutes registers control and traffic routes on mux.
-func addRoutes(mux *http.ServeMux, proxy *marasi.Proxy, chrome *Chrome, events *eventBroadcaster, status http.HandlerFunc, stop func()) {
+func addRoutes(mux *http.ServeMux, projects *ProjectLifecycle, proxy *marasi.Proxy, chrome *Chrome, events *eventBroadcaster, status http.HandlerFunc, stop func()) {
 	serviceMux := http.NewServeMux()
 	addServiceRoutes(serviceMux, status, stop)
 	mux.Handle("/service/", http.StripPrefix("/service", serviceMux))
-	addScopeRoutes(mux, proxy)
+	projectRoutes := admittingMux{ServeMux: mux, projects: projects}
+	addScopeRoutes(projectRoutes, proxy)
 	addCertificateRoutes(mux, proxy)
-	addTrafficRoutes(mux, proxy, events)
-	addLogRoutes(mux, proxy)
-	addWebSocketRoutes(mux, proxy)
-	addNoteRoutes(mux, proxy, events)
-	addCheckpointRoutes(mux, proxy, events)
-	addLaunchpadRoutes(mux, proxy, events)
-	addWaypointRoutes(mux, proxy, events)
-	addTestCaseRoutes(mux, proxy, events)
-	addFindingRoutes(mux, proxy, events)
-	addArtifactRoutes(mux, proxy, events)
-	addArmoryRoutes(mux, proxy, events)
+	addTrafficRoutes(projectRoutes, proxy, events)
+	addLogRoutes(projectRoutes, proxy)
+	addWebSocketRoutes(projectRoutes, mux, projects, proxy)
+	addNoteRoutes(projectRoutes, proxy, events)
+	addCheckpointRoutes(projectRoutes, proxy, events)
+	addLaunchpadRoutes(projectRoutes, mux, proxy, events)
+	addWaypointRoutes(projectRoutes, proxy, events)
+	addTestCaseRoutes(projectRoutes, proxy, events)
+	addFindingRoutes(projectRoutes, proxy, events)
+	addArtifactRoutes(projectRoutes, proxy, events)
+	addArmoryRoutes(projectRoutes, proxy, events)
 	addWordlistRoutes(mux, proxy, events)
-	addReportRoutes(mux, proxy, events)
+	addReportRoutes(projectRoutes, proxy, events)
 	addChromeRoutes(mux, chrome)
-	addExtensionRoutes(mux, proxy, events)
+	addExtensionRoutes(projectRoutes, mux, projects, proxy, events)
 }
 
 // addServiceRoutes registers the service status and stop routes.

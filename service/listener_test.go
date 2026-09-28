@@ -298,7 +298,7 @@ func TestListenerLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatalf("creating proxy: %v", err)
 		}
-		lifecycle := newListenerLifecycle(proxy, io.Discard).(*listenerLifecycle)
+		lifecycle := newListenerLifecycle(proxy, io.Discard)
 		t.Cleanup(func() {
 			close(releaseOrigin)
 			if err := lifecycle.Shutdown(); err != nil {
@@ -442,7 +442,7 @@ func TestListenerLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatalf("creating proxy: %v", err)
 		}
-		lifecycle := newListenerLifecycle(proxy, io.Discard).(*listenerLifecycle)
+		lifecycle := newListenerLifecycle(proxy, io.Discard)
 		t.Cleanup(func() {
 			close(releaseOrigin)
 			if err := lifecycle.Shutdown(); err != nil {
@@ -826,7 +826,7 @@ func TestListenerLifecycle(t *testing.T) {
 		proxy := newListenerTestProxy()
 		serveErr := errors.New("serve failed before readiness")
 		proxy.serve = func(net.Listener) error { return serveErr }
-		lifecycle := newListenerLifecycle(proxy, nil).(*listenerLifecycle)
+		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
 		subscriber := lifecycle.events.subscribe()
 		defer lifecycle.events.unsubscribe(subscriber)
@@ -876,7 +876,7 @@ func TestListenerLifecycle(t *testing.T) {
 
 	t.Run("should remain inactive when replacement serving fails before readiness", func(t *testing.T) {
 		proxy := newListenerTestProxy()
-		lifecycle := newListenerLifecycle(proxy, nil).(*listenerLifecycle)
+		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
 		subscriber := lifecycle.events.subscribe()
 		defer lifecycle.events.unsubscribe(subscriber)
@@ -962,7 +962,7 @@ func TestListenerLifecycle(t *testing.T) {
 			}
 			return errors.New("replacement failed before readiness")
 		}
-		lifecycle := newListenerLifecycle(proxy, nil).(*listenerLifecycle)
+		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
 		subscriber := lifecycle.events.subscribe()
 		defer lifecycle.events.unsubscribe(subscriber)
@@ -1032,7 +1032,7 @@ func TestListenerLifecycle(t *testing.T) {
 
 	t.Run("should not publish a failed stop after requested stop or update", func(t *testing.T) {
 		proxy := newListenerTestProxy()
-		lifecycle := newListenerLifecycle(proxy, nil).(*listenerLifecycle)
+		lifecycle := newListenerLifecycle(proxy, nil)
 		t.Cleanup(func() { lifecycle.Shutdown() })
 		subscriber := lifecycle.events.subscribe()
 		defer lifecycle.events.unsubscribe(subscriber)

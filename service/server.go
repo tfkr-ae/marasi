@@ -38,9 +38,13 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 	mux := http.NewServeMux()
 	events := newEventBroadcaster()
 	chromeLog := io.Writer(io.Discard)
-	if lifecycle, ok := listener.(*listenerLifecycle); ok {
-		events = lifecycle.events
-		chromeLog = lifecycle.logWriter
+	if listener != nil {
+		if broadcaster, logWriter := listener.controlEvents(); broadcaster != nil {
+			events = broadcaster
+			if logWriter != nil {
+				chromeLog = logWriter
+			}
+		}
 	}
 	chrome := NewChrome(proxy, listener, chromeLog)
 	chrome.events = events
@@ -56,9 +60,6 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		instance:          instance,
 		project:           project,
 	}
-	publishArmoryRunUpdated := func(run *domain.ArmoryRun) {
-		events.publish("armory.run.updated", armoryRunFromDomain(run))
-	}
 	if projects != nil {
 		projects.opened = func(path string) {
 			events.publish("project.opened", struct {
@@ -68,16 +69,11 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		projects.logAdded = func(entry *domain.Log) {
 			events.publish("log.added", proxyLogFromDomain(entry))
 		}
-		projects.armoryRunUpdated = publishArmoryRunUpdated
-	}
-	if proxy != nil {
-		if armoryService, err := proxy.GetArmory(); err == nil {
-			if manager, ok := armoryService.(interface{ SetRunUpdated(func(*domain.ArmoryRun)) }); ok {
-				manager.SetRunUpdated(publishArmoryRunUpdated)
-			}
+		projects.armoryRunUpdated = func(run *domain.ArmoryRun) {
+			events.publish("armory.run.updated", armoryRunFromDomain(run))
 		}
 	}
-	addRoutes(mux, proxy, chrome, events, server.serveStatus, func() {
+	addRoutes(mux, projects, proxy, chrome, events, server.serveStatus, func() {
 		server.dropPendingCheckpoint()
 		server.Close()
 		stop()
@@ -354,37 +350,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_report_template_request"})
 		return
 	}
-	if s.projects != nil && persistsToOpenProject(r.Method, r.URL.Path) {
-		release, err := s.projects.Admit(r.Context())
-		if err != nil {
-			writeJSON(w, r, http.StatusInternalServerError, struct {
-				Error string `json:"error"`
-			}{Error: "internal_server_error"})
-			return
-		}
-		defer release()
-	}
 	s.mux.ServeHTTP(w, r)
-}
-
-func persistsToOpenProject(method, path string) bool {
-	if method == http.MethodGet || method == http.MethodHead {
-		return false
-	}
-	switch {
-	case strings.HasPrefix(path, "/launchpad"):
-		return !strings.HasSuffix(path, "/launch")
-	case strings.HasPrefix(path, "/waypoint"),
-		strings.HasPrefix(path, "/test-case"),
-		strings.HasPrefix(path, "/finding"),
-		strings.HasPrefix(path, "/artifact"),
-		strings.HasPrefix(path, "/extension"):
-		return true
-	case strings.HasPrefix(path, "/armory"):
-		return !strings.HasSuffix(path, "/validate")
-	default:
-		return false
-	}
 }
 
 // HandleRequest publishes a traffic.request event. It always returns nil so
@@ -419,9 +385,7 @@ func (s *Server) dropPendingCheckpoint() {
 	if s.proxy == nil {
 		return
 	}
-	items := s.proxy.CheckpointItems()
-	s.proxy.DropAllCheckpoint()
-	for _, item := range items {
+	for _, item := range s.proxy.DropAllCheckpoint() {
 		s.events.publish("checkpoint.dropped", checkpointResolvedEvent{ID: item.ID, Type: item.Type})
 	}
 }

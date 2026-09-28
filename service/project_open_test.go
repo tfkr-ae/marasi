@@ -296,10 +296,29 @@ func TestProjectOpen(t *testing.T) {
 			release()
 			t.Fatalf("\nwanted:\nno launchpad in new project before publication\ngot:\n%v", names)
 		}
-		list := requestLaunchpad(server, http.MethodGet, "/launchpad", "")
-		if list.Code != http.StatusOK || list.Body.String() != "{\"items\":[]}\n" {
+		launchResult := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			launchResult <- requestLaunchpad(server, http.MethodPost, "/launchpad/01938032-1b17-7243-b035-e6a9f4645904/launch", `{}`)
+		}()
+		select {
+		case got := <-launchResult:
+			if got.Code == 0 {
+				release()
+				t.Fatal("launch returned an empty recorder")
+			}
+		case <-time.After(200 * time.Millisecond):
 			release()
-			t.Fatalf("\nwanted:\nempty launchpads on the old project\ngot:\n%d %s", list.Code, list.Body.String())
+			t.Fatal("launch waited on the project gate")
+		}
+		listResult := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			listResult <- requestLaunchpad(server, http.MethodGet, "/launchpad", "")
+		}()
+		select {
+		case got := <-listResult:
+			release()
+			t.Fatalf("\nwanted:\nlist waiting through handoff\ngot:\n%d %s", got.Code, got.Body.String())
+		case <-time.After(50 * time.Millisecond):
 		}
 		status := requestListener(t, server, http.MethodGet, "/service/status", "")
 		wantCurrent := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null}\n", current)
@@ -308,6 +327,10 @@ func TestProjectOpen(t *testing.T) {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%d %s", wantCurrent, status.Code, status.Body.String())
 		}
 		release()
+		list := <-listResult
+		if list.Code != http.StatusOK {
+			t.Fatalf("listing launchpads after publication: %d %s", list.Code, list.Body.String())
+		}
 		openResponse := <-openResult
 		if openResponse.Code != http.StatusOK {
 			t.Fatalf("opening target: %d %s", openResponse.Code, openResponse.Body.String())

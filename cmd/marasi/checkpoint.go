@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -10,11 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/spf13/cobra"
-	"github.com/tfkr-ae/marasi/service"
 )
 
 var checkpointKind string
@@ -46,7 +42,7 @@ var checkpointListCmd = &cobra.Command{
 			}
 			path += "?" + url.Values{"kind": {checkpointKind}}.Encode()
 		}
-		body, err := runCheckpointRequest(cmd, http.MethodGet, path, "listing checkpoint items", nil)
+		body, err := runControlRequest(cmd, http.MethodGet, path, "listing checkpoint items", nil)
 		if err != nil {
 			return err
 		}
@@ -67,7 +63,7 @@ var checkpointGetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runCheckpointRequest(cmd, http.MethodGet, path, "getting checkpoint item", nil)
+		body, err := runControlRequest(cmd, http.MethodGet, path, "getting checkpoint item", nil)
 		if err != nil {
 			return err
 		}
@@ -92,7 +88,7 @@ var checkpointForwardCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runCheckpointRequest(cmd, http.MethodPost, path, "forwarding checkpoint item", payload)
+		body, err := runControlRequest(cmd, http.MethodPost, path, "forwarding checkpoint item", payload)
 		if err != nil {
 			return err
 		}
@@ -114,7 +110,7 @@ var checkpointDropCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runCheckpointRequest(cmd, http.MethodPost, path, "dropping checkpoint item", nil)
+		body, err := runControlRequest(cmd, http.MethodPost, path, "dropping checkpoint item", nil)
 		if err != nil {
 			return err
 		}
@@ -153,7 +149,7 @@ func runCheckpointFlag(cmd *cobra.Command, value, path, field, operation, name s
 	if err != nil {
 		return fmt.Errorf("encoding checkpoint %s: %w", name, err)
 	}
-	body, err := runCheckpointRequest(cmd, http.MethodPost, path, operation, payload)
+	body, err := runControlRequest(cmd, http.MethodPost, path, operation, payload)
 	if err != nil {
 		return err
 	}
@@ -180,7 +176,7 @@ func encodeCheckpointForward(cmd *cobra.Command, id string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		item, err := runCheckpointRequest(cmd, http.MethodGet, path, "forwarding checkpoint item", nil)
+		item, err := runControlRequest(cmd, http.MethodGet, path, "forwarding checkpoint item", nil)
 		if err != nil {
 			return nil, err
 		}
@@ -227,41 +223,6 @@ func readCheckpointForwardBytes(cmd *cobra.Command) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("reading checkpoint from stdin: %w", err)
 	}
 	return raw, true, nil
-}
-
-func runCheckpointRequest(cmd *cobra.Command, method, path, operation string, payload []byte) ([]byte, error) {
-	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
-	var requestBody io.Reader
-	if payload != nil {
-		requestBody = bytes.NewReader(payload)
-	}
-	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("creating checkpoint request: %w", err)
-	}
-	if payload != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("instance %s is not running", instance)
-	}
-	body, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(wrapError("reading checkpoint response", readErr), wrapError("closing checkpoint response", closeErr))
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, controlAPIError(operation, response.Status, body)
-	}
-	return body, nil
 }
 
 func writeCheckpointList(body []byte, stdout io.Writer) error {

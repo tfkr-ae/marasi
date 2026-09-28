@@ -706,6 +706,9 @@ func TestArmoryRunStatusEvents(t *testing.T) {
 		t.Fatalf("creating Armory manager: %v", err)
 	}
 	server := newTestServer(&marasi.Proxy{Armory: manager}, func() {})
+	manager.SetRunUpdated(func(run *domain.ArmoryRun) {
+		server.events.publish("armory.run.updated", armoryRunFromDomain(run))
+	})
 	subscriber := server.events.subscribe()
 	defer server.events.unsubscribe(subscriber)
 

@@ -16,7 +16,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
-	"github.com/tfkr-ae/marasi/service"
 )
 
 func init() {
@@ -69,7 +68,7 @@ var websocketCloseCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runCheckpointRequest(cmd, http.MethodPost, path, "closing websocket connection", payload)
+		body, err := runControlRequest(cmd, http.MethodPost, path, "closing websocket connection", payload)
 		if err != nil {
 			return err
 		}
@@ -130,7 +129,7 @@ var websocketInjectCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runCheckpointRequest(cmd, http.MethodPost, path, "injecting websocket message", payload)
+		body, err := runControlRequest(cmd, http.MethodPost, path, "injecting websocket message", payload)
 		if err != nil {
 			return err
 		}
@@ -158,26 +157,13 @@ var websocketListCmd = &cobra.Command{
 		if err := setCursorQuery(query, websocketListCursor); err != nil {
 			return err
 		}
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/websocket?"+query.Encode(), nil)
+		called, err := callInstance(ctx, http.MethodGet, "/websocket?"+query.Encode(), "", nil)
 		if err != nil {
-			return fmt.Errorf("creating websocket list request: %w", err)
+			return err
 		}
-		client := service.NewClient(instancePath + ".sock")
-		defer client.Close()
-		response, err := client.Do(request)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return fmt.Errorf("instance %s is not running", instance)
-		}
-		body, readErr := io.ReadAll(response.Body)
-		closeErr := response.Body.Close()
-		if readErr != nil || closeErr != nil {
-			return errors.Join(wrapError("reading websocket list response", readErr), wrapError("closing websocket list response", closeErr))
-		}
-		if response.StatusCode != http.StatusOK {
-			return controlAPIError("listing websocket connections", response.Status, body)
+		body := called.Body
+		if called.StatusCode != http.StatusOK {
+			return controlAPIError("listing websocket connections", called.Status, body)
 		}
 		if jsonOutput {
 			_, err = cmd.OutOrStdout().Write(body)
@@ -248,26 +234,13 @@ var websocketMessagesCmd = &cobra.Command{
 		if err := setCursorQuery(query, websocketMessagesCursor); err != nil {
 			return err
 		}
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/websocket/"+id+"/message?"+query.Encode(), nil)
+		called, err := callInstance(ctx, http.MethodGet, "/websocket/"+id+"/message?"+query.Encode(), "", nil)
 		if err != nil {
-			return fmt.Errorf("creating websocket messages request: %w", err)
+			return err
 		}
-		client := service.NewClient(instancePath + ".sock")
-		defer client.Close()
-		response, err := client.Do(request)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return fmt.Errorf("instance %s is not running", instance)
-		}
-		body, readErr := io.ReadAll(response.Body)
-		closeErr := response.Body.Close()
-		if readErr != nil || closeErr != nil {
-			return errors.Join(wrapError("reading websocket messages response", readErr), wrapError("closing websocket messages response", closeErr))
-		}
-		if response.StatusCode != http.StatusOK {
-			return controlAPIError("listing websocket messages", response.Status, body)
+		body := called.Body
+		if called.StatusCode != http.StatusOK {
+			return controlAPIError("listing websocket messages", called.Status, body)
 		}
 		if jsonOutput {
 			_, err = cmd.OutOrStdout().Write(body)
@@ -330,26 +303,15 @@ func getWebSocketConnection(cmd *cobra.Command, path, operation string) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi"+path, nil)
+	called, err := callInstance(ctx, http.MethodGet, path, "", nil)
 	if err != nil {
-		return fmt.Errorf("creating websocket request: %w", err)
+		return err
 	}
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return fmt.Errorf("instance %s is not running", instance)
-	}
-	body, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return errors.Join(wrapError("reading websocket response", readErr), wrapError("closing websocket response", closeErr))
-	}
-	if response.StatusCode != http.StatusOK {
-		return controlAPIError(operation, response.Status, body)
+	body := called.Body
+	responseStatus := called.Status
+	responseCode := called.StatusCode
+	if responseCode != http.StatusOK {
+		return controlAPIError(operation, responseStatus, body)
 	}
 	if jsonOutput {
 		_, err = cmd.OutOrStdout().Write(body)

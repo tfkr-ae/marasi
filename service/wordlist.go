@@ -60,12 +60,7 @@ func addWordlistRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBro
 			writeWordlistError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
-		manager, ok := provider.(interface{ Add(string) error })
-		if !ok {
-			writeWordlistError(w, r, http.StatusNotFound, "not_found")
-			return
-		}
-		if err := manager.Add(path); err != nil {
+		if err := provider.Add(path); err != nil {
 			switch {
 			case errors.Is(err, wordlist.ErrAlreadyExists):
 				writeWordlistError(w, r, http.StatusConflict, "wordlist_already_exists")
@@ -104,12 +99,7 @@ func addWordlistRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBro
 			writeWordlistError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
-		manager, ok := provider.(interface{ Remove(string) error })
-		if !ok {
-			writeWordlistError(w, r, http.StatusNotFound, "not_found")
-			return
-		}
-		if err = manager.Remove(name); err != nil {
+		if err = provider.Remove(name); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				writeWordlistError(w, r, http.StatusNotFound, "not_found")
 			} else {

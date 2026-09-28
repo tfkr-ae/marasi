@@ -1,19 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/tfkr-ae/marasi/service"
 )
 
 var extensionUpdateFile string
@@ -39,7 +35,7 @@ var extensionListCmd = &cobra.Command{
 	Short: "List extensions",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		body, err := runExtensionRequest(cmd, http.MethodGet, "/extension", "listing extensions", nil)
+		body, err := runControlRequest(cmd, http.MethodGet, "/extension", "listing extensions", nil)
 		if err != nil {
 			return err
 		}
@@ -60,7 +56,7 @@ var extensionGetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runExtensionRequest(cmd, http.MethodGet, path, "getting extension", nil)
+		body, err := runControlRequest(cmd, http.MethodGet, path, "getting extension", nil)
 		if err != nil {
 			return err
 		}
@@ -92,7 +88,7 @@ var extensionUpdateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runExtensionRequest(cmd, http.MethodPost, path, "updating extension", payload)
+		body, err := runControlRequest(cmd, http.MethodPost, path, "updating extension", payload)
 		if err != nil {
 			return err
 		}
@@ -114,7 +110,7 @@ var extensionLogsCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runExtensionRequest(cmd, http.MethodGet, path, "listing extension logs", nil)
+		body, err := runControlRequest(cmd, http.MethodGet, path, "listing extension logs", nil)
 		if err != nil {
 			return err
 		}
@@ -140,7 +136,7 @@ var extensionSettingsGetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runExtensionRequest(cmd, http.MethodGet, path, "getting extension settings", nil)
+		body, err := runControlRequest(cmd, http.MethodGet, path, "getting extension settings", nil)
 		if err != nil {
 			return err
 		}
@@ -173,7 +169,7 @@ var extensionSettingsSetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runExtensionRequest(cmd, http.MethodPost, path, "setting extension settings", payload)
+		body, err := runControlRequest(cmd, http.MethodPost, path, "setting extension settings", payload)
 		if err != nil {
 			return err
 		}
@@ -199,7 +195,7 @@ var extensionCallCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runExtensionRequest(cmd, http.MethodPost, path, "calling extension", payload)
+		body, err := runControlRequest(cmd, http.MethodPost, path, "calling extension", payload)
 		if err != nil {
 			return err
 		}
@@ -241,7 +237,7 @@ func runExtensionEnableDisable(cmd *cobra.Command, id string, enabled bool, oper
 	if err != nil {
 		return err
 	}
-	body, err := runExtensionRequest(cmd, http.MethodPost, path, operation, payload)
+	body, err := runControlRequest(cmd, http.MethodPost, path, operation, payload)
 	if err != nil {
 		return err
 	}
@@ -307,41 +303,6 @@ func readExtensionInput(cmd *cobra.Command, path, fileErr, stdinErr, missing str
 		return "", fmt.Errorf("%s: %w", stdinErr, err)
 	}
 	return string(raw), nil
-}
-
-func runExtensionRequest(cmd *cobra.Command, method, path, operation string, payload []byte) ([]byte, error) {
-	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
-	var requestBody io.Reader
-	if payload != nil {
-		requestBody = bytes.NewReader(payload)
-	}
-	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("creating extension request: %w", err)
-	}
-	if payload != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("instance %s is not running", instance)
-	}
-	body, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(wrapError("reading extension response", readErr), wrapError("closing extension response", closeErr))
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, controlAPIError(operation, response.Status, body)
-	}
-	return body, nil
 }
 
 func writeExtensionList(body []byte, stdout io.Writer) error {

@@ -25,7 +25,7 @@ type artifactResponse struct {
 	CreatedAt  time.Time  `json:"created_at"`
 }
 
-func addArtifactRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+func addArtifactRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	mux.HandleFunc("POST /test-case/{id}/artifact", artifactUploadHandler(proxy, events, "test-case"))
 	mux.HandleFunc("POST /finding/{id}/artifact", artifactUploadHandler(proxy, events, "finding"))
 

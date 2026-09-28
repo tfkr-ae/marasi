@@ -374,6 +374,9 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	}()
 
 	projects := service.NewProjectLifecycle(proxy, configDir, wordlists, logger)
+	listenerLifecycle := service.NewListenerLifecycle(proxy, logFile)
+	closeProxy = listenerLifecycle.Shutdown
+	listenerLifecycle.BindProject(projects)
 	if filepath.Clean(filepath.Dir(projectPath)) == filepath.Join(filepath.Clean(configDir), "projects") {
 		if err := os.MkdirAll(filepath.Dir(projectPath), 0700); err != nil {
 			return fmt.Errorf("creating projects dir: %w", err)
@@ -393,8 +396,6 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	if err != nil {
 		return fmt.Errorf("starting proxy base options: %w", err)
 	}
-	closeProxy = proxy.CloseTransport
-
 	controlListener, instanceLock, err := claimInstance(socketPath, lockPath)
 	if err != nil {
 		return err
@@ -406,8 +407,6 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	serviceCtx, stopService := context.WithCancel(ctx)
 	defer stopService()
 	instanceName := filepath.Base(instancePath)
-	listenerLifecycle := service.NewListenerLifecycle(proxy, logFile)
-	closeProxy = listenerLifecycle.Shutdown
 	serviceServer := service.NewServer(proxy, listenerLifecycle, projects, stopService, version, instanceName, projects.Path())
 	if handlerErr := proxy.WithOptions(
 		marasi.WithRequestHandler(serviceServer.HandleRequest),

@@ -15,7 +15,6 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"github.com/tfkr-ae/marasi/service"
 )
 
 var artifactUploadTestCase string
@@ -120,7 +119,7 @@ func runArtifactUpload(cmd *cobra.Command, parent, parentID, path, mimeType stri
 	ctx, cancel := artifactCommandContext(cmd)
 	defer cancel()
 	endpoint := "/" + parent + "/" + parentID + "/artifact?" + url.Values{"filename": {filepath.Base(path)}}.Encode()
-	response, err := controlArtifactRequest(ctx, instancePath, instance, jsonOutput, http.MethodPost, endpoint, mimeType, file, "uploading artifact")
+	response, err := controlArtifactRequest(ctx, jsonOutput, http.MethodPost, endpoint, mimeType, file, "uploading artifact")
 	if err != nil {
 		return err
 	}
@@ -143,7 +142,7 @@ func runArtifactGet(cmd *cobra.Command, id string) error {
 	}
 	ctx, cancel := artifactCommandContext(cmd)
 	defer cancel()
-	response, err := controlArtifactRequest(ctx, instancePath, instance, jsonOutput, http.MethodGet, "/artifact/"+id, "", nil, "getting artifact")
+	response, err := controlArtifactRequest(ctx, jsonOutput, http.MethodGet, "/artifact/"+id, "", nil, "getting artifact")
 	if err != nil {
 		return err
 	}
@@ -166,7 +165,7 @@ func runArtifactDownload(cmd *cobra.Command, id, output string) error {
 	}
 	ctx, cancel := artifactCommandContext(cmd)
 	defer cancel()
-	metadataBody, err := controlArtifactRequest(ctx, instancePath, instance, false, http.MethodGet, "/artifact/"+id, "", nil, "getting artifact")
+	metadataBody, err := controlArtifactRequest(ctx, false, http.MethodGet, "/artifact/"+id, "", nil, "getting artifact")
 	if err != nil {
 		return err
 	}
@@ -177,7 +176,7 @@ func runArtifactDownload(cmd *cobra.Command, id, output string) error {
 	if output == "" {
 		output = filepath.Join(".", filepath.Base(metadata.Filename))
 	}
-	contents, err := controlArtifactRequest(ctx, instancePath, instance, false, http.MethodGet, "/artifact/"+id+"/content", "", nil, "downloading artifact")
+	contents, err := controlArtifactRequest(ctx, false, http.MethodGet, "/artifact/"+id+"/content", "", nil, "downloading artifact")
 	if err != nil {
 		return err
 	}
@@ -195,7 +194,7 @@ func runArtifactDelete(cmd *cobra.Command, id string) error {
 	}
 	ctx, cancel := artifactCommandContext(cmd)
 	defer cancel()
-	response, err := controlArtifactRequest(ctx, instancePath, instance, jsonOutput, http.MethodDelete, "/artifact/"+id, "", nil, "deleting artifact")
+	response, err := controlArtifactRequest(ctx, jsonOutput, http.MethodDelete, "/artifact/"+id, "", nil, "deleting artifact")
 	if err != nil {
 		return err
 	}
@@ -215,35 +214,15 @@ func artifactCommandContext(cmd *cobra.Command) (context.Context, context.Cancel
 	return signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 }
 
-func controlArtifactRequest(ctx context.Context, instancePath, instanceName string, asJSON bool, method, path, contentType string, body io.Reader, operation string) ([]byte, error) {
-	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, body)
+func controlArtifactRequest(ctx context.Context, asJSON bool, method, path, contentType string, body io.Reader, operation string) ([]byte, error) {
+	response, err := callInstance(ctx, method, path, contentType, body)
 	if err != nil {
-		return nil, fmt.Errorf("creating artifact request: %w", err)
+		return nil, err
 	}
-	if contentType != "" {
-		request.Header.Set("Content-Type", contentType)
+	if err := rejectInstanceStatus(operation, response, asJSON); err != nil {
+		return nil, err
 	}
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("instance %s is not running", instanceName)
-	}
-	responseBody, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(wrapError("reading artifact response", readErr), wrapError("closing artifact response", closeErr))
-	}
-	if response.StatusCode != http.StatusOK {
-		if asJSON {
-			return nil, controlAPIError(operation, response.Status, responseBody)
-		}
-		return nil, fmt.Errorf("%s: %s", operation, response.Status)
-	}
-	return responseBody, nil
+	return response.Body, nil
 }
 
 func decodeArtifactMetadata(body []byte) (artifactMetadata, error) {

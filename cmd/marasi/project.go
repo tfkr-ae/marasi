@@ -141,30 +141,11 @@ func openProject(ctx context.Context, instancePath, instanceName string, asJSON 
 	if err != nil {
 		return fmt.Errorf("encoding project open request: %w", err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://marasi/project/open", bytes.NewReader(body))
+	response, err := dialInstance(ctx, instancePath+".sock", instanceName, http.MethodPost, "/project/open", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("creating project open request: %w", err)
+		return err
 	}
-	request.Header.Set("Content-Type", "application/json")
-
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return fmt.Errorf("instance %s is not running", instanceName)
-	}
-
-	responseBody, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return errors.Join(
-			wrapError("reading project open response", readErr),
-			wrapError("closing project open response", closeErr),
-		)
-	}
+	responseBody := response.Body
 	if response.StatusCode != http.StatusOK {
 		if asJSON {
 			return controlAPIError("opening project", response.Status, responseBody)

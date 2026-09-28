@@ -24,6 +24,10 @@ func (provider *stubWordlistProvider) List() ([]wordlist.Info, error) {
 	return provider.infos, nil
 }
 
+func (provider *stubWordlistProvider) Add(string) error { return os.ErrNotExist }
+
+func (provider *stubWordlistProvider) Remove(string) error { return os.ErrNotExist }
+
 func (provider *stubWordlistProvider) Open(name string) (wordlist.Iterator, error) {
 	if provider.openErr != nil {
 		return nil, provider.openErr

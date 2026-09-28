@@ -71,7 +71,7 @@ type extensionCallResult struct {
 
 var errInvalidExtensionRequest = errors.New("invalid extension request")
 
-func addExtensionRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifecycle, proxy *marasi.Proxy, events *eventBroadcaster) {
 	mux.HandleFunc("GET /extension", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, r, http.StatusOK, extensionList{Items: listExtensionSummaries(proxy)})
 	})
@@ -154,7 +154,13 @@ func addExtensionRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBr
 		writeJSON(w, r, http.StatusOK, envelope)
 	})
 
-	mux.HandleFunc("POST /extension/{id}/call", func(w http.ResponseWriter, r *http.Request) {
+	// CallFunction can send through the proxy, which admits again. Release first.
+	raw.HandleFunc("POST /extension/{id}/call", func(w http.ResponseWriter, r *http.Request) {
+		release, admitted := admitProjectWork(projects, w, r)
+		if !admitted {
+			return
+		}
+		defer release()
 		id, ok := parseExtensionID(w, r)
 		if !ok {
 			return
@@ -173,6 +179,7 @@ func addExtensionRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBr
 			writeExtensionError(w, r, http.StatusNotFound, "function_not_found")
 			return
 		}
+		release()
 		if err := runtime.CallFunction(name, args...); err != nil {
 			writeExtensionError(w, r, http.StatusBadRequest, "lua_error")
 			return
@@ -214,7 +221,13 @@ func addExtensionRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBr
 		writeJSON(w, r, http.StatusOK, summary)
 	})
 
-	mux.HandleFunc("POST /extension/{id}", func(w http.ResponseWriter, r *http.Request) {
+	// ExecuteLua can send through the proxy. Keep admission only around the repo write.
+	raw.HandleFunc("POST /extension/{id}", func(w http.ResponseWriter, r *http.Request) {
+		release, admitted := admitProjectWork(projects, w, r)
+		if !admitted {
+			return
+		}
+		defer release()
 		id, ok := parseExtensionID(w, r)
 		if !ok {
 			return
@@ -251,6 +264,7 @@ func addExtensionRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBr
 		runtime.Data.Enabled = stored.Enabled
 		runtime.Data.UpdatedAt = stored.UpdatedAt
 		events.publish("extension.updated", extensionSummaryFromRuntime(runtime))
+		release()
 		if err := runtime.ExecuteLua(lua); err != nil {
 			writeExtensionError(w, r, http.StatusBadRequest, "lua_error")
 			return

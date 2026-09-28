@@ -68,7 +68,7 @@ type trafficResponse struct {
 }
 
 // addTrafficRoutes registers traffic and metadata control routes.
-func addTrafficRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	mux.HandleFunc("GET /traffic", func(w http.ResponseWriter, r *http.Request) {
 		limit, cursor, filter, ok := parseTrafficListQuery(r)
 		if !ok {

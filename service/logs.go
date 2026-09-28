@@ -24,7 +24,7 @@ type proxyLogResponse struct {
 	ExtensionID *uuid.UUID     `json:"extension_id"`
 }
 
-func addLogRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
+func addLogRoutes(mux routeMux, proxy *marasi.Proxy) {
 	mux.HandleFunc("/logs", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)

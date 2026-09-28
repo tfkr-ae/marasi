@@ -14,7 +14,6 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"github.com/tfkr-ae/marasi/service"
 )
 
 var listenerStartAddress string
@@ -51,7 +50,7 @@ var listenerStartCmd = &cobra.Command{
 		if settings.Address == nil || settings.Port == nil {
 			return errors.New("listener start requires --address and --port")
 		}
-		return runListenerCommand(cmd, settings)
+		return runListenerCommand(cmd, http.MethodPost, "/listener/start", "starting proxy listener", "start", settings)
 	},
 }
 
@@ -60,7 +59,7 @@ var listenerStopCmd = &cobra.Command{
 	Short: "Stop the proxy listener",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return runListenerCommand(cmd, listenerRequest{})
+		return runListenerCommand(cmd, http.MethodPost, "/listener/stop", "stopping proxy listener", "stop", listenerRequest{})
 	},
 }
 
@@ -73,7 +72,7 @@ var listenerUpdateCmd = &cobra.Command{
 		if settings.Address == nil || settings.Port == nil {
 			return errors.New("listener update requires --address and --port")
 		}
-		return runListenerCommand(cmd, settings)
+		return runListenerCommand(cmd, http.MethodPost, "/listener/update", "updating proxy listener", "update", settings)
 	},
 }
 
@@ -82,7 +81,7 @@ var listenerStatusCmd = &cobra.Command{
 	Short: "Print the proxy listener status",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return runListenerCommand(cmd, listenerRequest{})
+		return runListenerCommand(cmd, http.MethodGet, "/listener/status", "getting proxy listener status", "status", listenerRequest{})
 	},
 }
 
@@ -91,7 +90,7 @@ var listenerAddressCmd = &cobra.Command{
 	Short: "Print the active proxy listener address",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return runListenerCommand(cmd, listenerRequest{})
+		return runListenerCommand(cmd, http.MethodGet, "/listener/status", "getting proxy listener address", "address", listenerRequest{})
 	},
 }
 
@@ -107,33 +106,13 @@ func listenerSettings(cmd *cobra.Command, address string, port decimalPort) list
 	return settings
 }
 
-func runListenerCommand(cmd *cobra.Command, settings listenerRequest) error {
+func runListenerCommand(cmd *cobra.Command, method, path, operation, action string, settings listenerRequest) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-
-	return controlListener(ctx, instancePath, instance, jsonOutput, cmd.Name(), settings, cmd.OutOrStdout(), cmd.ErrOrStderr())
+	return controlListener(ctx, method, path, operation, action, jsonOutput, settings, cmd.OutOrStdout(), cmd.ErrOrStderr())
 }
 
-func controlListener(ctx context.Context, instancePath, instanceName string, asJSON bool, action string, settings listenerRequest, stdout, stderr io.Writer) error {
-	method := http.MethodPost
-	operation := "starting proxy listener"
-	switch action {
-	case "update":
-		operation = "updating proxy listener"
-	case "status":
-		method = http.MethodGet
-		operation = "getting proxy listener status"
-	case "address":
-		method = http.MethodGet
-		operation = "getting proxy listener address"
-	case "stop":
-		operation = "stopping proxy listener"
-	}
-	path := "/listener/" + action
-	if action == "address" {
-		path = "/listener/status"
-	}
-
+func controlListener(ctx context.Context, method, path, operation, action string, asJSON bool, settings listenerRequest, stdout, stderr io.Writer) error {
 	var requestBody io.Reader
 	if settings.Address != nil || settings.Port != nil {
 		body, err := json.Marshal(settings)
@@ -142,37 +121,14 @@ func controlListener(ctx context.Context, instancePath, instanceName string, asJ
 		}
 		requestBody = bytes.NewReader(body)
 	}
-	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
+	response, err := callInstance(ctx, method, path, "application/json", requestBody)
 	if err != nil {
-		return fmt.Errorf("creating proxy listener request: %w", err)
+		return err
 	}
-	if requestBody != nil {
-		request.Header.Set("Content-Type", "application/json")
+	if err := rejectInstanceStatus(operation, response, asJSON); err != nil {
+		return err
 	}
-
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return fmt.Errorf("instance %s is not running", instanceName)
-	}
-	body, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return errors.Join(
-			wrapError("reading proxy listener response", readErr),
-			wrapError("closing proxy listener response", closeErr),
-		)
-	}
-	if response.StatusCode != http.StatusOK {
-		if asJSON {
-			return controlAPIError(operation, response.Status, body)
-		}
-		return fmt.Errorf("%s: %s", operation, response.Status)
-	}
+	body := response.Body
 	if action == "address" {
 		status, proxyListener, decodeErr := decodeListenerStatus(body)
 		if decodeErr != nil {

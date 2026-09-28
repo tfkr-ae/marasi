@@ -31,12 +31,16 @@ type Iterator interface {
 	Close() error
 }
 
-// Provider lists and opens available wordlists.
+// Provider lists, opens, and changes available wordlists.
 type Provider interface {
 	// List returns metadata for each available wordlist.
 	List() ([]Info, error)
 	// Open opens a wordlist by name.
 	Open(name string) (Iterator, error)
+	// Add links source into the managed directory and removes source.
+	Add(source string) error
+	// Remove deletes a managed wordlist by name.
+	Remove(name string) error
 }
 
 // fileIterator reads entries from a wordlist file.

@@ -29,7 +29,7 @@ type scopeCheckRule struct {
 
 var errInvalidScopeRequest = errors.New("invalid scope request")
 
-func addScopeRoutes(mux *http.ServeMux, proxy *marasi.Proxy) {
+func addScopeRoutes(mux routeMux, proxy *marasi.Proxy) {
 	mux.HandleFunc("POST /scope/check", func(w http.ResponseWriter, r *http.Request) {
 		urlInput, err := decodeScopeCheckRequest(r)
 		if err != nil {

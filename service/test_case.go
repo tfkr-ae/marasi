@@ -51,7 +51,7 @@ type testCaseTrafficResponse struct {
 	ID         uuid.UUID `json:"id"`
 }
 
-func addTestCaseRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+func addTestCaseRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	addTestCaseChecklistRoute(mux, proxy)
 
 	mux.HandleFunc("GET /test-case", func(w http.ResponseWriter, r *http.Request) {

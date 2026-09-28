@@ -58,7 +58,7 @@ type findingTrafficResponse struct {
 	ID        uuid.UUID `json:"id"`
 }
 
-func addFindingRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+func addFindingRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	mux.HandleFunc("GET /finding", func(w http.ResponseWriter, r *http.Request) {
 		repo, err := proxy.GetReportingRepo()
 		if err != nil {

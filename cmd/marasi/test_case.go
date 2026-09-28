@@ -15,7 +15,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"github.com/tfkr-ae/marasi/service"
 )
 
 var testCaseCreateTitle string
@@ -85,7 +84,7 @@ var testCaseCreateCmd = &cobra.Command{
 		if cmd.Flags().Changed("note") {
 			request.Note = &testCaseCreateNote
 		}
-		return runTestCaseCommand(cmd, "create", "", request)
+		return runTestCaseCommand(cmd, http.MethodPost, "/test-case", "creating test case", "create", request)
 	},
 }
 
@@ -94,7 +93,7 @@ var testCaseListCmd = &cobra.Command{
 	Short: "List test cases newest-first",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return runTestCaseCommand(cmd, "list", "", testCaseRequest{})
+		return runTestCaseCommand(cmd, http.MethodGet, "/test-case", "listing test cases", "list", testCaseRequest{})
 	},
 }
 
@@ -103,7 +102,11 @@ var testCaseGetCmd = &cobra.Command{
 	Short: "Get one test case",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runTestCaseCommand(cmd, "get", args[0], testCaseRequest{})
+		path, err := serviceIDPath("/test-case/", args[0], "")
+		if err != nil {
+			return err
+		}
+		return runTestCaseCommand(cmd, http.MethodGet, path, "getting test case", "get", testCaseRequest{})
 	},
 }
 
@@ -112,7 +115,7 @@ var testCaseChecklistCmd = &cobra.Command{
 	Short: "List predefined test cases",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return runTestCaseCommand(cmd, "checklist", "", testCaseRequest{})
+		return runTestCaseCommand(cmd, http.MethodGet, "/test-case/checklist", "listing test case checklist", "checklist", testCaseRequest{})
 	},
 }
 
@@ -143,7 +146,11 @@ var testCaseUpdateCmd = &cobra.Command{
 		if request.Title == nil && request.Description == nil && request.Category == nil && request.Tags == nil && request.Note == nil {
 			return errors.New("test-case update requires at least one changed flag")
 		}
-		return runTestCaseCommand(cmd, "update", args[0], request)
+		path, err := serviceIDPath("/test-case/", args[0], "")
+		if err != nil {
+			return err
+		}
+		return runTestCaseCommand(cmd, http.MethodPost, path, "updating test case", "update", request)
 	},
 }
 
@@ -152,7 +159,11 @@ var testCaseDeleteCmd = &cobra.Command{
 	Short: "Delete a test case",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runTestCaseCommand(cmd, "delete", args[0], testCaseRequest{})
+		path, err := serviceIDPath("/test-case/", args[0], "")
+		if err != nil {
+			return err
+		}
+		return runTestCaseCommand(cmd, http.MethodDelete, path, "deleting test case", "delete", testCaseRequest{})
 	},
 }
 
@@ -177,7 +188,7 @@ var testCaseUnlinkCmd = &cobra.Command{
 func runTrafficMembershipCommand(cmd *cobra.Command, resource, parentID, requestID string, link bool) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	response, err := controlTrafficMembership(ctx, instancePath, instance, jsonOutput, resource, parentID, requestID, link)
+	response, err := controlTrafficMembership(ctx, jsonOutput, resource, parentID, requestID, link)
 	if err != nil {
 		return err
 	}
@@ -199,7 +210,7 @@ func runTrafficMembershipCommand(cmd *cobra.Command, resource, parentID, request
 	return err
 }
 
-func controlTrafficMembership(ctx context.Context, instancePath, instanceName string, asJSON bool, resource, parentID, requestID string, link bool) ([]byte, error) {
+func controlTrafficMembership(ctx context.Context, asJSON bool, resource, parentID, requestID string, link bool) ([]byte, error) {
 	parent, err := parseServiceID(parentID)
 	if err != nil {
 		return nil, err
@@ -226,43 +237,35 @@ func controlTrafficMembership(ctx context.Context, instancePath, instanceName st
 		}
 		path += request
 	}
-	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, body)
+	response, err := callInstance(ctx, method, path, "application/json", body)
 	if err != nil {
-		return nil, fmt.Errorf("creating traffic membership request: %w", err)
+		return nil, err
 	}
-	if body != nil {
-		request.Header.Set("Content-Type", "application/json")
+	if err := rejectInstanceStatus(operation, response, asJSON); err != nil {
+		return nil, err
 	}
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("instance %s is not running", instanceName)
-	}
-	responseBody, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(wrapError("reading traffic membership response", readErr), wrapError("closing traffic membership response", closeErr))
-	}
-	if response.StatusCode != http.StatusOK {
-		if asJSON {
-			return nil, controlAPIError(operation, response.Status, responseBody)
-		}
-		return nil, fmt.Errorf("%s: %s", operation, response.Status)
-	}
-	return responseBody, nil
+	return response.Body, nil
 }
 
-func runTestCaseCommand(cmd *cobra.Command, action, id string, payload testCaseRequest) error {
+func runTestCaseCommand(cmd *cobra.Command, method, path, operation, action string, payload testCaseRequest) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	response, err := controlTestCase(ctx, instancePath, instance, jsonOutput, action, id, payload)
+	var requestBody io.Reader
+	if method == http.MethodPost {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("encoding test case request: %w", err)
+		}
+		requestBody = bytes.NewReader(encoded)
+	}
+	called, err := callInstance(ctx, method, path, "application/json", requestBody)
 	if err != nil {
 		return err
 	}
+	if err := rejectInstanceStatus(operation, called, jsonOutput); err != nil {
+		return err
+	}
+	response := called.Body
 	if jsonOutput {
 		_, err = cmd.OutOrStdout().Write(response)
 		return err
@@ -284,68 +287,6 @@ func runTestCaseCommand(cmd *cobra.Command, action, id string, payload testCaseR
 	}
 	_, err = fmt.Fprintf(cmd.ErrOrStderr(), "test case %s %sd successfully\n", result.ID, action)
 	return err
-}
-
-func controlTestCase(ctx context.Context, instancePath, instanceName string, asJSON bool, action, id string, payload testCaseRequest) ([]byte, error) {
-	method := http.MethodGet
-	path := "/test-case"
-	operation := "listing test cases"
-	var requestBody io.Reader
-	switch action {
-	case "create":
-		method, operation = http.MethodPost, "creating test case"
-	case "checklist":
-		path, operation = path+"/checklist", "listing test case checklist"
-	case "get", "update", "delete":
-		parsed, err := serviceIDPath("/test-case/", id, "")
-		if err != nil {
-			return nil, err
-		}
-		path = parsed
-		switch action {
-		case "get":
-			operation = "getting test case"
-		case "update":
-			method, operation = http.MethodPost, "updating test case"
-		case "delete":
-			method, operation = http.MethodDelete, "deleting test case"
-		}
-	}
-	if method == http.MethodPost {
-		encoded, err := json.Marshal(payload)
-		if err != nil {
-			return nil, fmt.Errorf("encoding test case request: %w", err)
-		}
-		requestBody = bytes.NewReader(encoded)
-	}
-	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("creating test case request: %w", err)
-	}
-	if requestBody != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("instance %s is not running", instanceName)
-	}
-	body, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(wrapError("reading test case response", readErr), wrapError("closing test case response", closeErr))
-	}
-	if response.StatusCode != http.StatusOK {
-		if asJSON {
-			return nil, controlAPIError(operation, response.Status, body)
-		}
-		return nil, fmt.Errorf("%s: %s", operation, response.Status)
-	}
-	return body, nil
 }
 
 func writeTestCaseListHuman(body []byte, stdout io.Writer) error {

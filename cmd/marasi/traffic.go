@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,7 +15,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
-	"github.com/tfkr-ae/marasi/service"
 )
 
 var trafficListHost string
@@ -89,7 +87,7 @@ var trafficMetadataGetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runTrafficMetadataRequest(cmd, http.MethodGet, path, "getting metadata", nil)
+		body, err := runControlRequest(cmd, http.MethodGet, path, "getting metadata", nil)
 		if err != nil {
 			return err
 		}
@@ -112,7 +110,7 @@ var trafficMetadataUpdateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := runTrafficMetadataRequest(cmd, http.MethodPut, path, "updating metadata", payload)
+		body, err := runControlRequest(cmd, http.MethodPut, path, "updating metadata", payload)
 		if err != nil {
 			return err
 		}
@@ -157,29 +155,11 @@ func trafficListQuery() (string, error) {
 
 // listTraffic prints one page of traffic for the instance.
 func listTraffic(ctx context.Context, instancePath, instanceName string, asJSON bool, query string, stdout, stderr io.Writer) error {
-	socketPath := instancePath + ".sock"
-	client := service.NewClient(socketPath)
-	defer client.Close()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/traffic?"+query, nil)
+	response, err := dialInstance(ctx, instancePath+".sock", instanceName, http.MethodGet, "/traffic?"+query, "", nil)
 	if err != nil {
-		return fmt.Errorf("creating traffic list request: %w", err)
+		return err
 	}
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return fmt.Errorf("instance %s is not running", instanceName)
-	}
-
-	body, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return errors.Join(
-			wrapError("reading traffic list response", readErr),
-			wrapError("closing traffic list response", closeErr),
-		)
-	}
+	body := response.Body
 	if response.StatusCode != http.StatusOK {
 		if asJSON {
 			return controlAPIError("listing traffic", response.Status, body)
@@ -239,29 +219,11 @@ func getTraffic(ctx context.Context, instancePath, instanceName string, asJSON b
 	if err != nil {
 		return err
 	}
-	socketPath := instancePath + ".sock"
-	client := service.NewClient(socketPath)
-	defer client.Close()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/traffic/"+id, nil)
+	response, err := dialInstance(ctx, instancePath+".sock", instanceName, http.MethodGet, "/traffic/"+id, "", nil)
 	if err != nil {
-		return fmt.Errorf("creating traffic get request: %w", err)
+		return err
 	}
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return fmt.Errorf("instance %s is not running", instanceName)
-	}
-
-	body, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return errors.Join(
-			wrapError("reading traffic get response", readErr),
-			wrapError("closing traffic get response", closeErr),
-		)
-	}
+	body := response.Body
 	if response.StatusCode != http.StatusOK {
 		if asJSON {
 			return controlAPIError("getting traffic", response.Status, body)
@@ -410,39 +372,4 @@ func trafficMetadataStdinPresent(cmd *cobra.Command) (bool, error) {
 		return false, fmt.Errorf("checking stdin: %w", err)
 	}
 	return info.Mode()&os.ModeCharDevice == 0, nil
-}
-
-func runTrafficMetadataRequest(cmd *cobra.Command, method, path, operation string, payload []byte) ([]byte, error) {
-	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
-	var requestBody io.Reader
-	if payload != nil {
-		requestBody = bytes.NewReader(payload)
-	}
-	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("creating metadata request: %w", err)
-	}
-	if payload != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("instance %s is not running", instance)
-	}
-	body, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(wrapError("reading metadata response", readErr), wrapError("closing metadata response", closeErr))
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, controlAPIError(operation, response.Status, body)
-	}
-	return body, nil
 }

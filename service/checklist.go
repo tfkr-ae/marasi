@@ -27,7 +27,7 @@ type testCaseChecklist struct {
 	Items       []testCaseChecklistItem `json:"items" mapstructure:"test_cases"`
 }
 
-func addTestCaseChecklistRoute(mux *http.ServeMux, proxy *marasi.Proxy) {
+func addTestCaseChecklistRoute(mux routeMux, proxy *marasi.Proxy) {
 	mux.HandleFunc("GET /test-case/checklist", func(w http.ResponseWriter, r *http.Request) {
 		checklist, err := loadTestCaseChecklist(proxy.ConfigDir)
 		if err != nil {

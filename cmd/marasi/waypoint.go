@@ -1,19 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 
 	"github.com/spf13/cobra"
-	"github.com/tfkr-ae/marasi/service"
 )
 
 var waypointHostname string
@@ -96,7 +90,7 @@ var waypointUpdateCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("encoding waypoint request: %w", err)
 		}
-		response, err := runWaypointRequestPath(cmd, http.MethodPost, "/waypoint/update", body, "updating waypoint")
+		response, err := runControlRequest(cmd, http.MethodPost, "/waypoint/update", "updating waypoint", body)
 		if err != nil {
 			return err
 		}
@@ -122,42 +116,7 @@ var waypointRemoveCmd = &cobra.Command{
 }
 
 func runWaypointRequest(cmd *cobra.Command, method string, body []byte, operation string) ([]byte, error) {
-	return runWaypointRequestPath(cmd, method, "/waypoint", body, operation)
-}
-
-func runWaypointRequestPath(cmd *cobra.Command, method, path string, body []byte, operation string) ([]byte, error) {
-	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
-	var requestBody io.Reader
-	if body != nil {
-		requestBody = bytes.NewReader(body)
-	}
-	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("creating waypoint request: %w", err)
-	}
-	if body != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("instance %s is not running", instance)
-	}
-	responseBody, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(wrapError("reading waypoint response", readErr), wrapError("closing waypoint response", closeErr))
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, controlAPIError(operation, response.Status, responseBody)
-	}
-	return responseBody, nil
+	return runControlRequest(cmd, method, "/waypoint", operation, body)
 }
 
 func writeWaypointMutationResult(cmd *cobra.Command, response []byte, confirmation string) error {

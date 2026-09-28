@@ -15,7 +15,7 @@ import (
 	"github.com/tfkr-ae/marasi/report"
 )
 
-func addReportRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+func addReportRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	mux.HandleFunc("GET /report/template", func(w http.ResponseWriter, r *http.Request) {
 		query, err := url.ParseQuery(r.URL.RawQuery)
 		if err != nil || len(query) != 0 {
@@ -24,15 +24,7 @@ func addReportRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroad
 			}{Error: "invalid_report_template_request"})
 			return
 		}
-		if proxy == nil {
-			writeJSON(w, r, http.StatusNotFound, struct {
-				Error string `json:"error"`
-			}{Error: "not_found"})
-			return
-		}
-		generator, ok := proxy.ReportGenerator.(interface {
-			ListTemplateDetails() ([]report.TemplateInfo, error)
-		})
+		generator, ok := reportGenerator(proxy)
 		if !ok {
 			writeJSON(w, r, http.StatusNotFound, struct {
 				Error string `json:"error"`
@@ -70,14 +62,7 @@ func addReportRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroad
 			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_report_template_request"})
 			return
 		}
-		if proxy == nil {
-			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
-			return
-		}
-		generator, ok := proxy.ReportGenerator.(interface {
-			AddTemplate(string) error
-			ListTemplateDetails() ([]report.TemplateInfo, error)
-		})
+		generator, ok := reportGenerator(proxy)
 		if !ok {
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
@@ -119,14 +104,7 @@ func addReportRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroad
 			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_report_template_request"})
 			return
 		}
-		if proxy == nil {
-			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
-			return
-		}
-		generator, ok := proxy.ReportGenerator.(interface {
-			RemoveTemplate(string) error
-			ListTemplateDetails() ([]report.TemplateInfo, error)
-		})
+		generator, ok := reportGenerator(proxy)
 		if !ok {
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
@@ -162,18 +140,12 @@ func addReportRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBroad
 			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_report_template_request"})
 			return
 		}
-		if proxy == nil {
-			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
-			return
-		}
-		generator, ok := proxy.ReportGenerator.(interface {
-			ListTemplateDetails() ([]report.TemplateInfo, error)
-		})
+		generator, ok := reportGenerator(proxy)
 		if !ok {
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		if err := report.RestoreDefaultTemplate(proxy.ReportGenerator); err != nil {
+		if err := report.RestoreDefaultTemplate(generator); err != nil {
 			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
 			return
 		}
@@ -348,6 +320,14 @@ func reportDate(value string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, time.UTC), nil
+}
+
+func reportGenerator(proxy *marasi.Proxy) (*report.Generator, bool) {
+	if proxy == nil {
+		return nil, false
+	}
+	generator, ok := proxy.ReportGenerator.(*report.Generator)
+	return generator, ok
 }
 
 func writeReportError(w http.ResponseWriter, r *http.Request, status int, code string) {

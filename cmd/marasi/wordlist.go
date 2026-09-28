@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,7 +13,6 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"github.com/tfkr-ae/marasi/service"
 	"github.com/tfkr-ae/marasi/wordlist"
 )
 
@@ -128,36 +126,18 @@ var wordlistRemoveCmd = &cobra.Command{
 func runControlRequest(cmd *cobra.Command, method, path, operation string, body []byte) ([]byte, error) {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-
 	var requestBody io.Reader
 	if body != nil {
 		requestBody = bytes.NewReader(body)
 	}
-	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
+	response, err := callInstance(ctx, method, path, "application/json", requestBody)
 	if err != nil {
-		return nil, fmt.Errorf("creating control request: %w", err)
+		return nil, err
 	}
-	if body != nil {
-		request.Header.Set("Content-Type", "application/json")
+	if err := rejectInstanceStatus(operation, response, true); err != nil {
+		return nil, err
 	}
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("instance %s is not running", instance)
-	}
-	body, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(wrapError("reading control response", readErr), wrapError("closing control response", closeErr))
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, controlAPIError(operation, response.Status, body)
-	}
-	return body, nil
+	return response.Body, nil
 }
 
 func writeSizedList(body []byte, stdout io.Writer) error {

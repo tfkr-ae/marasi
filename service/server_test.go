@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -38,6 +39,9 @@ func (l *statusListener) Update(context.Context, ListenerSettings) (ListenerStat
 	panic("unexpected listener update")
 }
 func (l *statusListener) Shutdown() error { panic("unexpected listener shutdown") }
+func (l *statusListener) controlEvents() (*eventBroadcaster, io.Writer) {
+	return nil, nil
+}
 
 type stubTrafficRepository struct {
 	domain.TrafficRepository

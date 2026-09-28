@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"github.com/tfkr-ae/marasi/service"
 )
 
 var findingCreateTitle string
@@ -85,7 +83,7 @@ var findingCreateCmd = &cobra.Command{
 		}
 		request := findingRequest{Title: &findingCreateTitle}
 		applyFindingCreateFlags(cmd, &request)
-		return runFindingCommand(cmd, "create", "", request)
+		return runFindingCommand(cmd, http.MethodPost, "/finding", "creating finding", "create", request)
 	},
 }
 
@@ -94,7 +92,7 @@ var findingListCmd = &cobra.Command{
 	Short: "List findings newest-first",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return runFindingCommand(cmd, "list", "", findingRequest{})
+		return runFindingCommand(cmd, http.MethodGet, "/finding", "listing findings", "list", findingRequest{})
 	},
 }
 
@@ -103,7 +101,11 @@ var findingGetCmd = &cobra.Command{
 	Short: "Get one finding",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runFindingCommand(cmd, "get", args[0], findingRequest{})
+		path, err := serviceIDPath("/finding/", args[0], "")
+		if err != nil {
+			return err
+		}
+		return runFindingCommand(cmd, http.MethodGet, path, "getting finding", "get", findingRequest{})
 	},
 }
 
@@ -148,7 +150,11 @@ var findingUpdateCmd = &cobra.Command{
 		if request.Title == nil && request.Severity == nil && request.CVSSVector == nil && request.CVSSScore == nil && request.WriteUp == nil && request.TreatmentPlan == nil && request.TestCaseID == nil {
 			return errors.New("finding update requires at least one changed flag")
 		}
-		return runFindingCommand(cmd, "update", args[0], request)
+		path, err := serviceIDPath("/finding/", args[0], "")
+		if err != nil {
+			return err
+		}
+		return runFindingCommand(cmd, http.MethodPost, path, "updating finding", "update", request)
 	},
 }
 
@@ -157,7 +163,11 @@ var findingDeleteCmd = &cobra.Command{
 	Short: "Delete a finding",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runFindingCommand(cmd, "delete", args[0], findingRequest{})
+		path, err := serviceIDPath("/finding/", args[0], "")
+		if err != nil {
+			return err
+		}
+		return runFindingCommand(cmd, http.MethodDelete, path, "deleting finding", "delete", findingRequest{})
 	},
 }
 
@@ -201,91 +211,42 @@ func applyFindingCreateFlags(cmd *cobra.Command, request *findingRequest) {
 	}
 }
 
-func runFindingCommand(cmd *cobra.Command, action, id string, payload findingRequest) error {
+func runFindingCommand(cmd *cobra.Command, method, path, operation, human string, payload findingRequest) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	response, err := controlFinding(ctx, instancePath, instance, jsonOutput, action, id, payload)
+	var requestBody io.Reader
+	if method == http.MethodPost {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("encoding finding request: %w", err)
+		}
+		requestBody = bytes.NewReader(encoded)
+	}
+	response, err := callInstance(ctx, method, path, "application/json", requestBody)
 	if err != nil {
 		return err
 	}
-	if jsonOutput {
-		_, err = cmd.OutOrStdout().Write(response)
+	if err := rejectInstanceStatus(operation, response, jsonOutput); err != nil {
 		return err
 	}
-	if action == "list" {
-		return writeFindingListHuman(response, cmd.OutOrStdout())
+	if jsonOutput {
+		_, err = cmd.OutOrStdout().Write(response.Body)
+		return err
 	}
-	if action == "get" {
-		return writeFindingGetHuman(response, cmd.OutOrStdout())
+	if human == "list" {
+		return writeFindingListHuman(response.Body, cmd.OutOrStdout())
+	}
+	if human == "get" {
+		return writeFindingGetHuman(response.Body, cmd.OutOrStdout())
 	}
 	var result struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(response, &result); err != nil || result.ID == "" {
+	if err := json.Unmarshal(response.Body, &result); err != nil || result.ID == "" {
 		return errors.New("decoding finding response")
 	}
-	_, err = fmt.Fprintf(cmd.ErrOrStderr(), "finding %s %sd successfully\n", result.ID, action)
+	_, err = fmt.Fprintf(cmd.ErrOrStderr(), "finding %s %sd successfully\n", result.ID, human)
 	return err
-}
-
-func controlFinding(ctx context.Context, instancePath, instanceName string, asJSON bool, action, id string, payload findingRequest) ([]byte, error) {
-	method := http.MethodGet
-	path := "/finding"
-	operation := "listing findings"
-	var requestBody io.Reader
-	switch action {
-	case "create":
-		method, operation = http.MethodPost, "creating finding"
-	case "get", "update", "delete":
-		parsed, err := serviceIDPath("/finding/", id, "")
-		if err != nil {
-			return nil, err
-		}
-		path = parsed
-		switch action {
-		case "get":
-			operation = "getting finding"
-		case "update":
-			method, operation = http.MethodPost, "updating finding"
-		case "delete":
-			method, operation = http.MethodDelete, "deleting finding"
-		}
-	}
-	if method == http.MethodPost {
-		encoded, err := json.Marshal(payload)
-		if err != nil {
-			return nil, fmt.Errorf("encoding finding request: %w", err)
-		}
-		requestBody = bytes.NewReader(encoded)
-	}
-	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("creating finding request: %w", err)
-	}
-	if requestBody != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
-	client := service.NewClient(instancePath + ".sock")
-	defer client.Close()
-	response, err := client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("instance %s is not running", instanceName)
-	}
-	body, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(wrapError("reading finding response", readErr), wrapError("closing finding response", closeErr))
-	}
-	if response.StatusCode != http.StatusOK {
-		if asJSON {
-			return nil, controlAPIError(operation, response.Status, body)
-		}
-		return nil, fmt.Errorf("%s: %s", operation, response.Status)
-	}
-	return body, nil
 }
 
 func writeFindingListHuman(body []byte, stdout io.Writer) error {
