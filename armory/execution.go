@@ -168,8 +168,7 @@ func (manager *Manager) execute(execution *execution) {
 		execution.run.Status = domain.ArmoryRunCompleted
 	}
 
-	manager.removeExecution(execution)
-	manager.updateRun(execution.run)
+	manager.finishExecution(execution)
 	execution.cancelFunc()
 }
 
@@ -208,6 +207,36 @@ func (manager *Manager) executeWorker(execution *execution) {
 		case <-execution.ctx.Done():
 			return
 		}
+	}
+}
+
+// finishWriteRetry waits before another attempt to store a finished run.
+// Tests replace it so they can observe the run while the write is still failing.
+var finishWriteRetry = func() { time.Sleep(50 * time.Millisecond) }
+
+// finishExecution stores the finished status, then drops the run from activeRuns.
+// A failed write leaves the run active and retries only the write.
+func (manager *Manager) finishExecution(execution *execution) {
+	for {
+		manager.mu.Lock()
+		if manager.activeRuns[execution.run.ID] != execution {
+			manager.mu.Unlock()
+			return
+		}
+		err := manager.repository.UpdateArmoryRun(execution.run)
+		if err != nil {
+			manager.mu.Unlock()
+			log.Printf("writing armory run %s status: %v", execution.run.ID, err)
+			finishWriteRetry()
+			continue
+		}
+		delete(manager.activeRuns, execution.run.ID)
+		callback := manager.runUpdated
+		manager.mu.Unlock()
+		if callback != nil {
+			callback(execution.run)
+		}
+		return
 	}
 }
 

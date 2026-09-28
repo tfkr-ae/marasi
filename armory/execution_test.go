@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,11 +17,13 @@ import (
 
 type testExecutionRepository struct {
 	domain.ArmoryRepository
-	run       *domain.ArmoryRun
-	getErr    error
-	updateErr error
-	updates   chan domain.ArmoryRun
-	mu        sync.Mutex
+	run             *domain.ArmoryRun
+	getErr          error
+	updateErr       error
+	finishFailures  int
+	finishFailed    chan struct{}
+	updates         chan domain.ArmoryRun
+	mu              sync.Mutex
 }
 
 type testSentRequest struct {
@@ -40,8 +43,15 @@ func (repository *testExecutionRepository) UpdateArmoryRun(run *domain.ArmoryRun
 	if repository.updateErr != nil {
 		return repository.updateErr
 	}
-
 	repository.mu.Lock()
+	if run.Status != domain.ArmoryRunInProgress && repository.finishFailures > 0 {
+		repository.finishFailures--
+		repository.mu.Unlock()
+		if repository.finishFailed != nil {
+			repository.finishFailed <- struct{}{}
+		}
+		return errors.New("disk full")
+	}
 	updated := *run
 	repository.mu.Unlock()
 	if repository.updates != nil {
@@ -326,6 +336,67 @@ func TestManager_StartRun(t *testing.T) {
 		}
 		if len(manager.ActiveRunIDs()) != 0 {
 			t.Fatalf("\nwanted:\n0 active runs\ngot:\n%d", len(manager.ActiveRunIDs()))
+		}
+	})
+
+	t.Run("should keep a finished run active until the status write succeeds", func(t *testing.T) {
+		run := newTestArmoryRun(t)
+		updates := make(chan domain.ArmoryRun, 2)
+		failed := make(chan struct{}, 1)
+		repository := &testExecutionRepository{run: run, updates: updates, finishFailures: 1, finishFailed: failed}
+		provider := &testAttackWordlistProvider{entries: []string{"one"}}
+		var sends atomic.Int32
+		releaseRetry := make(chan struct{})
+		previousRetry := finishWriteRetry
+		finishWriteRetry = func() {
+			<-releaseRetry
+		}
+		t.Cleanup(func() {
+			finishWriteRetry = previousRetry
+			select {
+			case <-releaseRetry:
+			default:
+				close(releaseRetry)
+			}
+		})
+		manager := &Manager{
+			repository: repository,
+			wordlists:  provider,
+			sendFunc: func(context.Context, string, uuid.UUID, bool) error {
+				sends.Add(1)
+				return nil
+			},
+			activeRuns: make(map[uuid.UUID]*execution),
+		}
+
+		if err := manager.StartRun(run.ID); err != nil {
+			t.Fatalf("starting run: %v", err)
+		}
+		select {
+		case <-failed:
+		case <-time.After(5 * time.Second):
+			t.Fatal("finish write did not fail")
+		}
+		if len(manager.ActiveRunIDs()) != 1 {
+			t.Fatalf("\nwanted:\nrun still active after a failed finish write\ngot:\n%d", len(manager.ActiveRunIDs()))
+		}
+		if got := sends.Load(); got != 1 {
+			t.Fatalf("\nwanted:\n1 send before the finish retry\ngot:\n%d", got)
+		}
+		close(releaseRetry)
+		completed := waitForRunUpdate(t, updates)
+		if completed.Status != domain.ArmoryRunInProgress {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", domain.ArmoryRunInProgress, completed.Status)
+		}
+		completed = waitForRunUpdate(t, updates)
+		if completed.Status != domain.ArmoryRunCompleted {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", domain.ArmoryRunCompleted, completed.Status)
+		}
+		if len(manager.ActiveRunIDs()) != 0 {
+			t.Fatalf("\nwanted:\n0 active runs\ngot:\n%d", len(manager.ActiveRunIDs()))
+		}
+		if got := sends.Load(); got != 1 {
+			t.Fatalf("\nwanted:\n1 send after the finish retry\ngot:\n%d", got)
 		}
 	})
 
