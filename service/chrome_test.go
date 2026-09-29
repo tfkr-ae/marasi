@@ -335,13 +335,13 @@ func TestChromeStart(t *testing.T) {
 		configDir := t.TempDir()
 		argsPath := filepath.Join(configDir, "args")
 		executable := filepath.Join(configDir, "chrome")
-		script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + argsPath + "\"\n"
+		script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + argsPath + ".tmp\" && mv \"" + argsPath + ".tmp\" \"" + argsPath + "\"\n"
 		if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
 			t.Fatalf("writing fake Chrome: %v", err)
 		}
 		secondArgsPath := filepath.Join(configDir, "second-args")
 		secondExecutable := filepath.Join(configDir, "second-chrome")
-		secondScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + secondArgsPath + "\"\n"
+		secondScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + secondArgsPath + ".tmp\" && mv \"" + secondArgsPath + ".tmp\" \"" + secondArgsPath + "\"\n"
 		if err := os.WriteFile(secondExecutable, []byte(secondScript), 0700); err != nil {
 			t.Fatalf("writing second fake Chrome: %v", err)
 		}
@@ -367,30 +367,37 @@ func TestChromeStart(t *testing.T) {
 			t.Fatalf("\nwanted:\ndefault-profile\ngot:\n%s", profile)
 		}
 
-		var args []byte
-		deadline := time.Now().Add(10 * time.Second)
-		for time.Now().Before(deadline) {
-			args, err = os.ReadFile(argsPath)
-			if err == nil {
-				break
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		if err != nil {
-			t.Fatalf("reading fake Chrome arguments: %v", err)
-		}
-		if _, err := os.Stat(secondArgsPath); !os.IsNotExist(err) {
-			t.Fatalf("\nwanted:\nfirst configured executable to start\ngot second executable result:\n%v", err)
-		}
-		got := string(args)
-		for _, want := range []string{
+		wants := []string{
 			"--proxy-server=http://[::1]:43210",
 			"--ignore-certificate-errors-spki-list=test-spki",
 			"--user-data-dir=" + filepath.Join(configDir, "chrome_profiles", "default-profile"),
-		} {
-			if !strings.Contains(got, want) {
-				t.Fatalf("\nwanted arguments containing:\n%s\ngot:\n%s", want, got)
+		}
+		var got string
+		var readErr error
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			args, err := os.ReadFile(argsPath)
+			readErr = err
+			if err == nil {
+				got = string(args)
+				missing := false
+				for _, want := range wants {
+					if !strings.Contains(got, want) {
+						missing = true
+						break
+					}
+				}
+				if !missing {
+					break
+				}
 			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("\nwanted arguments containing:\n%s\ngot:\n%s\nread error:\n%v", strings.Join(wants, "\n"), got, readErr)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if _, err := os.Stat(secondArgsPath); !os.IsNotExist(err) {
+			t.Fatalf("\nwanted:\nfirst configured executable to start\ngot second executable result:\n%v", err)
 		}
 		profiles, err := module.Profiles(context.Background())
 		if err != nil || len(profiles) != 0 {
