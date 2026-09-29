@@ -58,16 +58,14 @@ func addWaypointRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcast
 			writeWaypointError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
-		if err := repo.CreateWaypoint(waypoint.Hostname, waypoint.Override); err != nil {
+		if _, err := proxy.ApplyWaypointChange(func(repo domain.WaypointRepository) (bool, error) {
+			return true, repo.CreateWaypoint(waypoint.Hostname, waypoint.Override)
+		}); err != nil {
 			if errors.Is(err, domain.ErrWaypointAlreadyExists) {
 				writeWaypointError(w, r, http.StatusConflict, "waypoint_already_exists")
 			} else {
 				writeWaypointError(w, r, http.StatusInternalServerError, "internal_server_error")
 			}
-			return
-		}
-		if err := proxy.SyncWaypoints(); err != nil {
-			writeWaypointError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
 		response, err := getWaypointList(repo)
@@ -90,16 +88,12 @@ func addWaypointRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcast
 			writeWaypointError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
-		changed, err := repo.UpdateWaypoint(waypoint.Hostname, waypoint.Override)
+		changed, err := proxy.ApplyWaypointChange(func(repo domain.WaypointRepository) (bool, error) {
+			return repo.UpdateWaypoint(waypoint.Hostname, waypoint.Override)
+		})
 		if err != nil {
 			writeWaypointRepositoryError(w, r, err)
 			return
-		}
-		if changed {
-			if err := proxy.SyncWaypoints(); err != nil {
-				writeWaypointError(w, r, http.StatusInternalServerError, "internal_server_error")
-				return
-			}
 		}
 		response, err := getWaypointList(repo)
 		if err != nil {
@@ -123,12 +117,10 @@ func addWaypointRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcast
 			writeWaypointError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
-		if err := repo.DeleteWaypoint(hostname); err != nil {
+		if _, err := proxy.ApplyWaypointChange(func(repo domain.WaypointRepository) (bool, error) {
+			return true, repo.DeleteWaypoint(hostname)
+		}); err != nil {
 			writeWaypointRepositoryError(w, r, err)
-			return
-		}
-		if err := proxy.SyncWaypoints(); err != nil {
-			writeWaypointError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
 		response, err := getWaypointList(repo)

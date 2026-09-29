@@ -110,7 +110,8 @@ type Proxy struct {
 	mitmConfig            *tls.Config           // Martian Proxy MITM config
 	MarasiClientTLSConfig *tls.Config           // TLSConfig for the proxy.Client
 	Scope                 *compass.Scope        // Proxy scope configuration through Compass
-	Waypoints             map[string]string     // Map of host:port overrides
+	Waypoints             map[string]string     // Published host:port overrides. Replaced, never mutated.
+	waypointMu            sync.RWMutex
 	// WebSocketRegistry tracks live WebSocket connections.
 	WebSocketRegistry *marasiws.Registry
 	// WebSocketInterceptor pauses WebSocket messages for manual inspection.
@@ -309,7 +310,9 @@ func (proxy *Proxy) SetProjectResources(resources ProjectResources) {
 	proxy.DBCloser = resources.Repository
 	proxy.Extensions = resources.Extensions
 	proxy.Scope = resources.Scope
-	proxy.Waypoints = resources.Waypoints
+	proxy.waypointMu.Lock()
+	proxy.Waypoints = cloneWaypointRoutes(resources.Waypoints)
+	proxy.waypointMu.Unlock()
 	proxy.Armory = resources.Armory
 	proxy.ReportGenerator = resources.ReportGenerator
 }
@@ -326,8 +329,32 @@ func (proxy *Proxy) AddResponseModifier(modifier ResponseModifierFunc) {
 	proxy.Modifiers.AddResponseModifier(adapter)
 }
 
-// SyncWaypoints fetches the latest waypoints from the repository and updates the proxy's in-memory map.
+// ApplyWaypointChange persists a waypoint change and publishes the resulting
+// routes as one snapshot. change reports whether that snapshot should replace
+// the live routes. change must not call back into the proxy.
+func (proxy *Proxy) ApplyWaypointChange(change func(domain.WaypointRepository) (publish bool, err error)) (bool, error) {
+	proxy.waypointMu.Lock()
+	defer proxy.waypointMu.Unlock()
+	if proxy.WaypointRepo == nil {
+		return false, fmt.Errorf("WaypointRepository not set")
+	}
+	publish, err := change(proxy.WaypointRepo)
+	if err != nil || !publish {
+		return false, err
+	}
+	return true, proxy.publishWaypointSnapshot()
+}
+
+// SyncWaypoints reloads waypoints and publishes them as the live routing snapshot.
 func (proxy *Proxy) SyncWaypoints() error {
+	proxy.waypointMu.Lock()
+	defer proxy.waypointMu.Unlock()
+	return proxy.publishWaypointSnapshot()
+}
+
+// publishWaypointSnapshot reloads waypoints and replaces the live snapshot.
+// The caller holds waypointMu.
+func (proxy *Proxy) publishWaypointSnapshot() error {
 	if proxy.WaypointRepo == nil {
 		return fmt.Errorf("WaypointRepository not set")
 	}
@@ -337,14 +364,33 @@ func (proxy *Proxy) SyncWaypoints() error {
 		return err
 	}
 
-	waypointsMap := make(map[string]string)
+	waypointsMap := make(map[string]string, len(waypointSlice))
 	for _, waypoint := range waypointSlice {
 		waypointsMap[waypoint.Hostname] = waypoint.Override
 	}
-
 	proxy.Waypoints = waypointsMap
 	return nil
+}
 
+func (proxy *Proxy) waypointOverride(hostport string) (string, bool) {
+	proxy.waypointMu.RLock()
+	defer proxy.waypointMu.RUnlock()
+	if proxy.Waypoints == nil {
+		return "", false
+	}
+	override, ok := proxy.Waypoints[hostport]
+	return override, ok
+}
+
+func cloneWaypointRoutes(routes map[string]string) map[string]string {
+	if routes == nil {
+		return nil
+	}
+	snapshot := make(map[string]string, len(routes))
+	for hostname, override := range routes {
+		snapshot[hostname] = override
+	}
+	return snapshot
 }
 
 // GetExtension retrieves a loaded extension by its name.

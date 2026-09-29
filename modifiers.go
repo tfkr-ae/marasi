@@ -255,7 +255,7 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 // TODO should allow TLS -> Non TLS override
 func OverrideWaypointsModifier(proxy *Proxy, req *http.Request) error {
 	if metadata, ok := core.MetadataFromContext(req.Context()); ok {
-		if override, ok := proxy.Waypoints[getHostPort(req)]; ok {
+		if override, ok := proxy.waypointOverride(getHostPort(req)); ok {
 			metadata["original_host"] = getHostPort(req)
 			metadata["override_host"] = override
 			*req = *core.ContextWithMetadata(req, metadata)
