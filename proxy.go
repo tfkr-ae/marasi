@@ -660,6 +660,11 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 	if proxy.dbWriterStarted.CompareAndSwap(false, true) {
 		go proxy.WriteToDB()
 	}
+	// Binding queues "Marasi Service Started" before the writer runs. Publish
+	// it before the listener reports ready, or a subscriber can see it late.
+	if err := proxy.flushDBWrites(); err != nil {
+		return err
+	}
 	roundTripper := newMarasiTransport(proxy.Cert)
 	proxy.martianProxy.SetRoundTripper(roundTripper)
 	proxy.listenerMu.Lock()

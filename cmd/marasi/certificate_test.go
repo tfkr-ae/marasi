@@ -51,6 +51,10 @@ func TestCertificateCommandLifecycle(t *testing.T) {
 	}
 
 	startNamedInstance(t, binary, configDir, "work", "--project-name", "certificate-one")
+	logsStdout, logsStderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "logs")
+	if err != nil || logsStderr != "" || !strings.Contains(logsStdout, "Marasi Service Started") {
+		t.Fatalf("startup log was not published before service start returned: stdout %q, stderr %q, error %v", logsStdout, logsStderr, err)
+	}
 	certificatePEM, err := os.ReadFile(filepath.Join(configDir, "marasi_cert.pem"))
 	if err != nil {
 		t.Fatalf("reading published CA certificate: %v", err)
