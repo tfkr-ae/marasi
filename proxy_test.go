@@ -1092,37 +1092,45 @@ func TestProxy_CloseWebSocketsClosesActiveSession(t *testing.T) {
 		t.Fatal("active websocket session did not stop")
 	}
 
-	for _, wantDirection := range []string{marasiws.DirectionFromClient, marasiws.DirectionFromServer} {
+	closes := map[string]*domain.WebSocketMessage{}
+	var sawUpdate bool
+	for len(closes) < 2 || !sawUpdate {
 		item := receiveSessionDBWrite(t, proxy.DBWriteChannel)
-		message, ok := item.(*domain.WebSocketMessage)
-		if !ok {
-			t.Fatalf("wanted websocket close message, got %T", item)
+		switch item := item.(type) {
+		case *domain.WebSocketMessage:
+			if item.Opcode != marasiws.OpClose {
+				t.Fatalf("\nwanted close opcode:\n%d\ngot:\n%d", marasiws.OpClose, item.Opcode)
+			}
+			code, reason, err := marasiws.ParseClosePayload(item.Payload)
+			if err != nil {
+				t.Fatalf("parsing persisted close payload: %v", err)
+			}
+			if code != marasiws.CloseGoingAway || reason != "listener stopped" {
+				t.Fatalf("\nwanted close details:\n%d %q\ngot:\n%d %q", marasiws.CloseGoingAway, "listener stopped", code, reason)
+			}
+			generated, _ := item.Metadata["generated"].(bool)
+			if generated != (item.Direction == marasiws.DirectionFromClient) {
+				t.Fatalf(
+					"\nwanted generated metadata:\n%v\ngot:\n%v",
+					item.Direction == marasiws.DirectionFromClient,
+					item.Metadata["generated"],
+				)
+			}
+			if _, exists := closes[item.Direction]; exists {
+				t.Fatalf("duplicate websocket close direction %q", item.Direction)
+			}
+			if item.Direction != marasiws.DirectionFromClient && item.Direction != marasiws.DirectionFromServer {
+				t.Fatalf("unexpected websocket close direction %q", item.Direction)
+			}
+			closes[item.Direction] = item
+		case *domain.WebSocketConnectionUpdate:
+			if sawUpdate {
+				t.Fatalf("duplicate websocket connection update")
+			}
+			sawUpdate = true
+		default:
+			t.Fatalf("wanted websocket close message or connection update, got %T", item)
 		}
-		if message.Direction != wantDirection {
-			t.Fatalf("\nwanted close direction:\n%q\ngot:\n%q", wantDirection, message.Direction)
-		}
-		if message.Opcode != marasiws.OpClose {
-			t.Fatalf("\nwanted close opcode:\n%d\ngot:\n%d", marasiws.OpClose, message.Opcode)
-		}
-		code, reason, err := marasiws.ParseClosePayload(message.Payload)
-		if err != nil {
-			t.Fatalf("parsing persisted close payload: %v", err)
-		}
-		if code != marasiws.CloseGoingAway || reason != "listener stopped" {
-			t.Fatalf("\nwanted close details:\n%d %q\ngot:\n%d %q", marasiws.CloseGoingAway, "listener stopped", code, reason)
-		}
-		generated, _ := message.Metadata["generated"].(bool)
-		if generated != (wantDirection == marasiws.DirectionFromClient) {
-			t.Fatalf(
-				"\nwanted generated metadata:\n%v\ngot:\n%v",
-				wantDirection == marasiws.DirectionFromClient,
-				message.Metadata["generated"],
-			)
-		}
-	}
-	item := receiveSessionDBWrite(t, proxy.DBWriteChannel)
-	if _, ok := item.(*domain.WebSocketConnectionUpdate); !ok {
-		t.Fatalf("wanted websocket connection update, got %T", item)
 	}
 
 	for name, resultChannel := range map[string]<-chan frameResult{
