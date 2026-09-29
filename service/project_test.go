@@ -323,6 +323,60 @@ func TestProjectLifecycle(t *testing.T) {
 		releaseNew()
 	})
 
+	t.Run("should admit nested work during extension execution and hold it after", func(t *testing.T) {
+		lifecycle, _, dir := newTestProjectLifecycle(t)
+		oldPath := canonicalProjectPath(t, filepath.Join(dir, "old.marasi"))
+		target := canonicalProjectPath(t, filepath.Join(dir, "target.marasi"))
+		if err := lifecycle.Open(context.Background(), oldPath); err != nil {
+			t.Fatalf("opening old project: %v", err)
+		}
+		releaseOld, err := lifecycle.Admit(context.Background())
+		if err != nil {
+			t.Fatalf("admitting extension execution: %v", err)
+		}
+		endExecution := lifecycle.gate.trackExtension()
+		result := make(chan error, 1)
+		go func() { result <- lifecycle.Open(context.Background(), target) }()
+		deadline := time.Now().Add(time.Second)
+		for {
+			lifecycle.gate.mu.Lock()
+			blocked := lifecycle.gate.blocked
+			lifecycle.gate.mu.Unlock()
+			if blocked {
+				break
+			}
+			if time.Now().After(deadline) {
+				endExecution()
+				releaseOld()
+				t.Fatal("handoff did not block")
+			}
+			time.Sleep(time.Millisecond)
+		}
+
+		nested, err := lifecycle.Admit(context.Background())
+		if err != nil {
+			endExecution()
+			releaseOld()
+			t.Fatalf("admitting nested work: %v", err)
+		}
+		nested()
+		endExecution()
+
+		plain, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		if _, err := lifecycle.Admit(plain); !errors.Is(err, context.DeadlineExceeded) {
+			releaseOld()
+			t.Fatalf("\nwanted:\nnew work to wait after extension execution\ngot:\n%v", err)
+		}
+		releaseOld()
+		if err := <-result; err != nil {
+			t.Fatalf("opening target: %v", err)
+		}
+		if lifecycle.Path() != target {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", target, lifecycle.Path())
+		}
+	})
+
 	t.Run("should serialize simultaneous handoffs", func(t *testing.T) {
 		lifecycle, _, dir := newTestProjectLifecycle(t)
 		initial := canonicalProjectPath(t, filepath.Join(dir, "initial.marasi"))

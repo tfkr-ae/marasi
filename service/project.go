@@ -425,10 +425,11 @@ func ResolveProjectPath(path string) (string, error) {
 var _ extensions.ProxyService = stagedExtensionService{}
 
 type projectGate struct {
-	mu      sync.Mutex
-	changed chan struct{}
-	blocked bool
-	active  int
+	mu                  sync.Mutex
+	changed             chan struct{}
+	blocked             bool
+	active              int
+	extensionExecutions int
 }
 
 func newProjectGate() *projectGate {
@@ -440,10 +441,32 @@ func (gate *projectGate) signal() {
 	gate.changed = make(chan struct{})
 }
 
+// trackExtension counts an in-flight extension execution as project-owned work.
+// The returned release is idempotent.
+func (gate *projectGate) trackExtension() func() {
+	gate.mu.Lock()
+	gate.extensionExecutions++
+	gate.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			gate.mu.Lock()
+			gate.extensionExecutions--
+			gate.signal()
+			gate.mu.Unlock()
+		})
+	}
+}
+
 func (gate *projectGate) admit(ctx context.Context) (func(), error) {
 	for {
 		gate.mu.Lock()
-		if !gate.blocked {
+		// Extension Lua may send through the proxy while a handoff is blocked
+		// on that execution. CONNECT does not carry x-extension-id, so a nested
+		// admit cannot be recognized on the request. Any admit proceeds until
+		// the execution finishes. The count keeps the handoff from closing the
+		// project, and the admit still takes a slot the handoff waits for.
+		if !gate.blocked || gate.extensionExecutions > 0 {
 			gate.active++
 			gate.mu.Unlock()
 			var once sync.Once
@@ -480,7 +503,7 @@ func (gate *projectGate) block(ctx context.Context, abort <-chan struct{}) (func
 	gate.mu.Lock()
 	gate.blocked = true
 	gate.signal()
-	for gate.active != 0 {
+	for gate.active != 0 || gate.extensionExecutions != 0 {
 		changed := gate.changed
 		gate.mu.Unlock()
 		select {

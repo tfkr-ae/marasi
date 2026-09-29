@@ -154,7 +154,8 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 		writeJSON(w, r, http.StatusOK, envelope)
 	})
 
-	// CallFunction can send through the proxy, which admits again. Release first.
+	// CallFunction can send through the proxy. Keep the execution project-owned
+	// until it returns; nested admits proceed so a switch cannot deadlock on it.
 	raw.HandleFunc("POST /extension/{id}/call", func(w http.ResponseWriter, r *http.Request) {
 		release, admitted := admitProjectWork(projects, w, r)
 		if !admitted {
@@ -179,7 +180,8 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			writeExtensionError(w, r, http.StatusNotFound, "function_not_found")
 			return
 		}
-		release()
+		endExecution := trackExtensionExecution(projects)
+		defer endExecution()
 		if err := runtime.CallFunction(name, args...); err != nil {
 			writeExtensionError(w, r, http.StatusBadRequest, "lua_error")
 			return
@@ -221,7 +223,8 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 		writeJSON(w, r, http.StatusOK, summary)
 	})
 
-	// ExecuteLua can send through the proxy. Keep admission only around the repo write.
+	// ExecuteLua can send through the proxy. Keep the execution project-owned
+	// until it returns; nested admits proceed so a switch cannot deadlock on it.
 	raw.HandleFunc("POST /extension/{id}", func(w http.ResponseWriter, r *http.Request) {
 		release, admitted := admitProjectWork(projects, w, r)
 		if !admitted {
@@ -264,7 +267,8 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 		runtime.Data.Enabled = stored.Enabled
 		runtime.Data.UpdatedAt = stored.UpdatedAt
 		events.publish("extension.updated", extensionSummaryFromRuntime(runtime))
-		release()
+		endExecution := trackExtensionExecution(projects)
+		defer endExecution()
 		if err := runtime.ExecuteLua(lua); err != nil {
 			writeExtensionError(w, r, http.StatusBadRequest, "lua_error")
 			return
@@ -419,6 +423,13 @@ func parseExtensionID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) 
 		return uuid.Nil, false
 	}
 	return id, true
+}
+
+func trackExtensionExecution(projects *ProjectLifecycle) func() {
+	if projects == nil {
+		return func() {}
+	}
+	return projects.gate.trackExtension()
 }
 
 func writeExtensionError(w http.ResponseWriter, r *http.Request, status int, code string) {

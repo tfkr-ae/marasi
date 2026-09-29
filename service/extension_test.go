@@ -1,13 +1,17 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -707,4 +711,217 @@ func preparedWorkshop(t *testing.T, lua string) (domain.ExtensionRepository, *ex
 		t.Fatalf("preparing workshop: %v", err)
 	}
 	return repo, runtime
+}
+
+func TestExtensionExecutionOwnsProject(t *testing.T) {
+	workshopID := uuid.MustParse("01937d13-9632-7f84-add5-14ec2c2c7f43")
+
+	t.Run("should keep a function call on its project through a nested proxy admit", func(t *testing.T) {
+		assertExtensionLuaOwnsProject(t, workshopID, func(holdURL, nestURL string) string {
+			return fmt.Sprintf(`function poke()
+  local res, err = marasi:builder():set_method("GET"):set_url("%s"):send()
+  if not res then error(err) end
+  res, err = marasi:builder():set_method("GET"):set_url("%s"):send()
+  if not res then error(err) end
+  marasi.settings:set({phase = "saved"})
+end`, holdURL, nestURL)
+		}, func(t *testing.T, server *Server, id uuid.UUID, body string) {
+			t.Helper()
+			installed := requestControlAPI(server, http.MethodPost, "/extension/"+id.String(), body)
+			if installed.Code != http.StatusOK {
+				t.Fatalf("\nwanted:\n200 installing poke\ngot:\n%d %s", installed.Code, installed.Body.String())
+			}
+		}, func(server *Server, id uuid.UUID, body string) *httptest.ResponseRecorder {
+			return requestControlAPI(server, http.MethodPost, "/extension/"+id.String()+"/call", `{"function":"poke"}`)
+		})
+	})
+
+	t.Run("should keep a lua update on its project through a nested proxy admit", func(t *testing.T) {
+		assertExtensionLuaOwnsProject(t, workshopID, func(holdURL, nestURL string) string {
+			return fmt.Sprintf(`local res, err = marasi:builder():set_method("GET"):set_url("%s"):send()
+if not res then error(err) end
+res, err = marasi:builder():set_method("GET"):set_url("%s"):send()
+if not res then error(err) end
+marasi.settings:set({phase = "saved"})
+`, holdURL, nestURL)
+		}, nil, func(server *Server, id uuid.UUID, body string) *httptest.ResponseRecorder {
+			return requestControlAPI(server, http.MethodPost, "/extension/"+id.String(), body)
+		})
+	})
+}
+
+// assertExtensionLuaOwnsProject runs Lua that blocks, then admits like a nested
+// proxy request, then writes settings. A concurrent project switch must wait
+// until that Lua finishes, and the nested admit must not deadlock the switch.
+func assertExtensionLuaOwnsProject(t *testing.T, id uuid.UUID, lua func(holdURL, nestURL string) string, prepare func(*testing.T, *Server, uuid.UUID, string), start func(*Server, uuid.UUID, string) *httptest.ResponseRecorder) {
+	t.Helper()
+	server, lifecycle, dir, current := newProjectOpenServer(t)
+	if err := lifecycle.proxy.WithOptions(marasi.WithBasePipeline()); err != nil {
+		t.Fatalf("installing proxy pipeline: %v", err)
+	}
+	listener := NewListenerLifecycle(lifecycle.proxy, io.Discard)
+	t.Cleanup(func() {
+		if err := listener.Shutdown(); err != nil {
+			t.Errorf("shutting down listener: %v", err)
+		}
+	})
+	if _, err := listener.Start(context.Background(), listenerSettings("127.0.0.1", 0)); err != nil {
+		t.Fatalf("starting proxy listener: %v", err)
+	}
+	proxyTransport := lifecycle.proxy.Client.Transport
+	target := canonicalProjectPath(t, filepath.Join(dir, "during-lua.marasi"))
+	hold := &extensionLuaHold{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		nested:  make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	releaseHold := func() { releaseOnce.Do(func() { close(hold.release) }) }
+	t.Cleanup(releaseHold)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/hold":
+			close(hold.entered)
+			<-hold.release
+		case "/nest":
+			close(hold.nested)
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	t.Cleanup(origin.Close)
+
+	direct := &http.Transport{}
+	t.Cleanup(direct.CloseIdleConnections)
+	lifecycle.proxy.Client.Transport = direct
+	admittedWhileBlocked := false
+	var admittedMu sync.Mutex
+	if err := lifecycle.proxy.WithOptions(marasi.WithWorkAdmission(func(ctx context.Context) (func(), error) {
+		release, err := lifecycle.Admit(ctx)
+		if err != nil {
+			return nil, err
+		}
+		lifecycle.gate.mu.Lock()
+		blocked := lifecycle.gate.blocked
+		lifecycle.gate.mu.Unlock()
+		if blocked {
+			admittedMu.Lock()
+			admittedWhileBlocked = true
+			admittedMu.Unlock()
+		}
+		return release, nil
+	})); err != nil {
+		t.Fatalf("wrapping work admission: %v", err)
+	}
+
+	script := lua(origin.URL+"/hold", origin.URL+"/nest")
+	encoded, err := json.Marshal(map[string]string{"lua_content": script})
+	if err != nil {
+		t.Fatalf("encoding lua: %v", err)
+	}
+	body := string(encoded)
+	if prepare != nil {
+		prepare(t, server, id, body)
+	}
+
+	ownedDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		ownedDone <- start(server, id, body)
+	}()
+	select {
+	case <-hold.entered:
+	case response := <-ownedDone:
+		t.Fatalf("\nwanted:\nlua to reach its proxy send\ngot:\n%d %s", response.Code, response.Body.String())
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for extension lua to send")
+	}
+
+	openDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		request := httptest.NewRequest(http.MethodPost, "/project/open", strings.NewReader(projectOpenBody(target)))
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		openDone <- response
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		select {
+		case response := <-openDone:
+			releaseHold()
+			t.Fatalf("\nwanted:\nswitch to wait while extension lua runs\ngot:\n%d %s", response.Code, response.Body.String())
+		default:
+		}
+		lifecycle.gate.mu.Lock()
+		blocked := lifecycle.gate.blocked
+		lifecycle.gate.mu.Unlock()
+		if blocked && lifecycle.Path() == current {
+			break
+		}
+		if time.Now().After(deadline) {
+			releaseHold()
+			t.Fatal("switch did not stop for in-flight extension lua")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	lifecycle.proxy.Client.Transport = proxyTransport
+	releaseHold()
+
+	deadline = time.Now().Add(5 * time.Second)
+	var opened *httptest.ResponseRecorder
+	var owned *httptest.ResponseRecorder
+	nestedSeen := false
+	for !nestedSeen || owned == nil || opened == nil {
+		var nested <-chan struct{}
+		if !nestedSeen {
+			nested = hold.nested
+		}
+		select {
+		case <-nested:
+			nestedSeen = true
+		case response := <-openDone:
+			opened = response
+		case response := <-ownedDone:
+			owned = response
+		case <-time.After(time.Until(deadline)):
+			t.Fatal("nested proxy admit deadlocked the project switch")
+		}
+	}
+	admittedMu.Lock()
+	blockedAdmit := admittedWhileBlocked
+	admittedMu.Unlock()
+	if !blockedAdmit {
+		t.Fatal("\nwanted:\nnested proxy admit while the switch was blocked\ngot:\nadmit after the gate reopened")
+	}
+	if owned.Code != http.StatusOK {
+		t.Fatalf("\nwanted:\n200 after settings write\ngot:\n%d %s", owned.Code, owned.Body.String())
+	}
+	if opened.Code != http.StatusOK {
+		t.Fatalf("\nwanted:\nswitch after extension lua\ngot:\n%d %s", opened.Code, opened.Body.String())
+	}
+	if lifecycle.Path() != target {
+		t.Fatalf("\nwanted:\n%s\ngot:\n%s", target, lifecycle.Path())
+	}
+
+	conn, err := db.New(current, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("reopening original project: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	stored, err := db.NewProxyRepo(conn).GetExtensionSettingsByUUID(id)
+	if err != nil {
+		t.Fatalf("reading settings from original project: %v", err)
+	}
+	if !reflect.DeepEqual(stored, map[string]any{"phase": "saved"}) {
+		t.Fatalf("\nwanted:\nsettings written on the original project\ngot:\n%v", stored)
+	}
+}
+
+type extensionLuaHold struct {
+	entered chan struct{}
+	release chan struct{}
+	nested  chan struct{}
 }
