@@ -116,18 +116,11 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 	targetProject := &openProject{path: path, resources: resources, unlock: unlock}
 
 	old := lifecycle.openProject()
-	if lifecycle.projectBusy(old) {
-		return errors.Join(ErrProjectBusy, cleanupPreparedProject(path, true, resources, unlock))
-	}
-
-	unblock, err := lifecycle.gate.block(ctx)
+	unblock, err := lifecycle.waitForHandoff(ctx, old)
 	if err != nil {
 		return errors.Join(err, cleanupPreparedProject(path, true, resources, unlock))
 	}
 	defer unblock()
-	if lifecycle.projectBusy(old) {
-		return errors.Join(ErrProjectBusy, cleanupPreparedProject(path, true, resources, unlock))
-	}
 	if err := ctx.Err(); err != nil {
 		return errors.Join(err, cleanupPreparedProject(path, true, resources, unlock))
 	}
@@ -189,6 +182,32 @@ func (repository *eventLogRepository) startPublishing() {
 	}
 }
 
+// waitForHandoff blocks admission until in-flight work finishes. A Checkpoint
+// hold that begins during the wait cannot be resolved until admission reopens,
+// so the handoff stops instead of waiting for that hold.
+func (lifecycle *ProjectLifecycle) waitForHandoff(ctx context.Context, project *openProject) (func(), error) {
+	held := lifecycle.proxy.CheckpointHoldStarted()
+	if lifecycle.projectBusy(project) {
+		return nil, ErrProjectBusy
+	}
+	unblock, err := lifecycle.gate.block(ctx, held)
+	if errors.Is(err, errBlockAborted) {
+		return nil, ErrProjectBusy
+	}
+	if err != nil {
+		return nil, err
+	}
+	if lifecycle.projectBusy(project) {
+		unblock()
+		return nil, ErrProjectBusy
+	}
+	if err := ctx.Err(); err != nil {
+		unblock()
+		return nil, err
+	}
+	return unblock, nil
+}
+
 func (lifecycle *ProjectLifecycle) projectBusy(project *openProject) bool {
 	if project != nil && project.resources.Armory != nil && len(project.resources.Armory.ActiveRunIDs()) != 0 {
 		return true
@@ -209,7 +228,7 @@ func (lifecycle *ProjectLifecycle) Shutdown() error {
 	if project == nil {
 		return nil
 	}
-	unblock, err := lifecycle.gate.block(context.Background())
+	unblock, err := lifecycle.gate.block(context.Background(), nil)
 	if err != nil {
 		return err
 	}
@@ -447,7 +466,17 @@ func (gate *projectGate) admit(ctx context.Context) (func(), error) {
 	}
 }
 
-func (gate *projectGate) block(ctx context.Context) (func(), error) {
+var errBlockAborted = errors.New("admission block aborted")
+
+func (gate *projectGate) abortBlock(err error) (func(), error) {
+	gate.mu.Lock()
+	gate.blocked = false
+	gate.signal()
+	gate.mu.Unlock()
+	return nil, err
+}
+
+func (gate *projectGate) block(ctx context.Context, abort <-chan struct{}) (func(), error) {
 	gate.mu.Lock()
 	gate.blocked = true
 	gate.signal()
@@ -456,11 +485,9 @@ func (gate *projectGate) block(ctx context.Context) (func(), error) {
 		gate.mu.Unlock()
 		select {
 		case <-ctx.Done():
-			gate.mu.Lock()
-			gate.blocked = false
-			gate.signal()
-			gate.mu.Unlock()
-			return nil, ctx.Err()
+			return gate.abortBlock(ctx.Err())
+		case <-abort:
+			return gate.abortBlock(errBlockAborted)
 		case <-changed:
 			gate.mu.Lock()
 		}

@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 )
@@ -25,7 +27,7 @@ func newProjectOpenServer(t *testing.T) (*Server, *ProjectLifecycle, string, str
 	if err := lifecycle.Open(context.Background(), current); err != nil {
 		t.Fatalf("opening current project: %v", err)
 	}
-	server := NewServer(nil, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, lifecycle, func() {}, "dev", "default", current)
+	server := NewServer(lifecycle.proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, lifecycle, func() {}, "dev", "default", current)
 	return server, lifecycle, dir, current
 }
 
@@ -153,6 +155,91 @@ func TestProjectOpen(t *testing.T) {
 		status = requestListener(t, server, http.MethodGet, "/service/status", "")
 		if status.Code != http.StatusOK || status.Body.String() != wantStatus {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%d %s", wantStatus, status.Code, status.Body.String())
+		}
+	})
+
+	t.Run("should refuse open when interception begins during handoff", func(t *testing.T) {
+		server, lifecycle, dir, current := newProjectOpenServer(t)
+		if err := lifecycle.proxy.WithOptions(marasi.WithExtension(&domain.Extension{
+			Name:    "checkpoint",
+			ID:      uuid.MustParse("01937d13-9632-75b1-9e73-c5129b06fa8c"),
+			Enabled: true,
+			LuaContent: `
+				function interceptRequest(request)
+					return false
+				end
+				function interceptResponse(response)
+					return false
+				end
+			`,
+		})); err != nil {
+			t.Fatalf("loading checkpoint: %v", err)
+		}
+		lifecycle.proxy.SetIntercept(true)
+		target := canonicalProjectPath(t, filepath.Join(dir, "during-handoff.marasi"))
+		release, err := lifecycle.Admit(context.Background())
+		if err != nil {
+			t.Fatalf("admitting in-flight work: %v", err)
+		}
+		defer release()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		openResult := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			request := httptest.NewRequest(http.MethodPost, "/project/open", strings.NewReader(projectOpenBody(target))).WithContext(ctx)
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			openResult <- response
+		}()
+		deadline := time.Now().Add(time.Second)
+		for {
+			admitCtx, admitCancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+			extra, admitErr := lifecycle.Admit(admitCtx)
+			admitCancel()
+			if errors.Is(admitErr, context.DeadlineExceeded) {
+				break
+			}
+			if extra != nil {
+				extra()
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("open did not pause project work")
+			}
+		}
+
+		responseID, holdDone := startCheckpointHTTPResponseHold(t, lifecycle.proxy)
+		waitForCheckpointItems(t, lifecycle.proxy, 1)
+		select {
+		case response := <-openResult:
+			assertProjectError(t, response, http.StatusConflict, "project_busy")
+		case <-time.After(2 * time.Second):
+			t.Fatal("open stalled after interception began during handoff")
+		}
+		if lifecycle.Path() != current {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", current, lifecycle.Path())
+		}
+		if !lifecycle.proxy.HasPendingCheckpoint() {
+			t.Fatal("\nwanted:\nintercept left pending\ngot:\nqueue cleared")
+		}
+
+		dropResult := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			dropResult <- requestControlAPI(server, http.MethodPost, "/checkpoint/"+responseID.String()+"/drop", "{}")
+		}()
+		select {
+		case response := <-dropResult:
+			assertControlAPIResponse(t, response, http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false}`+"\n")
+		case <-time.After(2 * time.Second):
+			t.Fatal("response drop waited for project handoff")
+		}
+		if err := receiveCheckpointHold(t, holdDone); !errors.Is(err, marasi.ErrDropped) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", marasi.ErrDropped, err)
+		}
+		wantCurrent := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null}\n", current)
+		status := requestListener(t, server, http.MethodGet, "/service/status", "")
+		if status.Code != http.StatusOK || status.Body.String() != wantCurrent {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%d %s", wantCurrent, status.Code, status.Body.String())
 		}
 	})
 

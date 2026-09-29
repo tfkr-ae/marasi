@@ -54,17 +54,24 @@ type httpHoldResult struct {
 }
 
 type checkpointState struct {
-	mu     sync.Mutex
-	http   map[uuid.UUID]*pendingHTTP
-	order  []uuid.UUID
-	wsConn map[uuid.UUID]uuid.UUID
+	mu          sync.Mutex
+	http        map[uuid.UUID]*pendingHTTP
+	order       []uuid.UUID
+	wsConn      map[uuid.UUID]uuid.UUID
+	holdStarted chan struct{}
 }
 
 func newCheckpointState() *checkpointState {
 	return &checkpointState{
-		http:   make(map[uuid.UUID]*pendingHTTP),
-		wsConn: make(map[uuid.UUID]uuid.UUID),
+		http:        make(map[uuid.UUID]*pendingHTTP),
+		wsConn:      make(map[uuid.UUID]uuid.UUID),
+		holdStarted: make(chan struct{}),
 	}
+}
+
+func (state *checkpointState) signalHoldStarted() {
+	close(state.holdStarted)
+	state.holdStarted = make(chan struct{})
 }
 
 func cloneCheckpointItem(item domain.CheckpointItem) domain.CheckpointItem {
@@ -99,6 +106,19 @@ func (proxy *Proxy) SetIntercept(enabled bool) {
 // GetIntercept reports whether global HTTP Checkpoint is enabled.
 func (proxy *Proxy) GetIntercept() bool {
 	return proxy.httpIntercept.Load()
+}
+
+// CheckpointHoldStarted returns a channel closed when the next Checkpoint item
+// becomes pending. A hold replaces the channel, so callers must re-check
+// HasPendingCheckpoint after receiving.
+func (proxy *Proxy) CheckpointHoldStarted() <-chan struct{} {
+	state := proxy.checkpoint
+	if state == nil {
+		return nil
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.holdStarted
 }
 
 // HasPendingCheckpoint reports whether any HTTP or WebSocket Checkpoint item is pending.
@@ -265,6 +285,7 @@ func (proxy *Proxy) holdHTTP(item domain.CheckpointItem, req *http.Request, res 
 	}
 	proxy.checkpoint.http[item.ID] = pending
 	proxy.checkpoint.order = append(proxy.checkpoint.order, item.ID)
+	proxy.checkpoint.signalHoldStarted()
 	notify := proxy.OnIntercept
 	proxy.checkpoint.mu.Unlock()
 
@@ -394,6 +415,7 @@ func (proxy *Proxy) noteWebSocketHold(message *marasiws.Message) {
 	}
 	proxy.checkpoint.wsConn[message.ID] = message.ConnectionID
 	proxy.checkpoint.order = append(proxy.checkpoint.order, message.ID)
+	proxy.checkpoint.signalHoldStarted()
 }
 
 func (proxy *Proxy) forgetCheckpoint(id uuid.UUID) {
