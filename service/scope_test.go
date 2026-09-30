@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/tfkr-ae/marasi"
@@ -54,6 +55,112 @@ func TestScopeCheck(t *testing.T) {
 		default:
 		}
 	})
+}
+
+func TestScopeCheckConcurrentLuaEdits(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		script string
+	}{
+		{
+			name: "rule additions and removals",
+			script: `for i=1,2000 do
+    s:add_rule('race'..i, 'HOST')
+    s:add_rule('-race'..i, 'url')
+    s:remove_rule('race'..i, 'host')
+    s:remove_rule('-race'..i, 'URL')
+end`,
+		},
+		{
+			name: "default policy changes and clears",
+			script: `for i=1,2000 do
+    s:set_default_allow(i % 2 == 0)
+    s:add_rule('example', 'host')
+    s:add_rule('-example', 'url')
+    s:clear_rules()
+end`,
+		},
+	} {
+		t.Run("should allow scope reads during Lua "+test.name, func(t *testing.T) {
+			scope := compass.NewScope(false)
+			proxy := &marasi.Proxy{Scope: scope}
+			writer := &extensions.Runtime{Data: &domain.Extension{
+				Name:       "scope-writer",
+				LuaContent: "function mutate() local s=marasi:scope(); " + test.script + " end",
+			}}
+			reader := &extensions.Runtime{Data: &domain.Extension{
+				Name: "scope-reader",
+				LuaContent: `function read()
+    local s=marasi:scope()
+    for i=1,2000 do
+        assert(type(tostring(s)) == 'string')
+        s:matches_string('example.com', 'HOST')
+    end
+end`,
+			}}
+			for _, runtime := range []*extensions.Runtime{writer, reader} {
+				if err := runtime.PrepareState(proxy, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			server := httptest.NewServer(newTestServer(proxy, func() {}))
+			defer server.Close()
+			start := make(chan struct{})
+			var workers sync.WaitGroup
+			for runtime, function := range map[*extensions.Runtime]string{writer: "mutate", reader: "read"} {
+				workers.Go(func() {
+					<-start
+					if err := runtime.CallFunction(function); err != nil {
+						t.Errorf("calling Lua %s: %v", function, err)
+					}
+				})
+			}
+			workers.Go(func() {
+				<-start
+				request := httptest.NewRequest(http.MethodGet, "https://example.com", nil)
+				for i := 0; i < 2000; i++ {
+					scope.Matches(request)
+					scope.Matches(&http.Response{})
+					scope.Matches(nil)
+					scope.MatchesString("example.com", "invalid")
+					includes, excludes, _ := scope.Snapshot()
+					// Mutating a snapshot must not mutate the live rule maps.
+					clear(includes)
+					clear(excludes)
+				}
+			})
+			close(start)
+			// Join even when an HTTP assertion fails, before the test server closes.
+			defer workers.Wait()
+			for i := 0; i < 2000; i++ {
+				response, err := server.Client().Post(server.URL+"/scope/check", "application/json", strings.NewReader(`{"url":"https://example.com"}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got scopeCheckResponse
+				err = json.NewDecoder(response.Body).Decode(&got)
+				response.Body.Close()
+				if err != nil || response.StatusCode != http.StatusOK || got.TestedURL != "https://example.com" || got.CompassEnabled {
+					t.Fatalf("\nwanted:\n200 scope result\ngot:\n%d %+v error=%v", response.StatusCode, got, err)
+				}
+				if test.name == "rule additions and removals" && (got.InScope || got.Rule != nil) {
+					t.Fatalf("\nwanted:\ndefault deny without a matching rule\ngot:\n%+v", got)
+				}
+				if got.Rule != nil && (got.Rule.Pattern != "example" || got.InScope != (got.Rule.MatchType == "host")) {
+					t.Fatalf("\nwanted:\nmatching include or exclude from the deciding walk\ngot:\n%+v", got)
+				}
+			}
+			workers.Wait()
+			includes, excludes, defaultAllow := scope.Snapshot()
+			wantDefault := test.name == "default policy changes and clears"
+			if len(includes) != 0 || len(excludes) != 0 || defaultAllow != wantDefault {
+				t.Fatalf("\nwanted:\nempty rule maps and default_allow=%v\ngot:\nincludes=%v excludes=%v default_allow=%v", wantDefault, includes, excludes, defaultAllow)
+			}
+			if scope.Matches(nil) != wantDefault || scope.Matches(&http.Response{}) != wantDefault || scope.MatchesString("example.com", "invalid") != wantDefault {
+				t.Fatalf("\nwanted:\ndefault_allow=%v for unsupported inputs\ngot:\ninconsistent default results", wantDefault)
+			}
+		})
+	}
 }
 
 func TestScopeCheckValidation(t *testing.T) {

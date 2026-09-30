@@ -150,7 +150,7 @@ func RegisterScopeType(extension *Runtime) {
 			scope := lua.CheckUserData(l, 1, "scope").(*compass.Scope)
 			allow := l.ToBoolean(2)
 
-			scope.DefaultAllow = allow
+			scope.SetDefaultAllow(allow)
 			return 0
 		},
 		// matches_string checks if a string matches a specific rule type in the scope.
@@ -177,9 +177,10 @@ func RegisterScopeType(extension *Runtime) {
 
 	RegisterType(extension.LuaState, "scope", funcs, func(l *lua.State) int {
 		scope := lua.CheckUserData(l, 1, "scope").(*compass.Scope)
+		includeRules, excludeRules, defaultAllow := scope.Snapshot()
 
 		policy := "Block"
-		if scope.DefaultAllow {
+		if defaultAllow {
 			policy = "Allow"
 		}
 
@@ -199,8 +200,8 @@ func RegisterScopeType(extension *Runtime) {
 		result := fmt.Sprintf(
 			"Scope (Default: %s)\n  Include Rules:%s\n  Exclude Rules:%s",
 			policy,
-			formatRules(scope.IncludeRules),
-			formatRules(scope.ExcludeRules),
+			formatRules(includeRules),
+			formatRules(excludeRules),
 		)
 
 		l.PushString(result)
