@@ -9,7 +9,7 @@ import (
 	"github.com/tfkr-ae/marasi/domain"
 )
 
-const eventQueueSize = 256
+const eventQueueSize = 1024
 
 // serviceEvent is one Server-Sent Event written to a subscriber.
 type serviceEvent struct {
