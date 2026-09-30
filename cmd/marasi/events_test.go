@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,49 @@ import (
 )
 
 func TestEventsCommand(t *testing.T) {
+	for _, asJSON := range []bool{false, true} {
+		for _, eventName := range []string{"checkpoint.held", "websocket.message"} {
+			t.Run(fmt.Sprintf("should print a large %s and the following event with json %t", eventName, asJSON), func(t *testing.T) {
+				configDir := serviceConfigDir(t)
+				field := "payload"
+				if eventName == "checkpoint.held" {
+					field = "raw"
+				}
+				payload := fmt.Sprintf(`{ "id":"large", "%s":"%s" }`, field, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 50_000)))
+				startCannedEventAPI(t, configDir, "work", func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					body := ": connected\r\n\r\nevent: " + eventName + "\r\ndata: " + payload + "\r\n\r\nevent: checkpoint.updated\r\ndata: {\"intercept\":false}\r\n\r\nevent: incomplete\ndata: {}"
+					for len(body) > 0 {
+						n := min(len(body), 997)
+						if _, err := io.WriteString(w, body[:n]); err != nil {
+							return
+						}
+						w.(http.Flusher).Flush()
+						body = body[n:]
+					}
+				})
+				args := []string{"--config-dir", configDir, "--instance", "work", "events"}
+				want := eventName + " " + payload + "\ncheckpoint.updated {\"intercept\":false}\n"
+				wantStderr := ": connected\n"
+				if asJSON {
+					args = append(args, "--json")
+					want = "{\"event\":\"" + eventName + "\",\"data\":" + payload + "}\n{\"event\":\"checkpoint.updated\",\"data\":{\"intercept\":false}}\n"
+					wantStderr = ""
+				}
+				stdout, stderr, err := runMarasi(buildMarasi(t), args...)
+				if err != nil {
+					t.Fatalf("\nwanted:\nexit status 0\ngot:\n%v\nstderr:\n%s", err, stderr)
+				}
+				if stdout != want {
+					t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
+				}
+				if stderr != wantStderr {
+					t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantStderr, stderr)
+				}
+			})
+		}
+	}
+
 	t.Run("should print the connected comment and one named event", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		sent := startCannedEventAPI(t, configDir, "work", func(w http.ResponseWriter, _ *http.Request) {

@@ -55,12 +55,17 @@ func printEvents(ctx context.Context, instancePath, instanceName string, asJSON 
 		return fmt.Errorf("subscribing to events: %s", response.Status)
 	}
 
-	scanner := bufio.NewScanner(response.Body)
+	reader := bufio.NewReader(response.Body)
 	connected := false
 	eventName := ""
 	data := ""
-	for scanner.Scan() {
-		line := scanner.Text()
+	for {
+		var line string
+		line, err = reader.ReadString('\n')
+		if len(line) == 0 {
+			break
+		}
+		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 		switch {
 		case line == ": connected":
 			connected = true
@@ -85,12 +90,15 @@ func printEvents(ctx context.Context, instancePath, instanceName string, asJSON 
 			}
 			eventName, data = "", ""
 		}
+		if err != nil {
+			break
+		}
 	}
-	if connected && (scanner.Err() == nil || ctx.Err() != nil) {
+	if connected && (err == io.EOF || ctx.Err() != nil) {
 		return nil
 	}
-	if scanner.Err() != nil {
-		return fmt.Errorf("reading events: %w", scanner.Err())
+	if err != io.EOF {
+		return fmt.Errorf("reading events: %w", err)
 	}
 	return fmt.Errorf("instance %s closed the event subscription before connecting", instanceName)
 }
