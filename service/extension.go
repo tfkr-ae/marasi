@@ -180,9 +180,7 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			writeExtensionError(w, r, http.StatusNotFound, "function_not_found")
 			return
 		}
-		endExecution := trackExtensionExecution(projects)
-		defer endExecution()
-		if err := runtime.CallFunction(name, args...); err != nil {
+		if err := runtime.CallFunctionContext(r.Context(), name, args...); err != nil {
 			writeExtensionError(w, r, http.StatusBadRequest, "lua_error")
 			return
 		}
@@ -267,9 +265,7 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 		runtime.Data.Enabled = stored.Enabled
 		runtime.Data.UpdatedAt = stored.UpdatedAt
 		events.publish("extension.updated", extensionSummaryFromRuntime(runtime))
-		endExecution := trackExtensionExecution(projects)
-		defer endExecution()
-		if err := runtime.ExecuteLua(lua); err != nil {
+		if err := runtime.ExecuteLuaContext(r.Context(), lua); err != nil {
 			writeExtensionError(w, r, http.StatusBadRequest, "lua_error")
 			return
 		}
@@ -423,13 +419,6 @@ func parseExtensionID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) 
 		return uuid.Nil, false
 	}
 	return id, true
-}
-
-func trackExtensionExecution(projects *ProjectLifecycle) func() {
-	if projects == nil {
-		return func() {}
-	}
-	return projects.gate.trackExtension()
 }
 
 func writeExtensionError(w http.ResponseWriter, r *http.Request, status int, code string) {

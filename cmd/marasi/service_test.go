@@ -960,6 +960,128 @@ func TestCleanupService(t *testing.T) {
 }
 
 func TestStopService(t *testing.T) {
+	for _, mode := range []string{"API function", "traffic hook"} {
+		t.Run("should cancel non-returning Lua "+mode+" and release instance and project ownership", func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			binary := buildMarasi(t)
+			args := []string{"--config-dir", configDir, "--instance", "lua-stop"}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				_ = exec.CommandContext(ctx, binary, append(args, "service", "stop")...).Run()
+			})
+			stdout, _, err := runMarasi(binary, append(args, "--json", "service", "start", "--port", "0")...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var started map[string]string
+			if err := json.Unmarshal([]byte(stdout), &started); err != nil {
+				t.Fatal(err)
+			}
+			entered := make(chan struct{}, 2)
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				entered <- struct{}{}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer origin.Close()
+			id := "01937d13-9632-7f84-add5-14ec2c2c7f43"
+			script := fmt.Sprintf(`function hang()
+  local res, err = marasi:builder():set_method("GET"):set_url(%q):send()
+  if not res then error(err) end
+  while true do end
+end
+function ping() end`, origin.URL)
+			path := filepath.Join(configDir, "hang.lua")
+			if err := os.WriteFile(path, []byte(script), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := runMarasi(binary, append(args, "extension", "update", id, "--file", path)...); err != nil {
+				t.Fatal(err)
+			}
+			client := service.NewClient(filepath.Join(configDir, "instances", "lua-stop.sock"))
+			defer client.Close()
+			for attempt := 0; attempt < 2; attempt++ {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://marasi/extension/"+id+"/call", strings.NewReader(`{"function":"hang"}`))
+				send := client.Do
+				if attempt == 1 && mode == "traffic hook" {
+					if err := os.WriteFile(path, []byte(script+"\nfunction processRequest(req) hang() end"), 0600); err != nil {
+						t.Fatal(err)
+					}
+					if _, _, err := runMarasi(binary, append(args, "extension", "update", id, "--file", path)...); err != nil {
+						t.Fatal(err)
+					}
+					proxyURL, err := url.Parse("http://" + started["proxy_listener"])
+					if err != nil {
+						t.Fatal(err)
+					}
+					transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+					defer transport.CloseIdleConnections()
+					trafficClient := &http.Client{Transport: transport}
+					send = trafficClient.Do
+					request, err = http.NewRequestWithContext(ctx, http.MethodGet, origin.URL+"/outer", nil)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				done := make(chan error, 1)
+				go func() {
+					response, err := send(request)
+					if response != nil {
+						_, _ = io.Copy(io.Discard, response.Body)
+						response.Body.Close()
+					}
+					done <- err
+				}()
+				select {
+				case <-entered:
+				case <-time.After(5 * time.Second):
+					t.Fatal("Lua did not enter hang")
+				}
+				if attempt == 0 {
+					cancel()
+					pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
+					defer pingCancel()
+					ping, _ := http.NewRequestWithContext(pingCtx, http.MethodPost, "http://marasi/extension/"+id+"/call", strings.NewReader(`{"function":"ping"}`))
+					response, err := client.Do(ping)
+					if err != nil {
+						t.Fatalf("VM kept running after caller disconnect: %v", err)
+					}
+					response.Body.Close()
+					if response.StatusCode != http.StatusOK {
+						t.Fatalf("ping after cancellation: %d", response.StatusCode)
+					}
+				} else {
+					stopCtx, stopCancel := context.WithTimeout(context.Background(), 15*time.Second)
+					defer stopCancel()
+					output, err := exec.CommandContext(stopCtx, binary, append(args, "service", "stop")...).CombinedOutput()
+					if err != nil {
+						t.Fatalf("service stop hung under non-returning Lua: %v %s", err, output)
+					}
+				}
+				select {
+				case <-done:
+				case <-time.After(2 * time.Second):
+					t.Fatal("Lua caller did not finish")
+				}
+			}
+			lock, err := acquireInstanceLock(filepath.Join(configDir, "instances", "lua-stop.lock"))
+			if err != nil {
+				t.Fatalf("instance ownership remains held: %v", err)
+			}
+			if err := errors.Join(filelock.Unlock(lock), lock.Close()); err != nil {
+				t.Fatal(err)
+			}
+			unlock, err := lockProject(filepath.Join(configDir, "projects", "scratchpad.marasi"))
+			if err != nil {
+				t.Fatalf("project ownership remains held: %v", err)
+			}
+			if err := unlock(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 	t.Run("should stop the selected instance and wait for cleanup", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")

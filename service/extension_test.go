@@ -716,8 +716,45 @@ func preparedWorkshop(t *testing.T, lua string) (domain.ExtensionRepository, *ex
 func TestExtensionExecutionOwnsProject(t *testing.T) {
 	workshopID := uuid.MustParse("01937d13-9632-7f84-add5-14ec2c2c7f43")
 
+	for _, hook := range []string{"processRequest", "processResponse", "processRequest HTTPS", "processResponse HTTPS"} {
+		t.Run("should keep traffic "+hook+" on its project through a nested proxy admit", func(t *testing.T) {
+			function := strings.Fields(hook)[0]
+			assertExtensionLuaOwnsProject(t, workshopID, strings.HasSuffix(hook, "HTTPS"), func(holdURL, nestURL string) string {
+				return fmt.Sprintf(`function %s(item)
+  local res, err = marasi:builder():set_method("GET"):set_url("%s"):send()
+  if not res then error(err) end
+  res, err = marasi:builder():set_method("GET"):set_url("%s"):send()
+  if not res then error(err) end
+  marasi.settings:set({phase = "saved"})
+end`, function, holdURL, nestURL)
+			}, func(t *testing.T, server *Server, id uuid.UUID, body string) {
+				installed := requestControlAPI(server, http.MethodPost, "/extension/"+id.String(), body)
+				if installed.Code != http.StatusOK {
+					t.Fatalf("installing traffic hook: %d %s", installed.Code, installed.Body.String())
+				}
+			}, func(server *Server, id uuid.UUID, body string) *httptest.ResponseRecorder {
+				req := httptest.NewRequest(http.MethodGet, "http://origin/outer", nil)
+				runtime := findExtensionRuntime(server.proxy, id)
+				var err error
+				if function == "processRequest" {
+					err = runtime.CallRequestHandler(req)
+				} else {
+					err = runtime.CallResponseHandler(&http.Response{Request: req})
+				}
+				response := httptest.NewRecorder()
+				if err != nil {
+					response.WriteHeader(http.StatusBadRequest)
+					response.WriteString(err.Error())
+				} else {
+					response.WriteHeader(http.StatusOK)
+				}
+				return response
+			})
+		})
+	}
+
 	t.Run("should keep a function call on its project through a nested proxy admit", func(t *testing.T) {
-		assertExtensionLuaOwnsProject(t, workshopID, func(holdURL, nestURL string) string {
+		assertExtensionLuaOwnsProject(t, workshopID, false, func(holdURL, nestURL string) string {
 			return fmt.Sprintf(`function poke()
   local res, err = marasi:builder():set_method("GET"):set_url("%s"):send()
   if not res then error(err) end
@@ -737,7 +774,7 @@ end`, holdURL, nestURL)
 	})
 
 	t.Run("should keep a lua update on its project through a nested proxy admit", func(t *testing.T) {
-		assertExtensionLuaOwnsProject(t, workshopID, func(holdURL, nestURL string) string {
+		assertExtensionLuaOwnsProject(t, workshopID, false, func(holdURL, nestURL string) string {
 			return fmt.Sprintf(`local res, err = marasi:builder():set_method("GET"):set_url("%s"):send()
 if not res then error(err) end
 res, err = marasi:builder():set_method("GET"):set_url("%s"):send()
@@ -748,18 +785,49 @@ marasi.settings:set({phase = "saved"})
 			return requestControlAPI(server, http.MethodPost, "/extension/"+id.String(), body)
 		})
 	})
+	t.Run("should keep an async callback on its project through a nested proxy admit", func(t *testing.T) {
+		assertExtensionLuaOwnsProject(t, workshopID, false, func(holdURL, nestURL string) string {
+			return fmt.Sprintf(`function poke()
+  marasi:builder():set_method("GET"):set_url("%s"):send_async(function(res, err)
+    if not res then error(err) end
+    res, err = marasi:builder():set_method("GET"):set_url("%s"):send()
+    if not res then error(err) end
+    marasi.settings:set({phase = "saved"})
+  end)
+end`, holdURL, nestURL)
+		}, func(t *testing.T, server *Server, id uuid.UUID, body string) {
+			installed := requestControlAPI(server, http.MethodPost, "/extension/"+id.String(), body)
+			if installed.Code != http.StatusOK {
+				t.Fatalf("installing async callback: %d %s", installed.Code, installed.Body.String())
+			}
+		}, func(server *Server, id uuid.UUID, body string) *httptest.ResponseRecorder {
+			return requestControlAPI(server, http.MethodPost, "/extension/"+id.String()+"/call", `{"function":"poke"}`)
+		})
+	})
 }
 
 // assertExtensionLuaOwnsProject runs Lua that blocks, then admits like a nested
 // proxy request, then writes settings. A concurrent project switch must wait
 // until that Lua finishes, and the nested admit must not deadlock the switch.
-func assertExtensionLuaOwnsProject(t *testing.T, id uuid.UUID, lua func(holdURL, nestURL string) string, prepare func(*testing.T, *Server, uuid.UUID, string), start func(*Server, uuid.UUID, string) *httptest.ResponseRecorder) {
+func assertExtensionLuaOwnsProject(t *testing.T, id uuid.UUID, httpsNested bool, lua func(holdURL, nestURL string) string, prepare func(*testing.T, *Server, uuid.UUID, string), start func(*Server, uuid.UUID, string) *httptest.ResponseRecorder) {
 	t.Helper()
 	server, lifecycle, dir, current := newProjectOpenServer(t)
 	if err := lifecycle.proxy.WithOptions(marasi.WithBasePipeline()); err != nil {
 		t.Fatalf("installing proxy pipeline: %v", err)
 	}
+	if httpsNested {
+		if err := lifecycle.proxy.WithOptions(marasi.WithTLS()); err != nil {
+			t.Fatalf("configuring proxy TLS: %v", err)
+		}
+		lifecycle.proxy.AddRequestModifier(marasi.SkipConnectRequestModifier)
+		// Terminate client TLS at the proxy; the test origin speaks plain HTTP.
+		lifecycle.proxy.AddRequestModifier(func(_ *marasi.Proxy, req *http.Request) error {
+			req.URL.Scheme = "http"
+			return nil
+		})
+	}
 	listener := NewListenerLifecycle(lifecycle.proxy, io.Discard)
+	listener.BindProject(lifecycle)
 	t.Cleanup(func() {
 		if err := listener.Shutdown(); err != nil {
 			t.Errorf("shutting down listener: %v", err)
@@ -793,6 +861,10 @@ func assertExtensionLuaOwnsProject(t *testing.T, id uuid.UUID, lua func(holdURL,
 		_, _ = w.Write([]byte("ok"))
 	}))
 	t.Cleanup(origin.Close)
+	nestURL := origin.URL + "/nest"
+	if httpsNested {
+		nestURL = strings.Replace(nestURL, "http://", "https://", 1)
+	}
 
 	direct := &http.Transport{}
 	t.Cleanup(direct.CloseIdleConnections)
@@ -817,7 +889,7 @@ func assertExtensionLuaOwnsProject(t *testing.T, id uuid.UUID, lua func(holdURL,
 		t.Fatalf("wrapping work admission: %v", err)
 	}
 
-	script := lua(origin.URL+"/hold", origin.URL+"/nest")
+	script := lua(origin.URL+"/hold", nestURL)
 	encoded, err := json.Marshal(map[string]string{"lua_content": script})
 	if err != nil {
 		t.Fatalf("encoding lua: %v", err)
@@ -831,10 +903,19 @@ func assertExtensionLuaOwnsProject(t *testing.T, id uuid.UUID, lua func(holdURL,
 	go func() {
 		ownedDone <- start(server, id, body)
 	}()
+	var owned *httptest.ResponseRecorder
 	select {
 	case <-hold.entered:
 	case response := <-ownedDone:
-		t.Fatalf("\nwanted:\nlua to reach its proxy send\ngot:\n%d %s", response.Code, response.Body.String())
+		owned = response
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\nlua to reach its proxy send\ngot:\n%d %s", response.Code, response.Body.String())
+		}
+		select {
+		case <-hold.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for async lua to send")
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for extension lua to send")
 	}
@@ -872,7 +953,6 @@ func assertExtensionLuaOwnsProject(t *testing.T, id uuid.UUID, lua func(holdURL,
 
 	deadline = time.Now().Add(5 * time.Second)
 	var opened *httptest.ResponseRecorder
-	var owned *httptest.ResponseRecorder
 	nestedSeen := false
 	for !nestedSeen || owned == nil || opened == nil {
 		var nested <-chan struct{}

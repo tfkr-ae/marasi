@@ -55,18 +55,23 @@ type ProjectLifecycle struct {
 	opened           func(string)
 	logAdded         func(*domain.Log)
 	armoryRunUpdated func(*domain.ArmoryRun)
+	executionContext context.Context
+	cancelExecution  context.CancelFunc
 }
 
 // NewProjectLifecycle creates a lifecycle with no open project. Open must
 // succeed before the service instance starts accepting work.
 func NewProjectLifecycle(proxy *marasi.Proxy, configDir string, wordlists wordlist.Provider, logger *slog.Logger) *ProjectLifecycle {
+	executionContext, cancelExecution := context.WithCancel(context.Background())
 	lifecycle := &ProjectLifecycle{
-		proxy:     proxy,
-		configDir: configDir,
-		wordlists: wordlists,
-		logger:    logger,
-		lock:      acquireProjectOwnership,
-		gate:      newProjectGate(),
+		executionContext: executionContext,
+		cancelExecution:  cancelExecution,
+		proxy:            proxy,
+		configDir:        configDir,
+		wordlists:        wordlists,
+		logger:           logger,
+		lock:             acquireProjectOwnership,
+		gate:             newProjectGate(),
 	}
 	lifecycle.prepare = lifecycle.prepareProject
 	lifecycle.flushOpenProject = proxy.CloseWebSocketsAndFlush
@@ -86,6 +91,10 @@ func (lifecycle *ProjectLifecycle) Path() string {
 
 // Open prepares target before publishing it as the open project.
 func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(lifecycle.executionContext, cancel)
+	defer stop()
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
 
@@ -222,6 +231,8 @@ func (lifecycle *ProjectLifecycle) Admit(ctx context.Context) (func(), error) {
 
 // Shutdown flushes, closes, and releases the open project.
 func (lifecycle *ProjectLifecycle) Shutdown() error {
+	// Interrupt before taking mu: an open may be waiting for running Lua.
+	lifecycle.cancelExecution()
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
 	project := lifecycle.openProject()
@@ -298,11 +309,15 @@ func (lifecycle *ProjectLifecycle) prepareProject(ctx context.Context, path stri
 		if err := ctx.Err(); err != nil {
 			return fail(err)
 		}
-		runtime := &extensions.Runtime{Data: stored}
+		executionContext, cancel := context.WithCancel(lifecycle.executionContext)
+		runtime := &extensions.Runtime{Data: stored, ExecutionContext: executionContext, CancelExecution: cancel, TrackExecution: lifecycle.gate.trackExtension}
+		resources.Extensions = append(resources.Extensions, runtime)
+		stop := context.AfterFunc(ctx, cancel)
 		if err := runtime.PrepareState(extensionService, nil); err != nil {
+			stop()
 			return fail(fmt.Errorf("preparing project extension %s: %w", stored.Name, err))
 		}
-		resources.Extensions = append(resources.Extensions, runtime)
+		stop()
 	}
 
 	resources.ReportGenerator, err = report.NewGenerator(repository, report.WithConfigDir(lifecycle.configDir))
@@ -358,6 +373,12 @@ func (service stagedExtensionService) WriteLog(level, message string, options ..
 }
 
 func cleanupPreparedProject(path string, existed bool, resources marasi.ProjectResources, unlock func() error) error {
+	for _, runtime := range resources.Extensions {
+		if runtime.CancelExecution != nil {
+			runtime.CancelExecution()
+		}
+		runtime.WaitExecution()
+	}
 	var closeErr error
 	if resources.Repository != nil {
 		closeErr = resources.Repository.Close()
@@ -373,6 +394,12 @@ func cleanupPreparedProject(path string, existed bool, resources marasi.ProjectR
 }
 
 func closeProject(project *openProject) error {
+	for _, runtime := range project.resources.Extensions {
+		if runtime.CancelExecution != nil {
+			runtime.CancelExecution()
+		}
+		runtime.WaitExecution()
+	}
 	return errors.Join(project.resources.Repository.Close(), project.unlock())
 }
 

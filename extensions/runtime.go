@@ -1,6 +1,7 @@
 package extensions
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -56,6 +57,53 @@ type Runtime struct {
 	Logs []ExtensionLog
 	// OnLog is a callback function to handle new log entries.
 	OnLog func(ExtensionLog) error `json:"-"`
+	// ExecutionContext and CancelExecution belong to the project that loaded this VM.
+	ExecutionContext context.Context
+	CancelExecution  context.CancelFunc
+	TrackExecution   func() func()
+	executionContext context.Context
+	asyncExecutions  sync.WaitGroup
+}
+
+// WaitExecution waits after cancellation, before the project's database closes.
+func (extension *Runtime) WaitExecution() {
+	extension.Mu.Lock()
+	extension.Mu.Unlock()
+	extension.asyncExecutions.Wait()
+}
+
+// beginExecution runs under Mu. Ownership lasts until the VM has stopped.
+func (extension *Runtime) beginExecution(ctx context.Context) func() {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	stop := func() bool { return false }
+	if extension.ExecutionContext != nil {
+		stop = context.AfterFunc(extension.ExecutionContext, cancel)
+		if extension.ExecutionContext.Err() != nil {
+			cancel()
+		}
+	}
+	extension.executionContext = ctx
+	release := func() {}
+	if extension.TrackExecution != nil {
+		release = extension.TrackExecution()
+	}
+	lua.SetDebugHook(extension.LuaState, func(l *lua.State, _ lua.Debug) {
+		if err := ctx.Err(); err != nil {
+			// If pcall catches this error, interrupt before Lua can call it again.
+			lua.SetDebugHook(l, lua.DebugHook(l), lua.MaskCount, 1)
+			lua.Errorf(l, "extension execution: %s", err.Error())
+		}
+	}, lua.MaskCount, 1000)
+	return func() {
+		lua.SetDebugHook(extension.LuaState, nil, 0, 0)
+		extension.executionContext = nil
+		stop()
+		cancel()
+		release()
+	}
 }
 
 // PrepareState initializes the Lua execution environment for the extension.
@@ -103,7 +151,7 @@ func (extension *Runtime) PrepareState(proxy ProxyService, options []func(*Runti
 	RegisterRegexType(extension)
 	RegisterScopeType(extension)
 
-	registerMarasiLibrary(extension.LuaState, proxy)
+	registerMarasiLibrary(extension, proxy)
 
 	for _, option := range options {
 		err := option(extension)
@@ -111,7 +159,7 @@ func (extension *Runtime) PrepareState(proxy ProxyService, options []func(*Runti
 			return fmt.Errorf("applying option for extension %s : %w", extension.Data.Name, err)
 		}
 	}
-	if err := lua.DoString(extension.LuaState, extension.Data.LuaContent); err != nil {
+	if err := extension.ExecuteLua(extension.Data.LuaContent); err != nil {
 		return fmt.Errorf("preparing state for extension %s : %w", extension.Data.Name, err)
 	}
 
@@ -163,8 +211,13 @@ func (extension *Runtime) CheckGlobalFunction(functionName string) bool {
 // ExecuteLua executes an arbitrary string of Lua code within the extension's sandboxed state.
 // Access is mutex-locked to ensure thread safety.
 func (extension *Runtime) ExecuteLua(code string) error {
+	return extension.ExecuteLuaContext(context.Background(), code)
+}
+
+func (extension *Runtime) ExecuteLuaContext(ctx context.Context, code string) error {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
+	defer extension.beginExecution(ctx)()
 
 	err := lua.DoString(extension.LuaState, code)
 	if err != nil {
@@ -179,6 +232,7 @@ func (extension *Runtime) ExecuteLua(code string) error {
 func (extension *Runtime) ShouldInterceptRequest(req *http.Request) (bool, error) {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
+	defer extension.beginExecution(req.Context())()
 
 	extension.LuaState.Global("interceptRequest")
 
@@ -206,6 +260,11 @@ func (extension *Runtime) ShouldInterceptRequest(req *http.Request) (bool, error
 func (extension *Runtime) ShouldInterceptResponse(res *http.Response) (bool, error) {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
+	ctx := context.Background()
+	if res.Request != nil {
+		ctx = res.Request.Context()
+	}
+	defer extension.beginExecution(ctx)()
 	extension.LuaState.Global("interceptResponse")
 
 	if !extension.LuaState.IsFunction(-1) {
@@ -230,6 +289,7 @@ func (extension *Runtime) ShouldInterceptResponse(res *http.Response) (bool, err
 func (extension *Runtime) ShouldInterceptWebSocketMessage(message *marasiws.Message) (bool, error) {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
+	defer extension.beginExecution(nil)()
 
 	extension.LuaState.Global("interceptWebSocketMessage")
 	if !extension.LuaState.IsFunction(-1) {
@@ -254,6 +314,7 @@ func (extension *Runtime) ShouldInterceptWebSocketMessage(message *marasiws.Mess
 func (extension *Runtime) CallWebSocketMessageHandler(message *marasiws.Message) error {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
+	defer extension.beginExecution(nil)()
 
 	extension.LuaState.Global("processWebSocketMessage")
 	if !extension.LuaState.IsFunction(-1) {
@@ -276,6 +337,11 @@ func (extension *Runtime) CallWebSocketMessageHandler(message *marasiws.Message)
 func (extension *Runtime) CallResponseHandler(res *http.Response) error {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
+	ctx := context.Background()
+	if res.Request != nil {
+		ctx = res.Request.Context()
+	}
+	defer extension.beginExecution(ctx)()
 
 	extension.LuaState.Global("processResponse")
 
@@ -299,6 +365,7 @@ func (extension *Runtime) CallResponseHandler(res *http.Response) error {
 func (extension *Runtime) CallRequestHandler(req *http.Request) error {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
+	defer extension.beginExecution(req.Context())()
 
 	extension.LuaState.Global("processRequest")
 
@@ -322,8 +389,13 @@ func (extension *Runtime) CallRequestHandler(req *http.Request) error {
 // It is used for lifecycle events or simple triggers. If the function does not exist,
 // it returns nil. If the function execution fails, it returns a formatted error.
 func (extension *Runtime) CallFunction(name string, args ...any) error {
+	return extension.CallFunctionContext(context.Background(), name, args...)
+}
+
+func (extension *Runtime) CallFunctionContext(ctx context.Context, name string, args ...any) error {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
+	defer extension.beginExecution(ctx)()
 
 	extension.LuaState.Global(name)
 

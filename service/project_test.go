@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/extensions"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 	"github.com/tfkr-ae/marasi/wordlist"
 )
@@ -85,6 +86,54 @@ func canonicalProjectPath(t *testing.T, path string) string {
 }
 
 func TestProjectLifecycle(t *testing.T) {
+	t.Run("should cancel non-returning Lua before releasing project ownership during shutdown", func(t *testing.T) {
+		lifecycle, proxy, dir := newTestProjectLifecycle(t)
+		path := canonicalProjectPath(t, filepath.Join(dir, "hang.marasi"))
+		if err := lifecycle.Open(context.Background(), path); err != nil {
+			t.Fatal(err)
+		}
+		runtime := findExtensionRuntime(proxy, uuid.MustParse("01937d13-9632-7f84-add5-14ec2c2c7f43"))
+		if err := runtime.ExecuteLua(`function hang() print("entered"); while true do end end`); err != nil {
+			t.Fatal(err)
+		}
+		entered := make(chan struct{})
+		runtime.OnLog = func(_ extensions.ExtensionLog) error { close(entered); return nil }
+		done := make(chan error, 1)
+		go func() { done <- runtime.CallFunction("hang") }()
+		select {
+		case <-entered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Lua did not enter hang")
+		}
+		if _, err := acquireProjectOwnership(path); !errors.Is(err, ErrProjectAlreadyOpen) {
+			t.Fatalf("project ownership released under running VM: %v", err)
+		}
+		stopped := make(chan error, 1)
+		go func() { stopped <- lifecycle.Shutdown() }()
+		select {
+		case err := <-stopped:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("shutdown did not cancel non-returning Lua")
+		}
+		select {
+		case err := <-done:
+			if err == nil || !strings.Contains(err.Error(), "context canceled") {
+				t.Fatalf("wanted cancellation, got %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("shutdown released ownership before Lua stopped")
+		}
+		unlock, err := acquireProjectOwnership(path)
+		if err != nil {
+			t.Fatalf("project ownership remains held: %v", err)
+		}
+		if err := unlock(); err != nil {
+			t.Fatal(err)
+		}
+	})
 	t.Run("should publish all target resources and release the previous ownership", func(t *testing.T) {
 		lifecycle, proxy, dir := newTestProjectLifecycle(t)
 		first := canonicalProjectPath(t, filepath.Join(dir, "first.marasi"))

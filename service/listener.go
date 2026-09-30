@@ -99,14 +99,15 @@ type ListenerLifecycle interface {
 }
 
 type listenerLifecycle struct {
-	proxy      listenerProxy
-	logWriter  io.Writer
-	events     *eventBroadcaster
-	requests   chan listenerRequest
-	serveEnded chan listenerServeResult
-	done       chan struct{}
-	statusMu   sync.RWMutex
-	status     ListenerStatus
+	cancelProjectExecution func()
+	proxy                  listenerProxy
+	logWriter              io.Writer
+	events                 *eventBroadcaster
+	requests               chan listenerRequest
+	serveEnded             chan listenerServeResult
+	done                   chan struct{}
+	statusMu               sync.RWMutex
+	status                 ListenerStatus
 }
 
 // NewListenerLifecycle creates an inactive proxy-listener lifecycle.
@@ -166,6 +167,7 @@ func (l *listenerLifecycle) BindProject(projects *ProjectLifecycle) {
 	if l == nil || projects == nil {
 		return
 	}
+	l.cancelProjectExecution = projects.cancelExecution
 	projects.opened = func(path string) {
 		l.events.publish("project.opened", struct {
 			Project string `json:"project"`
@@ -181,6 +183,9 @@ func (l *listenerLifecycle) BindProject(projects *ProjectLifecycle) {
 
 // Shutdown closes the proxy through its established full-service cleanup path.
 func (l *listenerLifecycle) Shutdown() error {
+	if l.cancelProjectExecution != nil {
+		l.cancelProjectExecution()
+	}
 	result := make(chan listenerResult, 1)
 	request := listenerRequest{operation: shutdownListener, result: result}
 	select {
