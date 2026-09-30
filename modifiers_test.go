@@ -2142,6 +2142,33 @@ func TestShouldInterceptWebSocketMessage(t *testing.T) {
 		return proxy
 	}
 
+	for _, state := range []string{"enabled", "disabled", "missing"} {
+		for _, global := range []bool{false, true} {
+			for _, rule := range []bool{false, true} {
+				t.Run(fmt.Sprintf("should honor %s checkpoint with global=%t rule=%t", state, global, rule), func(t *testing.T) {
+					proxy := &Proxy{}
+					if state != "missing" {
+						proxy = checkpointProxy(t, fmt.Sprintf(`
+							function interceptWebSocketMessage(message)
+								return %t
+							end
+						`, rule), state == "enabled")
+					}
+					proxy.SetWebSocketIntercept(global)
+					want := global
+					if state == "disabled" {
+						want = false
+					} else if state == "enabled" {
+						want = global || rule
+					}
+					if got := shouldInterceptWebSocketMessage(proxy, &marasiws.Message{}); got != want {
+						t.Fatalf("wanted: %t\ngot: %t", want, got)
+					}
+				})
+			}
+		}
+	}
+
 	t.Run("global websocket interception should return true without checkpoint", func(t *testing.T) {
 		proxy := &Proxy{}
 		proxy.SetWebSocketIntercept(true)

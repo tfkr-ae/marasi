@@ -1477,19 +1477,22 @@ func TestProxy_WebSocketControlAPIs(t *testing.T) {
 
 func TestProxy_WebSocketIntegration(t *testing.T) {
 	t.Run("ws", func(t *testing.T) {
-		testProxyWebSocketIntegration(t, false, false, false, false)
+		testProxyWebSocketIntegration(t, false, false, false, false, false)
 	})
 	t.Run("wss", func(t *testing.T) {
-		testProxyWebSocketIntegration(t, true, false, false, false)
+		testProxyWebSocketIntegration(t, true, false, false, false, false)
 	})
 	t.Run("ws interception", func(t *testing.T) {
-		testProxyWebSocketIntegration(t, false, true, true, false)
+		testProxyWebSocketIntegration(t, false, true, true, false, false)
 	})
 	t.Run("ws interception without handler", func(t *testing.T) {
-		testProxyWebSocketIntegration(t, false, true, false, false)
+		testProxyWebSocketIntegration(t, false, true, false, false, false)
 	})
 	t.Run("ws checkpoint interception", func(t *testing.T) {
-		testProxyWebSocketIntegration(t, false, false, true, true)
+		testProxyWebSocketIntegration(t, false, false, true, true, false)
+	})
+	t.Run("should pass frames with disabled checkpoint and global interception on", func(t *testing.T) {
+		testProxyWebSocketIntegration(t, false, true, true, true, true)
 	})
 }
 
@@ -1499,6 +1502,7 @@ func testProxyWebSocketIntegration(
 	intercept bool,
 	interceptHandler bool,
 	checkpointIntercept bool,
+	checkpointDisabled bool,
 ) {
 	t.Helper()
 
@@ -1581,6 +1585,9 @@ func testProxyWebSocketIntegration(
 					return message:opcode() == 1
 				end
 			`
+			if checkpointDisabled {
+				extension.Enabled = false
+			}
 		}
 	}
 
@@ -1884,7 +1891,11 @@ func testProxyWebSocketIntegration(
 		if message.Direction == marasiws.DirectionFromServer {
 			serverText = true
 		}
-		if interceptHandler && message.Metadata["intercepted"] != true {
+		if checkpointDisabled {
+			if message.Metadata["intercepted"] == true {
+				t.Fatal("disabled checkpoint intercepted a frame")
+			}
+		} else if interceptHandler && message.Metadata["intercepted"] != true {
 			t.Fatalf("wanted intercepted metadata: true\ngot: %v", message.Metadata["intercepted"])
 		}
 	}
@@ -1940,7 +1951,7 @@ interceptionEventLoop:
 			break interceptionEventLoop
 		}
 	}
-	if interceptHandler {
+	if interceptHandler && !checkpointDisabled {
 		if clientInterceptEvents != 1 {
 			t.Fatalf("wanted client interception event count: %d\ngot: %d", 1, clientInterceptEvents)
 		}

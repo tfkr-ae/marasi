@@ -461,14 +461,18 @@ func WebSocketPrepareModifier(proxy *Proxy, res *http.Response) error {
 }
 
 // shouldInterceptWebSocketMessage reports whether a message should enter manual interception.
-// Global interception takes precedence; otherwise only the enabled checkpoint extension is consulted.
+// Disabled checkpoint skips interception, including the global flag.
 func shouldInterceptWebSocketMessage(proxy *Proxy, message *marasiws.Message) bool {
+	checkpoint, ok := proxy.GetExtension("checkpoint")
+	if ok && (checkpoint.Data == nil || !checkpoint.Data.Enabled) {
+		return false
+	}
+
 	if proxy.GetWebSocketIntercept() {
 		return true
 	}
 
-	checkpoint, ok := proxy.GetExtension("checkpoint")
-	if !ok || checkpoint.Data == nil || !checkpoint.Data.Enabled {
+	if !ok {
 		return false
 	}
 
