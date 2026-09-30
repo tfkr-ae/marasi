@@ -86,7 +86,16 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			writeExtensionError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
-		writeJSON(w, r, http.StatusOK, extensionDetailFromRuntime(runtime))
+		settings, err := extensionSettingsFromRepository(proxy, id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeExtensionError(w, r, http.StatusNotFound, "not_found")
+				return
+			}
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		writeJSON(w, r, http.StatusOK, extensionDetailFromRuntime(runtime, settings.Settings))
 	})
 
 	mux.HandleFunc("GET /extension/{id}/logs", func(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +121,16 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			writeExtensionError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
-		writeJSON(w, r, http.StatusOK, extensionSettingsFromRuntime(runtime))
+		settings, err := extensionSettingsFromRepository(proxy, id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeExtensionError(w, r, http.StatusNotFound, "not_found")
+				return
+			}
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		writeJSON(w, r, http.StatusOK, settings)
 	})
 
 	mux.HandleFunc("POST /extension/{id}/settings", func(w http.ResponseWriter, r *http.Request) {
@@ -143,13 +161,15 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		stored, err := repo.GetExtensionSettingsByUUID(id)
+		envelope, err := extensionSettingsFromRepository(proxy, id)
 		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeExtensionError(w, r, http.StatusNotFound, "not_found")
+				return
+			}
 			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		runtime.Data.Settings = stored
-		envelope := extensionSettingsFromRuntime(runtime)
 		events.publish("extension.settings.updated", envelope)
 		writeJSON(w, r, http.StatusOK, envelope)
 	})
@@ -269,7 +289,16 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			writeExtensionError(w, r, http.StatusBadRequest, "lua_error")
 			return
 		}
-		writeJSON(w, r, http.StatusOK, extensionDetailFromRuntime(runtime))
+		settings, err := extensionSettingsFromRepository(proxy, id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeExtensionError(w, r, http.StatusNotFound, "not_found")
+				return
+			}
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		writeJSON(w, r, http.StatusOK, extensionDetailFromRuntime(runtime, settings.Settings))
 	})
 }
 
@@ -296,11 +325,7 @@ func extensionSummaryFromRuntime(runtime *extensions.Runtime) extensionSummary {
 	}
 }
 
-func extensionDetailFromRuntime(runtime *extensions.Runtime) extensionDetail {
-	settings := runtime.Data.Settings
-	if settings == nil {
-		settings = map[string]any{}
-	}
+func extensionDetailFromRuntime(runtime *extensions.Runtime, settings map[string]any) extensionDetail {
 	return extensionDetail{
 		extensionSummary: extensionSummaryFromRuntime(runtime),
 		LuaContent:       runtime.Data.LuaContent,
@@ -308,12 +333,19 @@ func extensionDetailFromRuntime(runtime *extensions.Runtime) extensionDetail {
 	}
 }
 
-func extensionSettingsFromRuntime(runtime *extensions.Runtime) extensionSettings {
-	settings := runtime.Data.Settings
+func extensionSettingsFromRepository(proxy *marasi.Proxy, id uuid.UUID) (extensionSettings, error) {
+	repo, err := proxy.GetExtensionRepo()
+	if err != nil {
+		return extensionSettings{}, err
+	}
+	settings, err := repo.GetExtensionSettingsByUUID(id)
+	if err != nil {
+		return extensionSettings{}, err
+	}
 	if settings == nil {
 		settings = map[string]any{}
 	}
-	return extensionSettings{Settings: settings}
+	return extensionSettings{Settings: settings}, nil
 }
 
 func extensionLogsFromRuntime(runtime *extensions.Runtime) extensionLogs {
