@@ -176,13 +176,10 @@ func noteStdinPresent(cmd *cobra.Command) (bool, error) {
 func writeNotesListHuman(body []byte, stdout, stderr io.Writer) error {
 	var page struct {
 		Items []struct {
-			ID         string `json:"id"`
-			Method     string `json:"method"`
-			Host       string `json:"host"`
-			Path       string `json:"path"`
-			StatusCode int    `json:"status_code"`
-			Length     string `json:"length"`
-			Note       string `json:"note"`
+			ID   string `json:"id"`
+			Host string `json:"host"`
+			Path string `json:"path"`
+			Note string `json:"note"`
 		} `json:"items"`
 		NextCursor *string `json:"next_cursor"`
 	}
@@ -192,7 +189,7 @@ func writeNotesListHuman(body []byte, stdout, stderr io.Writer) error {
 
 	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	for _, item := range page.Items {
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n", item.ID, item.Method, item.Host, truncateDisplay(item.Path, notesDisplayLimit), item.StatusCode, item.Length, truncateDisplay(item.Note, notesDisplayLimit))
+		fmt.Fprintf(writer, "%s\t%s\t%s\n", item.ID, truncateDisplay(item.Host+item.Path, notesDisplayLimit), truncateDisplay(item.Note, notesDisplayLimit))
 	}
 	if err := writer.Flush(); err != nil {
 		return err

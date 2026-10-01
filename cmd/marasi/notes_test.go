@@ -222,7 +222,7 @@ func TestNotesListCommand(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/notes" || got.RawQuery != "limit=200" {
 			t.Fatalf("\nwanted:\nGET /notes?limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
-		want := "01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /login  401  45  newer note\n0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /a      200  12  older note\n"
+		want := "01938032-1b17-7243-b035-e6a9f4645904  example.com/login  newer note\n0193802f-f0e7-73d9-a764-06d21e367809  example.com/a      older note\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -231,7 +231,7 @@ func TestNotesListCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("should truncate long paths and notes before aligning the row", func(t *testing.T) {
+	t.Run("should truncate joined URLs and notes before aligning the row", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"0193802f-f0e7-73d9-a764-06d21e367809","method":"GET","host":"example.com","path":"/12345678901234567890123456789012345678901234567890","status_code":200,"length":"12","note":"01234567890123456789012345678901234567890123456789"},{"id":"01938032-1b17-7243-b035-e6a9f4645904","method":"POST","host":"example.com","path":"/short","status_code":404,"length":"45","note":"short"}],"next_cursor":null}`)
 
@@ -239,7 +239,7 @@ func TestNotesListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /123456789012345678901234567890123456...  200  12  0123456789012345678901234567890123456...\n01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /short                                    404  45  short\n"
+		want := "0193802f-f0e7-73d9-a764-06d21e367809  example.com/1234567890123456789012345...  0123456789012345678901234567890123456...\n01938032-1b17-7243-b035-e6a9f4645904  example.com/short" + strings.Repeat(" ", 25) + "short\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -253,7 +253,7 @@ func TestNotesListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "0193802f-f0e7-73d9-a764-06d21e367809  GET  example.com  /a  200  12  keep this ok\n"
+		want := "0193802f-f0e7-73d9-a764-06d21e367809  example.com/a  keep this ok\n"
 		if stdout != want || strings.Count(stdout, "\n") != 1 {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, stdout)
 		}
@@ -267,7 +267,7 @@ func TestNotesListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "0193802f-f0e7-73d9-a764-06d21e367809  GET  example.com  /a  200  12  012345678901234567890123456789012345😀...\n"
+		want := "0193802f-f0e7-73d9-a764-06d21e367809  example.com/a  012345678901234567890123456789012345😀...\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -284,7 +284,7 @@ func TestNotesListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "01938032-1b17-7243-b035-e6a9f4645904  GET  example.com  /a  200  12  keep\n"
+		want := "01938032-1b17-7243-b035-e6a9f4645904  example.com/a  keep\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
