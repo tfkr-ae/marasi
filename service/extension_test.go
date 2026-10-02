@@ -787,6 +787,123 @@ end`)
 	})
 }
 
+func TestExtensionLogsDuringLuaExecution(t *testing.T) {
+	repo, runtime := preparedWorkshop(t, "")
+	server := newTestServer(&marasi.Proxy{ExtensionRepo: repo, Extensions: []*extensions.Runtime{runtime}}, func() {})
+	path := "/extension/" + runtime.Data.ID.String() + "/logs"
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	printed := make(chan struct{})
+	runtime.OnLog = func(entry extensions.ExtensionLog) error {
+		if entry.Text == "1" {
+			// OnLog runs inside Lua execution: snapshots must not re-lock the VM
+			// or expose its live backing array to callback consumers.
+			snapshot := runtime.LogSnapshot()
+			snapshot[0].Text = "changed snapshot"
+			close(started)
+		}
+		if entry.Text == "2000" {
+			close(printed)
+			<-finish
+		}
+		return nil
+	}
+	done := make(chan error, 1)
+	defer func() {
+		close(finish)
+		if err := <-done; err != nil {
+			t.Errorf("Lua execution: %v", err)
+		}
+	}()
+	go func() { done <- runtime.ExecuteLua(`for i = 1, 2000 do print(i) end`) }()
+	<-started
+	readLogs := func() extensionLogs {
+		t.Helper()
+		responses := make(chan *httptest.ResponseRecorder, 1)
+		go func() { responses <- requestControlAPI(server, http.MethodGet, path, "") }()
+		select {
+		case response := <-responses:
+			if response.Code != http.StatusOK {
+				t.Fatalf("logs status: %d", response.Code)
+			}
+			var logs extensionLogs
+			if err := json.Unmarshal(response.Body.Bytes(), &logs); err != nil {
+				t.Fatal(err)
+			}
+			return logs
+		case <-time.After(2 * time.Second):
+			t.Fatal("logs API waited for Lua execution to finish")
+			return extensionLogs{}
+		}
+	}
+	var first extensionLogs
+	for i := 0; i < 100; i++ {
+		logs := readLogs()
+		if i == 0 {
+			first = logs
+		}
+		for j, entry := range logs.Items {
+			if entry.Text != fmt.Sprint(j+1) || entry.Time.IsZero() {
+				t.Fatalf("log %d: %+v", j, entry)
+			}
+		}
+	}
+	<-printed
+	logs := readLogs()
+	if len(logs.Items) != 2000 || first.Items[0].Text != "1" {
+		t.Fatalf("snapshot changed or missing logs: first=%v final=%d", first.Items[0], len(logs.Items))
+	}
+}
+
+func TestExtensionMetadataDuringControlUpdates(t *testing.T) {
+	repo, runtime := preparedWorkshop(t, "")
+	server := newTestServer(&marasi.Proxy{ExtensionRepo: repo, Extensions: []*extensions.Runtime{runtime}}, func() {})
+	path := "/extension/" + runtime.Data.ID.String()
+	start := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		<-start
+		for i := 0; i < 100; i++ {
+			for _, endpoint := range []string{"/extension", path} {
+				response := requestControlAPI(server, http.MethodGet, endpoint, "")
+				if response.Code != http.StatusOK {
+					t.Errorf("%s status: %d", endpoint, response.Code)
+				}
+			}
+		}
+	}()
+	close(start)
+	for i := 0; i < 40; i++ {
+		response := requestControlAPI(server, http.MethodPost, path, `{"lua_content":"print('updated')"}`)
+		if response.Code != http.StatusOK {
+			t.Errorf("update status: %d: %s", response.Code, response.Body.String())
+		}
+		response = requestControlAPI(server, http.MethodPost, path+"/enable", fmt.Sprintf(`{"enabled":%v}`, i%2 == 0))
+		if response.Code != http.StatusOK {
+			t.Errorf("enable status: %d", response.Code)
+		}
+	}
+	<-done
+	var detail extensionDetail
+	response := requestControlAPI(server, http.MethodGet, path, "")
+	if err := json.Unmarshal(response.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	var list extensionList
+	response = requestControlAPI(server, http.MethodGet, "/extension", "")
+	if err := json.Unmarshal(response.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := repo.GetExtensionByUUID(detail.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Enabled || stored.Enabled || detail.LuaContent != "print('updated')" || detail.UpdatedAt != stored.UpdatedAt || len(list.Items) != 1 || list.Items[0] != detail.extensionSummary {
+		t.Fatalf("inconsistent metadata: detail=%+v list=%+v stored=%+v", detail, list, stored)
+	}
+}
+
 func assertNoExtensionEvent(t *testing.T, subscriber *eventSubscriber) {
 	t.Helper()
 	select {

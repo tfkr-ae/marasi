@@ -273,7 +273,7 @@ func OverrideWaypointsModifier(proxy *Proxy, req *http.Request) error {
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
 func CompassRequestModifier(proxy *Proxy, req *http.Request) error {
 	if compassExt, ok := proxy.GetExtension("compass"); ok {
-		if !compassExt.Data.Enabled {
+		if !compassExt.MetadataSnapshot().Enabled {
 			return nil
 		}
 		err := compassExt.CallRequestHandler(req)
@@ -306,7 +306,7 @@ func ExtensionsRequestModifier(proxy *Proxy, req *http.Request) error {
 	req.Header.Del("x-extension-id")
 
 	for _, ext := range proxy.Extensions {
-		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" && ext.Data.Enabled {
+		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" && ext.MetadataSnapshot().Enabled {
 			if extensionID != ext.Data.ID.String() {
 				err := ext.CallRequestHandler(req)
 				if err != nil {
@@ -333,7 +333,7 @@ func ExtensionsRequestModifier(proxy *Proxy, req *http.Request) error {
 // A nil notify still holds until forward, drop, or drop-all. Forward rebuilds from optional raw. Drop does not rebuild.
 func CheckpointRequestModifier(proxy *Proxy, req *http.Request) error {
 	if checkpointExt, ok := proxy.GetExtension("checkpoint"); ok {
-		if !checkpointExt.Data.Enabled {
+		if !checkpointExt.MetadataSnapshot().Enabled {
 			return nil
 		}
 		shouldIntercept, err := checkpointExt.ShouldInterceptRequest(req)
@@ -464,7 +464,7 @@ func WebSocketPrepareModifier(proxy *Proxy, res *http.Response) error {
 // Disabled checkpoint skips interception, including the global flag.
 func shouldInterceptWebSocketMessage(proxy *Proxy, message *marasiws.Message) bool {
 	checkpoint, ok := proxy.GetExtension("checkpoint")
-	if ok && (checkpoint.Data == nil || !checkpoint.Data.Enabled) {
+	if ok && (checkpoint.Data == nil || !checkpoint.MetadataSnapshot().Enabled) {
 		return false
 	}
 
@@ -493,7 +493,7 @@ func shouldInterceptWebSocketMessage(proxy *Proxy, message *marasiws.Message) bo
 // Dropped and skipped messages stop further extension processing.
 func processWebSocketMessageExtensions(proxy *Proxy, message *marasiws.Message) {
 	for _, extension := range proxy.Extensions {
-		if extension == nil || extension.Data == nil || !extension.Data.Enabled || extension.Data.Name == "checkpoint" {
+		if extension == nil || extension.Data == nil || !extension.MetadataSnapshot().Enabled || extension.Data.Name == "checkpoint" {
 			continue
 		}
 
@@ -708,7 +708,7 @@ func CompressedResponseModifier(proxy *Proxy, res *http.Response) error {
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
 func CompassResponseModifier(proxy *Proxy, res *http.Response) error {
 	if compassExt, ok := proxy.GetExtension("compass"); ok {
-		if !compassExt.Data.Enabled {
+		if !compassExt.MetadataSnapshot().Enabled {
 			return nil
 		}
 		err := compassExt.CallResponseHandler(res)
@@ -733,7 +733,7 @@ func CompassResponseModifier(proxy *Proxy, res *http.Response) error {
 // After `processResponse`, it will check if the request is passed through (nil), skipped (`ErrSkipPipeline`), or dropped (`ErrDropped`).
 func ExtensionsResponseModifier(proxy *Proxy, res *http.Response) error {
 	for _, ext := range proxy.Extensions {
-		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" && ext.Data.Enabled {
+		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" && ext.MetadataSnapshot().Enabled {
 			if extensionID, ok := core.ExtensionIDFromContext(res.Request.Context()); !ok || extensionID != ext.Data.ID.String() {
 				err := ext.CallResponseHandler(res)
 				if err != nil {
@@ -759,7 +759,7 @@ func ExtensionsResponseModifier(proxy *Proxy, res *http.Response) error {
 // or the matching request was forwarded with intercept-response. A nil notify still holds until forward, drop, or drop-all.
 func CheckpointResponseModifier(proxy *Proxy, res *http.Response) error {
 	if checkpointExt, ok := proxy.GetExtension("checkpoint"); ok {
-		if !checkpointExt.Data.Enabled {
+		if !checkpointExt.MetadataSnapshot().Enabled {
 			return nil
 		}
 		shouldIntercept, err := checkpointExt.ShouldInterceptResponse(res)

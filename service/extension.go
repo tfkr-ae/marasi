@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
 )
 
@@ -227,7 +228,7 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		if err := repo.SetExtensionEnabledByUUID(id, enabled); err != nil {
+		if err := runtime.SetEnabled(repo, enabled); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				writeExtensionError(w, r, http.StatusNotFound, "not_found")
 				return
@@ -235,8 +236,7 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		runtime.Data.Enabled = enabled
-		summary := extensionSummaryFromRuntime(runtime)
+		summary := extensionSummaryFromData(runtime.MetadataSnapshot())
 		events.publish("extension.enabled", summary)
 		writeJSON(w, r, http.StatusOK, summary)
 	})
@@ -268,7 +268,7 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		if err := repo.UpdateExtensionLuaCodeByUUID(id, lua); err != nil {
+		if err := runtime.UpdateLuaContent(repo, lua); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				writeExtensionError(w, r, http.StatusNotFound, "not_found")
 				return
@@ -276,15 +276,7 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		stored, err := repo.GetExtensionByUUID(id)
-		if err != nil {
-			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
-			return
-		}
-		runtime.Data.LuaContent = stored.LuaContent
-		runtime.Data.Enabled = stored.Enabled
-		runtime.Data.UpdatedAt = stored.UpdatedAt
-		events.publish("extension.updated", extensionSummaryFromRuntime(runtime))
+		events.publish("extension.updated", extensionSummaryFromData(runtime.MetadataSnapshot()))
 		if err := runtime.ExecuteLuaContext(r.Context(), lua); err != nil {
 			writeExtensionError(w, r, http.StatusBadRequest, "lua_error")
 			return
@@ -305,7 +297,7 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 func listExtensionSummaries(proxy *marasi.Proxy) []extensionSummary {
 	items := make([]extensionSummary, 0, len(proxy.Extensions))
 	for _, runtime := range proxy.Extensions {
-		items = append(items, extensionSummaryFromRuntime(runtime))
+		items = append(items, extensionSummaryFromData(runtime.MetadataSnapshot()))
 	}
 	slices.SortFunc(items, func(a, b extensionSummary) int {
 		return cmp.Compare(a.ID.String(), b.ID.String())
@@ -313,22 +305,23 @@ func listExtensionSummaries(proxy *marasi.Proxy) []extensionSummary {
 	return items
 }
 
-func extensionSummaryFromRuntime(runtime *extensions.Runtime) extensionSummary {
+func extensionSummaryFromData(data domain.Extension) extensionSummary {
 	return extensionSummary{
-		ID:          runtime.Data.ID,
-		Name:        runtime.Data.Name,
-		Enabled:     runtime.Data.Enabled,
-		Author:      runtime.Data.Author,
-		Description: runtime.Data.Description,
-		SourceURL:   runtime.Data.SourceURL,
-		UpdatedAt:   runtime.Data.UpdatedAt,
+		ID:          data.ID,
+		Name:        data.Name,
+		Enabled:     data.Enabled,
+		Author:      data.Author,
+		Description: data.Description,
+		SourceURL:   data.SourceURL,
+		UpdatedAt:   data.UpdatedAt,
 	}
 }
 
 func extensionDetailFromRuntime(runtime *extensions.Runtime, settings map[string]any) extensionDetail {
+	data := runtime.MetadataSnapshot()
 	return extensionDetail{
-		extensionSummary: extensionSummaryFromRuntime(runtime),
-		LuaContent:       runtime.Data.LuaContent,
+		extensionSummary: extensionSummaryFromData(data),
+		LuaContent:       data.LuaContent,
 		Settings:         settings,
 	}
 }
@@ -349,8 +342,9 @@ func extensionSettingsFromRepository(proxy *marasi.Proxy, id uuid.UUID) (extensi
 }
 
 func extensionLogsFromRuntime(runtime *extensions.Runtime) extensionLogs {
-	items := make([]extensionLogItem, 0, len(runtime.Logs))
-	for _, entry := range runtime.Logs {
+	logs := runtime.LogSnapshot()
+	items := make([]extensionLogItem, 0, len(logs))
+	for _, entry := range logs {
 		items = append(items, extensionLogItem{Time: entry.Time, Text: entry.Text})
 	}
 	return extensionLogs{Items: items}

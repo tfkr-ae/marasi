@@ -60,7 +60,7 @@ func addScopeRoutes(mux routeMux, proxy *marasi.Proxy) {
 
 		compassEnabled := false
 		if extension, ok := proxy.GetExtension("compass"); ok {
-			compassEnabled = extension.Data.Enabled
+			compassEnabled = extension.MetadataSnapshot().Enabled
 		}
 
 		writeJSON(w, r, http.StatusOK, scopeCheckResponse{
