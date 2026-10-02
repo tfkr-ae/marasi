@@ -858,25 +858,27 @@ end`, function, holdURL, nestURL)
 		})
 	}
 
-	t.Run("should keep a function call on its project through a nested proxy admit", func(t *testing.T) {
-		assertExtensionLuaOwnsProject(t, workshopID, false, func(holdURL, nestURL string) string {
-			return fmt.Sprintf(`function poke()
+	for _, httpsNested := range []bool{false, true} {
+		t.Run(fmt.Sprintf("should keep a function call on its project through a nested proxy admit https=%t", httpsNested), func(t *testing.T) {
+			assertExtensionLuaOwnsProject(t, workshopID, httpsNested, func(holdURL, nestURL string) string {
+				return fmt.Sprintf(`function poke()
   local res, err = marasi:builder():set_method("GET"):set_url("%s"):send()
   if not res then error(err) end
   res, err = marasi:builder():set_method("GET"):set_url("%s"):send()
   if not res then error(err) end
   marasi.settings:set({phase = "saved"})
 end`, holdURL, nestURL)
-		}, func(t *testing.T, server *Server, id uuid.UUID, body string) {
-			t.Helper()
-			installed := requestControlAPI(server, http.MethodPost, "/extension/"+id.String(), body)
-			if installed.Code != http.StatusOK {
-				t.Fatalf("\nwanted:\n200 installing poke\ngot:\n%d %s", installed.Code, installed.Body.String())
-			}
-		}, func(server *Server, id uuid.UUID, body string) *httptest.ResponseRecorder {
-			return requestControlAPI(server, http.MethodPost, "/extension/"+id.String()+"/call", `{"function":"poke"}`)
+			}, func(t *testing.T, server *Server, id uuid.UUID, body string) {
+				t.Helper()
+				installed := requestControlAPI(server, http.MethodPost, "/extension/"+id.String(), body)
+				if installed.Code != http.StatusOK {
+					t.Fatalf("\nwanted:\n200 installing poke\ngot:\n%d %s", installed.Code, installed.Body.String())
+				}
+			}, func(server *Server, id uuid.UUID, body string) *httptest.ResponseRecorder {
+				return requestControlAPI(server, http.MethodPost, "/extension/"+id.String()+"/call", `{"function":"poke"}`)
+			})
 		})
-	})
+	}
 
 	t.Run("should keep a lua update on its project through a nested proxy admit", func(t *testing.T) {
 		assertExtensionLuaOwnsProject(t, workshopID, false, func(holdURL, nestURL string) string {
@@ -976,8 +978,8 @@ func assertExtensionLuaOwnsProject(t *testing.T, id uuid.UUID, httpsNested bool,
 	lifecycle.proxy.Client.Transport = direct
 	admittedWhileBlocked := false
 	var admittedMu sync.Mutex
-	if err := lifecycle.proxy.WithOptions(marasi.WithWorkAdmission(func(ctx context.Context) (func(), error) {
-		release, err := lifecycle.Admit(ctx)
+	if err := lifecycle.proxy.WithOptions(marasi.WithWorkAdmission(func(ctx context.Context, internal bool) (func(), error) {
+		release, err := lifecycle.gate.admit(ctx, internal)
 		if err != nil {
 			return nil, err
 		}

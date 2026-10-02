@@ -152,7 +152,8 @@ type Proxy struct {
 	ReportGenerator domain.ReportGenerator // Generator for report templates and exports.
 	DBCloser        io.Closer              // Closer for the database connection.
 	Logger          *slog.Logger           // Logger for Marasi
-	admitWork       func(context.Context) (func(), error)
+	admitWork       func(context.Context, bool) (func(), error)
+	clientWorkToken string
 }
 
 // ProjectResources is the complete set of dependencies owned by one open project.
@@ -294,7 +295,8 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 		WebSocketInterceptor: marasiws.NewInterceptor(),
 		checkpoint:           newCheckpointState(),
 		launchpadWS:          make(map[io.Closer]struct{}),
-		admitWork: func(context.Context) (func(), error) {
+		clientWorkToken:      uuid.NewString(),
+		admitWork: func(context.Context, bool) (func(), error) {
 			return func() {}, nil
 		},
 	}
@@ -692,6 +694,7 @@ func (proxy *Proxy) GetListener(address string, port string) (net.Listener, erro
 	}
 
 	proxy.Logger.Info("Proxy Client Configured", "url", parsedURL.String())
+	parsedURL.User = url.UserPassword("marasi", proxy.clientWorkToken)
 
 	transport := &http.Transport{
 		Proxy:           http.ProxyURL(parsedURL),

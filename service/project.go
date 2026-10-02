@@ -75,7 +75,7 @@ func NewProjectLifecycle(proxy *marasi.Proxy, configDir string, wordlists wordli
 	}
 	lifecycle.prepare = lifecycle.prepareProject
 	lifecycle.flushOpenProject = proxy.CloseWebSocketsAndFlush
-	_ = proxy.WithOptions(marasi.WithWorkAdmission(lifecycle.Admit))
+	_ = proxy.WithOptions(marasi.WithWorkAdmission(lifecycle.gate.admit))
 	return lifecycle
 }
 
@@ -133,6 +133,34 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 	if err := ctx.Err(); err != nil {
 		return errors.Join(err, cleanupPreparedProject(path, true, resources, unlock))
 	}
+	held := lifecycle.proxy.CheckpointHoldStarted()
+	flushed := make(chan error, 1)
+	flush := lifecycle.flushOpenProject
+	go func() { flushed <- flush() }()
+	select {
+	case err := <-flushed:
+		if err != nil {
+			return errors.Join(err, cleanupPreparedProject(path, true, resources, unlock))
+		}
+	case <-held:
+		// Reopen admission so a late Lua hold can be forwarded or dropped.
+		// The proxy still owns the closing sessions and their flush.
+		return errors.Join(ErrProjectBusy, cleanupPreparedProject(path, true, resources, unlock))
+	case <-ctx.Done():
+		return errors.Join(ctx.Err(), cleanupPreparedProject(path, true, resources, unlock))
+	}
+	// Closing a WebSocket can run Lua on its peer's final frame. Drain that
+	// work and its nested requests before replacing repositories.
+	if lifecycle.projectBusy(old) {
+		return errors.Join(ErrProjectBusy, cleanupPreparedProject(path, true, resources, unlock))
+	}
+	if err := lifecycle.gate.drain(ctx, held); err != nil {
+		if errors.Is(err, errBlockAborted) {
+			err = ErrProjectBusy
+		}
+		return errors.Join(err, cleanupPreparedProject(path, true, resources, unlock))
+	}
+	// The late nested requests may have queued persistence after the first flush.
 	if err := lifecycle.flushOpenProject(); err != nil {
 		return errors.Join(err, cleanupPreparedProject(path, true, resources, unlock))
 	}
@@ -226,7 +254,7 @@ func (lifecycle *ProjectLifecycle) projectBusy(project *openProject) bool {
 
 // Admit admits project-bound work and returns its matching release operation.
 func (lifecycle *ProjectLifecycle) Admit(ctx context.Context) (func(), error) {
-	return lifecycle.gate.admit(ctx)
+	return lifecycle.gate.admit(ctx, false)
 }
 
 // Shutdown flushes, closes, and releases the open project.
@@ -485,15 +513,11 @@ func (gate *projectGate) trackExtension() func() {
 	}
 }
 
-func (gate *projectGate) admit(ctx context.Context) (func(), error) {
+func (gate *projectGate) admit(ctx context.Context, internal bool) (func(), error) {
 	for {
 		gate.mu.Lock()
-		// Extension Lua may send through the proxy while a handoff is blocked
-		// on that execution. CONNECT does not carry x-extension-id, so a nested
-		// admit cannot be recognized on the request. Any admit proceeds until
-		// the execution finishes. The count keeps the handoff from closing the
-		// project, and the admit still takes a slot the handoff waits for.
-		if !gate.blocked || gate.extensionExecutions > 0 {
+		// Only the self-client can finish nested Lua requests during a handoff.
+		if !gate.blocked || internal && gate.extensionExecutions > 0 {
 			gate.active++
 			gate.mu.Unlock()
 			var once sync.Once
@@ -530,19 +554,10 @@ func (gate *projectGate) block(ctx context.Context, abort <-chan struct{}) (func
 	gate.mu.Lock()
 	gate.blocked = true
 	gate.signal()
-	for gate.active != 0 || gate.extensionExecutions != 0 {
-		changed := gate.changed
-		gate.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return gate.abortBlock(ctx.Err())
-		case <-abort:
-			return gate.abortBlock(errBlockAborted)
-		case <-changed:
-			gate.mu.Lock()
-		}
-	}
 	gate.mu.Unlock()
+	if err := gate.drain(ctx, abort); err != nil {
+		return gate.abortBlock(err)
+	}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
@@ -552,4 +567,22 @@ func (gate *projectGate) block(ctx context.Context, abort <-chan struct{}) (func
 			gate.mu.Unlock()
 		})
 	}, nil
+}
+
+func (gate *projectGate) drain(ctx context.Context, abort <-chan struct{}) error {
+	gate.mu.Lock()
+	for gate.active != 0 || gate.extensionExecutions != 0 {
+		changed := gate.changed
+		gate.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-abort:
+			return errBlockAborted
+		case <-changed:
+			gate.mu.Lock()
+		}
+	}
+	gate.mu.Unlock()
+	return nil
 }

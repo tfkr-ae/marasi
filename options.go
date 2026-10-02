@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/google/martian"
 	"github.com/google/martian/mitm"
 	"github.com/spf13/viper"
 	"github.com/tfkr-ae/marasi/chrome"
@@ -437,7 +439,8 @@ func WithWordlistManager(manager wordlist.Provider) func(*Proxy) error {
 }
 
 // WithWorkAdmission coordinates proxy traffic with service lifecycle changes.
-func WithWorkAdmission(admit func(context.Context) (func(), error)) func(*Proxy) error {
+// The boolean identifies requests made by the proxy's own client, including CONNECT.
+func WithWorkAdmission(admit func(context.Context, bool) (func(), error)) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		if admit == nil {
 			return errors.New("work admission cannot be nil")
@@ -456,7 +459,18 @@ func WithBasePipeline() func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		proxy.martianProxy.SetRequestModifier(
 			martianReqModifierFunc(func(req *http.Request) error {
-				release, err := proxy.admitWork(req.Context())
+				// Proxy credentials must not reach the origin or extension scripts.
+				expected := "Basic " + base64.StdEncoding.EncodeToString([]byte("marasi:"+proxy.clientWorkToken))
+				internal := req.Header.Get("Proxy-Authorization") == expected
+				session := martian.NewContext(req).Session()
+				if req.Method == http.MethodConnect && internal {
+					session.Set("marasi.self-client", true)
+				}
+				if owned, _ := session.Get("marasi.self-client"); owned == true {
+					internal = true
+				}
+				req.Header.Del("Proxy-Authorization")
+				release, err := proxy.admitWork(req.Context(), internal)
 				if err != nil {
 					return err
 				}

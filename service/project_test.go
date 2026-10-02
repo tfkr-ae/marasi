@@ -1,13 +1,23 @@
 package service
 
 import (
+	"bufio"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -87,6 +97,229 @@ func canonicalProjectPath(t *testing.T, path string) string {
 }
 
 func TestProjectLifecycle(t *testing.T) {
+	for _, mode := range []string{"sync", "async", "checkpoint", "sync-https", "async-https", "sync-checkpoint"} {
+		t.Run("should exclude unrelated work during a late WebSocket Lua callback "+mode, func(t *testing.T) {
+			async := strings.HasPrefix(mode, "async") || mode == "checkpoint"
+			checkpoint := strings.Contains(mode, "checkpoint")
+			httpsNested := strings.Contains(mode, "https")
+			server, lifecycle, dir, current := newProjectOpenServer(t)
+			proxy := lifecycle.proxy
+			if err := proxy.WithOptions(marasi.WithBasePipeline(), marasi.WithDefaultModifierPipeline(), marasi.WithRequestHandler(server.HandleRequest), marasi.WithResponseHandler(server.HandleResponse)); err != nil {
+				t.Fatal(err)
+			}
+			if httpsNested {
+				if err := proxy.WithOptions(marasi.WithTLS()); err != nil {
+					t.Fatal(err)
+				}
+				// Exercise CONNECT and client TLS at the proxy; the origin speaks HTTP.
+				proxy.AddRequestModifier(func(_ *marasi.Proxy, req *http.Request) error { req.URL.Scheme = "http"; return nil })
+			}
+			entered, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			releaseLua := func() { once.Do(func() { close(release) }) }
+			t.Cleanup(releaseLua)
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/hold" {
+					close(entered)
+					<-release
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				if r.URL.Path == "/unrelated" {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				conn, buffered, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				accept := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+				fmt.Fprintf(buffered, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: %s\r\n\r\n", base64.StdEncoding.EncodeToString(accept[:]))
+				buffered.Flush()
+				for {
+					frame, err := marasiws.ReadFrame(buffered)
+					if err != nil {
+						return
+					}
+					if frame.Opcode == marasiws.OpClose {
+						marasiws.WriteFrame(buffered, frame, false)
+						buffered.Flush()
+						return
+					}
+				}
+			}))
+			t.Cleanup(func() { releaseLua(); origin.Close() })
+			holdURL := origin.URL + "/hold"
+			if httpsNested {
+				holdURL = strings.Replace(holdURL, "http://", "https://", 1)
+			}
+			runtime := findExtensionRuntime(proxy, uuid.MustParse("01937d13-9632-7f84-add5-14ec2c2c7f43"))
+			runtime.Data.Enabled = true
+			checkpointHeld := proxy.CheckpointHoldStarted()
+			script := fmt.Sprintf(`function processWebSocketMessage(message)
+  local res, err = marasi:builder():set_method("GET"):set_url("%s"):send()
+  if not res then error(err) end
+  marasi.settings:set({phase = "closed"})
+end`, holdURL)
+			if async {
+				script = fmt.Sprintf(`function processWebSocketMessage(message)
+  marasi:builder():set_method("GET"):set_url("%s"):send_async(function(res, err)
+    if not res then error(err) end
+    marasi.settings:set({phase = "closed"})
+  end)
+  print("sent")
+end`, holdURL)
+				runtime.OnLog = func(extensions.ExtensionLog) error {
+					if checkpoint {
+						select {
+						case <-checkpointHeld:
+						case <-release:
+						}
+						close(entered)
+						return nil
+					}
+					select {
+					case <-entered:
+					case <-release:
+					}
+					return nil
+				}
+			}
+			if err := runtime.ExecuteLua(script); err != nil {
+				t.Fatal(err)
+			}
+			listener := NewListenerLifecycle(proxy, io.Discard)
+			listener.BindProject(lifecycle)
+			t.Cleanup(func() { releaseLua(); listener.Shutdown() })
+			if _, err := listener.Start(context.Background(), listenerSettings("127.0.0.1", 0)); err != nil {
+				t.Fatal(err)
+			}
+			address := net.JoinHostPort(proxy.Addr, proxy.Port)
+			conn, request := upgradeWebSocketThroughProxy(t, address, origin.URL)
+			t.Cleanup(func() { conn.Close() })
+			response, err := http.ReadResponse(bufio.NewReader(conn), request)
+			if err != nil || response.StatusCode != http.StatusSwitchingProtocols {
+				t.Fatalf("upgrade: %v %v", response, err)
+			}
+			target := canonicalProjectPath(t, filepath.Join(dir, "late-callback.marasi"))
+			opened := make(chan error, 1)
+			if checkpoint {
+				proxy.SetIntercept(true)
+			}
+			enteredWait := (<-chan struct{})(entered)
+			if checkpoint {
+				enteredWait = checkpointHeld
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			go func() { opened <- lifecycle.Open(ctx, target) }()
+			select {
+			case <-enteredWait:
+			case <-time.After(5 * time.Second):
+				t.Fatal("flush did not execute the peer close frame's Lua callback")
+			}
+			if lifecycle.Path() != current {
+				t.Fatal("published while close callback is running")
+			}
+			if checkpoint {
+				var err error
+				select {
+				case err = <-opened:
+				case <-time.After(500 * time.Millisecond):
+					t.Error("handoff did not abort when late Lua created a Checkpoint hold")
+					for _, item := range proxy.CheckpointItems() {
+						proxy.DropCheckpoint(item.ID)
+					}
+					err = <-opened
+				}
+				proxy.SetIntercept(false)
+				for _, item := range proxy.CheckpointItems() {
+					proxy.DropCheckpoint(item.ID)
+				}
+				releaseLua()
+				if !errors.Is(err, ErrProjectBusy) {
+					t.Fatalf("late Checkpoint hold should abort handoff, got %v", err)
+				}
+				status := requestControlAPI(server, http.MethodGet, "/traffic", "")
+				if status.Code != http.StatusOK {
+					t.Fatalf("admission did not reopen: %s", status.Body.String())
+				}
+				return
+			}
+			select {
+			case err := <-opened:
+				releaseLua()
+				t.Fatalf("handoff returned before late nested request completed: %v", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+			for _, kind := range []string{"control", "proxy"} {
+				ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+				var err error
+				if kind == "control" {
+					req := httptest.NewRequest(http.MethodPost, "/scope/check", strings.NewReader(`{"url":"http://example.com"}`)).WithContext(ctx)
+					recorder := httptest.NewRecorder()
+					server.ServeHTTP(recorder, req)
+					err = ctx.Err()
+				} else {
+					proxyURL, _ := url.Parse("http://" + address)
+					transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+					client := &http.Client{Transport: transport}
+					req, _ := http.NewRequestWithContext(ctx, http.MethodGet, origin.URL+"/unrelated", nil)
+					// Skip the busy VM so its mutex cannot hide an admission leak.
+					// An extension ID alone is not proof that this is nested work.
+					req.Header.Set("x-extension-id", runtime.Data.ID.String())
+					res, requestErr := client.Do(req)
+					if res != nil {
+						res.Body.Close()
+					}
+					transport.CloseIdleConnections()
+					err = requestErr
+				}
+				cancel()
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Errorf("unrelated %s work crossed the blocked handoff: %v", kind, err)
+				}
+			}
+			releaseLua()
+			select {
+			case err := <-opened:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("handoff deadlocked on nested Lua proxy request")
+			}
+			settingsPath := "/extension/" + runtime.Data.ID.String() + "/settings"
+			settings := requestControlAPI(server, http.MethodGet, settingsPath, "")
+			if strings.Contains(settings.Body.String(), `"phase":"closed"`) {
+				t.Fatalf("old callback wrote settings into the target: %s", settings.Body.String())
+			}
+			traffic := requestControlAPI(server, http.MethodGet, "/traffic", "")
+			if strings.Contains(traffic.Body.String(), `"path":"/hold"`) {
+				t.Fatalf("nested traffic leaked into target: %s", traffic.Body.String())
+			}
+			if err := lifecycle.Open(context.Background(), current); err != nil {
+				t.Fatal(err)
+			}
+			settings = requestControlAPI(server, http.MethodGet, settingsPath, "")
+			assertControlAPIResponse(t, settings, http.StatusOK, `{"settings":{"phase":"closed"}}`+"\n")
+			traffic = requestControlAPI(server, http.MethodGet, "/traffic", "")
+			var captured trafficList
+			if err := json.Unmarshal(traffic.Body.Bytes(), &captured); err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, item := range captured.Items {
+				if item.Path == "/hold" && item.StatusCode == http.StatusOK {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("old project lost the nested response: %s", traffic.Body.String())
+			}
+		})
+	}
 	t.Run("should cancel non-returning Lua before releasing project ownership during shutdown", func(t *testing.T) {
 		lifecycle, proxy, dir := newTestProjectLifecycle(t)
 		path := canonicalProjectPath(t, filepath.Join(dir, "hang.marasi"))
@@ -403,7 +636,7 @@ func TestProjectLifecycle(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 
-		nested, err := lifecycle.Admit(context.Background())
+		nested, err := lifecycle.gate.admit(context.Background(), true)
 		if err != nil {
 			endExecution()
 			releaseOld()
