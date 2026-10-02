@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -960,6 +961,195 @@ func TestCleanupService(t *testing.T) {
 }
 
 func TestStopService(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		graceful   bool
+		queuedStop bool
+		background bool
+	}{
+		{name: "should bound detached shutdown with a stalled upstream and reopen the project"},
+		{name: "should finish normal traffic during detached shutdown and reopen the project", graceful: true},
+		{name: "should bound detached shutdown queued behind a listener stop", queuedStop: true},
+		{name: "should cancel and persist background Armory runs before detached shutdown", background: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			binary := buildMarasi(t)
+			args := []string{"--config-dir", configDir, "--instance", "stalled-stop"}
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			releaseOrigin := func() { releaseOnce.Do(func() { close(release) }) }
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				close(entered)
+				<-release
+				fmt.Fprint(w, "finished")
+			}))
+			defer origin.Close()
+			defer releaseOrigin()
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				_ = exec.CommandContext(ctx, binary, append(args, "service", "stop")...).Run()
+			})
+			stdout, stderr, err := runMarasi(binary, append(args, "service", "start", "--port", "0", "--json")...)
+			if err != nil {
+				t.Fatalf("start: %v %s", err, stderr)
+			}
+			var started map[string]string
+			if err := json.Unmarshal([]byte(stdout), &started); err != nil {
+				t.Fatal(err)
+			}
+			proxyURL, _ := url.Parse("http://" + started["proxy_listener"])
+			transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+			defer transport.CloseIdleConnections()
+			requestDone := make(chan error, 1)
+			var runID string
+			if test.background {
+				if err := os.WriteFile(filepath.Join(configDir, "wordlists", "shutdown.txt"), []byte(strings.Repeat("payload\n", 10000)), 0600); err != nil {
+					t.Fatal(err)
+				}
+				rawFile := filepath.Join(configDir, "shutdown.raw")
+				raw := "GET /stalled/@@x@@ HTTP/1.1\r\nHost: " + strings.TrimPrefix(origin.URL, "http://") + "\r\n\r\n"
+				if err := os.WriteFile(rawFile, []byte(raw), 0600); err != nil {
+					t.Fatal(err)
+				}
+				body, stderr, err := runMarasi(binary, append(args, "armory", "template", "create", "--name", "shutdown", "--raw-file", rawFile, "--json")...)
+				if err != nil {
+					t.Fatalf("create template: %v %s", err, stderr)
+				}
+				var template struct {
+					ID string `json:"id"`
+				}
+				if err := json.Unmarshal([]byte(body), &template); err != nil {
+					t.Fatal(err)
+				}
+				body, stderr, err = runMarasi(binary, append(args, "armory", "run", "create", "--template", template.ID, "--attack-type", "harpoon", "--wordlist", "shutdown.txt", "--http", "--max-concurrent", "1", "--json")...)
+				if err != nil {
+					t.Fatalf("create run: %v %s", err, stderr)
+				}
+				var run struct {
+					ID string `json:"id"`
+				}
+				if err := json.Unmarshal([]byte(body), &run); err != nil {
+					t.Fatal(err)
+				}
+				runID = run.ID
+				if _, stderr, err := runMarasi(binary, append(args, "armory", "run", "start", runID)...); err != nil {
+					t.Fatalf("start run: %v %s", err, stderr)
+				}
+			} else {
+				go func() {
+					response, err := (&http.Client{Transport: transport}).Get(origin.URL + "/stalled")
+					if response != nil {
+						body, readErr := io.ReadAll(response.Body)
+						if test.graceful && (readErr != nil || string(body) != "finished") {
+							err = fmt.Errorf("graceful response: %q, %v", body, readErr)
+						}
+						response.Body.Close()
+					}
+					requestDone <- err
+				}()
+			}
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("upstream did not receive the proxied request")
+			}
+			if !test.graceful {
+				// A client stalled before protocol inspection must be interrupted too.
+				idle, err := net.Dial("tcp", started["proxy_listener"])
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer idle.Close()
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout+2*time.Second)
+			defer cancel()
+			if test.queuedStop {
+				listenerStop := exec.CommandContext(ctx, binary, append(args, "listener", "stop")...)
+				if err := listenerStop.Start(); err != nil {
+					t.Fatal(err)
+				}
+				defer listenerStop.Wait()
+				// A refused new connection proves the listener operation has closed
+				// admission while its accepted idle client is still withholding bytes.
+				for {
+					probe, err := net.DialTimeout("tcp", started["proxy_listener"], 100*time.Millisecond)
+					if err != nil {
+						break
+					}
+					probe.Close()
+					if ctx.Err() != nil {
+						t.Fatal("listener stop did not close admission")
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+			}
+			var output bytes.Buffer
+			stop := exec.CommandContext(ctx, binary, append(args, "service", "stop", "--json")...)
+			stop.Stdout, stop.Stderr = &output, &output
+			if err := stop.Start(); err != nil {
+				t.Fatal(err)
+			}
+			if test.graceful {
+				// Keep the origin pending until the control listener has stopped
+				// accepting, proving this response finishes during shutdown.
+				for {
+					status := exec.CommandContext(ctx, binary, append(args, "service", "status", "--json")...)
+					if err := status.Run(); err != nil {
+						break
+					}
+					if ctx.Err() != nil {
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				releaseOrigin()
+			}
+			err = stop.Wait()
+			if err != nil {
+				t.Fatalf("shutdown exceeded bound: %v %s", err, output.String())
+			}
+			if !test.background {
+				select {
+				case err := <-requestDone:
+					if test.graceful && err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("proxied connection remains open after stop")
+				}
+			}
+			if _, err := os.Stat(filepath.Join(configDir, "instances", "stalled-stop.sock")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("instance socket remains: %v", err)
+			}
+			stdout, stderr, err = runMarasi(binary, append(args, "service", "start", "--port", "0", "--json")...)
+			if err != nil {
+				t.Fatalf("reopen same instance and project: %v %s", err, stderr)
+			}
+			stdout, stderr, err = runMarasi(binary, append(args, "traffic", "list", "--path", "/stalled", "--json")...)
+			if err != nil || !strings.Contains(stdout, "/stalled") {
+				t.Fatalf("request was not flushed before project close: %v %s %s", err, stdout, stderr)
+			}
+			if test.background {
+				stdout, stderr, err = runMarasi(binary, append(args, "armory", "run", "get", runID, "--json")...)
+				var run struct {
+					Status     string     `json:"status"`
+					FinishedAt *time.Time `json:"finished_at"`
+				}
+				if err != nil {
+					t.Fatalf("read final run: %v %s", err, stderr)
+				}
+				if err := json.Unmarshal([]byte(stdout), &run); err != nil {
+					t.Fatal(err)
+				}
+				if run.Status != "cancelled" || run.FinishedAt == nil {
+					t.Fatalf("background run not safely finished: %s", stdout)
+				}
+			}
+		})
+	}
 	for _, mode := range []string{"API function", "traffic hook"} {
 		t.Run("should cancel non-returning Lua "+mode+" and release instance and project ownership", func(t *testing.T) {
 			configDir := serviceConfigDir(t)

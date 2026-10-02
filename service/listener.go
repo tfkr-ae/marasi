@@ -46,7 +46,8 @@ type listenerProxy interface {
 	GetListener(string, string) (net.Listener, error)
 	Serve(net.Listener) error
 	CloseWebSockets(int, string) error
-	CloseTransport() error
+	CloseTransportContext(context.Context) error
+	ForceCloseTransport()
 }
 
 type listenerOperation uint8
@@ -59,6 +60,7 @@ const (
 )
 
 type listenerRequest struct {
+	ctx       context.Context
 	operation listenerOperation
 	settings  ListenerSettings
 	result    chan listenerResult
@@ -183,11 +185,20 @@ func (l *listenerLifecycle) BindProject(projects *ProjectLifecycle) {
 
 // Shutdown closes the proxy through its established full-service cleanup path.
 func (l *listenerLifecycle) Shutdown() error {
+	return l.ShutdownContext(context.Background())
+}
+
+// ShutdownContext bounds graceful network draining, then joins forced cleanup.
+func (l *listenerLifecycle) ShutdownContext(ctx context.Context) error {
+	// The lifecycle actor may be draining an earlier stop/update. Enforce the
+	// deadline even before it can receive the shutdown request.
+	stopForceClose := context.AfterFunc(ctx, l.proxy.ForceCloseTransport)
+	defer stopForceClose()
 	if l.cancelProjectExecution != nil {
 		l.cancelProjectExecution()
 	}
 	result := make(chan listenerResult, 1)
-	request := listenerRequest{operation: shutdownListener, result: result}
+	request := listenerRequest{ctx: ctx, operation: shutdownListener, result: result}
 	select {
 	case l.requests <- request:
 		return (<-result).err
@@ -266,7 +277,7 @@ func (l *listenerLifecycle) run() {
 				}
 				request.result <- listenerResult{status: l.Status(), err: err}
 			case shutdownListener:
-				err := l.proxy.CloseTransport()
+				err := l.proxy.CloseTransportContext(request.ctx)
 				if current != nil {
 					<-current.finished
 				}

@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/martian"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
@@ -859,10 +858,11 @@ func TestProxy_CloseClosesWebSockets(t *testing.T) {
 		t.Fatalf("Add() returned unexpected error: %v", err)
 	}
 
-	proxy := &Proxy{
-		WebSocketRegistry: registry,
-		martianProxy:      martian.NewProxy(),
+	proxy, err := New()
+	if err != nil {
+		t.Fatal(err)
 	}
+	proxy.WebSocketRegistry = registry
 	proxy.Close()
 
 	if _, exists := registry.Get(connection.ID); exists {
@@ -886,12 +886,13 @@ func TestProxy_CloseClosesWebSockets(t *testing.T) {
 
 func TestProxy_CloseReturnsDatabaseError(t *testing.T) {
 	want := errors.New("database close failed")
-	proxy := &Proxy{
-		martianProxy: martian.NewProxy(),
-		DBCloser:     &errorCloser{err: want},
+	proxy, err := New()
+	if err != nil {
+		t.Fatal(err)
 	}
+	proxy.DBCloser = &errorCloser{err: want}
 
-	err := proxy.Close()
+	err = proxy.Close()
 	if !errors.Is(err, want) {
 		t.Fatalf("wanted database close error:\n%v\ngot:\n%v", want, err)
 	}
@@ -903,10 +904,9 @@ func TestProxy_CloseStopsServeCleanly(t *testing.T) {
 		t.Fatalf("creating listener: %v", err)
 	}
 
-	proxy := &Proxy{
-		martianProxy:      martian.NewProxy(),
-		DBWriteChannel:    make(chan any, 1),
-		WebSocketRegistry: marasiws.NewRegistry(),
+	proxy, err := New()
+	if err != nil {
+		t.Fatal(err)
 	}
 	serveResult := make(chan error, 1)
 	go func() {
@@ -955,13 +955,11 @@ func TestProxy_ActiveListenerAddress(t *testing.T) {
 		if err != nil {
 			t.Fatalf("creating listener: %v", err)
 		}
-		proxy := &Proxy{
-			martianProxy:      martian.NewProxy(),
-			DBWriteChannel:    make(chan any, 1),
-			WebSocketRegistry: marasiws.NewRegistry(),
-			Addr:              "wrong-address",
-			Port:              "1",
+		proxy, err := New()
+		if err != nil {
+			t.Fatal(err)
 		}
+		proxy.Addr, proxy.Port = "wrong-address", "1"
 		serveResult := make(chan error, 1)
 		go func() { serveResult <- proxy.Serve(listener) }()
 
@@ -1658,7 +1656,7 @@ func testProxyWebSocketIntegration(
 	}
 	serveResult := make(chan error, 1)
 	if secure {
-		roundTripper := newMarasiTransport(proxy.Cert)
+		roundTripper := newMarasiTransport(proxy.Cert, nil)
 		marasiTransport := roundTripper.(*marasiRoundTripper)
 		upstreamTransport := marasiTransport.base.(*http.Transport)
 		upstreamTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}

@@ -124,8 +124,15 @@ type Proxy struct {
 	webSocketsClosing    bool
 	martianCloseOnce     sync.Once
 	martianCloseDone     chan struct{}
+	connectionMu         sync.Mutex
+	connectionSessions   sync.WaitGroup
+	connections          map[net.Conn]struct{}
+	connectionsClosing   bool
+	transportContext     context.Context
+	cancelTransport      context.CancelFunc
 	listenerMu           sync.Mutex
 	activeListener       net.Listener
+	activeServeDone      chan struct{}
 	dbWriterStarted      atomic.Bool
 	launchpadWSMu        sync.Mutex
 	launchpadWS          map[io.Closer]struct{}
@@ -270,7 +277,11 @@ func (proxy *Proxy) GetArmory() (ArmoryService, error) {
 //   - *Proxy: Configured proxy instance
 //   - error: Configuration error if any option fails
 func New(options ...func(*Proxy) error) (*Proxy, error) {
+	transportContext, cancelTransport := context.WithCancel(context.Background())
 	proxy := &Proxy{
+		transportContext:     transportContext,
+		cancelTransport:      cancelTransport,
+		connections:          make(map[net.Conn]struct{}),
 		martianProxy:         martian.NewProxy(),
 		Modifiers:            fifo.NewGroup(),
 		DBWriteChannel:       make(chan any, 10),
@@ -669,6 +680,7 @@ func (proxy *Proxy) GetListener(address string, port string) (net.Listener, erro
 	proxy.Port = fmt.Sprintf("%d", addr.Port)
 
 	muxListener := listener.NewProtocolMuxListener(rawListener, proxy.mitmConfig)
+	muxListener.WrapConn = func(conn net.Conn) net.Conn { return proxy.trackConnection(conn, true) }
 	marasiListener := listener.NewMarasiListener(muxListener)
 
 	proxy.WriteLog("INFO", fmt.Sprintf("Marasi Service Started on %s", rawListener.Addr().String()))
@@ -711,13 +723,16 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 	if err := proxy.flushDBWrites(); err != nil {
 		return err
 	}
-	roundTripper := newMarasiTransport(proxy.Cert)
+	roundTripper := newMarasiTransport(proxy.Cert, proxy.dialTransport)
 	proxy.martianProxy.SetRoundTripper(roundTripper)
 	proxy.listenerMu.Lock()
 	proxy.activeListener = activeListener
+	serveDone := make(chan struct{})
+	proxy.activeServeDone = serveDone
 	proxy.listenerMu.Unlock()
 	defer func() {
 		proxy.listenerMu.Lock()
+		close(serveDone)
 		if proxy.activeListener == activeListener {
 			proxy.activeListener = nil
 		}
@@ -732,16 +747,24 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 
 // Close shuts down the proxy and closes the database connection.
 func (proxy *Proxy) Close() error {
-	return proxy.close(true)
+	return proxy.close(context.Background(), true)
 }
 
 // CloseTransport stops listeners and live connections without closing the
 // open project's database. The service project lifecycle closes that resource.
 func (proxy *Proxy) CloseTransport() error {
-	return proxy.close(false)
+	return proxy.CloseTransportContext(context.Background())
 }
 
-func (proxy *Proxy) close(closeDatabase bool) error {
+// CloseTransportContext allows traffic to finish until ctx expires, then
+// interrupts network work and joins its handlers before flushing persistence.
+func (proxy *Proxy) CloseTransportContext(ctx context.Context) error {
+	return proxy.close(ctx, false)
+}
+
+func (proxy *Proxy) close(ctx context.Context, closeDatabase bool) error {
+	stopForceClose := context.AfterFunc(ctx, proxy.ForceCloseTransport)
+	defer stopForceClose()
 	proxy.webSocketLifecycleMu.Lock()
 	proxy.webSocketsClosing = true
 	proxy.webSocketLifecycleMu.Unlock()
@@ -759,6 +782,7 @@ func (proxy *Proxy) close(closeDatabase bool) error {
 
 	var listenerErr error
 	proxy.listenerMu.Lock()
+	serveDone := proxy.activeServeDone
 	if proxy.activeListener != nil {
 		listenerErr = proxy.activeListener.Close()
 		if errors.Is(listenerErr, net.ErrClosed) {
@@ -770,7 +794,18 @@ func (proxy *Proxy) close(closeDatabase bool) error {
 	proxy.closeLaunchpadWebSockets()
 	proxy.DropAllCheckpoint()
 	webSocketErr := proxy.CloseWebSocketsAndFlush()
+	if proxy.Armory != nil {
+		proxy.Armory.Shutdown()
+	}
+	if serveDone != nil {
+		<-serveDone
+	}
 	<-proxy.martianCloseDone
+	// Martian increments its handler wait count inside the new goroutine.
+	// Join accepted sockets too, including not-yet-scheduled handlers.
+	proxy.connectionSessions.Wait()
+	proxy.ForceCloseTransport()
+	flushErr := proxy.flushDBWrites()
 	var databaseErr error
 	if closeDatabase && proxy.DBCloser != nil {
 		if proxy.Logger != nil {
@@ -779,7 +814,59 @@ func (proxy *Proxy) close(closeDatabase bool) error {
 		databaseErr = proxy.DBCloser.Close()
 	}
 
-	return errors.Join(listenerErr, webSocketErr, databaseErr)
+	return errors.Join(listenerErr, webSocketErr, flushErr, databaseErr)
+}
+
+// Track sockets before protocol inspection or TLS handshakes so forced shutdown
+// also interrupts clients and upstreams that have not sent HTTP headers yet.
+func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
+	proxy.connectionMu.Lock()
+	if inbound {
+		proxy.connectionSessions.Add(1)
+	}
+	proxy.connections[conn] = struct{}{}
+	closing := proxy.connectionsClosing
+	proxy.connectionMu.Unlock()
+	if closing {
+		conn.Close()
+	}
+	return listener.NewTrackedConnection(conn, func() {
+		proxy.connectionMu.Lock()
+		delete(proxy.connections, conn)
+		proxy.connectionMu.Unlock()
+		if inbound {
+			proxy.connectionSessions.Done()
+		}
+	})
+}
+
+func (proxy *Proxy) dialTransport(ctx context.Context, network, address string) (net.Conn, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(proxy.transportContext, cancel)
+	defer stop()
+	defer cancel()
+	conn, err := (&net.Dialer{}).DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	return proxy.trackConnection(conn, false), nil
+}
+
+// ForceCloseTransport interrupts network work without releasing handler ownership.
+// Full shutdown still joins those handlers before closing persistence.
+func (proxy *Proxy) ForceCloseTransport() {
+	proxy.cancelTransport()
+	proxy.connectionMu.Lock()
+	proxy.connectionsClosing = true
+	connections := make([]net.Conn, 0, len(proxy.connections))
+	for conn := range proxy.connections {
+		connections = append(connections, conn)
+	}
+	proxy.connectionMu.Unlock()
+	for _, conn := range connections {
+		// Interrupt I/O without releasing the handler's wait count.
+		conn.Close()
+	}
 }
 
 // StartChrome launches Chrome with proxy configuration and security settings.

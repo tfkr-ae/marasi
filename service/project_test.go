@@ -26,6 +26,7 @@ func (busyArmory) ValidateRun(*domain.ArmoryRun) error { return nil }
 func (busyArmory) StartRun(uuid.UUID) error            { return nil }
 func (busyArmory) CancelRun(uuid.UUID) error           { return nil }
 func (busyArmory) ActiveRunIDs() []uuid.UUID           { return []uuid.UUID{uuid.Nil} }
+func (busyArmory) Shutdown()                           {}
 
 func newTestProjectLifecycle(t *testing.T) (*ProjectLifecycle, *marasi.Proxy, string) {
 	t.Helper()

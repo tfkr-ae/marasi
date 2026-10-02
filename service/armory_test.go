@@ -142,6 +142,7 @@ type stubArmoryService struct {
 
 func (service *stubArmoryService) Repo() domain.ArmoryRepository { return service.repo }
 func (service *stubArmoryService) ActiveRunIDs() []uuid.UUID     { return service.active }
+func (service *stubArmoryService) Shutdown()                     {}
 func (service *stubArmoryService) ValidateRun(run *domain.ArmoryRun) error {
 	service.validateMu.Lock()
 	service.validated = append(service.validated, run)

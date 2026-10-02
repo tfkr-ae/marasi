@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -15,6 +16,8 @@ import (
 type connWrapper struct {
 	net.Conn
 	io.Reader
+	onClose   func()
+	closeOnce sync.Once
 }
 
 // connWrapper.Read method will read from the io.Reader instead of the net.Conn
@@ -22,10 +25,25 @@ func (cw *connWrapper) Read(b []byte) (int, error) {
 	return cw.Reader.Read(b)
 }
 
+func (cw *connWrapper) Close() error {
+	err := cw.Conn.Close()
+	if cw.onClose != nil {
+		cw.closeOnce.Do(cw.onClose)
+	}
+	return err
+}
+
+// NewTrackedConnection uses the listener's connection wrapper to notify the
+// owner when its handler closes the socket. Raw socket closure does not notify.
+func NewTrackedConnection(conn net.Conn, onClose func()) net.Conn {
+	return &connWrapper{Conn: conn, Reader: conn, onClose: onClose}
+}
+
 // ProtocolMuxListener wraps net.Listener and inspects the incoming connection to determine the protocol
 type ProtocolMuxListener struct {
 	net.Listener
 	TLSConfig *tls.Config
+	WrapConn  func(net.Conn) net.Conn
 }
 
 func NewProtocolMuxListener(listener net.Listener, tlsConfig *tls.Config) *ProtocolMuxListener {
@@ -39,6 +57,9 @@ func (l *ProtocolMuxListener) Accept() (net.Conn, error) {
 	rawConnection, err := l.Listener.Accept()
 	if err != nil {
 		return nil, fmt.Errorf("accepting connection: %w", err)
+	}
+	if l.WrapConn != nil {
+		rawConnection = l.WrapConn(rawConnection)
 	}
 
 	bufferedReader := bufio.NewReader(rawConnection)

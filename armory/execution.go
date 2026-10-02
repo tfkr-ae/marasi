@@ -119,12 +119,18 @@ func (manager *Manager) StartRun(runID uuid.UUID) error {
 	}
 
 	manager.mu.Lock()
+	if manager.closing {
+		manager.mu.Unlock()
+		execution.cancelFunc()
+		return errors.New("armory manager is shutting down")
+	}
 	if _, exists := manager.activeRuns[runID]; exists {
 		manager.mu.Unlock()
 		execution.cancelFunc()
 		return fmt.Errorf("armory run %s is already active", runID)
 	}
 	manager.activeRuns[runID] = execution
+	manager.executions.Add(1)
 	manager.mu.Unlock()
 
 	startedAt := time.Now()
@@ -133,6 +139,7 @@ func (manager *Manager) StartRun(runID uuid.UUID) error {
 	if err := manager.updateRun(run); err != nil {
 		manager.removeExecution(execution)
 		execution.cancelFunc()
+		manager.executions.Done()
 		return err
 	}
 
@@ -142,6 +149,7 @@ func (manager *Manager) StartRun(runID uuid.UUID) error {
 
 // execute produces and sends all requests for an Armory run.
 func (manager *Manager) execute(execution *execution) {
+	defer manager.executions.Done()
 	for worker := 0; worker < execution.run.MaxConcurrent; worker++ {
 		execution.wg.Add(1)
 		go manager.executeWorker(execution)

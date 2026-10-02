@@ -30,6 +30,8 @@ type Manager struct {
 	mu sync.Mutex
 	// activeRuns contains the runs currently being executed.
 	activeRuns map[uuid.UUID]*execution
+	closing    bool
+	executions sync.WaitGroup
 }
 
 // execution contains the runtime state of an active Armory run.
@@ -95,6 +97,18 @@ func (manager *Manager) CancelRun(runID uuid.UUID) error {
 
 	execution.cancelFunc()
 	return nil
+}
+
+// Shutdown prevents new runs, cancels workers and producers, and waits for
+// their final statuses to be persisted before project resources can close.
+func (manager *Manager) Shutdown() {
+	manager.mu.Lock()
+	manager.closing = true
+	for _, execution := range manager.activeRuns {
+		execution.cancelFunc()
+	}
+	manager.mu.Unlock()
+	manager.executions.Wait()
 }
 
 // Repo returns the repository used by the Armory manager.

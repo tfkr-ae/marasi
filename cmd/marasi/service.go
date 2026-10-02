@@ -375,7 +375,16 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 
 	projects := service.NewProjectLifecycle(proxy, configDir, wordlists, logger)
 	listenerLifecycle := service.NewListenerLifecycle(proxy, logFile)
-	closeProxy = listenerLifecycle.Shutdown
+	var shutdownOnce sync.Once
+	var shutdownErr error
+	closeProxy = func() error {
+		shutdownOnce.Do(func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+			defer cancel()
+			shutdownErr = listenerLifecycle.ShutdownContext(shutdownCtx)
+		})
+		return shutdownErr
+	}
 	listenerLifecycle.BindProject(projects)
 	if filepath.Clean(filepath.Dir(projectPath)) == filepath.Join(filepath.Clean(configDir), "projects") {
 		if err := os.MkdirAll(filepath.Dir(projectPath), 0700); err != nil {
@@ -426,6 +435,9 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	}
 
 	server := &http.Server{Handler: serviceServer}
+	// Drain proxy traffic alongside control requests, using the same grace period.
+	// Deferred cleanup joins this callback before closing the project database.
+	server.RegisterOnShutdown(func() { _ = closeProxy() })
 	return serveControlAPIReady(serviceCtx, server, controlListener, shutdownTimeout, func() error {
 		return ready(*listenerStatus.ProxyListener)
 	})
