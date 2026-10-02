@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/url"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/jmoiron/sqlx"
@@ -58,7 +61,20 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 	dbLogger := logger.With("component", "db")
 	dbLogger.Info("Connecting to SQLite...", "path", name)
 
-	db, err := sqlx.Connect("sqlite", fmt.Sprintf("%s?_journal=WAL&_timeout=5000&_fk=true", name))
+	dsn := name
+	if name != ":memory:" && name != "" {
+		path, err := filepath.Abs(name)
+		if err != nil {
+			return nil, fmt.Errorf("resolving database path: %w", err)
+		}
+		path = filepath.ToSlash(path)
+		// SQLite file URIs use /C:/... for absolute Windows drive paths.
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		dsn = (&url.URL{Scheme: "file", Path: path}).String()
+	}
+	db, err := sqlx.Connect("sqlite", dsn+"?_journal=WAL&_timeout=5000&_fk=true")
 
 	if err != nil {
 		dbLogger.Error("Failed to connect to database", "error", err)

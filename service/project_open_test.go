@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +40,50 @@ func projectOpenBody(path string) string {
 func assertProjectError(t *testing.T, response *httptest.ResponseRecorder, status int, code string) {
 	t.Helper()
 	assertListenerError(t, response, status, code)
+}
+
+func TestProjectOpenLiteralPaths(t *testing.T) {
+	prefixes := []string{"shared#", "shared%23", "shared% space 雪"}
+	if runtime.GOOS != "windows" {
+		prefixes = append(prefixes, "shared?")
+	}
+	for _, prefix := range prefixes {
+		t.Run(prefix, func(t *testing.T) {
+			dir := t.TempDir()
+			servers := make([]*Server, 0, 2)
+			for _, name := range []string{"one", "two"} {
+				server, lifecycle, _, _ := newProjectOpenServer(t)
+				servers = append(servers, server)
+				path := canonicalProjectPath(t, filepath.Join(dir, prefix+name+".marasi"))
+				response := requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(path))
+				want := fmt.Sprintf("{\"project\":%q}\n", path)
+				if response.Code != http.StatusOK || response.Body.String() != want || lifecycle.Path() != path {
+					t.Fatalf("opening literal project: want %s; got %d %s, path %q", want, response.Code, response.Body.String(), lifecycle.Path())
+				}
+				if _, err := os.Stat(path); err != nil {
+					t.Errorf("requested literal project %q: %v", path, err)
+				}
+				created := requestLaunchpad(server, http.MethodPost, "/launchpad", fmt.Sprintf(`{"name":%q}`, name))
+				if created.Code != http.StatusOK {
+					t.Fatalf("creating launchpad: %d %s", created.Code, created.Body.String())
+				}
+			}
+			for i, name := range []string{"one", "two"} {
+				response := requestLaunchpad(servers[i], http.MethodGet, "/launchpad", "")
+				var launchpads struct{ Items []domain.Launchpad }
+				if err := json.Unmarshal(response.Body.Bytes(), &launchpads); err != nil {
+					t.Fatalf("decoding launchpads: %v; %s", err, response.Body.String())
+				}
+				if response.Code != http.StatusOK || len(launchpads.Items) != 1 || launchpads.Items[0].Name != name {
+					t.Fatalf("independent project data: want %s; got %d %s", name, response.Code, response.Body.String())
+				}
+			}
+			competitor, _, _, _ := newProjectOpenServer(t)
+			alias := dir + string(os.PathSeparator) + "." + string(os.PathSeparator) + prefix + "one.marasi"
+			response := requestListener(t, competitor, http.MethodPost, "/project/open", projectOpenBody(alias))
+			assertProjectError(t, response, http.StatusConflict, "project_already_open")
+		})
+	}
 }
 
 func TestProjectOpen(t *testing.T) {
