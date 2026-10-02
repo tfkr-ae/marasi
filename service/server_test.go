@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -159,7 +160,7 @@ func (s *stubTrafficRepository) UpdateMetadata(metadata map[string]any, ids ...u
 func (s *stubTrafficRepository) GetNote(id uuid.UUID) (string, error) {
 	note, ok := s.notes[id]
 	if !ok {
-		return "", errors.New("not found")
+		return "", sql.ErrNoRows
 	}
 	return note, nil
 }

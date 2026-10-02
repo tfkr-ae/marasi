@@ -1,6 +1,7 @@
 package service
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -42,7 +43,11 @@ func addNoteRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) 
 		}
 		note, err := repo.GetNote(id)
 		if err != nil {
-			writeNoteError(w, r, http.StatusNotFound, "not_found")
+			if errors.Is(err, sql.ErrNoRows) {
+				writeNoteError(w, r, http.StatusNotFound, "not_found")
+			} else {
+				writeNoteError(w, r, http.StatusInternalServerError, "internal_server_error")
+			}
 			return
 		}
 		writeJSON(w, r, http.StatusOK, noteBody{ID: id, Note: note})

@@ -2,6 +2,8 @@ package service
 
 import (
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -137,6 +140,18 @@ func TestNoteGet(t *testing.T) {
 	requestControlAPI(server, http.MethodDelete, "/notes/"+id.String(), "")
 	assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/notes/"+id.String(), ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
 	assertControlAPIResponse(t, requestControlAPI(newTestServer(&marasi.Proxy{}, func() {}), http.MethodGet, "/notes/"+id.String(), ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
+}
+
+func TestNoteGetDatabaseFailure(t *testing.T) {
+	conn, err := db.New(t.TempDir()+"/notes.marasi", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := newTestServer(&marasi.Proxy{TrafficRepo: db.NewProxyRepo(conn)}, func() {})
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/notes/0193802f-f0e7-73d9-a764-06d21e367809", ""), http.StatusInternalServerError, "{\"error\":\"internal_server_error\"}\n")
 }
 
 func TestNotesList(t *testing.T) {
