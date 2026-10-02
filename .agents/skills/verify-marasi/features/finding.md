@@ -7,6 +7,7 @@ Users record findings in the open project, optionally point them at a test case,
 - Create with `finding create --title`.
 - List newest first with `finding list`.
 - Read one finding and its linked traffic with `finding get`.
+- List linked traffic oldest-first with `finding list-requests UUID`.
 - Change title, severity, CVSS fields, writeup, treatment plan, or related test case with `finding update`.
 - Delete with `finding delete`.
 - Attach an existing request UUID with `finding link --request`.
@@ -22,6 +23,8 @@ Start a service first. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --inst
 Run `finding create --title "Broken access control" --severity High --test-case "$TEST_CASE_ID" --json` and save `id`. Run `finding list --json` and require that id. Run `finding update "$FINDING_ID" --severity Medium --json`. Link a captured request with `finding link "$FINDING_ID" --request "$TRAFFIC_ID" --json`. Run `finding get "$FINDING_ID" --json` and require `severity` `Medium`, `test_case_id` equal to `$TEST_CASE_ID`, and that traffic id in `items`. Unlink with `finding unlink "$FINDING_ID" --request "$TRAFFIC_ID" --json`, then `finding delete "$FINDING_ID" --json`.
 
 ## Gotchas
+
+After linking, run `finding list-requests "$FINDING_ID" --json` and require the traffic id in `items`, with no finding fields or artifacts. Check human output includes the request id, method, host, path, status code, and length. After unlinking, require `{"items":[]}`.
 
 - `--title` is required on create and must be non-empty. Update requires at least one changed flag.
 - `--severity` is `Critical`, `High`, `Medium`, `Low`, `Informational`, or empty. Matching ignores case. The stored value uses that spelling. `--test-case` and `--clear-test-case` cannot be used together on update.

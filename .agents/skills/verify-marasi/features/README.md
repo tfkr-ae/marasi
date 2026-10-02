@@ -8,13 +8,13 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Proxy listener control | `listener status`, `listener address`, `listener stop`, `listener start`, `listener update` | [proxy listener control](proxy-listener-control.md) |
 | HTTP traffic capture | Configure a client with `proxy_listener`, then make HTTP or HTTPS requests | [HTTP traffic capture](http-traffic-capture.md) |
 | Captured traffic inspection | `traffic list`, list filters and pagination, `traffic get`, `traffic metadata get`, `traffic metadata update` | [captured traffic inspection](captured-traffic-inspection.md) |
-| Notes | `notes set`, `notes list`, list pagination, `notes clear` | [notes](notes.md) |
+| Notes | `notes set`, `notes get`, `notes list`, list pagination, `notes clear` | [notes](notes.md) |
 | Project open | `project open --name`, `project open --path`, `project switch`, `project list` | [project open](project-open.md) |
 | Events | `events` | [events](events.md) |
 | Launchpad | `launchpad create`, `launchpad list`, `launchpad get`, `launchpad update`, `launchpad link`, `launchpad launch` | [launchpad](launchpad.md) |
-| Test case | `test-case create`, `test-case list`, `test-case get`, `test-case update`, `test-case delete`, `test-case link`, `test-case unlink`, `test-case checklist` | [test case](test-case.md) |
-| Finding | `finding create`, `finding list`, `finding get`, `finding update`, `finding delete`, `finding link`, `finding unlink` | [finding](finding.md) |
-| Artifact | `artifact upload`, `artifact get`, `artifact download`, `artifact delete` | [artifact](artifact.md) |
+| Test case | `test-case create`, `test-case list`, `test-case get`, `test-case list-requests`, `test-case update`, `test-case delete`, `test-case link`, `test-case unlink`, `test-case checklist` | [test case](test-case.md) |
+| Finding | `finding create`, `finding list`, `finding get`, `finding list-requests`, `finding update`, `finding delete`, `finding link`, `finding unlink` | [finding](finding.md) |
+| Artifact | `artifact upload`, `artifact list`, `artifact get`, `artifact download`, `artifact delete` | [artifact](artifact.md) |
 | Checkpoint | `checkpoint list`, `checkpoint get`, `checkpoint forward`, `checkpoint drop`, `checkpoint intercept`, `checkpoint websocket-intercept` | [checkpoint](checkpoint.md) |
 | Chrome | `chrome path add`, `chrome path list`, `chrome path remove`, `chrome profile add`, `chrome profile list`, `chrome profile remove`, `chrome start` | [chrome](chrome.md) |
 | Waypoint | `waypoint list`, `waypoint add`, `waypoint update`, `waypoint remove` | [waypoint](waypoint.md) |

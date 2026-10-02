@@ -127,6 +127,18 @@ func TestNoteControlAPI(t *testing.T) {
 	})
 }
 
+func TestNoteGet(t *testing.T) {
+	id := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+	server := newTestServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{row: &domain.RequestResponseRow{Request: domain.ProxyRequest{ID: id}}}}, func() {})
+	assertControlAPIResponse(t, requestControlAPI(server, http.MethodPut, "/notes/"+id.String(), `{"note":"full note\nsecond line"}`), http.StatusOK, `{"id":"`+id.String()+`","note":"full note\nsecond line"}`+"\n")
+	assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/notes/"+id.String(), ""), http.StatusOK, `{"id":"`+id.String()+`","note":"full note\nsecond line"}`+"\n")
+	assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/notes/not-a-uuid", ""), http.StatusBadRequest, "{\"error\":\"bad_request\"}\n")
+	assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/notes/01938032-1b17-7243-b035-e6a9f4645904", ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
+	requestControlAPI(server, http.MethodDelete, "/notes/"+id.String(), "")
+	assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/notes/"+id.String(), ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
+	assertControlAPIResponse(t, requestControlAPI(newTestServer(&marasi.Proxy{}, func() {}), http.MethodGet, "/notes/"+id.String(), ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
+}
+
 func TestNotesList(t *testing.T) {
 	t.Run("should return an empty page", func(t *testing.T) {
 		server := newTestServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})

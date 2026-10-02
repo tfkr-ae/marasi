@@ -370,3 +370,25 @@ func TestNotesListCommand(t *testing.T) {
 		assertJSONCommandError(t, stdout, stderr, err, "listing notes: bad_request")
 	})
 }
+func TestNotesGet(t *testing.T) {
+	binary := buildMarasi(t)
+	id := "0193802f-f0e7-73d9-a764-06d21e367809"
+	body := `{"id":"` + id + `","note":"Full note, not truncated, with multiple lines\nsecond line"}` + "\n"
+	for _, asJSON := range []bool{false, true} {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+		args := []string{"--config-dir", configDir, "--instance", "work", "notes", "get", id}
+		want := "Full note, not truncated, with multiple lines\nsecond line\n"
+		if asJSON {
+			args = append(args, "--json")
+			want = body
+		}
+		stdout, stderr, err := runMarasi(binary, args...)
+		if err != nil || stdout != want || stderr != "" {
+			t.Fatalf("wanted %q, got stdout %q stderr %q error %v", want, stdout, stderr, err)
+		}
+		if got := sent.snapshot(); got.Method != http.MethodGet || got.Path != "/notes/"+id {
+			t.Fatalf("unexpected request: %s %s", got.Method, got.Path)
+		}
+	}
+}

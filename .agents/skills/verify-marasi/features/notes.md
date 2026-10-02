@@ -6,6 +6,7 @@ Users attach a text note to one captured request/response pair, list pairs that 
 
 - Set a note with `notes set UUID` from text, `--file`, or piped stdin.
 - List noted pairs newest first with `notes list`.
+- Get the full note with `notes get UUID`, using the captured traffic UUID.
 - Page the list with `--limit` and `--cursor`.
 - Clear a note with `notes clear UUID`.
 - Choose human-readable or `--json` output.
@@ -19,6 +20,8 @@ Send traffic through a running instance, then run `dist/marasi --config-dir "$VE
 Create one known proxied request and save `TRAFFIC_ID`. Run `notes set "$TRAFFIC_ID" "verify-note" --json` and require the same id plus that note. Run `notes list --json` and require an item with that id and note. The page is every noted pair in the open project, not a query for one id. Run `traffic metadata get "$TRAFFIC_ID" --json` and require `has_note` equal to the number `1`, not boolean `true`. Run `notes clear "$TRAFFIC_ID" --json`, then `notes list --json`, and require no item with that id.
 
 ## Gotchas
+
+Run `notes get "$TRAFFIC_ID" --json` after setting and require the same `id` and full `note`. Human output must preserve the full text and line breaks. After clearing, get must return not found.
 
 - Set requires exactly one of trailing text, `--file`, or piped stdin, and the note must be non-empty. A TTY stdin fails.
 - `notes set` on a missing request id returns not found. Invalid UUIDs fail before repository lookup.

@@ -26,6 +26,25 @@ type artifactResponse struct {
 }
 
 func addArtifactRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+	mux.HandleFunc("GET /artifact", func(w http.ResponseWriter, r *http.Request) {
+		repo, err := proxy.GetReportingRepo()
+		if err != nil {
+			writeArtifactError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		artifacts, err := repo.ListArtifacts()
+		if err != nil {
+			writeArtifactRepositoryError(w, r, err)
+			return
+		}
+		items := make([]artifactResponse, 0, len(artifacts))
+		for _, artifact := range artifacts {
+			items = append(items, artifactResponseFromDomain(artifact))
+		}
+		writeJSON(w, r, http.StatusOK, struct {
+			Items []artifactResponse `json:"items"`
+		}{Items: items})
+	})
 	mux.HandleFunc("POST /test-case/{id}/artifact", artifactUploadHandler(proxy, events, "test-case"))
 	mux.HandleFunc("POST /finding/{id}/artifact", artifactUploadHandler(proxy, events, "finding"))
 

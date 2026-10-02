@@ -163,3 +163,26 @@ func runMarasiInDir(binary, dir string, args ...string) (stdout, stderr string, 
 	err = command.Run()
 	return outBuf.String(), errBuf.String(), err
 }
+func TestArtifactListCommand(t *testing.T) {
+	binary := buildMarasi(t)
+	id := "01938032-1b17-7243-b035-e6a9f4645904"
+	parentID := "0193802f-f0e7-73d9-a764-06d21e367809"
+	body := `{"items":[{"id":"` + id + `","filename":"proof.txt","mime_type":"text/plain","size":5,"test_case_id":"` + parentID + `","finding_id":null,"created_at":"2026-10-03T10:00:00Z"}]}` + "\n"
+	for _, asJSON := range []bool{false, true} {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+		args := []string{"--config-dir", configDir, "--instance", "work", "artifact", "list"}
+		want := id + "  proof.txt  text/plain  5  " + parentID + "    2026-10-03T10:00:00Z\n"
+		if asJSON {
+			args = append(args, "--json")
+			want = body
+		}
+		stdout, stderr, err := runMarasi(binary, args...)
+		if err != nil || stdout != want || stderr != "" {
+			t.Fatalf("wanted %q, got stdout %q stderr %q error %v", want, stdout, stderr, err)
+		}
+		if got := sent.snapshot(); got.Method != http.MethodGet || got.Path != "/artifact" {
+			t.Fatalf("unexpected request: %s %s", got.Method, got.Path)
+		}
+	}
+}

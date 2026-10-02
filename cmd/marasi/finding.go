@@ -64,7 +64,7 @@ func init() {
 	findingLinkCmd.MarkFlagRequired("request")
 	findingUnlinkCmd.Flags().StringVar(&findingUnlinkRequest, "request", "", "UUID of the request/response pair")
 	findingUnlinkCmd.MarkFlagRequired("request")
-	findingCmd.AddCommand(findingCreateCmd, findingListCmd, findingGetCmd, findingUpdateCmd, findingDeleteCmd, findingLinkCmd, findingUnlinkCmd)
+	findingCmd.AddCommand(findingCreateCmd, findingListCmd, findingGetCmd, findingUpdateCmd, findingDeleteCmd, findingLinkCmd, findingUnlinkCmd, findingListRequestsCmd)
 	rootCmd.AddCommand(findingCmd)
 }
 
@@ -106,6 +106,15 @@ var findingGetCmd = &cobra.Command{
 			return err
 		}
 		return runFindingCommand(cmd, http.MethodGet, path, "getting finding", "get", findingRequest{})
+	},
+}
+
+var findingListRequestsCmd = &cobra.Command{
+	Use:   "list-requests UUID",
+	Short: "List traffic linked to a finding oldest-first",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runListRequestsCommand(cmd, "finding", args[0])
 	},
 }
 

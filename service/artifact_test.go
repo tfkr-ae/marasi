@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -20,6 +23,45 @@ type stubArtifactRepository struct {
 	testCases map[uuid.UUID]*domain.TestCase
 	findings  map[uuid.UUID]*domain.Finding
 	artifacts map[uuid.UUID]*domain.Artifact
+}
+
+func TestArtifactList(t *testing.T) {
+	conn, err := db.New(t.TempDir()+"/artifacts.marasi", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	server := newTestServer(&marasi.Proxy{ReportingRepo: db.NewProxyRepo(conn)}, func() {})
+	assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/artifact", ""), http.StatusOK, "{\"items\":[]}\n")
+	uploads := make([]artifactResponse, 0, 2)
+	for _, parent := range []string{"test-case", "finding"} {
+		created := requestControlAPI(server, http.MethodPost, "/"+parent, `{"title":"Evidence"}`)
+		var resource struct {
+			ID string `json:"id"`
+		}
+		if created.Code != http.StatusOK || json.Unmarshal(created.Body.Bytes(), &resource) != nil || resource.ID == "" {
+			t.Fatalf("creating parent: %s", created.Body.String())
+		}
+		uploaded := requestControlAPI(server, http.MethodPost, "/"+parent+"/"+resource.ID+"/artifact?filename="+parent+".txt", "proof")
+		var artifact artifactResponse
+		if uploaded.Code != http.StatusOK || json.Unmarshal(uploaded.Body.Bytes(), &artifact) != nil {
+			t.Fatalf("uploading artifact: %s", uploaded.Body.String())
+		}
+		uploads = append(uploads, artifact)
+	}
+	listed := requestControlAPI(server, http.MethodGet, "/artifact", "")
+	want, err := json.Marshal(struct {
+		Items []artifactResponse `json:"items"`
+	}{Items: []artifactResponse{uploads[1], uploads[0]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertControlAPIResponse(t, listed, http.StatusOK, string(want)+"\n")
+	for _, artifact := range uploads {
+		requestControlAPI(server, http.MethodDelete, "/artifact/"+artifact.ID.String(), "")
+	}
+	assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/artifact", ""), http.StatusOK, "{\"items\":[]}\n")
+	assertControlAPIResponse(t, requestControlAPI(newTestServer(&marasi.Proxy{}, func() {}), http.MethodGet, "/artifact", ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
 }
 
 func (repo *stubArtifactRepository) GetTestCase(id uuid.UUID) (*domain.TestCase, error) {

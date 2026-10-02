@@ -15,19 +15,19 @@ var _ domain.ReportingRepository = (*Repository)(nil)
 // dbTestCase represents the database schema for a test case.
 type dbTestCase struct {
 	// ID is the primary key.
-	ID          uuid.UUID   `db:"id"`
+	ID uuid.UUID `db:"id"`
 	// Title is the test case title.
-	Title       string      `db:"title"`
+	Title string `db:"title"`
 	// Description is the test case description.
-	Description string      `db:"description"`
+	Description string `db:"description"`
 	// Category is the test case category.
-	Category    string      `db:"category"`
+	Category string `db:"category"`
 	// Tags is a custom string array type for database storage.
-	Tags        StringArray `db:"tags"`
+	Tags StringArray `db:"tags"`
 	// Note is the researcher note.
-	Note        string      `db:"note"`
+	Note string `db:"note"`
 	// CreatedAt is the record creation timestamp.
-	CreatedAt   time.Time   `db:"created_at"`
+	CreatedAt time.Time `db:"created_at"`
 }
 
 // toDomainTestCase converts a database test case model to a domain test case model.
@@ -297,23 +297,23 @@ func (repo *Repository) DeleteTestCase(id uuid.UUID) error {
 // dbFinding represents the database schema for a finding.
 type dbFinding struct {
 	// ID is the primary key.
-	ID            uuid.UUID  `db:"id"`
+	ID uuid.UUID `db:"id"`
 	// TestCaseID is the foreign key to the associated test case.
-	TestCaseID    *uuid.UUID `db:"test_case_id"`
+	TestCaseID *uuid.UUID `db:"test_case_id"`
 	// Title is the finding title.
-	Title         string     `db:"title"`
+	Title string `db:"title"`
 	// CVSSVector is the CVSS vector string.
-	CVSSVector    string     `db:"cvss_vector"`
+	CVSSVector string `db:"cvss_vector"`
 	// CVSSScore is the numerical CVSS score.
-	CVSSScore     float64    `db:"cvss_score"`
+	CVSSScore float64 `db:"cvss_score"`
 	// Severity is the finding severity level.
-	Severity      string     `db:"severity"`
+	Severity string `db:"severity"`
 	// WriteUp is the finding write-up.
-	WriteUp       string     `db:"writeup"`
+	WriteUp string `db:"writeup"`
 	// TreatmentPlan is the remediation plan.
-	TreatmentPlan string     `db:"treatment_plan"`
+	TreatmentPlan string `db:"treatment_plan"`
 	// CreatedAt is the record creation timestamp.
-	CreatedAt     time.Time  `db:"created_at"`
+	CreatedAt time.Time `db:"created_at"`
 }
 
 // toDomainFinding converts a database finding model to a domain finding model.
@@ -597,33 +597,33 @@ func (repo *Repository) DeleteFinding(id uuid.UUID) error {
 // dbArtifact represents the full database schema for an artifact, including binary data.
 type dbArtifact struct {
 	// ID is the primary key.
-	ID         uuid.UUID  `db:"id"`
+	ID uuid.UUID `db:"id"`
 	// TestCaseID is the foreign key to an associated test case.
 	TestCaseID *uuid.UUID `db:"test_case_id"`
 	// FindingID is the foreign key to an associated finding.
-	FindingID  *uuid.UUID `db:"finding_id"`
+	FindingID *uuid.UUID `db:"finding_id"`
 	// Filename is the artifact filename.
-	Filename   string     `db:"filename"`
+	Filename string `db:"filename"`
 	// MimeType is the artifact media type.
-	MimeType   string     `db:"mime_type"`
+	MimeType string `db:"mime_type"`
 	// Size is the size in bytes.
-	Size       int64      `db:"size_bytes"`
+	Size int64 `db:"size_bytes"`
 	// Data is the raw binary content.
-	Data       []byte     `db:"data"`
+	Data []byte `db:"data"`
 	// CreatedAt is the record creation timestamp.
-	CreatedAt  time.Time  `db:"created_at"`
+	CreatedAt time.Time `db:"created_at"`
 }
 
 // dbArtifactMetadata represents the database schema for artifact metadata.
 type dbArtifactMetadata struct {
 	// ID is the primary key.
-	ID        uuid.UUID `db:"id"`
+	ID uuid.UUID `db:"id"`
 	// Filename is the artifact filename.
-	Filename  string    `db:"filename"`
+	Filename string `db:"filename"`
 	// MimeType is the artifact media type.
-	MimeType  string    `db:"mime_type"`
+	MimeType string `db:"mime_type"`
 	// Size is the size in bytes.
-	Size      int64     `db:"size_bytes"`
+	Size int64 `db:"size_bytes"`
 	// CreatedAt is the record creation timestamp.
 	CreatedAt time.Time `db:"created_at"`
 }
@@ -707,6 +707,24 @@ func (repo *Repository) GetArtifact(id uuid.UUID) (*domain.Artifact, error) {
 	}
 
 	return toDomainArtifact(&dbA), nil
+}
+
+// ListArtifacts retrieves metadata and parent IDs without loading file contents.
+func (repo *Repository) ListArtifacts() ([]*domain.Artifact, error) {
+	var rows []dbArtifact
+	query := `
+		SELECT id, test_case_id, finding_id, filename, mime_type, size_bytes, created_at
+		FROM artifacts
+		ORDER BY created_at DESC, id DESC
+	`
+	if err := repo.dbConn.Select(&rows, query); err != nil {
+		return nil, fmt.Errorf("listing artifacts: %w", err)
+	}
+	items := make([]*domain.Artifact, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, toDomainArtifact(&row))
+	}
+	return items, nil
 }
 
 // DeleteArtifact removes an artifact from the database.

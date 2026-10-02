@@ -185,6 +185,8 @@ type ReportingRepository interface {
 	SaveArtifact(*Artifact) error
 	// GetArtifact retrieves an artifact, including its raw data, by its ID.
 	GetArtifact(uuid.UUID) (*Artifact, error)
+	// ListArtifacts returns artifact metadata and parent IDs newest-first, without raw data.
+	ListArtifacts() ([]*Artifact, error)
 	// DeleteArtifact removes an artifact by its ID.
 	DeleteArtifact(uuid.UUID) error
 }

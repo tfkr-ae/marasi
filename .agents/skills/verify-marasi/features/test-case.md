@@ -7,6 +7,7 @@ Users record named test cases in the open project, attach captured traffic, and 
 - Create with `test-case create --title`.
 - List newest first with `test-case list`.
 - Read one case and its linked traffic with `test-case get`.
+- List linked traffic oldest-first with `test-case list-requests UUID`.
 - Change title, description, category, tags, or note with `test-case update`.
 - Delete with `test-case delete`.
 - Attach an existing request UUID with `test-case link --request`.
@@ -23,6 +24,8 @@ Start a service first. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --inst
 Run `test-case create --title "Auth bypass" --category Access --tag auth --note first --json` and save `id`. Run `test-case list --json` and require that id. Run `test-case update "$TEST_CASE_ID" --note replay --json`. Link a captured request with `test-case link "$TEST_CASE_ID" --request "$TRAFFIC_ID" --json`. Run `test-case get "$TEST_CASE_ID" --json` and require note `replay` plus that traffic id in `items`. Run `test-case checklist --json` and require a non-empty `title` and `items` whose members have `title`, `description`, and `category` but no `id`. Unlink with `test-case unlink "$TEST_CASE_ID" --request "$TRAFFIC_ID" --json`, then `test-case delete "$TEST_CASE_ID" --json`.
 
 ## Gotchas
+
+After linking, run `test-case list-requests "$TEST_CASE_ID" --json` and require the traffic id in `items`, with no test-case fields or artifacts. Check human output includes the request id, method, host, path, status code, and length. After unlinking, require `{"items":[]}`.
 
 - `--title` is required on create and must be non-empty. Update requires at least one changed flag. Repeat `--tag` for multiple tags.
 - Checklist items have no ids. The first `test-case checklist` writes `$VERIFY_CONFIG_DIR/test_cases.yml` from the bundled default if that file is missing.

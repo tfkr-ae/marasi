@@ -54,13 +54,22 @@ func init() {
 	testCaseLinkCmd.MarkFlagRequired("request")
 	testCaseUnlinkCmd.Flags().StringVar(&testCaseUnlinkRequest, "request", "", "UUID of the request/response pair")
 	testCaseUnlinkCmd.MarkFlagRequired("request")
-	testCaseCmd.AddCommand(testCaseCreateCmd, testCaseListCmd, testCaseGetCmd, testCaseUpdateCmd, testCaseDeleteCmd, testCaseLinkCmd, testCaseUnlinkCmd, testCaseChecklistCmd)
+	testCaseCmd.AddCommand(testCaseCreateCmd, testCaseListCmd, testCaseGetCmd, testCaseUpdateCmd, testCaseDeleteCmd, testCaseLinkCmd, testCaseUnlinkCmd, testCaseChecklistCmd, testCaseListRequestsCmd)
 	rootCmd.AddCommand(testCaseCmd)
 }
 
 var testCaseCmd = &cobra.Command{
 	Use:   "test-case",
 	Short: "Create, list, and link test cases",
+}
+
+var testCaseListRequestsCmd = &cobra.Command{
+	Use:   "list-requests UUID",
+	Short: "List traffic linked to a test case oldest-first",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runListRequestsCommand(cmd, "test-case", args[0])
+	},
 }
 
 var testCaseCreateCmd = &cobra.Command{

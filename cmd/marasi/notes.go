@@ -24,13 +24,13 @@ func init() {
 	notesSetCmd.Flags().StringVar(&notesSetFile, "file", "", "Read the note from a file")
 	notesListCmd.Flags().StringVar(&notesListLimit, "limit", "200", "Maximum number of items to return, from 1 to 500")
 	notesListCmd.Flags().StringVar(&notesListCursor, "cursor", "", "UUID of the last item, used to fetch the next older page")
-	notesCmd.AddCommand(notesListCmd, notesSetCmd, notesClearCmd)
+	notesCmd.AddCommand(notesListCmd, notesGetCmd, notesSetCmd, notesClearCmd)
 	rootCmd.AddCommand(notesCmd)
 }
 
 var notesCmd = &cobra.Command{
 	Use:   "notes",
-	Short: "List, set, and clear notes on traffic",
+	Short: "List, get, set, and clear notes on traffic",
 }
 
 var notesListCmd = &cobra.Command{
@@ -88,6 +88,34 @@ var notesSetCmd = &cobra.Command{
 			return err
 		}
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "note %s set\n", args[0])
+		return err
+	},
+}
+
+var notesGetCmd = &cobra.Command{
+	Use:   "get UUID",
+	Short: "Get the full note on a request/response pair",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := serviceIDPath("/notes/", args[0], "")
+		if err != nil {
+			return err
+		}
+		body, err := runControlRequest(cmd, http.MethodGet, path, "getting note", nil)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		var note struct {
+			Note string `json:"note"`
+		}
+		if err := json.Unmarshal(body, &note); err != nil {
+			return fmt.Errorf("decoding note: %w", err)
+		}
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), note.Note)
 		return err
 	},
 }

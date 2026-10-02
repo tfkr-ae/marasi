@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
@@ -40,13 +41,40 @@ func init() {
 	artifactUploadCmd.Flags().StringVar(&artifactUploadMIME, "mime", "", "MIME type. Defaults from the file extension")
 	artifactUploadCmd.MarkFlagRequired("file")
 	artifactDownloadCmd.Flags().StringVar(&artifactDownloadOutput, "output", "", "File to write. Defaults to the artifact file name in the current directory")
-	artifactCmd.AddCommand(artifactUploadCmd, artifactGetCmd, artifactDownloadCmd, artifactDeleteCmd)
+	artifactCmd.AddCommand(artifactListCmd, artifactUploadCmd, artifactGetCmd, artifactDownloadCmd, artifactDeleteCmd)
 	rootCmd.AddCommand(artifactCmd)
 }
 
 var artifactCmd = &cobra.Command{
 	Use:   "artifact",
 	Short: "Upload and download files for findings and test cases",
+}
+
+var artifactListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List artifacts in the open project newest-first",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		body, err := runControlRequest(cmd, http.MethodGet, "/artifact", "listing artifacts", nil)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		var list struct {
+			Items []artifactMetadata `json:"items"`
+		}
+		if err := json.Unmarshal(body, &list); err != nil {
+			return fmt.Errorf("decoding artifact list: %w", err)
+		}
+		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+		for _, item := range list.Items {
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%d\t%s\t%s\t%s\n", item.ID, truncateDisplay(item.Filename, trafficPathDisplayLimit), item.MIMEType, item.Size, optionalString(item.TestCaseID), optionalString(item.FindingID), item.CreatedAt)
+		}
+		return writer.Flush()
+	},
 }
 
 var artifactUploadCmd = &cobra.Command{

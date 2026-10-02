@@ -30,6 +30,23 @@ type noteListItem struct {
 var errInvalidNoteRequest = errors.New("invalid note request")
 
 func addNoteRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+	mux.HandleFunc("GET /notes/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseNoteID(w, r)
+		if !ok {
+			return
+		}
+		repo, err := proxy.GetTrafficRepo()
+		if err != nil {
+			writeNoteError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		note, err := repo.GetNote(id)
+		if err != nil {
+			writeNoteError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		writeJSON(w, r, http.StatusOK, noteBody{ID: id, Note: note})
+	})
 	mux.HandleFunc("GET /notes", func(w http.ResponseWriter, r *http.Request) {
 		limit, cursor, ok := parseNotesListQuery(r)
 		if !ok {
