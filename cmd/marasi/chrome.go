@@ -1,0 +1,233 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"path/filepath"
+	"runtime"
+	"strings"
+
+	"github.com/spf13/cobra"
+)
+
+var chromePathValue string
+var chromePathOS = runtime.GOOS
+var chromeStartProfile string
+
+type chromePathRequest struct {
+	OS   string `json:"os"`
+	Path string `json:"path"`
+}
+
+type chromeProfileRequest struct {
+	Name string `json:"name"`
+}
+
+type chromeStartRequest struct {
+	Profile string `json:"profile"`
+}
+
+func init() {
+	chromePathAddCmd.Flags().StringVar(&chromePathValue, "path", "", "Path to the Chrome executable. Required")
+	chromePathAddCmd.Flags().StringVar(&chromePathOS, "os", runtime.GOOS, "Operating system: darwin, linux, or windows")
+	chromePathAddCmd.MarkFlagRequired("path")
+	chromePathRemoveCmd.Flags().StringVar(&chromePathValue, "path", "", "Path to the Chrome executable. Required")
+	chromePathRemoveCmd.Flags().StringVar(&chromePathOS, "os", runtime.GOOS, "Operating system: darwin, linux, or windows")
+	chromePathRemoveCmd.MarkFlagRequired("path")
+	chromePathCmd.AddCommand(chromePathAddCmd, chromePathRemoveCmd, chromePathListCmd)
+	chromeProfileCmd.AddCommand(chromeProfileAddCmd, chromeProfileRemoveCmd, chromeProfileListCmd)
+	chromeStartCmd.Flags().StringVar(&chromeStartProfile, "profile", "", "Chrome profile name to start")
+	chromeCmd.AddCommand(chromePathCmd, chromeProfileCmd, chromeStartCmd)
+	rootCmd.AddCommand(chromeCmd)
+}
+
+var chromeCmd = &cobra.Command{
+	Use:   "chrome",
+	Short: "Start Chrome and manage its paths and profiles",
+}
+
+var chromePathCmd = &cobra.Command{
+	Use:   "path",
+	Short: "Add, remove, and list Chrome executable paths",
+}
+
+var chromePathAddCmd = &cobra.Command{
+	Use:   "add",
+	Short: "Add a Chrome executable path",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return runChromePathCommand(cmd, http.MethodPost, "adding chrome path", "chrome path added")
+	},
+}
+
+var chromePathRemoveCmd = &cobra.Command{
+	Use:   "remove",
+	Short: "Remove a Chrome executable path",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return runChromePathCommand(cmd, http.MethodDelete, "removing chrome path", "chrome path removed")
+	},
+}
+
+var chromePathListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List Chrome executable paths",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		body, err := runControlRequest(cmd, http.MethodGet, "/chrome/path", "listing chrome paths", nil)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		return writeChromePaths(body, cmd.OutOrStdout())
+	},
+}
+
+var chromeProfileCmd = &cobra.Command{
+	Use:   "profile",
+	Short: "Add, remove, and list Chrome profiles",
+}
+
+var chromeProfileAddCmd = &cobra.Command{
+	Use:   "add NAME",
+	Short: "Add a Chrome profile",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		body, err := json.Marshal(chromeProfileRequest{Name: args[0]})
+		if err != nil {
+			return fmt.Errorf("encoding chrome profile request: %w", err)
+		}
+		return runChromeMutation(cmd, http.MethodPost, "/chrome/profile", "adding chrome profile", body, "chrome profile "+args[0]+" added")
+	},
+}
+
+var chromeProfileRemoveCmd = &cobra.Command{
+	Use:   "remove NAME",
+	Short: "Remove a Chrome profile",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name, err := chromeProfileSegment(args[0])
+		if err != nil {
+			return err
+		}
+		return runChromeMutation(cmd, http.MethodDelete, "/chrome/profile/"+name, "removing chrome profile", nil, "chrome profile "+args[0]+" removed")
+	},
+}
+
+var chromeProfileListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List Chrome profiles",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		body, err := runControlRequest(cmd, http.MethodGet, "/chrome/profile", "listing chrome profiles", nil)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		return writeChromeProfiles(body, cmd.OutOrStdout())
+	},
+}
+
+var chromeStartCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start Chrome",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		body := []byte("{}")
+		if cmd.Flags().Changed("profile") {
+			var err error
+			body, err = json.Marshal(chromeStartRequest{Profile: chromeStartProfile})
+			if err != nil {
+				return fmt.Errorf("encoding chrome start request: %w", err)
+			}
+		}
+		response, err := runControlRequest(cmd, http.MethodPost, "/chrome/start", "starting chrome", body)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(response)
+			return err
+		}
+		var result struct {
+			Profile string `json:"profile"`
+		}
+		if err := json.Unmarshal(response, &result); err != nil {
+			return fmt.Errorf("decoding chrome start response: %w", err)
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "chrome started with profile %s\n", result.Profile)
+		return err
+	},
+}
+
+func runChromePathCommand(cmd *cobra.Command, method, operation, confirmation string) error {
+	body, err := json.Marshal(chromePathRequest{OS: chromePathOS, Path: chromePathValue})
+	if err != nil {
+		return fmt.Errorf("encoding chrome path request: %w", err)
+	}
+	return runChromeMutation(cmd, method, "/chrome/path", operation, body, confirmation)
+}
+
+func runChromeMutation(cmd *cobra.Command, method, path, operation string, body []byte, confirmation string) error {
+	response, err := runControlRequest(cmd, method, path, operation, body)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		_, err = cmd.OutOrStdout().Write(response)
+	} else {
+		_, err = fmt.Fprintln(cmd.ErrOrStderr(), confirmation)
+	}
+	return err
+}
+
+func writeChromePaths(body []byte, stdout io.Writer) error {
+	var response struct {
+		Items []chromePathRequest `json:"items"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return fmt.Errorf("decoding chrome paths: %w", err)
+	}
+	for index, path := range response.Items {
+		if index > 0 {
+			if _, err := fmt.Fprintln(stdout); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintf(stdout, "os: %s\npath: %s\n", path.OS, path.Path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeChromeProfiles(body []byte, stdout io.Writer) error {
+	var response struct {
+		Items []chromeProfileRequest `json:"items"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return fmt.Errorf("decoding chrome profiles: %w", err)
+	}
+	for _, profile := range response.Items {
+		if _, err := fmt.Fprintln(stdout, profile.Name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func chromeProfileSegment(name string) (string, error) {
+	if name == "" || strings.ContainsRune(name, 0) || !filepath.IsLocal(name) || filepath.Base(name) != name {
+		return "", fmt.Errorf("invalid chrome profile name %q", name)
+	}
+	return url.PathEscape(name), nil
+}

@@ -1,7 +1,9 @@
 package db
 
 import (
+	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,19 +15,19 @@ var _ domain.ReportingRepository = (*Repository)(nil)
 // dbTestCase represents the database schema for a test case.
 type dbTestCase struct {
 	// ID is the primary key.
-	ID          uuid.UUID   `db:"id"`
+	ID uuid.UUID `db:"id"`
 	// Title is the test case title.
-	Title       string      `db:"title"`
+	Title string `db:"title"`
 	// Description is the test case description.
-	Description string      `db:"description"`
+	Description string `db:"description"`
 	// Category is the test case category.
-	Category    string      `db:"category"`
+	Category string `db:"category"`
 	// Tags is a custom string array type for database storage.
-	Tags        StringArray `db:"tags"`
+	Tags StringArray `db:"tags"`
 	// Note is the researcher note.
-	Note        string      `db:"note"`
+	Note string `db:"note"`
 	// CreatedAt is the record creation timestamp.
-	CreatedAt   time.Time   `db:"created_at"`
+	CreatedAt time.Time `db:"created_at"`
 }
 
 // toDomainTestCase converts a database test case model to a domain test case model.
@@ -165,6 +167,47 @@ func (repo *Repository) SaveTestCase(domainTC *domain.TestCase) error {
 	return tx.Commit()
 }
 
+// UpdateTestCase atomically changes only supplied metadata, leaving links untouched.
+func (repo *Repository) UpdateTestCase(id uuid.UUID, mutation domain.TestCaseMutation) error {
+	columns := []string{}
+	args := []any{}
+	set := func(column string, value any) {
+		columns = append(columns, column+" = ?")
+		args = append(args, value)
+	}
+	if mutation.Title != nil {
+		set("title", *mutation.Title)
+	}
+	if mutation.Description != nil {
+		set("description", *mutation.Description)
+	}
+	if mutation.Category != nil {
+		set("category", *mutation.Category)
+	}
+	if mutation.Tags != nil {
+		set("tags", StringArray(*mutation.Tags))
+	}
+	if mutation.Note != nil {
+		set("note", *mutation.Note)
+	}
+	if len(columns) == 0 {
+		columns = append(columns, "id = id")
+	}
+	args = append(args, id)
+	result, err := repo.dbConn.Exec("UPDATE test_cases SET "+strings.Join(columns, ", ")+" WHERE id = ?", args...)
+	if err != nil {
+		return fmt.Errorf("updating test case %s: %w", id, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking updated test case rows: %w", err)
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // ListTestCases retrieves all test cases with their associated requests and artifacts.
 func (repo *Repository) ListTestCases() ([]*domain.TestCase, error) {
 	type tcRequestRow struct {
@@ -254,23 +297,23 @@ func (repo *Repository) DeleteTestCase(id uuid.UUID) error {
 // dbFinding represents the database schema for a finding.
 type dbFinding struct {
 	// ID is the primary key.
-	ID            uuid.UUID  `db:"id"`
+	ID uuid.UUID `db:"id"`
 	// TestCaseID is the foreign key to the associated test case.
-	TestCaseID    *uuid.UUID `db:"test_case_id"`
+	TestCaseID *uuid.UUID `db:"test_case_id"`
 	// Title is the finding title.
-	Title         string     `db:"title"`
+	Title string `db:"title"`
 	// CVSSVector is the CVSS vector string.
-	CVSSVector    string     `db:"cvss_vector"`
+	CVSSVector string `db:"cvss_vector"`
 	// CVSSScore is the numerical CVSS score.
-	CVSSScore     float64    `db:"cvss_score"`
+	CVSSScore float64 `db:"cvss_score"`
 	// Severity is the finding severity level.
-	Severity      string     `db:"severity"`
+	Severity string `db:"severity"`
 	// WriteUp is the finding write-up.
-	WriteUp       string     `db:"writeup"`
+	WriteUp string `db:"writeup"`
 	// TreatmentPlan is the remediation plan.
-	TreatmentPlan string     `db:"treatment_plan"`
+	TreatmentPlan string `db:"treatment_plan"`
 	// CreatedAt is the record creation timestamp.
-	CreatedAt     time.Time  `db:"created_at"`
+	CreatedAt time.Time `db:"created_at"`
 }
 
 // toDomainFinding converts a database finding model to a domain finding model.
@@ -418,6 +461,53 @@ func (repo *Repository) SaveFinding(domainF *domain.Finding) error {
 	return tx.Commit()
 }
 
+// UpdateFinding atomically changes only supplied metadata, leaving links untouched.
+func (repo *Repository) UpdateFinding(id uuid.UUID, mutation domain.FindingMutation) error {
+	columns := []string{}
+	args := []any{}
+	set := func(column string, value any) {
+		columns = append(columns, column+" = ?")
+		args = append(args, value)
+	}
+	if mutation.Title != nil {
+		set("title", *mutation.Title)
+	}
+	if mutation.Severity != nil {
+		set("severity", *mutation.Severity)
+	}
+	if mutation.CVSSVector != nil {
+		set("cvss_vector", *mutation.CVSSVector)
+	}
+	if mutation.CVSSScore != nil {
+		set("cvss_score", *mutation.CVSSScore)
+	}
+	if mutation.WriteUp != nil {
+		set("writeup", *mutation.WriteUp)
+	}
+	if mutation.TreatmentPlan != nil {
+		set("treatment_plan", *mutation.TreatmentPlan)
+	}
+	if mutation.TestCaseIDSet {
+		set("test_case_id", mutation.TestCaseID)
+	}
+	if len(columns) == 0 {
+		columns = append(columns, "id = id")
+	}
+	args = append(args, id)
+	result, err := repo.dbConn.Exec("UPDATE findings SET "+strings.Join(columns, ", ")+" WHERE id = ?", args...)
+	if err != nil {
+		return fmt.Errorf("updating finding %s: %w", id, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking updated finding rows: %w", err)
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // ListFindings retrieves all findings with their associated requests and artifacts.
 func (repo *Repository) ListFindings() ([]*domain.Finding, error) {
 	type fRequestRow struct {
@@ -507,33 +597,33 @@ func (repo *Repository) DeleteFinding(id uuid.UUID) error {
 // dbArtifact represents the full database schema for an artifact, including binary data.
 type dbArtifact struct {
 	// ID is the primary key.
-	ID         uuid.UUID  `db:"id"`
+	ID uuid.UUID `db:"id"`
 	// TestCaseID is the foreign key to an associated test case.
 	TestCaseID *uuid.UUID `db:"test_case_id"`
 	// FindingID is the foreign key to an associated finding.
-	FindingID  *uuid.UUID `db:"finding_id"`
+	FindingID *uuid.UUID `db:"finding_id"`
 	// Filename is the artifact filename.
-	Filename   string     `db:"filename"`
+	Filename string `db:"filename"`
 	// MimeType is the artifact media type.
-	MimeType   string     `db:"mime_type"`
+	MimeType string `db:"mime_type"`
 	// Size is the size in bytes.
-	Size       int64      `db:"size_bytes"`
+	Size int64 `db:"size_bytes"`
 	// Data is the raw binary content.
-	Data       []byte     `db:"data"`
+	Data []byte `db:"data"`
 	// CreatedAt is the record creation timestamp.
-	CreatedAt  time.Time  `db:"created_at"`
+	CreatedAt time.Time `db:"created_at"`
 }
 
 // dbArtifactMetadata represents the database schema for artifact metadata.
 type dbArtifactMetadata struct {
 	// ID is the primary key.
-	ID        uuid.UUID `db:"id"`
+	ID uuid.UUID `db:"id"`
 	// Filename is the artifact filename.
-	Filename  string    `db:"filename"`
+	Filename string `db:"filename"`
 	// MimeType is the artifact media type.
-	MimeType  string    `db:"mime_type"`
+	MimeType string `db:"mime_type"`
 	// Size is the size in bytes.
-	Size      int64     `db:"size_bytes"`
+	Size int64 `db:"size_bytes"`
 	// CreatedAt is the record creation timestamp.
 	CreatedAt time.Time `db:"created_at"`
 }
@@ -619,6 +709,24 @@ func (repo *Repository) GetArtifact(id uuid.UUID) (*domain.Artifact, error) {
 	return toDomainArtifact(&dbA), nil
 }
 
+// ListArtifacts retrieves metadata and parent IDs without loading file contents.
+func (repo *Repository) ListArtifacts() ([]*domain.Artifact, error) {
+	var rows []dbArtifact
+	query := `
+		SELECT id, test_case_id, finding_id, filename, mime_type, size_bytes, created_at
+		FROM artifacts
+		ORDER BY created_at DESC, id DESC
+	`
+	if err := repo.dbConn.Select(&rows, query); err != nil {
+		return nil, fmt.Errorf("listing artifacts: %w", err)
+	}
+	items := make([]*domain.Artifact, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, toDomainArtifact(&row))
+	}
+	return items, nil
+}
+
 // DeleteArtifact removes an artifact from the database.
 func (repo *Repository) DeleteArtifact(id uuid.UUID) error {
 	query := `DELETE FROM artifacts WHERE id = ?`
@@ -638,9 +746,16 @@ func (repo *Repository) LinkRequestToTestCase(tcID, reqID uuid.UUID) error {
 		VALUES (?, ?) 
 		ON CONFLICT(test_case_id, request_id) DO NOTHING
 	`
-	_, err := repo.dbConn.Exec(query, tcID, reqID)
+	result, err := repo.dbConn.Exec(query, tcID, reqID)
 	if err != nil {
 		return fmt.Errorf("linking request %s to test case %s: %w", reqID, tcID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking linked test case rows: %w", err)
+	}
+	if rowsAffected == 0 {
+		return domain.ErrReportingAlreadyLinked
 	}
 	return nil
 }
@@ -648,11 +763,39 @@ func (repo *Repository) LinkRequestToTestCase(tcID, reqID uuid.UUID) error {
 // UnlinkRequestFromTestCase removes the association between a test case and a request.
 func (repo *Repository) UnlinkRequestFromTestCase(tcID, reqID uuid.UUID) error {
 	query := `DELETE FROM test_case_requests WHERE test_case_id = ? AND request_id = ?`
-	_, err := repo.dbConn.Exec(query, tcID, reqID)
+	result, err := repo.dbConn.Exec(query, tcID, reqID)
 	if err != nil {
 		return fmt.Errorf("unlinking request %s from test case %s: %w", reqID, tcID, err)
 	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking unlinked test case rows: %w", err)
+	}
+	if rowsAffected == 0 {
+		return domain.ErrReportingNotLinked
+	}
 	return nil
+}
+
+// GetTestCaseRequests retrieves oldest-first traffic summaries linked to a test case.
+func (repo *Repository) GetTestCaseRequests(id uuid.UUID) ([]*domain.RequestResponseSummary, error) {
+	var rows []*dbRequestResponseSummary
+	query := `SELECT
+			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
+			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
+			  json_remove(r.metadata, '$.prettified-request', '$.prettified-response') AS metadata
+		      FROM request r
+		      JOIN test_case_requests tcr ON r.id = tcr.request_id
+		      WHERE tcr.test_case_id = ?
+		      ORDER BY r.requested_at ASC, r.id ASC`
+	if err := repo.dbConn.Select(&rows, query, id); err != nil {
+		return nil, fmt.Errorf("getting test case requests: %w", err)
+	}
+	items := make([]*domain.RequestResponseSummary, len(rows))
+	for i, row := range rows {
+		items[i] = toDomainRequestResponseSummary(row)
+	}
+	return items, nil
 }
 
 // LinkRequestToFinding creates an association between a finding and a request.
@@ -662,9 +805,16 @@ func (repo *Repository) LinkRequestToFinding(fID, reqID uuid.UUID) error {
 		VALUES (?, ?) 
 		ON CONFLICT(finding_id, request_id) DO NOTHING
 	`
-	_, err := repo.dbConn.Exec(query, fID, reqID)
+	result, err := repo.dbConn.Exec(query, fID, reqID)
 	if err != nil {
 		return fmt.Errorf("linking request %s to finding %s: %w", reqID, fID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking linked finding rows: %w", err)
+	}
+	if rowsAffected == 0 {
+		return domain.ErrReportingAlreadyLinked
 	}
 	return nil
 }
@@ -672,9 +822,37 @@ func (repo *Repository) LinkRequestToFinding(fID, reqID uuid.UUID) error {
 // UnlinkRequestFromFinding removes the association between a finding and a request.
 func (repo *Repository) UnlinkRequestFromFinding(fID, reqID uuid.UUID) error {
 	query := `DELETE FROM finding_requests WHERE finding_id = ? AND request_id = ?`
-	_, err := repo.dbConn.Exec(query, fID, reqID)
+	result, err := repo.dbConn.Exec(query, fID, reqID)
 	if err != nil {
 		return fmt.Errorf("unlinking request %s from finding %s: %w", reqID, fID, err)
 	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking unlinked finding rows: %w", err)
+	}
+	if rowsAffected == 0 {
+		return domain.ErrReportingNotLinked
+	}
 	return nil
+}
+
+// GetFindingRequests retrieves oldest-first traffic summaries linked to a finding.
+func (repo *Repository) GetFindingRequests(id uuid.UUID) ([]*domain.RequestResponseSummary, error) {
+	var rows []*dbRequestResponseSummary
+	query := `SELECT
+			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
+			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
+			  json_remove(r.metadata, '$.prettified-request', '$.prettified-response') AS metadata
+		      FROM request r
+		      JOIN finding_requests fr ON r.id = fr.request_id
+		      WHERE fr.finding_id = ?
+		      ORDER BY r.requested_at ASC, r.id ASC`
+	if err := repo.dbConn.Select(&rows, query, id); err != nil {
+		return nil, fmt.Errorf("getting finding requests: %w", err)
+	}
+	items := make([]*domain.RequestResponseSummary, len(rows))
+	for i, row := range rows {
+		items[i] = toDomainRequestResponseSummary(row)
+	}
+	return items, nil
 }

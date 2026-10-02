@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -58,6 +59,30 @@ func TestLaunchpadRepo_GetLaunchpads(t *testing.T) {
 	})
 }
 
+func TestLaunchpadRepo_GetLaunchpad(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+
+	id, err := repo.CreateLaunchpad("Test Launchpad", "Test Description")
+	if err != nil {
+		t.Fatalf("creating launchpad: %v", err)
+	}
+
+	want := &domain.Launchpad{ID: id, Name: "Test Launchpad", Description: "Test Description"}
+	got, err := repo.GetLaunchpad(id)
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
+	}
+
+	missing := uuid.MustParse("01937f48-a14a-74b8-8c50-3d5f8f80ea0c")
+	if _, err := repo.GetLaunchpad(missing); err == nil {
+		t.Fatal("\nwanted:\nerror\ngot:\nnil")
+	}
+}
+
 func TestLaunchpadRepo_CreateLaunchpad(t *testing.T) {
 	t.Run("should create a launchpad", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
@@ -112,7 +137,7 @@ func TestLaunchpadRepo_UpdateLaunchpad(t *testing.T) {
 		wantName := "Updated Name"
 		wantDesc := "Updated Desc"
 
-		err = repo.UpdateLaunchpad(id, wantName, wantDesc)
+		err = repo.UpdateLaunchpad(id, &wantName, &wantDesc)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -149,7 +174,7 @@ func TestLaunchpadRepo_UpdateLaunchpad(t *testing.T) {
 
 		wantName := "Updated Name"
 
-		err = repo.UpdateLaunchpad(id, wantName, "") // Empty description
+		err = repo.UpdateLaunchpad(id, &wantName, nil)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -182,7 +207,7 @@ func TestLaunchpadRepo_UpdateLaunchpad(t *testing.T) {
 
 		wantDesc := "Updated Desc"
 
-		err = repo.UpdateLaunchpad(id, "", wantDesc) // Empty name
+		err = repo.UpdateLaunchpad(id, nil, &wantDesc)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -206,14 +231,36 @@ func TestLaunchpadRepo_UpdateLaunchpad(t *testing.T) {
 		defer teardown()
 
 		nonExistentID := uuid.MustParse("01937f48-a14a-74b8-8c50-3d5f8f80ea0c")
-		err := repo.UpdateLaunchpad(nonExistentID, "Test", "Test")
+		name, description := "Test", "Test"
+		err := repo.UpdateLaunchpad(nonExistentID, &name, &description)
 
 		if err == nil {
 			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
 		}
 
-		if !strings.Contains(err.Error(), "no launchpad found") {
-			t.Fatalf("\nwanted:\nerror containing 'no launchpad found'\ngot:\n%v", err)
+		if !errors.Is(err, domain.ErrLaunchpadNotFound) {
+			t.Fatalf("\nwanted:\nlaunchpad not found\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should clear the description when an empty description is supplied", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		id, err := repo.CreateLaunchpad("Test", "Initial Description")
+		if err != nil {
+			t.Fatalf("creating launchpad: %v", err)
+		}
+		description := ""
+		if err := repo.UpdateLaunchpad(id, nil, &description); err != nil {
+			t.Fatalf("updating launchpad: %v", err)
+		}
+		got, err := repo.GetLaunchpad(id)
+		if err != nil {
+			t.Fatalf("getting launchpad: %v", err)
+		}
+		if got.Description != "" {
+			t.Fatalf("\nwanted:\nempty description\ngot:\n%q", got.Description)
 		}
 	})
 }
@@ -295,8 +342,9 @@ func TestLaunchpadRepo_GetLaunchpadRequests(t *testing.T) {
 			t.Fatalf("creating launchpad 2: %v", err)
 		}
 
-		reqID1 := testRequest(t, repo, nil)
+		reqID1 := testRequest(t, repo, map[string]any{"prettified-request": "omit", "source": "seed"})
 		reqID2 := testRequest(t, repo, nil)
+		response2 := insertTestResponseAndGet(t, repo, reqID2, nil)
 		_ = testRequest(t, repo, nil)
 		reqID4_other_launchpad := testRequest(t, repo, nil)
 
@@ -315,18 +363,6 @@ func TestLaunchpadRepo_GetLaunchpadRequests(t *testing.T) {
 			t.Fatalf("linking req4 to launchpad 2: %v", err)
 		}
 
-		req1Row, err := repo.GetRequestResponseRow(reqID1)
-		if err != nil {
-			t.Fatalf("getting row for req1: %v", err)
-		}
-
-		req2Row, err := repo.GetRequestResponseRow(reqID2)
-		if err != nil {
-			t.Fatalf("getting row for req2: %v", err)
-		}
-
-		want := []*domain.ProxyRequest{&req1Row.Request, &req2Row.Request}
-
 		got, err := repo.GetLaunchpadRequests(launchpadID)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
@@ -336,8 +372,20 @@ func TestLaunchpadRepo_GetLaunchpadRequests(t *testing.T) {
 			t.Fatalf("\nwanted:\n2\ngot:\n%d", len(got))
 		}
 
-		if !reflect.DeepEqual(want, got) {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
+		if got[0].ID != reqID1 || got[1].ID != reqID2 {
+			t.Fatalf("\nwanted oldest-first:\n%s, %s\ngot:\n%s, %s", reqID1, reqID2, got[0].ID, got[1].ID)
+		}
+		if got[0].StatusCode != -1 || got[0].Status != "N/A" || !got[0].RespondedAt.IsZero() {
+			t.Fatalf("\nwanted:\nin-flight response defaults\ngot:\n%+v", got[0])
+		}
+		if got[0].Metadata["source"] != "seed" {
+			t.Fatalf("\nwanted:\nseed metadata\ngot:\n%v", got[0].Metadata)
+		}
+		if _, ok := got[0].Metadata["prettified-request"]; ok {
+			t.Fatalf("\nwanted:\nprettified metadata omitted\ngot:\n%v", got[0].Metadata)
+		}
+		if got[1].StatusCode != response2.StatusCode || got[1].Status != response2.Status || !got[1].RespondedAt.Equal(response2.RespondedAt) {
+			t.Fatalf("\nwanted:\nresponse fields from %+v\ngot:\n%+v", response2, got[1])
 		}
 	})
 
@@ -443,8 +491,39 @@ func TestLaunchpadRepo_LinkRequestToLaunchpad(t *testing.T) {
 		if err == nil {
 			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
 		}
-		if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
-			t.Fatalf("\nwanted:\nerror containing 'UNIQUE constraint failed'\ngot:\n%v", err)
+		if !errors.Is(err, domain.ErrLaunchpadAlreadyLinked) {
+			t.Fatalf("\nwanted:\nrequest already linked\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should link one request to two launchpads", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		first, err := repo.CreateLaunchpad("First", "")
+		if err != nil {
+			t.Fatalf("creating first launchpad: %v", err)
+		}
+		second, err := repo.CreateLaunchpad("Second", "")
+		if err != nil {
+			t.Fatalf("creating second launchpad: %v", err)
+		}
+		requestID := testRequest(t, repo, nil)
+		if err := repo.LinkRequestToLaunchpad(requestID, first); err != nil {
+			t.Fatalf("linking request to first launchpad: %v", err)
+		}
+		if err := repo.LinkRequestToLaunchpad(requestID, second); err != nil {
+			t.Fatalf("linking request to second launchpad: %v", err)
+		}
+
+		for _, launchpadID := range []uuid.UUID{first, second} {
+			members, err := repo.GetLaunchpadRequests(launchpadID)
+			if err != nil {
+				t.Fatalf("getting members for %s: %v", launchpadID, err)
+			}
+			if len(members) != 1 || members[0].ID != requestID {
+				t.Fatalf("\nwanted:\n%s linked to %s\ngot:\n%v", requestID, launchpadID, members)
+			}
 		}
 	})
 }

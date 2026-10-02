@@ -1,3 +1,6 @@
+# Build output
+dist/
+
 # Binaries for programs and plugins
 *.exe
 *.exe~
@@ -18,3 +21,6 @@
 go.work
 
 .DS_Store
+
+# Local verification evidence
+.agents/verification-artifacts/

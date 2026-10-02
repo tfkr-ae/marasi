@@ -1,6 +1,16 @@
 package domain
 
-import "github.com/google/uuid"
+import (
+	"errors"
+
+	"github.com/google/uuid"
+)
+
+// ErrLaunchpadNotFound means no launchpad has the requested id.
+var ErrLaunchpadNotFound = errors.New("launchpad not found")
+
+// ErrLaunchpadAlreadyLinked means the request is already a member of the launchpad.
+var ErrLaunchpadAlreadyLinked = errors.New("request already linked to launchpad")
 
 // LaunchpadRepository defines the interface for managing Launchpads, which are collections of saved requests.
 // It provides methods for creating, retrieving, updating, and deleting launchpads,
@@ -9,6 +19,7 @@ type LaunchpadRepository interface {
 	// GetLaunchpads retrieves all launchpads configured in the application.
 	// It returns a slice of Launchpad pointers.
 	GetLaunchpads() ([]*Launchpad, error)
+	GetLaunchpad(id uuid.UUID) (*Launchpad, error)
 
 	// CreateLaunchpad creates a new launchpad with the given name and description.
 	// It returns the UUID of the newly created launchpad.
@@ -16,15 +27,14 @@ type LaunchpadRepository interface {
 
 	// UpdateLaunchpad updates the name and description of an existing launchpad identified by its UUID.
 	// It returns an error if the launchpad does not exist.
-	UpdateLaunchpad(launchpadID uuid.UUID, name, description string) error
+	UpdateLaunchpad(launchpadID uuid.UUID, name, description *string) error
 
 	// DeleteLaunchpad removes a launchpad identified by its UUID.
 	// It returns an error if the launchpad does not exist.
 	DeleteLaunchpad(launchpadID uuid.UUID) error
 
-	// GetLaunchpadRequests retrieves all requests linked to a specific launchpad, identified by its UUID.
-	// It returns a slice of ProxyRequest pointers. If the launchpad has no requests, it returns an empty slice.
-	GetLaunchpadRequests(id uuid.UUID) ([]*ProxyRequest, error)
+	// GetLaunchpadRequests retrieves oldest-first traffic summaries for requests linked to a launchpad.
+	GetLaunchpadRequests(id uuid.UUID) ([]*RequestResponseSummary, error)
 
 	// LinkRequestToLaunchpad associates a request with a launchpad using their respective UUIDs.
 	// This allows for organizing requests into collections.

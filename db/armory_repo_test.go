@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -58,6 +59,11 @@ func TestArmoryRepo_Templates(t *testing.T) {
 
 	first := armoryTestTemplate(t, repo, "First")
 	second := armoryTestTemplate(t, repo, "Second")
+	secondRun := armoryTestRun(t, repo, second)
+	requestID := testRequest(t, repo, nil)
+	if err := repo.CreateArmoryEntry(&domain.ArmoryEntry{RunID: secondRun.ID, RequestID: requestID}); err != nil {
+		t.Fatalf("creating armory entry: %v", err)
+	}
 
 	got, err := repo.GetArmoryTemplate(first.ID)
 	if err != nil {
@@ -99,6 +105,16 @@ func TestArmoryRepo_Templates(t *testing.T) {
 	if _, err := repo.GetArmoryTemplate(second.ID); err == nil {
 		t.Fatal("expected error getting deleted armory template")
 	}
+	if _, err := repo.GetArmoryRun(secondRun.ID); err == nil {
+		t.Fatal("expected template delete to cascade to its run")
+	}
+	entries, err := repo.GetArmoryEntries(secondRun.ID)
+	if err != nil {
+		t.Fatalf("getting entries after template delete: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected template delete to cascade to entries, got %+v", entries)
+	}
 }
 
 func TestArmoryRepo_TemplateNotFound(t *testing.T) {
@@ -106,6 +122,9 @@ func TestArmoryRepo_TemplateNotFound(t *testing.T) {
 	defer teardown()
 
 	template := &domain.ArmoryTemplate{ID: armoryTestUUID(t), Name: "Missing"}
+	if _, err := repo.GetArmoryTemplate(template.ID); !errors.Is(err, domain.ErrArmoryTemplateNotFound) {
+		t.Fatalf("expected ErrArmoryTemplateNotFound, got %v", err)
+	}
 	if err := repo.UpdateArmoryTemplate(template); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected not found update error, got %v", err)
 	}
@@ -224,6 +243,68 @@ func TestArmoryRepo_Entries(t *testing.T) {
 	if err := repo.CreateArmoryEntry(first); err == nil || !strings.Contains(err.Error(), "UNIQUE constraint failed") {
 		t.Fatalf("expected duplicate entry error, got %v", err)
 	}
+}
+
+func TestArmoryRepo_RunTraffic(t *testing.T) {
+	t.Run("should page linked traffic oldest first by request id", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		template := armoryTestTemplate(t, repo, "Template")
+		run := armoryTestRun(t, repo, template)
+		otherRun := armoryTestRun(t, repo, template)
+		olderID := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+		newerID := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
+		otherID := uuid.MustParse("01938033-298e-73dc-b640-eb321b621154")
+		for _, id := range []uuid.UUID{newerID, otherID, olderID} {
+			err := repo.InsertRequest(&domain.ProxyRequest{
+				ID:          id,
+				Scheme:      "https",
+				Method:      "GET",
+				Host:        "example.com",
+				Path:        "/" + id.String(),
+				Metadata:    map[string]any{"armory_run_id": run.ID.String(), "prettified-request": "omit"},
+				RequestedAt: time.Date(2026, time.September, 17, 10, 30, 0, 0, time.UTC),
+			})
+			if err != nil {
+				t.Fatalf("inserting request %s: %v", id, err)
+			}
+		}
+		if err := repo.CreateArmoryEntry(&domain.ArmoryEntry{RunID: run.ID, RequestID: olderID}); err != nil {
+			t.Fatalf("linking older request: %v", err)
+		}
+		if err := repo.CreateArmoryEntry(&domain.ArmoryEntry{RunID: run.ID, RequestID: newerID}); err != nil {
+			t.Fatalf("linking newer request: %v", err)
+		}
+		if err := repo.CreateArmoryEntry(&domain.ArmoryEntry{RunID: otherRun.ID, RequestID: otherID}); err != nil {
+			t.Fatalf("linking other run request: %v", err)
+		}
+
+		firstPage, nextCursor, err := repo.ListArmoryRunTraffic(run.ID, nil, 1)
+		if err != nil {
+			t.Fatalf("listing first page: %v", err)
+		}
+		if len(firstPage) != 1 || firstPage[0].ID != olderID || firstPage[0].StatusCode != -1 {
+			t.Fatalf("expected older in-flight request, got %+v", firstPage)
+		}
+		if _, ok := firstPage[0].Metadata["prettified-request"]; ok {
+			t.Fatalf("prettified metadata was not removed: %+v", firstPage[0].Metadata)
+		}
+		if nextCursor == nil || *nextCursor != olderID {
+			t.Fatalf("expected next cursor %s, got %v", olderID, nextCursor)
+		}
+
+		secondPage, nextCursor, err := repo.ListArmoryRunTraffic(run.ID, nextCursor, 1)
+		if err != nil {
+			t.Fatalf("listing second page: %v", err)
+		}
+		if len(secondPage) != 1 || secondPage[0].ID != newerID {
+			t.Fatalf("expected newer linked request, got %+v", secondPage)
+		}
+		if nextCursor != nil {
+			t.Fatalf("expected final cursor to be nil, got %v", nextCursor)
+		}
+	})
 }
 
 func TestArmoryRepo_EntryForeignKeys(t *testing.T) {

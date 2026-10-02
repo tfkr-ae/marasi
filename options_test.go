@@ -2,13 +2,20 @@ package marasi
 
 import (
 	"bytes"
+	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/martian/mitm"
 	"github.com/tfkr-ae/marasi/armory"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
@@ -20,6 +27,14 @@ var _ ArmoryService = (*armory.Manager)(nil)
 
 type testArmoryService struct {
 	ArmoryService
+}
+
+type testTLSConfigRepository struct {
+	domain.ConfigRepository
+}
+
+func (testTLSConfigRepository) UpdateSPKI(string) error {
+	return nil
 }
 
 func setupTestDB(t *testing.T) (*db.Repository, func()) {
@@ -139,6 +154,243 @@ func TestWithWordlistManager(t *testing.T) {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
 	})
+}
+
+func TestWithTLS(t *testing.T) {
+	newProxy := func(t *testing.T, configDir string, option func(*Proxy) error) *Proxy {
+		t.Helper()
+		proxy, err := New(
+			WithConfigDir(configDir),
+			WithConfigRepository(testTLSConfigRepository{}),
+			option,
+		)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		return proxy
+	}
+
+	t.Run("should serialize concurrent first initialization", func(t *testing.T) {
+		configDir := t.TempDir()
+		if _, err := New(WithConfigDir(configDir)); err != nil {
+			t.Fatalf("preparing config directory: %v", err)
+		}
+		lock, err := acquireCertificateLock(context.Background(), configDir)
+		if err != nil {
+			t.Fatalf("acquiring certificate lock: %v", err)
+		}
+
+		const proxyCount = 6
+		commands := make([]*exec.Cmd, proxyCount)
+		outputs := make([]bytes.Buffer, proxyCount)
+		errorsOutput := make([]bytes.Buffer, proxyCount)
+		for i := range proxyCount {
+			command := exec.Command(os.Args[0], "-test.run=^TestWithTLSHelperProcess$")
+			command.Env = append(os.Environ(), "MARASI_TLS_HELPER=1", "MARASI_TLS_CONFIG_DIR="+configDir)
+			command.Stdout = &outputs[i]
+			command.Stderr = &errorsOutput[i]
+			commands[i] = command
+			if err := command.Start(); err != nil {
+				releaseCertificateLock(lock)
+				t.Fatalf("starting proxy %d: %v", i, err)
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+		if err := releaseCertificateLock(lock); err != nil {
+			t.Fatalf("releasing certificate lock: %v", err)
+		}
+
+		for i, command := range commands {
+			if err := command.Wait(); err != nil {
+				t.Fatalf("\nwanted proxy %d error:\nnil\ngot:\n%v\n%s", i, err, errorsOutput[i].String())
+			}
+			if outputs[i].String() != outputs[0].String() {
+				t.Fatalf("\nwanted proxy %d certificate:\n%s\ngot:\n%s", i, outputs[0].String(), outputs[i].String())
+			}
+		}
+	})
+
+	t.Run("should stop waiting when context is canceled", func(t *testing.T) {
+		configDir := t.TempDir()
+		lock, err := acquireCertificateLock(context.Background(), configDir)
+		if err != nil {
+			t.Fatalf("acquiring certificate lock: %v", err)
+		}
+		t.Cleanup(func() { releaseCertificateLock(lock) })
+
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			_, err := New(
+				WithConfigDir(configDir),
+				WithConfigRepository(testTLSConfigRepository{}),
+				WithTLSContext(ctx),
+			)
+			result <- err
+		}()
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+
+		select {
+		case err := <-result:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.Canceled, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for canceled TLS initialization")
+		}
+	})
+
+	t.Run("should replace an incomplete pair", func(t *testing.T) {
+		configDir := t.TempDir()
+		keyPath := filepath.Join(configDir, keyFile)
+		if err := os.WriteFile(keyPath, []byte("incomplete key"), 0600); err != nil {
+			t.Fatalf("writing incomplete key: %v", err)
+		}
+
+		proxy := newProxy(t, configDir, WithTLS())
+		loadedCert, _, err := loadCertAndKey(configDir)
+		if err != nil {
+			t.Fatalf("loading replacement pair: %v", err)
+		}
+		if !proxy.Cert.Equal(loadedCert) {
+			t.Fatalf("\nwanted:\n%x\ngot:\n%x", proxy.Cert.Raw, loadedCert.Raw)
+		}
+	})
+
+	t.Run("should leave an established invalid pair unchanged", func(t *testing.T) {
+		configDir := t.TempDir()
+		certPath := filepath.Join(configDir, certFile)
+		keyPath := filepath.Join(configDir, keyFile)
+		wantCert := []byte("invalid certificate")
+		wantKey := []byte("invalid key")
+		if err := os.WriteFile(certPath, wantCert, 0600); err != nil {
+			t.Fatalf("writing invalid certificate: %v", err)
+		}
+		if err := os.WriteFile(keyPath, wantKey, 0600); err != nil {
+			t.Fatalf("writing invalid key: %v", err)
+		}
+
+		_, err := New(
+			WithConfigDir(configDir),
+			WithConfigRepository(testTLSConfigRepository{}),
+			WithTLS(),
+		)
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		gotCert, readErr := os.ReadFile(certPath)
+		if readErr != nil {
+			t.Fatalf("reading certificate: %v", readErr)
+		}
+		gotKey, readErr := os.ReadFile(keyPath)
+		if readErr != nil {
+			t.Fatalf("reading key: %v", readErr)
+		}
+		if !bytes.Equal(gotCert, wantCert) || !bytes.Equal(gotKey, wantKey) {
+			t.Fatalf("\nwanted:\n%q and %q\ngot:\n%q and %q", wantCert, wantKey, gotCert, gotKey)
+		}
+	})
+
+	t.Run("should reject a mismatched pair without replacing it", func(t *testing.T) {
+		configDir := t.TempDir()
+		cert, _, err := mitm.NewAuthority("first", "first", time.Hour)
+		if err != nil {
+			t.Fatalf("creating certificate: %v", err)
+		}
+		_, key, err := mitm.NewAuthority("second", "second", time.Hour)
+		if err != nil {
+			t.Fatalf("creating key: %v", err)
+		}
+		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+		keyBytes, err := x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			t.Fatalf("marshaling key: %v", err)
+		}
+		keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes})
+		certPath := filepath.Join(configDir, certFile)
+		keyPath := filepath.Join(configDir, keyFile)
+		if err := os.WriteFile(certPath, certPEM, 0600); err != nil {
+			t.Fatalf("writing certificate: %v", err)
+		}
+		if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+			t.Fatalf("writing key: %v", err)
+		}
+
+		_, err = New(
+			WithConfigDir(configDir),
+			WithConfigRepository(testTLSConfigRepository{}),
+			WithTLS(),
+		)
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		gotCert, _ := os.ReadFile(certPath)
+		gotKey, _ := os.ReadFile(keyPath)
+		if !bytes.Equal(gotCert, certPEM) || !bytes.Equal(gotKey, keyPEM) {
+			t.Fatalf("mismatched pair was replaced")
+		}
+	})
+
+	t.Run("should remove temporary files after publishing", func(t *testing.T) {
+		configDir := t.TempDir()
+		newProxy(t, configDir, WithTLS())
+
+		matches, err := filepath.Glob(filepath.Join(configDir, ".marasi-*.tmp"))
+		if err != nil {
+			t.Fatalf("finding temporary files: %v", err)
+		}
+		if len(matches) != 0 {
+			t.Fatalf("\nwanted:\nno temporary certificate files\ngot:\n%v", matches)
+		}
+		if _, err := os.Stat(filepath.Join(configDir, "certificate.lock")); err != nil {
+			t.Fatalf("checking retained certificate lock: %v", err)
+		}
+	})
+
+	t.Run("should remove temporary files after publishing fails", func(t *testing.T) {
+		configDir := t.TempDir()
+		keyPath := filepath.Join(configDir, keyFile)
+		if err := os.Mkdir(keyPath, 0700); err != nil {
+			t.Fatalf("creating obstructing key directory: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(keyPath, "keep"), []byte("keep"), 0600); err != nil {
+			t.Fatalf("populating obstructing key directory: %v", err)
+		}
+
+		_, err := New(
+			WithConfigDir(configDir),
+			WithConfigRepository(testTLSConfigRepository{}),
+			WithTLS(),
+		)
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		matches, globErr := filepath.Glob(filepath.Join(configDir, ".marasi-*.tmp"))
+		if globErr != nil {
+			t.Fatalf("finding temporary files: %v", globErr)
+		}
+		if len(matches) != 0 {
+			t.Fatalf("\nwanted:\nno temporary certificate files\ngot:\n%v", matches)
+		}
+	})
+}
+
+func TestWithTLSHelperProcess(t *testing.T) {
+	if os.Getenv("MARASI_TLS_HELPER") != "1" {
+		return
+	}
+	proxy, err := New(
+		WithConfigDir(os.Getenv("MARASI_TLS_CONFIG_DIR")),
+		WithConfigRepository(testTLSConfigRepository{}),
+		WithTLSContext(context.Background()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stdout.WriteString(proxy.SPKIHash); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestWithArmory(t *testing.T) {

@@ -1,0 +1,1024 @@
+package service
+
+import (
+	"bufio"
+	"context"
+	"crypto/sha1"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
+	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/compass"
+	"github.com/tfkr-ae/marasi/db"
+	marasiws "github.com/tfkr-ae/marasi/websocket"
+)
+
+func TestWebSocketConnectionControlRoutesAndEvents(t *testing.T) {
+	control, originURL, proxyAddress, _, _ := newWebSocketControlFixture(t)
+	stream, events := connectEventStream(t, control.URL)
+	defer stream.Body.Close()
+
+	connection, request := upgradeWebSocketThroughProxy(t, proxyAddress, originURL)
+	defer connection.Close()
+	response, err := http.ReadResponse(bufio.NewReader(connection), request)
+	if err != nil {
+		t.Fatalf("reading websocket upgrade response: %v", err)
+	}
+	if response.StatusCode != http.StatusSwitchingProtocols {
+		response.Body.Close()
+		t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusSwitchingProtocols, response.StatusCode)
+	}
+
+	openedData := readWebSocketEventData(t, events, "websocket.opened")
+	var opened struct {
+		ID        uuid.UUID `json:"id"`
+		RequestID uuid.UUID `json:"request_id"`
+		State     string    `json:"state"`
+	}
+	if err := json.Unmarshal([]byte(openedData), &opened); err != nil {
+		t.Fatalf("decoding websocket.opened: %v", err)
+	}
+	if opened.ID == uuid.Nil || opened.RequestID == uuid.Nil || opened.State != "open" {
+		t.Fatalf("\nwanted:\nconnection and request IDs with state open\ngot:\n%s", openedData)
+	}
+
+	connectionPath := "/websocket/" + opened.ID.String()
+	openedBody := waitForWebSocketState(t, control.URL+connectionPath, "open")
+	if got := string(openedBody); got != openedData+"\n" {
+		t.Fatalf("\nwanted event and get to have the same connection JSON:\n%s\ngot:\n%s", openedData+"\n", got)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(openedBody, &fields); err != nil {
+		t.Fatalf("decoding websocket connection: %v", err)
+	}
+	for _, name := range []string{"id", "request_id", "state", "transport", "host", "path", "started_at", "closed_at", "close_code", "close_reason"} {
+		if _, ok := fields[name]; !ok {
+			t.Fatalf("\nwanted:\n%s field\ngot:\n%s", name, openedBody)
+		}
+	}
+	if _, ok := fields["connection_id"]; ok {
+		t.Fatalf("\nwanted:\nno connection_id field\ngot:\n%s", openedBody)
+	}
+	if string(fields["closed_at"]) != "null" {
+		t.Fatalf("\nwanted:\nclosed_at null\ngot:\n%s", fields["closed_at"])
+	}
+	var startedAt string
+	if err := json.Unmarshal(fields["started_at"], &startedAt); err != nil {
+		t.Fatalf("decoding started_at: %v", err)
+	}
+	if _, err := time.Parse(time.RFC3339, startedAt); err != nil {
+		t.Fatalf("started_at is not RFC3339: %s", startedAt)
+	}
+
+	assertWebSocketControlResponse(t, control.URL+"/traffic/"+opened.RequestID.String()+"/websocket", http.StatusOK, openedBody)
+	assertWebSocketControlResponse(t, control.URL+"/websocket/"+opened.RequestID.String(), http.StatusNotFound, []byte("{\"error\":\"not_found\"}\n"))
+	assertWebSocketControlResponse(t, control.URL+"/traffic/"+opened.ID.String()+"/websocket", http.StatusNotFound, []byte("{\"error\":\"not_found\"}\n"))
+	assertWebSocketControlResponse(t, control.URL+"/websocket/not-a-uuid", http.StatusBadRequest, []byte("{\"error\":\"bad_request\"}\n"))
+	assertWebSocketControlResponse(t, control.URL+"/traffic/not-a-uuid/websocket", http.StatusBadRequest, []byte("{\"error\":\"bad_request\"}\n"))
+	unknownID := uuid.New()
+	assertWebSocketControlResponse(t, control.URL+"/websocket/"+unknownID.String(), http.StatusNotFound, []byte("{\"error\":\"not_found\"}\n"))
+	assertWebSocketControlResponse(t, control.URL+"/traffic/"+unknownID.String()+"/websocket", http.StatusNotFound, []byte("{\"error\":\"not_found\"}\n"))
+
+	if err := marasiws.WriteFrame(connection, marasiws.Frame{
+		Fin:     true,
+		Opcode:  marasiws.OpClose,
+		Payload: []byte{0x03, 0xe8},
+	}, true); err != nil {
+		t.Fatalf("sending websocket close frame: %v", err)
+	}
+	closedData := readWebSocketEventData(t, events, "websocket.closed")
+	closedBody := waitForWebSocketState(t, control.URL+connectionPath, "closed")
+	if got := string(closedBody); got != closedData+"\n" {
+		t.Fatalf("\nwanted event and closed get to have the same connection JSON:\n%s\ngot:\n%s", closedData+"\n", got)
+	}
+	assertWebSocketControlResponse(t, control.URL+"/traffic/"+opened.RequestID.String()+"/websocket", http.StatusOK, closedBody)
+}
+
+func TestWebSocketConnectionList(t *testing.T) {
+	control, originURL, proxyAddress, _, _ := newWebSocketControlFixture(t)
+
+	t.Run("should return an empty page", func(t *testing.T) {
+		assertWebSocketControlResponse(t, control.URL+"/websocket", http.StatusOK, []byte("{\"items\":[],\"next_cursor\":null}\n"))
+	})
+
+	t.Run("should reject invalid paging and ignore unknown parameters", func(t *testing.T) {
+		for _, query := range []string{"limit=0", "limit=501", "limit=abc", "limit=1.5", "limit=", "cursor=bad", "cursor="} {
+			assertWebSocketControlResponse(t, control.URL+"/websocket?"+query, http.StatusBadRequest, []byte("{\"error\":\"bad_request\"}\n"))
+		}
+		assertWebSocketControlResponse(t, control.URL+"/websocket?state=closed", http.StatusOK, []byte("{\"items\":[],\"next_cursor\":null}\n"))
+	})
+
+	t.Run("should page saved open closed and error connections by id", func(t *testing.T) {
+		stream, events := connectEventStream(t, control.URL)
+		defer stream.Body.Close()
+		var ids []uuid.UUID
+		var bodies []string
+		for i := range 3 {
+			connection, request := upgradeWebSocketThroughProxy(t, proxyAddress, originURL)
+			t.Cleanup(func() { connection.Close() })
+			response, err := http.ReadResponse(bufio.NewReader(connection), request)
+			if err != nil {
+				t.Fatalf("\nwanted:\nwebsocket upgrade response\ngot:\n%v", err)
+			}
+			response.Body.Close()
+			if response.StatusCode != http.StatusSwitchingProtocols {
+				t.Fatalf("\nwanted:\n101 upgrade\ngot:\n%d", response.StatusCode)
+			}
+			var opened struct {
+				ID uuid.UUID `json:"id"`
+			}
+			if err := json.Unmarshal([]byte(readWebSocketEventData(t, events, "websocket.opened")), &opened); err != nil {
+				t.Fatalf("\nwanted:\ndecoded websocket.opened event\ngot:\n%v", err)
+			}
+			ids = append(ids, opened.ID)
+			path := control.URL + "/websocket/" + opened.ID.String()
+			waitForWebSocketState(t, path, "open")
+			if i == 1 {
+				if err := marasiws.WriteFrame(connection, marasiws.Frame{Fin: true, Opcode: marasiws.OpClose, Payload: []byte{0x03, 0xe8}}, true); err != nil {
+					t.Fatalf("\nwanted:\nwebsocket close frame sent\ngot:\n%v", err)
+				}
+				bodies = append(bodies, strings.TrimSpace(string(waitForWebSocketState(t, path, "closed"))))
+			} else if i == 2 {
+				connection.Close()
+				bodies = append(bodies, strings.TrimSpace(string(waitForWebSocketState(t, path, "error"))))
+			} else {
+				bodies = append(bodies, strings.TrimSpace(string(waitForWebSocketState(t, path, "open"))))
+			}
+		}
+		if !(ids[0].String() < ids[1].String() && ids[1].String() < ids[2].String()) {
+			t.Fatalf("\nwanted:\nascending connection IDs from sequential upgrades\ngot:\n%v", ids)
+		}
+		firstPage := fmt.Sprintf(`{"items":[%s,%s],"next_cursor":"%s"}`+"\n", bodies[2], bodies[1], ids[1])
+		assertWebSocketControlResponse(t, control.URL+"/websocket?limit=2&state=open", http.StatusOK, []byte(firstPage))
+		assertWebSocketControlResponse(t, control.URL+"/websocket?limit=2&cursor="+ids[1].String(), http.StatusOK, []byte(fmt.Sprintf(`{"items":[%s],"next_cursor":null}`+"\n", bodies[0])))
+		assertWebSocketControlResponse(t, control.URL+"/websocket?cursor="+uuid.Nil.String(), http.StatusOK, []byte("{\"items\":[],\"next_cursor\":null}\n"))
+		assertWebSocketControlResponse(t, control.URL+"/websocket", http.StatusOK, []byte(fmt.Sprintf(`{"items":[%s,%s,%s],"next_cursor":null}`+"\n", bodies[2], bodies[1], bodies[0])))
+	})
+}
+
+func TestWebSocketMessageList(t *testing.T) {
+	control, originURL, proxyAddress, _, _ := newWebSocketControlFixture(t)
+	stream, events := connectEventStream(t, control.URL)
+	defer stream.Body.Close()
+	connection, request := upgradeWebSocketThroughProxy(t, proxyAddress, originURL)
+	t.Cleanup(func() { connection.Close() })
+	response, err := http.ReadResponse(bufio.NewReader(connection), request)
+	if err != nil {
+		t.Fatalf("reading websocket upgrade response: %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("\nwanted:\n101 upgrade\ngot:\n%d", response.StatusCode)
+	}
+	var opened struct {
+		ID        uuid.UUID `json:"id"`
+		RequestID uuid.UUID `json:"request_id"`
+	}
+	if err := json.Unmarshal([]byte(readWebSocketEventData(t, events, "websocket.opened")), &opened); err != nil {
+		t.Fatalf("decoding websocket.opened: %v", err)
+	}
+	path := control.URL + "/websocket/" + opened.ID.String() + "/message"
+	waitForWebSocketState(t, control.URL+"/websocket/"+opened.ID.String(), "open")
+	assertWebSocketControlResponse(t, path, http.StatusOK, []byte("{\"items\":[],\"next_cursor\":null}\n"))
+	assertWebSocketControlResponse(t, control.URL+"/websocket/"+uuid.New().String()+"/message", http.StatusNotFound, []byte("{\"error\":\"not_found\"}\n"))
+	assertWebSocketControlResponse(t, control.URL+"/websocket/not-a-uuid/message", http.StatusBadRequest, []byte("{\"error\":\"bad_request\"}\n"))
+	for _, query := range []string{"limit=0", "limit=501", "limit=abc", "limit=", "cursor=bad", "cursor="} {
+		assertWebSocketControlResponse(t, path+"?"+query, http.StatusBadRequest, []byte("{\"error\":\"bad_request\"}\n"))
+	}
+	for _, rawQuery := range []string{"limit=%ZZ", "cursor=%ZZ"} {
+		req, err := http.NewRequest(http.MethodGet, path, nil)
+		if err != nil {
+			t.Fatalf("creating message page request: %v", err)
+		}
+		req.URL.RawQuery = rawQuery
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("getting malformed message page: %v", err)
+		}
+		body, err := io.ReadAll(res.Body)
+		res.Body.Close()
+		if err != nil {
+			t.Fatalf("reading malformed message page: %v", err)
+		}
+		if res.StatusCode != http.StatusBadRequest || string(body) != "{\"error\":\"bad_request\"}\n" {
+			t.Fatalf("\nwanted:\n400 bad_request for %s\ngot:\n%d %s", rawQuery, res.StatusCode, body)
+		}
+	}
+	for _, rawQuery := range []string{"limit=1&ignored=%ZZ", "limit=1&ignored=a;b"} {
+		req, err := http.NewRequest(http.MethodGet, path, nil)
+		if err != nil {
+			t.Fatalf("creating message page request: %v", err)
+		}
+		req.URL.RawQuery = rawQuery
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("getting page with unknown parameter: %v", err)
+		}
+		body, err := io.ReadAll(res.Body)
+		res.Body.Close()
+		if err != nil {
+			t.Fatalf("reading page with unknown parameter: %v", err)
+		}
+		if res.StatusCode != http.StatusOK || string(body) != "{\"items\":[],\"next_cursor\":null}\n" {
+			t.Fatalf("\nwanted:\n200 empty page for %s\ngot:\n%d %s", rawQuery, res.StatusCode, body)
+		}
+	}
+	assertWebSocketControlResponse(t, path+"/"+uuid.New().String(), http.StatusNotFound, []byte("404 page not found\n"))
+	wrongMethod, err := http.Post(path, "application/json", nil)
+	if err != nil {
+		t.Fatalf("posting to message list: %v", err)
+	}
+	wrongMethod.Body.Close()
+	if wrongMethod.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("\nwanted:\n405 for POST /message\ngot:\n%d", wrongMethod.StatusCode)
+	}
+
+	t.Run("should store an unreassembled fragment and an empty control frame", func(t *testing.T) {
+		for _, frame := range []marasiws.Frame{
+			{Fin: false, Opcode: marasiws.OpText, Payload: []byte("first")},
+			{Fin: true, Opcode: marasiws.OpPing},
+		} {
+			if err := marasiws.WriteFrame(connection, frame, true); err != nil {
+				t.Fatalf("writing websocket frame: %v", err)
+			}
+		}
+		fragment := readWebSocketEventData(t, events, "websocket.message")
+		ping := readWebSocketEventData(t, events, "websocket.message")
+		var first, second struct {
+			ID           uuid.UUID `json:"id"`
+			ConnectionID uuid.UUID `json:"connection_id"`
+			RequestID    uuid.UUID `json:"request_id"`
+			Direction    string    `json:"direction"`
+			Opcode       int       `json:"opcode"`
+			Fin          bool      `json:"fin"`
+			Payload      string    `json:"payload"`
+			IsBinary     bool      `json:"is_binary"`
+			CreatedAt    string    `json:"created_at"`
+		}
+		if err := json.Unmarshal([]byte(fragment), &first); err != nil {
+			t.Fatalf("decoding fragment event: %v", err)
+		}
+		if err := json.Unmarshal([]byte(ping), &second); err != nil {
+			t.Fatalf("decoding ping event: %v", err)
+		}
+		if first.ID == uuid.Nil || first.ConnectionID != opened.ID || first.RequestID != opened.RequestID || first.Direction != "client" || first.Opcode != 1 || first.Fin || first.Payload != "Zmlyc3Q=" || first.IsBinary || first.CreatedAt == "" || !strings.Contains(fragment, `"metadata":{}`) {
+			t.Fatalf("\nwanted:\nclient text fragment with its own ID and base64 payload\ngot:\n%s", fragment)
+		}
+		if second.ID == uuid.Nil || second.ID == first.ID || second.ConnectionID != opened.ID || second.RequestID != opened.RequestID || second.Direction != "client" || second.Opcode != 9 || !second.Fin || second.Payload != "" || second.IsBinary || second.CreatedAt == "" || !strings.Contains(ping, `"metadata":{}`) {
+			t.Fatalf("\nwanted:\nempty client ping with full message fields\ngot:\n%s", ping)
+		}
+		if _, err := time.Parse(time.RFC3339, first.CreatedAt); err != nil {
+			t.Fatalf("invalid message timestamp %q: %v", first.CreatedAt, err)
+		}
+
+		// The event precedes the asynchronous database flush.
+		var page []byte
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			res, err := http.Get(path + "?limit=1&ignored=yes")
+			if err != nil {
+				t.Fatalf("getting message page: %v", err)
+			}
+			page, err = io.ReadAll(res.Body)
+			res.Body.Close()
+			if err != nil {
+				t.Fatalf("reading message page: %v", err)
+			}
+			if string(page) == fmt.Sprintf(`{"items":[%s],"next_cursor":"%s"}`+"\n", ping, second.ID) {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		want := fmt.Sprintf(`{"items":[%s],"next_cursor":"%s"}`+"\n", ping, second.ID)
+		if string(page) != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, page)
+		}
+		assertWebSocketControlResponse(t, path+"?limit=1&cursor="+second.ID.String(), http.StatusOK, []byte(fmt.Sprintf(`{"items":[%s],"next_cursor":null}`+"\n", fragment)))
+		assertWebSocketControlResponse(t, path+"?cursor="+uuid.Nil.String(), http.StatusOK, []byte("{\"items\":[],\"next_cursor\":null}\n"))
+	})
+
+	t.Run("should publish a dropped frame only after Checkpoint resolves it", func(t *testing.T) {
+		if err := marasiws.WriteFrame(connection, marasiws.Frame{Fin: true, Opcode: marasiws.OpContinuation, Payload: []byte(" last")}, true); err != nil {
+			t.Fatalf("finishing fragment: %v", err)
+		}
+		continuation := readWebSocketEventData(t, events, "websocket.message")
+		var continued struct {
+			ID uuid.UUID `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(continuation), &continued); err != nil {
+			t.Fatalf("decoding continuation: %v", err)
+		}
+		wantContinuation := fmt.Sprintf(`{"items":[%s],"next_cursor":"%s"}`+"\n", continuation, continued.ID)
+		var lastPage []byte
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			res, err := http.Get(path + "?limit=1")
+			if err != nil {
+				t.Fatalf("getting continuation page: %v", err)
+			}
+			lastPage, err = io.ReadAll(res.Body)
+			res.Body.Close()
+			if err != nil {
+				t.Fatalf("reading continuation page: %v", err)
+			}
+			if string(lastPage) == wantContinuation {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		if string(lastPage) != wantContinuation {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantContinuation, lastPage)
+		}
+		res, err := http.Post(control.URL+"/checkpoint/websocket-intercept", "application/json", strings.NewReader(`{"websocket_intercept":true}`))
+		if err != nil {
+			t.Fatalf("enabling websocket Checkpoint: %v", err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("\nwanted:\n200 enabling Checkpoint\ngot:\n%d", res.StatusCode)
+		}
+		if err := marasiws.WriteFrame(connection, marasiws.Frame{Fin: true, Opcode: marasiws.OpText, Payload: []byte("drop me")}, true); err != nil {
+			t.Fatalf("sending held frame: %v", err)
+		}
+		held := readWebSocketEventData(t, events, "checkpoint.held")
+		var item struct {
+			ID uuid.UUID `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(held), &item); err != nil || item.ID == uuid.Nil {
+			t.Fatalf("\nwanted:\ncheckpoint.held with a message ID\ngot:\n%s, %v", held, err)
+		}
+		// While held, the message has not been stored or published as websocket.message.
+		assertWebSocketControlResponse(t, path+"?limit=1", http.StatusOK, []byte(wantContinuation))
+		res, err = http.Post(control.URL+"/checkpoint/"+item.ID.String()+"/drop", "application/json", nil)
+		if err != nil {
+			t.Fatalf("dropping held frame: %v", err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("\nwanted:\n200 dropping frame\ngot:\n%d", res.StatusCode)
+		}
+		dropped := readWebSocketEventData(t, events, "websocket.message")
+		var message struct {
+			ID       uuid.UUID      `json:"id"`
+			Payload  string         `json:"payload"`
+			Metadata map[string]any `json:"metadata"`
+		}
+		if err := json.Unmarshal([]byte(dropped), &message); err != nil {
+			t.Fatalf("decoding dropped event: %v", err)
+		}
+		if message.ID != item.ID || message.Payload != "ZHJvcCBtZQ==" || message.Metadata["dropped"] != true {
+			t.Fatalf("\nwanted:\nstored dropped frame with held ID and original payload\ngot:\n%s", dropped)
+		}
+		deadline = time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			res, err := http.Get(path + "?limit=1")
+			if err != nil {
+				t.Fatalf("reading dropped message: %v", err)
+			}
+			body, err := io.ReadAll(res.Body)
+			res.Body.Close()
+			if err != nil {
+				t.Fatalf("reading dropped page: %v", err)
+			}
+			if string(body) == fmt.Sprintf(`{"items":[%s],"next_cursor":"%s"}`+"\n", dropped, item.ID) {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("dropped websocket.message was not saved: %s", dropped)
+	})
+}
+
+func TestWebSocketInject(t *testing.T) {
+	upstreamFrames := make(chan marasiws.Frame, 4)
+	control, originURL, proxyAddress, proxy, _ := newWebSocketControlFixture(t, upstreamFrames)
+	stream, events := connectEventStream(t, control.URL)
+	t.Cleanup(func() { stream.Body.Close() })
+	connection, request := upgradeWebSocketThroughProxy(t, proxyAddress, originURL)
+	t.Cleanup(func() { connection.Close() })
+	upgrade, err := http.ReadResponse(bufio.NewReader(connection), request)
+	if err != nil {
+		t.Fatalf("reading websocket upgrade response: %v", err)
+	}
+	upgrade.Body.Close()
+	if upgrade.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("\nwanted:\n101 upgrade\ngot:\n%d", upgrade.StatusCode)
+	}
+	var opened struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(readWebSocketEventData(t, events, "websocket.opened")), &opened); err != nil {
+		t.Fatalf("decoding opened connection: %v", err)
+	}
+	path := "/websocket/" + opened.ID.String() + "/inject"
+	waitForWebSocketState(t, control.URL+"/websocket/"+opened.ID.String(), "open")
+
+	t.Run("should inject client and server frames and return the stored message", func(t *testing.T) {
+		for _, test := range []struct {
+			direction string
+			opcode    int
+			payload   string
+		}{
+			{direction: "client", opcode: 1, payload: "aGVsbG8="},
+			{direction: "server", opcode: 2, payload: "AAEC"},
+		} {
+			body := fmt.Sprintf(`{"direction":%q,"opcode":%d,"payload":%q}`, test.direction, test.opcode, test.payload)
+			response, err := http.Post(control.URL+path, "application/json", strings.NewReader(body))
+			if err != nil {
+				t.Fatalf("injecting %s frame: %v", test.direction, err)
+			}
+			stored, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			if err != nil {
+				t.Fatalf("reading injection response: %v", err)
+			}
+			event := readWebSocketEventData(t, events, "websocket.message")
+			if response.StatusCode != http.StatusOK || string(stored) != event+"\n" {
+				t.Fatalf("\nwanted:\n200 and message event %s\ngot:\n%d %s", event, response.StatusCode, stored)
+			}
+			var message struct {
+				ConnectionID uuid.UUID      `json:"connection_id"`
+				Direction    string         `json:"direction"`
+				Opcode       int            `json:"opcode"`
+				Payload      string         `json:"payload"`
+				Metadata     map[string]any `json:"metadata"`
+			}
+			if err := json.Unmarshal(stored, &message); err != nil {
+				t.Fatalf("decoding injected message: %v", err)
+			}
+			if message.ConnectionID != opened.ID || message.Direction != test.direction || message.Opcode != test.opcode || message.Payload != test.payload || message.Metadata["injected"] != true {
+				t.Fatalf("\nwanted:\n%s opcode %d payload %q and injected metadata\ngot:\n%s", test.direction, test.opcode, test.payload, stored)
+			}
+			if test.direction == "client" {
+				select {
+				case frame := <-upstreamFrames:
+					if !frame.Masked || string(frame.Payload) != "hello" {
+						t.Fatalf("\nwanted:\nmasked upstream hello\ngot:\n%+v", frame)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("upstream did not receive injected frame")
+				}
+			} else {
+				frame, err := marasiws.ReadFrame(connection)
+				if err != nil || frame.Masked || string(frame.Payload) != string([]byte{0, 1, 2}) {
+					t.Fatalf("\nwanted:\nunmasked browser frame with binary payload\ngot:\n%+v, %v", frame, err)
+				}
+			}
+		}
+	})
+
+	t.Run("should reject malformed input and distinguish missing from non-live connections", func(t *testing.T) {
+		for _, body := range []string{`{}`, `null`, `{"direction":"client"}`, `{"direction":"sideways","opcode":1}`, `{"direction":"client","opcode":-1}`, `{"direction":"client","opcode":16}`, `{"direction":"client","opcode":1.5}`, `{"direction":"client","opcode":null}`, `{"direction":null,"opcode":1}`, `{"direction":"client","opcode":1,"payload":null}`, `{"direction":"client","opcode":1,"payload":"bad!"}`, `{"direction":"client","opcode":1,"payload":[1,2]}`, `{"direction":"client","opcode":1,"extra":true}`, `{"direction":"client","opcode":1} {}`} {
+			response, err := http.Post(control.URL+path, "application/json", strings.NewReader(body))
+			if err != nil {
+				t.Fatalf("posting %s: %v", body, err)
+			}
+			got, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			if err != nil || response.StatusCode != http.StatusBadRequest || string(got) != "{\"error\":\"invalid_websocket_request\"}\n" {
+				t.Fatalf("\nwanted:\n400 invalid_websocket_request for %s\ngot:\n%d %s, %v", body, response.StatusCode, got, err)
+			}
+		}
+		assertWebSocketInjectError(t, control.URL+"/websocket/not-a-uuid/inject", `{}`, http.StatusBadRequest, "bad_request")
+		assertWebSocketInjectError(t, control.URL+"/websocket/"+uuid.New().String()+"/inject", `{"direction":"client","opcode":1}`, http.StatusNotFound, "not_found")
+		live, exists := proxy.WebSocketRegistry.Get(opened.ID)
+		if !exists {
+			t.Fatal("opened connection missing from live registry")
+		}
+		proxy.WebSocketRegistry.Remove(opened.ID)
+		t.Cleanup(func() {
+			if _, exists := proxy.WebSocketRegistry.Get(opened.ID); !exists {
+				_ = proxy.WebSocketRegistry.Add(live)
+			}
+		})
+		assertWebSocketInjectError(t, control.URL+path, `{"direction":"client","opcode":1}`, http.StatusConflict, "websocket_not_open")
+		if err := proxy.WebSocketRegistry.Add(live); err != nil {
+			t.Fatalf("restoring live connection: %v", err)
+		}
+	})
+
+	t.Run("should send an empty frame when payload is omitted", func(t *testing.T) {
+		response, err := http.Post(control.URL+path, "application/json", strings.NewReader(`{"direction":"client","opcode":9}`))
+		if err != nil {
+			t.Fatalf("injecting empty ping: %v", err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"payload":""`) {
+			t.Fatalf("\nwanted:\n200 with empty payload\ngot:\n%d %s, %v", response.StatusCode, body, err)
+		}
+		readWebSocketEventData(t, events, "websocket.message")
+		select {
+		case frame := <-upstreamFrames:
+			if frame.Opcode != marasiws.OpPing || len(frame.Payload) != 0 {
+				t.Fatalf("\nwanted:\nempty ping upstream\ngot:\n%+v", frame)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("upstream did not receive empty ping")
+		}
+	})
+
+	t.Run("should block for Checkpoint then return the edited or dropped stored message", func(t *testing.T) {
+		response, err := http.Post(control.URL+"/checkpoint/websocket-intercept", "application/json", strings.NewReader(`{"websocket_intercept":true}`))
+		if err != nil {
+			t.Fatalf("enabling Checkpoint: %v", err)
+		}
+		response.Body.Close()
+		for _, test := range []struct {
+			name    string
+			resolve string
+			payload string
+			dropped bool
+		}{
+			{name: "forward", resolve: "/forward", payload: "ZWRpdGVk"},
+			{name: "drop", resolve: "/drop", payload: "aG9sZA==", dropped: true},
+		} {
+			t.Run("should "+test.name, func(t *testing.T) {
+				result := make(chan *http.Response, 1)
+				failures := make(chan error, 1)
+				go func() {
+					res, err := http.Post(control.URL+path, "application/json", strings.NewReader(`{"direction":"client","opcode":1,"payload":"aG9sZA=="}`))
+					if err != nil {
+						failures <- err
+						return
+					}
+					result <- res
+				}()
+				held := readWebSocketEventData(t, events, "checkpoint.held")
+				var item struct {
+					ID uuid.UUID `json:"id"`
+				}
+				if err := json.Unmarshal([]byte(held), &item); err != nil || item.ID == uuid.Nil {
+					t.Fatalf("decoding held message %s: %v", held, err)
+				}
+				select {
+				case res := <-result:
+					res.Body.Close()
+					t.Fatal("inject returned before Checkpoint resolved the frame")
+				case err := <-failures:
+					t.Fatalf("inject failed before resolution: %v", err)
+				default:
+				}
+				resolutionBody := `{}`
+				if !test.dropped {
+					resolutionBody = `{"payload":"ZWRpdGVk"}`
+				}
+				resolved, err := http.Post(control.URL+"/checkpoint/"+item.ID.String()+test.resolve, "application/json", strings.NewReader(resolutionBody))
+				if err != nil {
+					t.Fatalf("resolving held frame: %v", err)
+				}
+				resolved.Body.Close()
+				if resolved.StatusCode != http.StatusOK {
+					t.Fatalf("\nwanted:\n200 resolving Checkpoint\ngot:\n%d", resolved.StatusCode)
+				}
+				var injection *http.Response
+				select {
+				case injection = <-result:
+				case err := <-failures:
+					t.Fatalf("injecting after resolution: %v", err)
+				case <-time.After(3 * time.Second):
+					t.Fatal("inject did not return after resolution")
+				}
+				body, err := io.ReadAll(injection.Body)
+				injection.Body.Close()
+				if err != nil {
+					t.Fatalf("reading inject response: %v", err)
+				}
+				event := readWebSocketEventData(t, events, "websocket.message")
+				if injection.StatusCode != http.StatusOK || string(body) != event+"\n" {
+					t.Fatalf("\nwanted:\n200 stored message %s\ngot:\n%d %s", event, injection.StatusCode, body)
+				}
+				var message struct {
+					ID       uuid.UUID      `json:"id"`
+					Payload  string         `json:"payload"`
+					Metadata map[string]any `json:"metadata"`
+				}
+				if err := json.Unmarshal(body, &message); err != nil {
+					t.Fatalf("decoding inject response: %v", err)
+				}
+				if message.ID != item.ID || message.Payload != test.payload || message.Metadata["injected"] != true || (message.Metadata["dropped"] == true) != test.dropped {
+					t.Fatalf("\nwanted:\nheld ID %s, payload %s, dropped %t\ngot:\n%s", item.ID, test.payload, test.dropped, body)
+				}
+				wantPage := fmt.Sprintf(`{"items":[%s],"next_cursor":`, strings.TrimSpace(string(body)))
+				var page []byte
+				deadline := time.Now().Add(3 * time.Second)
+				for time.Now().Before(deadline) {
+					res, err := http.Get(control.URL + "/websocket/" + opened.ID.String() + "/message?limit=1")
+					if err != nil {
+						t.Fatalf("reading message list: %v", err)
+					}
+					page, err = io.ReadAll(res.Body)
+					res.Body.Close()
+					if err != nil {
+						t.Fatalf("reading message page: %v", err)
+					}
+					if res.StatusCode == http.StatusOK && strings.HasPrefix(string(page), wantPage) {
+						break
+					}
+					time.Sleep(time.Millisecond)
+				}
+				if !strings.HasPrefix(string(page), wantPage) {
+					t.Fatalf("\nwanted:\nmessage list containing injected frame %s\ngot:\n%s", body, page)
+				}
+				select {
+				case frame := <-upstreamFrames:
+					if test.dropped || string(frame.Payload) != "edited" {
+						t.Fatalf("\nwanted:\n%s upstream frame\ngot:\n%+v", test.name, frame)
+					}
+				case <-time.After(100 * time.Millisecond):
+					if !test.dropped {
+						t.Fatal("forwarded frame did not reach upstream")
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("should reject injection after the connection closes", func(t *testing.T) {
+		connection.Close()
+		waitForWebSocketState(t, control.URL+"/websocket/"+opened.ID.String(), "error")
+		assertWebSocketInjectError(t, control.URL+path, `{"direction":"client","opcode":1}`, http.StatusConflict, "websocket_not_open")
+	})
+}
+
+func TestWebSocketClose(t *testing.T) {
+	control, originURL, proxyAddress, _, dbConnection := newWebSocketControlFixture(t)
+	stream, events := connectEventStream(t, control.URL)
+	t.Cleanup(func() { stream.Body.Close() })
+	connection, request := upgradeWebSocketThroughProxy(t, proxyAddress, originURL)
+	t.Cleanup(func() { connection.Close() })
+	upgrade, err := http.ReadResponse(bufio.NewReader(connection), request)
+	if err != nil {
+		t.Fatalf("reading websocket upgrade response: %v", err)
+	}
+	upgrade.Body.Close()
+	if upgrade.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("\nwanted:\n101 upgrade\ngot:\n%d", upgrade.StatusCode)
+	}
+	var opened struct {
+		ID        uuid.UUID `json:"id"`
+		RequestID uuid.UUID `json:"request_id"`
+		StartedAt string    `json:"started_at"`
+	}
+	if err := json.Unmarshal([]byte(readWebSocketEventData(t, events, "websocket.opened")), &opened); err != nil {
+		t.Fatalf("decoding opened connection: %v", err)
+	}
+	path := control.URL + "/websocket/" + opened.ID.String() + "/close"
+	waitForWebSocketState(t, control.URL+"/websocket/"+opened.ID.String(), "open")
+
+	for _, body := range []string{"null", `{"code":null}`, `{"reason":null}`, `{"code":"1000"}`, `{"code":1005}`, `{"reason":"` + strings.Repeat("é", 62) + `"}`, string([]byte{'{', '"', 'r', 'e', 'a', 's', 'o', 'n', '"', ':', '"', 0xff, '"', '}'}), `{"extra":1}`, `{} {}`} {
+		assertWebSocketInjectError(t, path, body, http.StatusBadRequest, "invalid_websocket_request")
+	}
+	assertWebSocketInjectError(t, control.URL+"/websocket/bad/close", `{}`, http.StatusBadRequest, "bad_request")
+	assertWebSocketInjectError(t, control.URL+"/websocket/"+uuid.New().String()+"/close", `{}`, http.StatusNotFound, "not_found")
+	method, err := http.Get(path)
+	if err != nil {
+		t.Fatalf("getting close route: %v", err)
+	}
+	method.Body.Close()
+	if method.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("\nwanted:\n405 for GET /close\ngot:\n%d", method.StatusCode)
+	}
+	unknown, err := http.Post(path+"/extra", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("posting unknown close path: %v", err)
+	}
+	unknown.Body.Close()
+	if unknown.StatusCode != http.StatusNotFound {
+		t.Fatalf("\nwanted:\n404 for unknown path\ngot:\n%d", unknown.StatusCode)
+	}
+
+	// The stored open row is already visible. Block subsequent writes to show
+	// that the close response comes from the running connection, not SQLite.
+	dbSession, err := dbConnection.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("holding database connection: %v", err)
+	}
+	t.Cleanup(func() { dbSession.Close() })
+
+	closeRequest, err := http.NewRequest(http.MethodPost, path, strings.NewReader(`{"code":0,"reason":"done"}`))
+	if err != nil {
+		t.Fatalf("creating close request: %v", err)
+	}
+	closeRequest.Header.Set("Content-Type", "application/json")
+	closed, err := (&http.Client{Timeout: 2 * time.Second}).Do(closeRequest)
+	if err != nil {
+		t.Fatalf("closing websocket: %v", err)
+	}
+	defer closed.Body.Close()
+	body, err := io.ReadAll(closed.Body)
+	if err != nil {
+		t.Fatalf("reading close response: %v", err)
+	}
+	var result struct {
+		ID          uuid.UUID `json:"id"`
+		State       string    `json:"state"`
+		CloseCode   int       `json:"close_code"`
+		CloseReason string    `json:"close_reason"`
+		ClosedAt    *string   `json:"closed_at"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatalf("decoding closed connection: %v", err)
+	}
+	if closed.StatusCode != http.StatusOK || result.ID != opened.ID || result.State != "closed" || result.CloseCode != 1000 || result.CloseReason != "done" || result.ClosedAt == nil {
+		t.Fatalf("\nwanted:\n200 closed connection with code 1000 and reason done\ngot:\n%d %s", closed.StatusCode, body)
+	}
+	frame, err := marasiws.ReadFrame(connection)
+	if err != nil {
+		t.Fatalf("reading peer close frame: %v", err)
+	}
+	code, reason, err := marasiws.ParseClosePayload(frame.Payload)
+	if err != nil || frame.Opcode != marasiws.OpClose || code != 1000 || reason != "done" {
+		t.Fatalf("\nwanted:\nclose frame with 1000 done\ngot:\n%+v, %d %q, %v", frame, code, reason, err)
+	}
+	if err := connection.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("setting close deadline: %v", err)
+	}
+	var next [1]byte
+	if n, err := connection.Read(next[:]); n != 0 || !errors.Is(err, io.EOF) {
+		t.Fatalf("\nwanted:\npeer connection EOF after close frame\ngot:\n%d bytes and %v", n, err)
+	}
+	want := fmt.Sprintf(`{"id":%q,"request_id":%q,"state":"closed","transport":"ws","host":%q,"path":"/socket?test=1","started_at":%q,"closed_at":%q,"close_code":1000,"close_reason":"done"}`+"\n", opened.ID, opened.RequestID, strings.TrimPrefix(originURL, "http://"), opened.StartedAt, *result.ClosedAt)
+	if string(body) != want {
+		t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, body)
+	}
+	if event := readWebSocketEventData(t, events, "websocket.closed"); event+"\n" != want {
+		t.Fatalf("\nwanted:\nclosed event %s\ngot:\n%s", want, event)
+	}
+	if err := dbSession.Close(); err != nil {
+		t.Fatalf("releasing database connection: %v", err)
+	}
+	assertWebSocketInjectError(t, path, `{}`, http.StatusConflict, "websocket_not_open")
+}
+
+func TestWebSocketCloseDefaults(t *testing.T) {
+	control, originURL, proxyAddress, _, _ := newWebSocketControlFixture(t)
+	stream, events := connectEventStream(t, control.URL)
+	t.Cleanup(func() { stream.Body.Close() })
+	for _, body := range []string{"", `{}`} {
+		t.Run("should close normally with body "+body, func(t *testing.T) {
+			connection, request := upgradeWebSocketThroughProxy(t, proxyAddress, originURL)
+			t.Cleanup(func() { connection.Close() })
+			upgrade, err := http.ReadResponse(bufio.NewReader(connection), request)
+			if err != nil {
+				t.Fatalf("reading websocket upgrade response: %v", err)
+			}
+			upgrade.Body.Close()
+			if upgrade.StatusCode != http.StatusSwitchingProtocols {
+				t.Fatalf("\nwanted:\n101 upgrade\ngot:\n%d", upgrade.StatusCode)
+			}
+			var opened struct {
+				ID uuid.UUID `json:"id"`
+			}
+			if err := json.Unmarshal([]byte(readWebSocketEventData(t, events, "websocket.opened")), &opened); err != nil {
+				t.Fatalf("decoding opened connection: %v", err)
+			}
+			response, err := http.Post(control.URL+"/websocket/"+opened.ID.String()+"/close", "application/json", strings.NewReader(body))
+			if err != nil {
+				t.Fatalf("closing websocket: %v", err)
+			}
+			defer response.Body.Close()
+			closed, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatalf("reading close response: %v", err)
+			}
+			var record struct {
+				State       string `json:"state"`
+				CloseCode   int    `json:"close_code"`
+				CloseReason string `json:"close_reason"`
+			}
+			if err := json.Unmarshal(closed, &record); err != nil {
+				t.Fatalf("decoding close response: %v", err)
+			}
+			if response.StatusCode != http.StatusOK || record.State != "closed" || record.CloseCode != 1000 || record.CloseReason != "" {
+				t.Fatalf("\nwanted:\n200 closed connection with code 1000 and empty reason\ngot:\n%d %s", response.StatusCode, closed)
+			}
+			if event := readWebSocketEventData(t, events, "websocket.closed"); event+"\n" != string(closed) {
+				t.Fatalf("\nwanted:\nclosed event matching response %s\ngot:\n%s", closed, event)
+			}
+		})
+	}
+}
+
+func assertWebSocketInjectError(t *testing.T, endpoint, request string, status int, code string) {
+	t.Helper()
+	response, err := http.Post(endpoint, "application/json", strings.NewReader(request))
+	if err != nil {
+		t.Fatalf("posting inject request: %v", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode != status || string(body) != fmt.Sprintf(`{"error":%q}`+"\n", code) {
+		t.Fatalf("\nwanted:\n%d %s\ngot:\n%d %s, %v", status, code, response.StatusCode, body, err)
+	}
+}
+
+func newWebSocketControlFixture(t *testing.T, upstreamFrames ...chan marasiws.Frame) (*httptest.Server, string, string, *marasi.Proxy, *sqlx.DB) {
+	t.Helper()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			return
+		}
+		connection, buffered, err := hijacker.Hijack()
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+
+		accept := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+		if _, err := fmt.Fprintf(buffered, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: %s\r\n\r\n", base64.StdEncoding.EncodeToString(accept[:])); err != nil {
+			return
+		}
+		if err := buffered.Flush(); err != nil {
+			return
+		}
+		for {
+			frame, err := marasiws.ReadFrame(buffered)
+			if err != nil {
+				return
+			}
+			if len(upstreamFrames) != 0 && frame.Opcode != marasiws.OpClose {
+				upstreamFrames[0] <- frame
+			}
+			if frame.Opcode == marasiws.OpClose {
+				_ = marasiws.WriteFrame(buffered, frame, false)
+				_ = buffered.Flush()
+				return
+			}
+		}
+	}))
+	t.Cleanup(origin.Close)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dbConnection, err := db.New(filepath.Join(t.TempDir(), "project.marasi"), logger)
+	if err != nil {
+		t.Fatalf("creating database: %v", err)
+	}
+	repository := db.NewProxyRepo(dbConnection)
+	defaultExtensions, err := repository.GetExtensions()
+	if err != nil {
+		_ = repository.Close()
+		t.Fatalf("getting default extensions: %v", err)
+	}
+	proxy, err := marasi.New(
+		marasi.WithConfigDir(t.TempDir()),
+		marasi.WithDefaultRepositories(repository),
+	)
+	if err != nil {
+		_ = repository.Close()
+		t.Fatalf("creating proxy: %v", err)
+	}
+	proxy.Scope = compass.NewScope(true)
+	proxy.Waypoints = make(map[string]string)
+	if err := proxy.WithOptions(
+		marasi.WithExtensions(defaultExtensions),
+		marasi.WithBasePipeline(),
+		marasi.WithDefaultModifierPipeline(),
+	); err != nil {
+		_ = proxy.Close()
+		t.Fatalf("configuring proxy pipeline: %v", err)
+	}
+	server := newTestServer(proxy, func() {})
+	server.heartbeatInterval = 50 * time.Millisecond
+	if err := proxy.WithOptions(
+		marasi.WithRequestHandler(server.HandleRequest),
+		marasi.WithResponseHandler(server.HandleResponse),
+		marasi.WithWebSocketOpenHandler(server.HandleWebSocketOpen),
+		marasi.WithWebSocketMessageHandler(server.HandleWebSocketMessage),
+		marasi.WithWebSocketCloseHandler(server.HandleWebSocketClose),
+		marasi.WithWebSocketInterceptHandler(server.HandleWebSocketIntercept),
+	); err != nil {
+		_ = proxy.Close()
+		t.Fatalf("installing service handlers: %v", err)
+	}
+	proxyListener, err := proxy.GetListener("127.0.0.1", "0")
+	if err != nil {
+		_ = proxy.Close()
+		t.Fatalf("creating proxy listener: %v", err)
+	}
+	serveResult := make(chan error, 1)
+	go func() { serveResult <- proxy.Serve(proxyListener) }()
+	control := httptest.NewServer(server)
+	t.Cleanup(func() {
+		control.Close()
+		if err := proxy.Close(); err != nil {
+			t.Errorf("closing proxy: %v", err)
+		}
+		select {
+		case <-serveResult:
+		case <-time.After(5 * time.Second):
+			t.Error("proxy serve did not stop")
+		}
+	})
+
+	return control, origin.URL, net.JoinHostPort(proxy.Addr, proxy.Port), proxy, dbConnection
+}
+
+func upgradeWebSocketThroughProxy(t *testing.T, proxyAddress, originURL string) (net.Conn, *http.Request) {
+	t.Helper()
+	connection, err := net.Dial("tcp", proxyAddress)
+	if err != nil {
+		t.Fatalf("dialing proxy: %v", err)
+	}
+	if err := connection.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		connection.Close()
+		t.Fatalf("setting websocket deadline: %v", err)
+	}
+	parsedOrigin, err := url.Parse(originURL)
+	if err != nil {
+		connection.Close()
+		t.Fatalf("parsing origin URL: %v", err)
+	}
+	target := originURL + "/socket?test=1"
+	key := "dGhlIHNhbXBsZSBub25jZQ=="
+	request, err := http.NewRequest(http.MethodGet, target, nil)
+	if err != nil {
+		connection.Close()
+		t.Fatalf("creating websocket request: %v", err)
+	}
+	request.Header.Set("Host", parsedOrigin.Host)
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "websocket")
+	request.Header.Set("Sec-WebSocket-Key", key)
+	request.Header.Set("Sec-WebSocket-Version", "13")
+	if _, err := fmt.Fprintf(connection, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n", request.URL.String(), parsedOrigin.Host, key); err != nil {
+		connection.Close()
+		t.Fatalf("writing websocket request: %v", err)
+	}
+	return connection, request
+}
+
+func websocketEventData(t *testing.T, frame, name string) string {
+	t.Helper()
+	wantPrefix := "event: " + name + "\ndata: "
+	if !strings.HasPrefix(frame, wantPrefix) || !strings.HasSuffix(frame, "\n\n") {
+		t.Fatalf("\nwanted event frame:\n%s\ngot:\n%s", wantPrefix+"<json>\n\n", frame)
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(frame, wantPrefix), "\n\n")
+}
+
+func readWebSocketEventData(t *testing.T, reader *bufio.Reader, name string) string {
+	t.Helper()
+	for range 20 {
+		frame := readEventFrame(t, reader)
+		if strings.HasPrefix(frame, "event: "+name+"\n") {
+			return websocketEventData(t, frame, name)
+		}
+	}
+	t.Fatalf("timed out waiting for %s event", name)
+	return ""
+}
+
+func waitForWebSocketState(t *testing.T, endpoint, state string) []byte {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		response, err := http.Get(endpoint)
+		if err == nil {
+			body, readErr := io.ReadAll(response.Body)
+			response.Body.Close()
+			if readErr == nil && response.StatusCode == http.StatusOK {
+				var current struct {
+					State string `json:"state"`
+				}
+				if json.Unmarshal(body, &current) == nil && current.State == state {
+					return body
+				}
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for websocket connection state %q at %s", state, endpoint)
+	return nil
+}
+
+func assertWebSocketControlResponse(t *testing.T, endpoint string, status int, body []byte) {
+	t.Helper()
+	response, err := http.Get(endpoint)
+	if err != nil {
+		t.Fatalf("getting %s: %v", endpoint, err)
+	}
+	defer response.Body.Close()
+	got, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("reading %s: %v", endpoint, err)
+	}
+	if response.StatusCode != status || string(got) != string(body) {
+		t.Fatalf("\nwanted status and body:\n%d %s\ngot:\n%d %s", status, body, response.StatusCode, got)
+	}
+}

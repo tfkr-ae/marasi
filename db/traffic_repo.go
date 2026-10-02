@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,6 +62,11 @@ type dbRequestResponseSummary struct {
 
 	// Common
 	Metadata Metadata `db:"metadata"`
+}
+
+type dbNoteSummary struct {
+	dbRequestResponseSummary
+	Note string `db:"note"`
 }
 
 // fromDomainProxyRequest converts a domain.ProxyRequest into a dbRequestResponse for database insertion.
@@ -350,6 +356,65 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 	return reqResSummary, nil
 }
 
+// ListTraffic returns a newest-first page of summaries older than cursor.
+func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, filter domain.TrafficListFilter) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+	query := `SELECT
+			  id, scheme, method, host, path, requested_at,
+			  status, status_code, content_type, length, responded_at,
+			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
+			  FROM request`
+	args := make([]any, 0, 7)
+	var conditions []string
+	if cursor != nil {
+		conditions = append(conditions, `id < ?`)
+		args = append(args, *cursor)
+	}
+	if filter.Host != "" {
+		conditions = append(conditions, `host = ?`)
+		args = append(args, filter.Host)
+	}
+	if filter.Method != "" {
+		conditions = append(conditions, `method = ?`)
+		args = append(args, filter.Method)
+	}
+	if filter.StatusCode != nil {
+		conditions = append(conditions, `status_code = ?`)
+		args = append(args, *filter.StatusCode)
+	}
+	if filter.PathPrefix != "" {
+		conditions = append(conditions, `substr(path, 1, length(?)) = ?`)
+		args = append(args, filter.PathPrefix, filter.PathPrefix)
+	}
+	if len(conditions) > 0 {
+		query += ` WHERE ` + strings.Join(conditions, ` AND `)
+	}
+	query += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit+1)
+
+	var dbSummary []*dbRequestResponseSummary
+	err := repo.dbConn.Select(&dbSummary, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listing traffic: %w", err)
+	}
+
+	hasMore := len(dbSummary) > limit
+	if hasMore {
+		dbSummary = dbSummary[:limit]
+	}
+
+	items := make([]*domain.RequestResponseSummary, len(dbSummary))
+	for i, row := range dbSummary {
+		items[i] = toDomainRequestResponseSummary(row)
+	}
+
+	var nextCursor *uuid.UUID
+	if hasMore {
+		id := items[len(items)-1].ID
+		nextCursor = &id
+	}
+	return items, nextCursor, nil
+}
+
 // GetMetadata retrieves the metadata map for a specific request ID.
 func (repo *Repository) GetMetadata(id uuid.UUID) (map[string]any, error) {
 	var dbMeta Metadata
@@ -408,6 +473,66 @@ func (repo *Repository) UpdateNote(requestID uuid.UUID, note string) error {
 	}
 
 	return nil
+}
+
+// DeleteNote removes the note row for a request ID.
+func (repo *Repository) DeleteNote(requestID uuid.UUID) error {
+	result, err := repo.dbConn.Exec(`DELETE FROM notes WHERE request_id = ?`, requestID)
+	if err != nil {
+		return fmt.Errorf("deleting note for request %s: %w", requestID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("deleting note for request %s: %w", requestID, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("deleting note for request %s: %w", requestID, sql.ErrNoRows)
+	}
+	return nil
+}
+
+// ListNotes returns a newest-first page of summaries that have a non-empty note.
+func (repo *Repository) ListNotes(cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+	query := `SELECT
+			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
+			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
+			  json_remove(r.metadata, '$.prettified-request', '$.prettified-response') AS metadata,
+			  n.note
+			  FROM request r
+			  INNER JOIN notes n ON r.id = n.request_id
+			  WHERE n.note IS NOT NULL AND n.note != ''`
+	args := make([]any, 0, 2)
+	if cursor != nil {
+		query += ` AND r.id < ?`
+		args = append(args, *cursor)
+	}
+	query += ` ORDER BY r.id DESC LIMIT ?`
+	args = append(args, limit+1)
+
+	var rows []*dbNoteSummary
+	err := repo.dbConn.Select(&rows, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listing notes: %w", err)
+	}
+
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+
+	items := make([]*domain.RequestResponseSummary, len(rows))
+	for i, row := range rows {
+		item := toDomainRequestResponseSummary(&row.dbRequestResponseSummary)
+		item.Note = row.Note
+		items[i] = item
+	}
+
+	var nextCursor *uuid.UUID
+	if hasMore {
+		id := items[len(items)-1].ID
+		nextCursor = &id
+	}
+	return items, nextCursor, nil
 }
 
 // SearchByMetadata retrieves requests where the value at the specified JSON path matches the provided value.

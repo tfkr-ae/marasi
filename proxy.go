@@ -13,6 +13,7 @@
 package marasi
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -53,10 +54,16 @@ var (
 	ErrClientNotFound = errors.New("http client field not found")
 	// ErrExtensionRepoNotFound is returned when the extension repository is not found.
 	ErrExtensionRepoNotFound = errors.New("extension repo not found")
+	// ErrLaunchpadRepoNotFound is returned when the launchpad repository is not found.
+	ErrLaunchpadRepoNotFound = errors.New("launchpad repo not found")
+	// ErrWaypointRepoNotFound is returned when the waypoint repository is not found.
+	ErrWaypointRepoNotFound = errors.New("waypoint repo not found")
 	// ErrReportingRepoNotFound is returned when the reporting repository is not found.
 	ErrReportingRepoNotFound = errors.New("reporting repo not found")
 	// ErrArmoryRepoNotFound is returned when the Armory repository is not found.
 	ErrArmoryRepoNotFound = errors.New("armory repo not found")
+	// ErrArmoryNotFound is returned when the Armory service is not found.
+	ErrArmoryNotFound = errors.New("armory service not found")
 	// ErrWordlistManagerNotSet is returned when the wordlist manager is not set.
 	ErrWordlistManagerNotSet = errors.New("wordlist manager not set")
 	// ErrWebSocketConnectionNotFound is returned when a live WebSocket cannot be located.
@@ -76,16 +83,15 @@ const (
 // extension management, database operations, and TLS handling. It serves as the central coordinator
 // for the Marasi proxy server.
 type Proxy struct {
-	martianProxy     *martian.Proxy                       // The underlying martian.Proxy
-	ConfigDir        string                               // The configuration directory (defaults to the marasi folder under the user configuration directory)
-	Config           *Config                              // The marasi proxy configuration (separate from the GUI config)
-	Modifiers        *fifo.Group                          // Modifier group pipeline
-	DBWriteChannel   chan any                             // DB Write Channel
-	InterceptedQueue []*Intercepted                       // Queue of intercepted requests / responses
-	OnRequest        func(req domain.ProxyRequest) error  // Function to be ran on each request - used by the GUI application to handle the new requests
-	OnResponse       func(res domain.ProxyResponse) error // Function to be ran on each response - used by the GUI application to handle the new responses
-	OnIntercept      func(intercepted *Intercepted) error // Function to be ran on each intercept - used by the GUI application to handle the new intercepted items
-	OnLog            func(log domain.Log) error           // Function to be ran on each log event - used by the GUI application to handle new log entries
+	martianProxy   *martian.Proxy                       // The underlying martian.Proxy
+	ConfigDir      string                               // The configuration directory (defaults to the marasi folder under the user configuration directory)
+	Config         *Config                              // The marasi proxy configuration (separate from the GUI config)
+	Modifiers      *fifo.Group                          // Modifier group pipeline
+	DBWriteChannel chan any                             // DB Write Channel
+	OnRequest      func(req domain.ProxyRequest) error  // Function to be ran on each request - used by the GUI application to handle the new requests
+	OnResponse     func(res domain.ProxyResponse) error // Function to be ran on each response - used by the GUI application to handle the new responses
+	OnIntercept    func(item domain.CheckpointItem) error
+	OnLog          func(log domain.Log) error // Function to be ran on each log event - used by the GUI application to handle new log entries
 	// OnWebSocketOpen is called when a WebSocket connection opens.
 	OnWebSocketOpen func(domain.WebSocketConnection) error
 	// OnWebSocketMessage is called for each processed WebSocket message.
@@ -104,20 +110,29 @@ type Proxy struct {
 	mitmConfig            *tls.Config           // Martian Proxy MITM config
 	MarasiClientTLSConfig *tls.Config           // TLSConfig for the proxy.Client
 	Scope                 *compass.Scope        // Proxy scope configuration through Compass
-	Waypoints             map[string]string     // Map of host:port overrides
-	InterceptFlag         bool                  // Global intercept flag
+	Waypoints             map[string]string     // Published host:port overrides. Replaced, never mutated.
+	waypointMu            sync.RWMutex
 	// WebSocketRegistry tracks live WebSocket connections.
 	WebSocketRegistry *marasiws.Registry
 	// WebSocketInterceptor pauses WebSocket messages for manual inspection.
 	WebSocketInterceptor *marasiws.Interceptor
+	checkpoint           *checkpointState
+	httpIntercept        atomic.Bool
 	webSocketIntercept   atomic.Bool
 	webSocketLifecycleMu sync.RWMutex
 	webSocketSessions    sync.WaitGroup
 	webSocketsClosing    bool
 	martianCloseOnce     sync.Once
 	martianCloseDone     chan struct{}
+	connectionMu         sync.Mutex
+	connectionSessions   sync.WaitGroup
+	connections          map[net.Conn]struct{}
+	connectionsClosing   bool
+	transportContext     context.Context
+	cancelTransport      context.CancelFunc
 	listenerMu           sync.Mutex
 	activeListener       net.Listener
+	activeServeDone      chan struct{}
 	dbWriterStarted      atomic.Bool
 	launchpadWSMu        sync.Mutex
 	launchpadWS          map[io.Closer]struct{}
@@ -137,6 +152,18 @@ type Proxy struct {
 	ReportGenerator domain.ReportGenerator // Generator for report templates and exports.
 	DBCloser        io.Closer              // Closer for the database connection.
 	Logger          *slog.Logger           // Logger for Marasi
+	admitWork       func(context.Context, bool) (func(), error)
+	clientWorkToken string
+}
+
+// ProjectResources is the complete set of dependencies owned by one open project.
+type ProjectResources struct {
+	Repository      RepositoryProvider
+	Extensions      []*extensions.Runtime
+	Scope           *compass.Scope
+	Waypoints       map[string]string
+	Armory          ArmoryService
+	ReportGenerator domain.ReportGenerator
 }
 
 type dbWriteBarrier struct {
@@ -197,6 +224,22 @@ func (proxy *Proxy) GetTrafficRepo() (domain.TrafficRepository, error) {
 	return proxy.TrafficRepo, nil
 }
 
+// GetLaunchpadRepo returns the launchpad repository.
+func (proxy *Proxy) GetLaunchpadRepo() (domain.LaunchpadRepository, error) {
+	if proxy.LaunchpadRepo == nil {
+		return nil, ErrLaunchpadRepoNotFound
+	}
+	return proxy.LaunchpadRepo, nil
+}
+
+// GetWaypointRepo returns the waypoint repository.
+func (proxy *Proxy) GetWaypointRepo() (domain.WaypointRepository, error) {
+	if proxy.WaypointRepo == nil {
+		return nil, ErrWaypointRepoNotFound
+	}
+	return proxy.WaypointRepo, nil
+}
+
 // GetReportingRepo returns the reporting repository.
 // It returns an error if the repository is not set.
 func (proxy *Proxy) GetReportingRepo() (domain.ReportingRepository, error) {
@@ -215,6 +258,15 @@ func (proxy *Proxy) GetArmoryRepo() (domain.ArmoryRepository, error) {
 	return proxy.ArmoryRepo, nil
 }
 
+// GetArmory returns the Armory service.
+// It returns an error if the service is not set.
+func (proxy *Proxy) GetArmory() (ArmoryService, error) {
+	if proxy.Armory == nil {
+		return nil, ErrArmoryNotFound
+	}
+	return proxy.Armory, nil
+}
+
 // New creates a new Proxy instance with default configuration and applies any provided options.
 // It initializes the underlying martian proxy, database write channel, extensions map, HTTP client,
 // scope, waypoints, and sets up default log modifiers.
@@ -226,7 +278,11 @@ func (proxy *Proxy) GetArmoryRepo() (domain.ArmoryRepository, error) {
 //   - *Proxy: Configured proxy instance
 //   - error: Configuration error if any option fails
 func New(options ...func(*Proxy) error) (*Proxy, error) {
+	transportContext, cancelTransport := context.WithCancel(context.Background())
 	proxy := &Proxy{
+		transportContext:     transportContext,
+		cancelTransport:      cancelTransport,
+		connections:          make(map[net.Conn]struct{}),
 		martianProxy:         martian.NewProxy(),
 		Modifiers:            fifo.NewGroup(),
 		DBWriteChannel:       make(chan any, 10),
@@ -234,17 +290,44 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 		Client:               &http.Client{},
 		Scope:                compass.NewScope(true),
 		Waypoints:            make(map[string]string),
-		InterceptFlag:        false,
 		Logger:               slog.Default(),
 		WebSocketRegistry:    marasiws.NewRegistry(),
 		WebSocketInterceptor: marasiws.NewInterceptor(),
+		checkpoint:           newCheckpointState(),
 		launchpadWS:          make(map[io.Closer]struct{}),
+		clientWorkToken:      uuid.NewString(),
+		admitWork: func(context.Context, bool) (func(), error) {
+			return func() {}, nil
+		},
 	}
 	err := proxy.WithOptions(options...)
 	if err != nil {
 		return nil, err
 	}
 	return proxy, nil
+}
+
+// SetProjectResources replaces every project-owned dependency. Callers must
+// block project work before calling it.
+func (proxy *Proxy) SetProjectResources(resources ProjectResources) {
+	proxy.TrafficRepo = resources.Repository
+	proxy.LaunchpadRepo = resources.Repository
+	proxy.ArmoryRepo = resources.Repository
+	proxy.WaypointRepo = resources.Repository
+	proxy.StatsRepo = resources.Repository
+	proxy.ConfigRepo = resources.Repository
+	proxy.LogRepo = resources.Repository
+	proxy.ExtensionRepo = resources.Repository
+	proxy.ReportingRepo = resources.Repository
+	proxy.WebSocketRepo = resources.Repository
+	proxy.DBCloser = resources.Repository
+	proxy.Extensions = resources.Extensions
+	proxy.Scope = resources.Scope
+	proxy.waypointMu.Lock()
+	proxy.Waypoints = cloneWaypointRoutes(resources.Waypoints)
+	proxy.waypointMu.Unlock()
+	proxy.Armory = resources.Armory
+	proxy.ReportGenerator = resources.ReportGenerator
 }
 
 // AddRequestModifier accepts RequestModifierFunc and wraps it in a reqAdapter
@@ -259,8 +342,32 @@ func (proxy *Proxy) AddResponseModifier(modifier ResponseModifierFunc) {
 	proxy.Modifiers.AddResponseModifier(adapter)
 }
 
-// SyncWaypoints fetches the latest waypoints from the repository and updates the proxy's in-memory map.
+// ApplyWaypointChange persists a waypoint change and publishes the resulting
+// routes as one snapshot. change reports whether that snapshot should replace
+// the live routes. change must not call back into the proxy.
+func (proxy *Proxy) ApplyWaypointChange(change func(domain.WaypointRepository) (publish bool, err error)) (bool, error) {
+	proxy.waypointMu.Lock()
+	defer proxy.waypointMu.Unlock()
+	if proxy.WaypointRepo == nil {
+		return false, fmt.Errorf("WaypointRepository not set")
+	}
+	publish, err := change(proxy.WaypointRepo)
+	if err != nil || !publish {
+		return false, err
+	}
+	return true, proxy.publishWaypointSnapshot()
+}
+
+// SyncWaypoints reloads waypoints and publishes them as the live routing snapshot.
 func (proxy *Proxy) SyncWaypoints() error {
+	proxy.waypointMu.Lock()
+	defer proxy.waypointMu.Unlock()
+	return proxy.publishWaypointSnapshot()
+}
+
+// publishWaypointSnapshot reloads waypoints and replaces the live snapshot.
+// The caller holds waypointMu.
+func (proxy *Proxy) publishWaypointSnapshot() error {
 	if proxy.WaypointRepo == nil {
 		return fmt.Errorf("WaypointRepository not set")
 	}
@@ -270,14 +377,33 @@ func (proxy *Proxy) SyncWaypoints() error {
 		return err
 	}
 
-	waypointsMap := make(map[string]string)
+	waypointsMap := make(map[string]string, len(waypointSlice))
 	for _, waypoint := range waypointSlice {
 		waypointsMap[waypoint.Hostname] = waypoint.Override
 	}
-
 	proxy.Waypoints = waypointsMap
 	return nil
+}
 
+func (proxy *Proxy) waypointOverride(hostport string) (string, bool) {
+	proxy.waypointMu.RLock()
+	defer proxy.waypointMu.RUnlock()
+	if proxy.Waypoints == nil {
+		return "", false
+	}
+	override, ok := proxy.Waypoints[hostport]
+	return override, ok
+}
+
+func cloneWaypointRoutes(routes map[string]string) map[string]string {
+	if routes == nil {
+		return nil
+	}
+	snapshot := make(map[string]string, len(routes))
+	for hostname, override := range routes {
+		snapshot[hostname] = override
+	}
+	return snapshot
 }
 
 // GetExtension retrieves a loaded extension by its name.
@@ -289,21 +415,6 @@ func (proxy *Proxy) GetExtension(name string) (*extensions.Runtime, bool) {
 		}
 	}
 	return nil, false
-}
-
-// InterceptionTuple contains the user's decision when an intercepted item is resumed,
-// indicating whether to continue and whether to intercept the corresponding response.
-type InterceptionTuple struct {
-	Resume                  bool // Whether to resume the intercepted item
-	ShouldInterceptResponse bool // Whether to intercept the corresponding response
-}
-
-// Intercepted represents a request or response that has been intercepted for manual inspection
-// and modification before being allowed to continue.
-type Intercepted struct {
-	Type    string                 // "request" or "response"
-	Raw     string                 // Raw HTTP data that can be modified
-	Channel chan InterceptionTuple // Channel for receiving user decisions
 }
 
 // Waypoint represents a hostname override mapping, allowing requests to specific hosts
@@ -502,7 +613,9 @@ func (proxy *Proxy) WriteToDB() {
 			if err != nil {
 				log.Print(err)
 			}
-			proxy.OnLog(*castItem)
+			if proxy.OnLog != nil {
+				proxy.OnLog(*castItem)
+			}
 		case *dbWriteBarrier:
 			close(castItem.done)
 		default:
@@ -555,9 +668,9 @@ func (proxy *Proxy) WriteLog(level string, message string, options ...func(log *
 }
 
 func (proxy *Proxy) GetListener(address string, port string) (net.Listener, error) {
-	rawListener, err := net.Listen("tcp", fmt.Sprintf("%s:%s", address, port))
+	rawListener, err := net.Listen("tcp", net.JoinHostPort(address, port))
 	if err != nil {
-		return rawListener, fmt.Errorf("setting up listener on address:port %s:%s", address, port)
+		return nil, fmt.Errorf("setting up listener on address:port %s:%s: %w", address, port, err)
 	}
 	addr := rawListener.Addr().(*net.TCPAddr)
 
@@ -569,6 +682,7 @@ func (proxy *Proxy) GetListener(address string, port string) (net.Listener, erro
 	proxy.Port = fmt.Sprintf("%d", addr.Port)
 
 	muxListener := listener.NewProtocolMuxListener(rawListener, proxy.mitmConfig)
+	muxListener.WrapConn = func(conn net.Conn) net.Conn { return proxy.trackConnection(conn, true) }
 	marasiListener := listener.NewMarasiListener(muxListener)
 
 	proxy.WriteLog("INFO", fmt.Sprintf("Marasi Service Started on %s", rawListener.Addr().String()))
@@ -579,7 +693,8 @@ func (proxy *Proxy) GetListener(address string, port string) (net.Listener, erro
 		log.Fatal(fmt.Errorf("error parsing proxy URL: %w", err))
 	}
 
-	log.Printf("Proxy Client Configured: %s", parsedURL.String())
+	proxy.Logger.Info("Proxy Client Configured", "url", parsedURL.String())
+	parsedURL.User = url.UserPassword("marasi", proxy.clientWorkToken)
 
 	transport := &http.Transport{
 		Proxy:           http.ProxyURL(parsedURL),
@@ -589,19 +704,38 @@ func (proxy *Proxy) GetListener(address string, port string) (net.Listener, erro
 	return marasiListener, nil
 }
 
+// ActiveListenerAddress returns the bound address of the listener currently
+// served by the proxy.
+func (proxy *Proxy) ActiveListenerAddress() (string, bool) {
+	proxy.listenerMu.Lock()
+	defer proxy.listenerMu.Unlock()
+	if proxy.activeListener == nil {
+		return "", false
+	}
+	return proxy.activeListener.Addr().String(), true
+}
+
 // Serve starts the proxy and begins accepting connections on the provided listener.
 // It also starts the database writer goroutine.
 func (proxy *Proxy) Serve(activeListener net.Listener) error {
 	if proxy.dbWriterStarted.CompareAndSwap(false, true) {
 		go proxy.WriteToDB()
 	}
-	roundTripper := newMarasiTransport(proxy.Cert)
+	// Binding queues "Marasi Service Started" before the writer runs. Publish
+	// it before the listener reports ready, or a subscriber can see it late.
+	if err := proxy.flushDBWrites(); err != nil {
+		return err
+	}
+	roundTripper := newMarasiTransport(proxy.Cert, proxy.dialTransport)
 	proxy.martianProxy.SetRoundTripper(roundTripper)
 	proxy.listenerMu.Lock()
 	proxy.activeListener = activeListener
+	serveDone := make(chan struct{})
+	proxy.activeServeDone = serveDone
 	proxy.listenerMu.Unlock()
 	defer func() {
 		proxy.listenerMu.Lock()
+		close(serveDone)
 		if proxy.activeListener == activeListener {
 			proxy.activeListener = nil
 		}
@@ -615,7 +749,25 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 }
 
 // Close shuts down the proxy and closes the database connection.
-func (proxy *Proxy) Close() {
+func (proxy *Proxy) Close() error {
+	return proxy.close(context.Background(), true)
+}
+
+// CloseTransport stops listeners and live connections without closing the
+// open project's database. The service project lifecycle closes that resource.
+func (proxy *Proxy) CloseTransport() error {
+	return proxy.CloseTransportContext(context.Background())
+}
+
+// CloseTransportContext allows traffic to finish until ctx expires, then
+// interrupts network work and joins its handlers before flushing persistence.
+func (proxy *Proxy) CloseTransportContext(ctx context.Context) error {
+	return proxy.close(ctx, false)
+}
+
+func (proxy *Proxy) close(ctx context.Context, closeDatabase bool) error {
+	stopForceClose := context.AfterFunc(ctx, proxy.ForceCloseTransport)
+	defer stopForceClose()
 	proxy.webSocketLifecycleMu.Lock()
 	proxy.webSocketsClosing = true
 	proxy.webSocketLifecycleMu.Unlock()
@@ -631,25 +783,93 @@ func (proxy *Proxy) Close() {
 		time.Sleep(time.Millisecond)
 	}
 
+	var listenerErr error
 	proxy.listenerMu.Lock()
+	serveDone := proxy.activeServeDone
 	if proxy.activeListener != nil {
-		_ = proxy.activeListener.Close()
+		listenerErr = proxy.activeListener.Close()
+		if errors.Is(listenerErr, net.ErrClosed) {
+			listenerErr = nil
+		}
 	}
 	proxy.listenerMu.Unlock()
 
 	proxy.closeLaunchpadWebSockets()
-	if proxy.WebSocketInterceptor != nil {
-		proxy.WebSocketInterceptor.CancelAll()
+	proxy.DropAllCheckpoint()
+	webSocketErr := proxy.CloseWebSocketsAndFlush()
+	if proxy.Armory != nil {
+		proxy.Armory.Shutdown()
 	}
-	if err := proxy.CloseWebSocketsAndFlush(); err != nil {
-		log.Printf("closing websocket connections: %v", err)
+	if serveDone != nil {
+		<-serveDone
 	}
 	<-proxy.martianCloseDone
-	if proxy.DBCloser != nil {
-		log.Println("Closing database connection...")
-		proxy.DBCloser.Close()
+	// Martian increments its handler wait count inside the new goroutine.
+	// Join accepted sockets too, including not-yet-scheduled handlers.
+	proxy.connectionSessions.Wait()
+	proxy.ForceCloseTransport()
+	flushErr := proxy.flushDBWrites()
+	var databaseErr error
+	if closeDatabase && proxy.DBCloser != nil {
+		if proxy.Logger != nil {
+			proxy.Logger.Info("Closing database connection")
+		}
+		databaseErr = proxy.DBCloser.Close()
 	}
 
+	return errors.Join(listenerErr, webSocketErr, flushErr, databaseErr)
+}
+
+// Track sockets before protocol inspection or TLS handshakes so forced shutdown
+// also interrupts clients and upstreams that have not sent HTTP headers yet.
+func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
+	proxy.connectionMu.Lock()
+	if inbound {
+		proxy.connectionSessions.Add(1)
+	}
+	proxy.connections[conn] = struct{}{}
+	closing := proxy.connectionsClosing
+	proxy.connectionMu.Unlock()
+	if closing {
+		conn.Close()
+	}
+	return listener.NewTrackedConnection(conn, func() {
+		proxy.connectionMu.Lock()
+		delete(proxy.connections, conn)
+		proxy.connectionMu.Unlock()
+		if inbound {
+			proxy.connectionSessions.Done()
+		}
+	})
+}
+
+func (proxy *Proxy) dialTransport(ctx context.Context, network, address string) (net.Conn, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(proxy.transportContext, cancel)
+	defer stop()
+	defer cancel()
+	conn, err := (&net.Dialer{}).DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	return proxy.trackConnection(conn, false), nil
+}
+
+// ForceCloseTransport interrupts network work without releasing handler ownership.
+// Full shutdown still joins those handlers before closing persistence.
+func (proxy *Proxy) ForceCloseTransport() {
+	proxy.cancelTransport()
+	proxy.connectionMu.Lock()
+	proxy.connectionsClosing = true
+	connections := make([]net.Conn, 0, len(proxy.connections))
+	for conn := range proxy.connections {
+		connections = append(connections, conn)
+	}
+	proxy.connectionMu.Unlock()
+	for _, conn := range connections {
+		// Interrupt I/O without releasing the handler's wait count.
+		conn.Close()
+	}
 }
 
 // StartChrome launches Chrome with proxy configuration and security settings.

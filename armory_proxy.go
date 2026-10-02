@@ -21,6 +21,7 @@ type ArmoryService interface {
 	StartRun(uuid.UUID) error
 	CancelRun(uuid.UUID) error
 	ActiveRunIDs() []uuid.UUID
+	Shutdown()
 }
 
 const armoryRunIDHeader = "x-armory-run-id"

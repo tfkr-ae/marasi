@@ -1,0 +1,3173 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/spf13/cobra"
+	"github.com/tfkr-ae/marasi/db"
+	"github.com/tfkr-ae/marasi/internal/filelock"
+	"github.com/tfkr-ae/marasi/service"
+)
+
+var errServing = errors.New("serving failed")
+var errClosingListener = errors.New("listener close failed")
+var errClosingProxy = errors.New("proxy close failed")
+var errUnlockingProject = errors.New("project unlock failed")
+var errReleasingInstance = errors.New("instance release failed")
+
+type failingListener struct {
+	closed   bool
+	closeErr error
+}
+
+type lineWriter struct {
+	lines chan string
+}
+
+func (writer *lineWriter) Write(contents []byte) (int, error) {
+	writer.lines <- strings.TrimSpace(string(contents))
+	return len(contents), nil
+}
+
+func (l *failingListener) Accept() (net.Conn, error) { return nil, errServing }
+func (l *failingListener) Addr() net.Addr            { return &net.TCPAddr{} }
+func (l *failingListener) Close() error {
+	l.closed = true
+	return l.closeErr
+}
+
+func TestProjectPath(t *testing.T) {
+	t.Run("should resolve a relative project path to an absolute path", func(t *testing.T) {
+		parent, err := os.MkdirTemp(".", "project-path-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(parent) })
+		path := filepath.Join(parent, "scratchpad.marasi")
+
+		got, err := resolveProjectPath(path)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		absoluteParent, err := filepath.Abs(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		canonicalParent, err := filepath.EvalSymlinks(absoluteParent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(canonicalParent, "scratchpad.marasi")
+		if got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should resolve an existing project symlink", func(t *testing.T) {
+		parent := t.TempDir()
+		target := filepath.Join(parent, "target.marasi")
+		if err := os.WriteFile(target, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(parent, "link.marasi")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("creating symlink: %v", err)
+		}
+
+		got, err := resolveProjectPath(link)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want, err := filepath.EvalSymlinks(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should resolve a symlinked parent for a new project", func(t *testing.T) {
+		root := t.TempDir()
+		targetParent := filepath.Join(root, "projects")
+		if err := os.Mkdir(targetParent, 0700); err != nil {
+			t.Fatal(err)
+		}
+		linkParent := filepath.Join(root, "linked-projects")
+		if err := os.Symlink(targetParent, linkParent); err != nil {
+			t.Skipf("creating symlink: %v", err)
+		}
+
+		got, err := resolveProjectPath(filepath.Join(linkParent, "new.marasi"))
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		canonicalParent, err := filepath.EvalSymlinks(targetParent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(canonicalParent, "new.marasi")
+		if got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	for name, path := range map[string]string{
+		"missing extension": filepath.Join(t.TempDir(), "scratchpad"),
+		"missing parent":    filepath.Join(t.TempDir(), "missing", "scratchpad.marasi"),
+	} {
+		t.Run("should reject "+name, func(t *testing.T) {
+			if _, err := resolveProjectPath(path); err == nil {
+				t.Fatal("\nwanted:\nerror\ngot:\nnil")
+			}
+		})
+	}
+
+	t.Run("should reject a parent that is not a directory", func(t *testing.T) {
+		parent := filepath.Join(t.TempDir(), "not-a-directory")
+		if err := os.WriteFile(parent, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := resolveProjectPath(filepath.Join(parent, "scratchpad.marasi")); err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+	})
+}
+
+func TestNamedProjectPath(t *testing.T) {
+	for _, name := range []string{"scratchpad", "scratchpad.marasi"} {
+		t.Run("should resolve name "+name+" under projects", func(t *testing.T) {
+			configDir := t.TempDir()
+			got, err := resolveNamedProjectPath(configDir, name)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			canonicalConfigDir, err := filepath.EvalSymlinks(configDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := filepath.Join(canonicalConfigDir, "projects", "scratchpad.marasi")
+			if got != want {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+			}
+		})
+	}
+
+	for _, name := range []string{"", ".", "..", "/tmp/scratchpad", "../scratchpad", "nested/scratchpad", `nested\scratchpad`, "scratchpad.marasi.marasi"} {
+		t.Run("should reject invalid name "+name, func(t *testing.T) {
+			if _, err := resolveNamedProjectPath(t.TempDir(), name); err == nil {
+				t.Fatal("\nwanted:\nerror\ngot:\nnil")
+			}
+		})
+	}
+
+	t.Run("should resolve a symlinked projects directory", func(t *testing.T) {
+		root := t.TempDir()
+		configDir := filepath.Join(root, "config")
+		target := filepath.Join(root, "projects")
+		if err := os.Mkdir(configDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(target, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(configDir, "projects")); err != nil {
+			t.Skipf("creating symlink: %v", err)
+		}
+
+		got, err := resolveNamedProjectPath(configDir, "scratchpad")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		canonicalTarget, err := filepath.EvalSymlinks(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(canonicalTarget, "scratchpad.marasi")
+		if got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+}
+
+func TestInstancePath(t *testing.T) {
+	t.Run("should resolve a named instance under instances", func(t *testing.T) {
+		configDir := filepath.Join(string(filepath.Separator), "config")
+
+		got, err := resolveInstancePath(configDir, " work ")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		want := filepath.Join(configDir, "instances", "work")
+		if got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	invalidNames := []string{
+		"",
+		"   ",
+		".",
+		"..",
+		"/tmp/work",
+		"../work",
+		"nested/work",
+		`nested\work`,
+		"work.sock",
+	}
+	for _, name := range invalidNames {
+		t.Run("should reject invalid instance name "+name, func(t *testing.T) {
+			_, err := resolveInstancePath(t.TempDir(), name)
+			if err == nil {
+				t.Fatal("\nwanted:\nerror\ngot:\nnil")
+			}
+		})
+	}
+
+	t.Run("should reject a socket path over the portable limit", func(t *testing.T) {
+		configDir := filepath.Join(string(filepath.Separator), "config")
+		name := strings.Repeat("a", 104)
+		path := filepath.Join(configDir, "instances", name+".sock")
+
+		_, err := resolveInstancePath(configDir, name)
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "104") {
+			t.Fatalf("\nwanted:\nerror containing %q and 104\ngot:\n%v", path, err)
+		}
+	})
+}
+
+func TestInstanceFlag(t *testing.T) {
+	t.Run("should default to the default instance", func(t *testing.T) {
+		flag := rootCmd.PersistentFlags().Lookup("instance")
+		if flag == nil {
+			t.Fatal("\nwanted:\ninstance flag\ngot:\nnil")
+		}
+		if flag.DefValue != "default" {
+			t.Fatalf("\nwanted:\ndefault\ngot:\n%s", flag.DefValue)
+		}
+	})
+}
+
+func TestProjectFlags(t *testing.T) {
+	t.Run("should expose path and name selectors without choosing either by default", func(t *testing.T) {
+		pathFlag := startCmd.Flags().Lookup("project")
+		nameFlag := startCmd.Flags().Lookup("project-name")
+		if pathFlag == nil || nameFlag == nil {
+			t.Fatalf("\nwanted:\nproject and project-name flags\ngot:\nproject %v, project-name %v", pathFlag, nameFlag)
+		}
+		if pathFlag.DefValue != "" || nameFlag.DefValue != "" {
+			t.Fatalf("\nwanted:\nempty selector defaults\ngot:\nproject %q, project-name %q", pathFlag.DefValue, nameFlag.DefValue)
+		}
+	})
+
+	t.Run("should reject conflicting path and name selectors", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		project := filepath.Join(configDir, "project.marasi")
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "service", "start", "--project", project, "--project-name", "project")
+		if err == nil || stdout != "" || !strings.Contains(stderr, "--project and --project-name are mutually exclusive") {
+			t.Fatalf("\nwanted:\nselector conflict on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+	})
+}
+
+func TestProxyListenerFlags(t *testing.T) {
+	t.Run("should belong only to service start with loopback defaults", func(t *testing.T) {
+		addressFlag := startCmd.Flags().Lookup("address")
+		if addressFlag == nil {
+			t.Fatal("\nwanted:\naddress flag\ngot:\nnil")
+		}
+		if addressFlag.DefValue != "127.0.0.1" {
+			t.Fatalf("\nwanted:\n127.0.0.1\ngot:\n%s", addressFlag.DefValue)
+		}
+		portFlag := startCmd.Flags().Lookup("port")
+		if portFlag == nil {
+			t.Fatal("\nwanted:\nport flag\ngot:\nnil")
+		}
+		if portFlag.DefValue != "8080" {
+			t.Fatalf("\nwanted:\n8080\ngot:\n%s", portFlag.DefValue)
+		}
+		if stopCmd.Flags().Lookup("address") != nil || stopCmd.Flags().Lookup("port") != nil {
+			t.Fatal("\nwanted:\nno proxy listener flags on service stop\ngot:\nproxy listener flag")
+		}
+	})
+
+	for _, value := range []string{"-1", "65536", "not-a-port", "0x50"} {
+		t.Run("should reject non-decimal or out-of-range port "+value, func(t *testing.T) {
+			if err := startCmd.Flags().Set("port", value); err == nil {
+				t.Fatal("\nwanted:\nerror\ngot:\nnil")
+			}
+		})
+	}
+
+	for _, value := range []string{"0", "65535"} {
+		t.Run("should accept decimal port "+value, func(t *testing.T) {
+			oldPort := proxyPort
+			t.Cleanup(func() { proxyPort = oldPort })
+			if err := startCmd.Flags().Set("port", value); err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+		})
+	}
+}
+
+func TestGlobalJSONOption(t *testing.T) {
+	t.Run("should be accepted by every executable command", func(t *testing.T) {
+		binary := buildMarasi(t)
+		tests := []struct {
+			name string
+			args []string
+		}{
+			{name: "service start before command group", args: []string{"--json", "--config-dir=", "service", "start"}},
+			{name: "service stop after executable command", args: []string{"service", "stop", "--json", "--config-dir="}},
+			{name: "traffic list before command group", args: []string{"--json", "--config-dir=", "traffic", "list"}},
+			{name: "traffic get after executable command", args: []string{"traffic", "get", "00000000-0000-0000-0000-000000000000", "--json", "--config-dir="}},
+			{name: "project open after executable command", args: []string{"project", "open", "--path", "x.marasi", "--json", "--config-dir="}},
+		}
+		for _, test := range tests {
+			t.Run("should accept JSON for "+test.name, func(t *testing.T) {
+				stdout, stderr, err := runMarasi(binary, test.args...)
+				assertJSONCommandError(t, stdout, stderr, err, "config dir is empty")
+			})
+		}
+	})
+
+	t.Run("should keep help human-readable when set", func(t *testing.T) {
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--json", "--help")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if !strings.Contains(stdout, "Usage:") || !strings.Contains(stdout, "--json") {
+			t.Fatalf("\nwanted:\nhuman-readable help with --json\ngot:\n%s", stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+		}
+	})
+
+	t.Run("should normalize parsing validation and preparation failures", func(t *testing.T) {
+		binary := buildMarasi(t)
+		configDir := serviceConfigDir(t)
+		tests := []struct {
+			name string
+			args []string
+			want string
+		}{
+			{name: "unknown command", args: []string{"--json", "unknown"}, want: "unknown command"},
+			{name: "unknown flag", args: []string{"traffic", "list", "--json", "--unknown"}, want: "unknown flag"},
+			{name: "wrong argument count", args: []string{"traffic", "get", "--json"}, want: "accepts 1 arg(s)"},
+			{name: "instance validation", args: []string{"--config-dir", configDir, "--instance", "../work", "traffic", "list", "--json"}, want: "invalid instance name"},
+			{name: "project validation", args: []string{"--config-dir", configDir, "service", "start", "--project-name", "../work", "--json"}, want: "invalid project name"},
+			{name: "command preparation", args: []string{"--config-dir", "", "traffic", "list", "--json"}, want: "config dir is empty"},
+		}
+		for _, test := range tests {
+			t.Run("should normalize "+test.name, func(t *testing.T) {
+				stdout, stderr, err := runMarasi(binary, test.args...)
+				assertJSONCommandError(t, stdout, stderr, err, test.want)
+			})
+		}
+	})
+
+	t.Run("should normalize a service runtime failure", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusInternalServerError, `{"error":"internal_server_error"}`)
+
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "service", "stop", "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "stopping service: 500 Internal Server Error")
+	})
+
+	t.Run("should keep human parsing errors on stderr when JSON was not recognized", func(t *testing.T) {
+		binary := buildMarasi(t)
+		for _, args := range [][]string{
+			{"--unknown", "--json", "traffic", "list"},
+			{"-x", "--json", "traffic", "list"},
+			{"--instance", "--json", "traffic", "list"},
+			{"service", "stop", "--limit", "1", "--json"},
+		} {
+			stdout, stderr, err := runMarasi(binary, args...)
+			if err == nil || stdout != "" || stderr == "" {
+				t.Fatalf("\nwanted:\nhuman parsing error on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+			}
+		}
+	})
+}
+
+func TestCommandPreparation(t *testing.T) {
+	t.Run("should prepare proxy listener flags only for service start", func(t *testing.T) {
+		oldRunE := startCmd.RunE
+		oldAddress, oldPort := proxyAddress, proxyPort
+		t.Cleanup(func() {
+			startCmd.RunE = oldRunE
+			proxyAddress, proxyPort = oldAddress, oldPort
+			rootCmd.SetArgs(nil)
+		})
+
+		var gotAddress string
+		var gotPort decimalPort
+		startCmd.RunE = func(*cobra.Command, []string) error {
+			gotAddress, gotPort = proxyAddress, proxyPort
+			return nil
+		}
+		rootCmd.SetArgs([]string{"--config-dir", serviceConfigDir(t), "service", "start", "--address", "localhost", "--port", "0"})
+
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if gotAddress != "localhost" || gotPort != 0 {
+			t.Fatalf("\nwanted:\nlocalhost:0\ngot:\n%s:%s", gotAddress, gotPort.String())
+		}
+	})
+
+	t.Run("should prepare the instance path before service stop runs", func(t *testing.T) {
+		oldRunE := stopCmd.RunE
+		oldConfigDir, oldInstancePath := configDir, instancePath
+		t.Cleanup(func() {
+			stopCmd.RunE = oldRunE
+			configDir, instancePath = oldConfigDir, oldInstancePath
+			rootCmd.SetArgs(nil)
+		})
+
+		dir := serviceConfigDir(t)
+		var got string
+		stopCmd.RunE = func(*cobra.Command, []string) error {
+			got = instancePath
+			return nil
+		}
+		rootCmd.SetArgs([]string{"--config-dir", dir, "--instance", " work ", "service", "stop"})
+
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := filepath.Join(dir, "instances", "work")
+		if got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should prepare instance and project paths before service start runs", func(t *testing.T) {
+		oldRootPreRunE := rootCmd.PersistentPreRunE
+		oldStartPreRunE, oldRunE := startCmd.PreRunE, startCmd.RunE
+		oldConfigDir, oldInstancePath, oldProjectPath := configDir, instancePath, projectPath
+		t.Cleanup(func() {
+			rootCmd.PersistentPreRunE = oldRootPreRunE
+			startCmd.PreRunE, startCmd.RunE = oldStartPreRunE, oldRunE
+			configDir, instancePath, projectPath = oldConfigDir, oldInstancePath, oldProjectPath
+			startCmd.Flags().Lookup("project-name").Changed = false
+			rootCmd.SetArgs(nil)
+		})
+
+		var order []string
+		rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+			if err := oldRootPreRunE(cmd, args); err != nil {
+				return err
+			}
+			order = append(order, "instance")
+			return nil
+		}
+		startCmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+			if err := oldStartPreRunE(cmd, args); err != nil {
+				return err
+			}
+			order = append(order, "project")
+			return nil
+		}
+		startCmd.RunE = func(*cobra.Command, []string) error {
+			order = append(order, "run")
+			return nil
+		}
+		dir := serviceConfigDir(t)
+		rootCmd.SetArgs([]string{"--config-dir", dir, "--instance", "work", "service", "start", "--project-name", " juice-shop.marasi "})
+
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got := strings.Join(order, ","); got != "instance,project,run" {
+			t.Fatalf("\nwanted:\ninstance,project,run\ngot:\n%s", got)
+		}
+		wantInstancePath := filepath.Join(dir, "instances", "work")
+		if instancePath != wantInstancePath {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantInstancePath, instancePath)
+		}
+		canonicalDir, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantProjectPath := filepath.Join(canonicalDir, "projects", "juice-shop.marasi")
+		if projectPath != wantProjectPath {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantProjectPath, projectPath)
+		}
+	})
+
+	t.Run("should not prepare a project for service stop", func(t *testing.T) {
+		oldRunE := stopCmd.RunE
+		oldProjectPath := projectPath
+		t.Cleanup(func() {
+			stopCmd.RunE = oldRunE
+			projectPath = oldProjectPath
+			rootCmd.SetArgs(nil)
+		})
+
+		projectPath = "unchanged"
+		stopCmd.RunE = func(*cobra.Command, []string) error { return nil }
+		rootCmd.SetArgs([]string{"--config-dir", serviceConfigDir(t), "service", "stop"})
+
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if projectPath != "unchanged" {
+			t.Fatalf("\nwanted:\nunchanged\ngot:\n%s", projectPath)
+		}
+	})
+
+	t.Run("should stop before project preparation when instance preparation fails", func(t *testing.T) {
+		oldPreRunE, oldRunE := startCmd.PreRunE, startCmd.RunE
+		oldInstancePath := instancePath
+		t.Cleanup(func() {
+			startCmd.PreRunE, startCmd.RunE = oldPreRunE, oldRunE
+			instancePath = oldInstancePath
+			rootCmd.SetArgs(nil)
+		})
+
+		projectPrepared, ran := false, false
+		startCmd.PreRunE = func(*cobra.Command, []string) error {
+			projectPrepared = true
+			return nil
+		}
+		startCmd.RunE = func(*cobra.Command, []string) error {
+			ran = true
+			return nil
+		}
+		instancePath = "unchanged"
+		rootCmd.SetArgs([]string{"--config-dir", "", "service", "start"})
+
+		if err := rootCmd.Execute(); err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if projectPrepared || ran {
+			t.Fatalf("\nwanted:\nno descendant execution\ngot:\nproject prepared %t, ran %t", projectPrepared, ran)
+		}
+		if instancePath != "unchanged" {
+			t.Fatalf("\nwanted:\nunchanged\ngot:\n%s", instancePath)
+		}
+	})
+
+	t.Run("should stop before execution when project preparation fails", func(t *testing.T) {
+		oldRunE := startCmd.RunE
+		oldProjectPath := projectPath
+		t.Cleanup(func() {
+			startCmd.RunE = oldRunE
+			projectPath = oldProjectPath
+			startCmd.Flags().Lookup("project").Changed = false
+			rootCmd.SetArgs(nil)
+		})
+
+		ran := false
+		startCmd.RunE = func(*cobra.Command, []string) error {
+			ran = true
+			return nil
+		}
+		projectPath = "unchanged"
+		rootCmd.SetArgs([]string{"--config-dir", serviceConfigDir(t), "service", "start", "--project", "foo/bar"})
+
+		if err := rootCmd.Execute(); err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if ran {
+			t.Fatal("\nwanted:\nno command execution\ngot:\ncommand ran")
+		}
+		if projectPath != "unchanged" {
+			t.Fatalf("\nwanted:\nunchanged\ngot:\n%s", projectPath)
+		}
+	})
+
+	t.Run("should run root preparation before a descendant persistent hook", func(t *testing.T) {
+		oldPreRunE, oldRunE := serviceCmd.PersistentPreRunE, stopCmd.RunE
+		oldInstancePath := instancePath
+		t.Cleanup(func() {
+			serviceCmd.PersistentPreRunE, stopCmd.RunE = oldPreRunE, oldRunE
+			instancePath = oldInstancePath
+			rootCmd.SetArgs(nil)
+		})
+
+		dir := serviceConfigDir(t)
+		want := filepath.Join(dir, "instances", "work")
+		var order []string
+		instancePath = "unchanged"
+		serviceCmd.PersistentPreRunE = func(*cobra.Command, []string) error {
+			if instancePath != want {
+				return fmt.Errorf("instance path not prepared: %s", instancePath)
+			}
+			order = append(order, "descendant")
+			return nil
+		}
+		stopCmd.RunE = func(*cobra.Command, []string) error {
+			order = append(order, "run")
+			return nil
+		}
+		rootCmd.SetArgs([]string{"--config-dir", dir, "--instance", "work", "service", "stop"})
+
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got := strings.Join(order, ","); got != "descendant,run" {
+			t.Fatalf("\nwanted:\ndescendant,run\ngot:\n%s", got)
+		}
+	})
+
+	t.Run("should pass command cancellation to service start", func(t *testing.T) {
+		oldConfigDir, oldInstancePath, oldProjectPath := configDir, instancePath, projectPath
+		t.Cleanup(func() {
+			configDir, instancePath, projectPath = oldConfigDir, oldInstancePath, oldProjectPath
+			startCmd.Flags().Lookup("project-name").Changed = false
+			rootCmd.SetArgs(nil)
+			rootCmd.SetContext(nil)
+			startCmd.SetContext(nil)
+		})
+
+		dir := serviceConfigDir(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		startCmd.SetContext(nil)
+		rootCmd.SetArgs([]string{"--config-dir", dir, "--instance", "work", "service", "start", "--project-name", "scratchpad"})
+		result := make(chan error, 1)
+		go func() { result <- rootCmd.ExecuteContext(ctx) }()
+
+		select {
+		case err := <-result:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.Canceled, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("\nwanted:\ncanceled command\ngot:\ntimeout")
+		}
+		if _, err := os.Stat(filepath.Join(dir, "instances", "work.sock")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("\nwanted:\nremoved socket\ngot:\n%v", err)
+		}
+	})
+}
+
+func instanceResourcePaths(configDir, name string) (string, string, error) {
+	path, err := resolveInstancePath(configDir, name)
+	if err != nil {
+		return "", "", err
+	}
+	return path + ".sock", path + ".lock", nil
+}
+
+func TestClaimInstance(t *testing.T) {
+	t.Run("should create owner-only instance resources", func(t *testing.T) {
+		socketPath, lockPath, err := instanceResourcePaths(serviceConfigDir(t), "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		listener, lock, err := claimInstance(socketPath, lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer releaseInstance(listener, socketPath, lock)
+
+		if runtime.GOOS == "windows" {
+			return
+		}
+		for path, want := range map[string]os.FileMode{
+			filepath.Dir(socketPath): 0700,
+			lockPath:                 0600,
+			socketPath:               0600,
+		} {
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			if got := info.Mode().Perm(); got != want {
+				t.Fatalf("\nwanted:\n%#o\ngot:\n%#o", want, got)
+			}
+		}
+	})
+
+	t.Run("should replace a stale socket after acquiring the lock", func(t *testing.T) {
+		socketPath, lockPath, err := instanceResourcePaths(serviceConfigDir(t), "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.WriteFile(socketPath, []byte("stale"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		listener, lock, err := claimInstance(socketPath, lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer releaseInstance(listener, socketPath, lock)
+
+		info, err := os.Lstat(socketPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if info.Mode()&os.ModeSocket == 0 {
+			t.Fatalf("\nwanted:\nsocket\ngot:\n%v", info.Mode())
+		}
+	})
+
+	t.Run("should reject a concurrent owner without disturbing it", func(t *testing.T) {
+		socketPath, lockPath, err := instanceResourcePaths(serviceConfigDir(t), "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		firstListener, firstLock, err := claimInstance(socketPath, lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer releaseInstance(firstListener, socketPath, firstLock)
+
+		secondListener, secondLock, err := claimInstance(socketPath, lockPath)
+		if err == nil {
+			releaseInstance(secondListener, socketPath, secondLock)
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if _, err := os.Stat(socketPath); err != nil {
+			t.Fatalf("\nwanted:\nrunning instance socket\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should allow different instance names", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		workSocketPath, workLockPath, err := instanceResourcePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		personalSocketPath, personalLockPath, err := instanceResourcePaths(configDir, "personal")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		workListener, workLock, err := claimInstance(workSocketPath, workLockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer releaseInstance(workListener, workSocketPath, workLock)
+		personalListener, personalLock, err := claimInstance(personalSocketPath, personalLockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer releaseInstance(personalListener, personalSocketPath, personalLock)
+	})
+
+	t.Run("should leave the lock and permit restart after close", func(t *testing.T) {
+		socketPath, lockPath, err := instanceResourcePaths(serviceConfigDir(t), "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		firstListener, firstLock, err := claimInstance(socketPath, lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		releaseInstance(firstListener, socketPath, firstLock)
+
+		if _, err := os.Stat(lockPath); err != nil {
+			t.Fatalf("\nwanted:\nlock file\ngot:\n%v", err)
+		}
+		if _, err := os.Stat(socketPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("\nwanted:\nremoved socket\ngot:\n%v", err)
+		}
+
+		secondListener, secondLock, err := claimInstance(socketPath, lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer releaseInstance(secondListener, socketPath, secondLock)
+	})
+
+	t.Run("should preserve errors and complete every release step", func(t *testing.T) {
+		dir := t.TempDir()
+		socketPath := filepath.Join(dir, "work.sock")
+		if err := os.Mkdir(socketPath, 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.WriteFile(filepath.Join(socketPath, "keep"), nil, 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		lockPath := filepath.Join(dir, "work.lock")
+		lock, err := acquireInstanceLock(lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		listener := &failingListener{closeErr: errClosingListener}
+
+		err = releaseInstance(listener, socketPath, lock)
+		if !errors.Is(err, errClosingListener) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", errClosingListener, err)
+		}
+		if !strings.Contains(err.Error(), "removing instance socket") {
+			t.Fatalf("\nwanted:\nremove error\ngot:\n%v", err)
+		}
+		if _, err := lock.Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("\nwanted:\nclosed lock\ngot:\n%v", err)
+		}
+
+		restartedLock, err := acquireInstanceLock(lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer func() {
+			filelock.Unlock(restartedLock)
+			restartedLock.Close()
+		}()
+	})
+}
+
+func serviceConfigDir(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return t.TempDir()
+	}
+
+	dir, err := os.MkdirTemp("/tmp", "marasi-")
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
+func TestLockProject(t *testing.T) {
+	t.Run("should create the projects directory", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "projects", "scratchpad.marasi")
+
+		unlock, err := lockProject(path)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer unlock()
+
+		info, err := os.Stat(filepath.Dir(path))
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("\nwanted:\ndirectory\ngot:\n%v", info.Mode())
+		}
+	})
+
+	t.Run("should raise an error if the project is already open", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "projects", "scratchpad.marasi")
+
+		unlock, err := lockProject(path)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer unlock()
+
+		_, err = lockProject(path)
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+	})
+
+	t.Run("should allow opening the project after it is closed", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "projects", "scratchpad.marasi")
+
+		unlock, err := lockProject(path)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := unlock(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		unlock, err = lockProject(path)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer unlock()
+	})
+
+	t.Run("should preserve unlock and close errors", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "projects", "scratchpad.marasi")
+		unlock, err := lockProject(path)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := unlock(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		err = unlock()
+		if !strings.Contains(err.Error(), "unlocking project") {
+			t.Fatalf("\nwanted:\nunlock error\ngot:\n%v", err)
+		}
+		if !strings.Contains(err.Error(), "closing project lock") {
+			t.Fatalf("\nwanted:\nclose error\ngot:\n%v", err)
+		}
+	})
+}
+
+func TestCleanupService(t *testing.T) {
+	t.Run("should clean up in completion order and preserve errors", func(t *testing.T) {
+		var order []string
+		err := cleanupService(
+			func() error {
+				order = append(order, "proxy")
+				return errClosingProxy
+			},
+			func() error {
+				order = append(order, "project")
+				return errUnlockingProject
+			},
+			func() error {
+				order = append(order, "instance")
+				return errReleasingInstance
+			},
+		)
+
+		if got := strings.Join(order, ","); got != "proxy,project,instance" {
+			t.Fatalf("\nwanted:\nproxy,project,instance\ngot:\n%s", got)
+		}
+		for _, want := range []error{errClosingProxy, errUnlockingProject, errReleasingInstance} {
+			if !errors.Is(err, want) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, err)
+			}
+		}
+	})
+}
+
+func TestStopService(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		graceful   bool
+		queuedStop bool
+		background bool
+	}{
+		{name: "should bound detached shutdown with a stalled upstream and reopen the project"},
+		{name: "should finish normal traffic during detached shutdown and reopen the project", graceful: true},
+		{name: "should bound detached shutdown queued behind a listener stop", queuedStop: true},
+		{name: "should cancel and persist background Armory runs before detached shutdown", background: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			binary := buildMarasi(t)
+			args := []string{"--config-dir", configDir, "--instance", "stalled-stop"}
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			releaseOrigin := func() { releaseOnce.Do(func() { close(release) }) }
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				close(entered)
+				<-release
+				fmt.Fprint(w, "finished")
+			}))
+			defer origin.Close()
+			defer releaseOrigin()
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				_ = exec.CommandContext(ctx, binary, append(args, "service", "stop")...).Run()
+			})
+			stdout, stderr, err := runMarasi(binary, append(args, "service", "start", "--port", "0", "--json")...)
+			if err != nil {
+				t.Fatalf("start: %v %s", err, stderr)
+			}
+			var started map[string]string
+			if err := json.Unmarshal([]byte(stdout), &started); err != nil {
+				t.Fatal(err)
+			}
+			proxyURL, _ := url.Parse("http://" + started["proxy_listener"])
+			transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+			defer transport.CloseIdleConnections()
+			requestDone := make(chan error, 1)
+			var runID string
+			if test.background {
+				if err := os.WriteFile(filepath.Join(configDir, "wordlists", "shutdown.txt"), []byte(strings.Repeat("payload\n", 10000)), 0600); err != nil {
+					t.Fatal(err)
+				}
+				rawFile := filepath.Join(configDir, "shutdown.raw")
+				raw := "GET /stalled/@@x@@ HTTP/1.1\r\nHost: " + strings.TrimPrefix(origin.URL, "http://") + "\r\n\r\n"
+				if err := os.WriteFile(rawFile, []byte(raw), 0600); err != nil {
+					t.Fatal(err)
+				}
+				body, stderr, err := runMarasi(binary, append(args, "armory", "template", "create", "--name", "shutdown", "--raw-file", rawFile, "--json")...)
+				if err != nil {
+					t.Fatalf("create template: %v %s", err, stderr)
+				}
+				var template struct {
+					ID string `json:"id"`
+				}
+				if err := json.Unmarshal([]byte(body), &template); err != nil {
+					t.Fatal(err)
+				}
+				body, stderr, err = runMarasi(binary, append(args, "armory", "run", "create", "--template", template.ID, "--attack-type", "harpoon", "--wordlist", "shutdown.txt", "--http", "--max-concurrent", "1", "--json")...)
+				if err != nil {
+					t.Fatalf("create run: %v %s", err, stderr)
+				}
+				var run struct {
+					ID string `json:"id"`
+				}
+				if err := json.Unmarshal([]byte(body), &run); err != nil {
+					t.Fatal(err)
+				}
+				runID = run.ID
+				if _, stderr, err := runMarasi(binary, append(args, "armory", "run", "start", runID)...); err != nil {
+					t.Fatalf("start run: %v %s", err, stderr)
+				}
+			} else {
+				go func() {
+					response, err := (&http.Client{Transport: transport}).Get(origin.URL + "/stalled")
+					if response != nil {
+						body, readErr := io.ReadAll(response.Body)
+						if test.graceful && (readErr != nil || string(body) != "finished") {
+							err = fmt.Errorf("graceful response: %q, %v", body, readErr)
+						}
+						response.Body.Close()
+					}
+					requestDone <- err
+				}()
+			}
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("upstream did not receive the proxied request")
+			}
+			if !test.graceful {
+				// A client stalled before protocol inspection must be interrupted too.
+				idle, err := net.Dial("tcp", started["proxy_listener"])
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer idle.Close()
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout+2*time.Second)
+			defer cancel()
+			if test.queuedStop {
+				listenerStop := exec.CommandContext(ctx, binary, append(args, "listener", "stop")...)
+				if err := listenerStop.Start(); err != nil {
+					t.Fatal(err)
+				}
+				defer listenerStop.Wait()
+				// A refused new connection proves the listener operation has closed
+				// admission while its accepted idle client is still withholding bytes.
+				for {
+					probe, err := net.DialTimeout("tcp", started["proxy_listener"], 100*time.Millisecond)
+					if err != nil {
+						break
+					}
+					probe.Close()
+					if ctx.Err() != nil {
+						t.Fatal("listener stop did not close admission")
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+			}
+			var output bytes.Buffer
+			stop := exec.CommandContext(ctx, binary, append(args, "service", "stop", "--json")...)
+			stop.Stdout, stop.Stderr = &output, &output
+			if err := stop.Start(); err != nil {
+				t.Fatal(err)
+			}
+			if test.graceful {
+				// Keep the origin pending until the control listener has stopped
+				// accepting, proving this response finishes during shutdown.
+				for {
+					status := exec.CommandContext(ctx, binary, append(args, "service", "status", "--json")...)
+					if err := status.Run(); err != nil {
+						break
+					}
+					if ctx.Err() != nil {
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				releaseOrigin()
+			}
+			err = stop.Wait()
+			if err != nil {
+				t.Fatalf("shutdown exceeded bound: %v %s", err, output.String())
+			}
+			if !test.background {
+				select {
+				case err := <-requestDone:
+					if test.graceful && err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("proxied connection remains open after stop")
+				}
+			}
+			if _, err := os.Stat(filepath.Join(configDir, "instances", "stalled-stop.sock")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("instance socket remains: %v", err)
+			}
+			stdout, stderr, err = runMarasi(binary, append(args, "service", "start", "--port", "0", "--json")...)
+			if err != nil {
+				t.Fatalf("reopen same instance and project: %v %s", err, stderr)
+			}
+			stdout, stderr, err = runMarasi(binary, append(args, "traffic", "list", "--path", "/stalled", "--json")...)
+			if err != nil || !strings.Contains(stdout, "/stalled") {
+				t.Fatalf("request was not flushed before project close: %v %s %s", err, stdout, stderr)
+			}
+			if test.background {
+				stdout, stderr, err = runMarasi(binary, append(args, "armory", "run", "get", runID, "--json")...)
+				var run struct {
+					Status     string     `json:"status"`
+					FinishedAt *time.Time `json:"finished_at"`
+				}
+				if err != nil {
+					t.Fatalf("read final run: %v %s", err, stderr)
+				}
+				if err := json.Unmarshal([]byte(stdout), &run); err != nil {
+					t.Fatal(err)
+				}
+				if run.Status != "cancelled" || run.FinishedAt == nil {
+					t.Fatalf("background run not safely finished: %s", stdout)
+				}
+			}
+		})
+	}
+	for _, mode := range []string{"API function", "traffic hook"} {
+		t.Run("should cancel non-returning Lua "+mode+" and release instance and project ownership", func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			binary := buildMarasi(t)
+			args := []string{"--config-dir", configDir, "--instance", "lua-stop"}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				_ = exec.CommandContext(ctx, binary, append(args, "service", "stop")...).Run()
+			})
+			stdout, _, err := runMarasi(binary, append(args, "--json", "service", "start", "--port", "0")...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var started map[string]string
+			if err := json.Unmarshal([]byte(stdout), &started); err != nil {
+				t.Fatal(err)
+			}
+			entered := make(chan struct{}, 2)
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				entered <- struct{}{}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer origin.Close()
+			id := "01937d13-9632-7f84-add5-14ec2c2c7f43"
+			script := fmt.Sprintf(`function hang()
+  local res, err = marasi:builder():set_method("GET"):set_url(%q):send()
+  if not res then error(err) end
+  while true do end
+end
+function ping() end`, origin.URL)
+			path := filepath.Join(configDir, "hang.lua")
+			if err := os.WriteFile(path, []byte(script), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := runMarasi(binary, append(args, "extension", "update", id, "--file", path)...); err != nil {
+				t.Fatal(err)
+			}
+			client := service.NewClient(filepath.Join(configDir, "instances", "lua-stop.sock"))
+			defer client.Close()
+			for attempt := 0; attempt < 2; attempt++ {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://marasi/extension/"+id+"/call", strings.NewReader(`{"function":"hang"}`))
+				send := client.Do
+				if attempt == 1 && mode == "traffic hook" {
+					if err := os.WriteFile(path, []byte(script+"\nfunction processRequest(req) hang() end"), 0600); err != nil {
+						t.Fatal(err)
+					}
+					if _, _, err := runMarasi(binary, append(args, "extension", "update", id, "--file", path)...); err != nil {
+						t.Fatal(err)
+					}
+					proxyURL, err := url.Parse("http://" + started["proxy_listener"])
+					if err != nil {
+						t.Fatal(err)
+					}
+					transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+					defer transport.CloseIdleConnections()
+					trafficClient := &http.Client{Transport: transport}
+					send = trafficClient.Do
+					request, err = http.NewRequestWithContext(ctx, http.MethodGet, origin.URL+"/outer", nil)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				done := make(chan error, 1)
+				go func() {
+					response, err := send(request)
+					if response != nil {
+						_, _ = io.Copy(io.Discard, response.Body)
+						response.Body.Close()
+					}
+					done <- err
+				}()
+				select {
+				case <-entered:
+				case <-time.After(5 * time.Second):
+					t.Fatal("Lua did not enter hang")
+				}
+				if attempt == 0 {
+					cancel()
+					pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
+					defer pingCancel()
+					ping, _ := http.NewRequestWithContext(pingCtx, http.MethodPost, "http://marasi/extension/"+id+"/call", strings.NewReader(`{"function":"ping"}`))
+					response, err := client.Do(ping)
+					if err != nil {
+						t.Fatalf("VM kept running after caller disconnect: %v", err)
+					}
+					response.Body.Close()
+					if response.StatusCode != http.StatusOK {
+						t.Fatalf("ping after cancellation: %d", response.StatusCode)
+					}
+				} else {
+					stopCtx, stopCancel := context.WithTimeout(context.Background(), 15*time.Second)
+					defer stopCancel()
+					output, err := exec.CommandContext(stopCtx, binary, append(args, "service", "stop")...).CombinedOutput()
+					if err != nil {
+						t.Fatalf("service stop hung under non-returning Lua: %v %s", err, output)
+					}
+				}
+				select {
+				case <-done:
+				case <-time.After(2 * time.Second):
+					t.Fatal("Lua caller did not finish")
+				}
+			}
+			lock, err := acquireInstanceLock(filepath.Join(configDir, "instances", "lua-stop.lock"))
+			if err != nil {
+				t.Fatalf("instance ownership remains held: %v", err)
+			}
+			if err := errors.Join(filelock.Unlock(lock), lock.Close()); err != nil {
+				t.Fatal(err)
+			}
+			unlock, err := lockProject(filepath.Join(configDir, "projects", "scratchpad.marasi"))
+			if err != nil {
+				t.Fatalf("project ownership remains held: %v", err)
+			}
+			if err := unlock(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	t.Run("should stop the selected instance and wait for cleanup", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		listener, lock, err := claimInstance(socketPath, lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		released := false
+		requestReceived := make(chan struct{}, 1)
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.Path != "/service/stop" {
+				t.Errorf("\nwanted:\nPOST /service/stop\ngot:\n%s %s", r.Method, r.URL.Path)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			requestReceived <- struct{}{}
+		})}
+		go server.Serve(listener)
+		defer func() {
+			server.Close()
+			if !released {
+				releaseInstance(listener, socketPath, lock)
+			}
+		}()
+
+		result := make(chan error, 1)
+		go func() {
+			result <- stopService(context.Background(), filepath.Join(configDir, "instances", "work"))
+		}()
+		select {
+		case <-requestReceived:
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\nstop request\ngot:\ntimeout")
+		}
+
+		select {
+		case err := <-result:
+			t.Fatalf("\nwanted:\ncommand waiting for cleanup\ngot:\n%v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		if err := releaseInstance(listener, socketPath, lock); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		released = true
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\ncommand completion\ngot:\ntimeout")
+		}
+	})
+
+	t.Run("should succeed without creating resources when the socket is missing", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if err := stopService(context.Background(), filepath.Join(configDir, "instances", "work")); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		for _, path := range []string{socketPath, lockPath} {
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("\nwanted:\nmissing %s\ngot:\n%v", path, err)
+			}
+		}
+	})
+
+	t.Run("should leave a stale socket when no instance owns the lock", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.WriteFile(socketPath, []byte("stale"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		if err := stopService(context.Background(), filepath.Join(configDir, "instances", "work")); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got, err := os.ReadFile(socketPath); err != nil || string(got) != "stale" {
+			t.Fatalf("\nwanted:\nstale socket\ngot:\n%s, %v", got, err)
+		}
+		probe, err := acquireInstanceLock(lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nreleased probe lock\ngot:\n%v", err)
+		}
+		defer func() {
+			filelock.Unlock(probe)
+			probe.Close()
+		}()
+	})
+
+	t.Run("should wait after a failed dial while the instance lock is held", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.WriteFile(socketPath, []byte("stale"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		lock, err := acquireInstanceLock(lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		locked := true
+		defer func() {
+			if locked {
+				filelock.Unlock(lock)
+				lock.Close()
+			}
+		}()
+
+		result := make(chan error, 1)
+		go func() {
+			result <- stopService(context.Background(), filepath.Join(configDir, "instances", "work"))
+		}()
+		select {
+		case err := <-result:
+			t.Fatalf("\nwanted:\ncommand waiting for lock release\ngot:\n%v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		if err := errors.Join(filelock.Unlock(lock), lock.Close()); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		locked = false
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\ncommand completion\ngot:\ntimeout")
+		}
+	})
+
+	t.Run("should let repeated stops wait for the same cleanup", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		listener, lock, err := claimInstance(socketPath, lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		released := false
+		requests := make(chan struct{}, 2)
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusAccepted)
+			requests <- struct{}{}
+		})}
+		go server.Serve(listener)
+		defer func() {
+			server.Close()
+			if !released {
+				releaseInstance(listener, socketPath, lock)
+			}
+		}()
+
+		results := make(chan error, 2)
+		go func() { results <- stopService(context.Background(), filepath.Join(configDir, "instances", "work")) }()
+		select {
+		case <-requests:
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\nfirst stop request\ngot:\ntimeout")
+		}
+		go func() { results <- stopService(context.Background(), filepath.Join(configDir, "instances", "work")) }()
+		select {
+		case <-requests:
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\nsecond stop request\ngot:\ntimeout")
+		}
+
+		for range 2 {
+			select {
+			case err := <-results:
+				t.Fatalf("\nwanted:\ncommands waiting for cleanup\ngot:\n%v", err)
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+		if err := releaseInstance(listener, socketPath, lock); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		released = true
+		for range 2 {
+			select {
+			case err := <-results:
+				if err != nil {
+					t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("\nwanted:\ncommand completion\ngot:\ntimeout")
+			}
+		}
+	})
+
+	t.Run("should report a rejected response with a bounded body", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		listener, lock, err := claimInstance(socketPath, lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, strings.Repeat("x", maxErrorBodySize+100))
+		})}
+		go server.Serve(listener)
+		defer func() {
+			server.Close()
+			releaseInstance(listener, socketPath, lock)
+		}()
+
+		err = stopService(context.Background(), filepath.Join(configDir, "instances", "work"))
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !strings.Contains(err.Error(), "500 Internal Server Error") {
+			t.Fatalf("\nwanted:\nHTTP status\ngot:\n%v", err)
+		}
+		if got := strings.Count(err.Error(), "x"); got != maxErrorBodySize {
+			t.Fatalf("\nwanted:\n%d response bytes\ngot:\n%d", maxErrorBodySize, got)
+		}
+	})
+
+	t.Run("should reject redirects without following them", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		listener, lock, err := claimInstance(socketPath, lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/service/stop" {
+				http.Redirect(w, r, "/accepted", http.StatusTemporaryRedirect)
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+		})}
+		go server.Serve(listener)
+		defer func() {
+			server.Close()
+			releaseInstance(listener, socketPath, lock)
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		err = stopService(ctx, filepath.Join(configDir, "instances", "work"))
+		if err == nil || !strings.Contains(err.Error(), "307 Temporary Redirect") {
+			t.Fatalf("\nwanted:\nredirect status error\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should stop waiting when its context is canceled", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.WriteFile(socketPath, []byte("stale"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		lock, err := acquireInstanceLock(lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer func() {
+			filelock.Unlock(lock)
+			lock.Close()
+		}()
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() { result <- stopService(ctx, filepath.Join(configDir, "instances", "work")) }()
+
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		select {
+		case err := <-result:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.Canceled, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\ncanceled command\ngot:\ntimeout")
+		}
+	})
+}
+
+func TestStopCommand(t *testing.T) {
+	t.Run("should accept no arguments and keep the project flag exclusive to start", func(t *testing.T) {
+		if err := stopCmd.Args(stopCmd, nil); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := stopCmd.Args(stopCmd, []string{"extra"}); err == nil {
+			t.Fatal("\nwanted:\nargument error\ngot:\nnil")
+		}
+		if flag := stopCmd.Flag("config-dir"); flag == nil {
+			t.Fatal("\nwanted:\nconfig-dir flag\ngot:\nnil")
+		}
+		if flag := stopCmd.Flag("instance"); flag == nil {
+			t.Fatal("\nwanted:\ninstance flag\ngot:\nnil")
+		}
+		if flag := stopCmd.Flag("project"); flag != nil {
+			t.Fatalf("\nwanted:\nno project flag\ngot:\n%s", flag.Name)
+		}
+	})
+
+	t.Run("should report an already stopped instance in JSON and human modes", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		binary := buildMarasi(t)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop", "--json")
+		if err != nil || stdout != "{\"instance\":\"work\",\"status\":\"stopped\"}\n" || stderr != "" {
+			t.Fatalf("\nwanted:\nJSON stop result on stdout\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop")
+		if err != nil || stdout != "" || stderr != "instance work stopped successfully\n" {
+			t.Fatalf("\nwanted:\nhuman stop result on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+	})
+
+	t.Run("should report a stale unowned socket without removing it", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, _, err := instanceResourcePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.WriteFile(socketPath, []byte("stale"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		binary := buildMarasi(t)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop", "--json")
+		if err != nil || stdout != "{\"instance\":\"work\",\"status\":\"stopped\"}\n" || stderr != "" {
+			t.Fatalf("\nwanted:\nJSON stop result on stdout\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop")
+		if err != nil || stdout != "" || stderr != "instance work stopped successfully\n" {
+			t.Fatalf("\nwanted:\nhuman stop result on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		if got, err := os.ReadFile(socketPath); err != nil || string(got) != "stale" {
+			t.Fatalf("\nwanted:\nstale socket\ngot:\n%s, %v", got, err)
+		}
+	})
+
+	t.Run("should report concurrent stops only after ownership is released", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		listener, lock, err := claimInstance(socketPath, lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.Remove(socketPath); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		released := false
+		defer func() {
+			if !released {
+				releaseInstance(listener, socketPath, lock)
+			}
+		}()
+
+		binary := buildMarasi(t)
+		var jsonStdout, jsonStderr, humanStdout, humanStderr bytes.Buffer
+		jsonCommand := exec.Command(binary, "--config-dir", configDir, "--instance", "work", "service", "stop", "--json")
+		jsonCommand.Stdout, jsonCommand.Stderr = &jsonStdout, &jsonStderr
+		humanCommand := exec.Command(binary, "--config-dir", configDir, "--instance", "work", "service", "stop")
+		humanCommand.Stdout, humanCommand.Stderr = &humanStdout, &humanStderr
+		if err := jsonCommand.Start(); err != nil {
+			t.Fatalf("\nwanted:\nstarted JSON stop\ngot:\n%v", err)
+		}
+		if err := humanCommand.Start(); err != nil {
+			jsonCommand.Process.Kill()
+			t.Fatalf("\nwanted:\nstarted human stop\ngot:\n%v", err)
+		}
+		jsonResult, humanResult := make(chan error, 1), make(chan error, 1)
+		go func() { jsonResult <- jsonCommand.Wait() }()
+		go func() { humanResult <- humanCommand.Wait() }()
+		select {
+		case err := <-jsonResult:
+			t.Fatalf("\nwanted:\nJSON stop waiting for ownership release\ngot:\n%v", err)
+		case err := <-humanResult:
+			t.Fatalf("\nwanted:\nhuman stop waiting for ownership release\ngot:\n%v", err)
+		case <-time.After(500 * time.Millisecond):
+		}
+
+		if err := releaseInstance(listener, socketPath, lock); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		released = true
+		for name, result := range map[string]<-chan error{"JSON": jsonResult, "human": humanResult} {
+			select {
+			case err := <-result:
+				if err != nil {
+					t.Fatalf("\nwanted:\n%s stop success\ngot:\n%v", name, err)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("\nwanted:\n%s stop completion\ngot:\ntimeout", name)
+			}
+		}
+		if jsonStdout.String() != "{\"instance\":\"work\",\"status\":\"stopped\"}\n" || jsonStderr.Len() != 0 {
+			t.Fatalf("\nwanted:\nJSON stop result on stdout\ngot:\nstdout %q, stderr %q", jsonStdout.String(), jsonStderr.String())
+		}
+		if humanStdout.Len() != 0 || humanStderr.String() != "instance work stopped successfully\n" {
+			t.Fatalf("\nwanted:\nhuman stop result on stderr\ngot:\nstdout %q, stderr %q", humanStdout.String(), humanStderr.String())
+		}
+	})
+
+	t.Run("should stop waiting when the command context is canceled", func(t *testing.T) {
+		oldConfigDir, oldInstance, oldInstancePath := configDir, instance, instancePath
+		defer func() {
+			configDir, instance, instancePath = oldConfigDir, oldInstance, oldInstancePath
+			rootCmd.SetArgs(nil)
+			rootCmd.SetContext(nil)
+			stopCmd.SetContext(nil)
+		}()
+		configDir = serviceConfigDir(t)
+		instance = "work"
+		socketPath, lockPath, err := instanceResourcePaths(configDir, instance)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.WriteFile(socketPath, []byte("stale"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		lock, err := acquireInstanceLock(lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer func() {
+			filelock.Unlock(lock)
+			lock.Close()
+		}()
+		ctx, cancel := context.WithCancel(context.Background())
+		stopCmd.SetContext(nil)
+		rootCmd.SetArgs([]string{"--config-dir", configDir, "--instance", instance, "service", "stop"})
+		result := make(chan error, 1)
+		go func() { result <- rootCmd.ExecuteContext(ctx) }()
+
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		select {
+		case err := <-result:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.Canceled, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("\nwanted:\ncanceled command\ngot:\ntimeout")
+		}
+	})
+}
+
+func TestStartService(t *testing.T) {
+	t.Run("should report the Make-injected version and canonical names from the running binary", func(t *testing.T) {
+		dist := t.TempDir()
+		const wantVersion = "ticket-01-test-version"
+		command := exec.Command("make", "-C", filepath.Join("..", ".."), "build", "DIST="+dist, "VERSION="+wantVersion)
+		command.Env = append(os.Environ(), "GOWORK=off")
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("\nwanted:\nMake-built marasi command\ngot:\n%s\n%v", output, err)
+		}
+		binary := filepath.Join(dist, "marasi")
+		configDir := serviceConfigDir(t)
+		stopped := false
+		t.Cleanup(func() {
+			if !stopped {
+				runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop")
+			}
+		})
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", " work ", "service", "start", "--project-name", " juice-shop.marasi ", "--port", "0")
+		if err != nil {
+			t.Fatalf("\nwanted:\nrunning service\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		if stdout != "" {
+			t.Fatalf("\nwanted:\nempty stdout\ngot:\n%s", stdout)
+		}
+		const listenerPrefix = "proxy listener started on "
+		listenerIndex := strings.Index(stderr, listenerPrefix)
+		if listenerIndex < 0 {
+			t.Fatalf("\nwanted:\nproxy listener startup output\ngot:\n%s", stderr)
+		}
+		proxyListener := strings.TrimSpace(stderr[listenerIndex+len(listenerPrefix):])
+		socketPath := filepath.Join(configDir, "instances", "work.sock")
+		waitForPath(t, socketPath)
+		client := service.NewClient(socketPath)
+		defer client.Close()
+		request, err := http.NewRequest(http.MethodGet, "http://marasi/service/status", nil)
+		if err != nil {
+			t.Fatalf("creating status request: %v", err)
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatalf("getting service status: %v", err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil {
+			t.Fatalf("reading service status: %v", readErr)
+		}
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.StatusCode)
+		}
+		if got := response.Header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		}
+		canonicalProject, err := filepath.EvalSymlinks(filepath.Join(configDir, "projects", "juice-shop.marasi"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := fmt.Sprintf("{\"status\":\"running\",\"version\":%q,\"instance\":\"work\",\"project\":%q,\"proxy_listener\":%q}\n", wantVersion, canonicalProject, proxyListener)
+		if got := string(body); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+
+		if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop"); err != nil {
+			t.Fatalf("stopping service: %v", err)
+		}
+		stopped = true
+	})
+
+	t.Run("should print JSON for a named instance and report its completed stop", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		binary := buildMarasi(t)
+		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "--json", "service", "start", "--port", "0")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if stderr != "" {
+			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+		}
+		if !strings.HasSuffix(stdout, "\n") || strings.Contains(stdout, " ") {
+			t.Fatalf("\nwanted:\ncompact JSON line\ngot:\n%q", stdout)
+		}
+		var got map[string]string
+		if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+			t.Fatalf("\nwanted:\nJSON object\ngot:\n%q, %v", stdout, err)
+		}
+		if got["instance"] != "work" {
+			t.Fatalf("\nwanted:\nwork\ngot:\n%s", got["instance"])
+		}
+		host, port, err := net.SplitHostPort(got["proxy_listener"])
+		if err != nil || host != "127.0.0.1" || port == "0" {
+			t.Fatalf("\nwanted:\nassigned 127.0.0.1 port\ngot:\n%s (%v)", got["proxy_listener"], err)
+		}
+		if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "traffic", "list"); err != nil {
+			t.Fatalf("\nwanted:\nrunning instance\ngot:\n%v", err)
+		}
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop", "--json")
+		if err != nil || stdout != "{\"instance\":\"work\",\"status\":\"stopped\"}\n" || stderr != "" {
+			t.Fatalf("\nwanted:\ncompleted JSON stop result\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		var stopped map[string]string
+		if err := json.Unmarshal([]byte(stdout), &stopped); err != nil {
+			t.Fatalf("\nwanted:\nJSON stop object\ngot:\n%q, %v", stdout, err)
+		}
+		if len(stopped) != 2 || stopped["instance"] != "work" || stopped["status"] != "stopped" {
+			t.Fatalf("\nwanted:\nwork stopped\ngot:\n%v", stopped)
+		}
+		lock, err := acquireInstanceLock(filepath.Join(configDir, "instances", "work.lock"))
+		if err != nil {
+			t.Fatalf("\nwanted:\nreleased instance ownership\ngot:\n%v", err)
+		}
+		if err := errors.Join(filelock.Unlock(lock), lock.Close()); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should print JSON for the default instance", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		binary := buildMarasi(t)
+		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "service", "stop") })
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "service", "start", "--port", "0", "--json")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if stderr != "" {
+			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+		}
+		var got map[string]string
+		if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+			t.Fatalf("\nwanted:\nJSON object\ngot:\n%q, %v", stdout, err)
+		}
+		if got["instance"] != "default" {
+			t.Fatalf("\nwanted:\ndefault\ngot:\n%s", got["instance"])
+		}
+		if _, _, err := net.SplitHostPort(got["proxy_listener"]); err != nil {
+			t.Fatalf("\nwanted:\nproxy listener address\ngot:\n%s (%v)", got["proxy_listener"], err)
+		}
+		statusStdout, statusStderr, err := runMarasi(binary, "--config-dir", configDir, "service", "status", "--json")
+		if err != nil || statusStderr != "" {
+			t.Fatalf("getting default service status: stdout %q, stderr %q, error %v", statusStdout, statusStderr, err)
+		}
+		var status map[string]any
+		if err := json.Unmarshal([]byte(statusStdout), &status); err != nil {
+			t.Fatalf("decoding default service status: %v", err)
+		}
+		projectPath, err := filepath.EvalSymlinks(filepath.Join(configDir, "projects", "scratchpad.marasi"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status["project"] != projectPath {
+			t.Fatalf("\nwanted:\nproject %s\ngot:\n%v", projectPath, status["project"])
+		}
+	})
+
+	t.Run("should print a JSON error when startup fails", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		instancePath := filepath.Join(configDir, "instances", "work")
+		if err := os.MkdirAll(instancePath+".log", 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0", "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "opening instance log")
+	})
+
+	t.Run("should report the default instance and leave it running", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		binary := buildMarasi(t)
+		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "service", "stop") })
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "service", "start", "--port", "0")
+		if err != nil || stdout != "" || !strings.HasPrefix(stderr, "instance default started\nproxy listener started on 127.0.0.1:") || strings.Count(stderr, "\n") != 2 {
+			t.Fatalf("\nwanted:\ndefault instance startup on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		if stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "service", "stop"); err != nil || stdout != "" || stderr != "instance default stopped successfully\n" {
+			t.Fatalf("\nwanted:\nhuman stop result on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+	})
+
+	t.Run("should reject an already-running instance without disturbing it", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		binary := buildMarasi(t)
+		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
+		if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0"); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--project-name", "other", "--port", "0")
+		if err == nil || stdout != "" || !strings.Contains(stderr, "instance already running") || strings.Contains(stderr, "instance work started") {
+			t.Fatalf("\nwanted:\nalready-running error only\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "traffic", "list"); err != nil {
+			t.Fatalf("\nwanted:\noriginal instance reachable\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should keep two named instances running independently", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		binary := buildMarasi(t)
+		for _, name := range []string{"first", "second"} {
+			name := name
+			t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", name, "service", "stop") })
+			stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", name, "service", "start", "--project-name", name, "--port", "0")
+			if err != nil || stdout != "" || !strings.HasPrefix(stderr, "instance "+name+" started\nproxy listener started on 127.0.0.1:") {
+				t.Fatalf("\nwanted:\nrunning instance %s\ngot:\nstdout %q, stderr %q, error %v", name, stdout, stderr, err)
+			}
+		}
+
+		for _, name := range []string{"first", "second"} {
+			if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", name, "traffic", "list"); err != nil {
+				t.Fatalf("\nwanted:\nreachable instance %s\ngot:\n%v", name, err)
+			}
+			contents, err := os.ReadFile(filepath.Join(configDir, "instances", name+".log"))
+			if err != nil || !strings.Contains(string(contents), "Connecting to SQLite") {
+				t.Fatalf("\nwanted:\ninstance log for %s\ngot:\n%s, %v", name, contents, err)
+			}
+		}
+	})
+
+	for name, signal := range map[string]os.Signal{"Interrupt": os.Interrupt, "SIGTERM": syscall.SIGTERM} {
+		t.Run("should abort a child that is still starting on "+name, func(t *testing.T) {
+			testCanceledStart(t, signal, false)
+		})
+	}
+	t.Run("should print a JSON error when startup is canceled", func(t *testing.T) {
+		testCanceledStart(t, syscall.SIGTERM, true)
+	})
+
+	t.Run("should abort the child when success output fails", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		binary := buildMarasi(t)
+		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
+		closedReader, stderr, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		closedReader.Close()
+		defer stderr.Close()
+		var stdout bytes.Buffer
+		command := exec.Command(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0")
+		command.Stdout = &stdout
+		command.Stderr = stderr
+
+		if err := command.Run(); err == nil {
+			t.Fatal("\nwanted:\nstartup output error\ngot:\nnil")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		instancePath := filepath.Join(configDir, "instances", "work")
+		if err := waitForInstanceStop(ctx, instancePath+".lock"); err != nil {
+			t.Fatalf("\nwanted:\nreleased instance lock\ngot:\n%v", err)
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("\nwanted:\nempty stdout\ngot:\n%s", stdout.String())
+		}
+		if _, err := os.Stat(instancePath + ".sock"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("\nwanted:\nremoved instance socket\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should append service logs to the retained owner-only instance log", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		instancePath := filepath.Join(configDir, "instances", "work")
+		if err := os.MkdirAll(filepath.Dir(instancePath), 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		logPath := instancePath + ".log"
+		if err := os.WriteFile(logPath, []byte("previous start\n"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		binary := buildMarasi(t)
+		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
+
+		type commandResult struct {
+			stdout string
+			stderr string
+			err    error
+		}
+		started := make(chan commandResult, 1)
+		go func() {
+			stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0")
+			started <- commandResult{stdout: stdout, stderr: stderr, err: err}
+		}()
+		var stdout, stderr string
+		var err error
+		select {
+		case result := <-started:
+			stdout, stderr, err = result.stdout, result.stderr, result.err
+		case <-time.After(10 * time.Second):
+			t.Fatal("\nwanted:\nstart command to return and close its output pipes\ngot:\ntimeout")
+		}
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if stdout != "" {
+			t.Fatalf("\nwanted:\nempty stdout\ngot:\n%s", stdout)
+		}
+		lines := strings.Split(strings.TrimSuffix(stderr, "\n"), "\n")
+		if len(lines) != 2 || lines[0] != "instance work started" || !strings.HasPrefix(lines[1], "proxy listener started on 127.0.0.1:") {
+			t.Fatalf("\nwanted:\ninstance work started\nproxy listener started on 127.0.0.1:<port>\ngot:\n%s", stderr)
+		}
+		if _, port, err := net.SplitHostPort(strings.TrimPrefix(lines[1], "proxy listener started on ")); err != nil || port == "0" {
+			t.Fatalf("\nwanted:\nassigned proxy port\ngot:\n%s (%v)", lines[1], err)
+		}
+
+		trafficStdout, trafficStderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "traffic", "list")
+		if err != nil || trafficStdout != "" || trafficStderr != "" {
+			t.Fatalf("\nwanted:\nrunning instance with empty traffic\ngot:\nstdout %q, stderr %q, error %v", trafficStdout, trafficStderr, err)
+		}
+		if stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop"); err != nil || stdout != "" || stderr != "instance work stopped successfully\n" {
+			t.Fatalf("\nwanted:\nhuman stop result on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		contents, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got := string(contents); !strings.Contains(got, "previous start\n") || !strings.Contains(got, "Connecting to SQLite") || !strings.Contains(got, "Proxy Client Configured") {
+			t.Fatalf("\nwanted:\nappended SQLite and proxy listener logs\ngot:\n%s", got)
+		}
+		if runtime.GOOS != "windows" {
+			info, err := os.Stat(logPath)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			if got := info.Mode().Perm(); got != 0600 {
+				t.Fatalf("\nwanted:\n0600\ngot:\n%#o", got)
+			}
+		}
+	})
+
+	t.Run("should fail before claiming the instance when its log cannot be opened", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		instancePath := filepath.Join(configDir, "instances", "work")
+		if err := os.MkdirAll(instancePath+".log", 0700); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0")
+		if err == nil || !strings.Contains(stderr, "opening instance log") {
+			t.Fatalf("\nwanted:\ninstance log open error\ngot:\n%s\n%v", stderr, err)
+		}
+		if stdout != "" || !strings.Contains(stderr, "opening instance log") {
+			t.Fatalf("\nwanted:\nlog error on stderr only\ngot:\nstdout %q, stderr %q", stdout, stderr)
+		}
+		for _, path := range []string{instancePath + ".sock", instancePath + ".lock"} {
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("\nwanted:\nmissing %s\ngot:\n%v", path, err)
+			}
+		}
+	})
+
+	t.Run("should retain the instance log and report only the error after a failed start", func(t *testing.T) {
+		occupied, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		t.Cleanup(func() { occupied.Close() })
+		configDir := serviceConfigDir(t)
+		port := occupied.Addr().(*net.TCPAddr).Port
+
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "service", "start", "--port", strconv.Itoa(port))
+		if err == nil {
+			t.Fatal("\nwanted:\nbind error\ngot:\nnil")
+		}
+		if stdout != "" || !strings.Contains(stderr, "binding proxy listener") || strings.Contains(stderr, "proxy listener started") {
+			t.Fatalf("\nwanted:\nbind error on stderr only\ngot:\nstdout %q, stderr %q", stdout, stderr)
+		}
+		logPath := filepath.Join(configDir, "instances", "work.log")
+		info, statErr := os.Stat(logPath)
+		if statErr != nil || !info.Mode().IsRegular() {
+			t.Fatalf("\nwanted:\nretained instance log\ngot:\n%v, %v", info, statErr)
+		}
+	})
+
+	t.Run("should initialize the shared certificate authority for HTTPS proxy connections", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+
+		instancePath := filepath.Join(configDir, "instances", "secure")
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		output := &lineWriter{lines: make(chan string, 1)}
+		go func() {
+			result <- startService(ctx, configDir, filepath.Join(configDir, "projects", "secure.marasi"), instancePath, "127.0.0.1", 0, output)
+		}()
+		finished := false
+		defer func() {
+			if !finished {
+				cancel()
+				<-result
+			}
+		}()
+
+		var proxyAddress string
+		select {
+		case line := <-output.lines:
+			proxyAddress = strings.TrimPrefix(line, "proxy listener started on ")
+		case err := <-result:
+			finished = true
+			t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("\nwanted:\nrunning service\ngot:\ntimeout")
+		}
+		roots := x509.NewCertPool()
+		certificatePEM, err := os.ReadFile(filepath.Join(configDir, "marasi_cert.pem"))
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if !roots.AppendCertsFromPEM(certificatePEM) {
+			t.Fatal("\nwanted:\nvalid shared certificate authority\ngot:\ninvalid certificate")
+		}
+		connection, err := tls.Dial("tcp", proxyAddress, &tls.Config{
+			RootCAs:    roots,
+			ServerName: "marasi.test",
+		})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		connection.Close()
+
+		if err := stopService(context.Background(), instancePath); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := <-result; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		finished = true
+	})
+
+	t.Run("should run two named instances on distinct assigned ports", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		type runningInstance struct {
+			path   string
+			cancel context.CancelFunc
+			result chan error
+			output *lineWriter
+		}
+		instances := []runningInstance{
+			{path: filepath.Join(configDir, "instances", "first")},
+			{path: filepath.Join(configDir, "instances", "second")},
+		}
+		for index := range instances {
+			ctx, cancel := context.WithCancel(context.Background())
+			instances[index].cancel = cancel
+			instances[index].result = make(chan error, 1)
+			instances[index].output = &lineWriter{lines: make(chan string, 1)}
+			projectPath := filepath.Join(configDir, "projects", fmt.Sprintf("project-%d.marasi", index))
+			go func(instance runningInstance, projectPath string) {
+				instance.result <- startService(ctx, configDir, projectPath, instance.path, "127.0.0.1", 0, instance.output)
+			}(instances[index], projectPath)
+		}
+		finished := false
+		defer func() {
+			if !finished {
+				for _, instance := range instances {
+					instance.cancel()
+					select {
+					case <-instance.result:
+					case <-time.After(5 * time.Second):
+					}
+				}
+			}
+		}()
+
+		addresses := make(map[string]struct{})
+		for _, instance := range instances {
+			select {
+			case line := <-instance.output.lines:
+				address := strings.TrimPrefix(line, "proxy listener started on ")
+				if _, _, err := net.SplitHostPort(address); err != nil {
+					t.Fatalf("\nwanted:\nproxy listener address\ngot:\n%s", line)
+				}
+				addresses[address] = struct{}{}
+			case err := <-instance.result:
+				t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("\nwanted:\nrunning service\ngot:\ntimeout")
+			}
+		}
+		if len(addresses) != 2 {
+			t.Fatalf("\nwanted:\n2 distinct proxy addresses\ngot:\n%v", addresses)
+		}
+		for _, instance := range instances {
+			contents, err := os.ReadFile(instance.path + ".log")
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			if !strings.Contains(string(contents), "Connecting to SQLite") {
+				t.Fatalf("\nwanted:\nSQLite logs in %s.log\ngot:\n%s", instance.path, contents)
+			}
+		}
+
+		for _, instance := range instances {
+			if err := stopService(context.Background(), instance.path); err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			if err := <-instance.result; err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+		}
+		finished = true
+	})
+
+	t.Run("should abort and clean up after a proxy bind collision", func(t *testing.T) {
+		occupied, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer occupied.Close()
+		port := uint16(occupied.Addr().(*net.TCPAddr).Port)
+		configDir := serviceConfigDir(t)
+		projectPath := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		instancePath := filepath.Join(configDir, "instances", "work")
+
+		err = startService(context.Background(), configDir, projectPath, instancePath, "127.0.0.1", port, io.Discard)
+		if err == nil {
+			t.Fatal("\nwanted:\nbind error\ngot:\nnil")
+		}
+		var operationError *net.OpError
+		if !errors.As(err, &operationError) {
+			t.Fatalf("\nwanted:\nwrapped operating-system error\ngot:\n%v", err)
+		}
+		if !strings.Contains(err.Error(), "127.0.0.1") || !strings.Contains(err.Error(), fmt.Sprint(port)) {
+			t.Fatalf("\nwanted:\nrequested address and port\ngot:\n%v", err)
+		}
+		if _, statErr := os.Stat(instancePath + ".sock"); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("\nwanted:\nremoved control socket\ngot:\n%v", statErr)
+		}
+		instanceLock, err := acquireInstanceLock(instancePath + ".lock")
+		if err != nil {
+			t.Fatalf("\nwanted:\nreleased instance lock\ngot:\n%v", err)
+		}
+		defer func() {
+			filelock.Unlock(instanceLock)
+			instanceLock.Close()
+		}()
+		projectUnlock, err := lockProject(projectPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nreleased project lock\ngot:\n%v", err)
+		}
+		defer projectUnlock()
+
+		connection, err := net.Dial("tcp", occupied.Addr().String())
+		if err != nil {
+			t.Fatalf("\nwanted:\nexisting listener left open\ngot:\n%v", err)
+		}
+		connection.Close()
+	})
+
+	t.Run("should abort and clean up after TLS setup fails", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		if err := os.WriteFile(filepath.Join(configDir, "marasi_cert.pem"), []byte("invalid certificate"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := os.WriteFile(filepath.Join(configDir, "marasi_key.pem"), []byte("invalid key"), 0600); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		projectPath := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		instancePath := filepath.Join(configDir, "instances", "work")
+
+		err := startService(context.Background(), configDir, projectPath, instancePath, "127.0.0.1", 0, io.Discard)
+		if err == nil {
+			t.Fatal("\nwanted:\nTLS setup error\ngot:\nnil")
+		}
+		if _, statErr := os.Stat(instancePath + ".sock"); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("\nwanted:\nno control socket\ngot:\n%v", statErr)
+		}
+		projectUnlock, err := lockProject(projectPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nreleased project lock\ngot:\n%v", err)
+		}
+		defer projectUnlock()
+	})
+
+	t.Run("should proxy and persist HTTP traffic on an assigned port", func(t *testing.T) {
+		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			fmt.Fprint(w, "proxied "+request.URL.Path)
+		}))
+		defer origin.Close()
+
+		configDir := serviceConfigDir(t)
+		projectPath := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		instancePath := filepath.Join(configDir, "instances", "work")
+		ctx, cancel := context.WithCancel(context.Background())
+		output := &lineWriter{lines: make(chan string, 1)}
+		result := make(chan error, 1)
+		go func() {
+			result <- startService(ctx, configDir, projectPath, instancePath, "127.0.0.1", 0, output)
+		}()
+		finished := false
+		defer func() {
+			if !finished {
+				cancel()
+				<-result
+			}
+		}()
+
+		var line string
+		select {
+		case line = <-output.lines:
+		case err := <-result:
+			finished = true
+			t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("\nwanted:\nproxy startup message\ngot:\ntimeout")
+		}
+		const prefix = "proxy listener started on "
+		if !strings.HasPrefix(line, prefix) {
+			t.Fatalf("\nwanted:\n%s<address>\ngot:\n%s", prefix, line)
+		}
+		proxyAddress := strings.TrimPrefix(line, prefix)
+		_, assignedPort, err := net.SplitHostPort(proxyAddress)
+		if err != nil || assignedPort == "0" {
+			t.Fatalf("\nwanted:\nassigned TCP port\ngot:\n%s (%v)", proxyAddress, err)
+		}
+
+		parsedProxyURL, err := url.Parse("http://" + proxyAddress)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		transport := &http.Transport{Proxy: http.ProxyURL(parsedProxyURL)}
+		defer transport.CloseIdleConnections()
+		response, err := (&http.Client{Transport: transport}).Get(origin.URL + "/ticket-03")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", readErr)
+		}
+		if got := string(body); got != "proxied /ticket-03" {
+			t.Fatalf("\nwanted:\nproxied /ticket-03\ngot:\n%s", got)
+		}
+
+		if err := stopService(context.Background(), instancePath); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := <-result; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		finished = true
+		if connection, err := net.DialTimeout("tcp", proxyAddress, 100*time.Millisecond); err == nil {
+			connection.Close()
+			t.Fatal("\nwanted:\nclosed proxy listener\ngot:\nopen proxy listener")
+		}
+
+		dbConn, err := db.New(projectPath, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		repository := db.NewProxyRepo(dbConn)
+		defer repository.Close()
+		summaries, err := repository.GetRequestResponseSummary()
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(summaries) != 1 {
+			t.Fatalf("\nwanted:\n1 persisted request\ngot:\n%d", len(summaries))
+		}
+	})
+
+	t.Run("should publish proxied traffic events after the listener starts accepting", func(t *testing.T) {
+		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			fmt.Fprint(w, "proxied "+request.URL.Path)
+		}))
+		defer origin.Close()
+
+		configDir := serviceConfigDir(t)
+		projectPath := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		instancePath := filepath.Join(configDir, "instances", "work")
+		ctx, cancel := context.WithCancel(context.Background())
+		output := &lineWriter{lines: make(chan string, 1)}
+		result := make(chan error, 1)
+		go func() {
+			result <- startService(ctx, configDir, projectPath, instancePath, "127.0.0.1", 0, output)
+		}()
+		finished := false
+		defer func() {
+			if !finished {
+				cancel()
+				<-result
+			}
+		}()
+
+		var line string
+		select {
+		case line = <-output.lines:
+		case err := <-result:
+			finished = true
+			t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("\nwanted:\nproxy startup message\ngot:\ntimeout")
+		}
+		const prefix = "proxy listener started on "
+		if !strings.HasPrefix(line, prefix) {
+			t.Fatalf("\nwanted:\n%s<address>\ngot:\n%s", prefix, line)
+		}
+		proxyAddress := strings.TrimPrefix(line, prefix)
+
+		_, reader, closeEvents := connectInstanceEvents(t, instancePath+".sock")
+		defer closeEvents()
+
+		parsedProxyURL, err := url.Parse("http://" + proxyAddress)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		transport := &http.Transport{Proxy: http.ProxyURL(parsedProxyURL)}
+		defer transport.CloseIdleConnections()
+		response, err := (&http.Client{Transport: transport}).Get(origin.URL + "/events-path")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", readErr)
+		}
+		if got := string(body); got != "proxied /events-path" {
+			t.Fatalf("\nwanted:\nproxied /events-path\ngot:\n%s", got)
+		}
+
+		requestName, requestData := readControlEventSkippingLogs(t, reader, "traffic.request")
+		responseName, responseData := readControlEventSkippingLogs(t, reader, "traffic.response")
+		if requestName != "traffic.request" || responseName != "traffic.response" {
+			t.Fatalf("\nwanted:\ntraffic.request then traffic.response\ngot:\n%s then %s", requestName, responseName)
+		}
+		var requestEvent struct {
+			ID   string `json:"id"`
+			Path string `json:"path"`
+		}
+		var responseEvent struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(requestData), &requestEvent); err != nil {
+			t.Fatalf("\nwanted:\nrequest event JSON\ngot:\n%s (%v)", requestData, err)
+		}
+		if err := json.Unmarshal([]byte(responseData), &responseEvent); err != nil {
+			t.Fatalf("\nwanted:\nresponse event JSON\ngot:\n%s (%v)", responseData, err)
+		}
+		if requestEvent.ID == "" || requestEvent.ID != responseEvent.ID {
+			t.Fatalf("\nwanted:\nshared traffic UUID\ngot:\nrequest %q response %q", requestEvent.ID, responseEvent.ID)
+		}
+		if !strings.Contains(requestEvent.Path, "/events-path") {
+			t.Fatalf("\nwanted:\npath containing /events-path\ngot:\n%s", requestEvent.Path)
+		}
+
+		if err := stopService(context.Background(), instancePath); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := <-result; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		finished = true
+	})
+
+	t.Run("should complete proxied traffic when an event subscriber stops reading", func(t *testing.T) {
+		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			fmt.Fprint(w, "ok")
+		}))
+		defer origin.Close()
+
+		configDir := serviceConfigDir(t)
+		projectPath := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		instancePath := filepath.Join(configDir, "instances", "work")
+		ctx, cancel := context.WithCancel(context.Background())
+		output := &lineWriter{lines: make(chan string, 1)}
+		result := make(chan error, 1)
+		go func() {
+			result <- startService(ctx, configDir, projectPath, instancePath, "127.0.0.1", 0, output)
+		}()
+		finished := false
+		defer func() {
+			if !finished {
+				cancel()
+				<-result
+			}
+		}()
+
+		var line string
+		select {
+		case line = <-output.lines:
+		case err := <-result:
+			finished = true
+			t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("\nwanted:\nproxy startup message\ngot:\ntimeout")
+		}
+		proxyAddress := strings.TrimPrefix(line, "proxy listener started on ")
+
+		_, _, closeEvents := connectInstanceEvents(t, instancePath+".sock")
+		defer closeEvents()
+
+		parsedProxyURL, err := url.Parse("http://" + proxyAddress)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		client := &http.Client{
+			Transport: &http.Transport{Proxy: http.ProxyURL(parsedProxyURL)},
+			Timeout:   2 * time.Second,
+		}
+		defer client.Transport.(*http.Transport).CloseIdleConnections()
+		for range 200 {
+			response, err := client.Get(origin.URL + "/overflow")
+			if err != nil {
+				t.Fatalf("\nwanted:\ncompleted proxy request\ngot:\n%v", err)
+			}
+			if _, err := io.Copy(io.Discard, response.Body); err != nil {
+				response.Body.Close()
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			response.Body.Close()
+		}
+
+		closeEvents()
+		if err := stopService(context.Background(), instancePath); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := <-result; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		finished = true
+	})
+
+	t.Run("should stop through the control API", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, lockPath, err := instanceResourcePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			result <- startService(ctx, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "work"), "127.0.0.1", 0, io.Discard)
+		}()
+		finished := false
+		defer func() {
+			if !finished {
+				cancel()
+				<-result
+			}
+		}()
+
+		waitForPath(t, socketPath)
+		if probe, err := acquireInstanceLock(lockPath); err == nil {
+			filelock.Unlock(probe)
+			probe.Close()
+			t.Fatal("\nwanted:\nheld instance lock\ngot:\nfree instance lock")
+		}
+		projectPath := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		if unlock, err := lockProject(projectPath); err == nil {
+			unlock()
+			t.Fatal("\nwanted:\nheld project lock\ngot:\nfree project lock")
+		}
+		if err := stopService(context.Background(), filepath.Join(configDir, "instances", "work")); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		err = <-result
+		finished = true
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if _, err := os.Stat(socketPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("\nwanted:\nremoved socket\ngot:\n%v", err)
+		}
+		instanceLock, err := acquireInstanceLock(lockPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer func() {
+			filelock.Unlock(instanceLock)
+			instanceLock.Close()
+		}()
+		projectLock, err := lockProject(projectPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer projectLock()
+	})
+
+	t.Run("should serve HTTP on the named instance socket until cancellation", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		socketPath, _, err := instanceResourcePaths(configDir, "work")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			result <- startService(ctx, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "work"), "127.0.0.1", 0, io.Discard)
+		}()
+		finished := false
+		defer func() {
+			if !finished {
+				cancel()
+				<-result
+			}
+		}()
+
+		waitForPath(t, socketPath)
+		transport := &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+			},
+		}
+		defer transport.CloseIdleConnections()
+		response, err := (&http.Client{Transport: transport}).Get("http://marasi/")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusNotFound {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusNotFound, response.StatusCode)
+		}
+
+		cancel()
+		if err := <-result; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		finished = true
+		if _, err := os.Stat(socketPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("\nwanted:\nremoved socket\ngot:\n%v", err)
+		}
+
+		restartContext, stopRestart := context.WithCancel(context.Background())
+		stopRestart()
+		if err := startService(restartContext, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "work"), "127.0.0.1", 0, io.Discard); !errors.Is(err, context.Canceled) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.Canceled, err)
+		}
+	})
+
+	t.Run("should create the default scratchpad project", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := startService(ctx, configDir, filepath.Join(configDir, "projects", "scratchpad.marasi"), filepath.Join(configDir, "instances", "default"), "127.0.0.1", 0, io.Discard)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.Canceled, err)
+		}
+
+		path := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should hold a checkpoint item after startup and drop it on stop", func(t *testing.T) {
+		originHit := make(chan struct{}, 1)
+		origin := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			select {
+			case originHit <- struct{}{}:
+			default:
+			}
+		}))
+		defer origin.Close()
+
+		configDir := serviceConfigDir(t)
+		projectPath := filepath.Join(configDir, "projects", "scratchpad.marasi")
+		instancePath := filepath.Join(configDir, "instances", "work")
+		ctx, cancel := context.WithCancel(context.Background())
+		output := &lineWriter{lines: make(chan string, 1)}
+		result := make(chan error, 1)
+		go func() {
+			result <- startService(ctx, configDir, projectPath, instancePath, "127.0.0.1", 0, output)
+		}()
+		finished := false
+		defer func() {
+			if !finished {
+				cancel()
+				<-result
+			}
+		}()
+
+		var line string
+		select {
+		case line = <-output.lines:
+		case err := <-result:
+			finished = true
+			t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("\nwanted:\nproxy startup message\ngot:\ntimeout")
+		}
+		const prefix = "proxy listener started on "
+		if !strings.HasPrefix(line, prefix) {
+			t.Fatalf("\nwanted:\n%s<address>\ngot:\n%s", prefix, line)
+		}
+		proxyAddress := strings.TrimPrefix(line, prefix)
+		socketPath := instancePath + ".sock"
+
+		status, body := doInstanceRequest(t, socketPath, http.MethodPost, "/checkpoint/intercept", `{"intercept":true}`)
+		if status != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d %s", http.StatusOK, status, body)
+		}
+
+		_, reader, closeEvents := connectInstanceEvents(t, socketPath)
+		defer closeEvents()
+
+		parsedProxyURL, err := url.Parse("http://" + proxyAddress)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		proxied := make(chan error, 1)
+		go func() {
+			transport := &http.Transport{Proxy: http.ProxyURL(parsedProxyURL)}
+			defer transport.CloseIdleConnections()
+			client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+			response, err := client.Get(origin.URL + "/held")
+			if err != nil {
+				proxied <- err
+				return
+			}
+			_, _ = io.Copy(io.Discard, response.Body)
+			response.Body.Close()
+			proxied <- nil
+		}()
+
+		eventName, eventData := readControlEventSkippingLogs(t, reader, "checkpoint.held")
+		if eventName != "checkpoint.held" {
+			t.Fatalf("\nwanted:\ncheckpoint.held\ngot:\n%s %s", eventName, eventData)
+		}
+		var held struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+			Raw  string `json:"raw"`
+		}
+		if err := json.Unmarshal([]byte(eventData), &held); err != nil || held.ID == "" || held.Type != "request" || held.Raw == "" {
+			t.Fatalf("\nwanted:\nheld request object\ngot:\n%s (%v)", eventData, err)
+		}
+		status, body = doInstanceRequest(t, socketPath, http.MethodGet, "/checkpoint/"+held.ID, "")
+		if status != http.StatusOK || body != eventData+"\n" {
+			t.Fatalf("\nwanted:\n200 %s\\n\ngot:\n%d %s", eventData, status, body)
+		}
+
+		otherPath, err := resolveProjectPath(filepath.Join(configDir, "projects", "other.marasi"))
+		if err != nil {
+			t.Fatalf("resolving other project: %v", err)
+		}
+		status, body = doInstanceRequest(t, socketPath, http.MethodPost, "/project/open", fmt.Sprintf(`{"path":%q}`, otherPath))
+		if status != http.StatusConflict || body != `{"error":"project_busy"}`+"\n" {
+			t.Fatalf("\nwanted:\n409 project_busy\ngot:\n%d %s", status, body)
+		}
+		status, body = doInstanceRequest(t, socketPath, http.MethodGet, "/checkpoint/"+held.ID, "")
+		if status != http.StatusOK {
+			t.Fatalf("\nwanted:\npending item left untouched\ngot:\n%d %s", status, body)
+		}
+
+		stopErr := make(chan error, 1)
+		go func() {
+			stopErr <- stopService(context.Background(), instancePath)
+		}()
+		eventName, eventData = readControlEventSkippingLogs(t, reader, "checkpoint.dropped")
+		wantDropped := fmt.Sprintf(`{"id":"%s","type":"request"}`, held.ID)
+		if eventName != "checkpoint.dropped" || eventData != wantDropped {
+			t.Fatalf("\nwanted:\ncheckpoint.dropped %s\ngot:\n%s %s", wantDropped, eventName, eventData)
+		}
+		if err := <-stopErr; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := <-result; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		finished = true
+		select {
+		case <-proxied:
+		case <-time.After(2 * time.Second):
+			t.Fatal("\nwanted:\nheld connection released on stop\ngot:\ntimeout")
+		}
+		select {
+		case <-originHit:
+			t.Fatal("\nwanted:\ndropped checkpoint item\ngot:\norigin request")
+		default:
+		}
+	})
+
+}
+
+func testCanceledStart(t *testing.T, signal os.Signal, asJSON bool) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("process signals are not implemented on Windows")
+	}
+	configDir := serviceConfigDir(t)
+	certificateLock, err := os.OpenFile(filepath.Join(configDir, "certificate.lock"), os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	if err := filelock.TryLock(certificateLock); err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	defer func() {
+		filelock.Unlock(certificateLock)
+		certificateLock.Close()
+	}()
+
+	binary := buildMarasi(t)
+	var stdout, stderr bytes.Buffer
+	args := []string{"--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0"}
+	if asJSON {
+		args = append(args, "--json")
+	}
+	command := exec.Command(binary, args...)
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	instancePath := filepath.Join(configDir, "instances", "work")
+	waitForPath(t, instancePath+".log")
+	if err := command.Process.Signal(signal); err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	result := make(chan error, 1)
+	go func() { result <- command.Wait() }()
+	var commandErr error
+	select {
+	case commandErr = <-result:
+		if commandErr == nil {
+			t.Fatal("\nwanted:\ncanceled start error\ngot:\nnil")
+		}
+	case <-time.After(5 * time.Second):
+		command.Process.Kill()
+		t.Fatal("\nwanted:\ncanceled start to return\ngot:\ntimeout")
+	}
+	if asJSON {
+		assertJSONCommandError(t, stdout.String(), stderr.String(), commandErr, "context canceled")
+	} else if stdout.Len() != 0 || strings.Contains(stderr.String(), "instance work started") || strings.Contains(stderr.String(), "proxy listener started") {
+		t.Fatalf("\nwanted:\nerror without startup output\ngot:\nstdout %q, stderr %q", stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(instancePath + ".sock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("\nwanted:\nremoved instance socket\ngot:\n%v", err)
+	}
+	probe, err := acquireInstanceLock(instancePath + ".lock")
+	if err != nil {
+		t.Fatalf("\nwanted:\nreleased instance lock\ngot:\n%v", err)
+	}
+	filelock.Unlock(probe)
+	probe.Close()
+}
+
+func buildMarasi(t *testing.T) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "marasi")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	command := exec.Command("go", "build", "-o", binary, ".")
+	command.Env = append(os.Environ(), "GOWORK=off")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("\nwanted:\nbuilt marasi command\ngot:\n%s\n%v", output, err)
+	}
+	return binary
+}
+
+func runMarasi(binary string, args ...string) (stdout, stderr string, err error) {
+	var outBuf, errBuf bytes.Buffer
+	command := exec.Command(binary, args...)
+	command.Stdout = &outBuf
+	command.Stderr = &errBuf
+	err = command.Run()
+	return outBuf.String(), errBuf.String(), err
+}
+
+func assertJSONCommandError(t *testing.T, stdout, stderr string, commandErr error, want string) {
+	t.Helper()
+	if commandErr == nil {
+		t.Fatal("\nwanted:\nexit status 1\ngot:\nnil")
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(commandErr, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("\nwanted:\nexit status 1\ngot:\n%v", commandErr)
+	}
+	if stderr != "" {
+		t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+	}
+	if !strings.HasSuffix(stdout, "\n") || strings.Count(stdout, "\n") != 1 {
+		t.Fatalf("\nwanted:\none compact JSON line\ngot:\n%q", stdout)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil || len(payload) != 1 || !strings.Contains(payload["error"], want) {
+		t.Fatalf("\nwanted:\none error containing %q\ngot:\n%q, %v", want, stdout, err)
+	}
+}
+
+func TestServeControlAPI(t *testing.T) {
+	t.Run("should give an active request time to finish", func(t *testing.T) {
+		requestStarted := make(chan struct{})
+		finishRequest := make(chan struct{})
+		server := &http.Server{Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			close(requestStarted)
+			<-finishRequest
+		})}
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			result <- serveControlAPI(ctx, server, listener, time.Second)
+		}()
+		requestResult := make(chan error, 1)
+		go func() {
+			response, err := http.Get("http://" + listener.Addr().String())
+			if err == nil {
+				response.Body.Close()
+			}
+			requestResult <- err
+		}()
+
+		<-requestStarted
+		cancel()
+		select {
+		case err := <-result:
+			t.Fatalf("\nwanted:\nserver to wait for request\ngot:\n%v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		close(finishRequest)
+		if err := <-result; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := <-requestResult; err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should force close a stuck request after the deadline", func(t *testing.T) {
+		requestStarted := make(chan struct{})
+		server := &http.Server{Handler: http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+			close(requestStarted)
+			<-request.Context().Done()
+		})}
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			result <- serveControlAPI(ctx, server, listener, 50*time.Millisecond)
+		}()
+		go http.Get("http://" + listener.Addr().String())
+
+		<-requestStarted
+		cancel()
+		err = <-result
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.DeadlineExceeded, err)
+		}
+	})
+
+	t.Run("should return an unexpected serving failure", func(t *testing.T) {
+		listener := &failingListener{}
+
+		err := serveControlAPI(context.Background(), &http.Server{}, listener, time.Second)
+		if !errors.Is(err, errServing) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", errServing, err)
+		}
+		if !listener.closed {
+			t.Fatal("\nwanted:\nclosed listener\ngot:\nopen listener")
+		}
+	})
+
+	t.Run("should return ErrServerClosed without a shutdown request", func(t *testing.T) {
+		server := &http.Server{}
+		if err := server.Close(); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		err = serveControlAPI(context.Background(), server, listener, time.Second)
+		if !errors.Is(err, http.ErrServerClosed) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", http.ErrServerClosed, err)
+		}
+	})
+}
+
+func waitForPath(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("\nwanted:\npath %s to exist\ngot:\ntimeout", path)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func doInstanceRequest(t *testing.T, socketPath, method, path, body string) (int, string) {
+	t.Helper()
+	client := service.NewClient(socketPath)
+	defer client.Close()
+	request, err := http.NewRequest(method, "http://marasi"+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("creating instance request: %v", err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("sending instance request: %v", err)
+	}
+	payload, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil {
+		t.Fatalf("reading instance response: %v", readErr)
+	}
+	return response.StatusCode, string(payload)
+}
+
+func connectInstanceEvents(t *testing.T, socketPath string) (*http.Response, *bufio.Reader, func()) {
+	t.Helper()
+	client := service.NewClient(socketPath)
+	request, err := http.NewRequest(http.MethodGet, "http://marasi/events", nil)
+	if err != nil {
+		client.Close()
+		t.Fatalf("creating events request: %v", err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		client.Close()
+		t.Fatalf("connecting to events: %v", err)
+	}
+	if got := response.Header.Get("Content-Type"); got != "text/event-stream" {
+		response.Body.Close()
+		client.Close()
+		t.Fatalf("\nwanted:\ntext/event-stream\ngot:\n%s", got)
+	}
+	reader := bufio.NewReader(response.Body)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		response.Body.Close()
+		client.Close()
+		t.Fatalf("reading connected comment: %v", err)
+	}
+	blank, err := reader.ReadString('\n')
+	if err != nil {
+		response.Body.Close()
+		client.Close()
+		t.Fatalf("reading connected comment terminator: %v", err)
+	}
+	if got := line + blank; got != ": connected\n\n" {
+		response.Body.Close()
+		client.Close()
+		t.Fatalf("\nwanted:\n%s\ngot:\n%s", ": connected\\n\\n", got)
+	}
+	return response, reader, func() {
+		response.Body.Close()
+		client.Close()
+	}
+}
+
+func readControlEvent(t *testing.T, reader *bufio.Reader) (string, string) {
+	t.Helper()
+	type result struct {
+		name string
+		data string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		var name, data string
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				done <- result{err: err}
+				return
+			}
+			if line == "\n" {
+				done <- result{name: name, data: data}
+				return
+			}
+			line = strings.TrimSuffix(line, "\n")
+			switch {
+			case strings.HasPrefix(line, "event: "):
+				name = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: "):
+				data = strings.TrimPrefix(line, "data: ")
+			}
+		}
+	}()
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("reading control event: %v", got.err)
+		}
+		return got.name, got.data
+	case <-time.After(5 * time.Second):
+		t.Fatal("\nwanted:\ntraffic event\ngot:\ntimeout")
+	}
+	return "", ""
+}
+
+func readControlEventSkippingLogs(t *testing.T, reader *bufio.Reader, want string) (string, string) {
+	t.Helper()
+	for {
+		name, data := readControlEvent(t, reader)
+		if name == want {
+			return name, data
+		}
+		if name != "log.added" {
+			t.Fatalf("wanted %s event, got %s %s", want, name, data)
+		}
+	}
+}

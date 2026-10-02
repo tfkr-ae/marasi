@@ -28,11 +28,12 @@ func TestWaypointRepo_GetWaypoints(t *testing.T) {
 		defer teardown()
 
 		want := []*domain.Waypoint{
-			{Hostname: "marasi.app:443", Override: "127.0.0.1:8080"},
 			{Hostname: "api.marasi.app:80", Override: "127.0.0.1:9000"},
+			{Hostname: "marasi.app:443", Override: "127.0.0.1:8080"},
 		}
 
-		for _, waypoint := range want {
+		for index := len(want) - 1; index >= 0; index-- {
+			waypoint := want[index]
 			err := repo.CreateOrUpdateWaypoint(waypoint.Hostname, waypoint.Override)
 			if err != nil {
 				t.Fatalf("creating waypoints : %v", err)
@@ -50,6 +51,29 @@ func TestWaypointRepo_GetWaypoints(t *testing.T) {
 
 		if !reflect.DeepEqual(want, got) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
+		}
+	})
+}
+
+func TestWaypointRepo_CreateWaypoint(t *testing.T) {
+	t.Run("should insert without replacing an existing hostname", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		if err := repo.CreateWaypoint("marasi.app:443", "127.0.0.1:8080"); err != nil {
+			t.Fatalf("creating waypoint: %v", err)
+		}
+		err := repo.CreateWaypoint("marasi.app:443", "127.0.0.1:9000")
+		if !errors.Is(err, domain.ErrWaypointAlreadyExists) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", domain.ErrWaypointAlreadyExists, err)
+		}
+
+		got, err := repo.GetWaypoints()
+		if err != nil {
+			t.Fatalf("getting waypoints: %v", err)
+		}
+		if len(got) != 1 || got[0].Override != "127.0.0.1:8080" {
+			t.Fatalf("\nwanted:\noriginal waypoint\ngot:\n%v", got)
 		}
 	})
 }
@@ -127,6 +151,62 @@ func TestWaypointRepo_CreateOrUpdateWaypoint(t *testing.T) {
 	})
 }
 
+func TestWaypointRepo_UpdateWaypoint(t *testing.T) {
+	t.Run("should update only an existing waypoint and report whether it changed", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		if err := repo.CreateWaypoint("marasi.app:443", "127.0.0.1:8080"); err != nil {
+			t.Fatalf("creating waypoint: %v", err)
+		}
+		changed, err := repo.UpdateWaypoint("marasi.app:443", "127.0.0.1:9000")
+		if err != nil || !changed {
+			t.Fatalf("\nwanted:\nchanged without error\ngot:\nchanged %t, error %v", changed, err)
+		}
+		changed, err = repo.UpdateWaypoint("marasi.app:443", "127.0.0.1:9000")
+		if err != nil || changed {
+			t.Fatalf("\nwanted:\nunchanged without error\ngot:\nchanged %t, error %v", changed, err)
+		}
+	})
+
+	t.Run("should not insert a missing waypoint", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		changed, err := repo.UpdateWaypoint("missing.example:443", "127.0.0.1:9000")
+		if !errors.Is(err, domain.ErrNoWaypointForHostname) || changed {
+			t.Fatalf("\nwanted:\n%v and unchanged\ngot:\n%v and changed %t", domain.ErrNoWaypointForHostname, err, changed)
+		}
+		waypoints, getErr := repo.GetWaypoints()
+		if getErr != nil || len(waypoints) != 0 {
+			t.Fatalf("missing update inserted a waypoint: %v, %v", waypoints, getErr)
+		}
+	})
+
+	t.Run("should report not found when the row disappears before update", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		if err := repo.CreateWaypoint("marasi.app:443", "127.0.0.1:8080"); err != nil {
+			t.Fatalf("creating waypoint: %v", err)
+		}
+		if _, err := repo.dbConn.Exec(`
+			CREATE TRIGGER delete_waypoint_before_update
+			BEFORE UPDATE ON waypoint
+			BEGIN
+				DELETE FROM waypoint WHERE hostname = OLD.hostname;
+			END
+		`); err != nil {
+			t.Fatalf("creating concurrent-delete trigger: %v", err)
+		}
+
+		changed, err := repo.UpdateWaypoint("marasi.app:443", "127.0.0.1:9000")
+		if !errors.Is(err, domain.ErrNoWaypointForHostname) || changed {
+			t.Fatalf("\nwanted:\n%v and unchanged\ngot:\n%v and changed %t", domain.ErrNoWaypointForHostname, err, changed)
+		}
+	})
+}
+
 func TestWaypointRepo_DeleteWaypoint(t *testing.T) {
 	t.Run("should delete an existing waypoint", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
@@ -162,8 +242,8 @@ func TestWaypointRepo_DeleteWaypoint(t *testing.T) {
 
 		err := repo.DeleteWaypoint("marasi.app:443")
 
-		if !errors.Is(err, ErrNoWaypointForHostname) {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", ErrNoWaypointForHostname, err)
+		if !errors.Is(err, domain.ErrNoWaypointForHostname) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", domain.ErrNoWaypointForHostname, err)
 		}
 	})
 }
