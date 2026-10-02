@@ -856,52 +856,171 @@ func TestExtensionLogsDuringLuaExecution(t *testing.T) {
 }
 
 func TestExtensionMetadataDuringControlUpdates(t *testing.T) {
-	repo, runtime := preparedWorkshop(t, "")
-	server := newTestServer(&marasi.Proxy{ExtensionRepo: repo, Extensions: []*extensions.Runtime{runtime}}, func() {})
-	path := "/extension/" + runtime.Data.ID.String()
-	start := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		<-start
-		for i := 0; i < 100; i++ {
-			for _, endpoint := range []string{"/extension", path} {
-				response := requestControlAPI(server, http.MethodGet, endpoint, "")
+	t.Run("metadata remains available while Lua is held", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `function hold() print("holding") end`)
+		server := newTestServer(&marasi.Proxy{ExtensionRepo: repo, Extensions: []*extensions.Runtime{runtime}}, func() {})
+		path := "/extension/" + runtime.Data.ID.String()
+		response := requestControlAPI(server, http.MethodPost, path+"/enable", `{"enabled":false}`)
+		if response.Code != http.StatusOK {
+			t.Fatalf("disabling before Lua execution: %d %s", response.Code, response.Body.String())
+		}
+		entered, release := make(chan struct{}), make(chan struct{})
+		runtime.OnLog = func(entry extensions.ExtensionLog) error {
+			if entry.Text == "holding" {
+				close(entered)
+				<-release
+			}
+			return nil
+		}
+		var requests sync.WaitGroup
+		var releaseOnce sync.Once
+		releaseLua := func() { releaseOnce.Do(func() { close(release) }) }
+		defer func() { releaseLua(); requests.Wait() }()
+		start := func(method, endpoint, body string) <-chan *httptest.ResponseRecorder {
+			responses := make(chan *httptest.ResponseRecorder, 1)
+			requests.Add(1)
+			go func() {
+				defer requests.Done()
+				responses <- requestControlAPI(server, method, endpoint, body)
+			}()
+			return responses
+		}
+		await := func(responses <-chan *httptest.ResponseRecorder) *httptest.ResponseRecorder {
+			t.Helper()
+			select {
+			case response := <-responses:
 				if response.Code != http.StatusOK {
-					t.Errorf("%s status: %d", endpoint, response.Code)
+					t.Fatalf("HTTP status: %d %s", response.Code, response.Body.String())
 				}
+				return response
+			case <-time.After(2 * time.Second):
+				t.Fatal("metadata HTTP operation waited for held Lua execution")
+				return nil
 			}
 		}
-	}()
-	close(start)
-	for i := 0; i < 40; i++ {
-		response := requestControlAPI(server, http.MethodPost, path, `{"lua_content":"print('updated')"}`)
-		if response.Code != http.StatusOK {
-			t.Errorf("update status: %d: %s", response.Code, response.Body.String())
+		call := start(http.MethodPost, path+"/call", `{"function":"hold"}`)
+		select {
+		case <-entered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Lua did not reach its print barrier")
 		}
-		response = requestControlAPI(server, http.MethodPost, path+"/enable", fmt.Sprintf(`{"enabled":%v}`, i%2 == 0))
-		if response.Code != http.StatusOK {
-			t.Errorf("enable status: %d", response.Code)
+		await(start(http.MethodGet, path, ""))
+		await(start(http.MethodGet, "/extension", ""))
+		response = await(start(http.MethodPost, path+"/enable", `{"enabled":true}`))
+		var summary extensionSummary
+		if err := json.Unmarshal(response.Body.Bytes(), &summary); err != nil || !summary.Enabled {
+			t.Fatalf("enable did not publish true while Lua was held: %s, %v", response.Body.String(), err)
 		}
-	}
-	<-done
-	var detail extensionDetail
-	response := requestControlAPI(server, http.MethodGet, path, "")
-	if err := json.Unmarshal(response.Body.Bytes(), &detail); err != nil {
-		t.Fatal(err)
-	}
-	var list extensionList
-	response = requestControlAPI(server, http.MethodGet, "/extension", "")
-	if err := json.Unmarshal(response.Body.Bytes(), &list); err != nil {
-		t.Fatal(err)
-	}
-	stored, err := repo.GetExtensionByUUID(detail.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if detail.Enabled || stored.Enabled || detail.LuaContent != "print('updated')" || detail.UpdatedAt != stored.UpdatedAt || len(list.Items) != 1 || list.Items[0] != detail.extensionSummary {
-		t.Fatalf("inconsistent metadata: detail=%+v list=%+v stored=%+v", detail, list, stored)
-	}
+		response = await(start(http.MethodGet, path, ""))
+		var detail extensionDetail
+		if err := json.Unmarshal(response.Body.Bytes(), &detail); err != nil || !detail.Enabled {
+			t.Fatalf("metadata did not reflect enable while Lua was held: %s, %v", response.Body.String(), err)
+		}
+		select {
+		case response := <-call:
+			t.Fatalf("Lua returned before barrier release: %d %s", response.Code, response.Body.String())
+		default:
+		}
+		releaseLua()
+		await(call)
+	})
+
+	t.Run("overlapping persistence cannot publish a stale enabled flag", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, "")
+		id := runtime.Data.ID
+		if err := repo.SetExtensionEnabledByUUID(id, false); err != nil {
+			t.Fatal(err)
+		}
+		held := &extensionSnapshotHoldRepository{
+			ExtensionRepository: repo,
+			captured:            make(chan struct{}), release: make(chan struct{}), enabledPersisted: make(chan struct{}),
+		}
+		server := newTestServer(&marasi.Proxy{ExtensionRepo: held, Extensions: []*extensions.Runtime{runtime}}, func() {})
+		path := "/extension/" + id.String()
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(held.release) }) }
+		var requests sync.WaitGroup
+		defer func() { release(); requests.Wait() }()
+		start := func(endpoint, body string) <-chan *httptest.ResponseRecorder {
+			responses := make(chan *httptest.ResponseRecorder, 1)
+			requests.Add(1)
+			go func() {
+				defer requests.Done()
+				responses <- requestControlAPI(server, http.MethodPost, endpoint, body)
+			}()
+			return responses
+		}
+		await := func(responses <-chan *httptest.ResponseRecorder) {
+			t.Helper()
+			select {
+			case response := <-responses:
+				if response.Code != http.StatusOK {
+					t.Fatalf("HTTP status: %d %s", response.Code, response.Body.String())
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("metadata update did not finish after repository release")
+			}
+		}
+		update := start(path, `{"lua_content":"print('updated')"}`)
+		select {
+		case <-held.captured:
+		case <-time.After(2 * time.Second):
+			t.Fatal("source update did not reach the repository snapshot barrier")
+		}
+		enable := start(path+"/enable", `{"enabled":true}`)
+		// The captured row has enabled=false. If enable can overtake the held
+		// source publication, let it finish before returning that stale row.
+		select {
+		case <-held.enabledPersisted:
+			await(enable)
+			enable = nil
+		case <-time.After(200 * time.Millisecond):
+		}
+		release()
+		await(update)
+		if enable != nil {
+			await(enable)
+		}
+		var detail extensionDetail
+		response := requestControlAPI(server, http.MethodGet, path, "")
+		if err := json.Unmarshal(response.Body.Bytes(), &detail); err != nil {
+			t.Fatal(err)
+		}
+		var list extensionList
+		response = requestControlAPI(server, http.MethodGet, "/extension", "")
+		if err := json.Unmarshal(response.Body.Bytes(), &list); err != nil {
+			t.Fatal(err)
+		}
+		stored, err := repo.GetExtensionByUUID(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !stored.Enabled || detail.Enabled != stored.Enabled || detail.LuaContent != "print('updated')" || detail.LuaContent != stored.LuaContent || detail.UpdatedAt != stored.UpdatedAt || len(list.Items) != 1 || list.Items[0] != detail.extensionSummary {
+			t.Fatalf("inconsistent metadata after overlapping updates: detail=%+v list=%+v stored=%+v", detail, list, stored)
+		}
+	})
+}
+
+// Delay a real repository read after it captures the persisted source metadata.
+// All writes still use SQLite; only return timing is controlled by the test.
+type extensionSnapshotHoldRepository struct {
+	domain.ExtensionRepository
+	captured         chan struct{}
+	release          chan struct{}
+	enabledPersisted chan struct{}
+}
+
+func (repo *extensionSnapshotHoldRepository) GetExtensionByUUID(id uuid.UUID) (*domain.Extension, error) {
+	stored, err := repo.ExtensionRepository.GetExtensionByUUID(id)
+	close(repo.captured)
+	<-repo.release
+	return stored, err
+}
+
+func (repo *extensionSnapshotHoldRepository) SetExtensionEnabledByUUID(id uuid.UUID, enabled bool) error {
+	err := repo.ExtensionRepository.SetExtensionEnabledByUUID(id, enabled)
+	close(repo.enabledPersisted)
+	return err
 }
 
 func assertNoExtensionEvent(t *testing.T, subscriber *eventSubscriber) {
