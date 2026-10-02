@@ -15,16 +15,7 @@ import (
 	"github.com/tfkr-ae/marasi/domain"
 )
 
-type findingMutation struct {
-	Title         *string
-	Severity      *string
-	CVSSVector    *string
-	CVSSScore     *float64
-	WriteUp       *string
-	TreatmentPlan *string
-	TestCaseID    *uuid.UUID
-	TestCaseIDSet bool
-}
+type findingMutation = domain.FindingMutation
 
 type findingResponse struct {
 	ID            uuid.UUID  `json:"id"`
@@ -236,9 +227,8 @@ func addFindingRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 		if mutation.TestCaseIDSet && mutation.TestCaseID != nil && !findingTestCaseExists(w, r, repo, *mutation.TestCaseID) {
 			return
 		}
-		applyFindingMutation(finding, mutation)
-		if err := repo.SaveFinding(finding); err != nil {
-			writeFindingError(w, r, http.StatusInternalServerError, "internal_server_error")
+		if err := repo.UpdateFinding(id, mutation); err != nil {
+			writeFindingRepositoryError(w, r, err)
 			return
 		}
 		finding, err = repo.GetFinding(id)

@@ -2,17 +2,245 @@ package service
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 )
+
+// Pause after real SQLite reads, so concurrent HTTP mutations see the same
+// snapshot without replacing persistence with a mock.
+type reportingReadBarrier struct {
+	*db.Repository
+	remaining atomic.Int32
+	read      chan struct{}
+	release   chan struct{}
+}
+
+func (repo *reportingReadBarrier) pause() {
+	if repo.remaining.Add(-1) >= 0 {
+		repo.read <- struct{}{}
+		<-repo.release
+	}
+}
+
+func (repo *reportingReadBarrier) GetFinding(id uuid.UUID) (*domain.Finding, error) {
+	finding, err := repo.Repository.GetFinding(id)
+	repo.pause()
+	return finding, err
+}
+
+func (repo *reportingReadBarrier) GetTestCase(id uuid.UUID) (*domain.TestCase, error) {
+	testCase, err := repo.Repository.GetTestCase(id)
+	repo.pause()
+	return testCase, err
+}
+
+func newReportingSQLiteControl(t *testing.T, resource string) (*Server, *reportingReadBarrier, string) {
+	t.Helper()
+	conn, err := db.New(t.TempDir()+"/reporting.marasi", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	repo := &reportingReadBarrier{Repository: db.NewProxyRepo(conn), read: make(chan struct{}, 2), release: make(chan struct{})}
+	t.Cleanup(func() {
+		select {
+		case <-repo.release:
+		default:
+			close(repo.release)
+		}
+	})
+	server := newTestServer(&marasi.Proxy{ReportingRepo: repo, TrafficRepo: repo.Repository}, func() {})
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, httptest.NewRequest("POST", "/"+resource, strings.NewReader(`{"title":"original"}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("create: %d %s", w.Code, w.Body)
+	}
+	var created struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	return server, repo, "/" + resource + "/" + created.ID.String()
+}
+
+func waitReportingRead(t *testing.T, repo *reportingReadBarrier) {
+	t.Helper()
+	select {
+	case <-repo.read:
+	case <-time.After(5 * time.Second):
+		t.Fatal("HTTP mutation did not reach SQLite read barrier")
+	}
+}
+
+func TestFindingConcurrentControlEdits(t *testing.T) {
+	server, repo, path := newReportingSQLiteControl(t, "finding")
+	repo.remaining.Store(2)
+	done := make(chan *httptest.ResponseRecorder, 2)
+	for _, body := range []string{`{"title":"changed-title"}`, `{"writeup":"changed-writeup","severity":"high","cvss_vector":"vector","cvss_score":7.5,"treatment_plan":"remediate"}`} {
+		go func() {
+			w := httptest.NewRecorder()
+			server.ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader(body)))
+			done <- w
+		}()
+	}
+	waitReportingRead(t, repo)
+	waitReportingRead(t, repo)
+	close(repo.release)
+	for range 2 {
+		w := <-done
+		if w.Code != http.StatusOK {
+			t.Fatalf("edit: %d %s", w.Code, w.Body)
+		}
+	}
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+	var got findingDetail
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusOK || got.Title != "changed-title" || got.WriteUp != "changed-writeup" || got.Severity != "High" || got.CVSSVector != "vector" || got.CVSSScore != 7.5 || got.TreatmentPlan != "remediate" {
+		t.Fatalf("concurrent edits lost: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestFindingSQLiteControlNullableAssociation(t *testing.T) {
+	server, _, path := newReportingSQLiteControl(t, "finding")
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, httptest.NewRequest("POST", "/test-case", strings.NewReader(`{"title":"parent"}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("create test case: %d %s", w.Code, w.Body)
+	}
+	var parent testCaseResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &parent); err != nil {
+		t.Fatal(err)
+	}
+	var createdAt time.Time
+	for _, step := range []struct {
+		body   string
+		linked bool
+	}{
+		{fmt.Sprintf(`{"test_case_id":%q,"severity":"High","cvss_vector":"vector","cvss_score":7.5,"writeup":"writeup","treatment_plan":"plan"}`, parent.ID), true},
+		{`{}`, true},
+		{`{"title":"renamed"}`, true},
+		{`{"test_case_id":null,"severity":"","cvss_vector":"","cvss_score":0,"writeup":"","treatment_plan":""}`, false},
+		{`{}`, false},
+	} {
+		w = httptest.NewRecorder()
+		server.ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader(step.body)))
+		if w.Code != http.StatusOK {
+			t.Fatalf("patch %s: %d %s", step.body, w.Code, w.Body)
+		}
+		w = httptest.NewRecorder()
+		server.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		var got findingDetail
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if w.Code != http.StatusOK || step.linked && (got.TestCaseID == nil || *got.TestCaseID != parent.ID) || !step.linked && got.TestCaseID != nil {
+			t.Fatalf("association after %s: %d %s", step.body, w.Code, w.Body)
+		}
+		if !step.linked && (got.Severity != "" || got.CVSSVector != "" || got.CVSSScore != 0 || got.WriteUp != "" || got.TreatmentPlan != "") {
+			t.Fatalf("zero-value fields were not cleared: %s", w.Body)
+		}
+		if createdAt.IsZero() {
+			createdAt = got.CreatedAt
+		}
+		if !got.CreatedAt.Equal(createdAt) {
+			t.Fatalf("patch changed creation time: %s", w.Body)
+		}
+	}
+}
+
+func TestReportingConcurrentControlMembershipAndDelete(t *testing.T) {
+	for _, resource := range []string{"finding", "test-case"} {
+		for _, operation := range []string{"link", "unlink", "delete", "delete-noop", "link-noop"} {
+			t.Run(resource+"/"+operation, func(t *testing.T) {
+				server, repo, path := newReportingSQLiteControl(t, resource)
+				requestID := uuid.New()
+				if err := repo.InsertRequest(&domain.ProxyRequest{ID: requestID, Method: "GET", Scheme: "http", Host: "example.test", Path: "/proof", RequestedAt: time.Now()}); err != nil {
+					t.Fatal(err)
+				}
+				linkBody := fmt.Sprintf(`{"id":%q}`, requestID)
+				if operation == "unlink" {
+					w := httptest.NewRecorder()
+					server.ServeHTTP(w, httptest.NewRequest("POST", path+"/traffic", strings.NewReader(linkBody)))
+					if w.Code != http.StatusOK {
+						t.Fatalf("initial link: %d %s", w.Code, w.Body)
+					}
+				}
+				body := `{"title":"changed-title"}`
+				if strings.HasSuffix(operation, "-noop") {
+					body = `{}`
+				}
+				repo.remaining.Store(1)
+				done := make(chan *httptest.ResponseRecorder, 1)
+				go func() {
+					w := httptest.NewRecorder()
+					server.ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader(body)))
+					done <- w
+				}()
+				waitReportingRead(t, repo)
+				w := httptest.NewRecorder()
+				switch operation {
+				case "link", "link-noop":
+					server.ServeHTTP(w, httptest.NewRequest("POST", path+"/traffic", strings.NewReader(linkBody)))
+				case "unlink":
+					server.ServeHTTP(w, httptest.NewRequest("DELETE", path+"/traffic/"+requestID.String(), nil))
+				case "delete", "delete-noop":
+					server.ServeHTTP(w, httptest.NewRequest("DELETE", path, nil))
+				}
+				if w.Code != http.StatusOK {
+					t.Fatalf("interleaved %s: %d %s", operation, w.Code, w.Body)
+				}
+				close(repo.release)
+				edit := <-done
+				w = httptest.NewRecorder()
+				server.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+				if strings.HasPrefix(operation, "delete") {
+					if edit.Code != http.StatusNotFound || w.Code != http.StatusNotFound {
+						t.Fatalf("edit resurrected deleted record: edit=%d %s get=%d %s", edit.Code, edit.Body, w.Code, w.Body)
+					}
+					return
+				}
+				var got struct {
+					Title string           `json:"title"`
+					Items []trafficSummary `json:"items"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+					t.Fatal(err)
+				}
+				wantTitle := "changed-title"
+				if operation == "link-noop" {
+					wantTitle = "original"
+				}
+				if edit.Code != http.StatusOK || w.Code != http.StatusOK || got.Title != wantTitle {
+					t.Fatalf("edit failed: %d %s get=%d %s", edit.Code, edit.Body, w.Code, w.Body)
+				}
+				if operation == "unlink" {
+					if len(got.Items) != 0 {
+						t.Fatalf("edit restored unlinked traffic: %s", w.Body)
+					}
+				} else if len(got.Items) != 1 || got.Items[0].ID != requestID {
+					t.Fatalf("edit removed linked traffic: %s", w.Body)
+				}
+			})
+		}
+	}
+}
 
 type stubFindingRepository struct {
 	domain.ReportingRepository
@@ -44,6 +272,15 @@ func (repo *stubFindingRepository) GetFinding(id uuid.UUID) (*domain.Finding, er
 	}
 	copy := *finding
 	return &copy, nil
+}
+
+func (repo *stubFindingRepository) UpdateFinding(id uuid.UUID, mutation domain.FindingMutation) error {
+	finding, err := repo.GetFinding(id)
+	if err != nil {
+		return err
+	}
+	applyFindingMutation(finding, mutation)
+	return repo.SaveFinding(finding)
 }
 
 func (repo *stubFindingRepository) GetFindingRequests(id uuid.UUID) ([]*domain.RequestResponseSummary, error) {

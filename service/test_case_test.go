@@ -2,6 +2,7 @@ package service
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,50 @@ import (
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/domain"
 )
+
+func TestTestCaseConcurrentControlEdits(t *testing.T) {
+	server, repo, path := newReportingSQLiteControl(t, "test-case")
+	repo.remaining.Store(2)
+	done := make(chan *httptest.ResponseRecorder, 2)
+	for _, body := range []string{`{"title":"changed-title"}`, `{"description":"changed-description","category":"changed-category","tags":["tag"],"note":"changed-note"}`} {
+		go func() {
+			w := httptest.NewRecorder()
+			server.ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader(body)))
+			done <- w
+		}()
+	}
+	waitReportingRead(t, repo)
+	waitReportingRead(t, repo)
+	close(repo.release)
+	for range 2 {
+		w := <-done
+		if w.Code != http.StatusOK {
+			t.Fatalf("edit: %d %s", w.Code, w.Body)
+		}
+	}
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+	var got testCaseDetail
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusOK || got.Title != "changed-title" || got.Description != "changed-description" || got.Category != "changed-category" || got.Note != "changed-note" || len(got.Tags) != 1 || got.Tags[0] != "tag" {
+		t.Fatalf("concurrent edits lost: %d %s", w.Code, w.Body)
+	}
+	w = httptest.NewRecorder()
+	server.ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader(`{"description":"","category":"","tags":[],"note":""}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("clear: %d %s", w.Code, w.Body)
+	}
+	w = httptest.NewRecorder()
+	server.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusOK || got.Title != "changed-title" || got.Description != "" || got.Category != "" || got.Note != "" || got.Tags == nil || len(got.Tags) != 0 {
+		t.Fatalf("cleared fields were not saved: %d %s", w.Code, w.Body)
+	}
+}
 
 type stubReportingRepository struct {
 	domain.ReportingRepository
@@ -44,6 +89,15 @@ func (repo *stubReportingRepository) ListTestCases() ([]*domain.TestCase, error)
 		items = append(items, &copy)
 	}
 	return items, nil
+}
+
+func (repo *stubReportingRepository) UpdateTestCase(id uuid.UUID, mutation domain.TestCaseMutation) error {
+	testCase, err := repo.GetTestCase(id)
+	if err != nil {
+		return err
+	}
+	applyTestCaseMutation(testCase, mutation)
+	return repo.SaveTestCase(testCase)
 }
 
 func (repo *stubReportingRepository) GetTestCase(id uuid.UUID) (*domain.TestCase, error) {

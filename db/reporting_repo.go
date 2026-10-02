@@ -1,7 +1,9 @@
 package db
 
 import (
+	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -163,6 +165,47 @@ func (repo *Repository) SaveTestCase(domainTC *domain.TestCase) error {
 	}
 
 	return tx.Commit()
+}
+
+// UpdateTestCase atomically changes only supplied metadata, leaving links untouched.
+func (repo *Repository) UpdateTestCase(id uuid.UUID, mutation domain.TestCaseMutation) error {
+	columns := []string{}
+	args := []any{}
+	set := func(column string, value any) {
+		columns = append(columns, column+" = ?")
+		args = append(args, value)
+	}
+	if mutation.Title != nil {
+		set("title", *mutation.Title)
+	}
+	if mutation.Description != nil {
+		set("description", *mutation.Description)
+	}
+	if mutation.Category != nil {
+		set("category", *mutation.Category)
+	}
+	if mutation.Tags != nil {
+		set("tags", StringArray(*mutation.Tags))
+	}
+	if mutation.Note != nil {
+		set("note", *mutation.Note)
+	}
+	if len(columns) == 0 {
+		columns = append(columns, "id = id")
+	}
+	args = append(args, id)
+	result, err := repo.dbConn.Exec("UPDATE test_cases SET "+strings.Join(columns, ", ")+" WHERE id = ?", args...)
+	if err != nil {
+		return fmt.Errorf("updating test case %s: %w", id, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking updated test case rows: %w", err)
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // ListTestCases retrieves all test cases with their associated requests and artifacts.
@@ -416,6 +459,53 @@ func (repo *Repository) SaveFinding(domainF *domain.Finding) error {
 	}
 
 	return tx.Commit()
+}
+
+// UpdateFinding atomically changes only supplied metadata, leaving links untouched.
+func (repo *Repository) UpdateFinding(id uuid.UUID, mutation domain.FindingMutation) error {
+	columns := []string{}
+	args := []any{}
+	set := func(column string, value any) {
+		columns = append(columns, column+" = ?")
+		args = append(args, value)
+	}
+	if mutation.Title != nil {
+		set("title", *mutation.Title)
+	}
+	if mutation.Severity != nil {
+		set("severity", *mutation.Severity)
+	}
+	if mutation.CVSSVector != nil {
+		set("cvss_vector", *mutation.CVSSVector)
+	}
+	if mutation.CVSSScore != nil {
+		set("cvss_score", *mutation.CVSSScore)
+	}
+	if mutation.WriteUp != nil {
+		set("writeup", *mutation.WriteUp)
+	}
+	if mutation.TreatmentPlan != nil {
+		set("treatment_plan", *mutation.TreatmentPlan)
+	}
+	if mutation.TestCaseIDSet {
+		set("test_case_id", mutation.TestCaseID)
+	}
+	if len(columns) == 0 {
+		columns = append(columns, "id = id")
+	}
+	args = append(args, id)
+	result, err := repo.dbConn.Exec("UPDATE findings SET "+strings.Join(columns, ", ")+" WHERE id = ?", args...)
+	if err != nil {
+		return fmt.Errorf("updating finding %s: %w", id, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking updated finding rows: %w", err)
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // ListFindings retrieves all findings with their associated requests and artifacts.

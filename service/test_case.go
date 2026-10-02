@@ -14,13 +14,7 @@ import (
 	"github.com/tfkr-ae/marasi/domain"
 )
 
-type testCaseMutation struct {
-	Title       *string   `json:"title"`
-	Description *string   `json:"description"`
-	Category    *string   `json:"category"`
-	Tags        *[]string `json:"tags"`
-	Note        *string   `json:"note"`
-}
+type testCaseMutation = domain.TestCaseMutation
 
 type testCaseResponse struct {
 	ID          uuid.UUID `json:"id"`
@@ -234,9 +228,8 @@ func addTestCaseRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcast
 			writeTestCaseRepositoryError(w, r, err)
 			return
 		}
-		applyTestCaseMutation(testCase, mutation)
-		if err := repo.SaveTestCase(testCase); err != nil {
-			writeTestCaseError(w, r, http.StatusInternalServerError, "internal_server_error")
+		if err := repo.UpdateTestCase(id, mutation); err != nil {
+			writeTestCaseRepositoryError(w, r, err)
 			return
 		}
 		testCase, err = repo.GetTestCase(id)

@@ -13,6 +13,28 @@ var ErrReportingAlreadyLinked = errors.New("request already linked")
 // ErrReportingNotLinked means the requested parent/request link does not exist.
 var ErrReportingNotLinked = errors.New("request is not linked")
 
+// FindingMutation changes only supplied metadata fields; traffic links are separate.
+// TestCaseIDSet distinguishes omission from clearing the optional association.
+type FindingMutation struct {
+	Title         *string
+	Severity      *string
+	CVSSVector    *string
+	CVSSScore     *float64
+	WriteUp       *string
+	TreatmentPlan *string
+	TestCaseID    *uuid.UUID
+	TestCaseIDSet bool
+}
+
+// TestCaseMutation changes only supplied metadata fields; traffic links are separate.
+type TestCaseMutation struct {
+	Title       *string
+	Description *string
+	Category    *string
+	Tags        *[]string
+	Note        *string
+}
+
 // TestCase represents a single security test case with its metadata and associated data.
 type TestCase struct {
 	// ID is the unique identifier for the test case.
@@ -129,6 +151,8 @@ type ReportingRepository interface {
 	GetTestCase(uuid.UUID) (*TestCase, error)
 	// SaveTestCase persists a test case, performing an upsert if it already exists.
 	SaveTestCase(*TestCase) error
+	// UpdateTestCase changes supplied fields of an existing test case, never inserting it.
+	UpdateTestCase(uuid.UUID, TestCaseMutation) error
 	// ListTestCases returns all recorded test cases ordered by creation date.
 	ListTestCases() ([]*TestCase, error)
 	// DeleteTestCase removes a test case by its ID.
@@ -144,6 +168,8 @@ type ReportingRepository interface {
 	GetFinding(uuid.UUID) (*Finding, error)
 	// SaveFinding persists a finding, performing an upsert if it already exists.
 	SaveFinding(*Finding) error
+	// UpdateFinding changes supplied fields of an existing finding, never inserting it.
+	UpdateFinding(uuid.UUID, FindingMutation) error
 	// ListFindings returns all recorded findings ordered by creation date.
 	ListFindings() ([]*Finding, error)
 	// DeleteFinding removes a finding by its ID.
