@@ -1,0 +1,5 @@
+# Proxy logs are listed and announced
+
+A proxy log is a row in the open project. `marasi logs` lists those rows through the control API. A newly stored row is announced as `log.added` on the existing event subscription. The payload is that one row, the same object a list item uses. A failed insert publishes nothing. Opening a project does not replay old proxy logs. `marasi logs` is not a second subscription, and it does not tail the instance log file. Extension prints stay on `extension logs`. The service does not install itself as the proxy's only `OnLog` callback, because that slot belongs to the GUI.
+
+**Considered options:** tail the instance log file; make `marasi logs` follow new lines; publish when `WriteLog` is called, before the insert, as traffic events do; republish stored rows on `project.opened`; take `OnLog` for the service. Rejected because the instance log file is operational text, not a proxy log, a second subscription would duplicate `marasi events`, a log event that is not yet stored cannot be reconciled with the list, replay would violate the event rule, and the GUI already owns `OnLog`.
