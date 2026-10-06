@@ -1,0 +1,5 @@
+# WebSocket connections are addressed by their own UUID
+
+A WebSocket connection is its own row, one per upgrade request/response pair. Clients address it by its UUID. `messages`, `inject`, and `close` take that UUID only. A traffic row does not carry it, so the pair UUID finds the connection through `GET /traffic/{request_id}/websocket` and `marasi traffic websocket`, which return the same connection JSON as `GET /websocket/{connection_id}`. Frames are not on that route. The pair UUID is a lookup, not a second id for the connection.
+
+**Considered options:** address every websocket route by the pair UUID; a parallel `/websocket/request/...` tree; one `/websocket/{id}` slot that tries the connection id and then the pair UUID; a `--request-id` flag on the websocket commands. Rejected because the connection is not a facet of the pair, a second tree duplicates every verb, a slot that tries both ids hides which id was passed, and the flag would put the traffic entry on the websocket command after the lookup was nested under traffic.

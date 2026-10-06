@@ -14,7 +14,7 @@ A Go library for building application security testing proxies.
 ## Features
 
 - **HTTP/HTTPS Proxy**: TLS-capable proxy server with certificate management
-- **Request/Response Interception**: Modify traffic in real-time
+- **Checkpoint**: Hold, forward, and drop in-flight requests, responses, and WebSocket messages
 - **Lua Extensions**: Scriptable proxy behavior with built-in extensions
 - **Application Data Format**: SQLite-based storage for all proxy data (requests, responses, metadata)
 - **Launchpad**: Replay and modify HTTP requests
@@ -33,7 +33,7 @@ A Go library for building application security testing proxies.
 ### Extension System
 Lua based extension support, three built-in extensions:
 - **Compass**: Scope management and traffic filtering
-- **Checkpoint**: Request/response interception rules
+- **Checkpoint**: Lua rules for whether Checkpoint holds a request, response, or WebSocket message
 - **Workshop**: Lua development environment
 
 The ability to add custom extensions coming soon.
