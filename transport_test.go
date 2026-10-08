@@ -223,7 +223,7 @@ func TestMarasiRoundTripper(t *testing.T) {
 
 func TestMarasiTransportDialTLSContext(t *testing.T) {
 	marasiCert := testCert(t)
-	transport := newMarasiTransport(marasiCert)
+	transport := newMarasiTransport(marasiCert, nil)
 
 	t.Run("request to standard HTTPS server should pass through", func(t *testing.T) {
 		testTLSServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

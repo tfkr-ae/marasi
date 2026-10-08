@@ -36,7 +36,11 @@ func (proxy *Proxy) ResolveWebSocketInterception(
 	if proxy.WebSocketInterceptor == nil {
 		return errors.New("websocket interceptor not configured")
 	}
-	return proxy.WebSocketInterceptor.Resolve(messageID, decision)
+	err := proxy.WebSocketInterceptor.Resolve(messageID, decision)
+	if err == nil {
+		proxy.forgetCheckpoint(messageID)
+	}
+	return err
 }
 
 // GetWebSocketConnection returns live connection state for an upgrade request ID.
@@ -81,20 +85,20 @@ func (proxy *Proxy) InjectWebSocketMessage(
 	direction string,
 	opcode int,
 	payload []byte,
-) error {
+) (domain.WebSocketMessage, error) {
 	if proxy.WebSocketRegistry == nil {
-		return fmt.Errorf("%w: %s", ErrWebSocketConnectionNotFound, requestID)
+		return domain.WebSocketMessage{}, fmt.Errorf("%w: %s", ErrWebSocketConnectionNotFound, requestID)
 	}
 	connection, exists := proxy.WebSocketRegistry.GetByRequestID(requestID)
 	if !exists {
-		return fmt.Errorf("%w: %s", ErrWebSocketConnectionNotFound, requestID)
+		return domain.WebSocketMessage{}, fmt.Errorf("%w: %s", ErrWebSocketConnectionNotFound, requestID)
 	}
 
 	switch direction {
 	case marasiws.DirectionFromClient, marasiws.DirectionFromServer:
 		return connection.Inject(direction, opcode, payload)
 	default:
-		return fmt.Errorf("%w: %q", ErrWebSocketDirection, direction)
+		return domain.WebSocketMessage{}, fmt.Errorf("%w: %q", ErrWebSocketDirection, direction)
 	}
 }
 
@@ -143,6 +147,10 @@ func (proxy *Proxy) closeWebSockets(code int, reason string, flush bool) error {
 
 // runWebSocketSession registers a connection, emits lifecycle events, and runs the relay.
 func (proxy *Proxy) runWebSocketSession(connection *marasiws.Connection, record domain.WebSocketConnection) error {
+	return proxy.runWebSocketSessionWithRelease(connection, record, nil)
+}
+
+func (proxy *Proxy) runWebSocketSessionWithRelease(connection *marasiws.Connection, record domain.WebSocketConnection, release func()) error {
 	if connection.ID != record.ID {
 		return fmt.Errorf(
 			"websocket connection ID mismatch: %s != %s",
@@ -172,6 +180,9 @@ func (proxy *Proxy) runWebSocketSession(connection *marasiws.Connection, record 
 		return fmt.Errorf("registering websocket connection: %w", err)
 	}
 	proxy.webSocketLifecycleMu.RUnlock()
+	if release != nil {
+		release()
+	}
 	defer func() {
 		proxy.WebSocketRegistry.Remove(connection.ID)
 		proxy.webSocketSessions.Done()
@@ -206,13 +217,14 @@ func (proxy *Proxy) runWebSocketSession(connection *marasiws.Connection, record 
 		closedRecord.CloseCode = 1006
 	}
 
-	proxy.DBWriteChannel <- &domain.WebSocketConnectionUpdate{
-		Connection: closedRecord,
-	}
-	proxy.updateWebSocketRequestState(connection.RequestID, closedRecord.State)
-
+	connection.PublishClosedRecord(closedRecord)
 	if proxy.OnWebSocketClose != nil {
 		_ = proxy.OnWebSocketClose(closedRecord)
+	}
+
+	proxy.updateWebSocketRequestState(connection.RequestID, closedRecord.State)
+	proxy.DBWriteChannel <- &domain.WebSocketConnectionUpdate{
+		Connection: closedRecord,
 	}
 
 	return runErr

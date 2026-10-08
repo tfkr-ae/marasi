@@ -1,0 +1,261 @@
+package main
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+
+	"github.com/spf13/cobra"
+)
+
+var checkpointKind string
+var checkpointForwardFile string
+var checkpointInterceptResponse bool
+
+func init() {
+	checkpointListCmd.Flags().StringVar(&checkpointKind, "kind", "", "Keep only http or websocket items")
+	checkpointForwardCmd.Flags().StringVar(&checkpointForwardFile, "file", "", "Read edited bytes from a file. If omitted, use piped stdin. If stdin is not piped, forward the original bytes")
+	checkpointForwardCmd.Flags().BoolVar(&checkpointInterceptResponse, "intercept-response", false, "Hold the matching response")
+	checkpointCmd.AddCommand(checkpointListCmd, checkpointGetCmd, checkpointForwardCmd, checkpointDropCmd, checkpointInterceptCmd, checkpointWebsocketInterceptCmd)
+	rootCmd.AddCommand(checkpointCmd)
+}
+
+var checkpointCmd = &cobra.Command{
+	Use:   "checkpoint",
+	Short: "Hold, forward, and drop intercepted traffic",
+}
+
+var checkpointListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List Checkpoint items",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		path := "/checkpoint"
+		if cmd.Flags().Changed("kind") {
+			if checkpointKind != "http" && checkpointKind != "websocket" {
+				return errors.New("checkpoint list --kind must be http or websocket")
+			}
+			path += "?" + url.Values{"kind": {checkpointKind}}.Encode()
+		}
+		body, err := runControlRequest(cmd, http.MethodGet, path, "listing checkpoint items", nil)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		return writeCheckpointList(body, cmd.OutOrStdout())
+	},
+}
+
+var checkpointGetCmd = &cobra.Command{
+	Use:   "get UUID",
+	Short: "Get one Checkpoint item",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := serviceIDPath("/checkpoint/", args[0], "")
+		if err != nil {
+			return err
+		}
+		body, err := runControlRequest(cmd, http.MethodGet, path, "getting checkpoint item", nil)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		return writeCheckpointGet(body, cmd.OutOrStdout())
+	},
+}
+
+var checkpointForwardCmd = &cobra.Command{
+	Use:   "forward UUID",
+	Short: "Forward a Checkpoint item",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		payload, err := encodeCheckpointForward(cmd, args[0])
+		if err != nil {
+			return err
+		}
+		path, err := serviceIDPath("/checkpoint/", args[0], "/forward")
+		if err != nil {
+			return err
+		}
+		body, err := runControlRequest(cmd, http.MethodPost, path, "forwarding checkpoint item", payload)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "checkpoint %s forwarded\n", args[0])
+		return err
+	},
+}
+
+var checkpointDropCmd = &cobra.Command{
+	Use:   "drop UUID",
+	Short: "Drop a Checkpoint item",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := serviceIDPath("/checkpoint/", args[0], "/drop")
+		if err != nil {
+			return err
+		}
+		body, err := runControlRequest(cmd, http.MethodPost, path, "dropping checkpoint item", nil)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "checkpoint %s dropped\n", args[0])
+		return err
+	},
+}
+
+var checkpointInterceptCmd = &cobra.Command{
+	Use:   "intercept on|off",
+	Short: "Set HTTP Checkpoint intercept",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runCheckpointFlag(cmd, args[0], "/checkpoint/intercept", "intercept", "setting checkpoint intercept", "intercept")
+	},
+}
+
+var checkpointWebsocketInterceptCmd = &cobra.Command{
+	Use:   "websocket-intercept on|off",
+	Short: "Set WebSocket Checkpoint intercept",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runCheckpointFlag(cmd, args[0], "/checkpoint/websocket-intercept", "websocket_intercept", "setting checkpoint websocket intercept", "websocket-intercept")
+	},
+}
+
+func runCheckpointFlag(cmd *cobra.Command, value, path, field, operation, name string) error {
+	if value != "on" && value != "off" {
+		return fmt.Errorf("checkpoint %s requires on or off", name)
+	}
+	payload, err := json.Marshal(map[string]bool{field: value == "on"})
+	if err != nil {
+		return fmt.Errorf("encoding checkpoint %s: %w", name, err)
+	}
+	body, err := runControlRequest(cmd, http.MethodPost, path, operation, payload)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		_, err = cmd.OutOrStdout().Write(body)
+		return err
+	}
+	_, err = fmt.Fprintf(cmd.ErrOrStderr(), "checkpoint %s %s\n", name, value)
+	return err
+}
+
+func encodeCheckpointForward(cmd *cobra.Command, id string) ([]byte, error) {
+	raw, edited, err := readCheckpointForwardBytes(cmd)
+	if err != nil {
+		return nil, err
+	}
+	request := struct {
+		Raw               *string `json:"raw,omitempty"`
+		Payload           *string `json:"payload,omitempty"`
+		InterceptResponse bool    `json:"intercept_response,omitempty"`
+	}{InterceptResponse: checkpointInterceptResponse}
+	if edited {
+		path, err := serviceIDPath("/checkpoint/", id, "")
+		if err != nil {
+			return nil, err
+		}
+		item, err := runControlRequest(cmd, http.MethodGet, path, "forwarding checkpoint item", nil)
+		if err != nil {
+			return nil, err
+		}
+		var parsed struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(item, &parsed); err != nil {
+			return nil, fmt.Errorf("decoding checkpoint item: %w", err)
+		}
+		encoded := base64.StdEncoding.EncodeToString(raw)
+		if parsed.Type == "websocket" {
+			request.Payload = &encoded
+		} else {
+			request.Raw = &encoded
+		}
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("encoding checkpoint forward: %w", err)
+	}
+	return payload, nil
+}
+
+func readCheckpointForwardBytes(cmd *cobra.Command) ([]byte, bool, error) {
+	if cmd.Flags().Changed("file") {
+		raw, err := os.ReadFile(checkpointForwardFile)
+		if err != nil {
+			return nil, false, fmt.Errorf("reading checkpoint file: %w", err)
+		}
+		return raw, true, nil
+	}
+	stdin := cmd.InOrStdin()
+	if file, ok := stdin.(*os.File); ok {
+		info, err := file.Stat()
+		if err != nil {
+			return nil, false, fmt.Errorf("checking stdin: %w", err)
+		}
+		if info.Mode()&os.ModeCharDevice != 0 {
+			return nil, false, nil
+		}
+	}
+	raw, err := io.ReadAll(stdin)
+	if err != nil {
+		return nil, false, fmt.Errorf("reading checkpoint from stdin: %w", err)
+	}
+	return raw, true, nil
+}
+
+func writeCheckpointList(body []byte, stdout io.Writer) error {
+	var response struct {
+		Items []struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return fmt.Errorf("decoding checkpoint list: %w", err)
+	}
+	for _, item := range response.Items {
+		if _, err := fmt.Fprintf(stdout, "%s %s\n", item.ID, item.Type); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeCheckpointGet(body []byte, stdout io.Writer) error {
+	var item struct {
+		Type    string `json:"type"`
+		Raw     []byte `json:"raw"`
+		Payload []byte `json:"payload"`
+	}
+	if err := json.Unmarshal(body, &item); err != nil {
+		return fmt.Errorf("decoding checkpoint item: %w", err)
+	}
+	data := item.Raw
+	if item.Type == "websocket" {
+		data = item.Payload
+	}
+	_, err := stdout.Write(data)
+	return err
+}

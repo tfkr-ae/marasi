@@ -57,6 +57,11 @@ type TrafficRepository interface {
 	//GetRequestResponseSummary will return the request-response data without the raw and prettified fields
 	GetRequestResponseSummary() ([]*RequestResponseSummary, error)
 
+	// ListTraffic returns a newest-first page of summaries older than cursor.
+	// A nil cursor starts at the newest row. nextCursor is the last returned
+	// item's id when another older page exists, otherwise nil.
+	ListTraffic(cursor *uuid.UUID, limit int, filter TrafficListFilter) (items []*RequestResponseSummary, nextCursor *uuid.UUID, err error)
+
 	// GetMetadata returns the metadata map for a specific request ID.
 	GetMetadata(id uuid.UUID) (metadata map[string]any, err error)
 
@@ -69,6 +74,15 @@ type TrafficRepository interface {
 
 	// UpdateNote creates or updates the user-created note for a specific request ID.
 	UpdateNote(requestID uuid.UUID, note string) error
+
+	// DeleteNote removes the note row for a request ID.
+	// It returns an error if no note is found.
+	DeleteNote(requestID uuid.UUID) error
+
+	// ListNotes returns a newest-first page of summaries that have a non-empty note.
+	// A nil cursor starts at the newest row. nextCursor is the last returned
+	// item's id when another older page exists, otherwise nil.
+	ListNotes(cursor *uuid.UUID, limit int) (items []*RequestResponseSummary, nextCursor *uuid.UUID, err error)
 
 	// SearchByMetadata retrieves requests where the value at the specified JSON path matches the provided value.
 	SearchByMetadata(path string, value any) ([]*RequestResponseSummary, error)
@@ -107,6 +121,16 @@ type RequestResponseRow struct {
 	Note     string         // Note contents
 }
 
+// TrafficListFilter narrows ListTraffic. Empty strings and a nil StatusCode
+// mean no constraint on that column. PathPrefix matches the start of the
+// stored path, which includes the query string.
+type TrafficListFilter struct {
+	Host       string
+	Method     string
+	PathPrefix string
+	StatusCode *int
+}
+
 // RequestResponseSummary provides a summary of a request-response pair,
 // excluding raw body and prettified data
 type RequestResponseSummary struct {
@@ -122,5 +146,5 @@ type RequestResponseSummary struct {
 	Metadata    map[string]any
 	RequestedAt time.Time
 	RespondedAt time.Time
-	// TODO CHECK IF NOTE WILL BE ADDED
+	Note        string
 }

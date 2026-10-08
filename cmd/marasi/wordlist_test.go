@@ -1,0 +1,165 @@
+package main
+
+import (
+	"net/http"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestWordlistAddCommand(t *testing.T) {
+	binary := buildMarasi(t)
+	configDir := serviceConfigDir(t)
+	sent := startCannedControlAPI(t, configDir, "add", http.StatusOK, `{"items":[{"name":"passwords.txt","size":15}]}`+"\n")
+	workingDir := t.TempDir()
+
+	stdout, stderr, err := runMarasiInDir(binary, workingDir, "--config-dir", configDir, "--instance", "add", "wordlist", "add", "passwords.txt")
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	request := sent.snapshot()
+	wantBody := `{"path":"` + filepath.Join(workingDir, "passwords.txt") + `"}`
+	if request.Method != http.MethodPost || request.Path != "/wordlist" || request.Body != wantBody {
+		t.Fatalf("\nwanted:\nPOST /wordlist with body %s\ngot:\n%s %s with body %q", wantBody, request.Method, request.Path, request.Body)
+	}
+	if stdout != "" || stderr != "wordlist passwords.txt added\n" {
+		t.Fatalf("\nwanted:\nempty stdout, stderr %q\ngot:\nstdout %q, stderr %q", "wordlist passwords.txt added\n", stdout, stderr)
+	}
+}
+
+func TestWordlistRemoveCommand(t *testing.T) {
+	binary := buildMarasi(t)
+	configDir := serviceConfigDir(t)
+	sent := startCannedControlAPI(t, configDir, "remove", http.StatusOK, `{"items":[]}`+"\n")
+
+	stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "remove", "wordlist", "remove", "passwords.txt")
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	request := sent.snapshot()
+	if request.Method != http.MethodDelete || request.Path != "/wordlist/passwords.txt" || request.Body != "" {
+		t.Fatalf("\nwanted:\nDELETE /wordlist/passwords.txt with empty body\ngot:\n%s %s with body %q", request.Method, request.Path, request.Body)
+	}
+	if stdout != "" || stderr != "wordlist passwords.txt removed\n" {
+		t.Fatalf("\nwanted:\nempty stdout, stderr %q\ngot:\nstdout %q, stderr %q", "wordlist passwords.txt removed\n", stdout, stderr)
+	}
+}
+
+func TestWordlistListCommand(t *testing.T) {
+	binary := buildMarasi(t)
+	configDir := serviceConfigDir(t)
+	sent := startCannedControlAPI(t, configDir, "list", http.StatusOK, `{"items":[{"name":"passwords.txt","size":15},{"name":"users.txt","size":5}]}`+"\n")
+
+	stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "list", "wordlist", "list")
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	request := sent.snapshot()
+	if request.Method != http.MethodGet || request.Path != "/wordlist" || request.Body != "" {
+		t.Fatalf("\nwanted:\nGET /wordlist with empty body\ngot:\n%s %s with body %q", request.Method, request.Path, request.Body)
+	}
+	wantStdout := "name: passwords.txt\nsize: 15\n\nname: users.txt\nsize: 5\n"
+	if stdout != wantStdout || stderr != "" {
+		t.Fatalf("\nwanted:\nstdout %q, empty stderr\ngot:\nstdout %q, stderr %q", wantStdout, stdout, stderr)
+	}
+}
+
+func TestWordlistPreviewCommand(t *testing.T) {
+	binary := buildMarasi(t)
+	configDir := serviceConfigDir(t)
+	sent := startCannedControlAPI(t, configDir, "preview", http.StatusOK, `{"name":"passwords.txt","items":["one","two"]}`+"\n")
+
+	stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "preview", "wordlist", "preview", "passwords.txt")
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	request := sent.snapshot()
+	if request.Method != http.MethodGet || request.Path != "/wordlist/passwords.txt" || request.Body != "" {
+		t.Fatalf("\nwanted:\nGET /wordlist/passwords.txt with empty body\ngot:\n%s %s with body %q", request.Method, request.Path, request.Body)
+	}
+	if stdout != "one\ntwo\n" || stderr != "" {
+		t.Fatalf("\nwanted:\nstdout %q, empty stderr\ngot:\nstdout %q, stderr %q", "one\ntwo\n", stdout, stderr)
+	}
+}
+
+func TestWordlistPreviewCommandPassesLimit(t *testing.T) {
+	binary := buildMarasi(t)
+	configDir := serviceConfigDir(t)
+	sent := startCannedControlAPI(t, configDir, "preview-limit", http.StatusOK, `{"name":"passwords.txt","items":["one"]}`+"\n")
+
+	_, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "preview-limit", "wordlist", "preview", "passwords.txt", "--limit", "7")
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	request := sent.snapshot()
+	if request.Method != http.MethodGet || request.Path != "/wordlist/passwords.txt" || request.RawQuery != "limit=7" {
+		t.Fatalf("\nwanted:\nGET /wordlist/passwords.txt?limit=7\ngot:\n%s %s?%s", request.Method, request.Path, request.RawQuery)
+	}
+}
+
+func TestWordlistCommandContract(t *testing.T) {
+	binary := buildMarasi(t)
+
+	t.Run("should pass successful responses through byte for byte in JSON mode", func(t *testing.T) {
+		for index, args := range [][]string{{"wordlist", "list"}, {"wordlist", "preview", "passwords.txt"}, {"wordlist", "add", "passwords.txt"}, {"wordlist", "remove", "passwords.txt"}} {
+			configDir := serviceConfigDir(t)
+			instanceName := "json-" + string(rune('a'+index))
+			body := " {\n  \"unexpected\": true\n} "
+			startCannedControlAPI(t, configDir, instanceName, http.StatusOK, body)
+			commandArgs := append([]string{"--config-dir", configDir, "--instance", instanceName, "--json"}, args...)
+
+			stdout, stderr, err := runMarasi(binary, commandArgs...)
+			if err != nil || stdout != body || stderr != "" {
+				t.Fatalf("\n%v wanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", args, body, stdout, stderr, err)
+			}
+		}
+	})
+
+	t.Run("should print help when wordlist has no subcommand", func(t *testing.T) {
+		stdout, stderr, err := runMarasi(binary, "wordlist")
+		if err == nil || stderr != "" || !strings.Contains(stdout, "Available Commands:") || !strings.Contains(stdout, "marasi wordlist [command]") {
+			t.Fatalf("\nwanted:\nhelp for wordlist\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		stdout, stderr, err = runMarasi(binary, "--json", "wordlist")
+		assertJSONCommandError(t, stdout, stderr, err, "marasi wordlist: choose add, list, preview, or remove")
+	})
+
+	t.Run("should say add moves the source file", func(t *testing.T) {
+		stdout, stderr, err := runMarasi(binary, "wordlist", "add", "--help")
+		if err != nil || stderr != "" || !strings.Contains(stdout, "moved into the wordlists directory") {
+			t.Fatalf("\nwanted:\nhelp stating the source is moved\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+	})
+
+	t.Run("should reject an invalid wordlist name before calling the service", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "invalid-name", http.StatusBadRequest, `{"error":"invalid_wordlist_request"}`)
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "invalid-name", "--json", "wordlist", "preview", "../passwords.txt")
+		assertJSONCommandError(t, stdout, stderr, err, `invalid wordlist name "../passwords.txt"`)
+		if sent.snapshot().Path != "" {
+			t.Fatalf("\nwanted:\nno request\ngot:\n%s %s", sent.snapshot().Method, sent.snapshot().Path)
+		}
+	})
+
+	t.Run("should report control API errors for invalid limits", func(t *testing.T) {
+		for index, args := range [][]string{{"wordlist", "preview", "passwords.txt", "--limit", "0"}, {"wordlist", "preview", "passwords.txt", "--limit", "101"}} {
+			configDir := serviceConfigDir(t)
+			instanceName := "invalid-" + string(rune('a'+index))
+			startCannedControlAPI(t, configDir, instanceName, http.StatusBadRequest, `{"error":"invalid_wordlist_request"}`)
+			commandArgs := append([]string{"--config-dir", configDir, "--instance", instanceName, "--json"}, args...)
+
+			stdout, stderr, err := runMarasi(binary, commandArgs...)
+			assertJSONCommandError(t, stdout, stderr, err, "previewing wordlist: invalid_wordlist_request")
+		}
+	})
+
+	t.Run("should enforce command arguments", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		for _, args := range [][]string{{"wordlist", "list", "extra"}, {"wordlist", "preview"}, {"wordlist", "preview", "one", "two"}, {"wordlist", "preview", "one", "--limit", "nope"}, {"wordlist", "add"}, {"wordlist", "add", "one", "two"}, {"wordlist", "remove"}, {"wordlist", "remove", "one", "two"}} {
+			commandArgs := append([]string{"--config-dir", configDir}, args...)
+			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
+				t.Fatalf("\nwanted:\ninvalid invocation\ngot:\naccepted %v", args)
+			}
+		}
+	})
+}

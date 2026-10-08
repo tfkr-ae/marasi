@@ -1,12 +1,73 @@
 package db
 
 import (
+	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
 )
+
+func TestReportingRepo_LinkedTrafficSummaries(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+
+	testCaseID := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
+	findingID := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645905")
+	olderID := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+	newerID := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645906")
+	if err := repo.SaveTestCase(&domain.TestCase{ID: testCaseID, Title: "Parent"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveFinding(&domain.Finding{ID: findingID, Title: "Finding"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []*domain.ProxyRequest{
+		{ID: newerID, Scheme: "https", Method: "POST", Host: "example.com", Path: "/newer", Raw: []byte("POST /newer HTTP/1.1\r\n\r\n"), Metadata: map[string]any{}, RequestedAt: time.Date(2026, 9, 16, 10, 0, 1, 0, time.UTC)},
+		{ID: olderID, Scheme: "https", Method: "GET", Host: "example.com", Path: "/older", Raw: []byte("GET /older HTTP/1.1\r\n\r\n"), Metadata: map[string]any{"prettified-request": "omit"}, RequestedAt: time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC)},
+	} {
+		if err := repo.InsertRequest(request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.InsertResponse(&domain.ProxyResponse{ID: newerID, Status: "200 OK", StatusCode: 200, Length: "2", Metadata: map[string]any{}, RespondedAt: time.Date(2026, 9, 16, 10, 0, 2, 0, time.UTC)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, requestID := range []uuid.UUID{newerID, olderID} {
+		if err := repo.LinkRequestToTestCase(testCaseID, requestID); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.LinkRequestToFinding(findingID, requestID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for name, get := range map[string]func() ([]*domain.RequestResponseSummary, error){
+		"test case": func() ([]*domain.RequestResponseSummary, error) { return repo.GetTestCaseRequests(testCaseID) },
+		"finding":   func() ([]*domain.RequestResponseSummary, error) { return repo.GetFindingRequests(findingID) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			items, err := get()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(items) != 2 || items[0].ID != olderID || items[1].ID != newerID {
+				t.Fatalf("wanted oldest-first traffic, got %+v", items)
+			}
+			if items[0].StatusCode != -1 || items[0].Status != "N/A" || !items[0].RespondedAt.IsZero() {
+				t.Fatalf("wanted in-flight defaults, got %+v", items[0])
+			}
+			if _, ok := items[0].Metadata["prettified-request"]; ok {
+				t.Fatalf("wanted prettified metadata removed, got %+v", items[0].Metadata)
+			}
+			if items[1].StatusCode != 200 || items[1].RespondedAt.IsZero() {
+				t.Fatalf("wanted response status, got %+v", items[1])
+			}
+		})
+	}
+}
 
 func TestReportingRepo_SaveTestCase(t *testing.T) {
 	t.Run("should insert a new test case with the correct fields", func(t *testing.T) {
@@ -1250,7 +1311,7 @@ func TestReportingRepo_LinkRequestToTestCase(t *testing.T) {
 		}
 	})
 
-	t.Run("should ignore duplicate links without returning an error", func(t *testing.T) {
+	t.Run("should reject duplicate links", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 
@@ -1279,8 +1340,8 @@ func TestReportingRepo_LinkRequestToTestCase(t *testing.T) {
 		}
 
 		err = repo.LinkRequestToTestCase(tcID, reqID)
-		if err != nil {
-			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		if !errors.Is(err, domain.ErrReportingAlreadyLinked) {
+			t.Fatalf("\nwanted:\nErrReportingAlreadyLinked\ngot:\n%v", err)
 		}
 
 		var count int
@@ -1351,7 +1412,7 @@ func TestReportingRepo_UnlinkRequestFromTestCase(t *testing.T) {
 		}
 	})
 
-	t.Run("should not return an error when unlinking a request that is not linked", func(t *testing.T) {
+	t.Run("should return not linked when unlinking a missing link", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 
@@ -1363,8 +1424,8 @@ func TestReportingRepo_UnlinkRequestFromTestCase(t *testing.T) {
 		reqID := testRequest(t, repo, nil)
 
 		err = repo.UnlinkRequestFromTestCase(tcID, reqID)
-		if err != nil {
-			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		if !errors.Is(err, domain.ErrReportingNotLinked) {
+			t.Fatalf("\nwanted:\nErrReportingNotLinked\ngot:\n%v", err)
 		}
 	})
 }
@@ -1426,7 +1487,7 @@ func TestReportingRepo_LinkRequestToFinding(t *testing.T) {
 		}
 	})
 
-	t.Run("should ignore duplicate links without returning an error", func(t *testing.T) {
+	t.Run("should reject duplicate links", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 
@@ -1473,8 +1534,8 @@ func TestReportingRepo_LinkRequestToFinding(t *testing.T) {
 		}
 
 		err = repo.LinkRequestToFinding(fID, reqID)
-		if err != nil {
-			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		if !errors.Is(err, domain.ErrReportingAlreadyLinked) {
+			t.Fatalf("\nwanted:\nErrReportingAlreadyLinked\ngot:\n%v", err)
 		}
 
 		var count int
@@ -1563,7 +1624,7 @@ func TestReportingRepo_UnlinkRequestFromFinding(t *testing.T) {
 		}
 	})
 
-	t.Run("should not return an error when unlinking a request that is not linked", func(t *testing.T) {
+	t.Run("should return not linked when unlinking a missing link", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 
@@ -1575,8 +1636,8 @@ func TestReportingRepo_UnlinkRequestFromFinding(t *testing.T) {
 		reqID := testRequest(t, repo, nil)
 
 		err = repo.UnlinkRequestFromFinding(fID, reqID)
-		if err != nil {
-			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		if !errors.Is(err, domain.ErrReportingNotLinked) {
+			t.Fatalf("\nwanted:\nErrReportingNotLinked\ngot:\n%v", err)
 		}
 	})
 }

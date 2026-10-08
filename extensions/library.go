@@ -16,7 +16,8 @@ import (
 // registerMarasiLibrary registers the `marasi` global library and its sub-libraries
 // into the Lua state. This is the main entry point for exposing the proxy's
 // functionality to Lua scripts.
-func registerMarasiLibrary(l *lua.State, proxy ProxyService) {
+func registerMarasiLibrary(extension *Runtime, proxy ProxyService) {
+	l := extension.LuaState
 	funcs := []lua.RegistryFunction{
 		// log writes a message to the proxy's log.
 		//
@@ -129,7 +130,7 @@ func registerMarasiLibrary(l *lua.State, proxy ProxyService) {
 	registerSettingsLibrary(l, proxy)
 	registerEncodingLibrary(l)
 	registerCryptoLibrary(l)
-	registerUtilsLibrary(l)
+	registerUtilsLibrary(extension)
 	registerStringsLibrary(l)
 	registerRandomLibrary(l)
 	registerRepoLibrary(l, proxy)

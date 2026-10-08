@@ -2,9 +2,11 @@ package compass
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // Rule represents a single filtering rule in the scope system.
@@ -17,7 +19,10 @@ type Rule struct {
 // Scope represents the inclusion/exclusion rules and default behavior for filtering
 // HTTP requests and responses. It manages sets of rules and determines whether
 // traffic should be processed based on host or URL patterns.
+// A Scope must not be copied after first use. The exported fields are retained
+// for initialization compatibility; use methods to access a live Scope.
 type Scope struct {
+	mu           sync.RWMutex
 	IncludeRules map[string]Rule // Map of inclusion rules, key format: "pattern|matchType"
 	ExcludeRules map[string]Rule // Map of exclusion rules, key format: "pattern|matchType"
 	DefaultAllow bool            // Default behavior for items not matching any rule
@@ -40,6 +45,8 @@ func NewScope(defaultAllow bool) *Scope {
 
 // MatchesString determines if a given string is in scope based on matchType
 func (s *Scope) MatchesString(input string, matchType string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	matchType = strings.ToLower(matchType)
 
 	// Validate matchType
@@ -75,6 +82,8 @@ func (s *Scope) MatchesString(input string, matchType string) bool {
 
 // ClearRules clears all inclusion and exclusion rules from the scope
 func (s *Scope) ClearRules() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.IncludeRules = make(map[string]Rule)
 	s.ExcludeRules = make(map[string]Rule)
 }
@@ -96,6 +105,8 @@ func (s *Scope) AddRule(pattern, matchType string, exclude bool) error {
 		MatchType: matchType,
 	}
 	key := fmt.Sprintf("%s|%s", compiled.String(), matchType)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if exclude {
 		if _, exists := s.ExcludeRules[key]; exists {
@@ -116,6 +127,8 @@ func (s *Scope) AddRule(pattern, matchType string, exclude bool) error {
 func (s *Scope) RemoveRule(pattern, matchType string, exclude bool) error {
 	matchType = strings.ToLower(matchType)
 	key := fmt.Sprintf("%s|%s", strings.TrimPrefix(pattern, "-"), matchType)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if exclude {
 		if _, exists := s.ExcludeRules[key]; !exists {
@@ -134,6 +147,8 @@ func (s *Scope) RemoveRule(pattern, matchType string, exclude bool) error {
 
 // Matches determines if a *http.Request or *http.Response is in scope
 func (s *Scope) Matches(input interface{}) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var host, url string
 	switch v := input.(type) {
 	case *http.Request:
@@ -186,4 +201,51 @@ func (s *Scope) Matches(input interface{}) bool {
 
 	// Default behavior
 	return s.DefaultAllow
+}
+
+// MatchesWithRule determines whether input is in scope and returns the first
+// matching rule, if any.
+func (s *Scope) MatchesWithRule(request *http.Request) (bool, *Rule) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	host, url := request.Host, request.URL.String()
+	for _, rule := range s.ExcludeRules {
+		if rule.matches(host, url) {
+			matched := rule
+			return false, &matched
+		}
+	}
+
+	for _, rule := range s.IncludeRules {
+		if rule.matches(host, url) {
+			matched := rule
+			return true, &matched
+		}
+	}
+	return s.DefaultAllow, nil
+}
+
+// SetDefaultAllow changes the policy for inputs that match no rule.
+func (s *Scope) SetDefaultAllow(allow bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.DefaultAllow = allow
+}
+
+// Snapshot returns independent rule maps and the default policy from one read.
+func (s *Scope) Snapshot() (includeRules, excludeRules map[string]Rule, defaultAllow bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return maps.Clone(s.IncludeRules), maps.Clone(s.ExcludeRules), s.DefaultAllow
+}
+
+func (rule Rule) matches(host, url string) bool {
+	switch rule.MatchType {
+	case "host":
+		return rule.Pattern.MatchString(host)
+	case "url":
+		return rule.Pattern.MatchString(url)
+	default:
+		return false
+	}
 }

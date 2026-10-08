@@ -25,10 +25,14 @@ type marasiRoundTripper struct {
 // newMarasiTransport will create marasi's roundtripper
 // It will define the base transport with the upstream TLSConfig using utls to mimic Chrome,
 // waypoint aware DialContext and marasiRoundTripper to serve the certificate
-func newMarasiTransport(cert *x509.Certificate) http.RoundTripper {
+func newMarasiTransport(cert *x509.Certificate, dial func(context.Context, string, string) (net.Conn, error)) http.RoundTripper {
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
 	transport := &http.Transport{}
+	transport.DialContext = dial
 	transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		tcpConn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+		tcpConn, err := dial(ctx, network, addr)
 		if err != nil {
 			return nil, err
 		}

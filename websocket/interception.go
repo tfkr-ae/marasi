@@ -148,7 +148,8 @@ func (i *Interceptor) CancelConnection(connectionID uuid.UUID) {
 }
 
 // CancelAll drops and unblocks every pending interception.
-func (i *Interceptor) CancelAll() {
+// It returns the messages it actually removed.
+func (i *Interceptor) CancelAll() []domain.WebSocketMessage {
 	i.mu.Lock()
 
 	cancelled := make([]*pendingInterception, 0, len(i.pending))
@@ -160,7 +161,10 @@ func (i *Interceptor) CancelAll() {
 
 	i.mu.Unlock()
 
+	messages := make([]domain.WebSocketMessage, 0, len(cancelled))
 	for _, pending := range cancelled {
+		messages = append(messages, pending.message.ToDomain())
 		close(pending.done)
 	}
+	return messages
 }

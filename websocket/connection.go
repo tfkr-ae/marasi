@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // ErrConnectionClosed is returned when operating on a closed connection.
@@ -20,8 +21,9 @@ const (
 	// DirectionFromClient marks a message originating from the client.
 	DirectionFromClient = "client"
 	// DirectionFromServer marks a message originating from the server.
-	DirectionFromServer   = "server"
-	closeHandshakeTimeout = time.Second
+	DirectionFromServer = "server"
+	// CloseHandshakeTimeout bounds the local close handshake.
+	CloseHandshakeTimeout = time.Second
 )
 
 // ProcessFunc processes a live message before it is forwarded.
@@ -66,11 +68,12 @@ type Connection struct {
 	clientWriteMu   sync.Mutex
 	upstreamWriteMu sync.Mutex
 
-	closeOnce sync.Once
-	closeErr  error
-	done      chan struct{}
-	closing   atomic.Bool
-	running   atomic.Bool
+	closeOnce    sync.Once
+	closeErr     error
+	done         chan struct{}
+	closedRecord chan domain.WebSocketConnection
+	closing      atomic.Bool
+	running      atomic.Bool
 
 	mu          sync.RWMutex
 	closeCode   int
@@ -98,7 +101,18 @@ func NewConnection(
 		upstream:     upstream,
 		process:      process,
 		done:         make(chan struct{}),
+		closedRecord: make(chan domain.WebSocketConnection, 1),
 	}
+}
+
+// ClosedRecord receives the final in-memory connection state after the relay ends.
+func (c *Connection) ClosedRecord() <-chan domain.WebSocketConnection {
+	return c.closedRecord
+}
+
+// PublishClosedRecord makes the final state available before persistence starts.
+func (c *Connection) PublishClosedRecord(record domain.WebSocketConnection) {
+	c.closedRecord <- record
 }
 
 func (c *Connection) writeToClient(frame Frame) error {
@@ -287,9 +301,9 @@ func (c *Connection) SendToClient(frame Frame) error {
 
 // Inject sends a frame as if it originated from direction.
 // Injected messages are marked with metadata["injected"] = true.
-func (c *Connection) Inject(direction string, opcode int, payload []byte) error {
+func (c *Connection) Inject(direction string, opcode int, payload []byte) (domain.WebSocketMessage, error) {
 	if c.isClosed() {
-		return ErrConnectionClosed
+		return domain.WebSocketMessage{}, ErrConnectionClosed
 	}
 
 	var writeFrame func(Frame) error
@@ -299,7 +313,7 @@ func (c *Connection) Inject(direction string, opcode int, payload []byte) error 
 	case DirectionFromServer:
 		writeFrame = c.writeToClient
 	default:
-		return fmt.Errorf("invalid websocket inject direction: %q", direction)
+		return domain.WebSocketMessage{}, fmt.Errorf("invalid websocket inject direction: %q", direction)
 	}
 
 	message, err := NewMessage(c.ID, c.RequestID, direction, Frame{
@@ -308,35 +322,54 @@ func (c *Connection) Inject(direction string, opcode int, payload []byte) error 
 		Payload: append([]byte(nil), payload...),
 	})
 	if err != nil {
-		return fmt.Errorf("creating injected websocket message: %w", err)
+		return domain.WebSocketMessage{}, fmt.Errorf("creating injected websocket message: %w", err)
 	}
 	message.Metadata["injected"] = true
 
 	if c.process != nil {
 		if err := c.process(message); err != nil {
-			return fmt.Errorf("processing injected websocket message: %w", err)
+			return domain.WebSocketMessage{}, fmt.Errorf("processing injected websocket message: %w", err)
 		}
 	}
+	stored := message.ToDomain()
 	if message.Dropped {
-		return nil
+		return stored, nil
 	}
 
 	if err := writeFrame(message.Frame); err != nil {
-		return fmt.Errorf("writing injected websocket frame: %w", err)
+		return domain.WebSocketMessage{}, fmt.Errorf("writing injected websocket frame: %w", err)
 	}
 
-	return nil
+	return stored, nil
 }
 
 // Close sends close frames to both peers and shuts the connection down.
 func (c *Connection) Close(code int, reason string) error {
+	frame, err := c.beginClose(code, reason)
+	if err != nil {
+		return err
+	}
+	return c.sendClose(frame, false)
+}
+
+// StartClose claims the close and sends its frames without blocking the caller.
+func (c *Connection) StartClose(code int, reason string) error {
+	frame, err := c.beginClose(code, reason)
+	if err != nil {
+		return err
+	}
+	go func() { _ = c.sendClose(frame, true) }()
+	return nil
+}
+
+func (c *Connection) beginClose(code int, reason string) (Frame, error) {
 	if c.isClosed() {
-		return ErrConnectionClosed
+		return Frame{}, ErrConnectionClosed
 	}
 
 	payload, err := EncodeClosePayload(code, reason)
 	if err != nil {
-		return fmt.Errorf("encoding websocket close payload: %w", err)
+		return Frame{}, fmt.Errorf("encoding websocket close payload: %w", err)
 	}
 
 	frame := Frame{
@@ -345,14 +378,17 @@ func (c *Connection) Close(code int, reason string) error {
 		Payload: payload,
 	}
 
-	c.closing.Store(true)
+	if !c.closing.CompareAndSwap(false, true) {
+		return Frame{}, ErrConnectionClosed
+	}
 	c.setCloseDetails(code, reason)
+	return frame, nil
+}
 
-	clientErr := c.writeToClient(frame)
-	upstreamErr := c.sendGeneratedClose(frame, DirectionFromClient, c.writeToUpstream)
-	if c.running.Load() {
+func (c *Connection) sendClose(frame Frame, ensureTimeout bool) error {
+	if c.running.Load() || ensureTimeout {
 		go func() {
-			timer := time.NewTimer(closeHandshakeTimeout)
+			timer := time.NewTimer(CloseHandshakeTimeout)
 			defer timer.Stop()
 			select {
 			case <-c.done:
@@ -360,6 +396,10 @@ func (c *Connection) Close(code int, reason string) error {
 				_ = c.shutdown()
 			}
 		}()
+	}
+	clientErr := c.writeToClient(frame)
+	upstreamErr := c.sendGeneratedClose(frame, DirectionFromClient, c.writeToUpstream)
+	if c.running.Load() {
 		return errors.Join(clientErr, upstreamErr)
 	}
 	shutdownErr := c.shutdown()

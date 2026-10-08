@@ -159,9 +159,11 @@ func newTestProxy(t *testing.T, exts ...*domain.Extension) *Proxy {
 	t.Helper()
 
 	proxy := &Proxy{
-		Scope:          compass.NewScope(true),
-		Extensions:     make([]*extensions.Runtime, 0),
-		DBWriteChannel: make(chan any, 10),
+		Scope:                compass.NewScope(true),
+		Extensions:           make([]*extensions.Runtime, 0),
+		DBWriteChannel:       make(chan any, 10),
+		checkpoint:           newCheckpointState(),
+		WebSocketInterceptor: marasiws.NewInterceptor(),
 	}
 
 	onLogHandler := func(log extensions.ExtensionLog) error { return nil }
@@ -171,6 +173,7 @@ func newTestProxy(t *testing.T, exts ...*domain.Extension) *Proxy {
 			ID:         ext.ID,
 			Name:       ext.Name,
 			LuaContent: ext.LuaContent,
+			Enabled:    true,
 		}
 		err := proxy.WithOptions(WithExtension(ext, extensions.ExtensionWithLogHandler(onLogHandler)))
 		if err != nil {
@@ -189,6 +192,43 @@ func updateExtension(t *testing.T, proxy *Proxy, name string, luaCode string) {
 		}
 	} else {
 		t.Fatalf("getting %s extension", name)
+	}
+}
+
+func waitForCheckpoint(t *testing.T, proxy *Proxy, n int) []domain.CheckpointItem {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		items := proxy.CheckpointItems()
+		if len(items) == n {
+			return items
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d checkpoint items, got %d", n, len(proxy.CheckpointItems()))
+	return nil
+}
+
+func receiveHoldResult(t *testing.T, result <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for checkpoint hold")
+		return nil
+	}
+}
+
+func dropOnHold(proxy *Proxy) {
+	proxy.OnIntercept = func(item domain.CheckpointItem) error {
+		return proxy.DropCheckpoint(item.ID)
+	}
+}
+
+func forwardOnHold(proxy *Proxy, fwd CheckpointForward) {
+	proxy.OnIntercept = func(item domain.CheckpointItem) error {
+		return proxy.ForwardCheckpoint(item.ID, fwd)
 	}
 }
 
@@ -578,6 +618,30 @@ func TestCompassRequestModifier(t *testing.T) {
 
 		if !errors.Is(err, ErrExtensionNotFound) {
 			t.Fatalf("wanted: %q\ngot: %v", ErrExtensionNotFound, err)
+		}
+	})
+
+	t.Run("disabled compass should skip scope filtering without returning ErrExtensionNotFound", func(t *testing.T) {
+		proxy := newTestProxy(t, testExtensions["compass"])
+		compassExt, ok := proxy.GetExtension("compass")
+		if !ok {
+			t.Fatalf("getting compass extension")
+		}
+		compassExt.Data.Enabled = false
+		req := httptest.NewRequest(http.MethodGet, "https://www.blocked.com/examplePage", nil)
+
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context : %v", err)
+		}
+		defer remove()
+
+		err = CompassRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		if skip, ok := core.SkipFlagFromContext(req.Context()); ok && skip {
+			t.Errorf("expected skipflag to not be set")
 		}
 	})
 }
@@ -1126,9 +1190,29 @@ func TestExtensionsRequestModifier(t *testing.T) {
 			t.Errorf("expected x-workshop-ran header to be set to overwritten, but got : %q", req.Header.Get("x-workshop-ran"))
 		}
 	})
+
+	t.Run("disabled workshop should not set processRequest headers", func(t *testing.T) {
+		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"])
+		workshop, ok := proxy.GetExtension("workshop")
+		if !ok {
+			t.Fatalf("getting workshop extension")
+		}
+		workshop.Data.Enabled = false
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+
+		err := ExtensionsRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		if req.Header.Get("x-workshop-ran") == "true" {
+			t.Errorf("expected x-workshop-ran header to not be set but got %q", req.Header.Get("x-workshop-ran"))
+		}
+		if req.Header.Get("x-testExtension-ran") != "true" {
+			t.Errorf("expected x-testExtension-ran header to be set to true but got %q", req.Header.Get("x-testExtension-ran"))
+		}
+	})
 }
 
-// TODO need to review these once the InterceptedQueue is refactored
 func TestCheckpointRequestModifier(t *testing.T) {
 	t.Run("should return ErrExtensionNotFound if no checkpoint extension is loaded", func(t *testing.T) {
 		proxy := newTestProxy(t)
@@ -1161,8 +1245,8 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if len(proxy.InterceptedQueue) != 0 {
-			t.Fatalf("expected intercept queue to be empty, but got length %d", len(proxy.InterceptedQueue))
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected no pending checkpoint items")
 		}
 
 		if metadata, _ := core.MetadataFromContext(req.Context()); metadata["intercepted"] == true {
@@ -1170,9 +1254,9 @@ func TestCheckpointRequestModifier(t *testing.T) {
 		}
 	})
 
-	t.Run("should drop request if interceptHandler is not defined and the request is intercepted", func(t *testing.T) {
+	t.Run("should hold until drop when notify is nil", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])
-		proxy.InterceptFlag = true
+		proxy.SetIntercept(true)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 		ctx, remove, err := martian.TestContext(req, nil, nil)
 		if err != nil {
@@ -1184,15 +1268,36 @@ func TestCheckpointRequestModifier(t *testing.T) {
 		if err != nil {
 			t.Fatalf("running SetupRequestModifier : %v", err)
 		}
-
-		err = CheckpointRequestModifier(proxy, req)
-
-		if err == nil {
-			t.Fatalf("wanted: %v\ngot: nil", ErrDropped)
+		reqID, ok := core.RequestIDFromContext(req.Context())
+		if !ok {
+			t.Fatalf("request id missing")
 		}
 
+		done := make(chan error, 1)
+		go func() {
+			done <- CheckpointRequestModifier(proxy, req)
+		}()
+		items := waitForCheckpoint(t, proxy, 1)
+		if items[0].ID != reqID {
+			t.Fatalf("wanted: %s\ngot: %s", reqID, items[0].ID)
+		}
+		if items[0].Type != domain.CheckpointTypeRequest {
+			t.Fatalf("wanted: %s\ngot: %s", domain.CheckpointTypeRequest, items[0].Type)
+		}
+		if _, ok := proxy.GetCheckpoint(reqID); !ok {
+			t.Fatalf("wanted pending item %s", reqID)
+		}
+		if err := proxy.DropCheckpoint(reqID); err != nil {
+			t.Fatalf("dropping checkpoint: %v", err)
+		}
+		if err := receiveHoldResult(t, done); !errors.Is(err, ErrDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+		}
 		if !ctx.SkippingRoundTrip() {
 			t.Fatalf("wanted: True\ngot: %t", ctx.SkippingRoundTrip())
+		}
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 	})
 
@@ -1203,12 +1308,7 @@ func TestCheckpointRequestModifier(t *testing.T) {
 				return true
 			end
 		`)
-		proxy.OnIntercept = func(intercepted *Intercepted) error {
-			go func() {
-				intercepted.Channel <- InterceptionTuple{}
-			}()
-			return nil
-		}
+		dropOnHold(proxy)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
 		original, err := httputil.DumpRequest(req, true)
@@ -1233,8 +1333,8 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
 		}
 
-		if len(proxy.InterceptedQueue) != 1 {
-			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 
 		if !ctx.SkippingRoundTrip() {
@@ -1258,13 +1358,8 @@ func TestCheckpointRequestModifier(t *testing.T) {
 
 	t.Run("should intercept request if global intercept flag is set", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])
-		proxy.InterceptFlag = true
-		proxy.OnIntercept = func(intercepted *Intercepted) error {
-			go func() {
-				intercepted.Channel <- InterceptionTuple{}
-			}()
-			return nil
-		}
+		proxy.SetIntercept(true)
+		dropOnHold(proxy)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
 		original, err := httputil.DumpRequest(req, true)
@@ -1289,8 +1384,8 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
 		}
 
-		if len(proxy.InterceptedQueue) != 1 {
-			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 
 		if !ctx.SkippingRoundTrip() {
@@ -1313,15 +1408,8 @@ func TestCheckpointRequestModifier(t *testing.T) {
 
 	t.Run("should drop request the request if the resume action is false", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])
-		proxy.InterceptFlag = true
-		proxy.OnIntercept = func(intercepted *Intercepted) error {
-			go func() {
-				intercepted.Channel <- InterceptionTuple{
-					Resume: false,
-				}
-			}()
-			return nil
-		}
+		proxy.SetIntercept(true)
+		dropOnHold(proxy)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
 		original, err := httputil.DumpRequest(req, true)
@@ -1350,8 +1438,8 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: True\ngot: %t", ctx.SkippingRoundTrip())
 		}
 
-		if len(proxy.InterceptedQueue) != 1 {
-			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 
 		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
@@ -1371,16 +1459,8 @@ func TestCheckpointRequestModifier(t *testing.T) {
 
 	t.Run("should not set intercept flag if ShouldInterceptResponse is set to false and the request is resumed", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])
-		proxy.InterceptFlag = true
-		proxy.OnIntercept = func(intercepted *Intercepted) error {
-			go func() {
-				intercepted.Channel <- InterceptionTuple{
-					Resume:                  true,
-					ShouldInterceptResponse: false,
-				}
-			}()
-			return nil
-		}
+		proxy.SetIntercept(true)
+		forwardOnHold(proxy, CheckpointForward{})
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
 		original, err := httputil.DumpRequest(req, true)
@@ -1405,8 +1485,8 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if len(proxy.InterceptedQueue) != 1 {
-			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 
 		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
@@ -1431,16 +1511,8 @@ func TestCheckpointRequestModifier(t *testing.T) {
 
 	t.Run("should set intercept flag if ShouldInterceptResponse is set to true and the request is resumed", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])
-		proxy.InterceptFlag = true
-		proxy.OnIntercept = func(intercepted *Intercepted) error {
-			go func() {
-				intercepted.Channel <- InterceptionTuple{
-					Resume:                  true,
-					ShouldInterceptResponse: true,
-				}
-			}()
-			return nil
-		}
+		proxy.SetIntercept(true)
+		forwardOnHold(proxy, CheckpointForward{InterceptResponse: true})
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
 		original, err := httputil.DumpRequest(req, true)
@@ -1465,8 +1537,8 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if len(proxy.InterceptedQueue) != 1 {
-			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 
 		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
@@ -1492,16 +1564,10 @@ func TestCheckpointRequestModifier(t *testing.T) {
 	t.Run("resumed request should be updated after modification", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])
 		modifiedRequest := "POST / HTTP/1.1\r\nHost: marasi.app\r\nContent-Length: 12\r\nContent-Type: text/plain\r\n\r\nhello marasi"
-		proxy.InterceptFlag = true
-		proxy.OnIntercept = func(intercepted *Intercepted) error {
-			intercepted.Raw = modifiedRequest
-			go func() {
-				intercepted.Channel <- InterceptionTuple{
-					Resume:                  true,
-					ShouldInterceptResponse: false,
-				}
-			}()
-			return nil
+		proxy.SetIntercept(true)
+		proxy.OnIntercept = func(item domain.CheckpointItem) error {
+			raw := []byte(modifiedRequest)
+			return proxy.ForwardCheckpoint(item.ID, CheckpointForward{Raw: &raw})
 		}
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
@@ -1527,8 +1593,8 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if len(proxy.InterceptedQueue) != 1 {
-			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 
 		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
@@ -1563,15 +1629,11 @@ func TestCheckpointRequestModifier(t *testing.T) {
 	t.Run("modifier should return an error if the modified request is invalid / malformed", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])
 		modifiedRequest := "POST /HTTP/1.1\r\nHost: marasi.app\r\nContent-Length: 12\r\nContent-Type: text/plain\r\n\r\nhello marasi"
-		proxy.InterceptFlag = true
-		proxy.OnIntercept = func(intercepted *Intercepted) error {
-			intercepted.Raw = modifiedRequest
-			go func() {
-				intercepted.Channel <- InterceptionTuple{
-					Resume:                  true,
-					ShouldInterceptResponse: false,
-				}
-			}()
+		proxy.SetIntercept(true)
+		forwarded := make(chan error, 1)
+		proxy.OnIntercept = func(item domain.CheckpointItem) error {
+			raw := []byte(modifiedRequest)
+			forwarded <- proxy.ForwardCheckpoint(item.ID, CheckpointForward{Raw: &raw})
 			return nil
 		}
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -1587,13 +1649,62 @@ func TestCheckpointRequestModifier(t *testing.T) {
 			t.Fatalf("running SetupRequestModifier : %v", err)
 		}
 
-		err = CheckpointRequestModifier(proxy, req)
-
-		if !errors.Is(err, ErrRebuildRequest) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrRebuildRequest, err)
+		done := make(chan error, 1)
+		go func() {
+			done <- CheckpointRequestModifier(proxy, req)
+		}()
+		items := waitForCheckpoint(t, proxy, 1)
+		var forwardErr error
+		select {
+		case forwardErr = <-forwarded:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for forward")
 		}
-		if len(proxy.InterceptedQueue) != 1 {
-			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
+		if !errors.Is(forwardErr, ErrRebuildRequest) {
+			t.Fatalf("wanted: %v\ngot: %v", ErrRebuildRequest, forwardErr)
+		}
+		if err := proxy.DropCheckpoint(items[0].ID); err != nil {
+			t.Fatalf("dropping checkpoint after rebuild failure: %v", err)
+		}
+		if err := receiveHoldResult(t, done); !errors.Is(err, ErrDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+		}
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected checkpoint item to be dequeued")
+		}
+	})
+
+	t.Run("disabled checkpoint should not intercept HTTP", func(t *testing.T) {
+		proxy := newTestProxy(t, testExtensions["checkpoint"])
+		updateExtension(t, proxy, "checkpoint", `
+			function interceptRequest(request)
+				return true
+			end
+		`)
+		checkpoint, ok := proxy.GetExtension("checkpoint")
+		if !ok {
+			t.Fatalf("getting checkpoint extension")
+		}
+		checkpoint.Data.Enabled = false
+		proxy.SetIntercept(true)
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context : %v", err)
+		}
+		defer remove()
+
+		err = SetupRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("running SetupRequestModifier : %v", err)
+		}
+
+		err = CheckpointRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected no pending checkpoint items")
 		}
 	})
 }
@@ -2029,6 +2140,33 @@ func TestShouldInterceptWebSocketMessage(t *testing.T) {
 		}
 		checkpoint.Data.Enabled = enabled
 		return proxy
+	}
+
+	for _, state := range []string{"enabled", "disabled", "missing"} {
+		for _, global := range []bool{false, true} {
+			for _, rule := range []bool{false, true} {
+				t.Run(fmt.Sprintf("should honor %s checkpoint with global=%t rule=%t", state, global, rule), func(t *testing.T) {
+					proxy := &Proxy{}
+					if state != "missing" {
+						proxy = checkpointProxy(t, fmt.Sprintf(`
+							function interceptWebSocketMessage(message)
+								return %t
+							end
+						`, rule), state == "enabled")
+					}
+					proxy.SetWebSocketIntercept(global)
+					want := global
+					if state == "disabled" {
+						want = false
+					} else if state == "enabled" {
+						want = global || rule
+					}
+					if got := shouldInterceptWebSocketMessage(proxy, &marasiws.Message{}); got != want {
+						t.Fatalf("wanted: %t\ngot: %t", want, got)
+					}
+				})
+			}
+		}
 	}
 
 	t.Run("global websocket interception should return true without checkpoint", func(t *testing.T) {
@@ -2884,6 +3022,34 @@ func TestCompassResponseModifier(t *testing.T) {
 			t.Errorf("expected skipflag to be set in context and to be equal to true")
 		}
 	})
+
+	t.Run("disabled compass should skip scope filtering without returning ErrExtensionNotFound", func(t *testing.T) {
+		proxy := newTestProxy(t, testExtensions["compass"])
+		compassExt, ok := proxy.GetExtension("compass")
+		if !ok {
+			t.Fatalf("getting compass extension")
+		}
+		compassExt.Data.Enabled = false
+		req := httptest.NewRequest(http.MethodGet, "https://www.blocked.com/examplePage", nil)
+
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context : %v", err)
+		}
+		defer remove()
+
+		res := &http.Response{
+			Request: req,
+		}
+
+		err = CompassResponseModifier(proxy, res)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		if skip, ok := core.SkipFlagFromContext(res.Request.Context()); ok && skip {
+			t.Errorf("expected skipflag to not be set")
+		}
+	})
 }
 
 func TestExtensionsResponseModifier(t *testing.T) {
@@ -3134,6 +3300,39 @@ func TestExtensionsResponseModifier(t *testing.T) {
 			t.Errorf("expected x-testExtension-ran-response header to be set to true but got %q", res.Header.Get("x-testExtension-ran-response"))
 		}
 	})
+
+	t.Run("disabled workshop should not set processResponse headers", func(t *testing.T) {
+		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"])
+		workshop, ok := proxy.GetExtension("workshop")
+		if !ok {
+			t.Fatalf("getting workshop extension")
+		}
+		workshop.Data.Enabled = false
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+		*req = *core.ContextWithExtensionID(req, "")
+
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context : %v", err)
+		}
+		defer remove()
+
+		res := &http.Response{
+			Header:  make(http.Header),
+			Request: req,
+		}
+
+		err = ExtensionsResponseModifier(proxy, res)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		if res.Header.Get("x-workshop-ran-response") == "true" {
+			t.Errorf("expected x-workshop-ran-response header to not be set but got %q", res.Header.Get("x-workshop-ran-response"))
+		}
+		if res.Header.Get("x-testExtension-ran-response") != "true" {
+			t.Errorf("expected x-testExtension-ran-response header to be set to true but got %q", res.Header.Get("x-testExtension-ran-response"))
+		}
+	})
 }
 
 func TestCheckpointResponseModifier(t *testing.T) {
@@ -3186,8 +3385,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if len(proxy.InterceptedQueue) != 0 {
-			t.Fatalf("expected intercept queue to be empty, but got length %d", len(proxy.InterceptedQueue))
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected no pending checkpoint items")
 		}
 
 		if metadata, _ := core.MetadataFromContext(res.Request.Context()); metadata["intercepted"] == true {
@@ -3195,9 +3394,9 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		}
 	})
 
-	t.Run("should drop response if interceptHandler is not defined and the response is intercepted", func(t *testing.T) {
+	t.Run("should hold until drop when notify is nil", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])
-		proxy.InterceptFlag = true
+		proxy.SetIntercept(true)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
 		_, remove, err := martian.TestContext(req, nil, nil)
@@ -3210,16 +3409,35 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		if err != nil {
 			t.Fatalf("setting up request: %v", err)
 		}
+		reqID, ok := core.RequestIDFromContext(req.Context())
+		if !ok {
+			t.Fatalf("request id missing")
+		}
 
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
 		}
 
-		err = CheckpointResponseModifier(proxy, res)
-
-		if !errors.Is(err, ErrDropped) {
+		done := make(chan error, 1)
+		go func() {
+			done <- CheckpointResponseModifier(proxy, res)
+		}()
+		items := waitForCheckpoint(t, proxy, 1)
+		if items[0].ID != reqID {
+			t.Fatalf("wanted: %s\ngot: %s", reqID, items[0].ID)
+		}
+		if items[0].Type != domain.CheckpointTypeResponse {
+			t.Fatalf("wanted: %s\ngot: %s", domain.CheckpointTypeResponse, items[0].Type)
+		}
+		if err := proxy.DropCheckpoint(reqID); err != nil {
+			t.Fatalf("dropping checkpoint: %v", err)
+		}
+		if err := receiveHoldResult(t, done); !errors.Is(err, ErrDropped) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+		}
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 	})
 
@@ -3230,12 +3448,7 @@ func TestCheckpointResponseModifier(t *testing.T) {
 				return true
 			end
 		`)
-		proxy.OnIntercept = func(intercepted *Intercepted) error {
-			go func() {
-				intercepted.Channel <- InterceptionTuple{}
-			}()
-			return nil
-		}
+		dropOnHold(proxy)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
 		_, remove, err := martian.TestContext(req, nil, nil)
@@ -3265,8 +3478,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
 		}
 
-		if len(proxy.InterceptedQueue) != 1 {
-			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 
 		if metadata, ok := core.MetadataFromContext(res.Request.Context()); ok {
@@ -3286,13 +3499,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 
 	t.Run("should intercept response if global intercept flag is set", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])
-		proxy.InterceptFlag = true
-		proxy.OnIntercept = func(intercepted *Intercepted) error {
-			go func() {
-				intercepted.Channel <- InterceptionTuple{}
-			}()
-			return nil
-		}
+		proxy.SetIntercept(true)
+		dropOnHold(proxy)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
 		_, remove, err := martian.TestContext(req, nil, nil)
@@ -3322,8 +3530,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
 		}
 
-		if len(proxy.InterceptedQueue) != 1 {
-			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 
 		if metadata, ok := core.MetadataFromContext(res.Request.Context()); ok {
@@ -3343,15 +3551,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 
 	t.Run("should drop response if the resume action is false", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])
-		proxy.InterceptFlag = true
-		proxy.OnIntercept = func(intercepted *Intercepted) error {
-			go func() {
-				intercepted.Channel <- InterceptionTuple{
-					Resume: false,
-				}
-			}()
-			return nil
-		}
+		proxy.SetIntercept(true)
+		dropOnHold(proxy)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
 		_, remove, err := martian.TestContext(req, nil, nil)
@@ -3381,8 +3582,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
 		}
 
-		if len(proxy.InterceptedQueue) != 1 {
-			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 
 		if metadata, ok := core.MetadataFromContext(res.Request.Context()); ok {
@@ -3408,15 +3609,10 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			"X-Modified: true\r\n" +
 			"\r\n" +
 			"hello marasi"
-		proxy.InterceptFlag = true
-		proxy.OnIntercept = func(intercepted *Intercepted) error {
-			intercepted.Raw = modifiedResponse
-			go func() {
-				intercepted.Channel <- InterceptionTuple{
-					Resume: true,
-				}
-			}()
-			return nil
+		proxy.SetIntercept(true)
+		proxy.OnIntercept = func(item domain.CheckpointItem) error {
+			raw := []byte(modifiedResponse)
+			return proxy.ForwardCheckpoint(item.ID, CheckpointForward{Raw: &raw})
 		}
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
@@ -3452,8 +3648,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if len(proxy.InterceptedQueue) != 1 {
-			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 
 		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
@@ -3489,14 +3685,11 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			"X-Modified: true\r\n" +
 			"\r\n" +
 			"hello marasi"
-		proxy.InterceptFlag = true
-		proxy.OnIntercept = func(intercepted *Intercepted) error {
-			intercepted.Raw = modifiedResponse
-			go func() {
-				intercepted.Channel <- InterceptionTuple{
-					Resume: true,
-				}
-			}()
+		proxy.SetIntercept(true)
+		forwarded := make(chan error, 1)
+		proxy.OnIntercept = func(item domain.CheckpointItem) error {
+			raw := []byte(modifiedResponse)
+			forwarded <- proxy.ForwardCheckpoint(item.ID, CheckpointForward{Raw: &raw})
 			return nil
 		}
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -3522,13 +3715,66 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		}
 		res.Header.Set("Content-Length", fmt.Sprintf("%d", res.ContentLength))
 
-		err = CheckpointResponseModifier(proxy, res)
-
-		if !errors.Is(err, ErrRebuildResponse) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrRebuildResponse, err)
+		done := make(chan error, 1)
+		go func() {
+			done <- CheckpointResponseModifier(proxy, res)
+		}()
+		items := waitForCheckpoint(t, proxy, 1)
+		var forwardErr error
+		select {
+		case forwardErr = <-forwarded:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for forward")
 		}
-		if len(proxy.InterceptedQueue) != 1 {
-			t.Fatalf("wanted: 1\ngot: %d", len(proxy.InterceptedQueue))
+		if !errors.Is(forwardErr, ErrRebuildResponse) {
+			t.Fatalf("wanted: %v\ngot: %v", ErrRebuildResponse, forwardErr)
+		}
+		if err := proxy.DropCheckpoint(items[0].ID); err != nil {
+			t.Fatalf("dropping checkpoint after rebuild failure: %v", err)
+		}
+		if err := receiveHoldResult(t, done); !errors.Is(err, ErrDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+		}
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected checkpoint item to be dequeued")
+		}
+	})
+
+	t.Run("disabled checkpoint should not intercept HTTP", func(t *testing.T) {
+		proxy := newTestProxy(t, testExtensions["checkpoint"])
+		updateExtension(t, proxy, "checkpoint", `
+			function interceptResponse(response)
+				return true
+			end
+		`)
+		checkpoint, ok := proxy.GetExtension("checkpoint")
+		if !ok {
+			t.Fatalf("getting checkpoint extension")
+		}
+		checkpoint.Data.Enabled = false
+		proxy.SetIntercept(true)
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context : %v", err)
+		}
+		defer remove()
+
+		err = SetupRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("setting up request: %v", err)
+		}
+		res := &http.Response{
+			Header:  make(http.Header),
+			Request: req,
+		}
+
+		err = CheckpointResponseModifier(proxy, res)
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		if proxy.HasPendingCheckpoint() {
+			t.Fatalf("expected no pending checkpoint items")
 		}
 	})
 }

@@ -1,10 +1,18 @@
 package domain
 
 import (
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrArmoryTemplateNotFound means no Armory template has the requested ID.
+var ErrArmoryTemplateNotFound = errors.New("armory template not found")
+
+// ErrArmoryRunNotFound means no Armory run has the requested ID.
+var ErrArmoryRunNotFound = errors.New("armory run not found")
 
 // ArmoryAttackType identifies how payloads are applied to a template.
 type ArmoryAttackType string
@@ -19,6 +27,21 @@ const (
 	// ArmoryAttackMaelstrom generates every combination of its payload sets.
 	ArmoryAttackMaelstrom ArmoryAttackType = "maelstrom"
 )
+
+// ParseArmoryAttackType returns the canonical attack type for value, ignoring case.
+func ParseArmoryAttackType(value string) (ArmoryAttackType, bool) {
+	for _, attackType := range []ArmoryAttackType{
+		ArmoryAttackHarpoon,
+		ArmoryAttackBroadside,
+		ArmoryAttackTandem,
+		ArmoryAttackMaelstrom,
+	} {
+		if strings.EqualFold(string(attackType), value) {
+			return attackType, true
+		}
+	}
+	return "", false
+}
 
 // ArmoryRunStatus identifies the lifecycle state of an Armory run.
 type ArmoryRunStatus string
@@ -109,6 +132,8 @@ type ArmoryRepository interface {
 
 	// GetArmoryEntries returns all request links for a run.
 	GetArmoryEntries(runID uuid.UUID) ([]*ArmoryEntry, error)
+	// ListArmoryRunTraffic returns an oldest-first page of traffic linked to a run.
+	ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID, limit int) (items []*RequestResponseSummary, nextCursor *uuid.UUID, err error)
 	// CreateArmoryEntry links a generated request to a run.
 	CreateArmoryEntry(entry *ArmoryEntry) error
 }

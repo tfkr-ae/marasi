@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -112,6 +113,9 @@ func (repo *Repository) GetArmoryTemplate(id uuid.UUID) (*domain.ArmoryTemplate,
 	var template dbArmoryTemplate
 	query := `SELECT id, name, description, raw_template FROM armory_template WHERE id = ?`
 	if err := repo.dbConn.Get(&template, query, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: %s", domain.ErrArmoryTemplateNotFound, id)
+		}
 		return nil, fmt.Errorf("getting armory template %s: %w", id, err)
 	}
 	return toDomainArmoryTemplate(&template), nil
@@ -139,7 +143,7 @@ func (repo *Repository) UpdateArmoryTemplate(template *domain.ArmoryTemplate) er
 		return fmt.Errorf("getting updated armory template rows: %w", err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("armory template %s not found", template.ID)
+		return fmt.Errorf("%w: %s", domain.ErrArmoryTemplateNotFound, template.ID)
 	}
 	return nil
 }
@@ -155,7 +159,7 @@ func (repo *Repository) DeleteArmoryTemplate(id uuid.UUID) error {
 		return fmt.Errorf("getting deleted armory template rows: %w", err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("armory template %s not found", id)
+		return fmt.Errorf("%w: %s", domain.ErrArmoryTemplateNotFound, id)
 	}
 	return nil
 }
@@ -165,6 +169,9 @@ func (repo *Repository) GetArmoryRun(id uuid.UUID) (*domain.ArmoryRun, error) {
 	var run dbArmoryRun
 	query := `SELECT * FROM armory_run WHERE id = ?`
 	if err := repo.dbConn.Get(&run, query, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: %s", domain.ErrArmoryRunNotFound, id)
+		}
 		return nil, fmt.Errorf("getting armory run %s: %w", id, err)
 	}
 	return toDomainArmoryRun(&run), nil
@@ -229,7 +236,7 @@ func (repo *Repository) UpdateArmoryRun(run *domain.ArmoryRun) error {
 		return fmt.Errorf("getting updated armory run rows: %w", err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("armory run %s not found", run.ID)
+		return fmt.Errorf("%w: %s", domain.ErrArmoryRunNotFound, run.ID)
 	}
 	return nil
 }
@@ -245,7 +252,7 @@ func (repo *Repository) DeleteArmoryRun(id uuid.UUID) error {
 		return fmt.Errorf("getting deleted armory run rows: %w", err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("armory run %s not found", id)
+		return fmt.Errorf("%w: %s", domain.ErrArmoryRunNotFound, id)
 	}
 	return nil
 }
@@ -263,6 +270,42 @@ func (repo *Repository) GetArmoryEntries(runID uuid.UUID) ([]*domain.ArmoryEntry
 		result[i] = &domain.ArmoryEntry{RunID: entry.RunID, RequestID: entry.RequestID}
 	}
 	return result, nil
+}
+
+// ListArmoryRunTraffic returns an oldest-first page of traffic linked to a run.
+func (repo *Repository) ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+	query := `SELECT
+		request.id, request.scheme, request.method, request.host, request.path, request.requested_at,
+		request.status, request.status_code, request.content_type, request.length, request.responded_at,
+		json_remove(request.metadata, '$.prettified-request', '$.prettified-response') AS metadata
+		FROM armory_entry
+		JOIN request ON request.id = armory_entry.request_id
+		WHERE armory_entry.run_id = ?`
+	args := []any{runID}
+	if cursor != nil {
+		query += ` AND request.id > ?`
+		args = append(args, *cursor)
+	}
+	query += ` ORDER BY request.id ASC LIMIT ?`
+	args = append(args, limit+1)
+
+	rows := make([]*dbRequestResponseSummary, 0)
+	if err := repo.dbConn.Select(&rows, query, args...); err != nil {
+		return nil, nil, fmt.Errorf("listing traffic for armory run %s: %w", runID, err)
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	items := make([]*domain.RequestResponseSummary, len(rows))
+	for i, row := range rows {
+		items[i] = toDomainRequestResponseSummary(row)
+	}
+	if !hasMore {
+		return items, nil, nil
+	}
+	nextCursor := items[len(items)-1].ID
+	return items, &nextCursor, nil
 }
 
 // CreateArmoryEntry links a generated proxy request to an Armory run.

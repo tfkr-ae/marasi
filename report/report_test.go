@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -223,6 +225,47 @@ func TestGeneratorRestoreDefaultTemplate(t *testing.T) {
 	}
 }
 
+func TestGeneratorRestoreDefaultTemplateLeavesOtherTemplates(t *testing.T) {
+	configDir := t.TempDir()
+	generator, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(configDir, "templates")
+	other := filepath.Join(dir, "custom.md")
+	if err := os.WriteFile(other, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "default_template.md"), []byte("edited"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RestoreDefaultTemplate(generator); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "default_template.md"))
+	if err != nil || string(got) != defaultTemplate {
+		t.Fatalf("default not restored: %q, %v", got, err)
+	}
+	if content, err := os.ReadFile(other); err != nil || string(content) != "keep" {
+		t.Fatalf("other template changed: %q, %v", content, err)
+	}
+
+	if err := os.Remove(filepath.Join(dir, "default_template.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := RestoreDefaultTemplate(generator); err != nil {
+		t.Fatal(err)
+	}
+	got, err = os.ReadFile(filepath.Join(dir, "default_template.md"))
+	if err != nil || string(got) != defaultTemplate {
+		t.Fatalf("missing default not created: %q, %v", got, err)
+	}
+	if content, err := os.ReadFile(other); err != nil || string(content) != "keep" {
+		t.Fatalf("other template changed after recreate: %q, %v", content, err)
+	}
+}
+
 func TestGeneratorListTemplates(t *testing.T) {
 	t.Run("should list templates with default template first", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
@@ -299,6 +342,429 @@ func TestGeneratorListTemplates(t *testing.T) {
 			t.Fatal("\nwanted:\nerr\ngot:\nnil")
 		}
 	})
+}
+
+func TestGeneratorListTemplateDetails(t *testing.T) {
+	configDir := t.TempDir()
+	generator, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(configDir, "templates")
+	for name, content := range map[string]string{
+		"a.md": "alpha", ".hidden.md": "hidden", "z.md": "",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "nested"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "a.md"), filepath.Join(dir, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := generator.ListTemplateDetails()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []TemplateInfo{
+		{Name: "a.md", Size: 5},
+		{Name: "default_template.md", Size: int64(len(defaultTemplate))},
+		{Name: "z.md", Size: 0},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("wanted details %v, got %v", want, got)
+	}
+
+	if err := os.Remove(filepath.Join(dir, "a.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "z.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "default_template.md")); err != nil {
+		t.Fatal(err)
+	}
+	got, err = generator.ListTemplateDetails()
+	if err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("wanted empty non-nil list, got %v, %v", got, err)
+	}
+}
+
+func TestGeneratorAddTemplateAcrossDevices(t *testing.T) {
+	other := os.Getenv("MARASI_OTHER_VOLUME")
+	if other == "" {
+		t.Skip("MARASI_OTHER_VOLUME is not set")
+	}
+	sourceDir := filepath.Join(other, "marasi-report-src")
+	if err := os.MkdirAll(sourceDir, 0700); err != nil {
+		t.Fatalf("creating source dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(sourceDir) })
+	source := filepath.Join(sourceDir, "other.md")
+	if err := os.WriteFile(source, []byte("from other\n"), 0600); err != nil {
+		t.Fatalf("writing source: %v", err)
+	}
+	configDir := t.TempDir()
+	generator, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = generator.AddTemplate(source); err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	if _, err = os.Lstat(source); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("\nwanted:\nsource removed\ngot:\n%v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(generator.templatesDir, "other.md"))
+	if err != nil || string(content) != "from other\n" {
+		t.Fatalf("\nwanted:\ncopied template\ngot:\n%q, %v", content, err)
+	}
+}
+
+func TestGeneratorAddTemplate(t *testing.T) {
+	configDir := t.TempDir()
+	generator, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(configDir, "templates")
+	sourceDir := t.TempDir()
+	source := filepath.Join(sourceDir, "a.md")
+	if err := os.WriteFile(source, []byte("{{invalid"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := generator.AddTemplate(source); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(source); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source still exists: %v", err)
+	}
+	if content, err := os.ReadFile(filepath.Join(dir, "a.md")); err != nil || string(content) != "{{invalid" {
+		t.Fatalf("bad template was not moved intact: %q, %v", content, err)
+	}
+
+	empty := filepath.Join(sourceDir, "empty.md")
+	if err := os.WriteFile(empty, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := generator.AddTemplate(empty); err != nil {
+		t.Fatal(err)
+	}
+	items, err := generator.ListTemplateDetails()
+	if err != nil || !reflect.DeepEqual(items, []TemplateInfo{
+		{Name: "a.md", Size: 9},
+		{Name: "default_template.md", Size: int64(len(defaultTemplate))},
+		{Name: "empty.md", Size: 0},
+	}) {
+		t.Fatalf("wrong list after moves: %v, %v", items, err)
+	}
+
+	conflicting := filepath.Join(t.TempDir(), "a.md")
+	if err := os.WriteFile(conflicting, []byte("new"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := generator.AddTemplate(conflicting); !errors.Is(err, ErrTemplateAlreadyExists) {
+		t.Fatalf("wanted conflict, got %v", err)
+	}
+	if content, err := os.ReadFile(conflicting); err != nil || string(content) != "new" {
+		t.Fatalf("conflicting source changed: %q, %v", content, err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(conflicting))
+	if err != nil || len(entries) != 1 || entries[0].Name() != "a.md" {
+		t.Fatalf("conflict left staging files: %v, %v", entries, err)
+	}
+	if content, err := os.ReadFile(filepath.Join(dir, "a.md")); err != nil || string(content) != "{{invalid" {
+		t.Fatalf("existing template changed: %q, %v", content, err)
+	}
+}
+
+func TestGeneratorRemoveTemplate(t *testing.T) {
+	configDir := t.TempDir()
+	generator, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(configDir, "templates")
+	if err := os.WriteFile(filepath.Join(dir, "dropped.md"), []byte("dropped"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, " custom.md "), []byte("spaced"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "custom.md"), []byte("plain"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "target.md")
+	if err := os.WriteFile(target, []byte("target"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(configDir, "secret.md")
+	if err := os.WriteFile(outside, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := generator.RemoveTemplate("dropped.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "dropped.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("hand-dropped template still exists: %v", err)
+	}
+	if err := generator.RemoveTemplate("default_template.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "default_template.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("default template still exists: %v", err)
+	}
+	if err := generator.RemoveTemplate("link.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "link.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("symlink still exists: %v", err)
+	}
+	if content, err := os.ReadFile(target); err != nil || string(content) != "target" {
+		t.Fatalf("symlink target changed: %q, %v", content, err)
+	}
+	if err := generator.RemoveTemplate(" custom.md "); err != nil {
+		t.Fatal(err)
+	}
+	if content, err := os.ReadFile(filepath.Join(dir, "custom.md")); err != nil || string(content) != "plain" {
+		t.Fatalf("removing a spaced name deleted the wrong file: %q, %v", content, err)
+	}
+
+	if err := generator.RemoveTemplate("missing.md"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("wanted missing template, got %v", err)
+	}
+	for _, name := range []string{"", ".", "..", "nested/file.md", "/tmp/x.md", "a\x00b", "../secret.md"} {
+		if err := generator.RemoveTemplate(name); !errors.Is(err, ErrInvalidTemplateName) {
+			t.Errorf("name %q: wanted invalid name, got %v", name, err)
+		}
+	}
+	if content, err := os.ReadFile(outside); err != nil || string(content) != "secret" {
+		t.Fatalf("invalid name deleted outside the templates directory: %q, %v", content, err)
+	}
+	if content, err := os.ReadFile(filepath.Join(dir, "custom.md")); err != nil || string(content) != "plain" {
+		t.Fatalf("invalid name deleted a template: %q, %v", content, err)
+	}
+}
+
+func TestGeneratorAddTemplatePreservesFilename(t *testing.T) {
+	configDir := t.TempDir()
+	generator, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), " custom.md ")
+	if err := os.WriteFile(source, []byte("exact name"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := generator.SaveTemplate("custom.md", []byte("other template")); err != nil {
+		t.Fatal(err)
+	}
+	if err := generator.AddTemplate(source); err != nil {
+		t.Fatal(err)
+	}
+	content, err := generator.LoadTemplate(" custom.md ")
+	if err != nil || string(content) != "exact name" {
+		t.Fatalf("cannot load added filename: %q, %v", content, err)
+	}
+	if err := generator.SaveTemplate(" custom.md ", []byte("edited")); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{" custom.md ": "edited", "custom.md": "other template"} {
+		content, err := generator.LoadTemplate(name)
+		if err != nil || string(content) != want {
+			t.Fatalf("saving %q changed the wrong file: %q, %v", name, content, err)
+		}
+	}
+}
+
+func TestGeneratorAddTemplatePublishedWhole(t *testing.T) {
+	configDir := t.TempDir()
+	writer, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "large.md")
+	data := make([]byte, 16<<20)
+	for i := range data {
+		data[i] = 'x'
+	}
+	if err := os.WriteFile(source, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- writer.AddTemplate(source) }()
+	for {
+		items, err := reader.ListTemplateDetails()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range items {
+			if item.Name == "large.md" && item.Size != int64(len(data)) {
+				t.Fatalf("reader saw incomplete template: %d of %d bytes", item.Size, len(data))
+			}
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+			content, err := reader.LoadTemplate("large.md")
+			if err != nil || !reflect.DeepEqual(content, data) {
+				t.Fatalf("published template is incomplete: %d bytes, %v", len(content), err)
+			}
+			return
+		default:
+			runtime.Gosched()
+		}
+	}
+}
+
+func TestGeneratorAddTemplateUnreadableFile(t *testing.T) {
+	configDir := t.TempDir()
+	generator, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "unreadable.md")
+	if err := os.WriteFile(source, []byte("bytes"), 0000); err != nil {
+		t.Fatal(err)
+	}
+	if file, err := os.Open(source); err == nil {
+		file.Close()
+		t.Skip("this user can read files without read permission")
+	}
+	if err := generator.AddTemplate(source); err != nil {
+		t.Fatalf("regular file could not be moved: %v", err)
+	}
+	if _, err := os.Lstat(source); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source still exists: %v", err)
+	}
+	info, err := os.Lstat(filepath.Join(configDir, "templates", "unreadable.md"))
+	if err != nil || !info.Mode().IsRegular() || info.Size() != 5 {
+		t.Fatalf("destination not moved intact: %v, %v", info, err)
+	}
+}
+
+func TestGeneratorAddTemplateRejectsInvalidSources(t *testing.T) {
+	configDir := t.TempDir()
+	generator, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDir := t.TempDir()
+	file := filepath.Join(sourceDir, "file.md")
+	if err := os.WriteFile(file, []byte("content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(sourceDir, "link.md")
+	if err := os.Symlink(file, link); err != nil {
+		t.Fatal(err)
+	}
+	hidden := filepath.Join(sourceDir, ".hidden.md")
+	if err := os.WriteFile(hidden, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(configDir, "templates", "inside.md")
+	if err := os.WriteFile(inside, []byte("inside"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(filepath.Join(configDir, "templates"), alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{
+		"relative.md", link, sourceDir, hidden, inside, filepath.Join(alias, "inside.md"), file + "\x00bad",
+	} {
+		if err := generator.AddTemplate(source); !errors.Is(err, ErrInvalidTemplateSource) {
+			t.Errorf("source %q: wanted invalid source, got %v", source, err)
+		}
+	}
+	if err := generator.AddTemplate(filepath.Join(sourceDir, "missing.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("wanted missing source, got %v", err)
+	}
+	if content, err := os.ReadFile(file); err != nil || string(content) != "content" {
+		t.Fatalf("rejected source changed: %q, %v", content, err)
+	}
+}
+
+func TestGeneratorAddTemplateConflictWithUnreadableSource(t *testing.T) {
+	configDir := t.TempDir()
+	generator, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "default_template.md")
+	if err := os.WriteFile(source, []byte("source"), 0000); err != nil {
+		t.Fatal(err)
+	}
+	if file, err := os.Open(source); err == nil {
+		file.Close()
+		t.Skip("this user can read files without read permission")
+	}
+	if err := generator.AddTemplate(source); !errors.Is(err, ErrTemplateAlreadyExists) {
+		t.Fatalf("wanted conflict before opening source, got %v", err)
+	}
+	if _, err := os.Lstat(source); err != nil {
+		t.Fatalf("conflicting source was removed: %v", err)
+	}
+}
+
+func TestGeneratorAddTemplateAcrossGenerators(t *testing.T) {
+	configDir := t.TempDir()
+	first, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewGenerator(nil, WithConfigDir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := []string{filepath.Join(t.TempDir(), "shared.md"), filepath.Join(t.TempDir(), "shared.md")}
+	for i, source := range sources {
+		if err := os.WriteFile(source, []byte{byte('a' + i)}, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	results := make([]error, 2)
+	for i, generator := range []*Generator{first, second} {
+		wg.Add(1)
+		go func(i int, generator *Generator) {
+			defer wg.Done()
+			results[i] = generator.AddTemplate(sources[i])
+		}(i, generator)
+	}
+	wg.Wait()
+	if !(results[0] == nil && errors.Is(results[1], ErrTemplateAlreadyExists) ||
+		results[1] == nil && errors.Is(results[0], ErrTemplateAlreadyExists)) {
+		t.Fatalf("wanted one move and one conflict, got %v", results)
+	}
+	for i, result := range results {
+		_, err := os.Lstat(sources[i])
+		if result == nil && !errors.Is(err, os.ErrNotExist) || result != nil && err != nil {
+			t.Fatalf("source %d in wrong state after %v: %v", i, result, err)
+		}
+	}
+	winner := 0
+	if results[1] == nil {
+		winner = 1
+	}
+	content, err := os.ReadFile(filepath.Join(configDir, "templates", "shared.md"))
+	if err != nil || len(content) != 1 || content[0] != byte('a'+winner) {
+		t.Fatalf("unexpected winning template %q: %v", content, err)
+	}
 }
 
 func TestGeneratorLoadTemplate(t *testing.T) {

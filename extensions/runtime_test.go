@@ -1,8 +1,10 @@
 package extensions
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -833,6 +835,64 @@ func TestExtensionWithLogHandler(t *testing.T) {
 }
 
 func TestRuntime_CallFunction(t *testing.T) {
+	t.Run("should interrupt non-returning Lua even when pcall catches cancellation", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, `function hang()
+  print("entered")
+  while true do pcall(function() while true do end end) end
+end`)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		entered := make(chan struct{})
+		ext.OnLog = func(_ ExtensionLog) error { close(entered); return nil }
+		done := make(chan error, 1)
+		go func() { done <- ext.CallFunctionContext(ctx, "hang") }()
+		select {
+		case <-entered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Lua did not enter hang")
+		}
+		cancel()
+		select {
+		case err := <-done:
+			if err == nil || !strings.Contains(err.Error(), "context canceled") {
+				t.Fatalf("wanted cancellation, got %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("pcall swallowed cancellation")
+		}
+	})
+	t.Run("should cancel a non-returning async callback before execution cleanup finishes", func(t *testing.T) {
+		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer origin.Close()
+		ext, _ := setupTestExtension(t, fmt.Sprintf(`function poke()
+  marasi:builder():set_method("GET"):set_url(%q):send_async(function(res, err)
+    print("entered")
+    while true do end
+  end)
+end`, origin.URL))
+		ext.ExecutionContext, ext.CancelExecution = context.WithCancel(context.Background())
+		defer ext.CancelExecution()
+		entered := make(chan struct{})
+		ext.OnLog = func(_ ExtensionLog) error { close(entered); return nil }
+		if err := ext.CallFunction("poke"); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-entered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("callback did not enter Lua")
+		}
+		ext.CancelExecution()
+		done := make(chan struct{})
+		go func() { ext.WaitExecution(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("cleanup did not wait for and cancel the async callback")
+		}
+	})
 	t.Run("should execute global function successfully", func(t *testing.T) {
 		luaCode := `
 			function myTestFunc()

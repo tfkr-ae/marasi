@@ -9,7 +9,8 @@ import (
 	"github.com/google/uuid"
 )
 
-func registerUtilsLibrary(l *lua.State) {
+func registerUtilsLibrary(extension *Runtime) {
+	l := extension.LuaState
 	l.Global("marasi")
 
 	if l.IsNil(-1) {
@@ -17,7 +18,7 @@ func registerUtilsLibrary(l *lua.State) {
 		return
 	}
 
-	lua.NewLibrary(l, utilsLibrary())
+	lua.NewLibrary(l, utilsLibrary(extension))
 
 	l.SetField(-2, "utils")
 	l.Pop(1)
@@ -26,7 +27,7 @@ func registerUtilsLibrary(l *lua.State) {
 // utilsLibrary returns a list of Lua functions that provide utility
 // functionalities. These functions are available under the `marasi.utils`
 // table in Lua scripts.
-func utilsLibrary() []lua.RegistryFunction {
+func utilsLibrary(extension *Runtime) []lua.RegistryFunction {
 	return []lua.RegistryFunction{
 		// uuid generates a new UUIDv7 and returns it as a string.
 		//
@@ -56,7 +57,13 @@ func utilsLibrary() []lua.RegistryFunction {
 			limit := lua.OptInteger(l, 3, 60000)
 
 			if milliseconds < limit {
-				time.Sleep(time.Duration(milliseconds) * time.Millisecond)
+				timer := time.NewTimer(time.Duration(milliseconds) * time.Millisecond)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+				case <-extension.executionContext.Done():
+					lua.Errorf(l, "extension execution: %s", extension.executionContext.Err().Error())
+				}
 			}
 			return 0
 		}},

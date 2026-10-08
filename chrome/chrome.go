@@ -9,6 +9,7 @@ package chrome
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -97,9 +98,8 @@ func WithCustomPaths(paths []PathConfig) Option {
 // It checks custom paths first, then falls back to common installation locations
 // for Chrome and Chromium on macOS, Windows, and Linux.
 //
-// Returns:
-//   - string: Path to Chrome executable, or empty string if not found
-func (l *Launcher) getChromePath() string {
+// It returns the first executable path or the final operating-system lookup error.
+func (l *Launcher) getChromePath() (string, error) {
 	var paths []string
 	switch runtime.GOOS {
 	case "darwin":
@@ -123,21 +123,26 @@ func (l *Launcher) getChromePath() string {
 			`/snap/bin/chromium`,
 		}
 	default:
-		return ""
+		return "", fmt.Errorf("unsupported operating system %q", runtime.GOOS)
 	}
 
+	customPaths := make([]string, 0, len(l.customPaths))
 	for _, pc := range l.customPaths {
 		if pc.OS == runtime.GOOS {
-			paths = append([]string{pc.Path}, paths...)
+			customPaths = append(customPaths, pc.Path)
 		}
 	}
+	paths = append(customPaths, paths...)
 
+	var lastErr error
 	for _, p := range paths {
 		if _, err := exec.LookPath(p); err == nil {
-			return p
+			return p, nil
+		} else {
+			lastErr = err
 		}
 	}
-	return ""
+	return "", fmt.Errorf("finding Chrome executable: %w", lastErr)
 }
 
 // Start launches the Chrome instance with the configured flags and profile directory.
@@ -152,16 +157,16 @@ func (l *Launcher) Start() error {
 		return fmt.Errorf("configDir is required to start Chrome")
 	}
 
-	chromePath := l.getChromePath()
-	if chromePath == "" {
-		return fmt.Errorf("unsupported operating system or chrome executable was not found")
+	chromePath, err := l.getChromePath()
+	if err != nil {
+		return err
 	}
 
 	profileDir := filepath.Join(l.configDir, "chrome_profiles", l.profile)
 
 	flags := []string{
 		fmt.Sprintf("--user-data-dir=%s", profileDir),
-		fmt.Sprintf("--proxy-server=http://%s:%s", l.addr, l.port),
+		fmt.Sprintf("--proxy-server=http://%s", net.JoinHostPort(l.addr, l.port)),
 		fmt.Sprintf("--ignore-certificate-errors-spki-list=%s", l.spkiHash),
 		"--disable-background-networking",
 		"--disable-client-side-phishing-detection",

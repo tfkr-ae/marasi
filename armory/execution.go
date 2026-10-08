@@ -119,20 +119,27 @@ func (manager *Manager) StartRun(runID uuid.UUID) error {
 	}
 
 	manager.mu.Lock()
+	if manager.closing {
+		manager.mu.Unlock()
+		execution.cancelFunc()
+		return errors.New("armory manager is shutting down")
+	}
 	if _, exists := manager.activeRuns[runID]; exists {
 		manager.mu.Unlock()
 		execution.cancelFunc()
 		return fmt.Errorf("armory run %s is already active", runID)
 	}
 	manager.activeRuns[runID] = execution
+	manager.executions.Add(1)
 	manager.mu.Unlock()
 
 	startedAt := time.Now()
 	run.Status = domain.ArmoryRunInProgress
 	run.StartedAt = &startedAt
-	if err := manager.repository.UpdateArmoryRun(run); err != nil {
+	if err := manager.updateRun(run); err != nil {
 		manager.removeExecution(execution)
 		execution.cancelFunc()
+		manager.executions.Done()
 		return err
 	}
 
@@ -142,6 +149,7 @@ func (manager *Manager) StartRun(runID uuid.UUID) error {
 
 // execute produces and sends all requests for an Armory run.
 func (manager *Manager) execute(execution *execution) {
+	defer manager.executions.Done()
 	for worker := 0; worker < execution.run.MaxConcurrent; worker++ {
 		execution.wg.Add(1)
 		go manager.executeWorker(execution)
@@ -168,8 +176,7 @@ func (manager *Manager) execute(execution *execution) {
 		execution.run.Status = domain.ArmoryRunCompleted
 	}
 
-	manager.repository.UpdateArmoryRun(execution.run)
-	manager.removeExecution(execution)
+	manager.finishExecution(execution)
 	execution.cancelFunc()
 }
 
@@ -208,6 +215,36 @@ func (manager *Manager) executeWorker(execution *execution) {
 		case <-execution.ctx.Done():
 			return
 		}
+	}
+}
+
+// finishWriteRetry waits before another attempt to store a finished run.
+// Tests replace it so they can observe the run while the write is still failing.
+var finishWriteRetry = func() { time.Sleep(50 * time.Millisecond) }
+
+// finishExecution stores the finished status, then drops the run from activeRuns.
+// A failed write leaves the run active and retries only the write.
+func (manager *Manager) finishExecution(execution *execution) {
+	for {
+		manager.mu.Lock()
+		if manager.activeRuns[execution.run.ID] != execution {
+			manager.mu.Unlock()
+			return
+		}
+		err := manager.repository.UpdateArmoryRun(execution.run)
+		if err != nil {
+			manager.mu.Unlock()
+			log.Printf("writing armory run %s status: %v", execution.run.ID, err)
+			finishWriteRetry()
+			continue
+		}
+		delete(manager.activeRuns, execution.run.ID)
+		callback := manager.runUpdated
+		manager.mu.Unlock()
+		if callback != nil {
+			callback(execution.run)
+		}
+		return
 	}
 }
 

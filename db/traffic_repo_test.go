@@ -699,6 +699,272 @@ func TestTrafficRepo_NoteTriggers(t *testing.T) {
 	})
 }
 
+func TestTrafficRepo_DeleteNote(t *testing.T) {
+	t.Run("should remove the note row and leave has_note absent", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		reqID := testRequest(t, repo, nil)
+		if err := repo.UpdateNote(reqID, "clear me"); err != nil {
+			t.Fatalf("updating note: %v", err)
+		}
+
+		if err := repo.DeleteNote(reqID); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		_, err := repo.GetNote(reqID)
+		if err == nil {
+			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !errors.Is(err, sql.ErrNoRows) && !strings.Contains(err.Error(), "no rows") {
+			t.Fatalf("\nwanted:\nsql.ErrNoRows\ngot:\n%v", err)
+		}
+
+		meta, err := repo.GetMetadata(reqID)
+		if err != nil {
+			t.Fatalf("getting metadata: %v", err)
+		}
+		if _, ok := meta["has_note"]; ok {
+			t.Fatalf("\nwanted:\n'has_note' key to be removed\ngot:\nkey still exists")
+		}
+	})
+
+	t.Run("should return an error when no note row exists", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		reqID := testRequest(t, repo, nil)
+		err := repo.DeleteNote(reqID)
+		if err == nil {
+			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
+		}
+		if !errors.Is(err, sql.ErrNoRows) && !strings.Contains(err.Error(), "no rows") {
+			t.Fatalf("\nwanted:\nsql.ErrNoRows\ngot:\n%v", err)
+		}
+	})
+}
+
+func TestTrafficRepo_ListNotes(t *testing.T) {
+	t.Run("should return an empty page if no notes exist", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		_ = testRequest(t, repo, nil)
+
+		items, nextCursor, err := repo.ListNotes(nil, 200)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 0 {
+			t.Fatalf("\nwanted:\n0\ngot:\n%d", len(items))
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should return a pair after a note is set", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		id := testRequest(t, repo, nil)
+		if err := repo.UpdateNote(id, "needs review"); err != nil {
+			t.Fatalf("updating note: %v", err)
+		}
+
+		items, nextCursor, err := repo.ListNotes(nil, 200)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(items))
+		}
+		if items[0].ID != id {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", id, items[0].ID)
+		}
+		if items[0].Note != "needs review" {
+			t.Fatalf("\nwanted:\nneeds review\ngot:\n%s", items[0].Note)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should omit missing and empty notes and return newest first", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		oldest := testRequest(t, repo, nil)
+		if err := repo.UpdateNote(oldest, "oldest"); err != nil {
+			t.Fatalf("updating note: %v", err)
+		}
+		time.Sleep(2 * time.Millisecond)
+		_ = testRequest(t, repo, nil)
+		time.Sleep(2 * time.Millisecond)
+		empty := testRequest(t, repo, nil)
+		if err := repo.UpdateNote(empty, ""); err != nil {
+			t.Fatalf("updating empty note: %v", err)
+		}
+		time.Sleep(2 * time.Millisecond)
+		newest := testRequest(t, repo, nil)
+		if err := repo.UpdateNote(newest, "newest"); err != nil {
+			t.Fatalf("updating note: %v", err)
+		}
+
+		items, nextCursor, err := repo.ListNotes(nil, 200)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("\nwanted:\n2\ngot:\n%d", len(items))
+		}
+		if items[0].ID != newest || items[0].Note != "newest" {
+			t.Fatalf("\nwanted:\n%v newest\ngot:\n%v %s", newest, items[0].ID, items[0].Note)
+		}
+		if items[1].ID != oldest || items[1].Note != "oldest" {
+			t.Fatalf("\nwanted:\n%v oldest\ngot:\n%v %s", oldest, items[1].ID, items[1].Note)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should set next cursor to the last item when another page exists", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		oldest := testRequest(t, repo, nil)
+		if err := repo.UpdateNote(oldest, "oldest"); err != nil {
+			t.Fatalf("updating note: %v", err)
+		}
+		time.Sleep(2 * time.Millisecond)
+		middle := testRequest(t, repo, nil)
+		if err := repo.UpdateNote(middle, "middle"); err != nil {
+			t.Fatalf("updating note: %v", err)
+		}
+		time.Sleep(2 * time.Millisecond)
+		newest := testRequest(t, repo, nil)
+		if err := repo.UpdateNote(newest, "newest"); err != nil {
+			t.Fatalf("updating note: %v", err)
+		}
+
+		items, nextCursor, err := repo.ListNotes(nil, 2)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("\nwanted:\n2\ngot:\n%d", len(items))
+		}
+		if items[0].ID != newest || items[1].ID != middle {
+			t.Fatalf("\nwanted:\n%v then %v\ngot:\n%v", newest, middle, idsOf(items))
+		}
+		if nextCursor == nil || *nextCursor != middle {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, nextCursor)
+		}
+
+		older, olderNext, err := repo.ListNotes(nextCursor, 2)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(older) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(older))
+		}
+		if older[0].ID != oldest || older[0].Note != "oldest" {
+			t.Fatalf("\nwanted:\n%v oldest\ngot:\n%v %s", oldest, older[0].ID, older[0].Note)
+		}
+		if olderNext != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", olderNext)
+		}
+	})
+
+	t.Run("should not change an older page when newer notes are inserted", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		oldest := testRequest(t, repo, nil)
+		if err := repo.UpdateNote(oldest, "oldest"); err != nil {
+			t.Fatalf("updating note: %v", err)
+		}
+		time.Sleep(2 * time.Millisecond)
+		middle := testRequest(t, repo, nil)
+		if err := repo.UpdateNote(middle, "middle"); err != nil {
+			t.Fatalf("updating note: %v", err)
+		}
+		time.Sleep(2 * time.Millisecond)
+		newest := testRequest(t, repo, nil)
+		if err := repo.UpdateNote(newest, "newest"); err != nil {
+			t.Fatalf("updating note: %v", err)
+		}
+
+		first, nextCursor, err := repo.ListNotes(nil, 2)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(first) != 2 || first[0].ID != newest || first[1].ID != middle {
+			t.Fatalf("\nwanted:\n%v then %v\ngot:\n%v", newest, middle, idsOf(first))
+		}
+		if nextCursor == nil || *nextCursor != middle {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, nextCursor)
+		}
+
+		time.Sleep(2 * time.Millisecond)
+		later := testRequest(t, repo, nil)
+		if err := repo.UpdateNote(later, "later"); err != nil {
+			t.Fatalf("updating note: %v", err)
+		}
+
+		older, olderNext, err := repo.ListNotes(nextCursor, 2)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(older) != 1 || older[0].ID != oldest {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", oldest, idsOf(older))
+		}
+		if olderNext != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", olderNext)
+		}
+	})
+
+	t.Run("should include in-flight rows and omit prettified metadata keys", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		id := testRequest(t, repo, map[string]any{
+			"foo":                 "bar",
+			"prettified-request":  "pretty-req",
+			"prettified-response": "pretty-res",
+		})
+		if err := repo.UpdateNote(id, "in flight"); err != nil {
+			t.Fatalf("updating note: %v", err)
+		}
+
+		items, nextCursor, err := repo.ListNotes(nil, 200)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 || items[0].ID != id {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", id, idsOf(items))
+		}
+		if items[0].StatusCode != -1 {
+			t.Fatalf("\nwanted:\n-1\ngot:\n%d", items[0].StatusCode)
+		}
+		if !items[0].RespondedAt.IsZero() {
+			t.Fatalf("\nwanted:\nzero responded_at\ngot:\n%v", items[0].RespondedAt)
+		}
+		if items[0].Note != "in flight" {
+			t.Fatalf("\nwanted:\nin flight\ngot:\n%s", items[0].Note)
+		}
+		wantMeta := map[string]any{"foo": "bar", "has_note": float64(1)}
+		if !reflect.DeepEqual(items[0].Metadata, wantMeta) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", wantMeta, items[0].Metadata)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+}
+
 func TestTrafficRepo_SearchByMetadata(t *testing.T) {
 	t.Run("should return matching requests", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
@@ -771,4 +1037,440 @@ func TestTrafficRepo_SearchByMetadata(t *testing.T) {
 			t.Fatalf("\nwanted:\n0\ngot:\n%d", len(got))
 		}
 	})
+}
+
+func TestTrafficRepo_ListTraffic(t *testing.T) {
+	t.Run("should return an empty page if database is empty", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 0 {
+			t.Fatalf("\nwanted:\n0\ngot:\n%d", len(items))
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should return newest first and a null next cursor when all rows fit", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		older := testRequest(t, repo, nil)
+		time.Sleep(2 * time.Millisecond)
+		newer := testRequest(t, repo, nil)
+		insertTestResponseAndGet(t, repo, newer, nil)
+
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("\nwanted:\n2\ngot:\n%d", len(items))
+		}
+		if items[0].ID != newer {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", newer, items[0].ID)
+		}
+		if items[1].ID != older {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", older, items[1].ID)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should set next cursor to the last item when another page exists", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		oldest := testRequest(t, repo, nil)
+		time.Sleep(2 * time.Millisecond)
+		middle := testRequest(t, repo, nil)
+		time.Sleep(2 * time.Millisecond)
+		newest := testRequest(t, repo, nil)
+
+		items, nextCursor, err := repo.ListTraffic(nil, 2, domain.TrafficListFilter{})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("\nwanted:\n2\ngot:\n%d", len(items))
+		}
+		if items[0].ID != newest {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", newest, items[0].ID)
+		}
+		if items[1].ID != middle {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, items[1].ID)
+		}
+		if nextCursor == nil {
+			t.Fatal("\nwanted:\nnext cursor\ngot:\nnil")
+		}
+		if *nextCursor != middle {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, *nextCursor)
+		}
+
+		older, olderNext, err := repo.ListTraffic(nextCursor, 2, domain.TrafficListFilter{})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(older) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(older))
+		}
+		if older[0].ID != oldest {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", oldest, older[0].ID)
+		}
+		if olderNext != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", olderNext)
+		}
+	})
+
+	t.Run("should not change an older page when newer rows are inserted", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		oldest := testRequest(t, repo, nil)
+		time.Sleep(2 * time.Millisecond)
+		middle := testRequest(t, repo, nil)
+		time.Sleep(2 * time.Millisecond)
+		newest := testRequest(t, repo, nil)
+
+		first, nextCursor, err := repo.ListTraffic(nil, 2, domain.TrafficListFilter{})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(first) != 2 || first[0].ID != newest || first[1].ID != middle {
+			t.Fatalf("\nwanted:\n%v then %v\ngot:\n%v", newest, middle, idsOf(first))
+		}
+		if nextCursor == nil || *nextCursor != middle {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, nextCursor)
+		}
+
+		time.Sleep(2 * time.Millisecond)
+		_ = testRequest(t, repo, nil)
+
+		older, olderNext, err := repo.ListTraffic(nextCursor, 2, domain.TrafficListFilter{})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(older) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(older))
+		}
+		if older[0].ID != oldest {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", oldest, older[0].ID)
+		}
+		if olderNext != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", olderNext)
+		}
+	})
+
+	t.Run("should treat a zero uuid cursor as older than that id", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		_ = testRequest(t, repo, nil)
+		zero := uuid.Nil
+
+		items, nextCursor, err := repo.ListTraffic(&zero, 200, domain.TrafficListFilter{})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 0 {
+			t.Fatalf("\nwanted:\n0\ngot:\n%d", len(items))
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should include in-flight rows with status code -1", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		id := testRequest(t, repo, nil)
+
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(items))
+		}
+		if items[0].ID != id {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", id, items[0].ID)
+		}
+		if items[0].StatusCode != -1 {
+			t.Fatalf("\nwanted:\n-1\ngot:\n%d", items[0].StatusCode)
+		}
+		if !items[0].RespondedAt.IsZero() {
+			t.Fatalf("\nwanted:\nzero responded_at\ngot:\n%v", items[0].RespondedAt)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should omit prettified metadata keys", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		id := testRequest(t, repo, map[string]any{
+			"foo":                 "bar",
+			"prettified-request":  "pretty-req",
+			"prettified-response": "pretty-res",
+		})
+
+		items, _, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 || items[0].ID != id {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", id, idsOf(items))
+		}
+		wantMeta := map[string]any{"foo": "bar"}
+		if !reflect.DeepEqual(items[0].Metadata, wantMeta) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", wantMeta, items[0].Metadata)
+		}
+	})
+
+	t.Run("should match host exactly and case-sensitively", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		matching := insertTraffic(t, repo, "GET", "example.com", "/")
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "GET", "Example.com", "/")
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "GET", "other.com", "/")
+
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{Host: "example.com"})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(items))
+		}
+		if items[0].ID != matching {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", matching, items[0].ID)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should match method exactly and case-sensitively", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		matching := insertTraffic(t, repo, "POST", "example.com", "/")
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "post", "example.com", "/")
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "GET", "example.com", "/")
+
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{Method: "POST"})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(items))
+		}
+		if items[0].ID != matching {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", matching, items[0].ID)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should match status code exactly", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		matching := insertTraffic(t, repo, "GET", "example.com", "/")
+		insertTrafficResponse(t, repo, matching, 200)
+		time.Sleep(2 * time.Millisecond)
+		notFound := insertTraffic(t, repo, "GET", "example.com", "/")
+		insertTrafficResponse(t, repo, notFound, 404)
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "GET", "example.com", "/")
+
+		status200 := 200
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{StatusCode: &status200})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(items))
+		}
+		if items[0].ID != matching {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", matching, items[0].ID)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should match a prefix of the stored path including the query string", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		matching := insertTraffic(t, repo, "GET", "example.com", "/api/users?id=1")
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "GET", "example.com", "/api/v2/users")
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "GET", "example.com", "/users?id=1")
+
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{PathPrefix: "/api/users"})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(items))
+		}
+		if items[0].ID != matching {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", matching, items[0].ID)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should AND host, method, status code, and path prefix", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		matching := insertTraffic(t, repo, "POST", "example.com", "/api/users")
+		insertTrafficResponse(t, repo, matching, 200)
+		time.Sleep(2 * time.Millisecond)
+		wrongMethod := insertTraffic(t, repo, "GET", "example.com", "/api/users")
+		insertTrafficResponse(t, repo, wrongMethod, 200)
+		time.Sleep(2 * time.Millisecond)
+		wrongHost := insertTraffic(t, repo, "POST", "other.com", "/api/users")
+		insertTrafficResponse(t, repo, wrongHost, 200)
+		time.Sleep(2 * time.Millisecond)
+		wrongPath := insertTraffic(t, repo, "POST", "example.com", "/other")
+		insertTrafficResponse(t, repo, wrongPath, 200)
+		time.Sleep(2 * time.Millisecond)
+		wrongStatus := insertTraffic(t, repo, "POST", "example.com", "/api/users")
+		insertTrafficResponse(t, repo, wrongStatus, 404)
+
+		status200 := 200
+		items, nextCursor, err := repo.ListTraffic(nil, 200, domain.TrafficListFilter{
+			Host:       "example.com",
+			Method:     "POST",
+			PathPrefix: "/api",
+			StatusCode: &status200,
+		})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(items))
+		}
+		if items[0].ID != matching {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", matching, items[0].ID)
+		}
+		if nextCursor != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
+		}
+	})
+
+	t.Run("should page a filtered list with a cursor", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		oldest := insertTraffic(t, repo, "GET", "example.com", "/")
+		time.Sleep(2 * time.Millisecond)
+		_ = insertTraffic(t, repo, "GET", "other.com", "/")
+		time.Sleep(2 * time.Millisecond)
+		middle := insertTraffic(t, repo, "GET", "example.com", "/")
+		time.Sleep(2 * time.Millisecond)
+		newest := insertTraffic(t, repo, "GET", "example.com", "/")
+
+		filter := domain.TrafficListFilter{Host: "example.com"}
+		items, nextCursor, err := repo.ListTraffic(nil, 2, filter)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("\nwanted:\n2\ngot:\n%d", len(items))
+		}
+		if items[0].ID != newest {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", newest, items[0].ID)
+		}
+		if items[1].ID != middle {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, items[1].ID)
+		}
+		if nextCursor == nil {
+			t.Fatal("\nwanted:\nnext cursor\ngot:\nnil")
+		}
+		if *nextCursor != middle {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, *nextCursor)
+		}
+
+		older, olderNext, err := repo.ListTraffic(nextCursor, 2, filter)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(older) != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", len(older))
+		}
+		if older[0].ID != oldest {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", oldest, older[0].ID)
+		}
+		if olderNext != nil {
+			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", olderNext)
+		}
+	})
+}
+
+func idsOf(items []*domain.RequestResponseSummary) []uuid.UUID {
+	ids := make([]uuid.UUID, len(items))
+	for i, item := range items {
+		ids[i] = item.ID
+	}
+	return ids
+}
+
+func insertTraffic(t *testing.T, repo *Repository, method, host, path string) uuid.UUID {
+	t.Helper()
+	id, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("creating uuid: %v", err)
+	}
+	req := &domain.ProxyRequest{
+		ID:          id,
+		Scheme:      "https",
+		Method:      method,
+		Host:        host,
+		Path:        path,
+		Raw:         []byte("GET / HTTP/1.1\r\n\r\n"),
+		Metadata:    map[string]any{},
+		RequestedAt: time.Now(),
+	}
+	if err := repo.InsertRequest(req); err != nil {
+		t.Fatalf("inserting request: %v", err)
+	}
+	return id
+}
+
+func insertTrafficResponse(t *testing.T, repo *Repository, id uuid.UUID, statusCode int) {
+	t.Helper()
+	resp := &domain.ProxyResponse{
+		ID:          id,
+		Status:      "OK",
+		StatusCode:  statusCode,
+		ContentType: "text/plain",
+		Length:      "0",
+		Raw:         []byte{},
+		Metadata:    map[string]any{},
+		RespondedAt: time.Now().UTC().Truncate(time.Millisecond),
+	}
+	if err := repo.InsertResponse(resp); err != nil {
+		t.Fatalf("inserting response: %v", err)
+	}
 }

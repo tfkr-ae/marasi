@@ -1,0 +1,34 @@
+# Chrome
+
+Users register Chrome executable paths and named profiles on a running instance, then start a browser pointed at the active proxy listener.
+
+## Sub-features
+
+- Add a Chrome executable path with `chrome path add --path`.
+- Remove a path with `chrome path remove --path`.
+- List paths with `chrome path list`.
+- Add a named profile with `chrome profile add`.
+- Remove a profile with `chrome profile remove`.
+- List profiles with `chrome profile list`.
+- Start Chrome with `chrome start`, optionally `--profile`.
+- Choose human-readable or `--json` output.
+
+## How to get to it (user POV)
+
+Start a service first. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANCE" chrome path add --path /path/to/chrome`. Add a profile with `chrome profile add pentest`. Start with `chrome start --profile pentest`.
+
+## Driving it with shell and curl
+
+Point `--path` at an executable stub when you need start proof without a GUI Chrome. Run `chrome path add --path "$STUB" --json` and require an item whose `path` is that stub and whose `os` is this machine. Run `chrome path list --json` and require the same item. Duplicate add of that path must fail. Run `chrome profile add pentest --json` and require an item whose `name` is `pentest`. Run `chrome profile list --json` and require that name. Run `chrome start --profile pentest --json` and require `{"status":"started","profile":"pentest"}`. Confirm the stub received `--proxy-server=http://$PROXY_LISTENER`, `--user-data-dir` under `$VERIFY_CONFIG_DIR/chrome_profiles/pentest`, and `--proxy-bypass-list=<-loopback>`. Use the same `--config-dir` string passed to `service start`, not its real path. Run `chrome start --json` with no `--profile` and require `default-profile`. Run `chrome path remove --path "$STUB" --json` and `chrome profile remove pentest --json`.
+
+## Gotchas
+
+- `--path` is required on path add/remove. `--os` defaults to this machine and must be `darwin`, `linux`, or `windows`.
+- Duplicate path or profile returns a conflict. Removing a missing path or profile returns not found.
+- `chrome start` with no `--profile` uses `default-profile` even if that name is not registered. Any other `--profile` must already exist.
+- Start requires an active proxy listener. An inactive listener returns a conflict.
+- Custom paths for this OS are tried before OS defaults. The first path `LookPath` accepts is the binary. Later OS paths are not tried. A non-executable file is skipped. If nothing is accepted, start fails with `chrome_unavailable` and launches nothing. A file `LookPath` accepts that is not a valid executable is selected, `Start` fails, and OS defaults are not tried. On darwin and linux a mode-`0755` shebang stub is accepted. On Windows `LookPath` accepts an existing path that already has an extension, including `.sh`; `Start` then fails and OS defaults are not tried. Only an extensionless path is resolved by appending `PATHEXT`.
+- Start returns `{"status":"started","profile":...}` without waiting for flags or a page. The browser stays a child of the service. It is not a new session. Marasi does not write an args file or create the profile directory. The stub must record its own argv. It does not publish an events frame.
+- Launched Chrome sets `--proxy-bypass-list=<-loopback>`. That removes Chrome's implicit localhost bypass, so localhost is sent through Marasi.
+- Path and profile mutations publish `chrome.path.added`, `chrome.path.removed`, `chrome.profile.added`, and `chrome.profile.removed`.
+- Kill any process started from this run's `chrome_profiles` directory during cleanup.

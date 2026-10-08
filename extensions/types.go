@@ -2,6 +2,7 @@ package extensions
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -150,7 +151,7 @@ func RegisterScopeType(extension *Runtime) {
 			scope := lua.CheckUserData(l, 1, "scope").(*compass.Scope)
 			allow := l.ToBoolean(2)
 
-			scope.DefaultAllow = allow
+			scope.SetDefaultAllow(allow)
 			return 0
 		},
 		// matches_string checks if a string matches a specific rule type in the scope.
@@ -177,9 +178,10 @@ func RegisterScopeType(extension *Runtime) {
 
 	RegisterType(extension.LuaState, "scope", funcs, func(l *lua.State) int {
 		scope := lua.CheckUserData(l, 1, "scope").(*compass.Scope)
+		includeRules, excludeRules, defaultAllow := scope.Snapshot()
 
 		policy := "Block"
-		if scope.DefaultAllow {
+		if defaultAllow {
 			policy = "Allow"
 		}
 
@@ -199,8 +201,8 @@ func RegisterScopeType(extension *Runtime) {
 		result := fmt.Sprintf(
 			"Scope (Default: %s)\n  Include Rules:%s\n  Exclude Rules:%s",
 			policy,
-			formatRules(scope.IncludeRules),
-			formatRules(scope.ExcludeRules),
+			formatRules(includeRules),
+			formatRules(excludeRules),
 		)
 
 		l.PushString(result)
@@ -1899,7 +1901,7 @@ func RegisterRequestBuilderType(extension *Runtime) {
 		// Request Body
 		reqBody := bytes.NewBuffer([]byte(builder.body))
 
-		req, err := http.NewRequest(builder.method, builder.url.String(), reqBody)
+		req, err := http.NewRequestWithContext(extension.executionContext, builder.method, builder.url.String(), reqBody)
 		if err != nil {
 			lua.Errorf(l, "creating new request : %s", err.Error())
 			return 0
@@ -1977,16 +1979,27 @@ func RegisterRequestBuilderType(extension *Runtime) {
 		maps.Copy(reqMetadata, builder.metadata)
 
 		extID := extension.Data.ID.String()
+		ctx := extension.ExecutionContext
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		release := func() {}
+		if extension.TrackExecution != nil {
+			release = extension.TrackExecution()
+		}
+		extension.asyncExecutions.Add(1)
 
 		go func() {
+			defer extension.asyncExecutions.Done()
+			defer release()
 			reqBodyBuffer := bytes.NewBuffer([]byte(reqBody))
 			var resp *http.Response
-			req, err := http.NewRequest(reqMethod, reqURLStr, reqBodyBuffer)
+			req, err := http.NewRequestWithContext(ctx, reqMethod, reqURLStr, reqBodyBuffer)
 			if err == nil {
 				req.Header = reqHeaders
 
 				reqMetadata["request_builder"] = true
-				reqMetadata["marasi_extension_id"] = extension.Data.ID.String()
+				reqMetadata["marasi_extension_id"] = extID
 
 				if len(reqMetadata) > 0 {
 					if jsonBytes, err := json.Marshal(reqMetadata); err == nil {
@@ -2003,10 +2016,17 @@ func RegisterRequestBuilderType(extension *Runtime) {
 				resp, err = builder.client.Do(req)
 
 			}
+			if resp != nil {
+				defer resp.Body.Close()
+			}
 
 			if callbackKey != "" {
 				extension.Mu.Lock()
 				defer extension.Mu.Unlock()
+				if ctx.Err() != nil {
+					return
+				}
+				defer extension.beginExecution(ctx)()
 
 				top := l.Top()
 				defer l.SetTop(top)

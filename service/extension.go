@@ -1,0 +1,454 @@
+package service
+
+import (
+	"cmp"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"slices"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/extensions"
+)
+
+type extensionSummary struct {
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	Enabled     bool      `json:"enabled"`
+	Author      string    `json:"author"`
+	Description string    `json:"description"`
+	SourceURL   string    `json:"source_url"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type extensionList struct {
+	Items []extensionSummary `json:"items"`
+}
+
+type extensionDetail struct {
+	extensionSummary
+	LuaContent string         `json:"lua_content"`
+	Settings   map[string]any `json:"settings"`
+}
+
+type extensionLogItem struct {
+	Time time.Time `json:"time"`
+	Text string    `json:"text"`
+}
+
+type extensionLogs struct {
+	Items []extensionLogItem `json:"items"`
+}
+
+type extensionSettings struct {
+	Settings map[string]any `json:"settings"`
+}
+
+type extensionUpdateRequest struct {
+	LuaContent *string `json:"lua_content"`
+}
+
+type extensionSettingsRequest struct {
+	Settings *map[string]any `json:"settings"`
+}
+
+type extensionCallRequest struct {
+	Function *string         `json:"function"`
+	Args     json.RawMessage `json:"args"`
+}
+
+type extensionEnableRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+type extensionCallResult struct {
+	Status string `json:"status"`
+}
+
+var errInvalidExtensionRequest = errors.New("invalid extension request")
+
+func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifecycle, proxy *marasi.Proxy, events *eventBroadcaster) {
+	mux.HandleFunc("GET /extension", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, r, http.StatusOK, extensionList{Items: listExtensionSummaries(proxy)})
+	})
+
+	mux.HandleFunc("GET /extension/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseExtensionID(w, r)
+		if !ok {
+			return
+		}
+		runtime := findExtensionRuntime(proxy, id)
+		if runtime == nil {
+			writeExtensionError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		settings, err := extensionSettingsFromRepository(proxy, id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeExtensionError(w, r, http.StatusNotFound, "not_found")
+				return
+			}
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		writeJSON(w, r, http.StatusOK, extensionDetailFromRuntime(runtime, settings.Settings))
+	})
+
+	mux.HandleFunc("GET /extension/{id}/logs", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseExtensionID(w, r)
+		if !ok {
+			return
+		}
+		runtime := findExtensionRuntime(proxy, id)
+		if runtime == nil {
+			writeExtensionError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		writeJSON(w, r, http.StatusOK, extensionLogsFromRuntime(runtime))
+	})
+
+	mux.HandleFunc("GET /extension/{id}/settings", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseExtensionID(w, r)
+		if !ok {
+			return
+		}
+		runtime := findExtensionRuntime(proxy, id)
+		if runtime == nil {
+			writeExtensionError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		settings, err := extensionSettingsFromRepository(proxy, id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeExtensionError(w, r, http.StatusNotFound, "not_found")
+				return
+			}
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		writeJSON(w, r, http.StatusOK, settings)
+	})
+
+	mux.HandleFunc("POST /extension/{id}/settings", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseExtensionID(w, r)
+		if !ok {
+			return
+		}
+		runtime := findExtensionRuntime(proxy, id)
+		if runtime == nil {
+			writeExtensionError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		settings, err := decodeExtensionSettings(r)
+		if err != nil {
+			writeExtensionError(w, r, http.StatusBadRequest, "invalid_extension_request")
+			return
+		}
+		repo, err := proxy.GetExtensionRepo()
+		if err != nil {
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		if err := repo.SetExtensionSettingsByUUID(id, settings); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeExtensionError(w, r, http.StatusNotFound, "not_found")
+				return
+			}
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		envelope, err := extensionSettingsFromRepository(proxy, id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeExtensionError(w, r, http.StatusNotFound, "not_found")
+				return
+			}
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		events.publish("extension.settings.updated", envelope)
+		writeJSON(w, r, http.StatusOK, envelope)
+	})
+
+	// CallFunction can send through the proxy. Keep the execution project-owned
+	// until it returns; nested admits proceed so a switch cannot deadlock on it.
+	raw.HandleFunc("POST /extension/{id}/call", func(w http.ResponseWriter, r *http.Request) {
+		release, admitted := admitProjectWork(projects, w, r)
+		if !admitted {
+			return
+		}
+		defer release()
+		id, ok := parseExtensionID(w, r)
+		if !ok {
+			return
+		}
+		runtime := findExtensionRuntime(proxy, id)
+		if runtime == nil {
+			writeExtensionError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		name, args, err := decodeExtensionCall(r)
+		if err != nil {
+			writeExtensionError(w, r, http.StatusBadRequest, "invalid_extension_request")
+			return
+		}
+		if !runtime.CheckGlobalFunction(name) {
+			writeExtensionError(w, r, http.StatusNotFound, "function_not_found")
+			return
+		}
+		if err := runtime.CallFunctionContext(r.Context(), name, args...); err != nil {
+			writeExtensionError(w, r, http.StatusBadRequest, "lua_error")
+			return
+		}
+		writeJSON(w, r, http.StatusOK, extensionCallResult{Status: "called"})
+	})
+
+	mux.HandleFunc("POST /extension/{id}/enable", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseExtensionID(w, r)
+		if !ok {
+			return
+		}
+		runtime := findExtensionRuntime(proxy, id)
+		if runtime == nil {
+			writeExtensionError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		enabled, err := decodeExtensionEnable(r)
+		if err != nil {
+			writeExtensionError(w, r, http.StatusBadRequest, "invalid_extension_request")
+			return
+		}
+		repo, err := proxy.GetExtensionRepo()
+		if err != nil {
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		if err := runtime.SetEnabled(repo, enabled); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeExtensionError(w, r, http.StatusNotFound, "not_found")
+				return
+			}
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		summary := extensionSummaryFromData(runtime.MetadataSnapshot())
+		events.publish("extension.enabled", summary)
+		writeJSON(w, r, http.StatusOK, summary)
+	})
+
+	// ExecuteLua can send through the proxy. Keep the execution project-owned
+	// until it returns; nested admits proceed so a switch cannot deadlock on it.
+	raw.HandleFunc("POST /extension/{id}", func(w http.ResponseWriter, r *http.Request) {
+		release, admitted := admitProjectWork(projects, w, r)
+		if !admitted {
+			return
+		}
+		defer release()
+		id, ok := parseExtensionID(w, r)
+		if !ok {
+			return
+		}
+		runtime := findExtensionRuntime(proxy, id)
+		if runtime == nil {
+			writeExtensionError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		lua, err := decodeExtensionUpdate(r)
+		if err != nil {
+			writeExtensionError(w, r, http.StatusBadRequest, "invalid_extension_request")
+			return
+		}
+		repo, err := proxy.GetExtensionRepo()
+		if err != nil {
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		if err := runtime.UpdateLuaContent(repo, lua); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeExtensionError(w, r, http.StatusNotFound, "not_found")
+				return
+			}
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		events.publish("extension.updated", extensionSummaryFromData(runtime.MetadataSnapshot()))
+		if err := runtime.ExecuteLuaContext(r.Context(), lua); err != nil {
+			writeExtensionError(w, r, http.StatusBadRequest, "lua_error")
+			return
+		}
+		settings, err := extensionSettingsFromRepository(proxy, id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeExtensionError(w, r, http.StatusNotFound, "not_found")
+				return
+			}
+			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		writeJSON(w, r, http.StatusOK, extensionDetailFromRuntime(runtime, settings.Settings))
+	})
+}
+
+func listExtensionSummaries(proxy *marasi.Proxy) []extensionSummary {
+	items := make([]extensionSummary, 0, len(proxy.Extensions))
+	for _, runtime := range proxy.Extensions {
+		items = append(items, extensionSummaryFromData(runtime.MetadataSnapshot()))
+	}
+	slices.SortFunc(items, func(a, b extensionSummary) int {
+		return cmp.Compare(a.ID.String(), b.ID.String())
+	})
+	return items
+}
+
+func extensionSummaryFromData(data domain.Extension) extensionSummary {
+	return extensionSummary{
+		ID:          data.ID,
+		Name:        data.Name,
+		Enabled:     data.Enabled,
+		Author:      data.Author,
+		Description: data.Description,
+		SourceURL:   data.SourceURL,
+		UpdatedAt:   data.UpdatedAt,
+	}
+}
+
+func extensionDetailFromRuntime(runtime *extensions.Runtime, settings map[string]any) extensionDetail {
+	data := runtime.MetadataSnapshot()
+	return extensionDetail{
+		extensionSummary: extensionSummaryFromData(data),
+		LuaContent:       data.LuaContent,
+		Settings:         settings,
+	}
+}
+
+func extensionSettingsFromRepository(proxy *marasi.Proxy, id uuid.UUID) (extensionSettings, error) {
+	repo, err := proxy.GetExtensionRepo()
+	if err != nil {
+		return extensionSettings{}, err
+	}
+	settings, err := repo.GetExtensionSettingsByUUID(id)
+	if err != nil {
+		return extensionSettings{}, err
+	}
+	if settings == nil {
+		settings = map[string]any{}
+	}
+	return extensionSettings{Settings: settings}, nil
+}
+
+func extensionLogsFromRuntime(runtime *extensions.Runtime) extensionLogs {
+	logs := runtime.LogSnapshot()
+	items := make([]extensionLogItem, 0, len(logs))
+	for _, entry := range logs {
+		items = append(items, extensionLogItem{Time: entry.Time, Text: entry.Text})
+	}
+	return extensionLogs{Items: items}
+}
+
+func findExtensionRuntime(proxy *marasi.Proxy, id uuid.UUID) *extensions.Runtime {
+	for _, runtime := range proxy.Extensions {
+		if runtime.Data.ID == id {
+			return runtime
+		}
+	}
+	return nil
+}
+
+func decodeExtensionSettings(r *http.Request) (map[string]any, error) {
+	if r.Body == nil {
+		return nil, errInvalidExtensionRequest
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request extensionSettingsRequest
+	if err := decoder.Decode(&request); err != nil || request.Settings == nil {
+		return nil, errInvalidExtensionRequest
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, errInvalidExtensionRequest
+	}
+	settings := *request.Settings
+	if settings == nil {
+		return nil, errInvalidExtensionRequest
+	}
+	return settings, nil
+}
+
+func decodeExtensionCall(r *http.Request) (string, []any, error) {
+	if r.Body == nil {
+		return "", nil, errInvalidExtensionRequest
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request extensionCallRequest
+	if err := decoder.Decode(&request); err != nil || request.Function == nil || *request.Function == "" {
+		return "", nil, errInvalidExtensionRequest
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return "", nil, errInvalidExtensionRequest
+	}
+	if len(request.Args) == 0 {
+		return *request.Function, nil, nil
+	}
+	var value any
+	if err := json.Unmarshal(request.Args, &value); err != nil {
+		return "", nil, errInvalidExtensionRequest
+	}
+	args, ok := value.([]any)
+	if !ok {
+		return "", nil, errInvalidExtensionRequest
+	}
+	return *request.Function, args, nil
+}
+
+func decodeExtensionEnable(r *http.Request) (bool, error) {
+	if r.Body == nil {
+		return false, errInvalidExtensionRequest
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request extensionEnableRequest
+	if err := decoder.Decode(&request); err != nil || request.Enabled == nil {
+		return false, errInvalidExtensionRequest
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return false, errInvalidExtensionRequest
+	}
+	return *request.Enabled, nil
+}
+
+func decodeExtensionUpdate(r *http.Request) (string, error) {
+	if r.Body == nil {
+		return "", errInvalidExtensionRequest
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request extensionUpdateRequest
+	if err := decoder.Decode(&request); err != nil || request.LuaContent == nil {
+		return "", errInvalidExtensionRequest
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return "", errInvalidExtensionRequest
+	}
+	return *request.LuaContent, nil
+}
+
+func parseExtensionID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeExtensionError(w, r, http.StatusBadRequest, "bad_request")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func writeExtensionError(w http.ResponseWriter, r *http.Request, status int, code string) {
+	writeJSON(w, r, status, struct {
+		Error string `json:"error"`
+	}{Error: code})
+}

@@ -18,7 +18,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
-	"github.com/tfkr-ae/marasi/rawhttp"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
@@ -256,7 +255,7 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 // TODO should allow TLS -> Non TLS override
 func OverrideWaypointsModifier(proxy *Proxy, req *http.Request) error {
 	if metadata, ok := core.MetadataFromContext(req.Context()); ok {
-		if override, ok := proxy.Waypoints[getHostPort(req)]; ok {
+		if override, ok := proxy.waypointOverride(getHostPort(req)); ok {
 			metadata["original_host"] = getHostPort(req)
 			metadata["override_host"] = override
 			*req = *core.ContextWithMetadata(req, metadata)
@@ -274,6 +273,9 @@ func OverrideWaypointsModifier(proxy *Proxy, req *http.Request) error {
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
 func CompassRequestModifier(proxy *Proxy, req *http.Request) error {
 	if compassExt, ok := proxy.GetExtension("compass"); ok {
+		if !compassExt.MetadataSnapshot().Enabled {
+			return nil
+		}
 		err := compassExt.CallRequestHandler(req)
 		if err != nil {
 			proxy.WriteLog("ERROR", fmt.Sprintf("Running processRequest : %s", err.Error()), core.LogWithExtensionID(compassExt.Data.ID))
@@ -304,7 +306,7 @@ func ExtensionsRequestModifier(proxy *Proxy, req *http.Request) error {
 	req.Header.Del("x-extension-id")
 
 	for _, ext := range proxy.Extensions {
-		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" {
+		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" && ext.MetadataSnapshot().Enabled {
 			if extensionID != ext.Data.ID.String() {
 				err := ext.CallRequestHandler(req)
 				if err != nil {
@@ -327,13 +329,13 @@ func ExtensionsRequestModifier(proxy *Proxy, req *http.Request) error {
 	return nil
 }
 
-// CheckpointRequestModifier will intercept requests if the global `proxy.InterceptFlag` is set or the `interceptRequest` function returns true.
-// If a request is intercepted, the modifier will block until the user decides to resume or drop the request. If the request is resumed it will be
-// rebuilt with the same context and metadata from the modified raw request. The metadata will be updated to include "intercepted", "original-request", and "dropped" based
-// on the user action. If the modifier receives `ShouldInterceptResponse` the flag is added to the context so that the
-// response is intercepted regardless of the `processResponse` or `proxy.InterceptFlag`
+// CheckpointRequestModifier holds requests when the global HTTP Checkpoint flag is set or interceptRequest returns true.
+// A nil notify still holds until forward, drop, or drop-all. Forward rebuilds from optional raw. Drop does not rebuild.
 func CheckpointRequestModifier(proxy *Proxy, req *http.Request) error {
 	if checkpointExt, ok := proxy.GetExtension("checkpoint"); ok {
+		if !checkpointExt.MetadataSnapshot().Enabled {
+			return nil
+		}
 		shouldIntercept, err := checkpointExt.ShouldInterceptRequest(req)
 		if err != nil {
 			if reqID, ok := core.RequestIDFromContext(req.Context()); ok {
@@ -344,34 +346,25 @@ func CheckpointRequestModifier(proxy *Proxy, req *http.Request) error {
 			return nil
 		}
 
-		if shouldIntercept || proxy.InterceptFlag {
+		if shouldIntercept || proxy.GetIntercept() {
 			original, err := httputil.DumpRequest(req, true)
 			if err != nil {
 				return fmt.Errorf("getting raw request for intercept : %w", err)
 			}
-
-			interceptedRequest := Intercepted{
-				Type:    "request",
-				Raw:     string(original),
-				Channel: make(chan InterceptionTuple),
-			}
-			proxy.InterceptedQueue = append(proxy.InterceptedQueue, &interceptedRequest)
-
-			// TODO return different error?
-			if proxy.OnIntercept == nil {
-				proxy.WriteLog("ERROR", "Request intercepted but OnIntercept is not defined. Dropping request")
-				martian.NewContext(req).SkipRoundTrip()
-				return ErrDropped
+			reqID, ok := core.RequestIDFromContext(req.Context())
+			if !ok {
+				return ErrRequestIDNotFound
 			}
 
-			proxy.OnIntercept(&interceptedRequest)
-
-			userAction := <-interceptedRequest.Channel
+			result, err := proxy.holdHTTPRequest(reqID, original, req)
+			if err != nil {
+				return err
+			}
 
 			if metadata, ok := core.MetadataFromContext(req.Context()); ok {
 				metadata["intercepted"] = true
 				metadata["original-request"] = string(original)
-				if !userAction.Resume {
+				if result.dropped {
 					metadata["dropped"] = true
 				}
 				*req = *core.ContextWithMetadata(req, metadata)
@@ -379,21 +372,15 @@ func CheckpointRequestModifier(proxy *Proxy, req *http.Request) error {
 				return ErrMetadataNotFound
 			}
 
-			if !userAction.Resume {
+			if result.dropped {
 				martian.NewContext(req).SkipRoundTrip()
 				return ErrDropped
 			}
 
-			if userAction.ShouldInterceptResponse {
+			*req = *result.rebuiltReq
+			if result.interceptResponse {
 				*req = *core.ContextWithInterceptFlag(req, true)
 			}
-
-			rebuiltReq, err := rawhttp.RebuildRequest([]byte(interceptedRequest.Raw), req)
-			if err != nil {
-				return fmt.Errorf("%w : %w", ErrRebuildRequest, err)
-			}
-
-			*req = *rebuiltReq
 
 			return nil
 		}
@@ -474,14 +461,18 @@ func WebSocketPrepareModifier(proxy *Proxy, res *http.Response) error {
 }
 
 // shouldInterceptWebSocketMessage reports whether a message should enter manual interception.
-// Global interception takes precedence; otherwise only the enabled checkpoint extension is consulted.
+// Disabled checkpoint skips interception, including the global flag.
 func shouldInterceptWebSocketMessage(proxy *Proxy, message *marasiws.Message) bool {
+	checkpoint, ok := proxy.GetExtension("checkpoint")
+	if ok && (checkpoint.Data == nil || !checkpoint.MetadataSnapshot().Enabled) {
+		return false
+	}
+
 	if proxy.GetWebSocketIntercept() {
 		return true
 	}
 
-	checkpoint, ok := proxy.GetExtension("checkpoint")
-	if !ok || checkpoint.Data == nil || !checkpoint.Data.Enabled {
+	if !ok {
 		return false
 	}
 
@@ -502,7 +493,7 @@ func shouldInterceptWebSocketMessage(proxy *Proxy, message *marasiws.Message) bo
 // Dropped and skipped messages stop further extension processing.
 func processWebSocketMessageExtensions(proxy *Proxy, message *marasiws.Message) {
 	for _, extension := range proxy.Extensions {
-		if extension == nil || extension.Data == nil || !extension.Data.Enabled || extension.Data.Name == "checkpoint" {
+		if extension == nil || extension.Data == nil || !extension.MetadataSnapshot().Enabled || extension.Data.Name == "checkpoint" {
 			continue
 		}
 
@@ -572,11 +563,15 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		if !generated {
 			processWebSocketMessageExtensions(proxy, message)
 
-			if !message.Dropped && shouldInterceptWebSocketMessage(proxy, message) && proxy.OnWebSocketIntercept != nil {
+			if !message.Dropped && shouldInterceptWebSocketMessage(proxy, message) {
 				if proxy.WebSocketInterceptor == nil {
 					return errors.New("websocket interceptor not configured")
 				}
 				err := proxy.WebSocketInterceptor.Intercept(message, func(snapshot domain.WebSocketMessage) {
+					proxy.noteWebSocketHold(message)
+					if proxy.OnWebSocketIntercept == nil {
+						return
+					}
 					if err := proxy.OnWebSocketIntercept(snapshot); err != nil {
 						_ = proxy.ResolveWebSocketInterception(snapshot.ID, marasiws.InterceptionDecision{
 							Resume:  true,
@@ -618,7 +613,7 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		process,
 	)
 	if proxy.WebSocketInterceptor != nil {
-		connection.SetShutdownHandler(proxy.WebSocketInterceptor.CancelConnection)
+		connection.SetShutdownHandler(proxy.cancelWebSocketCheckpoint)
 	}
 
 	path := res.Request.URL.Path
@@ -636,7 +631,8 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		StartedAt: time.Now(),
 	}
 
-	return proxy.runWebSocketSession(connection, record)
+	release, _ := res.Request.Context().Value(projectReleaseKey{}).(func())
+	return proxy.runWebSocketSessionWithRelease(connection, record, release)
 }
 
 // BufferStreamingBodyModifier reads the entire streaming response body into memory
@@ -712,6 +708,9 @@ func CompressedResponseModifier(proxy *Proxy, res *http.Response) error {
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
 func CompassResponseModifier(proxy *Proxy, res *http.Response) error {
 	if compassExt, ok := proxy.GetExtension("compass"); ok {
+		if !compassExt.MetadataSnapshot().Enabled {
+			return nil
+		}
 		err := compassExt.CallResponseHandler(res)
 		if err != nil {
 			proxy.WriteLog("ERROR", fmt.Sprintf("Running processResponse : %s", err.Error()), core.LogWithExtensionID(compassExt.Data.ID))
@@ -734,7 +733,7 @@ func CompassResponseModifier(proxy *Proxy, res *http.Response) error {
 // After `processResponse`, it will check if the request is passed through (nil), skipped (`ErrSkipPipeline`), or dropped (`ErrDropped`).
 func ExtensionsResponseModifier(proxy *Proxy, res *http.Response) error {
 	for _, ext := range proxy.Extensions {
-		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" {
+		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" && ext.MetadataSnapshot().Enabled {
 			if extensionID, ok := core.ExtensionIDFromContext(res.Request.Context()); !ok || extensionID != ext.Data.ID.String() {
 				err := ext.CallResponseHandler(res)
 				if err != nil {
@@ -756,13 +755,13 @@ func ExtensionsResponseModifier(proxy *Proxy, res *http.Response) error {
 	return nil
 }
 
-// CheckpointResponseModifier will intercept response if the global `proxy.InterceptFlag` is set, `interceptResponse` function returns true, or
-// if the context has an intercept flag set as true.
-// If a response is intercepted, the modifier will block until the user decides to resume or drop the response. If the response is resumed it will be
-// rebuilt with the same context and metadata from the modified raw response. The metadata will be updated to include "intercepted", "original-response", and "dropped" based
-// on the user action.
+// CheckpointResponseModifier holds responses when the global HTTP Checkpoint flag is set, interceptResponse returns true,
+// or the matching request was forwarded with intercept-response. A nil notify still holds until forward, drop, or drop-all.
 func CheckpointResponseModifier(proxy *Proxy, res *http.Response) error {
 	if checkpointExt, ok := proxy.GetExtension("checkpoint"); ok {
+		if !checkpointExt.MetadataSnapshot().Enabled {
+			return nil
+		}
 		shouldIntercept, err := checkpointExt.ShouldInterceptResponse(res)
 		if err != nil {
 			if reqID, ok := core.RequestIDFromContext(res.Request.Context()); ok {
@@ -773,32 +772,25 @@ func CheckpointResponseModifier(proxy *Proxy, res *http.Response) error {
 			return nil
 		}
 
-		if interceptFlag, ok := core.InterceptFlagFromContext(res.Request.Context()); (ok && interceptFlag) || shouldIntercept || proxy.InterceptFlag {
+		if interceptFlag, ok := core.InterceptFlagFromContext(res.Request.Context()); (ok && interceptFlag) || shouldIntercept || proxy.GetIntercept() {
 			original, err := httputil.DumpResponse(res, true)
 			if err != nil {
 				return fmt.Errorf("getting raw response for intercept : %w", err)
 			}
-
-			interceptedResponse := Intercepted{
-				Type:    "response",
-				Raw:     string(original),
-				Channel: make(chan InterceptionTuple),
-			}
-			proxy.InterceptedQueue = append(proxy.InterceptedQueue, &interceptedResponse)
-
-			if proxy.OnIntercept == nil {
-				proxy.WriteLog("ERROR", "Response intercepted but OnIntercept is not defined. Dropping response")
-				return ErrDropped
+			reqID, ok := core.RequestIDFromContext(res.Request.Context())
+			if !ok {
+				return ErrRequestIDNotFound
 			}
 
-			proxy.OnIntercept(&interceptedResponse)
-
-			userAction := <-interceptedResponse.Channel
+			result, err := proxy.holdHTTPResponse(reqID, original, res)
+			if err != nil {
+				return err
+			}
 
 			if metadata, ok := core.MetadataFromContext(res.Request.Context()); ok {
 				metadata["intercepted"] = true
 				metadata["original-response"] = string(original)
-				if !userAction.Resume {
+				if result.dropped {
 					metadata["dropped"] = true
 				}
 				res.Request = core.ContextWithMetadata(res.Request, metadata)
@@ -806,17 +798,11 @@ func CheckpointResponseModifier(proxy *Proxy, res *http.Response) error {
 				return ErrMetadataNotFound
 			}
 
-			if !userAction.Resume {
+			if result.dropped {
 				return ErrDropped
 			}
 
-			rebuiltRes, err := rawhttp.RebuildResponse([]byte(interceptedResponse.Raw), res.Request)
-			if err != nil {
-				return fmt.Errorf("%w : %w", ErrRebuildResponse, err)
-			}
-
-			*res = *rebuiltRes
-
+			*res = *result.rebuiltRes
 			return nil
 		}
 		return nil

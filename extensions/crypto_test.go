@@ -329,13 +329,16 @@ func TestAESLibrary(t *testing.T) {
 		{
 			name: "aes.cbc:decrypt should fail on invalid padding",
 			luaCode: `
+				local function xor_nibble(c)
+					local n = bit32.bxor(tonumber(c, 16), 1)
+					return marasi.strings:substring("0123456789abcdef", n, n + 1)
+				end
+
 				local key = marasi.crypto.aes:generate_key(32)
 				local iv = marasi.crypto.aes.cbc:generate_iv()
 				local cipher = marasi.crypto.aes.cbc:encrypt(key, "secret", iv)
-				
-				local bad_key = marasi.crypto.aes:generate_key(32)
-				
-				local ok, res = pcall(marasi.crypto.aes.cbc.decrypt, marasi.crypto.aes.cbc, bad_key, cipher, iv)
+				local bad_iv = marasi.strings:substring(iv, 0, 31) .. xor_nibble(marasi.strings:substring(iv, 31, 32))
+				local ok, res = pcall(marasi.crypto.aes.cbc.decrypt, marasi.crypto.aes.cbc, key, cipher, bad_iv)
 				if ok then
 					return "expected error"
 				end

@@ -1,8 +1,10 @@
 package marasi
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -10,10 +12,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path"
 	"runtime"
-	"time"
 
+	"github.com/google/martian"
 	"github.com/google/martian/mitm"
 	"github.com/spf13/viper"
 	"github.com/tfkr-ae/marasi/chrome"
@@ -75,7 +76,7 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 		_, err := os.ReadDir(appConfigDir)
 		if err != nil {
 			if os.IsNotExist(err) {
-				log.Println("[*] creating config dir")
+				proxy.Logger.Info("Creating config directory")
 				err = os.MkdirAll(appConfigDir, 0700)
 				if err != nil {
 					return fmt.Errorf("creating config dir %s: %w", appConfigDir, err)
@@ -100,7 +101,12 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 				// Config file is not found
 				err = viperInstance.SafeWriteConfig()
 				if err != nil {
-					return fmt.Errorf("writing config file : %w", err)
+					if readErr := viperInstance.ReadInConfig(); readErr != nil {
+						return errors.Join(
+							fmt.Errorf("writing config file : %w", err),
+							fmt.Errorf("reading concurrently created config file : %w", readErr),
+						)
+					}
 				}
 			} else {
 				return fmt.Errorf("reading config file : %w", err)
@@ -113,11 +119,6 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 
 		proxy.Config.DesktopOS = runtime.GOOS
 		proxy.Config.ConfigDir = appConfigDir
-		// Rewrite entire file from struct
-		err = viperInstance.WriteConfig()
-		if err != nil {
-			return fmt.Errorf("writing config after unmarshalling : %w", err)
-		}
 		return nil
 	}
 }
@@ -164,8 +165,10 @@ func WithExtensions(exts []*domain.Extension, options ...func(*extensions.Runtim
 	}
 }
 
-// WithInterceptHandler takes a handler function that will be executed on each intercept (Request / Response)
-func WithInterceptHandler(handler func(intercepted *Intercepted) error) func(*Proxy) error {
+// WithInterceptHandler sets OnIntercept for pending HTTP Checkpoint items.
+// The handler runs synchronously, and its return error is ignored.
+// A blocking handler blocks the intercepted execution.
+func WithInterceptHandler(handler func(item domain.CheckpointItem) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		if proxy.OnIntercept != nil {
 			return errors.New("proxy already has an intercept handler defined")
@@ -256,51 +259,37 @@ func WithWebSocketInterceptHandler(handler func(domain.WebSocketMessage) error) 
 // It will also configure the http.Client that is used for the launchpad requests
 // TODO - Check if the certificate expired
 func WithTLS() func(*Proxy) error {
-	return func(proxy *Proxy) error {
-		var x509c *x509.Certificate
-		var priv any
-		var err error
-		certPath := path.Join(proxy.ConfigDir, certFile)
-		if _, err = os.Stat(certPath); os.IsNotExist(err) {
-			log.Println("[*] Certificate does not exist, creating a new one ")
-			// Certificate and key do not exist, create new ones
-			x509c, priv, err = mitm.NewAuthority("Marasi", "Marasi Authority", 365*3*24*time.Hour)
-			if err != nil {
-				return fmt.Errorf("creating new mitm authority : %w", err)
-			}
+	return WithTLSContext(context.Background())
+}
 
-			// Save certificate and private key to disk
-			if err := saveCertAndKey(x509c, priv, proxy.ConfigDir); err != nil {
-				return fmt.Errorf("saving cert and key to disk: %w", err)
-			}
-		} else {
-			log.Println("[*] Loading existing cert")
-			// Load existing certificate and key from disk
-			x509c, priv, err = loadCertAndKey(proxy.ConfigDir)
-			if err != nil {
-				return fmt.Errorf("loading cert and key from disk: %w", err)
-			}
+// WithTLSContext configures TLS like WithTLS and allows cancellation while
+// waiting for another process to finish initializing the shared CA.
+func WithTLSContext(ctx context.Context) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		certificate, privateKey, err := initializeCertificateAuthority(ctx, proxy.ConfigDir, proxy.Logger)
+		if err != nil {
+			return err
 		}
 
-		proxy.SPKIHash = getSPKIHash(x509c)
-		proxy.Cert = x509c
+		proxy.SPKIHash = getSPKIHash(certificate)
+		proxy.Cert = certificate
 		err = proxy.ConfigRepo.UpdateSPKI(proxy.SPKIHash)
 		if err != nil {
 			return fmt.Errorf("setting spki hash %s : %w", proxy.SPKIHash, err)
 		}
-		tlsc, err := mitm.NewConfig(x509c, priv)
+		mitmConfig, err := mitm.NewConfig(certificate, privateKey)
 		if err != nil {
 			return fmt.Errorf("creating new mitm config : %w", err)
 		}
-		proxy.martianProxy.SetMITM(tlsc)
-		proxy.mitmConfig = tlsc.TLS()
+		proxy.martianProxy.SetMITM(mitmConfig)
+		proxy.mitmConfig = mitmConfig.TLS()
 
 		// Add system certificates + marasi cert
 		systemPool, err := x509.SystemCertPool()
 		if err != nil {
 			return fmt.Errorf("fetching system cert pool : %w", err)
 		}
-		systemPool.AddCert(x509c)
+		systemPool.AddCert(certificate)
 		proxy.MarasiClientTLSConfig = &tls.Config{
 			RootCAs: systemPool,
 		}
@@ -451,6 +440,18 @@ func WithWordlistManager(manager wordlist.Provider) func(*Proxy) error {
 	}
 }
 
+// WithWorkAdmission coordinates proxy traffic with service lifecycle changes.
+// The boolean identifies requests made by the proxy's own client, including CONNECT.
+func WithWorkAdmission(admit func(context.Context, bool) (func(), error)) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if admit == nil {
+			return errors.New("work admission cannot be nil")
+		}
+		proxy.admitWork = admit
+		return nil
+	}
+}
+
 // WithBasePipeline will setup the base modifier pipeline for marasi
 // It will define the main Request & Response modifiers that will execute the
 // attached modifiers and hande `ErrDropped` and `ErrSkipPipeline`.
@@ -460,10 +461,30 @@ func WithBasePipeline() func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		proxy.martianProxy.SetRequestModifier(
 			martianReqModifierFunc(func(req *http.Request) error {
-				err := proxy.Modifiers.ModifyRequest(req)
+				// Proxy credentials must not reach the origin or extension scripts.
+				expected := "Basic " + base64.StdEncoding.EncodeToString([]byte("marasi:"+proxy.clientWorkToken))
+				internal := req.Header.Get("Proxy-Authorization") == expected
+				session := martian.NewContext(req).Session()
+				if req.Method == http.MethodConnect && internal {
+					session.Set("marasi.self-client", true)
+				}
+				if owned, _ := session.Get("marasi.self-client"); owned == true {
+					internal = true
+				}
+				req.Header.Del("Proxy-Authorization")
+				release, err := proxy.admitWork(req.Context(), internal)
+				if err != nil {
+					return err
+				}
+				*req = *req.WithContext(context.WithValue(req.Context(), projectReleaseKey{}, release))
+				err = proxy.Modifiers.ModifyRequest(req)
 				if err == nil || errors.Is(err, ErrDropped) || errors.Is(err, ErrSkipPipeline) {
+					if err != nil {
+						release()
+					}
 					return nil
 				}
+				release()
 				// TODO this should be handled through logging
 				log.Printf("request pipeline: %v", err)
 				return err
@@ -471,6 +492,9 @@ func WithBasePipeline() func(*Proxy) error {
 		)
 		proxy.martianProxy.SetResponseModifier(
 			martianResModifierFunc(func(res *http.Response) error {
+				if release, ok := res.Request.Context().Value(projectReleaseKey{}).(func()); ok {
+					defer release()
+				}
 				err := proxy.Modifiers.ModifyResponse(res)
 				if err == nil || errors.Is(err, ErrSkipPipeline) {
 					return nil
@@ -497,6 +521,8 @@ func WithBasePipeline() func(*Proxy) error {
 		return nil
 	}
 }
+
+type projectReleaseKey struct{}
 
 // WithDefaultModifierPipeline will apply the default modifier pipelines
 // The default processing order is: waypoint overrides → extensions → interception → database storage.
