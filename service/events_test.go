@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 	"time"
 
@@ -465,11 +464,8 @@ func TestListenerEvents(t *testing.T) {
 			}
 			return net.Listen("tcp", net.JoinHostPort(address, port))
 		}
-		firstServeEnded := make(chan struct{})
-		var firstServe sync.Once
 		proxy.serve = func(listener net.Listener) error {
 			_, err := listener.Accept()
-			firstServe.Do(func() { close(firstServeEnded) })
 			return err
 		}
 		lifecycle := newListenerLifecycle(proxy, nil)
@@ -490,7 +486,9 @@ func TestListenerEvents(t *testing.T) {
 		if err := old.Close(); err != nil {
 			t.Fatalf("failing old listener: %v", err)
 		}
-		<-firstServeEnded
+		// Wait until the lifecycle records the failure, then restore its notification.
+		ended := <-lifecycle.serveEnded
+		lifecycle.serveEnded <- ended
 		close(releaseBind)
 		response := <-updateDone
 		if response.Code != http.StatusOK {
