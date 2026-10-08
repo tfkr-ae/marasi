@@ -13,6 +13,7 @@
 package marasi
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -129,6 +130,7 @@ type Proxy struct {
 	connectionMu         sync.Mutex
 	connectionSessions   sync.WaitGroup
 	connections          map[net.Conn]struct{}
+	clientConnections    map[string]*listener.WatchedConn
 	connectionsClosing   bool
 	transportContext     context.Context
 	cancelTransport      context.CancelFunc
@@ -285,6 +287,7 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 		transportContext:     transportContext,
 		cancelTransport:      cancelTransport,
 		connections:          make(map[net.Conn]struct{}),
+		clientConnections:    make(map[string]*listener.WatchedConn),
 		martianProxy:         martian.NewProxy(),
 		Modifiers:            fifo.NewGroup(),
 		DBWriteChannel:       make(chan any, 10),
@@ -824,10 +827,18 @@ func (proxy *Proxy) close(ctx context.Context, closeDatabase bool) error {
 
 // Track sockets before protocol inspection or TLS handshakes so forced shutdown
 // also interrupts clients and upstreams that have not sent HTTP headers yet.
+// Inbound sockets are watched and indexed by client address so a client disconnect can cancel its request.
 func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
+	var watched *listener.WatchedConn
+	clientAddress := conn.RemoteAddr().String()
+	if inbound {
+		watched = listener.NewWatchedConnection(conn)
+		conn = watched
+	}
 	proxy.connectionMu.Lock()
 	if inbound {
 		proxy.connectionSessions.Add(1)
+		proxy.clientConnections[clientAddress] = watched
 	}
 	proxy.connections[conn] = struct{}{}
 	closing := proxy.connectionsClosing
@@ -838,11 +849,64 @@ func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
 	return listener.NewTrackedConnection(conn, func() {
 		proxy.connectionMu.Lock()
 		delete(proxy.connections, conn)
+		if inbound && proxy.clientConnections[clientAddress] == watched {
+			delete(proxy.clientConnections, clientAddress)
+		}
 		proxy.connectionMu.Unlock()
 		if inbound {
 			proxy.connectionSessions.Done()
 		}
 	})
+}
+
+// maxEagerBody bounds the request body watchClient reads before the pipeline runs.
+const maxEagerBody = 1 << 20
+
+// watchClient cancels the request context when its client disconnects while the request
+// is in flight, which interrupts its hooks. The socket is watched only after the body has
+// been read, so the watch never takes body bytes. A small body of known length is read now,
+// so hooks are watched. A larger, chunked, or Expect: 100-continue body is watched once it
+// has been read through.
+func (proxy *Proxy) watchClient(req *http.Request) {
+	proxy.connectionMu.Lock()
+	conn, ok := proxy.clientConnections[req.RemoteAddr]
+	proxy.connectionMu.Unlock()
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithCancel(req.Context())
+	*req = *req.WithContext(ctx)
+
+	if req.Body == nil || req.Body == http.NoBody {
+		conn.Watch(cancel)
+		return
+	}
+	if req.ContentLength > 0 && req.ContentLength <= maxEagerBody && req.Header.Get("Expect") == "" {
+		body, err := io.ReadAll(req.Body)
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		if err != nil {
+			cancel()
+			return
+		}
+		conn.Watch(cancel)
+		return
+	}
+	req.Body = &watchAtEOF{ReadCloser: req.Body, watch: func() { conn.Watch(cancel) }}
+}
+
+// watchAtEOF starts watching the client once the request body has been read through.
+type watchAtEOF struct {
+	io.ReadCloser
+	once  sync.Once
+	watch func()
+}
+
+func (body *watchAtEOF) Read(p []byte) (int, error) {
+	n, err := body.ReadCloser.Read(p)
+	if err == io.EOF {
+		body.once.Do(body.watch)
+	}
+	return n, err
 }
 
 func (proxy *Proxy) dialTransport(ctx context.Context, network, address string) (net.Conn, error) {

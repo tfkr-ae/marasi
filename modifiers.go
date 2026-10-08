@@ -3,6 +3,7 @@ package marasi
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/extensions"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
@@ -158,6 +160,26 @@ func getHostPort(req *http.Request) string {
 	return net.JoinHostPort(host, port)
 }
 
+// hookInterrupted reports whether a failed hook was interrupted rather than raising a Lua error.
+// A project switch, service stop, or listener shutdown cancels the execution context, and a client disconnect cancels ctx.
+// Interrupted hooks fail closed so the item is never sent. Other Lua errors fail open.
+func hookInterrupted(ctx context.Context, extension *extensions.Runtime) bool {
+	if extension.ExecutionContext != nil && extension.ExecutionContext.Err() != nil {
+		return true
+	}
+	return ctx.Err() != nil
+}
+
+// hookLogOptions links a hook error to its extension. The request ID goes in the log context,
+// not the request link, because the request is stored later or, when dropped, never.
+func hookLogOptions(ctx context.Context, extension *extensions.Runtime) []func(*domain.Log) error {
+	options := []func(*domain.Log) error{core.LogWithExtensionID(extension.Data.ID)}
+	if reqID, ok := core.RequestIDFromContext(ctx); ok {
+		options = append(options, core.LogWithContext(map[string]any{"request_id": reqID.String()}))
+	}
+	return options
+}
+
 // PreventLoopModifier skips processing a request if it is made to marasi's active listener address and port, preventing an infinite loop
 // It will normalize localhost & 127.0.0.1 when checking the host and port
 func PreventLoopModifier(proxy *Proxy, req *http.Request) error {
@@ -279,6 +301,10 @@ func CompassRequestModifier(proxy *Proxy, req *http.Request) error {
 		err := compassExt.CallRequestHandler(req)
 		if err != nil {
 			proxy.WriteLog("ERROR", fmt.Sprintf("Running processRequest : %s", err.Error()), core.LogWithExtensionID(compassExt.Data.ID))
+			if hookInterrupted(req.Context(), compassExt) {
+				martian.NewContext(req).SkipRoundTrip()
+				return ErrDropped
+			}
 			// Continue as a err in Lua should not bring down the proxy
 		}
 		if skip, ok := core.SkipFlagFromContext(req.Context()); ok && skip {
@@ -311,6 +337,10 @@ func ExtensionsRequestModifier(proxy *Proxy, req *http.Request) error {
 				err := ext.CallRequestHandler(req)
 				if err != nil {
 					proxy.WriteLog("ERROR", fmt.Sprintf("Running processRequest : %s", err.Error()), core.LogWithExtensionID(ext.Data.ID))
+					if hookInterrupted(req.Context(), ext) {
+						martian.NewContext(req).SkipRoundTrip()
+						return ErrDropped
+					}
 					// Continue as a err in Lua should not bring down the proxy
 				}
 
@@ -331,6 +361,7 @@ func ExtensionsRequestModifier(proxy *Proxy, req *http.Request) error {
 
 // CheckpointRequestModifier holds requests when the global HTTP Checkpoint flag is set or interceptRequest returns true.
 // A nil notify still holds until forward, drop, or drop-all. Forward rebuilds from optional raw. Drop does not rebuild.
+// A Lua error in interceptRequest does not skip the global flag.
 func CheckpointRequestModifier(proxy *Proxy, req *http.Request) error {
 	if checkpointExt, ok := proxy.GetExtension("checkpoint"); ok {
 		if !checkpointExt.MetadataSnapshot().Enabled {
@@ -338,12 +369,12 @@ func CheckpointRequestModifier(proxy *Proxy, req *http.Request) error {
 		}
 		shouldIntercept, err := checkpointExt.ShouldInterceptRequest(req)
 		if err != nil {
-			if reqID, ok := core.RequestIDFromContext(req.Context()); ok {
-				proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptRequest : %s", err.Error()), core.LogWithReqResID(reqID))
-			} else {
-				proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptRequest : %s", err.Error()))
+			proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptRequest : %s", err.Error()), hookLogOptions(req.Context(), checkpointExt)...)
+			if hookInterrupted(req.Context(), checkpointExt) {
+				martian.NewContext(req).SkipRoundTrip()
+				return ErrDropped
 			}
-			return nil
+			// A Lua error does not match the rule. The global flag still holds.
 		}
 
 		if shouldIntercept || proxy.GetIntercept() {
@@ -462,6 +493,7 @@ func WebSocketPrepareModifier(proxy *Proxy, res *http.Response) error {
 
 // shouldInterceptWebSocketMessage reports whether a message should enter manual interception.
 // Disabled checkpoint skips interception, including the global flag.
+// An interrupted interceptWebSocketMessage drops the message.
 func shouldInterceptWebSocketMessage(proxy *Proxy, message *marasiws.Message) bool {
 	checkpoint, ok := proxy.GetExtension("checkpoint")
 	if ok && (checkpoint.Data == nil || !checkpoint.MetadataSnapshot().Enabled) {
@@ -483,6 +515,9 @@ func shouldInterceptWebSocketMessage(proxy *Proxy, message *marasiws.Message) bo
 			fmt.Sprintf("Running interceptWebSocketMessage : %s", err.Error()),
 			core.LogWithExtensionID(checkpoint.Data.ID),
 		)
+		if hookInterrupted(context.Background(), checkpoint) {
+			message.Dropped = true
+		}
 		return false
 	}
 
@@ -491,6 +526,7 @@ func shouldInterceptWebSocketMessage(proxy *Proxy, message *marasiws.Message) bo
 
 // processWebSocketMessageExtensions runs enabled non-checkpoint extensions against a live message.
 // Dropped and skipped messages stop further extension processing.
+// An interrupted hook drops the message.
 func processWebSocketMessageExtensions(proxy *Proxy, message *marasiws.Message) {
 	for _, extension := range proxy.Extensions {
 		if extension == nil || extension.Data == nil || !extension.MetadataSnapshot().Enabled || extension.Data.Name == "checkpoint" {
@@ -503,6 +539,9 @@ func processWebSocketMessageExtensions(proxy *Proxy, message *marasiws.Message) 
 				fmt.Sprintf("Running processWebSocketMessage : %s", err.Error()),
 				core.LogWithExtensionID(extension.Data.ID),
 			)
+			if hookInterrupted(context.Background(), extension) {
+				message.Dropped = true
+			}
 		}
 		if message.Dropped || message.Skipped {
 			return
@@ -714,6 +753,9 @@ func CompassResponseModifier(proxy *Proxy, res *http.Response) error {
 		err := compassExt.CallResponseHandler(res)
 		if err != nil {
 			proxy.WriteLog("ERROR", fmt.Sprintf("Running processResponse : %s", err.Error()), core.LogWithExtensionID(compassExt.Data.ID))
+			if hookInterrupted(res.Request.Context(), compassExt) {
+				return ErrDropped
+			}
 			// Continue as a err in Lua should not bring down the proxy
 		}
 		if skip, ok := core.SkipFlagFromContext(res.Request.Context()); ok && skip {
@@ -738,6 +780,9 @@ func ExtensionsResponseModifier(proxy *Proxy, res *http.Response) error {
 				err := ext.CallResponseHandler(res)
 				if err != nil {
 					proxy.WriteLog("ERROR", fmt.Sprintf("Running processResponse : %s", err.Error()), core.LogWithExtensionID(ext.Data.ID))
+					if hookInterrupted(res.Request.Context(), ext) {
+						return ErrDropped
+					}
 					// Continue as a err in Lua should not bring down the proxy
 				}
 
@@ -757,6 +802,7 @@ func ExtensionsResponseModifier(proxy *Proxy, res *http.Response) error {
 
 // CheckpointResponseModifier holds responses when the global HTTP Checkpoint flag is set, interceptResponse returns true,
 // or the matching request was forwarded with intercept-response. A nil notify still holds until forward, drop, or drop-all.
+// A Lua error in interceptResponse does not skip either flag.
 func CheckpointResponseModifier(proxy *Proxy, res *http.Response) error {
 	if checkpointExt, ok := proxy.GetExtension("checkpoint"); ok {
 		if !checkpointExt.MetadataSnapshot().Enabled {
@@ -764,12 +810,11 @@ func CheckpointResponseModifier(proxy *Proxy, res *http.Response) error {
 		}
 		shouldIntercept, err := checkpointExt.ShouldInterceptResponse(res)
 		if err != nil {
-			if reqID, ok := core.RequestIDFromContext(res.Request.Context()); ok {
-				proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptResponse : %s", err.Error()), core.LogWithReqResID(reqID))
-			} else {
-				proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptResponse : %s", err.Error()))
+			proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptResponse : %s", err.Error()), hookLogOptions(res.Request.Context(), checkpointExt)...)
+			if hookInterrupted(res.Request.Context(), checkpointExt) {
+				return ErrDropped
 			}
-			return nil
+			// A Lua error does not match the rule. The global and per-request flags still hold.
 		}
 
 		if interceptFlag, ok := core.InterceptFlagFromContext(res.Request.Context()); (ok && interceptFlag) || shouldIntercept || proxy.GetIntercept() {

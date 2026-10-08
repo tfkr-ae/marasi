@@ -1406,6 +1406,34 @@ func TestCheckpointRequestModifier(t *testing.T) {
 		}
 	})
 
+	t.Run("should still hold the request with the global intercept flag when interceptRequest raises a Lua error", func(t *testing.T) {
+		proxy := newTestProxy(t, testExtensions["checkpoint"])
+		updateExtension(t, proxy, "checkpoint", `function interceptRequest(request) error("boom") end`)
+		proxy.SetIntercept(true)
+		dropOnHold(proxy)
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+
+		ctx, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context : %v", err)
+		}
+		defer remove()
+
+		err = SetupRequestModifier(proxy, req)
+		if err != nil {
+			t.Fatalf("running SetupRequestModifier : %v", err)
+		}
+
+		err = CheckpointRequestModifier(proxy, req)
+
+		if !errors.Is(err, ErrDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+		}
+		if !ctx.SkippingRoundTrip() {
+			t.Fatalf("wanted: True\ngot: %t", ctx.SkippingRoundTrip())
+		}
+	})
+
 	t.Run("should drop request the request if the resume action is false", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])
 		proxy.SetIntercept(true)
@@ -3548,6 +3576,42 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			}
 		}
 	})
+
+	for _, flag := range []string{"global intercept flag", "request intercept flag"} {
+		t.Run("should still hold the response with the "+flag+" when interceptResponse raises a Lua error", func(t *testing.T) {
+			proxy := newTestProxy(t, testExtensions["checkpoint"])
+			updateExtension(t, proxy, "checkpoint", `function interceptResponse(response) error("boom") end`)
+			dropOnHold(proxy)
+			req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+
+			_, remove, err := martian.TestContext(req, nil, nil)
+			if err != nil {
+				t.Fatalf("applying martian context : %v", err)
+			}
+			defer remove()
+
+			err = SetupRequestModifier(proxy, req)
+			if err != nil {
+				t.Fatalf("setting up request: %v", err)
+			}
+			if flag == "global intercept flag" {
+				proxy.SetIntercept(true)
+			} else {
+				req = core.ContextWithInterceptFlag(req, true)
+			}
+
+			res := &http.Response{
+				Header:  make(http.Header),
+				Request: req,
+			}
+
+			err = CheckpointResponseModifier(proxy, res)
+
+			if !errors.Is(err, ErrDropped) {
+				t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+			}
+		})
+	}
 
 	t.Run("should drop response if the resume action is false", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])

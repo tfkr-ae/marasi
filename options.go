@@ -477,6 +477,7 @@ func WithBasePipeline() func(*Proxy) error {
 					return err
 				}
 				*req = *req.WithContext(context.WithValue(req.Context(), projectReleaseKey{}, release))
+				proxy.watchClient(req)
 				err = proxy.Modifiers.ModifyRequest(req)
 				if err == nil || errors.Is(err, ErrDropped) || errors.Is(err, ErrSkipPipeline) {
 					if err != nil {

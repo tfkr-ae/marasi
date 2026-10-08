@@ -19,12 +19,16 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/martian"
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/extensions"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
@@ -451,6 +455,164 @@ func TestProxy_WriteToDBLog(t *testing.T) {
 			}
 			if test.withCallback && received.ID != entry.ID {
 				t.Fatalf("\nwanted:\ncallback log %s\ngot:\n%v", entry.ID, received)
+			}
+		})
+	}
+}
+
+func TestProxy_WriteToDBCheckpointHookLog(t *testing.T) {
+	t.Run("should persist a checkpoint extension Lua error before its request is stored", func(t *testing.T) {
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		dbConnection, err := db.New(":memory:", logger)
+		if err != nil {
+			t.Fatalf("creating in-memory database: %v", err)
+		}
+		repository := db.NewProxyRepo(dbConnection)
+		t.Cleanup(func() { repository.Close() })
+
+		proxy := newTestProxy(t, testExtensions["checkpoint"])
+		proxy.LogRepo = repository
+		updateExtension(t, proxy, "checkpoint", `
+			function interceptRequest(request) error("request boom") end
+			function interceptResponse(response) error("response boom") end
+		`)
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context : %v", err)
+		}
+		defer remove()
+		if err := SetupRequestModifier(proxy, req); err != nil {
+			t.Fatalf("running SetupRequestModifier : %v", err)
+		}
+		reqID, _ := core.RequestIDFromContext(req.Context())
+
+		if err := CheckpointRequestModifier(proxy, req); err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		if err := CheckpointResponseModifier(proxy, &http.Response{Header: make(http.Header), Request: req}); err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		close(proxy.DBWriteChannel)
+		proxy.WriteToDB()
+
+		logs, err := repository.GetLogs()
+		if err != nil {
+			t.Fatalf("getting persisted logs: %v", err)
+		}
+		if len(logs) != 2 {
+			t.Fatalf("\nwanted:\n2 persisted logs\ngot:\n%v", logs)
+		}
+		for _, entry := range logs {
+			if entry.ExtensionID == nil || *entry.ExtensionID != testExtensions["checkpoint"].ID {
+				t.Fatalf("\nwanted:\nextension %s\ngot:\n%v", testExtensions["checkpoint"].ID, entry.ExtensionID)
+			}
+			if entry.Context["request_id"] != reqID.String() {
+				t.Fatalf("\nwanted:\nrequest_id %s\ngot:\n%v", reqID, entry.Context)
+			}
+		}
+	})
+}
+
+func TestProxy_ClientDisconnectInterruptsRequestHook(t *testing.T) {
+	for _, request := range []string{
+		"GET %s/held HTTP/1.1\r\nHost: %s\r\n\r\n",
+		"POST %s/held HTTP/1.1\r\nHost: %s\r\nContent-Length: 4\r\n\r\nbody",
+	} {
+		method := strings.Fields(request)[0]
+		t.Run(method+" should not reach the origin after its client disconnects during processRequest", func(t *testing.T) {
+			var hits atomic.Int32
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+			}))
+			defer origin.Close()
+
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			dbConnection, err := db.New(":memory:", logger)
+			if err != nil {
+				t.Fatalf("creating in-memory database: %v", err)
+			}
+			repository := db.NewProxyRepo(dbConnection)
+			defaultExtensions, err := repository.GetExtensions()
+			if err != nil {
+				repository.Close()
+				t.Fatalf("getting default extensions: %v", err)
+			}
+			proxy, err := New(
+				WithConfigDir(t.TempDir()),
+				WithDefaultRepositories(repository),
+				WithExtensions(defaultExtensions),
+				WithRequestHandler(func(domain.ProxyRequest) error { return nil }),
+				WithResponseHandler(func(domain.ProxyResponse) error { return nil }),
+				WithLogHandler(func(domain.Log) error { return nil }),
+				WithBasePipeline(),
+				WithDefaultModifierPipeline(),
+			)
+			if err != nil {
+				repository.Close()
+				t.Fatalf("creating proxy: %v", err)
+			}
+			workshop, ok := proxy.GetExtension("workshop")
+			if !ok {
+				t.Fatal("getting workshop extension")
+			}
+			if err := workshop.ExecuteLua(`function processRequest(request) print("entered") while true do end end`); err != nil {
+				t.Fatalf("updating workshop: %v", err)
+			}
+			// Cleanup cancels the runtime, so a hook the disconnect missed cannot block proxy.Close.
+			workshop.ExecutionContext, workshop.CancelExecution = context.WithCancel(context.Background())
+			entered := make(chan struct{})
+			var once sync.Once
+			workshop.OnLog = func(extensions.ExtensionLog) error {
+				once.Do(func() { close(entered) })
+				return nil
+			}
+
+			proxyListener, err := proxy.GetListener("127.0.0.1", "0")
+			if err != nil {
+				proxy.Close()
+				t.Fatalf("creating proxy listener: %v", err)
+			}
+			serveResult := make(chan error, 1)
+			go func() { serveResult <- proxy.Serve(proxyListener) }()
+			defer func() {
+				workshop.CancelExecution()
+				proxy.Close()
+				select {
+				case <-serveResult:
+				case <-time.After(5 * time.Second):
+				}
+			}()
+
+			client, err := net.Dial("tcp", net.JoinHostPort(proxy.Addr, proxy.Port))
+			if err != nil {
+				t.Fatalf("dialing proxy: %v", err)
+			}
+			originHost := strings.TrimPrefix(origin.URL, "http://")
+			if _, err := fmt.Fprintf(client, request, origin.URL, originHost); err != nil {
+				t.Fatalf("writing request: %v", err)
+			}
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("processRequest did not enter Lua")
+			}
+
+			client.Close()
+
+			interrupted := make(chan error, 1)
+			go func() { interrupted <- workshop.ExecuteLua("probe = true") }()
+			select {
+			case err := <-interrupted:
+				if err != nil {
+					t.Fatalf("running Lua after the hook: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("client disconnect did not interrupt processRequest")
+			}
+			time.Sleep(200 * time.Millisecond)
+			if got := hits.Load(); got != 0 {
+				t.Fatalf("origin received %d requests after its client disconnected", got)
 			}
 		})
 	}
