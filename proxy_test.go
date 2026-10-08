@@ -22,7 +22,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/martian"
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
@@ -454,6 +456,60 @@ func TestProxy_WriteToDBLog(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProxy_WriteToDBCheckpointHookLog(t *testing.T) {
+	t.Run("should persist a checkpoint extension Lua error before its request is stored", func(t *testing.T) {
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		dbConnection, err := db.New(":memory:", logger)
+		if err != nil {
+			t.Fatalf("creating in-memory database: %v", err)
+		}
+		repository := db.NewProxyRepo(dbConnection)
+		t.Cleanup(func() { repository.Close() })
+
+		proxy := newTestProxy(t, testExtensions["checkpoint"])
+		proxy.LogRepo = repository
+		updateExtension(t, proxy, "checkpoint", `
+			function interceptRequest(request) error("request boom") end
+			function interceptResponse(response) error("response boom") end
+		`)
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+		_, remove, err := martian.TestContext(req, nil, nil)
+		if err != nil {
+			t.Fatalf("applying martian context : %v", err)
+		}
+		defer remove()
+		if err := SetupRequestModifier(proxy, req); err != nil {
+			t.Fatalf("running SetupRequestModifier : %v", err)
+		}
+		reqID, _ := core.RequestIDFromContext(req.Context())
+
+		if err := CheckpointRequestModifier(proxy, req); err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		if err := CheckpointResponseModifier(proxy, &http.Response{Header: make(http.Header), Request: req}); err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		close(proxy.DBWriteChannel)
+		proxy.WriteToDB()
+
+		logs, err := repository.GetLogs()
+		if err != nil {
+			t.Fatalf("getting persisted logs: %v", err)
+		}
+		if len(logs) != 2 {
+			t.Fatalf("\nwanted:\n2 persisted logs\ngot:\n%v", logs)
+		}
+		for _, entry := range logs {
+			if entry.ExtensionID == nil || *entry.ExtensionID != testExtensions["checkpoint"].ID {
+				t.Fatalf("\nwanted:\nextension %s\ngot:\n%v", testExtensions["checkpoint"].ID, entry.ExtensionID)
+			}
+			if entry.Context["request_id"] != reqID.String() {
+				t.Fatalf("\nwanted:\nrequest_id %s\ngot:\n%v", reqID, entry.Context)
+			}
+		}
+	})
 }
 
 type websocketRepositoryStub struct {

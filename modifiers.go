@@ -170,6 +170,16 @@ func hookInterrupted(ctx context.Context, extension *extensions.Runtime) bool {
 	return ctx.Err() != nil
 }
 
+// hookLogOptions links a hook error to its extension. The request ID goes in the log context,
+// not the request link, because the request is stored later or, when dropped, never.
+func hookLogOptions(ctx context.Context, extension *extensions.Runtime) []func(*domain.Log) error {
+	options := []func(*domain.Log) error{core.LogWithExtensionID(extension.Data.ID)}
+	if reqID, ok := core.RequestIDFromContext(ctx); ok {
+		options = append(options, core.LogWithContext(map[string]any{"request_id": reqID.String()}))
+	}
+	return options
+}
+
 // PreventLoopModifier skips processing a request if it is made to marasi's active listener address and port, preventing an infinite loop
 // It will normalize localhost & 127.0.0.1 when checking the host and port
 func PreventLoopModifier(proxy *Proxy, req *http.Request) error {
@@ -359,11 +369,7 @@ func CheckpointRequestModifier(proxy *Proxy, req *http.Request) error {
 		}
 		shouldIntercept, err := checkpointExt.ShouldInterceptRequest(req)
 		if err != nil {
-			if reqID, ok := core.RequestIDFromContext(req.Context()); ok {
-				proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptRequest : %s", err.Error()), core.LogWithReqResID(reqID))
-			} else {
-				proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptRequest : %s", err.Error()))
-			}
+			proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptRequest : %s", err.Error()), hookLogOptions(req.Context(), checkpointExt)...)
 			if hookInterrupted(req.Context(), checkpointExt) {
 				martian.NewContext(req).SkipRoundTrip()
 				return ErrDropped
@@ -804,11 +810,7 @@ func CheckpointResponseModifier(proxy *Proxy, res *http.Response) error {
 		}
 		shouldIntercept, err := checkpointExt.ShouldInterceptResponse(res)
 		if err != nil {
-			if reqID, ok := core.RequestIDFromContext(res.Request.Context()); ok {
-				proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptResponse : %s", err.Error()), core.LogWithReqResID(reqID))
-			} else {
-				proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptResponse : %s", err.Error()))
-			}
+			proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptResponse : %s", err.Error()), hookLogOptions(res.Request.Context(), checkpointExt)...)
 			if hookInterrupted(res.Request.Context(), checkpointExt) {
 				return ErrDropped
 			}
