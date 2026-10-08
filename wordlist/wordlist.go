@@ -37,7 +37,7 @@ type Provider interface {
 	List() ([]Info, error)
 	// Open opens a wordlist by name.
 	Open(name string) (Iterator, error)
-	// Add links source into the managed directory and removes source.
+	// Add moves source into the managed directory under its basename.
 	Add(source string) error
 	// Remove deletes a managed wordlist by name.
 	Remove(name string) error

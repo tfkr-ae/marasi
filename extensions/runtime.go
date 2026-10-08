@@ -64,6 +64,8 @@ type Runtime struct {
 	// ExecutionContext and CancelExecution belong to the project that loaded this VM.
 	ExecutionContext context.Context
 	CancelExecution  context.CancelFunc
+	// TrackExecution records project work for Lua execution and asynchronous requests.
+	// When non-nil, it returns a non-nil function that releases the record when the work ends.
 	TrackExecution   func() func()
 	executionContext context.Context
 	asyncExecutions  sync.WaitGroup
@@ -262,6 +264,10 @@ func (extension *Runtime) ExecuteLua(code string) error {
 	return extension.ExecuteLuaContext(context.Background(), code)
 }
 
+// ExecuteLuaContext executes code in the extension's Lua state under Mu.
+// Cancellation of ctx or ExecutionContext interrupts Lua through a debug hook.
+// Cancellation does not interrupt the wait for Mu.
+// Execution failures, including cancellation, return a wrapped Lua error.
 func (extension *Runtime) ExecuteLuaContext(ctx context.Context, code string) error {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
@@ -440,6 +446,11 @@ func (extension *Runtime) CallFunction(name string, args ...any) error {
 	return extension.CallFunctionContext(context.Background(), name, args...)
 }
 
+// CallFunctionContext calls the named global Lua function with args under Mu.
+// It returns nil if name does not identify a function.
+// Cancellation of ctx or ExecutionContext interrupts Lua through a debug hook.
+// Cancellation does not interrupt the wait for Mu.
+// Execution failures, including cancellation, return a wrapped Lua error.
 func (extension *Runtime) CallFunctionContext(ctx context.Context, name string, args ...any) error {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()

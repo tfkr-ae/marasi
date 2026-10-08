@@ -47,9 +47,12 @@ var defaultTemplate string
 var _ domain.ReportGenerator = (*Generator)(nil)
 
 var (
+	// ErrTemplateAlreadyExists means the destination template name is already in use.
 	ErrTemplateAlreadyExists = errors.New("report template already exists")
+	// ErrInvalidTemplateSource means the source cannot be added as a report template.
 	ErrInvalidTemplateSource = errors.New("invalid report template source")
-	ErrInvalidTemplateName   = errors.New("invalid report template name")
+	// ErrInvalidTemplateName means the name is not a valid managed template filename.
+	ErrInvalidTemplateName = errors.New("invalid report template name")
 )
 
 // Repository defines the database methods used by report template functions.

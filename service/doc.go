@@ -6,6 +6,7 @@
 // Project-bound handlers run only after admittingMux admits the request.
 //
 // GET /events is live and has no replay. Subscribe first, then read the row.
-// Events can arrive before the matching row is visible until handlers run
-// after the database write.
+// Traffic events can arrive before the matching row is persisted.
+// log.added follows a successful database insert.
+// Checkpoint events describe in-flight items, not stored rows.
 package service

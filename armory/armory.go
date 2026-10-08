@@ -28,7 +28,7 @@ type Manager struct {
 
 	// mu protects activeRuns.
 	mu sync.Mutex
-	// activeRuns contains the runs currently being executed.
+	// activeRuns contains executing runs and finished runs awaiting final persistence.
 	activeRuns map[uuid.UUID]*execution
 	closing    bool
 	executions sync.WaitGroup

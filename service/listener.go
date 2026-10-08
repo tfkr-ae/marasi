@@ -141,7 +141,8 @@ func (l *listenerLifecycle) Status() ListenerStatus {
 	return cloneListenerStatus(l.status)
 }
 
-// Start binds and serves the retained endpoint with optional overrides.
+// Start binds and serves the endpoint specified by settings.
+// Both Address and Port are required. Port zero requests an allocated port.
 func (l *listenerLifecycle) Start(ctx context.Context, settings ListenerSettings) (ListenerStatus, error) {
 	return l.mutate(ctx, startListener, settings)
 }

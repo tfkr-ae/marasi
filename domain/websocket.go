@@ -66,7 +66,15 @@ type WebSocketRepository interface {
 	UpdateConnection(conn *WebSocketConnection) error
 	GetConnection(id uuid.UUID) (*WebSocketConnection, error)
 	GetConnectionByRequestID(requestID uuid.UUID) (*WebSocketConnection, error)
+	// ListConnections returns at most limit connections in descending UUID order.
+	// A nil cursor starts the first page. Otherwise, only UUIDs less than cursor are included.
+	// The returned cursor identifies the next page and is nil when no more rows remain.
+	// limit must be positive.
 	ListConnections(cursor *uuid.UUID, limit int) ([]*WebSocketConnection, *uuid.UUID, error)
+	// ListMessages returns at most limit messages for connectionID in descending UUID order.
+	// A nil cursor starts the first page. Otherwise, only UUIDs less than cursor are included.
+	// The returned cursor identifies the next page and is nil when no more rows remain.
+	// limit must be positive.
 	ListMessages(connectionID uuid.UUID, cursor *uuid.UUID, limit int) ([]*WebSocketMessage, *uuid.UUID, error)
 	InsertMessage(msg *WebSocketMessage) error
 	GetMessage(id uuid.UUID) (*WebSocketMessage, error)

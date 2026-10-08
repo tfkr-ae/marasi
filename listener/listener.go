@@ -43,7 +43,9 @@ func NewTrackedConnection(conn net.Conn, onClose func()) net.Conn {
 type ProtocolMuxListener struct {
 	net.Listener
 	TLSConfig *tls.Config
-	WrapConn  func(net.Conn) net.Conn
+	// WrapConn wraps each accepted connection before protocol inspection and TLS.
+	// When non-nil, it must return a non-nil connection.
+	WrapConn func(net.Conn) net.Conn
 }
 
 func NewProtocolMuxListener(listener net.Listener, tlsConfig *tls.Config) *ProtocolMuxListener {

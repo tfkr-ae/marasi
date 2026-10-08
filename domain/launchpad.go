@@ -19,6 +19,8 @@ type LaunchpadRepository interface {
 	// GetLaunchpads retrieves all launchpads configured in the application.
 	// It returns a slice of Launchpad pointers.
 	GetLaunchpads() ([]*Launchpad, error)
+	// GetLaunchpad returns the launchpad identified by id.
+	// It returns ErrLaunchpadNotFound if the launchpad does not exist.
 	GetLaunchpad(id uuid.UUID) (*Launchpad, error)
 
 	// CreateLaunchpad creates a new launchpad with the given name and description.

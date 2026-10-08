@@ -23,7 +23,7 @@ type eventSubscriber struct {
 	done   chan struct{}     // closed when the subscriber is removed
 }
 
-// eventBroadcaster fans traffic events out to live /events subscribers.
+// eventBroadcaster sends service events to live /events subscribers.
 type eventBroadcaster struct {
 	mu          sync.Mutex                    // guards subscribers and closed
 	subscribers map[*eventSubscriber]struct{} // active event streams

@@ -165,7 +165,9 @@ func WithExtensions(exts []*domain.Extension, options ...func(*extensions.Runtim
 	}
 }
 
-// WithInterceptHandler takes a handler function that will be executed after a Checkpoint item is pending.
+// WithInterceptHandler sets OnIntercept for pending HTTP Checkpoint items.
+// The handler runs synchronously, and its return error is ignored.
+// A blocking handler blocks the intercepted execution.
 func WithInterceptHandler(handler func(item domain.CheckpointItem) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		if proxy.OnIntercept != nil {

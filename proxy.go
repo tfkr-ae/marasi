@@ -90,8 +90,10 @@ type Proxy struct {
 	DBWriteChannel chan any                             // DB Write Channel
 	OnRequest      func(req domain.ProxyRequest) error  // Function to be ran on each request - used by the GUI application to handle the new requests
 	OnResponse     func(res domain.ProxyResponse) error // Function to be ran on each response - used by the GUI application to handle the new responses
-	OnIntercept    func(item domain.CheckpointItem) error
-	OnLog          func(log domain.Log) error // Function to be ran on each log event - used by the GUI application to handle new log entries
+	// OnIntercept runs synchronously after an HTTP Checkpoint item becomes pending.
+	// Its return error is ignored. A blocking callback blocks the intercepted execution.
+	OnIntercept func(item domain.CheckpointItem) error
+	OnLog       func(log domain.Log) error // Function to be ran on each log event - used by the GUI application to handle new log entries
 	// OnWebSocketOpen is called when a WebSocket connection opens.
 	OnWebSocketOpen func(domain.WebSocketConnection) error
 	// OnWebSocketMessage is called for each processed WebSocket message.

@@ -395,9 +395,8 @@ func (s *Server) Close() {
 	s.events.close()
 }
 
-// serveEvents handles GET /events as a Server-Sent Events stream of traffic
-// notifications. It writes a connected comment, then request and response
-// events, with heartbeat comments while idle.
+// serveEvents handles GET /events as a Server-Sent Events stream of service events.
+// It writes a connected comment before events and heartbeat comments while idle.
 func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
