@@ -192,6 +192,8 @@ func listTraffic(ctx context.Context, instancePath, instanceName string, asJSON 
 }
 
 // writeTrafficListHuman writes a tab-separated traffic page and the next cursor, if any.
+// A page that reports an incomplete traffic index also gets a notice on stderr;
+// pages without an index field, such as Launchpad members, get none.
 func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 	var page struct {
 		Items []struct {
@@ -203,6 +205,9 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 			Length     string `json:"length"`
 		} `json:"items"`
 		NextCursor *string `json:"next_cursor"`
+		Index      *struct {
+			Complete bool `json:"complete"`
+		} `json:"index"`
 	}
 	if err := json.Unmarshal(body, &page); err != nil {
 		return fmt.Errorf("decoding traffic list: %w", err)
@@ -222,6 +227,9 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 	}
 	if page.NextCursor != nil {
 		fmt.Fprintf(stderr, "next_cursor=%s\n", *page.NextCursor)
+	}
+	if page.Index != nil && !page.Index.Complete {
+		fmt.Fprintln(stderr, "notice: the traffic index is still building; text results may be incomplete")
 	}
 	return nil
 }

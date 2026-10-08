@@ -37,6 +37,8 @@ type openProject struct {
 	path      string
 	resources marasi.ProjectResources
 	unlock    func() error
+	// cancelIndexBuild stops the project's background traffic index build.
+	cancelIndexBuild context.CancelFunc
 }
 
 // ProjectLifecycle owns the one open project of a service instance.
@@ -56,6 +58,8 @@ type ProjectLifecycle struct {
 	logAdded         func(*domain.Log)
 	armoryRunUpdated func(*domain.ArmoryRun)
 	extensionOptions []func(*extensions.Runtime) error
+	indexEvents      indexCompletion
+	indexBatch       func(context.Context, string, trafficIndexBuilder) (int, bool, error)
 	executionContext context.Context
 	cancelExecution  context.CancelFunc
 }
@@ -78,6 +82,7 @@ func NewProjectLifecycle(proxy *marasi.Proxy, configDir string, wordlists wordli
 		gate:             newProjectGate(),
 	}
 	lifecycle.prepare = lifecycle.prepareProject
+	lifecycle.indexBatch = indexMissingTraffic
 	lifecycle.flushOpenProject = proxy.CloseWebSocketsAndFlush
 	_ = proxy.WithOptions(marasi.WithWorkAdmission(lifecycle.gate.admit))
 	return lifecycle
@@ -177,6 +182,7 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 	if repository, ok := resources.Repository.(*eventLogRepository); ok {
 		repository.startPublishing()
 	}
+	lifecycle.startIndexBuild(targetProject)
 	if old == nil {
 		return nil
 	}
@@ -426,6 +432,9 @@ func cleanupPreparedProject(path string, existed bool, resources marasi.ProjectR
 }
 
 func closeProject(project *openProject) error {
+	if project.cancelIndexBuild != nil {
+		project.cancelIndexBuild()
+	}
 	for _, runtime := range project.resources.Extensions {
 		if runtime.CancelExecution != nil {
 			runtime.CancelExecution()

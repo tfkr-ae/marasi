@@ -101,6 +101,51 @@ func TestTrafficListCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("should warn on stderr that text results may be incomplete while the index builds", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","method":"GET","host":"example.com","path":"/a","status_code":200,"length":"12"}],"next_cursor":"0193802f-f0e7-73d9-a764-06d21e367809","index":{"complete":false}}`)
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := "01938032-1b17-7243-b035-e6a9f4645904  GET  example.com  /a  200  12\n"
+		if stdout != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
+		}
+		wantStderr := "next_cursor=0193802f-f0e7-73d9-a764-06d21e367809\nnotice: the traffic index is still building; text results may be incomplete\n"
+		if stderr != wantStderr {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantStderr, stderr)
+		}
+	})
+
+	t.Run("should print no notice when the index is complete", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null,"index":{"complete":true}}`)
+
+		_, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if stderr != "" {
+			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+		}
+	})
+
+	t.Run("should print the list body unchanged with --json while the index builds", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		body := `{"items":[],"next_cursor":null,"index":{"complete":false}}`
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "--json", "traffic", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if stdout != body || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %s and empty stderr\ngot:\nstdout %s and stderr %s", body, stdout, stderr)
+		}
+	})
+
 	t.Run("should print no rows for an empty page", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)

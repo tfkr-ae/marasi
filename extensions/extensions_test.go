@@ -172,6 +172,10 @@ func (m *mockTrafficRepo) GetRequestResponseRows(ids []uuid.UUID) ([]*domain.Req
 	return reqRows, nil
 }
 
+func (m *mockTrafficRepo) TrafficIndexComplete() (bool, error) {
+	return true, nil
+}
+
 func (m *mockTrafficRepo) GetMetadata(id uuid.UUID) (map[string]any, error) {
 	if m.forceError {
 		return nil, errors.New("forced repo error")

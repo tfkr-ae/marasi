@@ -64,6 +64,10 @@ type TrafficRepository interface {
 	// *QueryError.
 	ListTraffic(cursor *uuid.UUID, limit int, query string) (items []*RequestResponseSummary, nextCursor *uuid.UUID, err error)
 
+	// TrafficIndexComplete reports whether every pair is in the traffic
+	// index. Text conditions in a query can miss pairs while it is false.
+	TrafficIndexComplete() (complete bool, err error)
+
 	// GetMetadata returns the metadata map for a specific request ID.
 	GetMetadata(id uuid.UUID) (metadata map[string]any, err error)
 

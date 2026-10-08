@@ -23,6 +23,14 @@ var errInvalidMetadataRequest = errors.New("invalid metadata request")
 type trafficList struct {
 	Items      []trafficSummary `json:"items"`
 	NextCursor *uuid.UUID       `json:"next_cursor"` // oldest item id when an older page exists
+	Index      *trafficIndex    `json:"index,omitempty"`
+}
+
+// trafficIndex reports the state of the traffic index (ADR-0026).
+type trafficIndex struct {
+	// Complete is false while the background build is still indexing pairs.
+	// Text conditions in a query can miss pairs until it is true.
+	Complete bool `json:"complete"`
 }
 
 // trafficSummary is one request/response pair in a traffic list page.
@@ -87,6 +95,13 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
+		// Read completeness first: a build finishing during the list must not
+		// mark a page that may have missed pairs as complete.
+		complete, err := repo.TrafficIndexComplete()
+		if err != nil {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
 		items, nextCursor, err := repo.ListTraffic(cursor, limit, r.URL.Query().Get("q"))
 		var queryErr *domain.QueryError
 		if errors.As(err, &queryErr) {
@@ -98,7 +113,9 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			return
 		}
 		slices.Reverse(items)
-		writeJSON(w, r, http.StatusOK, trafficListFromSummaries(items, nextCursor))
+		list := trafficListFromSummaries(items, nextCursor)
+		list.Index = &trafficIndex{Complete: complete}
+		writeJSON(w, r, http.StatusOK, list)
 	})
 	mux.HandleFunc("GET /traffic/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(r.PathValue("id"))

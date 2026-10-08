@@ -58,6 +58,9 @@ type stubTrafficRepository struct {
 	cursor  *uuid.UUID
 	limit   int
 	listErr error
+
+	// indexIncomplete reports pairs still missing from the traffic index.
+	indexIncomplete bool
 }
 
 type stubLaunchpadRepository struct {
@@ -216,6 +219,10 @@ func (s *stubTrafficRepository) ListNotes(cursor *uuid.UUID, limit int) ([]*doma
 		return matched, &id, nil
 	}
 	return matched, s.nextCursor, nil
+}
+
+func (s *stubTrafficRepository) TrafficIndexComplete() (bool, error) {
+	return !s.indexIncomplete, nil
 }
 
 func (s *stubTrafficRepository) ListTraffic(cursor *uuid.UUID, limit int, query string) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
@@ -1062,7 +1069,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\"}],\"next_cursor\":null}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\"}],\"next_cursor\":null,\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1102,7 +1109,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\"}],\"next_cursor\":null}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\"}],\"next_cursor\":null,\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1136,7 +1143,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"N/A\",\"status_code\":-1,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"N/A\",\"status_code\":-1,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null,\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1164,7 +1171,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null},{\"id\":\"01938032-1b17-7243-b035-e6a9f4645904\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:06Z\",\"responded_at\":null}],\"next_cursor\":\"0193802f-f0e7-73d9-a764-06d21e367809\"}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null},{\"id\":\"01938032-1b17-7243-b035-e6a9f4645904\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:06Z\",\"responded_at\":null}],\"next_cursor\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1249,7 +1256,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null,\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1274,7 +1281,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[],\"next_cursor\":null}\n"
+		want := "{\"items\":[],\"next_cursor\":null,\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1330,6 +1337,30 @@ func TestTrafficList(t *testing.T) {
 		}
 		if repo.cursor == nil || *repo.cursor != cursor {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", cursor, repo.cursor)
+		}
+	})
+
+	t.Run("should report whether the traffic index is complete", func(t *testing.T) {
+		for _, test := range []struct {
+			incomplete bool
+			want       string
+		}{
+			{incomplete: true, want: "{\"items\":[],\"next_cursor\":null,\"index\":{\"complete\":false}}\n"},
+			{incomplete: false, want: "{\"items\":[],\"next_cursor\":null,\"index\":{\"complete\":true}}\n"},
+		} {
+			repo := &stubTrafficRepository{indexIncomplete: test.incomplete}
+			server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+			request := httptest.NewRequest(http.MethodGet, "/traffic", nil)
+			response := httptest.NewRecorder()
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
+			}
+			if got := response.Body.String(); got != test.want {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", test.want, got)
+			}
 		}
 	})
 

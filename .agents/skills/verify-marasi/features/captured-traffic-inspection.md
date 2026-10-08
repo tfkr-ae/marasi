@@ -26,6 +26,7 @@ Send two distinct proxied requests, for example `GET /proof.txt` returning 200 a
 - `host = "..."` is exact, keeps case, and may include the origin port for a non-default port. A `*` at the start or end matches anything there.
 - `path = "/proof*"` matches a path prefix. `status_code` also takes `<`, `<=`, `>`, and `>=`. The removed `--host`, `--method`, `--path`, and `--status-code` flags are unknown flags.
 - Human output writes `next_cursor=$NEXT_CURSOR` to stderr. JSON keeps it in `next_cursor`.
+- Every `traffic list` page has `"index":{"complete":bool}`. While an opened project's older pairs are still being indexed in the background it is `false`, text conditions can miss those pairs, and human output adds a `notice:` line on stderr. A new project, or one fully indexed, is `true`.
 - `traffic get` requires a UUID. Invalid IDs fail before repository lookup.
 - `traffic metadata update` requires `--file` or piped stdin with a non-empty JSON object body. A TTY stdin fails.
 - `--limit` must be 1 through 500. The default is 200.
