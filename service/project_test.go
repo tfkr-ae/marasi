@@ -21,8 +21,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Shopify/go-lua"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
@@ -38,7 +40,7 @@ func (busyArmory) CancelRun(uuid.UUID) error           { return nil }
 func (busyArmory) ActiveRunIDs() []uuid.UUID           { return []uuid.UUID{uuid.Nil} }
 func (busyArmory) Shutdown()                           {}
 
-func newTestProjectLifecycle(t *testing.T) (*ProjectLifecycle, *marasi.Proxy, string) {
+func newTestProjectLifecycle(t *testing.T, extensionOptions ...func(*extensions.Runtime) error) (*ProjectLifecycle, *marasi.Proxy, string) {
 	t.Helper()
 	configDir := t.TempDir()
 	manager, err := wordlist.NewManager(configDir)
@@ -50,7 +52,7 @@ func newTestProjectLifecycle(t *testing.T) (*ProjectLifecycle, *marasi.Proxy, st
 	if err != nil {
 		t.Fatalf("creating proxy: %v", err)
 	}
-	lifecycle := NewProjectLifecycle(proxy, configDir, manager, logger)
+	lifecycle := NewProjectLifecycle(proxy, configDir, manager, logger, extensionOptions...)
 	t.Cleanup(func() { _ = lifecycle.Shutdown() })
 	return lifecycle, proxy, configDir
 }
@@ -817,6 +819,46 @@ end`, holdURL)
 		}
 		if _, err := acquireProjectOwnership(target); !errors.Is(err, ErrProjectAlreadyOpen) {
 			t.Fatalf("\nwanted:\npublished target still owned\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should apply extension options before extension startup", func(t *testing.T) {
+		called := make(chan string, 1)
+		registerEmbedded := func(extension *extensions.Runtime) error {
+			extension.LuaState.Register("embedded", func(*lua.State) int {
+				called <- extension.Data.Name
+				return 0
+			})
+			return nil
+		}
+		lifecycle, _, configDir := newTestProjectLifecycle(t, registerEmbedded)
+		target := canonicalProjectPath(t, filepath.Join(configDir, "embedded.marasi"))
+		conn, err := db.New(target, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err != nil {
+			t.Fatalf("creating project: %v", err)
+		}
+		repository := db.NewProxyRepo(conn)
+		workshop, err := repository.GetExtensionByName("workshop")
+		if err != nil {
+			t.Fatalf("finding workshop: %v", err)
+		}
+		if err := repository.UpdateExtensionLuaCodeByUUID(workshop.ID, `function startup() embedded() end`); err != nil {
+			t.Fatalf("storing workshop startup: %v", err)
+		}
+		if err := conn.Close(); err != nil {
+			t.Fatalf("closing seeded project: %v", err)
+		}
+
+		if err := lifecycle.Open(context.Background(), target); err != nil {
+			t.Fatalf("\nwanted:\nproject opened\ngot:\n%v", err)
+		}
+		select {
+		case name := <-called:
+			if name != "workshop" {
+				t.Fatalf("\nwanted:\nworkshop startup\ngot:\n%s", name)
+			}
+		default:
+			t.Fatal("\nwanted:\nstartup called the embedded function\ngot:\nno call")
 		}
 	})
 }
