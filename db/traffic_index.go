@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -24,13 +25,18 @@ type trafficIndexRow struct {
 
 // storedPair is the stored text of a pair that the index is built from.
 type storedPair struct {
-	RowID       int64  `db:"rowid"`
-	RequestRaw  []byte `db:"request_raw"`
-	ResponseRaw []byte `db:"response_raw"`
+	RowID       int64          `db:"rowid"`
+	RequestRaw  []byte         `db:"request_raw"`
+	ResponseRaw []byte         `db:"response_raw"`
+	Note        sql.NullString `db:"note"`
+	// Metadata is the metadata JSON without the prettified-request and
+	// prettified-response keys, which repeat the raw text.
+	Metadata sql.NullString `db:"metadata"`
 }
 
 // newTrafficIndexRow builds the whole index row for a stored pair. Heads are
-// always indexed. A body is left out when it is binary.
+// always indexed. A body is left out when it is binary. The note and metadata
+// are indexed as text.
 func newTrafficIndexRow(pair storedPair) trafficIndexRow {
 	requestHead, requestBody := splitHTTPMessage(pair.RequestRaw)
 	responseHead, responseBody := splitHTTPMessage(pair.ResponseRaw)
@@ -40,14 +46,20 @@ func newTrafficIndexRow(pair storedPair) trafficIndexRow {
 		requestBody:  indexableBody(requestBody),
 		responseHead: indexableHead(responseHead),
 		responseBody: indexableBody(responseBody),
+		note:         indexableText(pair.Note),
+		metadata:     indexableText(pair.Metadata),
 	}
 }
 
 // indexPair writes the whole index row for the pair with id, replacing any row
-// it already has. Call it in the transaction that changed the pair's text.
+// it already has. Call it in the transaction that changed the pair's text,
+// note, or metadata.
 func indexPair(tx sqlx.Ext, id uuid.UUID) error {
 	var pair storedPair
-	err := sqlx.Get(tx, &pair, `SELECT rowid, request_raw, response_raw FROM request WHERE id = ?`, id)
+	err := sqlx.Get(tx, &pair, `SELECT r.rowid, r.request_raw, r.response_raw, n.note,
+		json_remove(r.metadata, '$."prettified-request"', '$."prettified-response"') AS metadata
+		FROM request r LEFT JOIN notes n ON n.request_id = r.id
+		WHERE r.id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("reading pair %s to index: %w", id, err)
 	}
@@ -96,4 +108,13 @@ func indexableBody(body []byte) any {
 		return nil
 	}
 	return string(body)
+}
+
+// indexableText returns text as valid UTF-8 without NUL bytes, or nil when it
+// is NULL or empty.
+func indexableText(text sql.NullString) any {
+	if !text.Valid {
+		return nil
+	}
+	return indexableHead([]byte(text.String))
 }

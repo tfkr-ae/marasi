@@ -44,6 +44,12 @@ const trafficListLong = `List the newest page of traffic.
       : (contains), ignoring case, for example response_body:"password".
       A head is the request or status line plus headers. Binary bodies
       are not searched.
+  note
+      : (contains), ignoring case, for example note:"idor candidate".
+  metadata
+      : (contains), ignoring case, anywhere in the metadata, for example
+      metadata:"workshop". The prettified-request and prettified-response
+      keys are not searched.
 
 Bare text, for example "hbGci", searches every text part. Text terms
 need at least 3 characters.

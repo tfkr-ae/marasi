@@ -108,8 +108,8 @@ marasi --instance assessment certificate get > marasi-ca.pem
 
 `traffic list -q` (or `--query`) takes an AIP-160 query, sent to the control API
 as `GET /traffic?q=`. It combines exact field conditions such as
-`host = "api.example.com"` with text search such as `response_body:"password"`
-or bare `"hbGci"`. Run `marasi traffic list --help` for the fields. In a
+`host = "api.example.com"` with text search such as `response_body:"password"`,
+`note:"idor candidate"`, `metadata:"workshop"`, or bare `"hbGci"`. Run `marasi traffic list --help` for the fields. In a
 query, `OR` binds tighter than `AND`, so `a AND b OR c` means `a AND (b OR c)`.
 An invalid query returns 400
 `{"error":"invalid_query","message":"...","position":N}`.

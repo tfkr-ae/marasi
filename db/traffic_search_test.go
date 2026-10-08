@@ -333,3 +333,146 @@ func TestTrafficRepo_ListTrafficTextSearchErrors(t *testing.T) {
 		})
 	}
 }
+
+// assertListNames checks that query lists the pairs named in want, newest
+// first.
+func assertListNames(t *testing.T, repo *Repository, ids map[string]uuid.UUID, step, query, want string) {
+	t.Helper()
+	if got := listNames(t, repo, ids, query); got != want {
+		t.Fatalf("%s: %s\nwanted:\n%q\ngot:\n%q", step, query, want, got)
+	}
+}
+
+func TestTrafficRepo_ListTrafficNoteSearch(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	ids := captureTextPairs(t, repo, []textPair{
+		{name: "noted", request: "GET /users/7 HTTP/1.1\r\n\r\n", response: []byte("HTTP/1.1 200 OK\r\n\r\n{}")},
+		{name: "other", request: "GET /users/8 HTTP/1.1\r\n\r\n"},
+	})
+
+	assertListNames(t, repo, ids, "before note", `note:"idor"`, "")
+
+	if err := repo.UpdateNote(ids["noted"], "IDOR candidate: user id in path"); err != nil {
+		t.Fatalf("inserting note: %v", err)
+	}
+	assertListNames(t, repo, ids, "after insert", `note:"idor candidate"`, "noted")
+	assertListNames(t, repo, ids, "after insert", `"idor candidate"`, "noted")
+	assertListNames(t, repo, ids, "after insert", `request_head:"idor"`, "")
+	assertListNames(t, repo, ids, "after insert", `request_head:"/users/7"`, "noted")
+	assertListNames(t, repo, ids, "after insert", `response_head:"200 OK"`, "noted")
+
+	if err := repo.UpdateNote(ids["noted"], "checked, not exploitable"); err != nil {
+		t.Fatalf("updating note: %v", err)
+	}
+	assertListNames(t, repo, ids, "after update", `note:"idor"`, "")
+	assertListNames(t, repo, ids, "after update", `note:"exploitable"`, "noted")
+
+	if err := repo.DeleteNote(ids["noted"]); err != nil {
+		t.Fatalf("deleting note: %v", err)
+	}
+	assertListNames(t, repo, ids, "after delete", `note:"exploitable"`, "")
+	assertListNames(t, repo, ids, "after delete", `"exploitable"`, "")
+	assertListNames(t, repo, ids, "after delete", `request_head:"/users/7"`, "noted")
+}
+
+func TestTrafficRepo_ListTrafficMetadataSearch(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	ids := captureTextPairs(t, repo, []textPair{
+		{name: "a", request: "GET /a HTTP/1.1\r\n\r\n"},
+		{name: "b", request: "GET /b HTTP/1.1\r\n\r\n"},
+		{name: "c", request: "GET /c HTTP/1.1\r\n\r\n", response: []byte("HTTP/1.1 200 OK\r\n\r\nok")},
+	})
+
+	assertListNames(t, repo, ids, "before update", `metadata:"workshop"`, "")
+
+	if err := repo.UpdateMetadata(map[string]any{"extension": "Workshop", "tags": []any{"needs-review"}}, ids["a"], ids["c"]); err != nil {
+		t.Fatalf("updating metadata: %v", err)
+	}
+	assertListNames(t, repo, ids, "after update", `metadata:"workshop"`, "c,a")
+	assertListNames(t, repo, ids, "after update", `metadata:"needs-review"`, "c,a")
+	assertListNames(t, repo, ids, "after update", `"needs-review"`, "c,a")
+	assertListNames(t, repo, ids, "after update", `metadata:"extension"`, "c,a")
+	assertListNames(t, repo, ids, "after update", `note:"workshop"`, "")
+	assertListNames(t, repo, ids, "after update", `request_head:"GET /b" AND metadata:"workshop"`, "")
+	assertListNames(t, repo, ids, "after update", `response_head:"200 OK" AND metadata:"workshop"`, "c")
+
+	if err := repo.UpdateMetadata(map[string]any{"extension": "repeater"}, ids["a"]); err != nil {
+		t.Fatalf("replacing metadata: %v", err)
+	}
+	assertListNames(t, repo, ids, "after replace", `metadata:"workshop"`, "c")
+	assertListNames(t, repo, ids, "after replace", `metadata:"repeater"`, "a")
+	assertListNames(t, repo, ids, "after replace", `request_head:"/a HTTP"`, "a")
+}
+
+func TestTrafficRepo_ListTrafficMetadataSearchAtCapture(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	id, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("creating uuid: %v", err)
+	}
+	ids := map[string]uuid.UUID{"tagged": id}
+	err = repo.InsertRequest(&domain.ProxyRequest{
+		ID:          id,
+		Scheme:      "https",
+		Method:      "GET",
+		Host:        "example.com",
+		Path:        "/",
+		Raw:         []byte("GET / HTTP/1.1\r\n\r\n"),
+		Metadata:    map[string]any{"extension": "intercepted-by-lua", "prettified-request": "prettyrequestonly"},
+		RequestedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("inserting request: %v", err)
+	}
+	assertListNames(t, repo, ids, "after request", `metadata:"intercepted-by-lua"`, "tagged")
+	assertListNames(t, repo, ids, "after request", `"prettyrequestonly"`, "")
+
+	err = repo.InsertResponse(&domain.ProxyResponse{
+		ID:          id,
+		Status:      "200 OK",
+		StatusCode:  200,
+		ContentType: "text/plain",
+		Length:      "0",
+		Raw:         []byte("HTTP/1.1 200 OK\r\n\r\n"),
+		Metadata: map[string]any{
+			"extension":           "response-tagger",
+			"prettified-request":  "prettyrequestonly",
+			"prettified-response": "prettyresponseonly",
+		},
+		RespondedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("inserting response: %v", err)
+	}
+	assertListNames(t, repo, ids, "after response", `metadata:"response-tagger"`, "tagged")
+	assertListNames(t, repo, ids, "after response", `metadata:"intercepted-by-lua"`, "")
+	assertListNames(t, repo, ids, "after response", `"prettyrequestonly"`, "")
+	assertListNames(t, repo, ids, "after response", `"prettyresponseonly"`, "")
+	assertListNames(t, repo, ids, "after response", `metadata:"prettified"`, "")
+
+	if err := repo.UpdateMetadata(map[string]any{"prettified-response": "prettyresponseonly", "kept": "visiblevalue"}, id); err != nil {
+		t.Fatalf("updating metadata: %v", err)
+	}
+	assertListNames(t, repo, ids, "after update", `"prettyresponseonly"`, "")
+	assertListNames(t, repo, ids, "after update", `metadata:"visiblevalue"`, "tagged")
+}
+
+func TestTrafficRepo_ListTrafficNoteChangesKeepMetadataSearch(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	ids := captureTextPairs(t, repo, []textPair{{name: "a", request: "GET /a HTTP/1.1\r\n\r\n"}})
+	if err := repo.UpdateMetadata(map[string]any{"extension": "workshop"}, ids["a"]); err != nil {
+		t.Fatalf("updating metadata: %v", err)
+	}
+	if err := repo.UpdateNote(ids["a"], "a note"); err != nil {
+		t.Fatalf("inserting note: %v", err)
+	}
+	assertListNames(t, repo, ids, "after note", `metadata:"workshop"`, "a")
+	if err := repo.DeleteNote(ids["a"]); err != nil {
+		t.Fatalf("deleting note: %v", err)
+	}
+	assertListNames(t, repo, ids, "after delete", `metadata:"workshop"`, "a")
+}

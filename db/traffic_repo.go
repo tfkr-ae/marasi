@@ -446,17 +446,31 @@ func (repo *Repository) GetMetadata(id uuid.UUID) (map[string]any, error) {
 }
 
 // UpdateMetadata updates the metadata for one or more requests identified by their IDs.
+// All requests and their index rows are updated in one transaction.
 func (repo *Repository) UpdateMetadata(metadata map[string]any, ids ...uuid.UUID) error {
 	dbMeta := Metadata(metadata)
 	query := `UPDATE request SET metadata = ? WHERE id = ?`
 
-	for _, id := range ids {
-		_, err := repo.dbConn.Exec(query, dbMeta, id)
-		if err != nil {
-			return fmt.Errorf("updating metadata %v for %v : %w", dbMeta, id, err)
+	return repo.inTx(func(tx *sqlx.Tx) error {
+		for _, id := range ids {
+			result, err := tx.Exec(query, dbMeta, id)
+			if err != nil {
+				return fmt.Errorf("updating metadata %v for %v : %w", dbMeta, id, err)
+			}
+			rowsAffected, err := result.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("updating metadata %v for %v : %w", dbMeta, id, err)
+			}
+			if rowsAffected == 0 {
+				// No such request: nothing changed, so there is nothing to index.
+				continue
+			}
+			if err := indexPair(tx, id); err != nil {
+				return fmt.Errorf("updating metadata %v for %v : %w", dbMeta, id, err)
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // GetNote retrieves the user-created note associated with a specific request ID.
@@ -475,37 +489,61 @@ func (repo *Repository) GetNote(requestID uuid.UUID) (string, error) {
 
 // UpdateNote creates or updates a user-created note for a specific request ID.
 // If a note already exists for the request, it will be updated; otherwise, a new note will be inserted.
+// The pair's index row is rebuilt in the same transaction.
 func (repo *Repository) UpdateNote(requestID uuid.UUID, note string) error {
 	query := `INSERT INTO notes (request_id, note, created_at)
               VALUES (?, ?, CURRENT_TIMESTAMP)
-              ON CONFLICT(request_id) 
+              ON CONFLICT(request_id)
 			  DO UPDATE SET
 				note = excluded.note,
 				created_at = CURRENT_TIMESTAMP;`
 
-	_, err := repo.dbConn.Exec(query, requestID, note)
-
+	err := repo.inTx(func(tx *sqlx.Tx) error {
+		if _, err := tx.Exec(query, requestID, note); err != nil {
+			return err
+		}
+		return indexPair(tx, requestID)
+	})
 	if err != nil {
 		return fmt.Errorf("updating note for request %s: %w", requestID, err)
 	}
-
 	return nil
 }
 
-// DeleteNote removes the note row for a request ID.
+// DeleteNote removes the note row for a request ID and rebuilds the pair's
+// index row in the same transaction.
 func (repo *Repository) DeleteNote(requestID uuid.UUID) error {
-	result, err := repo.dbConn.Exec(`DELETE FROM notes WHERE request_id = ?`, requestID)
+	err := repo.inTx(func(tx *sqlx.Tx) error {
+		result, err := tx.Exec(`DELETE FROM notes WHERE request_id = ?`, requestID)
+		if err != nil {
+			return err
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rowsAffected == 0 {
+			return sql.ErrNoRows
+		}
+		return indexPair(tx, requestID)
+	})
 	if err != nil {
 		return fmt.Errorf("deleting note for request %s: %w", requestID, err)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("deleting note for request %s: %w", requestID, err)
-	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("deleting note for request %s: %w", requestID, sql.ErrNoRows)
 	}
 	return nil
+}
+
+// inTx runs fn in a transaction and commits when fn succeeds.
+func (repo *Repository) inTx(fn func(tx *sqlx.Tx) error) error {
+	tx, err := repo.dbConn.Beginx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ListNotes returns a newest-first page of summaries that have a non-empty note.

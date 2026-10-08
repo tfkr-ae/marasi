@@ -64,6 +64,7 @@ var trafficFields = map[string]trafficField{
 	"request_body":  {kind: fieldIndexedText, column: "request_body"},
 	"response_head": {kind: fieldIndexedText, column: "response_head"},
 	"response_body": {kind: fieldIndexedText, column: "response_body"},
+	"note":          {kind: fieldIndexedText, column: "note"},
 }
 
 var comparisonOperators = map[string]string{
@@ -230,7 +231,11 @@ func (t *queryTranslator) has(e, lhs, rhs *expr.Expr) (string, error) {
 	case fieldExactText:
 		return "", t.errorAt(e, "operator : is not supported on %s; use = or !=, with * at the start or end", name)
 	case fieldMetadata:
-		return "", t.errorAt(e, "operator : is not supported on metadata keys; use = or !=")
+		if len(path) > 0 {
+			return "", t.errorAt(e, "operator : is not supported on metadata keys; use = or !=")
+		}
+		// metadata:"text" searches the whole indexed metadata.
+		return t.textMatch(rhs, "metadata")
 	}
 	return "", t.errorAt(e, "operator : is not supported on %s; use = or another comparison", name)
 }
