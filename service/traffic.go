@@ -35,20 +35,6 @@ type trafficIndex struct {
 	Complete bool `json:"complete"`
 }
 
-// trafficIndexState reads the state of the open project's traffic index for a
-// traffic list response.
-func trafficIndexState(proxy *marasi.Proxy) (*trafficIndex, error) {
-	repo, err := proxy.GetTrafficRepo()
-	if err != nil {
-		return nil, err
-	}
-	complete, err := repo.TrafficIndexComplete()
-	if err != nil {
-		return nil, err
-	}
-	return &trafficIndex{Complete: complete}, nil
-}
-
 // trafficSummary is one request/response pair in a traffic list page.
 type trafficSummary struct {
 	ID          uuid.UUID      `json:"id"`           // request UUID
@@ -111,26 +97,19 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		// Read completeness first: a build finishing during the list must not
-		// mark a page that may have missed pairs as complete.
-		index, err := trafficIndexState(proxy)
-		if err != nil {
-			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
-			return
-		}
-		items, nextCursor, err := repo.ListTraffic(cursor, limit, r.URL.Query().Get("q"))
+		items, nextCursor, indexComplete, err := repo.ListTraffic(cursor, limit, r.URL.Query().Get("q"))
 		var queryErr *domain.QueryError
 		if errors.As(err, &queryErr) {
 			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
 			return
 		}
 		if err != nil {
-			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
 			return
 		}
 		slices.Reverse(items)
 		list := trafficListFromSummaries(items, nextCursor)
-		list.Index = index
+		list.Index = &trafficIndex{Complete: indexComplete}
 		writeJSON(w, r, http.StatusOK, list)
 	})
 	mux.HandleFunc("GET /traffic/{id}", func(w http.ResponseWriter, r *http.Request) {

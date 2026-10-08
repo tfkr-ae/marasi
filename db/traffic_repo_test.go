@@ -1044,7 +1044,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 
-		items, nextCursor, err := repo.ListTraffic(nil, 200, "")
+		items, nextCursor, _, err := repo.ListTraffic(nil, 200, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1065,7 +1065,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		newer := testRequest(t, repo, nil)
 		insertTestResponseAndGet(t, repo, newer, nil)
 
-		items, nextCursor, err := repo.ListTraffic(nil, 200, "")
+		items, nextCursor, _, err := repo.ListTraffic(nil, 200, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1093,7 +1093,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		newest := testRequest(t, repo, nil)
 
-		items, nextCursor, err := repo.ListTraffic(nil, 2, "")
+		items, nextCursor, _, err := repo.ListTraffic(nil, 2, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1113,7 +1113,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, *nextCursor)
 		}
 
-		older, olderNext, err := repo.ListTraffic(nextCursor, 2, "")
+		older, olderNext, _, err := repo.ListTraffic(nextCursor, 2, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1138,7 +1138,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		newest := testRequest(t, repo, nil)
 
-		first, nextCursor, err := repo.ListTraffic(nil, 2, "")
+		first, nextCursor, _, err := repo.ListTraffic(nil, 2, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1152,7 +1152,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		_ = testRequest(t, repo, nil)
 
-		older, olderNext, err := repo.ListTraffic(nextCursor, 2, "")
+		older, olderNext, _, err := repo.ListTraffic(nextCursor, 2, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1174,7 +1174,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		_ = testRequest(t, repo, nil)
 		zero := uuid.Nil
 
-		items, nextCursor, err := repo.ListTraffic(&zero, 200, "")
+		items, nextCursor, _, err := repo.ListTraffic(&zero, 200, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1192,7 +1192,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 
 		id := testRequest(t, repo, nil)
 
-		items, nextCursor, err := repo.ListTraffic(nil, 200, "")
+		items, nextCursor, _, err := repo.ListTraffic(nil, 200, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1223,7 +1223,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 			"prettified-response": "pretty-res",
 		})
 
-		items, _, err := repo.ListTraffic(nil, 200, "")
+		items, _, _, err := repo.ListTraffic(nil, 200, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1246,7 +1246,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		_ = insertTraffic(t, repo, "GET", "other.com", "/")
 
-		items, nextCursor, err := repo.ListTraffic(nil, 200, `host = "example.com"`)
+		items, nextCursor, _, err := repo.ListTraffic(nil, 200, `host = "example.com"`)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1271,7 +1271,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		_ = insertTraffic(t, repo, "GET", "example.com", "/")
 
-		items, nextCursor, err := repo.ListTraffic(nil, 200, `method = "POST"`)
+		items, nextCursor, _, err := repo.ListTraffic(nil, 200, `method = "POST"`)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1298,7 +1298,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		_ = insertTraffic(t, repo, "GET", "example.com", "/")
 
-		items, nextCursor, err := repo.ListTraffic(nil, 200, `status_code = 200`)
+		items, nextCursor, _, err := repo.ListTraffic(nil, 200, `status_code = 200`)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1323,7 +1323,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		_ = insertTraffic(t, repo, "GET", "example.com", "/users?id=1")
 
-		items, nextCursor, err := repo.ListTraffic(nil, 200, `path = "/api/users*"`)
+		items, nextCursor, _, err := repo.ListTraffic(nil, 200, `path = "/api/users*"`)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1357,7 +1357,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		wrongStatus := insertTraffic(t, repo, "POST", "example.com", "/api/users")
 		insertTrafficResponse(t, repo, wrongStatus, 404)
 
-		items, nextCursor, err := repo.ListTraffic(nil, 200, `host = "example.com" AND method = "POST" path = "/api*" AND status_code = 200`)
+		items, nextCursor, _, err := repo.ListTraffic(nil, 200, `host = "example.com" AND method = "POST" path = "/api*" AND status_code = 200`)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1385,7 +1385,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		newest := insertTraffic(t, repo, "GET", "example.com", "/")
 
 		query := `host = "example.com"`
-		items, nextCursor, err := repo.ListTraffic(nil, 2, query)
+		items, nextCursor, _, err := repo.ListTraffic(nil, 2, query)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1405,7 +1405,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, *nextCursor)
 		}
 
-		older, olderNext, err := repo.ListTraffic(nextCursor, 2, query)
+		older, olderNext, _, err := repo.ListTraffic(nextCursor, 2, query)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}

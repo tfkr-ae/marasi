@@ -28,6 +28,8 @@ type stubArmoryRepository struct {
 	runs         map[uuid.UUID]*domain.ArmoryRun
 	beforeDelete func()
 	listTraffic  func(uuid.UUID, *uuid.UUID, int) ([]*domain.RequestResponseSummary, *uuid.UUID, error)
+	// indexIncomplete reports pairs still missing from the traffic index.
+	indexIncomplete bool
 }
 
 func (repo *stubArmoryRepository) CreateArmoryTemplate(template *domain.ArmoryTemplate) error {
@@ -125,8 +127,9 @@ func (repo *stubArmoryRepository) DeleteArmoryRun(id uuid.UUID) error {
 	return nil
 }
 
-func (repo *stubArmoryRepository) ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
-	return repo.listTraffic(runID, cursor, limit)
+func (repo *stubArmoryRepository) ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, bool, error) {
+	items, nextCursor, err := repo.listTraffic(runID, cursor, limit)
+	return items, nextCursor, !repo.indexIncomplete, err
 }
 
 type stubArmoryService struct {
@@ -673,20 +676,20 @@ func TestArmoryRunTrafficControlAPI(t *testing.T) {
 	})
 
 	t.Run("should report whether the traffic index is complete", func(t *testing.T) {
-		repo := &stubArmoryRepository{runs: map[uuid.UUID]*domain.ArmoryRun{runID: {ID: runID}}, listTraffic: func(uuid.UUID, *uuid.UUID, int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+		repo := &stubArmoryRepository{runs: map[uuid.UUID]*domain.ArmoryRun{runID: {ID: runID}}, indexIncomplete: true, listTraffic: func(uuid.UUID, *uuid.UUID, int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
 			return nil, nil, nil
 		}}
-		server := newTestServer(&marasi.Proxy{Armory: &stubArmoryService{repo: repo}, TrafficRepo: &stubTrafficRepository{indexIncomplete: true}}, func() {})
+		server := newArmoryServer(repo)
 
 		response := requestControlAPI(server, http.MethodGet, "/armory/run/"+runID.String()+"/traffic", "")
 		assertControlAPIResponse(t, response, http.StatusOK, "{\"items\":[],\"next_cursor\":null,\"index\":{\"complete\":false}}\n")
 	})
 
-	t.Run("should return 500 when the traffic index state cannot be read", func(t *testing.T) {
+	t.Run("should return 500 when listing fails", func(t *testing.T) {
 		repo := &stubArmoryRepository{runs: map[uuid.UUID]*domain.ArmoryRun{runID: {ID: runID}}, listTraffic: func(uuid.UUID, *uuid.UUID, int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
-			return nil, nil, nil
+			return nil, nil, errors.New("disk I/O error")
 		}}
-		server := newTestServer(&marasi.Proxy{Armory: &stubArmoryService{repo: repo}, TrafficRepo: &stubTrafficRepository{indexErr: errors.New("disk I/O error")}}, func() {})
+		server := newArmoryServer(repo)
 
 		response := requestControlAPI(server, http.MethodGet, "/armory/run/"+runID.String()+"/traffic", "")
 		assertControlAPIResponse(t, response, http.StatusInternalServerError, "{\"error\":\"internal_server_error\"}\n")

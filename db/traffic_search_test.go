@@ -83,7 +83,7 @@ func captureResponse(t *testing.T, repo *Repository, id uuid.UUID, raw []byte) {
 // first.
 func listNames(t *testing.T, repo *Repository, ids map[string]uuid.UUID, query string) string {
 	t.Helper()
-	items, _, err := repo.ListTraffic(nil, 200, query)
+	items, _, _, err := repo.ListTraffic(nil, 200, query)
 	if err != nil {
 		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 	}
@@ -267,7 +267,7 @@ func TestTrafficRepo_ListTrafficTextSearchPaging(t *testing.T) {
 		{name: "d", request: "GET /d HTTP/1.1\r\nX-Trace: NEEDLE\r\n\r\n"},
 	})
 
-	items, nextCursor, err := repo.ListTraffic(nil, 2, `"needle"`)
+	items, nextCursor, _, err := repo.ListTraffic(nil, 2, `"needle"`)
 	if err != nil {
 		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 	}
@@ -278,7 +278,7 @@ func TestTrafficRepo_ListTrafficTextSearchPaging(t *testing.T) {
 		t.Fatalf("\nwanted:\n%v\ngot:\n%v", ids["c"], nextCursor)
 	}
 
-	older, olderNext, err := repo.ListTraffic(nextCursor, 2, `"needle"`)
+	older, olderNext, _, err := repo.ListTraffic(nextCursor, 2, `"needle"`)
 	if err != nil {
 		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 	}
@@ -316,7 +316,7 @@ func TestTrafficRepo_ListTrafficTextSearchErrors(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.query, func(t *testing.T) {
-			items, nextCursor, err := repo.ListTraffic(nil, 200, test.query)
+			items, nextCursor, _, err := repo.ListTraffic(nil, 200, test.query)
 			var queryErr *domain.QueryError
 			if !errors.As(err, &queryErr) {
 				t.Fatalf("\nwanted:\n*domain.QueryError\ngot:\n%T %v", err, err)

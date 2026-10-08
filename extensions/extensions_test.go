@@ -137,14 +137,14 @@ func (m *mockTrafficRepo) GetRequestResponseSummary() ([]*domain.RequestResponse
 	return []*domain.RequestResponseSummary{}, nil
 }
 
-func (m *mockTrafficRepo) ListTraffic(cursor *uuid.UUID, limit int, query string) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+func (m *mockTrafficRepo) ListTraffic(cursor *uuid.UUID, limit int, query string) ([]*domain.RequestResponseSummary, *uuid.UUID, bool, error) {
 	if m.forceError {
-		return nil, nil, errors.New("forced repo error")
+		return nil, nil, false, errors.New("forced repo error")
 	}
 	if m.summaryData != nil {
-		return m.summaryData, nil, nil
+		return m.summaryData, nil, true, nil
 	}
-	return []*domain.RequestResponseSummary{}, nil, nil
+	return []*domain.RequestResponseSummary{}, nil, true, nil
 }
 
 func (m *mockTrafficRepo) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResponseRow, error) {
@@ -170,10 +170,6 @@ func (m *mockTrafficRepo) GetRequestResponseRows(ids []uuid.UUID) ([]*domain.Req
 	}
 
 	return reqRows, nil
-}
-
-func (m *mockTrafficRepo) TrafficIndexComplete() (bool, error) {
-	return true, nil
 }
 
 func (m *mockTrafficRepo) GetMetadata(id uuid.UUID) (map[string]any, error) {

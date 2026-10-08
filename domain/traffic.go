@@ -60,13 +60,10 @@ type TrafficRepository interface {
 	// ListTraffic returns a newest-first page of summaries older than cursor
 	// that match query. An empty query matches all traffic. A nil cursor
 	// starts at the newest row. nextCursor is the last returned item's id when
-	// another older page exists, otherwise nil. An invalid query returns a
-	// *QueryError.
-	ListTraffic(cursor *uuid.UUID, limit int, query string) (items []*RequestResponseSummary, nextCursor *uuid.UUID, err error)
-
-	// TrafficIndexComplete reports whether every pair is in the traffic
-	// index. Text conditions in a query can miss pairs while it is false.
-	TrafficIndexComplete() (complete bool, err error)
+	// another older page exists, otherwise nil. indexComplete reports whether
+	// every pair is in the traffic index; text conditions can miss pairs while
+	// it is false. An invalid query returns a *QueryError.
+	ListTraffic(cursor *uuid.UUID, limit int, query string) (items []*RequestResponseSummary, nextCursor *uuid.UUID, indexComplete bool, err error)
 
 	// GetMetadata returns the metadata map for a specific request ID.
 	GetMetadata(id uuid.UUID) (metadata map[string]any, err error)

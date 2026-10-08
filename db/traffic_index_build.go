@@ -88,13 +88,15 @@ func (repo *Repository) IndexMissingTraffic(limit int) (int, bool, error) {
 	return len(ids), remaining, nil
 }
 
-// TrafficIndexComplete reports whether every pair is in the traffic index.
-func (repo *Repository) TrafficIndexComplete() (bool, error) {
+// indexComplete reports whether every pair is in the traffic index. Traffic
+// lists call it in the same transaction as their page query, so the flag
+// describes the snapshot the page was read from.
+func (repo *Repository) indexComplete(q sqlx.Queryer) (bool, error) {
 	complete, indexedFrom := repo.index.snapshot()
 	if complete {
 		return true, nil
 	}
-	ids, err := missingFromIndex(repo.dbConn, indexedFrom, 1)
+	ids, err := missingFromIndex(q, indexedFrom, 1)
 	if err != nil {
 		return false, fmt.Errorf("checking the traffic index: %w", err)
 	}

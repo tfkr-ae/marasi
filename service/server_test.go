@@ -64,8 +64,6 @@ type stubTrafficRepository struct {
 
 	// indexIncomplete reports pairs still missing from the traffic index.
 	indexIncomplete bool
-	// indexErr, when set, is returned by TrafficIndexComplete.
-	indexErr error
 }
 
 type stubLaunchpadRepository struct {
@@ -226,20 +224,13 @@ func (s *stubTrafficRepository) ListNotes(cursor *uuid.UUID, limit int) ([]*doma
 	return matched, s.nextCursor, nil
 }
 
-func (s *stubTrafficRepository) TrafficIndexComplete() (bool, error) {
-	if s.indexErr != nil {
-		return false, s.indexErr
-	}
-	return !s.indexIncomplete, nil
-}
-
-func (s *stubTrafficRepository) ListTraffic(cursor *uuid.UUID, limit int, query string) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+func (s *stubTrafficRepository) ListTraffic(cursor *uuid.UUID, limit int, query string) ([]*domain.RequestResponseSummary, *uuid.UUID, bool, error) {
 	s.listed = true
 	s.query = query
 	s.cursor = cursor
 	s.limit = limit
 	if s.listErr != nil {
-		return nil, nil, s.listErr
+		return nil, nil, false, s.listErr
 	}
 	items := s.items
 	if items == nil {
@@ -256,9 +247,9 @@ func (s *stubTrafficRepository) ListTraffic(cursor *uuid.UUID, limit int, query 
 	if limit < len(items) {
 		items = items[:limit]
 		id := items[len(items)-1].ID
-		return items, &id, nil
+		return items, &id, !s.indexIncomplete, nil
 	}
-	return items, s.nextCursor, nil
+	return items, s.nextCursor, !s.indexIncomplete, nil
 }
 
 type shutdownOrderRecorder struct {
@@ -1372,8 +1363,8 @@ func TestTrafficList(t *testing.T) {
 		}
 	})
 
-	t.Run("should return 500 when the traffic index state cannot be read", func(t *testing.T) {
-		repo := &stubTrafficRepository{indexErr: errors.New("disk I/O error")}
+	t.Run("should return 500 when listing fails", func(t *testing.T) {
+		repo := &stubTrafficRepository{listErr: errors.New("disk I/O error")}
 		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic", nil)
 		response := httptest.NewRecorder()

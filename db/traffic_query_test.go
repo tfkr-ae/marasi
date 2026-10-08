@@ -183,7 +183,7 @@ func TestTrafficRepo_ListTrafficQuery(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.query, func(t *testing.T) {
-			items, nextCursor, err := repo.ListTraffic(nil, 200, test.query)
+			items, nextCursor, _, err := repo.ListTraffic(nil, 200, test.query)
 			if err != nil {
 				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 			}
@@ -206,7 +206,7 @@ func TestTrafficRepo_ListTrafficQueryPaging(t *testing.T) {
 	defer teardown()
 	ids := seedQueryPairs(t, repo, queryTestPairs())
 
-	items, nextCursor, err := repo.ListTraffic(nil, 2, `method = "GET"`)
+	items, nextCursor, _, err := repo.ListTraffic(nil, 2, `method = "GET"`)
 	if err != nil {
 		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 	}
@@ -217,7 +217,7 @@ func TestTrafficRepo_ListTrafficQueryPaging(t *testing.T) {
 		t.Fatalf("\nwanted:\n%v\ngot:\n%v", ids["c"], nextCursor)
 	}
 
-	older, olderNext, err := repo.ListTraffic(nextCursor, 2, `method = "GET"`)
+	older, olderNext, _, err := repo.ListTraffic(nextCursor, 2, `method = "GET"`)
 	if err != nil {
 		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 	}
@@ -276,7 +276,7 @@ func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.query, func(t *testing.T) {
-			items, nextCursor, err := repo.ListTraffic(nil, 200, test.query)
+			items, nextCursor, _, err := repo.ListTraffic(nil, 200, test.query)
 			var queryErr *domain.QueryError
 			if !errors.As(err, &queryErr) {
 				t.Fatalf("\nwanted:\n*domain.QueryError\ngot:\n%T %v", err, err)

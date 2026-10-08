@@ -367,11 +367,12 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 }
 
 // ListTraffic returns a newest-first page of summaries older than cursor that
-// match the query. An invalid query returns a *domain.QueryError.
-func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, trafficQuery string) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+// match the query, and whether every pair is in the traffic index. An invalid
+// query returns a *domain.QueryError.
+func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, trafficQuery string) ([]*domain.RequestResponseSummary, *uuid.UUID, bool, error) {
 	translated, err := translateTrafficQuery(trafficQuery)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 
 	query := `SELECT
@@ -396,9 +397,16 @@ func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, trafficQuery s
 	args = append(args, limit+1)
 
 	var dbSummary []*dbRequestResponseSummary
-	err = repo.dbConn.Select(&dbSummary, query, args...)
+	var indexComplete bool
+	err = repo.inTx(func(tx *sqlx.Tx) error {
+		var err error
+		if indexComplete, err = repo.indexComplete(tx); err != nil {
+			return err
+		}
+		return tx.Select(&dbSummary, query, args...)
+	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("listing traffic: %w", err)
+		return nil, nil, false, fmt.Errorf("listing traffic: %w", err)
 	}
 
 	hasMore := len(dbSummary) > limit
@@ -416,7 +424,7 @@ func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, trafficQuery s
 		id := items[len(items)-1].ID
 		nextCursor = &id
 	}
-	return items, nextCursor, nil
+	return items, nextCursor, indexComplete, nil
 }
 
 // GetMetadata retrieves the metadata map for a specific request ID.

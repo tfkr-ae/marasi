@@ -60,9 +60,9 @@ func indexMissing(t *testing.T, repo *Repository, limit int) (int, bool) {
 
 func indexComplete(t *testing.T, repo *Repository) bool {
 	t.Helper()
-	complete, err := repo.TrafficIndexComplete()
+	_, _, complete, err := repo.ListTraffic(nil, 1, "")
 	if err != nil {
-		t.Fatalf("TrafficIndexComplete: %v", err)
+		t.Fatalf("ListTraffic: %v", err)
 	}
 	return complete
 }
