@@ -351,6 +351,7 @@ func ExtensionsRequestModifier(proxy *Proxy, req *http.Request) error {
 
 // CheckpointRequestModifier holds requests when the global HTTP Checkpoint flag is set or interceptRequest returns true.
 // A nil notify still holds until forward, drop, or drop-all. Forward rebuilds from optional raw. Drop does not rebuild.
+// A Lua error in interceptRequest does not skip the global flag.
 func CheckpointRequestModifier(proxy *Proxy, req *http.Request) error {
 	if checkpointExt, ok := proxy.GetExtension("checkpoint"); ok {
 		if !checkpointExt.MetadataSnapshot().Enabled {
@@ -367,7 +368,7 @@ func CheckpointRequestModifier(proxy *Proxy, req *http.Request) error {
 				martian.NewContext(req).SkipRoundTrip()
 				return ErrDropped
 			}
-			return nil
+			// A Lua error does not match the rule. The global flag still holds.
 		}
 
 		if shouldIntercept || proxy.GetIntercept() {
@@ -795,6 +796,7 @@ func ExtensionsResponseModifier(proxy *Proxy, res *http.Response) error {
 
 // CheckpointResponseModifier holds responses when the global HTTP Checkpoint flag is set, interceptResponse returns true,
 // or the matching request was forwarded with intercept-response. A nil notify still holds until forward, drop, or drop-all.
+// A Lua error in interceptResponse does not skip either flag.
 func CheckpointResponseModifier(proxy *Proxy, res *http.Response) error {
 	if checkpointExt, ok := proxy.GetExtension("checkpoint"); ok {
 		if !checkpointExt.MetadataSnapshot().Enabled {
@@ -810,7 +812,7 @@ func CheckpointResponseModifier(proxy *Proxy, res *http.Response) error {
 			if hookInterrupted(res.Request.Context(), checkpointExt) {
 				return ErrDropped
 			}
-			return nil
+			// A Lua error does not match the rule. The global and per-request flags still hold.
 		}
 
 		if interceptFlag, ok := core.InterceptFlagFromContext(res.Request.Context()); (ok && interceptFlag) || shouldIntercept || proxy.GetIntercept() {
