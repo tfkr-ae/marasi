@@ -183,4 +183,28 @@ func TestTrafficRepo_IndexMissingTraffic(t *testing.T) {
 			t.Fatalf("\nwanted:\n%q\ngot:\n%q", "second,first", got)
 		}
 	})
+
+	t.Run("should index the notes and metadata older versions wrote", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+		ids := legacyPairs(t, repo, "tagged")
+		_, err := repo.dbConn.Exec(`UPDATE request SET metadata = '{"extension":"workshop","prettified-response":"hidden-pretty"}' WHERE id = ?`, ids["tagged"])
+		if err != nil {
+			t.Fatalf("writing legacy metadata: %v", err)
+		}
+		if _, err := repo.dbConn.Exec(`INSERT INTO notes (request_id, note) VALUES (?, 'idor candidate')`, ids["tagged"]); err != nil {
+			t.Fatalf("writing legacy note: %v", err)
+		}
+		indexMissing(t, repo, 100)
+
+		for query, want := range map[string]string{
+			`note:"idor"`:           "tagged",
+			`metadata:"workshop"`:   "tagged",
+			`metadata:"hidden-pre"`: "",
+		} {
+			if got := listNames(t, repo, ids, query); got != want {
+				t.Fatalf("\nwanted:\n%s -> %q\ngot:\n%q", query, want, got)
+			}
+		}
+	})
 }
