@@ -283,7 +283,7 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		for _, want := range []string{"-q, --query", "host", "method", "scheme", "path", "content_type", "status_code", "requested_at", "responded_at", "metadata.<key>", "OR binds tighter than AND"} {
+		for _, want := range []string{"-q, --query", "host", "method", "scheme", "path", "content_type", "status_code", "requested_at", "responded_at", "metadata.<key>", "request_head", "request_body", "response_head", "response_body", "response_body:\"password\"", "at least 3 characters", "OR binds tighter than AND"} {
 			if !strings.Contains(stdout, want) {
 				t.Fatalf("\nwanted help containing:\n%s\ngot:\n%s", want, stdout)
 			}

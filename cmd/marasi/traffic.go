@@ -40,6 +40,13 @@ const trafficListLong = `List the newest page of traffic.
   metadata.<key>
       = and != against the JSON value at that key, for example
       metadata.extension = "workshop".
+  request_head, request_body, response_head, response_body
+      : (contains), ignoring case, for example response_body:"password".
+      A head is the request or status line plus headers. Binary bodies
+      are not searched.
+
+Bare text, for example "hbGci", searches every text part. Text terms
+need at least 3 characters.
 
 Combine conditions with AND, OR, NOT, -, and parentheses. A space
 between conditions means AND. OR binds tighter than AND, so

@@ -218,9 +218,20 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 	dbRequest := fromDomainProxyRequest(req)
 	query := `INSERT INTO request(id, scheme, method, host, path, request_raw, requested_at, metadata)
 			  VALUES(:id, :scheme, :method, :host, :path, :request_raw, :requested_at, :metadata)`
-	_, err := repo.dbConn.NamedExec(query, dbRequest)
+	tx, err := repo.dbConn.Beginx()
 	if err != nil {
-		return fmt.Errorf("inserting request %d : %w", req.ID, err)
+		return fmt.Errorf("inserting request %s : %w", req.ID, err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.NamedExec(query, dbRequest); err != nil {
+		return fmt.Errorf("inserting request %s : %w", req.ID, err)
+	}
+	if err := indexPair(tx, req.ID); err != nil {
+		return fmt.Errorf("inserting request %s : %w", req.ID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("inserting request %s : %w", req.ID, err)
 	}
 	return nil
 }
@@ -238,9 +249,15 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 				responded_at = :responded_at,
 				metadata = :metadata
 			  WHERE id = :id`
-	result, err := repo.dbConn.NamedExec(query, dbResponse)
+	tx, err := repo.dbConn.Beginx()
 	if err != nil {
-		return fmt.Errorf("inserting request %d : %w", resp.ID, err)
+		return fmt.Errorf("inserting response %s : %w", resp.ID, err)
+	}
+	defer tx.Rollback()
+
+	result, err := tx.NamedExec(query, dbResponse)
+	if err != nil {
+		return fmt.Errorf("inserting response %s : %w", resp.ID, err)
 	}
 
 	rowsAffected, err := result.RowsAffected()
@@ -250,6 +267,12 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 
 	if rowsAffected == 0 {
 		return fmt.Errorf("no request found with id %s to update", resp.ID)
+	}
+	if err := indexPair(tx, resp.ID); err != nil {
+		return fmt.Errorf("inserting response %s : %w", resp.ID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("inserting response %s : %w", resp.ID, err)
 	}
 	return nil
 }

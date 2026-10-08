@@ -31,11 +31,19 @@ const (
 	// fieldMetadata is the root of metadata.<key>, which compares the JSON
 	// value at that key with = and !=.
 	fieldMetadata
+	// fieldIndexedText fields are text parts of a pair in the traffic index.
+	// They match a term with : (contains), ignoring case.
+	fieldIndexedText
 )
+
+// minTextTermLength is the shortest text term the trigram index can find.
+// Shorter terms would silently match nothing, so they are rejected.
+const minTextTermLength = 3
 
 type trafficField struct {
 	kind trafficFieldKind
-	// column is the SQL expression for the field's value.
+	// column is the SQL expression for the field's value, or the index column
+	// for fieldIndexedText.
 	column string
 }
 
@@ -51,6 +59,11 @@ var trafficFields = map[string]trafficField{
 	"requested_at": {kind: fieldTimestamp, column: sqlEpochSeconds("requested_at")},
 	"responded_at": {kind: fieldTimestamp, column: sqlEpochSeconds("responded_at")},
 	"metadata":     {kind: fieldMetadata, column: "metadata"},
+
+	"request_head":  {kind: fieldIndexedText, column: "request_head"},
+	"request_body":  {kind: fieldIndexedText, column: "request_body"},
+	"response_head": {kind: fieldIndexedText, column: "response_head"},
+	"response_body": {kind: fieldIndexedText, column: "response_body"},
 }
 
 var comparisonOperators = map[string]string{
@@ -161,7 +174,8 @@ func (t *queryTranslator) parseError(err error) error {
 func (t *queryTranslator) condition(e *expr.Expr) (string, error) {
 	call := e.GetCallExpr()
 	if call == nil {
-		return "", t.bareTerm(e)
+		// Bare text searches every indexed text part.
+		return t.textMatch(e, "")
 	}
 	args := call.GetArgs()
 	switch call.GetFunction() {
@@ -177,7 +191,7 @@ func (t *queryTranslator) condition(e *expr.Expr) (string, error) {
 		// A NULL comparison counts as no match, so NOT of it is a match.
 		return "NOT coalesce((" + inner + "), 0)", nil
 	case filtering.FunctionHas:
-		return "", t.errorAt(e, "text search is not supported; use = or another comparison on a field")
+		return t.has(e, args[0], args[1])
 	}
 	if op, ok := comparisonOperators[call.GetFunction()]; ok {
 		return t.comparison(e, op, args[0], args[1])
@@ -197,9 +211,75 @@ func (t *queryTranslator) junction(op string, args []*expr.Expr) (string, error)
 	return strings.Join(parts, " "+op+" "), nil
 }
 
-// bareTerm reports a term that is not a comparison, such as "token" or foo.
-func (t *queryTranslator) bareTerm(e *expr.Expr) error {
-	return t.errorAt(e, "text search is not supported; compare a field, for example host = \"example.com\"")
+// has translates field:value, which searches one indexed text part.
+func (t *queryTranslator) has(e, lhs, rhs *expr.Expr) (string, error) {
+	name, path, err := t.fieldName(lhs)
+	if err != nil {
+		return "", err
+	}
+	field, ok := trafficFields[name]
+	if !ok {
+		return "", t.errorAt(lhs, "unknown field %q", strings.Join(append([]string{name}, path...), "."))
+	}
+	switch field.kind {
+	case fieldIndexedText:
+		if len(path) > 0 {
+			return "", t.errorAt(lhs, "field %q has no member %q", name, path[0])
+		}
+		return t.textMatch(rhs, field.column)
+	case fieldExactText:
+		return "", t.errorAt(e, "operator : is not supported on %s; use = or !=, with * at the start or end", name)
+	case fieldMetadata:
+		return "", t.errorAt(e, "operator : is not supported on metadata keys; use = or !=")
+	}
+	return "", t.errorAt(e, "operator : is not supported on %s; use = or another comparison", name)
+}
+
+// textMatch matches pairs whose indexed text contains the term e, in one index
+// column or, when column is empty, in any of them.
+func (t *queryTranslator) textMatch(e *expr.Expr, column string) (string, error) {
+	term, ok := t.textTerm(e)
+	if !ok {
+		return "", t.errorAt(e, "expected text to search for, for example \"token\"")
+	}
+	if utf8.RuneCountInString(term) < minTextTermLength {
+		return "", t.errorAt(e, "text term %q is shorter than %d characters; search for a longer term", term, minTextTermLength)
+	}
+	// Quoting makes the term one literal phrase, so FTS5 syntax characters
+	// such as - and : in it are plain text.
+	match := `"` + strings.ReplaceAll(term, `"`, `""`) + `"`
+	if column != "" {
+		match = column + " : " + match
+	}
+	t.bind(match)
+	return "request.rowid IN (SELECT rowid FROM traffic_fts WHERE traffic_fts MATCH ?)", nil
+}
+
+// textTerm returns the text of a quoted string, an unquoted word, or a number
+// as written in the query.
+func (t *queryTranslator) textTerm(e *expr.Expr) (string, bool) {
+	if text, ok := literalText(e); ok {
+		return text, true
+	}
+	switch e.GetConstExpr().GetConstantKind().(type) {
+	case *expr.Constant_Int64Value, *expr.Constant_DoubleValue, *expr.Constant_Uint64Value:
+		return t.sourceToken(e), true
+	}
+	return "", false
+}
+
+// sourceToken returns the query text of e from its position up to the next
+// space or parenthesis.
+func (t *queryTranslator) sourceToken(e *expr.Expr) string {
+	start := t.lead + int(t.positions[e.GetId()])
+	if start > len(t.raw) {
+		return ""
+	}
+	token := t.raw[start:]
+	if end := strings.IndexAny(token, " \t\r\n\v\f()"); end >= 0 {
+		token = token[:end]
+	}
+	return token
 }
 
 func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Expr) (string, error) {
@@ -216,6 +296,9 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 	}
 
 	switch field.kind {
+	case fieldIndexedText:
+		return "", t.errorAt(e, "operator %s is not supported on %s; use :, for example %s:\"text\"", op, name, name)
+
 	case fieldExactText:
 		if op != "=" && op != "!=" {
 			return "", t.errorAt(e, "operator %s is not supported on %s; use = or !=", op, name)
