@@ -55,13 +55,16 @@ type ProjectLifecycle struct {
 	opened           func(string)
 	logAdded         func(*domain.Log)
 	armoryRunUpdated func(*domain.ArmoryRun)
+	extensionOptions []func(*extensions.Runtime) error
 	executionContext context.Context
 	cancelExecution  context.CancelFunc
 }
 
 // NewProjectLifecycle creates a lifecycle with no open project. Open must
-// succeed before the service instance starts accepting work.
-func NewProjectLifecycle(proxy *marasi.Proxy, configDir string, wordlists wordlist.Provider, logger *slog.Logger) *ProjectLifecycle {
+// succeed before the service instance starts accepting work. Every project it
+// opens applies extensionOptions to each extension before that extension's
+// code runs, so an embedder's hooks are in place for top-level code and startup.
+func NewProjectLifecycle(proxy *marasi.Proxy, configDir string, wordlists wordlist.Provider, logger *slog.Logger, extensionOptions ...func(*extensions.Runtime) error) *ProjectLifecycle {
 	executionContext, cancelExecution := context.WithCancel(context.Background())
 	lifecycle := &ProjectLifecycle{
 		executionContext: executionContext,
@@ -70,6 +73,7 @@ func NewProjectLifecycle(proxy *marasi.Proxy, configDir string, wordlists wordli
 		configDir:        configDir,
 		wordlists:        wordlists,
 		logger:           logger,
+		extensionOptions: extensionOptions,
 		lock:             acquireProjectOwnership,
 		gate:             newProjectGate(),
 	}
@@ -341,7 +345,7 @@ func (lifecycle *ProjectLifecycle) prepareProject(ctx context.Context, path stri
 		runtime := &extensions.Runtime{Data: stored, ExecutionContext: executionContext, CancelExecution: cancel, TrackExecution: lifecycle.gate.trackExtension}
 		resources.Extensions = append(resources.Extensions, runtime)
 		stop := context.AfterFunc(ctx, cancel)
-		if err := runtime.PrepareState(extensionService, nil); err != nil {
+		if err := runtime.PrepareState(extensionService, lifecycle.extensionOptions); err != nil {
 			stop()
 			return fail(fmt.Errorf("preparing project extension %s: %w", stored.Name, err))
 		}
