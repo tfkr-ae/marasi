@@ -17,21 +17,36 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var trafficListHost string
-var trafficListMethod string
-var trafficListStatusCode string
-var trafficListPath string
+var trafficListQueryText string
 var trafficListLimit string
 var trafficListCursor string
 var trafficMetadataUpdateFile string
 
 const trafficPathDisplayLimit = 40
 
+const trafficListLong = `List the newest page of traffic.
+
+--query (-q) takes an AIP-160 query that narrows the list. Fields:
+
+  host, method, scheme, path, content_type
+      = and !=, with exact case. A * at the start or end of the value
+      matches anything there, for example host = "*.example.com" or
+      path = "/api/*".
+  status_code
+      = != < <= > >=, for example status_code >= 500.
+  requested_at, responded_at
+      = != < <= > >= against an RFC 3339 timestamp, for example
+      requested_at > "2024-01-02T15:04:05Z".
+  metadata.<key>
+      = and != against the JSON value at that key, for example
+      metadata.extension = "workshop".
+
+Combine conditions with AND, OR, NOT, -, and parentheses. A space
+between conditions means AND. OR binds tighter than AND, so
+a AND b OR c means a AND (b OR c). Use parentheses to group otherwise.`
+
 func init() {
-	trafficListCmd.Flags().StringVar(&trafficListHost, "host", "", "Keep only this exact host")
-	trafficListCmd.Flags().StringVar(&trafficListMethod, "method", "", "Keep only this exact method")
-	trafficListCmd.Flags().StringVar(&trafficListStatusCode, "status-code", "", "Keep only this exact status code")
-	trafficListCmd.Flags().StringVar(&trafficListPath, "path", "", "Keep pairs whose path starts with this prefix")
+	trafficListCmd.Flags().StringVarP(&trafficListQueryText, "query", "q", "", "AIP-160 query that narrows the list; see the fields above")
 	trafficListCmd.Flags().StringVar(&trafficListLimit, "limit", "200", "Maximum number of items to return, from 1 to 500")
 	trafficListCmd.Flags().StringVar(&trafficListCursor, "cursor", "", "UUID of the last item, used to fetch the next older page")
 	trafficMetadataUpdateCmd.Flags().StringVar(&trafficMetadataUpdateFile, "file", "", "Read the metadata JSON from a file instead of stdin")
@@ -48,7 +63,11 @@ var trafficCmd = &cobra.Command{
 var trafficListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List the newest page of traffic",
-	Args:  cobra.NoArgs,
+	Long:  trafficListLong,
+	Example: `  marasi traffic list -q 'host = "*.example.com" AND status_code >= 500'
+  marasi traffic list -q 'method = "POST" path = "/api/*"'
+  marasi traffic list -q 'metadata.extension = "workshop" AND NOT status_code = 404'`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
@@ -131,21 +150,8 @@ func trafficListQuery() (string, error) {
 	}
 	query := url.Values{}
 	query.Set("limit", limit)
-	if trafficListHost != "" {
-		query.Set("host", trafficListHost)
-	}
-	if trafficListMethod != "" {
-		query.Set("method", trafficListMethod)
-	}
-	if trafficListStatusCode != "" {
-		statusCode, err := parseStatusCode(trafficListStatusCode)
-		if err != nil {
-			return "", err
-		}
-		query.Set("status_code", statusCode)
-	}
-	if trafficListPath != "" {
-		query.Set("path", trafficListPath)
+	if trafficListQueryText != "" {
+		query.Set("q", trafficListQueryText)
 	}
 	if err := setCursorQuery(query, trafficListCursor); err != nil {
 		return "", err
@@ -161,7 +167,7 @@ func listTraffic(ctx context.Context, instancePath, instanceName string, asJSON 
 	}
 	body := response.Body
 	if response.StatusCode != http.StatusOK {
-		if asJSON {
+		if asJSON || isInvalidQuery(body) {
 			return controlAPIError("listing traffic", response.Status, body)
 		}
 		return fmt.Errorf("listing traffic: %s", response.Status)
@@ -244,19 +250,33 @@ func getTraffic(ctx context.Context, instancePath, instanceName string, asJSON b
 
 // controlAPIError formats a control API failure.
 // A JSON string error field is preferred over status. A message is appended when the API sends one.
+// A query error's position is appended so it survives into the CLI error.
 func controlAPIError(operation, status string, body []byte) error {
 	var payload struct {
-		Error   json.RawMessage `json:"error"`
-		Message string          `json:"message"`
+		Error    json.RawMessage `json:"error"`
+		Message  string          `json:"message"`
+		Position int             `json:"position"`
 	}
 	var message string
 	if json.Unmarshal(body, &payload) == nil && json.Unmarshal(payload.Error, &message) == nil {
+		if payload.Message != "" && payload.Position > 0 {
+			return fmt.Errorf("%s: %s: %s at position %d", operation, message, payload.Message, payload.Position)
+		}
 		if payload.Message != "" {
 			return fmt.Errorf("%s: %s: %s", operation, message, payload.Message)
 		}
 		return fmt.Errorf("%s: %s", operation, message)
 	}
 	return fmt.Errorf("%s: %s", operation, status)
+}
+
+// isInvalidQuery reports whether a control API error body is an invalid_query
+// error, whose message the user needs to fix the query.
+func isInvalidQuery(body []byte) bool {
+	var payload struct {
+		Error string `json:"error"`
+	}
+	return json.Unmarshal(body, &payload) == nil && payload.Error == "invalid_query"
 }
 
 // writeTrafficGetHuman writes one traffic pair as labeled fields and raw HTTP messages.

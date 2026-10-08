@@ -18,13 +18,13 @@ Send traffic through a running instance, then run `dist/marasi --config-dir "$VE
 
 ## Driving it with shell and curl
 
-Send two distinct proxied requests, for example `GET /proof.txt` returning 200 and `POST /other` returning 404. Run `traffic list --host "$HOST" --method GET --path /proof --status-code 200 --limit 1 --json` and require that one row. A host filter that omits the origin port, and a method/status pair that matches nothing, must return empty `items`. `traffic list --limit 1 --json` is the newest row. Pass its `next_cursor` to a second `--limit 1` page and require the older row and `next_cursor` null. Run `traffic get "$TRAFFIC_ID" --json` and base64-decode `request.raw` and `response.raw`. Require the method, path, status, and origin body inside those bytes. `traffic metadata get` on a fresh row is `{}`. `traffic metadata update --file` with `{"phase":"two","has_note":false,"prettified-request":"client","prettified-response":"client"}`, then get again, must return only `{"phase":"two"}`.
+Send two distinct proxied requests, for example `GET /proof.txt` returning 200 and `POST /other` returning 404. Run `traffic list -q "host = \"$HOST\" AND method = \"GET\" AND path = \"/proof*\" AND status_code = 200" --limit 1 --json` and require that one row. A `host` clause that omits the origin port, and a method/status pair that matches nothing, must return empty `items`. A query naming an unknown field, such as `-q 'stauts = 200'`, must fail with `invalid_query` and a position. `traffic list --limit 1 --json` is the newest row. Pass its `next_cursor` to a second `--limit 1` page and require the older row and `next_cursor` null. Run `traffic get "$TRAFFIC_ID" --json` and base64-decode `request.raw` and `response.raw`. Require the method, path, status, and origin body inside those bytes. `traffic metadata get` on a fresh row is `{}`. `traffic metadata update --file` with `{"phase":"two","has_note":false,"prettified-request":"client","prettified-response":"client"}`, then get again, must return only `{"phase":"two"}`.
 
 ## Gotchas
 
 - Each page is the newest remaining rows, oldest first within the page. `--limit 1` is still the newest match. `next_cursor` is the oldest id of the current page when an older page remains, otherwise `null` (JSON) or absent (human stderr). Never assume a stable UUID or timestamp.
-- `--host` is exact and may include the origin port for a non-default port.
-- `--path` is a prefix filter, while method and status code are exact filters.
+- `host = "..."` is exact, keeps case, and may include the origin port for a non-default port. A `*` at the start or end matches anything there.
+- `path = "/proof*"` matches a path prefix. `status_code` also takes `<`, `<=`, `>`, and `>=`. The removed `--host`, `--method`, `--path`, and `--status-code` flags are unknown flags.
 - Human output writes `next_cursor=$NEXT_CURSOR` to stderr. JSON keeps it in `next_cursor`.
 - `traffic get` requires a UUID. Invalid IDs fail before repository lookup.
 - `traffic metadata update` requires `--file` or piped stdin with a non-empty JSON object body. A TTY stdin fails.

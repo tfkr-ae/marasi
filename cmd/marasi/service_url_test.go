@@ -20,7 +20,6 @@ func TestServiceURLParsing(t *testing.T) {
 			{[]string{"traffic", "list", "--cursor", "not-a-uuid"}, `invalid uuid "not-a-uuid"`},
 			{[]string{"traffic", "list", "--limit", "0"}, `invalid limit "0"`},
 			{[]string{"traffic", "list", "--limit", "abc"}, `invalid limit "abc"`},
-			{[]string{"traffic", "list", "--status-code", "abc"}, `invalid status code "abc"`},
 			{[]string{"notes", "clear", "not-a-uuid"}, `invalid uuid "not-a-uuid"`},
 			{[]string{"notes", "list", "--cursor", "not-a-uuid"}, `invalid uuid "not-a-uuid"`},
 			{[]string{"logs", "--cursor", "not-a-uuid"}, `invalid uuid "not-a-uuid"`},

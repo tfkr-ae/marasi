@@ -356,34 +356,28 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 	return reqResSummary, nil
 }
 
-// ListTraffic returns a newest-first page of summaries older than cursor.
-func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, filter domain.TrafficListFilter) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+// ListTraffic returns a newest-first page of summaries older than cursor that
+// match the query. An invalid query returns a *domain.QueryError.
+func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, trafficQuery string) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+	translated, err := translateTrafficQuery(trafficQuery)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	query := `SELECT
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
 			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
 			  FROM request`
-	args := make([]any, 0, 7)
+	args := make([]any, 0, len(translated.args)+2)
 	var conditions []string
 	if cursor != nil {
 		conditions = append(conditions, `id < ?`)
 		args = append(args, *cursor)
 	}
-	if filter.Host != "" {
-		conditions = append(conditions, `host = ?`)
-		args = append(args, filter.Host)
-	}
-	if filter.Method != "" {
-		conditions = append(conditions, `method = ?`)
-		args = append(args, filter.Method)
-	}
-	if filter.StatusCode != nil {
-		conditions = append(conditions, `status_code = ?`)
-		args = append(args, *filter.StatusCode)
-	}
-	if filter.PathPrefix != "" {
-		conditions = append(conditions, `substr(path, 1, length(?)) = ?`)
-		args = append(args, filter.PathPrefix, filter.PathPrefix)
+	if translated.where != "" {
+		conditions = append(conditions, `(`+translated.where+`)`)
+		args = append(args, translated.args...)
 	}
 	if len(conditions) > 0 {
 		query += ` WHERE ` + strings.Join(conditions, ` AND `)
@@ -392,7 +386,7 @@ func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, filter domain.
 	args = append(args, limit+1)
 
 	var dbSummary []*dbRequestResponseSummary
-	err := repo.dbConn.Select(&dbSummary, query, args...)
+	err = repo.dbConn.Select(&dbSummary, query, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("listing traffic: %w", err)
 	}

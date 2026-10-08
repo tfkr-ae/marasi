@@ -82,7 +82,15 @@ func recognizedJSONMode(args []string) bool {
 			continue
 		}
 		if !strings.HasPrefix(arg, "--") {
-			return requested
+			// A shorthand flag such as -q value or -qvalue.
+			flag := command.Flags().ShorthandLookup(arg[1:2])
+			if flag == nil {
+				return requested
+			}
+			if len(arg) == 2 && flag.NoOptDefVal == "" {
+				index++
+			}
+			continue
 		}
 
 		flagArg := strings.TrimPrefix(arg, "--")
@@ -216,15 +224,6 @@ func parsePageLimit(raw string) (string, error) {
 	parsed, err := strconv.Atoi(raw)
 	if err != nil || parsed < 1 || parsed > 500 {
 		return "", fmt.Errorf("invalid limit %q", raw)
-	}
-	return strconv.Itoa(parsed), nil
-}
-
-// parseStatusCode checks that raw is an integer status code.
-func parseStatusCode(raw string) (string, error) {
-	parsed, err := strconv.Atoi(raw)
-	if err != nil {
-		return "", fmt.Errorf("invalid status code %q", raw)
 	}
 	return strconv.Itoa(parsed), nil
 }

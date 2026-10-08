@@ -83,7 +83,7 @@ Capture one HTTP exchange:
 3. Run `events` and wait for `: connected` on stderr before the request. The stream has no replay. Human stdout is `event-name json`.
 4. `curl --noproxy '' --proxy "http://$PROXY_LISTENER" "http://127.0.0.1:$ORIGIN_PORT/proof.txt"`. `--noproxy ''` is required. `NO_PROXY` often bypasses localhost.
 5. Require events stdout to print `traffic.request` then `traffic.response` for that exchange, with the same `id`.
-6. `traffic list --path /proof.txt --status-code 200 --json`, then `traffic get` that `id`. The event `id` must match. `request.raw` and `response.raw` are base64.
+6. `traffic list -q 'path = "/proof.txt" AND status_code = 200' --json`, then `traffic get` that `id`. The event `id` must match. `request.raw` and `response.raw` are base64.
 
 WebSocket features need a real local WebSocket server and a client that holds the upgraded connection through the proxy. Checkpoint, launchpad, Armory, and waypoints are proven only when the origin or the stored traffic changes. Each feature file is the recipe.
 

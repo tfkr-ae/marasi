@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,13 @@ type stubTrafficRepository struct {
 	items      []*domain.RequestResponseSummary
 	nextCursor *uuid.UUID
 	notes      map[uuid.UUID]string
+
+	// ListTraffic records its arguments and returns listErr when set.
+	listed  bool
+	query   string
+	cursor  *uuid.UUID
+	limit   int
+	listErr error
 }
 
 type stubLaunchpadRepository struct {
@@ -210,7 +218,14 @@ func (s *stubTrafficRepository) ListNotes(cursor *uuid.UUID, limit int) ([]*doma
 	return matched, s.nextCursor, nil
 }
 
-func (s *stubTrafficRepository) ListTraffic(cursor *uuid.UUID, limit int, filter domain.TrafficListFilter) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+func (s *stubTrafficRepository) ListTraffic(cursor *uuid.UUID, limit int, query string) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+	s.listed = true
+	s.query = query
+	s.cursor = cursor
+	s.limit = limit
+	if s.listErr != nil {
+		return nil, nil, s.listErr
+	}
 	items := s.items
 	if items == nil {
 		items = []*domain.RequestResponseSummary{}
@@ -218,9 +233,6 @@ func (s *stubTrafficRepository) ListTraffic(cursor *uuid.UUID, limit int, filter
 	matched := make([]*domain.RequestResponseSummary, 0, len(items))
 	for _, item := range items {
 		if cursor != nil && item.ID.String() >= cursor.String() {
-			continue
-		}
-		if !trafficMatchesFilter(item, filter) {
 			continue
 		}
 		matched = append(matched, item)
@@ -232,22 +244,6 @@ func (s *stubTrafficRepository) ListTraffic(cursor *uuid.UUID, limit int, filter
 		return items, &id, nil
 	}
 	return items, s.nextCursor, nil
-}
-
-func trafficMatchesFilter(item *domain.RequestResponseSummary, filter domain.TrafficListFilter) bool {
-	if filter.Host != "" && item.Host != filter.Host {
-		return false
-	}
-	if filter.Method != "" && item.Method != filter.Method {
-		return false
-	}
-	if filter.StatusCode != nil && item.StatusCode != *filter.StatusCode {
-		return false
-	}
-	if filter.PathPrefix != "" && !strings.HasPrefix(item.Path, filter.PathPrefix) {
-		return false
-	}
-	return true
 }
 
 type shutdownOrderRecorder struct {
@@ -1314,17 +1310,11 @@ func TestTrafficList(t *testing.T) {
 		}
 	})
 
-	t.Run("should filter by exact host", func(t *testing.T) {
-		matching := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
-		other := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
-		repo := &stubTrafficRepository{
-			items: []*domain.RequestResponseSummary{
-				{ID: other, Host: "other.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
-				{ID: matching, Host: "example.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-			},
-		}
+	t.Run("should pass q, cursor, and limit to the repository", func(t *testing.T) {
+		cursor := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
+		repo := &stubTrafficRepository{}
 		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		request := httptest.NewRequest(http.MethodGet, "/traffic?host=example.com", nil)
+		request := httptest.NewRequest(http.MethodGet, "/traffic?q="+url.QueryEscape(`host = "*.example.com" AND status_code >= 500`)+"&limit=1&cursor="+cursor.String(), nil)
 		response := httptest.NewRecorder()
 
 		server.ServeHTTP(response, request)
@@ -1332,26 +1322,21 @@ func TestTrafficList(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
 		}
-		if got := response.Header().Get("Content-Type"); got != "application/json" {
-			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		if want := `host = "*.example.com" AND status_code >= 500`; repo.query != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, repo.query)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"example.com\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
-		if got := response.Body.String(); got != want {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		if repo.limit != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", repo.limit)
+		}
+		if repo.cursor == nil || *repo.cursor != cursor {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", cursor, repo.cursor)
 		}
 	})
 
-	t.Run("should filter by exact method", func(t *testing.T) {
-		matching := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
-		other := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
-		repo := &stubTrafficRepository{
-			items: []*domain.RequestResponseSummary{
-				{ID: other, Method: "GET", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
-				{ID: matching, Method: "POST", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-			},
-		}
+	t.Run("should pass an empty query when q is missing", func(t *testing.T) {
+		repo := &stubTrafficRepository{query: "unset"}
 		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		request := httptest.NewRequest(http.MethodGet, "/traffic?method=POST", nil)
+		request := httptest.NewRequest(http.MethodGet, "/traffic", nil)
 		response := httptest.NewRecorder()
 
 		server.ServeHTTP(response, request)
@@ -1359,156 +1344,68 @@ func TestTrafficList(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
 		}
-		if got := response.Header().Get("Content-Type"); got != "application/json" {
-			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
-		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"POST\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
-		if got := response.Body.String(); got != want {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		if repo.query != "" {
+			t.Fatalf("\nwanted:\nempty query\ngot:\n%s", repo.query)
 		}
 	})
 
-	t.Run("should filter by exact status code", func(t *testing.T) {
-		matching := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
-		other := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
-		repo := &stubTrafficRepository{
-			items: []*domain.RequestResponseSummary{
-				{ID: other, StatusCode: 404, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
-				{ID: matching, StatusCode: 200, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-			},
-		}
+	t.Run("should return 400 invalid_query with the message and position of a query error", func(t *testing.T) {
+		repo := &stubTrafficRepository{listErr: &domain.QueryError{Message: `unknown field "stauts"`, Position: 1}}
 		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		request := httptest.NewRequest(http.MethodGet, "/traffic?status_code=200", nil)
+		request := httptest.NewRequest(http.MethodGet, "/traffic?q="+url.QueryEscape("stauts = 5"), nil)
 		response := httptest.NewRecorder()
 
 		server.ServeHTTP(response, request)
 
-		if response.Code != http.StatusOK {
-			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusBadRequest, response.Code)
 		}
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":200,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
+		want := "{\"error\":\"invalid_query\",\"message\":\"unknown field \\\"stauts\\\"\",\"position\":1}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
 	})
 
-	t.Run("should filter by path prefix including the query string", func(t *testing.T) {
-		matching := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
-		other := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
-		repo := &stubTrafficRepository{
-			items: []*domain.RequestResponseSummary{
-				{ID: other, Path: "/api/v2/users", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
-				{ID: matching, Path: "/api/users?id=1", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-			},
+	t.Run("should reject removed list parameters naming the query clause", func(t *testing.T) {
+		tests := []struct {
+			raw  string
+			want string
+		}{
+			{raw: "host=example.com", want: "{\"error\":\"invalid_query\",\"message\":\"the host parameter was removed; use q=host = \\\"example.com\\\"\"}\n"},
+			{raw: "method=POST", want: "{\"error\":\"invalid_query\",\"message\":\"the method parameter was removed; use q=method = \\\"POST\\\"\"}\n"},
+			{raw: "path=/api", want: "{\"error\":\"invalid_query\",\"message\":\"the path parameter was removed; use q=path = \\\"/api*\\\"\"}\n"},
+			{raw: "status_code=200", want: "{\"error\":\"invalid_query\",\"message\":\"the status_code parameter was removed; use q=status_code = 200\"}\n"},
+			{raw: "status_code=abc", want: "{\"error\":\"invalid_query\",\"message\":\"the status_code parameter was removed; use q=status_code = 200\"}\n"},
+			{raw: "host=", want: "{\"error\":\"invalid_query\",\"message\":\"the host parameter was removed; use q=host = \\\"example.com\\\"\"}\n"},
+			{raw: "q=x&host=a.com", want: "{\"error\":\"invalid_query\",\"message\":\"the host parameter was removed; use q=host = \\\"a.com\\\"\"}\n"},
 		}
-		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		request := httptest.NewRequest(http.MethodGet, "/traffic?path=/api/users", nil)
-		response := httptest.NewRecorder()
-
-		server.ServeHTTP(response, request)
-
-		if response.Code != http.StatusOK {
-			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
-		}
-		if got := response.Header().Get("Content-Type"); got != "application/json" {
-			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
-		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"/api/users?id=1\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
-		if got := response.Body.String(); got != want {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
-		}
-	})
-
-	t.Run("should AND host, method, status code, and path prefix", func(t *testing.T) {
-		matching := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
-		other := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
-		repo := &stubTrafficRepository{
-			items: []*domain.RequestResponseSummary{
-				{ID: other, Host: "example.com", Method: "GET", Path: "/api/users", StatusCode: 200, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
-				{ID: matching, Host: "example.com", Method: "POST", Path: "/api/users", StatusCode: 200, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-			},
-		}
-		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		request := httptest.NewRequest(http.MethodGet, "/traffic?host=example.com&method=POST&status_code=200&path=/api", nil)
-		response := httptest.NewRecorder()
-
-		server.ServeHTTP(response, request)
-
-		if response.Code != http.StatusOK {
-			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
-		}
-		if got := response.Header().Get("Content-Type"); got != "application/json" {
-			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
-		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"POST\",\"host\":\"example.com\",\"path\":\"/api/users\",\"status\":\"\",\"status_code\":200,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
-		if got := response.Body.String(); got != want {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
-		}
-	})
-
-	t.Run("should ignore unknown query parameters", func(t *testing.T) {
-		matching := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
-		other := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
-		repo := &stubTrafficRepository{
-			items: []*domain.RequestResponseSummary{
-				{ID: other, Host: "other.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
-				{ID: matching, Host: "example.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-			},
-		}
-		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		request := httptest.NewRequest(http.MethodGet, "/traffic?host=example.com&q=secret", nil)
-		response := httptest.NewRecorder()
-
-		server.ServeHTTP(response, request)
-
-		if response.Code != http.StatusOK {
-			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
-		}
-		if got := response.Header().Get("Content-Type"); got != "application/json" {
-			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
-		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"example.com\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
-		if got := response.Body.String(); got != want {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
-		}
-	})
-
-	t.Run("should reject a non-integer status_code", func(t *testing.T) {
-		server := newTestServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
-		for _, raw := range []string{"abc", "1.5"} {
-			request := httptest.NewRequest(http.MethodGet, "/traffic?status_code="+raw, nil)
+		for _, test := range tests {
+			repo := &stubTrafficRepository{}
+			server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+			request := httptest.NewRequest(http.MethodGet, "/traffic?"+test.raw, nil)
 			response := httptest.NewRecorder()
 
 			server.ServeHTTP(response, request)
 
 			if response.Code != http.StatusBadRequest {
-				t.Fatalf("\nstatus_code %s wanted:\n%d\ngot:\n%d", raw, http.StatusBadRequest, response.Code)
+				t.Fatalf("\n%s wanted:\n%d\ngot:\n%d", test.raw, http.StatusBadRequest, response.Code)
 			}
-			if got := response.Header().Get("Content-Type"); got != "application/json" {
-				t.Fatalf("\nstatus_code %s wanted:\napplication/json\ngot:\n%s", raw, got)
+			if got := response.Body.String(); got != test.want {
+				t.Fatalf("\n%s wanted:\n%s\ngot:\n%s", test.raw, test.want, got)
 			}
-			if got := response.Body.String(); got != "{\"error\":\"bad_request\"}\n" {
-				t.Fatalf("\nstatus_code %s wanted:\n%s\ngot:\n%s", raw, "{\"error\":\"bad_request\"}\\n", got)
+			if repo.listed {
+				t.Fatalf("\n%s wanted:\nno repository call\ngot:\ncall", test.raw)
 			}
 		}
 	})
 
-	t.Run("should page a filtered list with a cursor", func(t *testing.T) {
-		newest := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
-		middle := uuid.MustParse("01938031-0a00-7000-8000-000000000000")
-		oldest := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
-		repo := &stubTrafficRepository{
-			items: []*domain.RequestResponseSummary{
-				{ID: newest, Host: "example.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 7, 0, time.UTC)},
-				{ID: middle, Host: "other.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
-				{ID: oldest, Host: "example.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-			},
-		}
+	t.Run("should ignore unknown query parameters", func(t *testing.T) {
+		repo := &stubTrafficRepository{}
 		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		request := httptest.NewRequest(http.MethodGet, "/traffic?host=example.com&limit=1", nil)
+		request := httptest.NewRequest(http.MethodGet, "/traffic?search=secret", nil)
 		response := httptest.NewRecorder()
 
 		server.ServeHTTP(response, request)
@@ -1516,21 +1413,8 @@ func TestTrafficList(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
 		}
-		want := "{\"items\":[{\"id\":\"01938032-1b17-7243-b035-e6a9f4645904\",\"scheme\":\"\",\"method\":\"\",\"host\":\"example.com\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:07Z\",\"responded_at\":null}],\"next_cursor\":\"01938032-1b17-7243-b035-e6a9f4645904\"}\n"
-		if got := response.Body.String(); got != want {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
-		}
-
-		olderRequest := httptest.NewRequest(http.MethodGet, "/traffic?host=example.com&limit=1&cursor="+newest.String(), nil)
-		olderResponse := httptest.NewRecorder()
-		server.ServeHTTP(olderResponse, olderRequest)
-
-		if olderResponse.Code != http.StatusOK {
-			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, olderResponse.Code)
-		}
-		wantOlder := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"example.com\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
-		if got := olderResponse.Body.String(); got != wantOlder {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantOlder, got)
+		if repo.query != "" {
+			t.Fatalf("\nwanted:\nempty query\ngot:\n%s", repo.query)
 		}
 	})
 }

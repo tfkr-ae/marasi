@@ -18,7 +18,7 @@ Start a service first. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --inst
 
 ## Driving it with shell and curl
 
-Run `launchpad create --name Login --description variants --json` and save `id`. Run `launchpad list --json` and require that id. Run `launchpad update "$PAD_ID" --description replay --json`. Link a captured request with `launchpad link "$PAD_ID" --request "$TRAFFIC_ID" --json`. Pipe `GET /launchpad-proof.txt HTTP/1.1` with CRLF or LF line endings, a `Host` of the local origin, and a blank line to `launchpad launch "$PAD_ID" --scheme http --json` and require `{"status":"launched"}`. Retry `launchpad get "$PAD_ID" --json` until it contains both the linked id and a new `/launchpad-proof.txt` row. Confirm that launched path with `traffic list --path /launchpad-proof.txt --json`.
+Run `launchpad create --name Login --description variants --json` and save `id`. Run `launchpad list --json` and require that id. Run `launchpad update "$PAD_ID" --description replay --json`. Link a captured request with `launchpad link "$PAD_ID" --request "$TRAFFIC_ID" --json`. Pipe `GET /launchpad-proof.txt HTTP/1.1` with CRLF or LF line endings, a `Host` of the local origin, and a blank line to `launchpad launch "$PAD_ID" --scheme http --json` and require `{"status":"launched"}`. Retry `launchpad get "$PAD_ID" --json` until it contains both the linked id and a new `/launchpad-proof.txt` row. Confirm that launched path with `traffic list -q 'path = "/launchpad-proof.txt"' --json`.
 
 ## Gotchas
 

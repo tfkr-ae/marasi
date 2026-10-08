@@ -137,7 +137,7 @@ func (m *mockTrafficRepo) GetRequestResponseSummary() ([]*domain.RequestResponse
 	return []*domain.RequestResponseSummary{}, nil
 }
 
-func (m *mockTrafficRepo) ListTraffic(cursor *uuid.UUID, limit int, filter domain.TrafficListFilter) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+func (m *mockTrafficRepo) ListTraffic(cursor *uuid.UUID, limit int, query string) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
 	if m.forceError {
 		return nil, nil, errors.New("forced repo error")
 	}
