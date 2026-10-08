@@ -9,16 +9,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -61,6 +64,8 @@ type stubTrafficRepository struct {
 
 	// indexIncomplete reports pairs still missing from the traffic index.
 	indexIncomplete bool
+	// indexErr, when set, is returned by TrafficIndexComplete.
+	indexErr error
 }
 
 type stubLaunchpadRepository struct {
@@ -222,6 +227,9 @@ func (s *stubTrafficRepository) ListNotes(cursor *uuid.UUID, limit int) ([]*doma
 }
 
 func (s *stubTrafficRepository) TrafficIndexComplete() (bool, error) {
+	if s.indexErr != nil {
+		return false, s.indexErr
+	}
 	return !s.indexIncomplete, nil
 }
 
@@ -1364,6 +1372,22 @@ func TestTrafficList(t *testing.T) {
 		}
 	})
 
+	t.Run("should return 500 when the traffic index state cannot be read", func(t *testing.T) {
+		repo := &stubTrafficRepository{indexErr: errors.New("disk I/O error")}
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		request := httptest.NewRequest(http.MethodGet, "/traffic", nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		if response.Code != http.StatusInternalServerError {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusInternalServerError, response.Code)
+		}
+		if want := "{\"error\":\"internal_server_error\"}\n"; response.Body.String() != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, response.Body.String())
+		}
+	})
+
 	t.Run("should pass an empty query when q is missing", func(t *testing.T) {
 		repo := &stubTrafficRepository{query: "unset"}
 		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
@@ -1429,6 +1453,63 @@ func TestTrafficList(t *testing.T) {
 			}
 			if repo.listed {
 				t.Fatalf("\n%s wanted:\nno repository call\ngot:\ncall", test.raw)
+			}
+		}
+	})
+
+	t.Run("should suggest a query clause that finds the traffic the removed parameter named", func(t *testing.T) {
+		connection, err := db.New(filepath.Join(t.TempDir(), "suggest.marasi"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err != nil {
+			t.Fatalf("opening project: %v", err)
+		}
+		repo := db.NewProxyRepo(connection)
+		t.Cleanup(func() { repo.Close() })
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+
+		for _, test := range []struct {
+			parameter string
+			value     string
+			request   domain.ProxyRequest
+		}{
+			{parameter: "host", value: `a"b\c.example`, request: domain.ProxyRequest{Method: "GET", Host: `a"b\c.example`, Path: "/"}},
+			{parameter: "host", value: "ünï.example", request: domain.ProxyRequest{Method: "GET", Host: "ünï.example", Path: "/"}},
+			{parameter: "host", value: "tab\there\\n", request: domain.ProxyRequest{Method: "GET", Host: "tab\there\\n", Path: "/"}},
+			{parameter: "host", value: "ctl\x01'x", request: domain.ProxyRequest{Method: "GET", Host: "ctl\x01'x", Path: "/"}},
+			{parameter: "method", value: `G"E\T`, request: domain.ProxyRequest{Method: `G"E\T`, Host: "method.example", Path: "/"}},
+			{parameter: "path", value: `/a"b\c/ü`, request: domain.ProxyRequest{Method: "GET", Host: "path.example", Path: `/a"b\c/ü/rest`}},
+		} {
+			id, err := uuid.NewV7()
+			if err != nil {
+				t.Fatalf("creating uuid: %v", err)
+			}
+			test.request.ID, test.request.Scheme, test.request.RequestedAt = id, "https", time.Now()
+			if err := repo.InsertRequest(&test.request); err != nil {
+				t.Fatalf("inserting %s: %v", test.value, err)
+			}
+
+			removed := requestListener(t, server, http.MethodGet, "/traffic?"+url.Values{test.parameter: {test.value}}.Encode(), "")
+			var body struct {
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal(removed.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decoding %s: %v", removed.Body.String(), err)
+			}
+			_, clause, found := strings.Cut(body.Message, "use q=")
+			if !found {
+				t.Fatalf("\nwanted:\na suggested clause\ngot:\n%s", body.Message)
+			}
+
+			listed := requestListener(t, server, http.MethodGet, "/traffic?"+url.Values{"q": {clause}}.Encode(), "")
+			var list struct {
+				Items []struct {
+					ID uuid.UUID `json:"id"`
+				} `json:"items"`
+			}
+			if err := json.Unmarshal(listed.Body.Bytes(), &list); err != nil || listed.Code != http.StatusOK {
+				t.Fatalf("\nwanted:\nthe suggested clause %s to parse\ngot:\n%d %s", clause, listed.Code, listed.Body.String())
+			}
+			if len(list.Items) != 1 || list.Items[0].ID != id {
+				t.Fatalf("\nwanted:\n%s to find %s\ngot:\n%s", clause, id, listed.Body.String())
 			}
 		}
 	})

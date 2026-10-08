@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -218,19 +219,13 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 	dbRequest := fromDomainProxyRequest(req)
 	query := `INSERT INTO request(id, scheme, method, host, path, request_raw, requested_at, metadata)
 			  VALUES(:id, :scheme, :method, :host, :path, :request_raw, :requested_at, :metadata)`
-	tx, err := repo.dbConn.Beginx()
+	err := repo.inTx(func(tx *sqlx.Tx) error {
+		if _, err := tx.NamedExec(query, dbRequest); err != nil {
+			return err
+		}
+		return indexPair(tx, req.ID)
+	})
 	if err != nil {
-		return fmt.Errorf("inserting request %s : %w", req.ID, err)
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.NamedExec(query, dbRequest); err != nil {
-		return fmt.Errorf("inserting request %s : %w", req.ID, err)
-	}
-	if err := indexPair(tx, req.ID); err != nil {
-		return fmt.Errorf("inserting request %s : %w", req.ID, err)
-	}
-	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("inserting request %s : %w", req.ID, err)
 	}
 	return nil
@@ -249,29 +244,21 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 				responded_at = :responded_at,
 				metadata = :metadata
 			  WHERE id = :id`
-	tx, err := repo.dbConn.Beginx()
+	err := repo.inTx(func(tx *sqlx.Tx) error {
+		result, err := tx.NamedExec(query, dbResponse)
+		if err != nil {
+			return err
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("checking rows affected: %w", err)
+		}
+		if rowsAffected == 0 {
+			return errors.New("no request found to update")
+		}
+		return indexPair(tx, resp.ID)
+	})
 	if err != nil {
-		return fmt.Errorf("inserting response %s : %w", resp.ID, err)
-	}
-	defer tx.Rollback()
-
-	result, err := tx.NamedExec(query, dbResponse)
-	if err != nil {
-		return fmt.Errorf("inserting response %s : %w", resp.ID, err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("checking rows affected for response %s : %w", resp.ID, err)
-	}
-
-	if rowsAffected == 0 {
-		return fmt.Errorf("no request found with id %s to update", resp.ID)
-	}
-	if err := indexPair(tx, resp.ID); err != nil {
-		return fmt.Errorf("inserting response %s : %w", resp.ID, err)
-	}
-	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("inserting response %s : %w", resp.ID, err)
 	}
 	return nil

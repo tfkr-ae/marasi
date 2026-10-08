@@ -3,6 +3,7 @@ package db
 import (
 	"errors"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -228,6 +229,10 @@ func TestTrafficRepo_ListTrafficQueryPaging(t *testing.T) {
 	}
 }
 
+// parserTokenName matches the AIP-160 library's token type names, which mean
+// nothing to someone writing a query.
+var parserTokenName = regexp.MustCompile(`\b(WS|TEXT|STRING|NUM|HEX)\b|trailing token`)
+
 func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
 	repo, teardown := setupTestDB(t)
 	defer teardown()
@@ -252,8 +257,17 @@ func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
 		{query: `metadata = "x"`, message: `compare a metadata key`, position: 1},
 		{query: `metadata.k > 5`, message: `operator > is not supported on metadata keys`, position: 1},
 		{query: `foo(bar)`, message: `unknown function "foo"`, position: 1},
-		{query: `(host = "a"`, message: `expected )`, position: 12},
-		{query: `host = "a")`, message: `unexpected trailing token`, position: 11},
+		{query: `(host = "a"`, message: `expected ")"`, position: 12},
+		{query: `host = "a")`, message: `unexpected ")"`, position: 11},
+		{query: `host = "a" AND`, message: `expected a condition after AND`, position: 12},
+		{query: `host = "a" AND `, message: `expected a condition after AND`, position: 12},
+		{query: `host = "a" OR`, message: `expected a condition after OR`, position: 12},
+		{query: `host = "a" AND host = "b" AND`, message: `expected a condition after AND`, position: 27},
+		{query: `NOT`, message: `expected a condition after NOT`, position: 1},
+		{query: `host = "a" AND AND host = "b"`, message: `unexpected "AND"`, position: 16},
+		{query: `status_code = 99999999999999999999`, message: `99999999999999999999 is not a valid number`, position: 15},
+		{query: `status_code = 0xZZ`, message: `0x is not a valid number`, position: 15},
+		{query: `status_code = 1e99`, message: `unexpected "e99"`, position: 16},
 		{query: `host =`, message: `unexpected end of query`, position: 7},
 		{query: `host = "unterminated`, message: `unterminated string`, position: 8},
 		{query: `host = "é" AND status_code = "x"`, message: `status_code needs a whole number`, position: 30},
@@ -269,6 +283,9 @@ func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
 			}
 			if !strings.Contains(queryErr.Message, test.message) {
 				t.Fatalf("\nwanted message containing:\n%s\ngot:\n%s", test.message, queryErr.Message)
+			}
+			if leaked := parserTokenName.FindString(queryErr.Message); leaked != "" {
+				t.Fatalf("\nwanted:\nno parser token name in the message\ngot:\n%s (%s)", leaked, queryErr.Message)
 			}
 			if queryErr.Position != test.position {
 				t.Fatalf("\nwanted position:\n%d\ngot:\n%d (%s)", test.position, queryErr.Position, queryErr.Message)

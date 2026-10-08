@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -230,6 +231,36 @@ func TestTrafficIndexBuild(t *testing.T) {
 		}
 		if got := nextEvent(subscriber, 300*time.Millisecond); got != "" {
 			t.Fatalf("\nwanted:\nno event\ngot:\n%s", got)
+		}
+	})
+
+	t.Run("should retry a failed batch and still announce completion once", func(t *testing.T) {
+		path := canonicalProjectPath(t, filepath.Join(t.TempDir(), "flaky.marasi"))
+		seedUnindexedProject(t, path, 150)
+		server, lifecycle, subscriber := newIndexServer(t)
+		failures := 2
+		lifecycle.indexBatch = func(ctx context.Context, path string, builder trafficIndexBuilder) (int, bool, error) {
+			if failures > 0 {
+				failures--
+				return 0, false, errors.New("database is locked")
+			}
+			return builder.IndexMissingTraffic(indexBuildBatchSize)
+		}
+
+		openProjectPath(t, lifecycle, path)
+
+		want := fmt.Sprintf("traffic.index_complete {\"project\":%q}", path)
+		if got := nextEvent(subscriber, 30*time.Second); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, got)
+		}
+		if !listIndexComplete(t, server) {
+			t.Fatalf("\nwanted:\nindex.complete true after the retried build\ngot:\nfalse")
+		}
+		if got := missingFromIndex(t, path); got != 0 {
+			t.Fatalf("\nwanted:\nno pairs missing\ngot:\n%d", got)
+		}
+		if got := nextEvent(subscriber, 200*time.Millisecond); got != "" {
+			t.Fatalf("\nwanted:\nno second event\ngot:\n%s", got)
 		}
 	})
 

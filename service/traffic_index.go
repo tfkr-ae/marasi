@@ -3,12 +3,17 @@ package service
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // indexBuildBatchSize is how many pairs one build transaction indexes. Batches
 // share the project's single database connection with capture and reads, so
 // they stay small (ADR-0026).
 const indexBuildBatchSize = 100
+
+// indexBuildRetryDelay is how long the build waits before retrying a failed
+// batch.
+const indexBuildRetryDelay = time.Second
 
 // trafficIndexBuilder is the repository side of the background traffic index
 // build.
@@ -56,8 +61,9 @@ func (completion *indexCompletion) announce(ctx context.Context, path string) {
 
 // startIndexBuild indexes the project's pairs missing from the traffic index
 // in the background. It runs outside the project gate, so a switch does not
-// wait for it. Closing the project cancels it between batches; the batch in
-// flight commits or rolls back on its own.
+// wait for it. A failed batch is retried after a short delay. Closing the
+// project cancels it between batches; the batch in flight commits or rolls
+// back on its own.
 func (lifecycle *ProjectLifecycle) startIndexBuild(project *openProject) {
 	repository, ok := project.resources.Repository.(*eventLogRepository)
 	if !ok {
@@ -76,10 +82,20 @@ func (lifecycle *ProjectLifecycle) startIndexBuild(project *openProject) {
 		for ctx.Err() == nil {
 			indexed, remaining, err := indexBatch(ctx, project.path, builder)
 			if err != nil {
-				if ctx.Err() == nil && lifecycle.logger != nil {
-					lifecycle.logger.Error("Failed to build the traffic index", "path", project.path, "error", err)
+				if ctx.Err() != nil {
+					return
 				}
-				return
+				if lifecycle.logger != nil {
+					lifecycle.logger.Error("Failed to build the traffic index; retrying", "path", project.path, "error", err)
+				}
+				// A failed batch rolled back. Retry it until the project
+				// closes, so one failure does not leave the index partial.
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(indexBuildRetryDelay):
+				}
+				continue
 			}
 			built = built || indexed > 0
 			if !remaining {

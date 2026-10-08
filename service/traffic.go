@@ -10,7 +10,9 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
@@ -31,6 +33,20 @@ type trafficIndex struct {
 	// Complete is false while the background build is still indexing pairs.
 	// Text conditions in a query can miss pairs until it is true.
 	Complete bool `json:"complete"`
+}
+
+// trafficIndexState reads the state of the open project's traffic index for a
+// traffic list response.
+func trafficIndexState(proxy *marasi.Proxy) (*trafficIndex, error) {
+	repo, err := proxy.GetTrafficRepo()
+	if err != nil {
+		return nil, err
+	}
+	complete, err := repo.TrafficIndexComplete()
+	if err != nil {
+		return nil, err
+	}
+	return &trafficIndex{Complete: complete}, nil
 }
 
 // trafficSummary is one request/response pair in a traffic list page.
@@ -97,9 +113,9 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 		}
 		// Read completeness first: a build finishing during the list must not
 		// mark a page that may have missed pairs as complete.
-		complete, err := repo.TrafficIndexComplete()
+		index, err := trafficIndexState(proxy)
 		if err != nil {
-			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
 			return
 		}
 		items, nextCursor, err := repo.ListTraffic(cursor, limit, r.URL.Query().Get("q"))
@@ -114,7 +130,7 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 		}
 		slices.Reverse(items)
 		list := trafficListFromSummaries(items, nextCursor)
-		list.Index = &trafficIndex{Complete: complete}
+		list.Index = index
 		writeJSON(w, r, http.StatusOK, list)
 	})
 	mux.HandleFunc("GET /traffic/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -226,12 +242,12 @@ func removedTrafficListParameter(query url.Values) (string, bool) {
 		var clause string
 		switch name {
 		case "host":
-			clause = fmt.Sprintf("host = %q", cmp.Or(value, "example.com"))
+			clause = "host = " + quoteQueryString(cmp.Or(value, "example.com"))
 		case "method":
-			clause = fmt.Sprintf("method = %q", cmp.Or(value, "GET"))
+			clause = "method = " + quoteQueryString(cmp.Or(value, "GET"))
 		case "path":
 			// The removed parameter matched a path prefix.
-			clause = fmt.Sprintf("path = %q", cmp.Or(value, "/")+"*")
+			clause = "path = " + quoteQueryString(cmp.Or(value, "/")+"*")
 		case "status_code":
 			if _, err := strconv.Atoi(value); err != nil {
 				value = "200"
@@ -241,6 +257,33 @@ func removedTrafficListParameter(query url.Values) (string, bool) {
 		return fmt.Sprintf("the %s parameter was removed; use q=%s", name, clause), true
 	}
 	return "", false
+}
+
+// quoteQueryString quotes value as an AIP-160 string literal. Only quotes,
+// backslashes, and control characters are escaped, with escapes AIP-160
+// defines; other characters, including non-ASCII, are written as they are.
+func quoteQueryString(value string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range strings.ToValidUTF8(value, "\uFFFD") {
+		switch {
+		case r == '"' || r == '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case unicode.IsControl(r):
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // parseTrafficListQuery reads the limit and cursor query parameters.

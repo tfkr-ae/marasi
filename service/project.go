@@ -38,6 +38,7 @@ type openProject struct {
 	resources marasi.ProjectResources
 	unlock    func() error
 	// cancelIndexBuild stops the project's background traffic index build.
+	// It is set and called only with ProjectLifecycle.mu held.
 	cancelIndexBuild context.CancelFunc
 }
 

@@ -162,13 +162,72 @@ func (t *queryTranslator) parseError(err error) error {
 		return &domain.QueryError{Message: err.Error(), Position: 1}
 	}
 	message := deepest.Message()
+	offset := deepest.Position().Offset
 	switch {
 	case errors.Is(cause, io.EOF):
 		message = "unexpected end of query"
 	case cause != nil:
 		message = cause.Error()
+	case strings.HasPrefix(message, "unexpected "):
+		// The library names the token type, such as WS, and can point at
+		// the space before the token at fault. Name the token itself.
+		message, offset = t.unexpectedToken(offset)
+	case strings.HasPrefix(message, "expected "):
+		message = "expected " + describeTokenType(strings.TrimPrefix(message, "expected "))
 	}
-	return &domain.QueryError{Message: message, Position: t.position(deepest.Position().Offset)}
+	return &domain.QueryError{Message: message, Position: t.position(offset)}
+}
+
+// unexpectedToken describes the first token at or after offset in the trimmed
+// query, skipping spaces, and returns its offset.
+func (t *queryTranslator) unexpectedToken(offset int32) (string, int32) {
+	trimmed := strings.TrimSpace(t.raw)
+	var lexer filtering.Lexer
+	lexer.Init(trimmed[offset:])
+	next := func() (filtering.Token, bool) {
+		for {
+			token, err := lexer.Lex()
+			if err != nil {
+				return filtering.Token{}, false
+			}
+			if token.Type != filtering.TokenTypeWhitespace {
+				return token, true
+			}
+		}
+	}
+	token, ok := next()
+	if !ok {
+		return "unexpected end of query", int32(len(trimmed))
+	}
+	offset += token.Position.Offset
+	switch token.Type {
+	case filtering.TokenTypeAnd, filtering.TokenTypeOr, filtering.TokenTypeNot:
+		if _, more := next(); !more {
+			return fmt.Sprintf("expected a condition after %s", token.Value), offset
+		}
+	case filtering.TokenTypeNumber, filtering.TokenTypeHexNumber:
+		return fmt.Sprintf("%s is not a valid number", token.Value), offset
+	}
+	return fmt.Sprintf("unexpected %q", token.Value), offset
+}
+
+// describeTokenType names a token type the library expected in words, or
+// returns what unchanged when it is not a token type.
+func describeTokenType(what string) string {
+	switch filtering.TokenType(what) {
+	case filtering.TokenTypeWhitespace:
+		return "a space"
+	case filtering.TokenTypeText:
+		return "a word"
+	case filtering.TokenTypeString:
+		return "a quoted string"
+	case filtering.TokenTypeNumber, filtering.TokenTypeHexNumber:
+		return "a number"
+	}
+	if strings.ContainsAny(what, " ") {
+		return what
+	}
+	return fmt.Sprintf("%q", what)
 }
 
 // condition translates a boolean expression.
@@ -214,13 +273,9 @@ func (t *queryTranslator) junction(op string, args []*expr.Expr) (string, error)
 
 // has translates field:value, which searches one indexed text part.
 func (t *queryTranslator) has(e, lhs, rhs *expr.Expr) (string, error) {
-	name, path, err := t.fieldName(lhs)
+	name, field, path, err := t.field(lhs)
 	if err != nil {
 		return "", err
-	}
-	field, ok := trafficFields[name]
-	if !ok {
-		return "", t.errorAt(lhs, "unknown field %q", strings.Join(append([]string{name}, path...), "."))
 	}
 	switch field.kind {
 	case fieldIndexedText:
@@ -235,7 +290,7 @@ func (t *queryTranslator) has(e, lhs, rhs *expr.Expr) (string, error) {
 			return "", t.errorAt(e, "operator : is not supported on metadata keys; use = or !=")
 		}
 		// metadata:"text" searches the whole indexed metadata.
-		return t.textMatch(rhs, "metadata")
+		return t.textMatch(rhs, field.column)
 	}
 	return "", t.errorAt(e, "operator : is not supported on %s; use = or another comparison", name)
 }
@@ -288,13 +343,9 @@ func (t *queryTranslator) sourceToken(e *expr.Expr) string {
 }
 
 func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Expr) (string, error) {
-	name, path, err := t.fieldName(lhs)
+	name, field, path, err := t.field(lhs)
 	if err != nil {
 		return "", err
-	}
-	field, ok := trafficFields[name]
-	if !ok {
-		return "", t.errorAt(lhs, "unknown field %q", strings.Join(append([]string{name}, path...), "."))
 	}
 	if field.kind != fieldMetadata && len(path) > 0 {
 		return "", t.errorAt(lhs, "field %q has no member %q", name, path[0])
@@ -312,7 +363,7 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 		if !ok {
 			return "", t.errorAt(rhs, "%s needs a text value, for example %s = \"value\"", name, name)
 		}
-		return t.negate(op, t.matchExactText(field.column, value)), nil
+		return negate(op, t.matchExactText(field.column, value)), nil
 
 	case fieldInteger:
 		value := rhs.GetConstExpr()
@@ -346,9 +397,23 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 		if err != nil {
 			return "", err
 		}
-		return t.negate(op, cond), nil
+		return negate(op, cond), nil
 	}
 	return "", t.errorAt(lhs, "unknown field %q", name)
+}
+
+// field returns the declared traffic field a field reference names, with its
+// root name and any .member path.
+func (t *queryTranslator) field(e *expr.Expr) (string, trafficField, []string, error) {
+	name, path, err := t.fieldName(e)
+	if err != nil {
+		return "", trafficField{}, nil, err
+	}
+	field, ok := trafficFields[name]
+	if !ok {
+		return "", trafficField{}, nil, t.errorAt(e, "unknown field %q", strings.Join(append([]string{name}, path...), "."))
+	}
+	return name, field, path, nil
 }
 
 // fieldName returns the root field name and any .member path of a field
@@ -392,7 +457,9 @@ func (t *queryTranslator) bind(values ...any) {
 	t.args = append(t.args, values...)
 }
 
-func (t *queryTranslator) negate(op, cond string) string {
+// negate wraps cond in NOT for !=. A NULL comparison counts as no match, so
+// NOT of it is a match.
+func negate(op, cond string) string {
 	if op == "!=" {
 		return "NOT coalesce((" + cond + "), 0)"
 	}
@@ -404,7 +471,7 @@ func (t *queryTranslator) negate(op, cond string) string {
 func (t *queryTranslator) compare(column, op string, value any) string {
 	t.bind(value)
 	if op == "!=" {
-		return t.negate(op, column+" = ?")
+		return negate(op, column+" = ?")
 	}
 	return column + " " + op + " ?"
 }
@@ -414,24 +481,24 @@ func (t *queryTranslator) compare(column, op string, value any) string {
 // LIKE, which ignores case.
 func (t *queryTranslator) matchExactText(column, value string) string {
 	core := value
-	suffix := strings.HasPrefix(core, "*")
-	if suffix {
+	leadingWildcard := strings.HasPrefix(core, "*")
+	if leadingWildcard {
 		core = core[1:]
 	}
-	prefix := strings.HasSuffix(core, "*")
-	if prefix {
+	trailingWildcard := strings.HasSuffix(core, "*")
+	if trailingWildcard {
 		core = core[:len(core)-1]
 	}
 	switch {
-	case (suffix || prefix) && core == "":
+	case (leadingWildcard || trailingWildcard) && core == "":
 		return column + " IS NOT NULL"
-	case suffix && prefix:
+	case leadingWildcard && trailingWildcard:
 		t.bind(core)
 		return "instr(" + column + ", ?) > 0"
-	case prefix:
+	case trailingWildcard:
 		t.bind(core, core)
 		return "substr(" + column + ", 1, length(?)) = ?"
-	case suffix:
+	case leadingWildcard:
 		t.bind(core, core)
 		return "substr(" + column + ", -length(?)) = ?"
 	default:
@@ -474,30 +541,34 @@ func (t *queryTranslator) metadataPath(lhs *expr.Expr, keys []string) (string, e
 // matches only a JSON string, a number only a JSON number, and true, false,
 // and null only the JSON literal.
 func (t *queryTranslator) metadataEquals(rhs *expr.Expr, path string) (string, error) {
+	column := trafficFields["metadata"].column
+	var jsonTypes string
+	var value any
 	switch kind := rhs.GetExprKind().(type) {
 	case *expr.Expr_ConstExpr:
-		switch value := kind.ConstExpr.GetConstantKind().(type) {
+		switch constant := kind.ConstExpr.GetConstantKind().(type) {
 		case *expr.Constant_StringValue:
-			t.bind(path, path, value.StringValue)
-			return "(json_type(metadata, ?) = 'text' AND json_extract(metadata, ?) = ?)", nil
+			jsonTypes, value = "('text')", constant.StringValue
 		case *expr.Constant_Int64Value:
-			t.bind(path, path, value.Int64Value)
-			return "(json_type(metadata, ?) IN ('integer', 'real') AND json_extract(metadata, ?) = ?)", nil
+			jsonTypes, value = "('integer', 'real')", constant.Int64Value
 		case *expr.Constant_DoubleValue:
-			t.bind(path, path, value.DoubleValue)
-			return "(json_type(metadata, ?) IN ('integer', 'real') AND json_extract(metadata, ?) = ?)", nil
+			jsonTypes, value = "('integer', 'real')", constant.DoubleValue
 		}
 	case *expr.Expr_IdentExpr:
 		switch name := kind.IdentExpr.GetName(); name {
 		case "true", "false", "null":
 			t.bind(path)
-			return "json_type(metadata, ?) = '" + name + "'", nil
+			return "json_type(" + column + ", ?) = '" + name + "'", nil
 		default:
-			t.bind(path, path, name)
-			return "(json_type(metadata, ?) = 'text' AND json_extract(metadata, ?) = ?)", nil
+			// An unquoted word is a string.
+			jsonTypes, value = "('text')", name
 		}
 	}
-	return "", t.errorAt(rhs, "metadata keys compare with a string, number, true, false, or null")
+	if value == nil {
+		return "", t.errorAt(rhs, "metadata keys compare with a string, number, true, false, or null")
+	}
+	t.bind(path, path, value)
+	return "(json_type(" + column + ", ?) IN " + jsonTypes + " AND json_extract(" + column + ", ?) = ?)", nil
 }
 
 // sqlEpochSeconds converts a timestamp column to Unix seconds. The SQLite
