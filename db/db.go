@@ -6,6 +6,10 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/url"
+	"path/filepath"
+	"strings"
+	"sync"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/pressly/goose/v3"
@@ -15,6 +19,10 @@ import (
 
 //go:embed migrations/*.sql migrations/*.go
 var embedMigrations embed.FS
+
+// migrateMu serializes goose.NewProvider and Up. Goose's global Go migration
+// registry is not safe for concurrent providers.
+var migrateMu sync.Mutex
 
 // Repository provides a centralized structure for database operations, embedding the database connection.
 // It acts as a receiver for methods that implement the various repository interfaces defined in the domain package.
@@ -53,7 +61,20 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 	dbLogger := logger.With("component", "db")
 	dbLogger.Info("Connecting to SQLite...", "path", name)
 
-	db, err := sqlx.Connect("sqlite", fmt.Sprintf("%s?_journal=WAL&_timeout=5000&_fk=true", name))
+	dsn := name
+	if name != ":memory:" && name != "" {
+		path, err := filepath.Abs(name)
+		if err != nil {
+			return nil, fmt.Errorf("resolving database path: %w", err)
+		}
+		path = filepath.ToSlash(path)
+		// SQLite file URIs use /C:/... for absolute Windows drive paths.
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		dsn = (&url.URL{Scheme: "file", Path: path}).String()
+	}
+	db, err := sqlx.Connect("sqlite", dsn+"?_journal=WAL&_timeout=5000&_fk=true")
 
 	if err != nil {
 		dbLogger.Error("Failed to connect to database", "error", err)
@@ -74,6 +95,9 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 		dbLogger.Error("Failed to load migration file system", "error", err)
 		return nil, fmt.Errorf("creating migrations fs: %w", err)
 	}
+
+	migrateMu.Lock()
+	defer migrateMu.Unlock()
 
 	provider, err := goose.NewProvider(
 		goose.DialectSQLite3,

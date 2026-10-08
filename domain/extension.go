@@ -17,7 +17,9 @@ type ExtensionRepository interface {
 	// It returns an error if no extension with the specified name is found.
 	GetExtensionByName(name string) (*Extension, error)
 
-
+	// GetExtensionByUUID retrieves a single extension by its UUID.
+	// It returns an error if no extension with the specified UUID is found.
+	GetExtensionByUUID(id uuid.UUID) (*Extension, error)
 
 	// GetExtensionLuaCodeByName retrieves the Lua source code for a specific extension by its name.
 	// It returns an error if the extension is not found.
@@ -27,6 +29,10 @@ type ExtensionRepository interface {
 	// It returns an error if the extension is not found.
 	UpdateExtensionLuaCodeByName(name string, code string) error
 
+	// UpdateExtensionLuaCodeByUUID updates the Lua source code for a specific extension identified by its UUID.
+	// It returns an error if the extension is not found.
+	UpdateExtensionLuaCodeByUUID(id uuid.UUID, code string) error
+
 	// GetExtensionSettingsByUUID retrieves the settings for a specific extension using its UUID.
 	// Extension settings are returned as a map[string]any, allowing for flexible configuration.
 	GetExtensionSettingsByUUID(id uuid.UUID) (map[string]any, error)
@@ -34,6 +40,10 @@ type ExtensionRepository interface {
 	// SetExtensionSettingsByUUID sets the settings for a specific extension using its UUID.
 	// Extension settings are provided as a map[string]any.
 	SetExtensionSettingsByUUID(id uuid.UUID, settings map[string]any) error
+
+	// SetExtensionEnabledByUUID sets the enabled flag for a specific extension using its UUID.
+	// It returns an error if the extension is not found.
+	SetExtensionEnabledByUUID(id uuid.UUID, enabled bool) error
 }
 
 // Extension represents the domain model for a Lua-based extension in Marasi.

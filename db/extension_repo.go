@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -72,6 +73,19 @@ func (repo *Repository) GetExtensionByName(name string) (*domain.Extension, erro
 	return toDomainExtension(&dbExt), nil
 }
 
+// GetExtensionByUUID implements the domain.ExtensionRepository interface.
+func (repo *Repository) GetExtensionByUUID(id uuid.UUID) (*domain.Extension, error) {
+	var dbExt dbExtension
+	query := `SELECT * FROM extensions WHERE id = ?`
+
+	err := repo.dbConn.Get(&dbExt, query, id)
+	if err != nil {
+		return nil, fmt.Errorf("fetching extension %s: %w", id, err)
+	}
+
+	return toDomainExtension(&dbExt), nil
+}
+
 // GetExtensionLuaCodeByName implements the domain.ExtensionRepository interface.
 // It retrieves the Lua source code of an extension by its name.
 func (repo *Repository) GetExtensionLuaCodeByName(name string) (string, error) {
@@ -100,6 +114,25 @@ func (repo *Repository) UpdateExtensionLuaCodeByName(name string, code string) e
 	return nil
 }
 
+// UpdateExtensionLuaCodeByUUID implements the domain.ExtensionRepository interface.
+func (repo *Repository) UpdateExtensionLuaCodeByUUID(id uuid.UUID, code string) error {
+	query := `UPDATE extensions SET lua_content = ?, update_at = ? WHERE id = ?`
+
+	result, err := repo.dbConn.Exec(query, code, time.Now().UTC(), id)
+	if err != nil {
+		return fmt.Errorf("updating extension %s code: %w", id, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("updating extension %s code: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("updating extension %s code: %w", id, sql.ErrNoRows)
+	}
+
+	return nil
+}
+
 // GetExtensionSettingsByUUID implements the domain.ExtensionRepository interface.
 // It retrieves the settings of an extension by its UUID.
 func (repo *Repository) GetExtensionSettingsByUUID(id uuid.UUID) (map[string]any, error) {
@@ -120,9 +153,35 @@ func (repo *Repository) SetExtensionSettingsByUUID(id uuid.UUID, settings map[st
 	dbSettings := Metadata(settings)
 	query := `UPDATE extensions SET settings = ? WHERE id = ?`
 
-	_, err := repo.dbConn.Exec(query, dbSettings, id)
+	result, err := repo.dbConn.Exec(query, dbSettings, id)
 	if err != nil {
 		return fmt.Errorf("updating settings for extension %s: %w", id, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("updating settings for extension %s: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("updating settings for extension %s: %w", id, sql.ErrNoRows)
+	}
+
+	return nil
+}
+
+// SetExtensionEnabledByUUID implements the domain.ExtensionRepository interface.
+func (repo *Repository) SetExtensionEnabledByUUID(id uuid.UUID, enabled bool) error {
+	query := `UPDATE extensions SET enabled = ? WHERE id = ?`
+
+	result, err := repo.dbConn.Exec(query, enabled, id)
+	if err != nil {
+		return fmt.Errorf("updating enabled for extension %s: %w", id, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("updating enabled for extension %s: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("updating enabled for extension %s: %w", id, sql.ErrNoRows)
 	}
 
 	return nil

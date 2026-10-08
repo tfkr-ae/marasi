@@ -80,14 +80,24 @@ func (m *mockExtensionRepo) GetExtensions() ([]*domain.Extension, error) { retur
 func (m *mockExtensionRepo) GetExtensionByName(name string) (*domain.Extension, error) {
 	return nil, nil
 }
+func (m *mockExtensionRepo) GetExtensionByUUID(id uuid.UUID) (*domain.Extension, error) {
+	return nil, nil
+}
 func (m *mockExtensionRepo) GetExtensionLuaCodeByName(name string) (string, error)       { return "", nil }
 func (m *mockExtensionRepo) UpdateExtensionLuaCodeByName(name string, code string) error { return nil }
+func (m *mockExtensionRepo) UpdateExtensionLuaCodeByUUID(id uuid.UUID, code string) error {
+	return nil
+}
 
 func (m *mockExtensionRepo) GetExtensionSettingsByUUID(id uuid.UUID) (map[string]any, error) {
 	if settings, ok := m.settingsStore[id]; ok {
 		return settings, nil
 	}
 	return make(map[string]any), nil
+}
+
+func (m *mockExtensionRepo) SetExtensionEnabledByUUID(id uuid.UUID, enabled bool) error {
+	return nil
 }
 
 func (m *mockExtensionRepo) SetExtensionSettingsByUUID(id uuid.UUID, settings map[string]any) error {
@@ -125,6 +135,16 @@ func (m *mockTrafficRepo) GetRequestResponseSummary() ([]*domain.RequestResponse
 		return m.summaryData, nil
 	}
 	return []*domain.RequestResponseSummary{}, nil
+}
+
+func (m *mockTrafficRepo) ListTraffic(cursor *uuid.UUID, limit int, filter domain.TrafficListFilter) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+	if m.forceError {
+		return nil, nil, errors.New("forced repo error")
+	}
+	if m.summaryData != nil {
+		return m.summaryData, nil, nil
+	}
+	return []*domain.RequestResponseSummary{}, nil, nil
 }
 
 func (m *mockTrafficRepo) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResponseRow, error) {
@@ -194,6 +214,24 @@ func (m *mockTrafficRepo) UpdateNote(id uuid.UUID, note string) error {
 	}
 	m.noteStore[id] = note
 	return nil
+}
+
+func (m *mockTrafficRepo) DeleteNote(id uuid.UUID) error {
+	if m.forceError {
+		return errors.New("forced repo error")
+	}
+	if _, ok := m.noteStore[id]; !ok {
+		return errors.New("note not found")
+	}
+	delete(m.noteStore, id)
+	return nil
+}
+
+func (m *mockTrafficRepo) ListNotes(cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+	if m.forceError {
+		return nil, nil, errors.New("forced repo error")
+	}
+	return []*domain.RequestResponseSummary{}, nil, nil
 }
 
 func (m *mockTrafficRepo) SearchByMetadata(path string, value any) ([]*domain.RequestResponseSummary, error) {

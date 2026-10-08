@@ -199,6 +199,39 @@ func (repo *Repository) GetConnectionByRequestID(requestID uuid.UUID) (*domain.W
 	return toDomainWebSocketConnection(&row), nil
 }
 
+// ListConnections returns a newest-first page of connections older than cursor.
+func (repo *Repository) ListConnections(cursor *uuid.UUID, limit int) ([]*domain.WebSocketConnection, *uuid.UUID, error) {
+	query := `SELECT id, request_id, state, transport, host, path,
+					 started_at, closed_at, close_code, close_reason
+			  FROM websocket_connections`
+	var args []any
+	if cursor != nil {
+		query += ` WHERE id < ?`
+		args = append(args, *cursor)
+	}
+	query += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit+1)
+
+	var rows []dbWebSocketConnection
+	if err := repo.dbConn.Select(&rows, query, args...); err != nil {
+		return nil, nil, fmt.Errorf("listing websocket connections: %w", err)
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	items := make([]*domain.WebSocketConnection, len(rows))
+	for i := range rows {
+		items[i] = toDomainWebSocketConnection(&rows[i])
+	}
+	var nextCursor *uuid.UUID
+	if hasMore {
+		id := items[len(items)-1].ID
+		nextCursor = &id
+	}
+	return items, nextCursor, nil
+}
+
 func (repo *Repository) InsertMessage(msg *domain.WebSocketMessage) error {
 	row := fromDomainWebSocketMessage(msg)
 	query := `INSERT INTO websocket_messages(
@@ -247,6 +280,37 @@ func (repo *Repository) GetMessages(connectionID uuid.UUID) ([]*domain.WebSocket
 	}
 
 	return messages, nil
+}
+
+// ListMessages returns a newest-first page of stored frames older than cursor.
+func (repo *Repository) ListMessages(connectionID uuid.UUID, cursor *uuid.UUID, limit int) ([]*domain.WebSocketMessage, *uuid.UUID, error) {
+	query := `SELECT id, connection_id, direction, opcode, fin, payload, is_binary, created_at, metadata
+			  FROM websocket_messages WHERE connection_id = ?`
+	args := []any{connectionID}
+	if cursor != nil {
+		query += ` AND id < ?`
+		args = append(args, *cursor)
+	}
+	query += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit+1)
+	var rows []dbWebSocketMessage
+	if err := repo.dbConn.Select(&rows, query, args...); err != nil {
+		return nil, nil, fmt.Errorf("listing websocket messages for connection %s: %w", connectionID, err)
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	items := make([]*domain.WebSocketMessage, len(rows))
+	for i := range rows {
+		items[i] = toDomainWebSocketMessage(&rows[i])
+	}
+	var nextCursor *uuid.UUID
+	if hasMore {
+		id := items[len(items)-1].ID
+		nextCursor = &id
+	}
+	return items, nextCursor, nil
 }
 
 func (repo *Repository) CountMessages(connectionID uuid.UUID) (int, error) {

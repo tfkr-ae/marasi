@@ -99,3 +99,34 @@ func (repo *Repository) GetLogs() ([]*domain.Log, error) {
 
 	return domainLogs, nil
 }
+
+// ListLogs returns a newest-first page of logs older than cursor.
+func (repo *Repository) ListLogs(cursor *uuid.UUID, limit int) ([]*domain.Log, *uuid.UUID, error) {
+	query := `SELECT id, timestamp, level, message, context, request_id, extension_id FROM logs`
+	var args []any
+	if cursor != nil {
+		query += ` WHERE id < ?`
+		args = append(args, *cursor)
+	}
+	query += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit+1)
+
+	var rows []*dbLog
+	if err := repo.dbConn.Select(&rows, query, args...); err != nil {
+		return nil, nil, fmt.Errorf("listing logs: %w", err)
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	items := make([]*domain.Log, len(rows))
+	for i, row := range rows {
+		items[i] = toDomainLog(row)
+	}
+	var nextCursor *uuid.UUID
+	if hasMore {
+		id := items[len(items)-1].ID
+		nextCursor = &id
+	}
+	return items, nextCursor, nil
+}

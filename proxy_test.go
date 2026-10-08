@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/martian"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
@@ -40,6 +39,12 @@ func (c *sessionTestReadWriteCloser) Close() error {
 type sessionTestErrorReader struct {
 	err error
 }
+
+type errorCloser struct {
+	err error
+}
+
+func (closer *errorCloser) Close() error { return closer.err }
 
 type testRoundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -397,6 +402,60 @@ func TestProxy_WriteToDBArmoryEntry(t *testing.T) {
 	})
 }
 
+func TestProxy_WriteToDBLog(t *testing.T) {
+	tests := []struct {
+		name         string
+		withCallback bool
+	}{
+		{name: "should persist a log without a callback"},
+		{name: "should deliver a log to a configured callback", withCallback: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			dbConnection, err := db.New(":memory:", logger)
+			if err != nil {
+				t.Fatalf("creating in-memory database: %v", err)
+			}
+			repository := db.NewProxyRepo(dbConnection)
+			t.Cleanup(func() { repository.Close() })
+			entry := &domain.Log{
+				ID:        uuid.New(),
+				Timestamp: time.Now(),
+				Level:     "INFO",
+				Message:   "listener started",
+			}
+			var received domain.Log
+			proxy := &Proxy{
+				LogRepo:        repository,
+				DBWriteChannel: make(chan any, 1),
+			}
+			if test.withCallback {
+				proxy.OnLog = func(log domain.Log) error {
+					received = log
+					return nil
+				}
+			}
+			proxy.DBWriteChannel <- entry
+			close(proxy.DBWriteChannel)
+
+			proxy.WriteToDB()
+
+			logs, err := repository.GetLogs()
+			if err != nil {
+				t.Fatalf("getting persisted logs: %v", err)
+			}
+			if len(logs) != 1 || logs[0].ID != entry.ID {
+				t.Fatalf("\nwanted:\npersisted log %s\ngot:\n%v", entry.ID, logs)
+			}
+			if test.withCallback && received.ID != entry.ID {
+				t.Fatalf("\nwanted:\ncallback log %s\ngot:\n%v", entry.ID, received)
+			}
+		})
+	}
+}
+
 type websocketRepositoryStub struct {
 	connection *domain.WebSocketConnection
 	messages   []*domain.WebSocketMessage
@@ -414,6 +473,12 @@ func (r *websocketRepositoryStub) GetConnection(uuid.UUID) (*domain.WebSocketCon
 }
 func (r *websocketRepositoryStub) GetConnectionByRequestID(uuid.UUID) (*domain.WebSocketConnection, error) {
 	return r.connection, nil
+}
+func (r *websocketRepositoryStub) ListConnections(*uuid.UUID, int) ([]*domain.WebSocketConnection, *uuid.UUID, error) {
+	return nil, nil, nil
+}
+func (r *websocketRepositoryStub) ListMessages(uuid.UUID, *uuid.UUID, int) ([]*domain.WebSocketMessage, *uuid.UUID, error) {
+	return nil, nil, nil
 }
 func (r *websocketRepositoryStub) InsertMessage(*domain.WebSocketMessage) error { return nil }
 func (r *websocketRepositoryStub) GetMessage(uuid.UUID) (*domain.WebSocketMessage, error) {
@@ -509,9 +574,18 @@ func TestProxy_RunWebSocketSession(t *testing.T) {
 			Path:      "/socket",
 		}
 		runResult := make(chan error, 1)
+		released := make(chan struct{})
 		go func() {
-			runResult <- proxy.runWebSocketSession(connection, record)
+			runResult <- proxy.runWebSocketSessionWithRelease(connection, record, func() { close(released) })
 		}()
+		select {
+		case <-released:
+			if _, exists := proxy.WebSocketRegistry.Get(connectionID); !exists {
+				t.Fatal("\nwanted:\nWebSocket registered before HTTP admission release\ngot:\nrelease before registration")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for HTTP admission release")
+		}
 
 		openItem := receiveSessionDBWrite(t, proxy.DBWriteChannel)
 		openRecord, ok := openItem.(*domain.WebSocketConnection)
@@ -784,10 +858,11 @@ func TestProxy_CloseClosesWebSockets(t *testing.T) {
 		t.Fatalf("Add() returned unexpected error: %v", err)
 	}
 
-	proxy := &Proxy{
-		WebSocketRegistry: registry,
-		martianProxy:      martian.NewProxy(),
+	proxy, err := New()
+	if err != nil {
+		t.Fatal(err)
 	}
+	proxy.WebSocketRegistry = registry
 	proxy.Close()
 
 	if _, exists := registry.Get(connection.ID); exists {
@@ -809,16 +884,29 @@ func TestProxy_CloseClosesWebSockets(t *testing.T) {
 	}
 }
 
+func TestProxy_CloseReturnsDatabaseError(t *testing.T) {
+	want := errors.New("database close failed")
+	proxy, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy.DBCloser = &errorCloser{err: want}
+
+	err = proxy.Close()
+	if !errors.Is(err, want) {
+		t.Fatalf("wanted database close error:\n%v\ngot:\n%v", want, err)
+	}
+}
+
 func TestProxy_CloseStopsServeCleanly(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("creating listener: %v", err)
 	}
 
-	proxy := &Proxy{
-		martianProxy:      martian.NewProxy(),
-		DBWriteChannel:    make(chan any, 1),
-		WebSocketRegistry: marasiws.NewRegistry(),
+	proxy, err := New()
+	if err != nil {
+		t.Fatal(err)
 	}
 	serveResult := make(chan error, 1)
 	go func() {
@@ -849,6 +937,82 @@ func TestProxy_CloseStopsServeCleanly(t *testing.T) {
 		t.Fatal("Serve() did not stop during shutdown")
 	}
 	close(proxy.DBWriteChannel)
+}
+
+func TestProxy_ActiveListenerAddress(t *testing.T) {
+	t.Run("should report no address before serving", func(t *testing.T) {
+		proxy := &Proxy{}
+
+		address, active := proxy.ActiveListenerAddress()
+
+		if active || address != "" {
+			t.Fatalf("\nwanted:\nno active listener\ngot:\n%q, %t", address, active)
+		}
+	})
+
+	t.Run("should report the active listener's assigned address", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("creating listener: %v", err)
+		}
+		proxy, err := New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		proxy.Addr, proxy.Port = "wrong-address", "1"
+		serveResult := make(chan error, 1)
+		go func() { serveResult <- proxy.Serve(listener) }()
+
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			address, active := proxy.ActiveListenerAddress()
+			if active {
+				if address != listener.Addr().String() {
+					t.Fatalf("\nwanted:\n%s\ngot:\n%s", listener.Addr(), address)
+				}
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("proxy did not start serving")
+			}
+			time.Sleep(time.Millisecond)
+		}
+
+		if err := proxy.Close(); err != nil {
+			t.Fatalf("closing proxy: %v", err)
+		}
+		if err := <-serveResult; err != nil {
+			t.Fatalf("serving proxy: %v", err)
+		}
+		close(proxy.DBWriteChannel)
+
+		address, active := proxy.ActiveListenerAddress()
+		if active || address != "" {
+			t.Fatalf("\nwanted:\nno active listener after close\ngot:\n%q, %t", address, active)
+		}
+	})
+}
+
+func TestProxy_GetListenerAcceptsNetListenAddresses(t *testing.T) {
+	addresses := []string{"localhost", "127.0.0.1", "0.0.0.0"}
+	if probe, err := net.Listen("tcp", net.JoinHostPort("::1", "0")); err == nil {
+		probe.Close()
+		addresses = append(addresses, "::1")
+	}
+
+	for _, address := range addresses {
+		t.Run("should bind "+address, func(t *testing.T) {
+			proxy, err := New()
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			listener, err := proxy.GetListener(address, "0")
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			defer listener.Close()
+		})
+	}
 }
 
 func TestProxy_CloseWebSocketsClosesActiveSession(t *testing.T) {
@@ -926,37 +1090,45 @@ func TestProxy_CloseWebSocketsClosesActiveSession(t *testing.T) {
 		t.Fatal("active websocket session did not stop")
 	}
 
-	for _, wantDirection := range []string{marasiws.DirectionFromClient, marasiws.DirectionFromServer} {
+	closes := map[string]*domain.WebSocketMessage{}
+	var sawUpdate bool
+	for len(closes) < 2 || !sawUpdate {
 		item := receiveSessionDBWrite(t, proxy.DBWriteChannel)
-		message, ok := item.(*domain.WebSocketMessage)
-		if !ok {
-			t.Fatalf("wanted websocket close message, got %T", item)
+		switch item := item.(type) {
+		case *domain.WebSocketMessage:
+			if item.Opcode != marasiws.OpClose {
+				t.Fatalf("\nwanted close opcode:\n%d\ngot:\n%d", marasiws.OpClose, item.Opcode)
+			}
+			code, reason, err := marasiws.ParseClosePayload(item.Payload)
+			if err != nil {
+				t.Fatalf("parsing persisted close payload: %v", err)
+			}
+			if code != marasiws.CloseGoingAway || reason != "listener stopped" {
+				t.Fatalf("\nwanted close details:\n%d %q\ngot:\n%d %q", marasiws.CloseGoingAway, "listener stopped", code, reason)
+			}
+			generated, _ := item.Metadata["generated"].(bool)
+			if generated != (item.Direction == marasiws.DirectionFromClient) {
+				t.Fatalf(
+					"\nwanted generated metadata:\n%v\ngot:\n%v",
+					item.Direction == marasiws.DirectionFromClient,
+					item.Metadata["generated"],
+				)
+			}
+			if _, exists := closes[item.Direction]; exists {
+				t.Fatalf("duplicate websocket close direction %q", item.Direction)
+			}
+			if item.Direction != marasiws.DirectionFromClient && item.Direction != marasiws.DirectionFromServer {
+				t.Fatalf("unexpected websocket close direction %q", item.Direction)
+			}
+			closes[item.Direction] = item
+		case *domain.WebSocketConnectionUpdate:
+			if sawUpdate {
+				t.Fatalf("duplicate websocket connection update")
+			}
+			sawUpdate = true
+		default:
+			t.Fatalf("wanted websocket close message or connection update, got %T", item)
 		}
-		if message.Direction != wantDirection {
-			t.Fatalf("\nwanted close direction:\n%q\ngot:\n%q", wantDirection, message.Direction)
-		}
-		if message.Opcode != marasiws.OpClose {
-			t.Fatalf("\nwanted close opcode:\n%d\ngot:\n%d", marasiws.OpClose, message.Opcode)
-		}
-		code, reason, err := marasiws.ParseClosePayload(message.Payload)
-		if err != nil {
-			t.Fatalf("parsing persisted close payload: %v", err)
-		}
-		if code != marasiws.CloseGoingAway || reason != "listener stopped" {
-			t.Fatalf("\nwanted close details:\n%d %q\ngot:\n%d %q", marasiws.CloseGoingAway, "listener stopped", code, reason)
-		}
-		generated, _ := message.Metadata["generated"].(bool)
-		if generated != (wantDirection == marasiws.DirectionFromClient) {
-			t.Fatalf(
-				"\nwanted generated metadata:\n%v\ngot:\n%v",
-				wantDirection == marasiws.DirectionFromClient,
-				message.Metadata["generated"],
-			)
-		}
-	}
-	item := receiveSessionDBWrite(t, proxy.DBWriteChannel)
-	if _, ok := item.(*domain.WebSocketConnectionUpdate); !ok {
-		t.Fatalf("wanted websocket connection update, got %T", item)
 	}
 
 	for name, resultChannel := range map[string]<-chan frameResult{
@@ -1182,12 +1354,13 @@ func TestProxy_WebSocketControlAPIs(t *testing.T) {
 		})
 		result := make(chan error, 1)
 		go func() {
-			result <- proxy.InjectWebSocketMessage(
+			_, err := proxy.InjectWebSocketMessage(
 				connection.RequestID,
 				marasiws.DirectionFromClient,
 				marasiws.OpText,
 				[]byte("to upstream"),
 			)
+			result <- err
 		}()
 
 		frame, err := marasiws.ReadFrame(upstreamPeer)
@@ -1218,12 +1391,13 @@ func TestProxy_WebSocketControlAPIs(t *testing.T) {
 		proxy, connection, clientPeer, _ := newLiveConnection(t, nil)
 		result := make(chan error, 1)
 		go func() {
-			result <- proxy.InjectWebSocketMessage(
+			_, err := proxy.InjectWebSocketMessage(
 				connection.RequestID,
 				marasiws.DirectionFromServer,
 				marasiws.OpBinary,
 				[]byte("to client"),
 			)
+			result <- err
 		}()
 
 		frame, err := marasiws.ReadFrame(clientPeer)
@@ -1278,7 +1452,7 @@ func TestProxy_WebSocketControlAPIs(t *testing.T) {
 		if _, exists := proxy.GetWebSocketConnection(requestID); exists {
 			t.Fatalf("wanted live connection exists: false\ngot: true")
 		}
-		if err := proxy.InjectWebSocketMessage(requestID, marasiws.DirectionFromClient, marasiws.OpText, nil); !errors.Is(err, ErrWebSocketConnectionNotFound) {
+		if _, err := proxy.InjectWebSocketMessage(requestID, marasiws.DirectionFromClient, marasiws.OpText, nil); !errors.Is(err, ErrWebSocketConnectionNotFound) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrWebSocketConnectionNotFound, err)
 		}
 		if err := proxy.CloseWebSocket(requestID, 1000, ""); !errors.Is(err, ErrWebSocketConnectionNotFound) {
@@ -1292,7 +1466,7 @@ func TestProxy_WebSocketControlAPIs(t *testing.T) {
 	t.Run("invalid injection direction returns an error", func(t *testing.T) {
 		proxy, connection, _, _ := newLiveConnection(t, nil)
 
-		err := proxy.InjectWebSocketMessage(connection.RequestID, "invalid", marasiws.OpText, nil)
+		_, err := proxy.InjectWebSocketMessage(connection.RequestID, "invalid", marasiws.OpText, nil)
 		if !errors.Is(err, ErrWebSocketDirection) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrWebSocketDirection, err)
 		}
@@ -1301,19 +1475,22 @@ func TestProxy_WebSocketControlAPIs(t *testing.T) {
 
 func TestProxy_WebSocketIntegration(t *testing.T) {
 	t.Run("ws", func(t *testing.T) {
-		testProxyWebSocketIntegration(t, false, false, false, false)
+		testProxyWebSocketIntegration(t, false, false, false, false, false)
 	})
 	t.Run("wss", func(t *testing.T) {
-		testProxyWebSocketIntegration(t, true, false, false, false)
+		testProxyWebSocketIntegration(t, true, false, false, false, false)
 	})
 	t.Run("ws interception", func(t *testing.T) {
-		testProxyWebSocketIntegration(t, false, true, true, false)
+		testProxyWebSocketIntegration(t, false, true, true, false, false)
 	})
 	t.Run("ws interception without handler", func(t *testing.T) {
-		testProxyWebSocketIntegration(t, false, true, false, false)
+		testProxyWebSocketIntegration(t, false, true, false, false, false)
 	})
 	t.Run("ws checkpoint interception", func(t *testing.T) {
-		testProxyWebSocketIntegration(t, false, false, true, true)
+		testProxyWebSocketIntegration(t, false, false, true, true, false)
+	})
+	t.Run("should pass frames with disabled checkpoint and global interception on", func(t *testing.T) {
+		testProxyWebSocketIntegration(t, false, true, true, true, true)
 	})
 }
 
@@ -1323,6 +1500,7 @@ func testProxyWebSocketIntegration(
 	intercept bool,
 	interceptHandler bool,
 	checkpointIntercept bool,
+	checkpointDisabled bool,
 ) {
 	t.Helper()
 
@@ -1405,6 +1583,9 @@ func testProxyWebSocketIntegration(
 					return message:opcode() == 1
 				end
 			`
+			if checkpointDisabled {
+				extension.Enabled = false
+			}
 		}
 	}
 
@@ -1450,6 +1631,23 @@ func testProxyWebSocketIntegration(
 		t.Fatalf("creating proxy: %v", proxyErr)
 	}
 	proxy.SetWebSocketIntercept(intercept)
+	if intercept && !interceptHandler {
+		stopForward := make(chan struct{})
+		defer close(stopForward)
+		go func() {
+			for {
+				select {
+				case <-stopForward:
+					return
+				default:
+					for _, message := range proxy.GetPendingWebSocketInterceptions() {
+						_ = proxy.ForwardCheckpoint(message.ID, CheckpointForward{})
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}
+		}()
+	}
 
 	proxyListener, listenerErr := proxy.GetListener("127.0.0.1", "0")
 	if listenerErr != nil {
@@ -1458,7 +1656,7 @@ func testProxyWebSocketIntegration(
 	}
 	serveResult := make(chan error, 1)
 	if secure {
-		roundTripper := newMarasiTransport(proxy.Cert)
+		roundTripper := newMarasiTransport(proxy.Cert, nil)
 		marasiTransport := roundTripper.(*marasiRoundTripper)
 		upstreamTransport := marasiTransport.base.(*http.Transport)
 		upstreamTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -1691,7 +1889,11 @@ func testProxyWebSocketIntegration(
 		if message.Direction == marasiws.DirectionFromServer {
 			serverText = true
 		}
-		if interceptHandler && message.Metadata["intercepted"] != true {
+		if checkpointDisabled {
+			if message.Metadata["intercepted"] == true {
+				t.Fatal("disabled checkpoint intercepted a frame")
+			}
+		} else if interceptHandler && message.Metadata["intercepted"] != true {
 			t.Fatalf("wanted intercepted metadata: true\ngot: %v", message.Metadata["intercepted"])
 		}
 	}
@@ -1747,7 +1949,7 @@ interceptionEventLoop:
 			break interceptionEventLoop
 		}
 	}
-	if interceptHandler {
+	if interceptHandler && !checkpointDisabled {
 		if clientInterceptEvents != 1 {
 			t.Fatalf("wanted client interception event count: %d\ngot: %d", 1, clientInterceptEvents)
 		}
@@ -1994,7 +2196,7 @@ func TestProxy_LaunchWebSocket(t *testing.T) {
 		t.Fatalf("wanted live websocket connection after Launch")
 	}
 
-	if err := proxy.InjectWebSocketMessage(
+	if _, err := proxy.InjectWebSocketMessage(
 		requestID,
 		marasiws.DirectionFromClient,
 		marasiws.OpText,
@@ -2003,18 +2205,24 @@ func TestProxy_LaunchWebSocket(t *testing.T) {
 		t.Fatalf("injecting websocket message: %v", err)
 	}
 
-	openMetadata, openMetadataErr := repository.GetMetadata(requestID)
-	if openMetadataErr != nil {
-		t.Fatalf("getting open request metadata: %v", openMetadataErr)
+	openDeadline := time.Now().Add(5 * time.Second)
+	var openMetadata map[string]any
+	for time.Now().Before(openDeadline) {
+		metadata, metadataErr := repository.GetMetadata(requestID)
+		if metadataErr == nil && metadata["websocket.state"] == "open" {
+			openMetadata = metadata
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if openMetadata == nil {
+		t.Fatalf("wanted open websocket metadata after Launch")
 	}
 	if openMetadata["protocol"] != "websocket" {
 		t.Fatalf("wanted: %q\ngot: %q", "websocket", openMetadata["protocol"])
 	}
 	if openMetadata["websocket.transport"] != "ws" {
 		t.Fatalf("wanted: %q\ngot: %q", "ws", openMetadata["websocket.transport"])
-	}
-	if openMetadata["websocket.state"] != "open" {
-		t.Fatalf("wanted: %q\ngot: %q", "open", openMetadata["websocket.state"])
 	}
 
 	if err := proxy.CloseWebSocket(requestID, 1000, "done"); err != nil {
