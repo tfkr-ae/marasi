@@ -161,6 +161,9 @@ func subcommandChoice(cmd *cobra.Command) string {
 
 // prepareInstancePath resolves --config-dir and --instance into instancePath.
 func prepareInstancePath(cmd *cobra.Command, _ []string) error {
+	if cmd == skillCmd {
+		return nil
+	}
 	if configDir == "" {
 		return fmt.Errorf("config dir is empty")
 	}
