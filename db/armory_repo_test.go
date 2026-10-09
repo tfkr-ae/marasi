@@ -280,7 +280,7 @@ func TestArmoryRepo_RunTraffic(t *testing.T) {
 			t.Fatalf("linking other run request: %v", err)
 		}
 
-		firstPage, nextCursor, err := repo.ListArmoryRunTraffic(run.ID, nil, 1)
+		firstPage, nextCursor, _, err := repo.ListArmoryRunTraffic(run.ID, nil, 1)
 		if err != nil {
 			t.Fatalf("listing first page: %v", err)
 		}
@@ -294,7 +294,7 @@ func TestArmoryRepo_RunTraffic(t *testing.T) {
 			t.Fatalf("expected next cursor %s, got %v", olderID, nextCursor)
 		}
 
-		secondPage, nextCursor, err := repo.ListArmoryRunTraffic(run.ID, nextCursor, 1)
+		secondPage, nextCursor, _, err := repo.ListArmoryRunTraffic(run.ID, nextCursor, 1)
 		if err != nil {
 			t.Fatalf("listing second page: %v", err)
 		}

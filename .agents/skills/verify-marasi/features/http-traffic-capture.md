@@ -16,9 +16,9 @@ Start a service and read `proxy_listener` from `service status --json`. Without 
 
 ## Driving it with shell and curl
 
-Start a local HTTP origin that returns a unique body. Start `events` first and wait until stderr is `: connected`. Run `curl --fail --show-error --noproxy '' --proxy "http://$PROXY_LISTENER" "http://127.0.0.1:$ORIGIN_PORT/proof.txt"`, saving request command, response headers, and response body. Require the unique body and HTTP 200. Require events stdout to contain `traffic.request` then `traffic.response` whose JSON `id` matches. Then use `traffic list --path /proof.txt --status-code 200 --json` and `traffic get "$TRAFFIC_ID" --json` to prove Marasi recorded the same exchange.
+Start a local HTTP origin that returns a unique body. Start `events` first and wait until stderr is `: connected`. Run `curl --fail --show-error --noproxy '' --proxy "http://$PROXY_LISTENER" "http://127.0.0.1:$ORIGIN_PORT/proof.txt"`, saving request command, response headers, and response body. Require the unique body and HTTP 200. Require events stdout to contain `traffic.request` then `traffic.response` whose JSON `id` matches. Then use `traffic list -q 'path = "/proof.txt" AND status_code = 200' --json` and `traffic get "$TRAFFIC_ID" --json` to prove Marasi recorded the same exchange.
 
-For HTTPS, trust `$VERIFY_CONFIG_DIR/marasi_cert.pem` with `curl --cacert` and request `https://example.com/` through the same proxy with `--noproxy ''`. Require `traffic list --host example.com --json` to show `scheme` `https`, path `/`, and status 200. A self-signed local origin is not this proof.
+For HTTPS, trust `$VERIFY_CONFIG_DIR/marasi_cert.pem` with `curl --cacert` and request `https://example.com/` through the same proxy with `--noproxy ''`. Require `traffic list -q 'host = "example.com"' --json` to show `scheme` `https`, path `/`, and status 200. A self-signed local origin is not this proof.
 
 ## Gotchas
 

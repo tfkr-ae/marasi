@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -272,8 +273,9 @@ func (repo *Repository) GetArmoryEntries(runID uuid.UUID) ([]*domain.ArmoryEntry
 	return result, nil
 }
 
-// ListArmoryRunTraffic returns an oldest-first page of traffic linked to a run.
-func (repo *Repository) ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+// ListArmoryRunTraffic returns an oldest-first page of traffic linked to a run,
+// and whether every pair is in the traffic index.
+func (repo *Repository) ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, bool, error) {
 	query := `SELECT
 		request.id, request.scheme, request.method, request.host, request.path, request.requested_at,
 		request.status, request.status_code, request.content_type, request.length, request.responded_at,
@@ -290,8 +292,16 @@ func (repo *Repository) ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID,
 	args = append(args, limit+1)
 
 	rows := make([]*dbRequestResponseSummary, 0)
-	if err := repo.dbConn.Select(&rows, query, args...); err != nil {
-		return nil, nil, fmt.Errorf("listing traffic for armory run %s: %w", runID, err)
+	var indexComplete bool
+	err := repo.inTx(func(tx *sqlx.Tx) error {
+		var err error
+		if indexComplete, err = repo.indexComplete(tx); err != nil {
+			return err
+		}
+		return tx.Select(&rows, query, args...)
+	})
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("listing traffic for armory run %s: %w", runID, err)
 	}
 	hasMore := len(rows) > limit
 	if hasMore {
@@ -302,10 +312,10 @@ func (repo *Repository) ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID,
 		items[i] = toDomainRequestResponseSummary(row)
 	}
 	if !hasMore {
-		return items, nil, nil
+		return items, nil, indexComplete, nil
 	}
 	nextCursor := items[len(items)-1].ID
-	return items, &nextCursor, nil
+	return items, &nextCursor, indexComplete, nil
 }
 
 // CreateArmoryEntry links a generated proxy request to an Armory run.

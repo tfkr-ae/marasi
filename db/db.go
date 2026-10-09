@@ -28,13 +28,12 @@ var migrateMu sync.Mutex
 // It acts as a receiver for methods that implement the various repository interfaces defined in the domain package.
 type Repository struct {
 	dbConn *sqlx.DB // dbConn is the active database connection pool.
+	index  indexBuildState
 }
 
 // NewProxyRepo initializes a new Repository with the given sqlx.DB database connection.
 func NewProxyRepo(db *sqlx.DB) *Repository {
-	return &Repository{
-		dbConn: db,
-	}
+	return &Repository{dbConn: db}
 }
 
 // Close terminates the database connection.

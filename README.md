@@ -100,11 +100,19 @@ loaded CA certificate:
 
 ```sh
 marasi --instance assessment traffic list --limit 20 --json
-marasi --instance assessment traffic list --host example.com --method GET --status-code 200 --json
+marasi --instance assessment traffic list -q 'host = "example.com" AND method = "GET" AND status_code = 200' --json
 marasi --instance assessment traffic get UUID --json
 marasi --instance assessment events --json
 marasi --instance assessment certificate get > marasi-ca.pem
 ```
+
+`traffic list -q` (or `--query`) takes an AIP-160 query, sent to the control API
+as `GET /traffic?q=`. It combines exact field conditions such as
+`host = "api.example.com"` with text search such as `response_body:"password"`,
+`note:"idor candidate"`, `metadata:"workshop"`, or bare `"hbGci"`. Run `marasi traffic list --help` for the fields. In a
+query, `OR` binds tighter than `AND`, so `a AND b OR c` means `a AND (b OR c)`.
+An invalid query returns 400
+`{"error":"invalid_query","message":"...","position":N}`.
 
 `UUID` denotes an ID returned by `traffic list`. Raw request and response bytes
 are base64-encoded in JSON output. Events are live notifications with no replay.

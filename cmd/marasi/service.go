@@ -77,7 +77,7 @@ const (
 )
 
 func init() {
-	startCmd.Flags().StringVar(&requestedProjectPath, "project", "", "Project directory. Do not set this with --project-name")
+	startCmd.Flags().StringVar(&requestedProjectPath, "project", "", "Project file path, such as /path/project.marasi. Do not set this with --project-name")
 	startCmd.Flags().StringVar(&projectName, "project-name", "", "Project name under the default projects directory. Defaults to scratchpad when omitted")
 	startCmd.MarkFlagsMutuallyExclusive("project", "project-name")
 	startCmd.Flags().StringVar(&proxyAddress, "address", "127.0.0.1", "Proxy listener host or IP, without a port")

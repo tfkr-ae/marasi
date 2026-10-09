@@ -7,7 +7,7 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Service lifecycle | `service start`, `service status`, `service stop`, `service list` | [service lifecycle](service-lifecycle.md) |
 | Proxy listener control | `listener status`, `listener address`, `listener stop`, `listener start`, `listener update` | [proxy listener control](proxy-listener-control.md) |
 | HTTP traffic capture | Configure a client with `proxy_listener`, then make HTTP or HTTPS requests | [HTTP traffic capture](http-traffic-capture.md) |
-| Captured traffic inspection | `traffic list`, list filters and pagination, `traffic get`, `traffic metadata get`, `traffic metadata update` | [captured traffic inspection](captured-traffic-inspection.md) |
+| Captured traffic inspection | `traffic list`, list queries (`-q`) and pagination, `traffic get`, `traffic metadata get`, `traffic metadata update` | [captured traffic inspection](captured-traffic-inspection.md) |
 | Notes | `notes set`, `notes get`, `notes list`, list pagination, `notes clear` | [notes](notes.md) |
 | Project open | `project open --name`, `project open --path`, `project switch`, `project list` | [project open](project-open.md) |
 | Events | `events` | [events](events.md) |
@@ -26,5 +26,6 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Scope check | `scope check` | [scope check](scope.md) |
 | Proxy logs | `logs`, list pagination with `--limit` and `--cursor` | [proxy logs](logs.md) |
 | CA certificate | `certificate get`, `--format pem` or `der` | [CA certificate](certificate.md) |
+| Agent skill | `skill` | [agent skill](agent-skill.md) |
 
 When a change touches one row, read that feature file and cover every entry point it names. There is no bundled script. A command that inspects or acts on captured traffic is proven only after real client traffic has gone through the proxy.

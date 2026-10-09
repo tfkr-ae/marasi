@@ -101,6 +101,51 @@ func TestTrafficListCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("should warn on stderr that text results may be incomplete while the index builds", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","method":"GET","host":"example.com","path":"/a","status_code":200,"length":"12"}],"next_cursor":"0193802f-f0e7-73d9-a764-06d21e367809","index":{"complete":false}}`)
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := "01938032-1b17-7243-b035-e6a9f4645904  GET  example.com  /a  200  12\n"
+		if stdout != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
+		}
+		wantStderr := "next_cursor=0193802f-f0e7-73d9-a764-06d21e367809\nnotice: the traffic index is still building; text results may be incomplete\n"
+		if stderr != wantStderr {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantStderr, stderr)
+		}
+	})
+
+	t.Run("should print no notice when the index is complete", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null,"index":{"complete":true}}`)
+
+		_, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if stderr != "" {
+			t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+		}
+	})
+
+	t.Run("should print the list body unchanged with --json while the index builds", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		body := `{"items":[],"next_cursor":null,"index":{"complete":false}}`
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "--json", "traffic", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if stdout != body || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %s and empty stderr\ngot:\nstdout %s and stderr %s", body, stdout, stderr)
+		}
+	})
+
 	t.Run("should print no rows for an empty page", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
@@ -221,59 +266,72 @@ func TestTrafficListCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("should send --path as the path query parameter", func(t *testing.T) {
-		configDir := serviceConfigDir(t)
-		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+	for _, flag := range []string{"--query", "-q"} {
+		t.Run("should send "+flag+" as the q query parameter", func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
 
-		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--path", "/api")
-		if err != nil {
-			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", flag, `host = "*.example.com" AND status_code >= 500`)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			got := sent.snapshot()
+			want := "limit=200&q=host+%3D+%22%2A.example.com%22+AND+status_code+%3E%3D+500"
+			if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != want {
+				t.Fatalf("\nwanted:\nGET /traffic?%s\ngot:\n%s %s?%s", want, got.Method, got.Path, got.RawQuery)
+			}
+		})
+	}
+
+	for _, flag := range []string{"--host", "--method", "--status-code", "--path"} {
+		t.Run("should reject the removed "+flag+" flag", func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+
+			_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", flag, "x")
+			if err == nil || !strings.Contains(err.Error(), "unknown flag: "+flag) {
+				t.Fatalf("\nwanted:\nunknown flag: %s\ngot:\n%v", flag, err)
+			}
+			if sent.snapshot().Path != "" {
+				t.Fatalf("\nwanted:\nno request\ngot:\n%s", sent.snapshot().Path)
+			}
+		})
+	}
+
+	t.Run("should print a query error with its position on stderr", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"invalid_query","message":"unknown field \"stauts\"","position":1}`)
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "-q", "stauts = 5")
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
-		got := sent.snapshot()
-		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "limit=200&path=%2Fapi" {
-			t.Fatalf("\nwanted:\nGET /traffic?limit=200&path=%%2Fapi\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
+		if stdout != "" {
+			t.Fatalf("\nwanted:\nno stdout\ngot:\n%s", stdout)
+		}
+		want := `listing traffic: invalid_query: unknown field "stauts" at position 1`
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("\nwanted stderr containing:\n%s\ngot:\n%s", want, stderr)
 		}
 	})
 
-	t.Run("should send --status-code as the status_code query parameter", func(t *testing.T) {
+	t.Run("should normalize a JSON query error keeping the message and position", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+		startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"invalid_query","message":"unknown field \"stauts\"","position":1}`)
 
-		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--status-code", "404")
-		if err != nil {
-			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
-		}
-		got := sent.snapshot()
-		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "limit=200&status_code=404" {
-			t.Fatalf("\nwanted:\nGET /traffic?limit=200&status_code=404\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
-		}
+		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "list", "-q", "stauts = 5", "--json")
+		assertJSONCommandError(t, stdout, stderr, err, `listing traffic: invalid_query: unknown field "stauts" at position 1`)
 	})
 
-	t.Run("should send --method as the method query parameter", func(t *testing.T) {
-		configDir := serviceConfigDir(t)
-		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
-
-		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--method", "POST")
+	t.Run("should document the query fields and the OR-before-AND rule in help", func(t *testing.T) {
+		stdout, _, err := executeRoot(t, "traffic", "list", "--help")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		got := sent.snapshot()
-		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "limit=200&method=POST" {
-			t.Fatalf("\nwanted:\nGET /traffic?limit=200&method=POST\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
-		}
-	})
-
-	t.Run("should send --host as the host query parameter", func(t *testing.T) {
-		configDir := serviceConfigDir(t)
-		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
-
-		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--host", "example.com")
-		if err != nil {
-			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
-		}
-		got := sent.snapshot()
-		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "host=example.com&limit=200" {
-			t.Fatalf("\nwanted:\nGET /traffic?host=example.com&limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
+		for _, want := range []string{"-q, --query", "host", "method", "scheme", "path", "content_type", "status_code", "requested_at", "responded_at", "metadata.<key>", "request_head", "request_body", "response_head", "response_body", "response_body:\"password\"", "note:\"idor candidate\"", "metadata:\"workshop\"", "at least 3 characters", "OR binds tighter than AND"} {
+			if !strings.Contains(stdout, want) {
+				t.Fatalf("\nwanted help containing:\n%s\ngot:\n%s", want, stdout)
+			}
 		}
 	})
 
@@ -793,7 +851,7 @@ func startCannedControlAPIHandler(t *testing.T, configDir, name string, handle h
 func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	oldJSON := jsonOutput
-	oldHost, oldMethod, oldStatusCode, oldPath, oldLimit, oldCursor := trafficListHost, trafficListMethod, trafficListStatusCode, trafficListPath, trafficListLimit, trafficListCursor
+	oldQuery, oldLimit, oldCursor := trafficListQueryText, trafficListLimit, trafficListCursor
 	oldConfigDir, oldInstance, oldInstancePath := configDir, instance, instancePath
 	var outBuf, errBuf bytes.Buffer
 	rootCmd.SetArgs(args)
@@ -801,7 +859,7 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	rootCmd.SetErr(&errBuf)
 	t.Cleanup(func() {
 		jsonOutput = oldJSON
-		trafficListHost, trafficListMethod, trafficListStatusCode, trafficListPath, trafficListLimit, trafficListCursor = oldHost, oldMethod, oldStatusCode, oldPath, oldLimit, oldCursor
+		trafficListQueryText, trafficListLimit, trafficListCursor = oldQuery, oldLimit, oldCursor
 		configDir, instance, instancePath = oldConfigDir, oldInstance, oldInstancePath
 		rootCmd.SetArgs(nil)
 		rootCmd.SetOut(nil)

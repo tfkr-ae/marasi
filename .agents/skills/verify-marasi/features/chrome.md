@@ -25,6 +25,7 @@ Point `--path` at an executable stub when you need start proof without a GUI Chr
 
 - `--path` is required on path add/remove. `--os` defaults to this machine and must be `darwin`, `linux`, or `windows`.
 - Duplicate path or profile returns a conflict. Removing a missing path or profile returns not found.
+- `chrome profile remove` also deletes `$VERIFY_CONFIG_DIR/chrome_profiles/<name>` and everything under it.
 - `chrome start` with no `--profile` uses `default-profile` even if that name is not registered. Any other `--profile` must already exist.
 - Start requires an active proxy listener. An inactive listener returns a conflict.
 - Custom paths for this OS are tried before OS defaults. The first path `LookPath` accepts is the binary. Later OS paths are not tried. A non-executable file is skipped. If nothing is accepted, start fails with `chrome_unavailable` and launches nothing. A file `LookPath` accepts that is not a valid executable is selected, `Start` fails, and OS defaults are not tried. On darwin and linux a mode-`0755` shebang stub is accepted. On Windows `LookPath` accepts an existing path that already has an extension, including `.sh`; `Start` then fails and OS defaults are not tried. Only an extensionless path is resolved by appending `PATHEXT`.

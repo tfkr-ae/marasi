@@ -5,7 +5,7 @@ Users list stored request/response pairs and open one pair to inspect its metada
 ## Sub-features
 
 - List the newest page of traffic with `traffic list`.
-- Filter by exact host, exact method, exact status code, or path prefix.
+- Narrow the list with an AIP-160 query, `-q` or `--query`. `traffic list --help` lists the fields: exact-case `=`/`!=` with `*` at either end on `host`, `method`, `scheme`, `path`, and `content_type`; comparisons on `status_code`, `requested_at`, and `responded_at`; type-strict `metadata.<key>`; and case-insensitive `:` text search on `request_head`, `request_body`, `response_head`, `response_body`, `note`, and `metadata`, or bare text across all of them. Combine with `AND`, `OR`, `NOT`, `-`, and parentheses.
 - Limit page size and continue with `--cursor`.
 - Read one pair by UUID with `traffic get "$TRAFFIC_ID"`.
 - Read one pair's metadata with `traffic metadata get "$TRAFFIC_ID"`.
@@ -18,14 +18,15 @@ Send traffic through a running instance, then run `dist/marasi --config-dir "$VE
 
 ## Driving it with shell and curl
 
-Send two distinct proxied requests, for example `GET /proof.txt` returning 200 and `POST /other` returning 404. Run `traffic list --host "$HOST" --method GET --path /proof --status-code 200 --limit 1 --json` and require that one row. A host filter that omits the origin port, and a method/status pair that matches nothing, must return empty `items`. `traffic list --limit 1 --json` is the newest row. Pass its `next_cursor` to a second `--limit 1` page and require the older row and `next_cursor` null. Run `traffic get "$TRAFFIC_ID" --json` and base64-decode `request.raw` and `response.raw`. Require the method, path, status, and origin body inside those bytes. `traffic metadata get` on a fresh row is `{}`. `traffic metadata update --file` with `{"phase":"two","has_note":false,"prettified-request":"client","prettified-response":"client"}`, then get again, must return only `{"phase":"two"}`.
+Send two distinct proxied requests, for example `GET /proof.txt` returning 200 and `POST /other` returning 404. Run `traffic list -q "host = \"$HOST\" AND method = \"GET\" AND path = \"/proof*\" AND status_code = 200" --limit 1 --json` and require that one row. A `host` clause that omits the origin port, and a method/status pair that matches nothing, must return empty `items`. A query naming an unknown field, such as `-q 'stauts = 200'`, must fail with `invalid_query` and a position. A text query on part of the origin body, in other case, such as `-q 'response_body:"<FRAGMENT>"'`, must return the GET row, and the same fragment as `request_body:` must not. A text term under three characters, such as `-q '"ab"'`, must fail with `invalid_query`. `traffic list --limit 1 --json` is the newest row. Pass its `next_cursor` to a second `--limit 1` page and require the older row and `next_cursor` null. Run `traffic get "$TRAFFIC_ID" --json` and base64-decode `request.raw` and `response.raw`. Require the method, path, status, and origin body inside those bytes. `traffic metadata get` on a fresh row is `{}`. `traffic metadata update --file` with `{"phase":"two","has_note":false,"prettified-request":"client","prettified-response":"client"}`, then get again, must return only `{"phase":"two"}`. After that update, `-q 'metadata:"phase"'` must return that row, and `-q '"client"'` must not, because the prettified keys are never indexed.
 
 ## Gotchas
 
 - Each page is the newest remaining rows, oldest first within the page. `--limit 1` is still the newest match. `next_cursor` is the oldest id of the current page when an older page remains, otherwise `null` (JSON) or absent (human stderr). Never assume a stable UUID or timestamp.
-- `--host` is exact and may include the origin port for a non-default port.
-- `--path` is a prefix filter, while method and status code are exact filters.
+- `host = "..."` is exact, keeps case, and may include the origin port for a non-default port. A `*` at the start or end matches anything there.
+- `path = "/proof*"` matches a path prefix. `status_code` also takes `<`, `<=`, `>`, and `>=`. The removed `--host`, `--method`, `--path`, and `--status-code` flags are unknown flags.
 - Human output writes `next_cursor=$NEXT_CURSOR` to stderr. JSON keeps it in `next_cursor`.
+- Every `traffic list` page has `"index":{"complete":bool}`. While an opened project's older pairs are still being indexed in the background it is `false`, text conditions can miss those pairs, and human output adds a `notice:` line on stderr. A new project, or one fully indexed, is `true`.
 - `traffic get` requires a UUID. Invalid IDs fail before repository lookup.
 - `traffic metadata update` requires `--file` or piped stdin with a non-empty JSON object body. A TTY stdin fails.
 - `--limit` must be 1 through 500. The default is 200.

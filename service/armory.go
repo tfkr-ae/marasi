@@ -344,12 +344,14 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 			return
 		}
 		repo, _ := armoryRepository(proxy)
-		items, nextCursor, err := repo.ListArmoryRunTraffic(id, cursor, limit)
+		items, nextCursor, indexComplete, err := repo.ListArmoryRunTraffic(id, cursor, limit)
 		if err != nil {
 			writeArmoryError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		writeJSON(w, r, http.StatusOK, trafficListFromSummaries(items, nextCursor))
+		list := trafficListFromSummaries(items, nextCursor)
+		list.Index = &trafficIndex{Complete: indexComplete}
+		writeJSON(w, r, http.StatusOK, list)
 	})
 
 	mux.HandleFunc("POST /armory/run/{id}/start", func(w http.ResponseWriter, r *http.Request) {
