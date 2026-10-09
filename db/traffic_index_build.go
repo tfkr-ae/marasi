@@ -183,15 +183,17 @@ func (repo *Repository) indexComplete(q sqlx.Queryer) (bool, error) {
 // missingFromIndex returns ids of pairs without an index row, newest first,
 // below indexedFrom when it is set and leaving out skipped, while their stored
 // text fits in maxBytes. It returns at least one id when any pair is missing,
-// and reports whether more pairs are missing than it returned. The FTS5
-// docsize table holds one row per indexed rowid.
+// and reports whether more pairs are missing than it returned. A pair is
+// missing when it has no key yet, or its key has no index row; the FTS5
+// docsize table holds one row per indexed key.
 func missingFromIndex(q sqlx.Queryer, indexedFrom *uuid.UUID, skipped []uuid.UUID, maxBytes int) ([]uuid.UUID, bool, error) {
 	query := `SELECT r.id,
 		coalesce(octet_length(r.request_raw), 0) + coalesce(octet_length(r.response_raw), 0) +
 		coalesce(octet_length(r.metadata), 0) +
 		coalesce((SELECT octet_length(n.note) FROM notes n WHERE n.request_id = r.id), 0) AS size
 		FROM request r
-		WHERE NOT EXISTS (SELECT 1 FROM traffic_fts_docsize d WHERE d.id = r.rowid)`
+		LEFT JOIN traffic_index_key k ON k.request_id = r.id
+		WHERE (k.id IS NULL OR NOT EXISTS (SELECT 1 FROM traffic_index_docsize d WHERE d.id = k.id))`
 	args := []any{}
 	if indexedFrom != nil {
 		query += ` AND r.id < ?`

@@ -324,7 +324,7 @@ func (t *queryTranslator) textMatch(e *expr.Expr, column string) (string, error)
 		match = column + " : " + match
 	}
 	t.bind(match)
-	return "request.rowid IN (SELECT rowid FROM traffic_fts WHERE traffic_fts MATCH ?)", nil
+	return "request.id IN (SELECT k.request_id FROM traffic_index JOIN traffic_index_key k ON k.id = traffic_index.rowid WHERE traffic_index MATCH ?)", nil
 }
 
 // textTerm returns the text of a quoted string, an unquoted word, or a number

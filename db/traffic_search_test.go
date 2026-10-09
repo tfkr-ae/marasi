@@ -476,3 +476,80 @@ func TestTrafficRepo_ListTrafficNoteChangesKeepMetadataSearch(t *testing.T) {
 	}
 	assertListNames(t, repo, ids, "after delete", `metadata:"workshop"`, "a")
 }
+
+// rebuildRequestTable rebuilds the request table the way a schema migration
+// does: create a copy, fill it, drop the original, and rename the copy. The
+// rows are copied oldest last, so every pair gets a different SQLite rowid.
+func rebuildRequestTable(t *testing.T, repo *Repository) {
+	t.Helper()
+	var schema string
+	if err := repo.dbConn.Get(&schema, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'request'`); err != nil {
+		t.Fatalf("reading the request schema: %v", err)
+	}
+	var indexes []string
+	if err := repo.dbConn.Select(&indexes, `SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'request' AND sql IS NOT NULL`); err != nil {
+		t.Fatalf("reading the request indexes: %v", err)
+	}
+	statements := []string{
+		`PRAGMA foreign_keys = OFF`,
+		`PRAGMA legacy_alter_table = ON`,
+		strings.Replace(schema, "request", "request_rebuilt", 1),
+		`INSERT INTO request_rebuilt SELECT * FROM request ORDER BY id DESC`,
+		`DROP TABLE request`,
+		`ALTER TABLE request_rebuilt RENAME TO request`,
+	}
+	statements = append(statements, indexes...)
+	statements = append(statements, `PRAGMA legacy_alter_table = OFF`, `PRAGMA foreign_keys = ON`)
+	for _, statement := range statements {
+		if _, err := repo.dbConn.Exec(statement); err != nil {
+			t.Fatalf("rebuilding the request table: %s: %v", statement, err)
+		}
+	}
+}
+
+func TestTrafficRepo_ListTrafficTextSearchAfterRequestTableRebuild(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	ids := captureTextPairs(t, repo, textSearchPairs())
+
+	rebuildRequestTable(t, repo)
+
+	for query, want := range map[string]string{
+		`"hbGci"`:                   "jwt",
+		`response_body:"password"`:  "reset",
+		`request_body:"user=alice"`: "login",
+		`request_head:"slow"`:       "pending",
+		`NOT "password"`:            "pending,jwt",
+	} {
+		t.Run(query, func(t *testing.T) {
+			if got := listNames(t, repo, ids, query); got != want {
+				t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, got)
+			}
+		})
+	}
+	if !indexComplete(t, repo) {
+		t.Fatalf("\nwanted:\ncomplete index after the rebuild\ngot:\nincomplete")
+	}
+}
+
+func TestTrafficRepo_ListTrafficTextSearchAfterPairDeleted(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	ids := captureTextPairs(t, repo, []textPair{{name: "deleted", request: "GET /old HTTP/1.1\r\n\r\n", response: []byte("HTTP/1.1 200 OK\r\n\r\nleftover-secret")}})
+
+	// Nothing deletes pairs yet; a future delete removes the request row and,
+	// through its foreign key, the pair's index key.
+	if _, err := repo.dbConn.Exec(`DELETE FROM request WHERE id = ?`, ids["deleted"]); err != nil {
+		t.Fatalf("deleting the pair: %v", err)
+	}
+	for name, id := range captureTextPairs(t, repo, []textPair{{name: "newer", request: "GET /new HTTP/1.1\r\n\r\n", response: []byte("HTTP/1.1 200 OK\r\n\r\nfresh")}}) {
+		ids[name] = id
+	}
+
+	if got := listNames(t, repo, ids, `"leftover-secret"`); got != "" {
+		t.Fatalf("\nwanted:\nthe deleted pair's text to match nothing\ngot:\n%q", got)
+	}
+	if got := listNames(t, repo, ids, `"fresh"`); got != "newer" {
+		t.Fatalf("\nwanted:\n%q\ngot:\n%q", "newer", got)
+	}
+}

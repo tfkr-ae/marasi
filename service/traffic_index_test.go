@@ -67,7 +67,8 @@ func missingFromIndex(t *testing.T, path string) int {
 	defer connection.Close()
 	var missing int
 	err = connection.Get(&missing, `SELECT count(*) FROM request r
-		WHERE NOT EXISTS (SELECT 1 FROM traffic_fts_docsize d WHERE d.id = r.rowid)`)
+		LEFT JOIN traffic_index_key k ON k.request_id = r.id
+		WHERE k.id IS NULL OR NOT EXISTS (SELECT 1 FROM traffic_index_docsize d WHERE d.id = k.id)`)
 	if err != nil {
 		t.Fatalf("counting pairs missing from the index: %v", err)
 	}

@@ -12,7 +12,7 @@ import (
 )
 
 // trafficIndexRow is the searchable text of one request/response pair, one
-// field per column of the traffic_fts index. A nil field indexes nothing.
+// field per column of the traffic_index table. A nil field indexes nothing.
 type trafficIndexRow struct {
 	rowID        int64
 	requestHead  any
@@ -25,7 +25,9 @@ type trafficIndexRow struct {
 
 // storedPair is the stored text of a pair that the index is built from.
 type storedPair struct {
-	RowID       int64          `db:"rowid"`
+	// IndexRowID is the pair's traffic_index_key id, which is the rowid of
+	// its index row.
+	IndexRowID  int64          `db:"index_rowid"`
 	RequestRaw  []byte         `db:"request_raw"`
 	ResponseRaw []byte         `db:"response_raw"`
 	Note        sql.NullString `db:"note"`
@@ -41,7 +43,7 @@ func newTrafficIndexRow(pair storedPair) trafficIndexRow {
 	requestHead, requestBody := splitHTTPMessage(pair.RequestRaw)
 	responseHead, responseBody := splitHTTPMessage(pair.ResponseRaw)
 	return trafficIndexRow{
-		rowID:        pair.RowID,
+		rowID:        pair.IndexRowID,
 		requestHead:  indexableHead(requestHead),
 		requestBody:  indexableBody(requestBody),
 		responseHead: indexableHead(responseHead),
@@ -55,10 +57,19 @@ func newTrafficIndexRow(pair storedPair) trafficIndexRow {
 // it already has. Call it in the transaction that changed the pair's text,
 // note, or metadata.
 func indexPair(tx sqlx.Ext, id uuid.UUID) error {
+	// The pair's key is assigned once and kept, so a replaced index row
+	// replaces the pair's own row.
+	_, err := tx.Exec(`INSERT INTO traffic_index_key (request_id) VALUES (?)
+		ON CONFLICT (request_id) DO NOTHING`, id)
+	if err != nil {
+		return fmt.Errorf("keying pair %s to index: %w", id, err)
+	}
 	var pair storedPair
-	err := sqlx.Get(tx, &pair, `SELECT r.rowid, r.request_raw, r.response_raw, n.note,
+	err = sqlx.Get(tx, &pair, `SELECT k.id AS index_rowid, r.request_raw, r.response_raw, n.note,
 		json_remove(r.metadata, '$."prettified-request"', '$."prettified-response"') AS metadata
-		FROM request r LEFT JOIN notes n ON n.request_id = r.id
+		FROM request r
+		JOIN traffic_index_key k ON k.request_id = r.id
+		LEFT JOIN notes n ON n.request_id = r.id
 		WHERE r.id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("reading pair %s to index: %w", id, err)
@@ -72,7 +83,7 @@ func indexPair(tx sqlx.Ext, id uuid.UUID) error {
 // writeTrafficIndexRow replaces the index row. A plain INSERT over an existing
 // rowid would keep the old text matching, so the row is always replaced whole.
 func writeTrafficIndexRow(tx sqlx.Execer, row trafficIndexRow) error {
-	_, err := tx.Exec(`INSERT OR REPLACE INTO traffic_fts
+	_, err := tx.Exec(`INSERT OR REPLACE INTO traffic_index
 		(rowid, request_head, request_body, response_head, response_body, note, metadata)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		row.rowID, row.requestHead, row.requestBody, row.responseHead, row.responseBody, row.note, row.metadata)
