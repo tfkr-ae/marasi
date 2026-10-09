@@ -1128,7 +1128,7 @@ func TestStopService(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reopen same instance and project: %v %s", err, stderr)
 			}
-			stdout, stderr, err = runMarasi(binary, append(args, "traffic", "list", "--path", "/stalled", "--json")...)
+			stdout, stderr, err = runMarasi(binary, append(args, "traffic", "list", "-q", `path = "/stalled*"`, "--json")...)
 			if err != nil || !strings.Contains(stdout, "/stalled") {
 				t.Fatalf("request was not flushed before project close: %v %s %s", err, stdout, stderr)
 			}

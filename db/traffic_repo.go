@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -218,9 +219,14 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 	dbRequest := fromDomainProxyRequest(req)
 	query := `INSERT INTO request(id, scheme, method, host, path, request_raw, requested_at, metadata)
 			  VALUES(:id, :scheme, :method, :host, :path, :request_raw, :requested_at, :metadata)`
-	_, err := repo.dbConn.NamedExec(query, dbRequest)
+	err := repo.inTx(func(tx *sqlx.Tx) error {
+		if _, err := tx.NamedExec(query, dbRequest); err != nil {
+			return err
+		}
+		return indexPair(tx, req.ID)
+	})
 	if err != nil {
-		return fmt.Errorf("inserting request %d : %w", req.ID, err)
+		return fmt.Errorf("inserting request %s : %w", req.ID, err)
 	}
 	return nil
 }
@@ -238,18 +244,22 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 				responded_at = :responded_at,
 				metadata = :metadata
 			  WHERE id = :id`
-	result, err := repo.dbConn.NamedExec(query, dbResponse)
+	err := repo.inTx(func(tx *sqlx.Tx) error {
+		result, err := tx.NamedExec(query, dbResponse)
+		if err != nil {
+			return err
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("checking rows affected: %w", err)
+		}
+		if rowsAffected == 0 {
+			return errors.New("no request found to update")
+		}
+		return indexPair(tx, resp.ID)
+	})
 	if err != nil {
-		return fmt.Errorf("inserting request %d : %w", resp.ID, err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("checking rows affected for response %s : %w", resp.ID, err)
-	}
-
-	if rowsAffected == 0 {
-		return fmt.Errorf("no request found with id %s to update", resp.ID)
+		return fmt.Errorf("inserting response %s : %w", resp.ID, err)
 	}
 	return nil
 }
@@ -356,34 +366,29 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 	return reqResSummary, nil
 }
 
-// ListTraffic returns a newest-first page of summaries older than cursor.
-func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, filter domain.TrafficListFilter) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+// ListTraffic returns a newest-first page of summaries older than cursor that
+// match the query, and whether every pair is in the traffic index. An invalid
+// query returns a *domain.QueryError.
+func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, trafficQuery string) ([]*domain.RequestResponseSummary, *uuid.UUID, bool, error) {
+	translated, err := translateTrafficQuery(trafficQuery)
+	if err != nil {
+		return nil, nil, false, err
+	}
+
 	query := `SELECT
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
 			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
 			  FROM request`
-	args := make([]any, 0, 7)
+	args := make([]any, 0, len(translated.args)+2)
 	var conditions []string
 	if cursor != nil {
 		conditions = append(conditions, `id < ?`)
 		args = append(args, *cursor)
 	}
-	if filter.Host != "" {
-		conditions = append(conditions, `host = ?`)
-		args = append(args, filter.Host)
-	}
-	if filter.Method != "" {
-		conditions = append(conditions, `method = ?`)
-		args = append(args, filter.Method)
-	}
-	if filter.StatusCode != nil {
-		conditions = append(conditions, `status_code = ?`)
-		args = append(args, *filter.StatusCode)
-	}
-	if filter.PathPrefix != "" {
-		conditions = append(conditions, `substr(path, 1, length(?)) = ?`)
-		args = append(args, filter.PathPrefix, filter.PathPrefix)
+	if translated.where != "" {
+		conditions = append(conditions, `(`+translated.where+`)`)
+		args = append(args, translated.args...)
 	}
 	if len(conditions) > 0 {
 		query += ` WHERE ` + strings.Join(conditions, ` AND `)
@@ -392,9 +397,16 @@ func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, filter domain.
 	args = append(args, limit+1)
 
 	var dbSummary []*dbRequestResponseSummary
-	err := repo.dbConn.Select(&dbSummary, query, args...)
+	var indexComplete bool
+	err = repo.inTx(func(tx *sqlx.Tx) error {
+		var err error
+		if indexComplete, err = repo.indexComplete(tx); err != nil {
+			return err
+		}
+		return tx.Select(&dbSummary, query, args...)
+	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("listing traffic: %w", err)
+		return nil, nil, false, fmt.Errorf("listing traffic: %w", err)
 	}
 
 	hasMore := len(dbSummary) > limit
@@ -412,7 +424,7 @@ func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, filter domain.
 		id := items[len(items)-1].ID
 		nextCursor = &id
 	}
-	return items, nextCursor, nil
+	return items, nextCursor, indexComplete, nil
 }
 
 // GetMetadata retrieves the metadata map for a specific request ID.
@@ -429,17 +441,31 @@ func (repo *Repository) GetMetadata(id uuid.UUID) (map[string]any, error) {
 }
 
 // UpdateMetadata updates the metadata for one or more requests identified by their IDs.
+// All requests and their index rows are updated in one transaction.
 func (repo *Repository) UpdateMetadata(metadata map[string]any, ids ...uuid.UUID) error {
 	dbMeta := Metadata(metadata)
 	query := `UPDATE request SET metadata = ? WHERE id = ?`
 
-	for _, id := range ids {
-		_, err := repo.dbConn.Exec(query, dbMeta, id)
-		if err != nil {
-			return fmt.Errorf("updating metadata %v for %v : %w", dbMeta, id, err)
+	return repo.inTx(func(tx *sqlx.Tx) error {
+		for _, id := range ids {
+			result, err := tx.Exec(query, dbMeta, id)
+			if err != nil {
+				return fmt.Errorf("updating metadata %v for %v : %w", dbMeta, id, err)
+			}
+			rowsAffected, err := result.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("updating metadata %v for %v : %w", dbMeta, id, err)
+			}
+			if rowsAffected == 0 {
+				// No such request: nothing changed, so there is nothing to index.
+				continue
+			}
+			if err := indexPair(tx, id); err != nil {
+				return fmt.Errorf("updating metadata %v for %v : %w", dbMeta, id, err)
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // GetNote retrieves the user-created note associated with a specific request ID.
@@ -458,37 +484,61 @@ func (repo *Repository) GetNote(requestID uuid.UUID) (string, error) {
 
 // UpdateNote creates or updates a user-created note for a specific request ID.
 // If a note already exists for the request, it will be updated; otherwise, a new note will be inserted.
+// The pair's index row is rebuilt in the same transaction.
 func (repo *Repository) UpdateNote(requestID uuid.UUID, note string) error {
 	query := `INSERT INTO notes (request_id, note, created_at)
               VALUES (?, ?, CURRENT_TIMESTAMP)
-              ON CONFLICT(request_id) 
+              ON CONFLICT(request_id)
 			  DO UPDATE SET
 				note = excluded.note,
 				created_at = CURRENT_TIMESTAMP;`
 
-	_, err := repo.dbConn.Exec(query, requestID, note)
-
+	err := repo.inTx(func(tx *sqlx.Tx) error {
+		if _, err := tx.Exec(query, requestID, note); err != nil {
+			return err
+		}
+		return indexPair(tx, requestID)
+	})
 	if err != nil {
 		return fmt.Errorf("updating note for request %s: %w", requestID, err)
 	}
-
 	return nil
 }
 
-// DeleteNote removes the note row for a request ID.
+// DeleteNote removes the note row for a request ID and rebuilds the pair's
+// index row in the same transaction.
 func (repo *Repository) DeleteNote(requestID uuid.UUID) error {
-	result, err := repo.dbConn.Exec(`DELETE FROM notes WHERE request_id = ?`, requestID)
+	err := repo.inTx(func(tx *sqlx.Tx) error {
+		result, err := tx.Exec(`DELETE FROM notes WHERE request_id = ?`, requestID)
+		if err != nil {
+			return err
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rowsAffected == 0 {
+			return sql.ErrNoRows
+		}
+		return indexPair(tx, requestID)
+	})
 	if err != nil {
 		return fmt.Errorf("deleting note for request %s: %w", requestID, err)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("deleting note for request %s: %w", requestID, err)
-	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("deleting note for request %s: %w", requestID, sql.ErrNoRows)
 	}
 	return nil
+}
+
+// inTx runs fn in a transaction and commits when fn succeeds.
+func (repo *Repository) inTx(fn func(tx *sqlx.Tx) error) error {
+	tx, err := repo.dbConn.Beginx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ListNotes returns a newest-first page of summaries that have a non-empty note.

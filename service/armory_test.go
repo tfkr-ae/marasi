@@ -28,6 +28,8 @@ type stubArmoryRepository struct {
 	runs         map[uuid.UUID]*domain.ArmoryRun
 	beforeDelete func()
 	listTraffic  func(uuid.UUID, *uuid.UUID, int) ([]*domain.RequestResponseSummary, *uuid.UUID, error)
+	// indexIncomplete reports pairs still missing from the traffic index.
+	indexIncomplete bool
 }
 
 func (repo *stubArmoryRepository) CreateArmoryTemplate(template *domain.ArmoryTemplate) error {
@@ -125,8 +127,9 @@ func (repo *stubArmoryRepository) DeleteArmoryRun(id uuid.UUID) error {
 	return nil
 }
 
-func (repo *stubArmoryRepository) ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
-	return repo.listTraffic(runID, cursor, limit)
+func (repo *stubArmoryRepository) ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID, limit int) ([]*domain.RequestResponseSummary, *uuid.UUID, bool, error) {
+	items, nextCursor, err := repo.listTraffic(runID, cursor, limit)
+	return items, nextCursor, !repo.indexIncomplete, err
 }
 
 type stubArmoryService struct {
@@ -654,7 +657,7 @@ func TestArmoryRunTrafficControlAPI(t *testing.T) {
 		server := newArmoryServer(repo)
 
 		response := requestControlAPI(server, http.MethodGet, "/armory/run/"+runID.String()+"/traffic?limit=1&cursor="+cursor.String(), "")
-		want := fmt.Sprintf(`{"items":[{"id":%q,"scheme":"https","method":"GET","host":"example.com","path":"/login","status":"","status_code":-1,"content_type":"","length":"","metadata":{"armory_run_id":%q},"requested_at":"2026-09-17T10:30:00Z","responded_at":null}],"next_cursor":%q}`+"\n", nextCursor, runID, nextCursor)
+		want := fmt.Sprintf(`{"items":[{"id":%q,"scheme":"https","method":"GET","host":"example.com","path":"/login","status":"","status_code":-1,"content_type":"","length":"","metadata":{"armory_run_id":%q},"requested_at":"2026-09-17T10:30:00Z","responded_at":null}],"next_cursor":%q,"index":{"complete":true}}`+"\n", nextCursor, runID, nextCursor)
 		assertControlAPIResponse(t, response, http.StatusOK, want)
 	})
 
@@ -669,7 +672,27 @@ func TestArmoryRunTrafficControlAPI(t *testing.T) {
 		server := newArmoryServer(repo)
 
 		response := requestControlAPI(server, http.MethodGet, "/armory/run/"+runID.String()+"/traffic", "")
-		assertControlAPIResponse(t, response, http.StatusOK, "{\"items\":[],\"next_cursor\":null}\n")
+		assertControlAPIResponse(t, response, http.StatusOK, "{\"items\":[],\"next_cursor\":null,\"index\":{\"complete\":true}}\n")
+	})
+
+	t.Run("should report whether the traffic index is complete", func(t *testing.T) {
+		repo := &stubArmoryRepository{runs: map[uuid.UUID]*domain.ArmoryRun{runID: {ID: runID}}, indexIncomplete: true, listTraffic: func(uuid.UUID, *uuid.UUID, int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+			return nil, nil, nil
+		}}
+		server := newArmoryServer(repo)
+
+		response := requestControlAPI(server, http.MethodGet, "/armory/run/"+runID.String()+"/traffic", "")
+		assertControlAPIResponse(t, response, http.StatusOK, "{\"items\":[],\"next_cursor\":null,\"index\":{\"complete\":false}}\n")
+	})
+
+	t.Run("should return 500 when listing fails", func(t *testing.T) {
+		repo := &stubArmoryRepository{runs: map[uuid.UUID]*domain.ArmoryRun{runID: {ID: runID}}, listTraffic: func(uuid.UUID, *uuid.UUID, int) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+			return nil, nil, errors.New("disk I/O error")
+		}}
+		server := newArmoryServer(repo)
+
+		response := requestControlAPI(server, http.MethodGet, "/armory/run/"+runID.String()+"/traffic", "")
+		assertControlAPIResponse(t, response, http.StatusInternalServerError, "{\"error\":\"internal_server_error\"}\n")
 	})
 
 	t.Run("should reject invalid paging and return not found for a missing run", func(t *testing.T) {
@@ -785,7 +808,7 @@ func testServiceArmoryRun(id, templateID uuid.UUID, createdAt time.Time) *domain
 }
 
 func newArmoryServer(repo domain.ArmoryRepository) *Server {
-	proxy := &marasi.Proxy{Armory: &stubArmoryService{repo: repo}}
+	proxy := &marasi.Proxy{Armory: &stubArmoryService{repo: repo}, TrafficRepo: &stubTrafficRepository{}}
 	return newTestServer(proxy, func() {})
 }
 

@@ -45,6 +45,10 @@ _Avoid_: comment, row note, traffic comment
 A document of extra data stored with a request/response pair.
 _Avoid_: tags, highlight, properties
 
+**Query**:
+A text expression that narrows one collection's list to the items that match it. It is not stored and has no id.
+_Avoid_: filter, search string, FTS
+
 **Checkpoint**:
 The intercept capability of a service instance. It is not stored and has no id.
 _Avoid_: intercept as the product name, using checkpoint as a synonym for the checkpoint extension

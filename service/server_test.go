@@ -9,15 +9,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -50,6 +54,16 @@ type stubTrafficRepository struct {
 	items      []*domain.RequestResponseSummary
 	nextCursor *uuid.UUID
 	notes      map[uuid.UUID]string
+
+	// ListTraffic records its arguments and returns listErr when set.
+	listed  bool
+	query   string
+	cursor  *uuid.UUID
+	limit   int
+	listErr error
+
+	// indexIncomplete reports pairs still missing from the traffic index.
+	indexIncomplete bool
 }
 
 type stubLaunchpadRepository struct {
@@ -210,7 +224,14 @@ func (s *stubTrafficRepository) ListNotes(cursor *uuid.UUID, limit int) ([]*doma
 	return matched, s.nextCursor, nil
 }
 
-func (s *stubTrafficRepository) ListTraffic(cursor *uuid.UUID, limit int, filter domain.TrafficListFilter) ([]*domain.RequestResponseSummary, *uuid.UUID, error) {
+func (s *stubTrafficRepository) ListTraffic(cursor *uuid.UUID, limit int, query string) ([]*domain.RequestResponseSummary, *uuid.UUID, bool, error) {
+	s.listed = true
+	s.query = query
+	s.cursor = cursor
+	s.limit = limit
+	if s.listErr != nil {
+		return nil, nil, false, s.listErr
+	}
 	items := s.items
 	if items == nil {
 		items = []*domain.RequestResponseSummary{}
@@ -220,34 +241,15 @@ func (s *stubTrafficRepository) ListTraffic(cursor *uuid.UUID, limit int, filter
 		if cursor != nil && item.ID.String() >= cursor.String() {
 			continue
 		}
-		if !trafficMatchesFilter(item, filter) {
-			continue
-		}
 		matched = append(matched, item)
 	}
 	items = matched
 	if limit < len(items) {
 		items = items[:limit]
 		id := items[len(items)-1].ID
-		return items, &id, nil
+		return items, &id, !s.indexIncomplete, nil
 	}
-	return items, s.nextCursor, nil
-}
-
-func trafficMatchesFilter(item *domain.RequestResponseSummary, filter domain.TrafficListFilter) bool {
-	if filter.Host != "" && item.Host != filter.Host {
-		return false
-	}
-	if filter.Method != "" && item.Method != filter.Method {
-		return false
-	}
-	if filter.StatusCode != nil && item.StatusCode != *filter.StatusCode {
-		return false
-	}
-	if filter.PathPrefix != "" && !strings.HasPrefix(item.Path, filter.PathPrefix) {
-		return false
-	}
-	return true
+	return items, s.nextCursor, !s.indexIncomplete, nil
 }
 
 type shutdownOrderRecorder struct {
@@ -1066,7 +1068,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\"}],\"next_cursor\":null}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\"}],\"next_cursor\":null,\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1106,7 +1108,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\"}],\"next_cursor\":null}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\"}],\"next_cursor\":null,\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1140,7 +1142,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"N/A\",\"status_code\":-1,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"N/A\",\"status_code\":-1,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null,\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1168,7 +1170,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null},{\"id\":\"01938032-1b17-7243-b035-e6a9f4645904\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:06Z\",\"responded_at\":null}],\"next_cursor\":\"0193802f-f0e7-73d9-a764-06d21e367809\"}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null},{\"id\":\"01938032-1b17-7243-b035-e6a9f4645904\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:06Z\",\"responded_at\":null}],\"next_cursor\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1253,7 +1255,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null,\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1278,7 +1280,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[],\"next_cursor\":null}\n"
+		want := "{\"items\":[],\"next_cursor\":null,\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1314,17 +1316,11 @@ func TestTrafficList(t *testing.T) {
 		}
 	})
 
-	t.Run("should filter by exact host", func(t *testing.T) {
-		matching := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
-		other := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
-		repo := &stubTrafficRepository{
-			items: []*domain.RequestResponseSummary{
-				{ID: other, Host: "other.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
-				{ID: matching, Host: "example.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-			},
-		}
+	t.Run("should pass q, cursor, and limit to the repository", func(t *testing.T) {
+		cursor := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
+		repo := &stubTrafficRepository{}
 		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		request := httptest.NewRequest(http.MethodGet, "/traffic?host=example.com", nil)
+		request := httptest.NewRequest(http.MethodGet, "/traffic?q="+url.QueryEscape(`host = "*.example.com" AND status_code >= 500`)+"&limit=1&cursor="+cursor.String(), nil)
 		response := httptest.NewRecorder()
 
 		server.ServeHTTP(response, request)
@@ -1332,26 +1328,61 @@ func TestTrafficList(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
 		}
-		if got := response.Header().Get("Content-Type"); got != "application/json" {
-			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+		if want := `host = "*.example.com" AND status_code >= 500`; repo.query != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, repo.query)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"example.com\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
-		if got := response.Body.String(); got != want {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		if repo.limit != 1 {
+			t.Fatalf("\nwanted:\n1\ngot:\n%d", repo.limit)
+		}
+		if repo.cursor == nil || *repo.cursor != cursor {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", cursor, repo.cursor)
 		}
 	})
 
-	t.Run("should filter by exact method", func(t *testing.T) {
-		matching := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
-		other := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
-		repo := &stubTrafficRepository{
-			items: []*domain.RequestResponseSummary{
-				{ID: other, Method: "GET", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
-				{ID: matching, Method: "POST", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-			},
+	t.Run("should report whether the traffic index is complete", func(t *testing.T) {
+		for _, test := range []struct {
+			incomplete bool
+			want       string
+		}{
+			{incomplete: true, want: "{\"items\":[],\"next_cursor\":null,\"index\":{\"complete\":false}}\n"},
+			{incomplete: false, want: "{\"items\":[],\"next_cursor\":null,\"index\":{\"complete\":true}}\n"},
+		} {
+			repo := &stubTrafficRepository{indexIncomplete: test.incomplete}
+			server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+			request := httptest.NewRequest(http.MethodGet, "/traffic", nil)
+			response := httptest.NewRecorder()
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
+			}
+			if got := response.Body.String(); got != test.want {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", test.want, got)
+			}
 		}
+	})
+
+	t.Run("should return 500 when listing fails", func(t *testing.T) {
+		repo := &stubTrafficRepository{listErr: errors.New("disk I/O error")}
 		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		request := httptest.NewRequest(http.MethodGet, "/traffic?method=POST", nil)
+		request := httptest.NewRequest(http.MethodGet, "/traffic", nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		if response.Code != http.StatusInternalServerError {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusInternalServerError, response.Code)
+		}
+		if want := "{\"error\":\"internal_server_error\"}\n"; response.Body.String() != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, response.Body.String())
+		}
+	})
+
+	t.Run("should pass an empty query when q is missing", func(t *testing.T) {
+		repo := &stubTrafficRepository{query: "unset"}
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		request := httptest.NewRequest(http.MethodGet, "/traffic", nil)
 		response := httptest.NewRecorder()
 
 		server.ServeHTTP(response, request)
@@ -1359,156 +1390,125 @@ func TestTrafficList(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
 		}
-		if got := response.Header().Get("Content-Type"); got != "application/json" {
-			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
-		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"POST\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
-		if got := response.Body.String(); got != want {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		if repo.query != "" {
+			t.Fatalf("\nwanted:\nempty query\ngot:\n%s", repo.query)
 		}
 	})
 
-	t.Run("should filter by exact status code", func(t *testing.T) {
-		matching := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
-		other := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
-		repo := &stubTrafficRepository{
-			items: []*domain.RequestResponseSummary{
-				{ID: other, StatusCode: 404, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
-				{ID: matching, StatusCode: 200, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-			},
-		}
+	t.Run("should return 400 invalid_query with the message and position of a query error", func(t *testing.T) {
+		repo := &stubTrafficRepository{listErr: &domain.QueryError{Message: `unknown field "stauts"`, Position: 1}}
 		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		request := httptest.NewRequest(http.MethodGet, "/traffic?status_code=200", nil)
+		request := httptest.NewRequest(http.MethodGet, "/traffic?q="+url.QueryEscape("stauts = 5"), nil)
 		response := httptest.NewRecorder()
 
 		server.ServeHTTP(response, request)
 
-		if response.Code != http.StatusOK {
-			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusBadRequest, response.Code)
 		}
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":200,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
+		want := "{\"error\":\"invalid_query\",\"message\":\"unknown field \\\"stauts\\\"\",\"position\":1}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
 	})
 
-	t.Run("should filter by path prefix including the query string", func(t *testing.T) {
-		matching := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
-		other := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
-		repo := &stubTrafficRepository{
-			items: []*domain.RequestResponseSummary{
-				{ID: other, Path: "/api/v2/users", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
-				{ID: matching, Path: "/api/users?id=1", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-			},
+	t.Run("should reject removed list parameters naming the query clause", func(t *testing.T) {
+		tests := []struct {
+			raw  string
+			want string
+		}{
+			{raw: "host=example.com", want: "{\"error\":\"invalid_query\",\"message\":\"the host parameter was removed; use q=host = \\\"example.com\\\"\"}\n"},
+			{raw: "method=POST", want: "{\"error\":\"invalid_query\",\"message\":\"the method parameter was removed; use q=method = \\\"POST\\\"\"}\n"},
+			{raw: "path=/api", want: "{\"error\":\"invalid_query\",\"message\":\"the path parameter was removed; use q=path = \\\"/api*\\\"\"}\n"},
+			{raw: "status_code=200", want: "{\"error\":\"invalid_query\",\"message\":\"the status_code parameter was removed; use q=status_code = 200\"}\n"},
+			{raw: "status_code=abc", want: "{\"error\":\"invalid_query\",\"message\":\"the status_code parameter was removed; use q=status_code = 200\"}\n"},
+			{raw: "host=", want: "{\"error\":\"invalid_query\",\"message\":\"the host parameter was removed; use q=host = \\\"example.com\\\"\"}\n"},
+			{raw: "q=x&host=a.com", want: "{\"error\":\"invalid_query\",\"message\":\"the host parameter was removed; use q=host = \\\"a.com\\\"\"}\n"},
 		}
-		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		request := httptest.NewRequest(http.MethodGet, "/traffic?path=/api/users", nil)
-		response := httptest.NewRecorder()
-
-		server.ServeHTTP(response, request)
-
-		if response.Code != http.StatusOK {
-			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
-		}
-		if got := response.Header().Get("Content-Type"); got != "application/json" {
-			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
-		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"/api/users?id=1\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
-		if got := response.Body.String(); got != want {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
-		}
-	})
-
-	t.Run("should AND host, method, status code, and path prefix", func(t *testing.T) {
-		matching := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
-		other := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
-		repo := &stubTrafficRepository{
-			items: []*domain.RequestResponseSummary{
-				{ID: other, Host: "example.com", Method: "GET", Path: "/api/users", StatusCode: 200, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
-				{ID: matching, Host: "example.com", Method: "POST", Path: "/api/users", StatusCode: 200, Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-			},
-		}
-		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		request := httptest.NewRequest(http.MethodGet, "/traffic?host=example.com&method=POST&status_code=200&path=/api", nil)
-		response := httptest.NewRecorder()
-
-		server.ServeHTTP(response, request)
-
-		if response.Code != http.StatusOK {
-			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
-		}
-		if got := response.Header().Get("Content-Type"); got != "application/json" {
-			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
-		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"POST\",\"host\":\"example.com\",\"path\":\"/api/users\",\"status\":\"\",\"status_code\":200,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
-		if got := response.Body.String(); got != want {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
-		}
-	})
-
-	t.Run("should ignore unknown query parameters", func(t *testing.T) {
-		matching := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
-		other := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
-		repo := &stubTrafficRepository{
-			items: []*domain.RequestResponseSummary{
-				{ID: other, Host: "other.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
-				{ID: matching, Host: "example.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-			},
-		}
-		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		request := httptest.NewRequest(http.MethodGet, "/traffic?host=example.com&q=secret", nil)
-		response := httptest.NewRecorder()
-
-		server.ServeHTTP(response, request)
-
-		if response.Code != http.StatusOK {
-			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
-		}
-		if got := response.Header().Get("Content-Type"); got != "application/json" {
-			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
-		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"example.com\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
-		if got := response.Body.String(); got != want {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
-		}
-	})
-
-	t.Run("should reject a non-integer status_code", func(t *testing.T) {
-		server := newTestServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
-		for _, raw := range []string{"abc", "1.5"} {
-			request := httptest.NewRequest(http.MethodGet, "/traffic?status_code="+raw, nil)
+		for _, test := range tests {
+			repo := &stubTrafficRepository{}
+			server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+			request := httptest.NewRequest(http.MethodGet, "/traffic?"+test.raw, nil)
 			response := httptest.NewRecorder()
 
 			server.ServeHTTP(response, request)
 
 			if response.Code != http.StatusBadRequest {
-				t.Fatalf("\nstatus_code %s wanted:\n%d\ngot:\n%d", raw, http.StatusBadRequest, response.Code)
+				t.Fatalf("\n%s wanted:\n%d\ngot:\n%d", test.raw, http.StatusBadRequest, response.Code)
 			}
-			if got := response.Header().Get("Content-Type"); got != "application/json" {
-				t.Fatalf("\nstatus_code %s wanted:\napplication/json\ngot:\n%s", raw, got)
+			if got := response.Body.String(); got != test.want {
+				t.Fatalf("\n%s wanted:\n%s\ngot:\n%s", test.raw, test.want, got)
 			}
-			if got := response.Body.String(); got != "{\"error\":\"bad_request\"}\n" {
-				t.Fatalf("\nstatus_code %s wanted:\n%s\ngot:\n%s", raw, "{\"error\":\"bad_request\"}\\n", got)
+			if repo.listed {
+				t.Fatalf("\n%s wanted:\nno repository call\ngot:\ncall", test.raw)
 			}
 		}
 	})
 
-	t.Run("should page a filtered list with a cursor", func(t *testing.T) {
-		newest := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
-		middle := uuid.MustParse("01938031-0a00-7000-8000-000000000000")
-		oldest := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
-		repo := &stubTrafficRepository{
-			items: []*domain.RequestResponseSummary{
-				{ID: newest, Host: "example.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 7, 0, time.UTC)},
-				{ID: middle, Host: "other.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)},
-				{ID: oldest, Host: "example.com", Length: "0", RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-			},
+	t.Run("should suggest a query clause that finds the traffic the removed parameter named", func(t *testing.T) {
+		connection, err := db.New(filepath.Join(t.TempDir(), "suggest.marasi"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err != nil {
+			t.Fatalf("opening project: %v", err)
 		}
+		repo := db.NewProxyRepo(connection)
+		t.Cleanup(func() { repo.Close() })
 		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		request := httptest.NewRequest(http.MethodGet, "/traffic?host=example.com&limit=1", nil)
+
+		for _, test := range []struct {
+			parameter string
+			value     string
+			request   domain.ProxyRequest
+		}{
+			{parameter: "host", value: `a"b\c.example`, request: domain.ProxyRequest{Method: "GET", Host: `a"b\c.example`, Path: "/"}},
+			{parameter: "host", value: "ünï.example", request: domain.ProxyRequest{Method: "GET", Host: "ünï.example", Path: "/"}},
+			{parameter: "host", value: "tab\there\\n", request: domain.ProxyRequest{Method: "GET", Host: "tab\there\\n", Path: "/"}},
+			{parameter: "host", value: "ctl\x01'x", request: domain.ProxyRequest{Method: "GET", Host: "ctl\x01'x", Path: "/"}},
+			{parameter: "method", value: `G"E\T`, request: domain.ProxyRequest{Method: `G"E\T`, Host: "method.example", Path: "/"}},
+			{parameter: "path", value: `/a"b\c/ü`, request: domain.ProxyRequest{Method: "GET", Host: "path.example", Path: `/a"b\c/ü/rest`}},
+		} {
+			id, err := uuid.NewV7()
+			if err != nil {
+				t.Fatalf("creating uuid: %v", err)
+			}
+			test.request.ID, test.request.Scheme, test.request.RequestedAt = id, "https", time.Now()
+			if err := repo.InsertRequest(&test.request); err != nil {
+				t.Fatalf("inserting %s: %v", test.value, err)
+			}
+
+			removed := requestListener(t, server, http.MethodGet, "/traffic?"+url.Values{test.parameter: {test.value}}.Encode(), "")
+			var body struct {
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal(removed.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decoding %s: %v", removed.Body.String(), err)
+			}
+			_, clause, found := strings.Cut(body.Message, "use q=")
+			if !found {
+				t.Fatalf("\nwanted:\na suggested clause\ngot:\n%s", body.Message)
+			}
+
+			listed := requestListener(t, server, http.MethodGet, "/traffic?"+url.Values{"q": {clause}}.Encode(), "")
+			var list struct {
+				Items []struct {
+					ID uuid.UUID `json:"id"`
+				} `json:"items"`
+			}
+			if err := json.Unmarshal(listed.Body.Bytes(), &list); err != nil || listed.Code != http.StatusOK {
+				t.Fatalf("\nwanted:\nthe suggested clause %s to parse\ngot:\n%d %s", clause, listed.Code, listed.Body.String())
+			}
+			if len(list.Items) != 1 || list.Items[0].ID != id {
+				t.Fatalf("\nwanted:\n%s to find %s\ngot:\n%s", clause, id, listed.Body.String())
+			}
+		}
+	})
+
+	t.Run("should ignore unknown query parameters", func(t *testing.T) {
+		repo := &stubTrafficRepository{}
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		request := httptest.NewRequest(http.MethodGet, "/traffic?search=secret", nil)
 		response := httptest.NewRecorder()
 
 		server.ServeHTTP(response, request)
@@ -1516,21 +1516,8 @@ func TestTrafficList(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.Code)
 		}
-		want := "{\"items\":[{\"id\":\"01938032-1b17-7243-b035-e6a9f4645904\",\"scheme\":\"\",\"method\":\"\",\"host\":\"example.com\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:07Z\",\"responded_at\":null}],\"next_cursor\":\"01938032-1b17-7243-b035-e6a9f4645904\"}\n"
-		if got := response.Body.String(); got != want {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
-		}
-
-		olderRequest := httptest.NewRequest(http.MethodGet, "/traffic?host=example.com&limit=1&cursor="+newest.String(), nil)
-		olderResponse := httptest.NewRecorder()
-		server.ServeHTTP(olderResponse, olderRequest)
-
-		if olderResponse.Code != http.StatusOK {
-			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, olderResponse.Code)
-		}
-		wantOlder := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"\",\"host\":\"example.com\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null}],\"next_cursor\":null}\n"
-		if got := olderResponse.Body.String(); got != wantOlder {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantOlder, got)
+		if repo.query != "" {
+			t.Fatalf("\nwanted:\nempty query\ngot:\n%s", repo.query)
 		}
 	})
 }

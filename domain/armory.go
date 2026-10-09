@@ -132,8 +132,9 @@ type ArmoryRepository interface {
 
 	// GetArmoryEntries returns all request links for a run.
 	GetArmoryEntries(runID uuid.UUID) ([]*ArmoryEntry, error)
-	// ListArmoryRunTraffic returns an oldest-first page of traffic linked to a run.
-	ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID, limit int) (items []*RequestResponseSummary, nextCursor *uuid.UUID, err error)
+	// ListArmoryRunTraffic returns an oldest-first page of traffic linked to a
+	// run, and whether every pair is in the traffic index.
+	ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID, limit int) (items []*RequestResponseSummary, nextCursor *uuid.UUID, indexComplete bool, err error)
 	// CreateArmoryEntry links a generated request to a run.
 	CreateArmoryEntry(entry *ArmoryEntry) error
 }

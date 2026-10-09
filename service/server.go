@@ -72,6 +72,11 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		projects.armoryRunUpdated = func(run *domain.ArmoryRun) {
 			events.publish("armory.run.updated", armoryRunFromDomain(run))
 		}
+		projects.indexEvents.install(func(path string) {
+			events.publish("traffic.index_complete", struct {
+				Project string `json:"project"`
+			}{Project: path})
+		})
 	}
 	addRoutes(mux, projects, proxy, chrome, events, server.serveStatus, func() {
 		server.dropPendingCheckpoint()

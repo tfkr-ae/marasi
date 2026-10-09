@@ -1,13 +1,18 @@
 package service
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
@@ -20,6 +25,14 @@ var errInvalidMetadataRequest = errors.New("invalid metadata request")
 type trafficList struct {
 	Items      []trafficSummary `json:"items"`
 	NextCursor *uuid.UUID       `json:"next_cursor"` // oldest item id when an older page exists
+	Index      *trafficIndex    `json:"index,omitempty"`
+}
+
+// trafficIndex reports the state of the traffic index (ADR-0026).
+type trafficIndex struct {
+	// Complete is false while the background build is still indexing pairs.
+	// Text conditions in a query can miss pairs until it is true.
+	Complete bool `json:"complete"`
 }
 
 // trafficSummary is one request/response pair in a traffic list page.
@@ -70,7 +83,11 @@ type trafficResponse struct {
 // addTrafficRoutes registers traffic and metadata control routes.
 func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	mux.HandleFunc("GET /traffic", func(w http.ResponseWriter, r *http.Request) {
-		limit, cursor, filter, ok := parseTrafficListQuery(r)
+		if message, removed := removedTrafficListParameter(r.URL.Query()); removed {
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: message})
+			return
+		}
+		limit, cursor, ok := parseTrafficListQuery(r)
 		if !ok {
 			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
 			return
@@ -80,13 +97,20 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		items, nextCursor, err := repo.ListTraffic(cursor, limit, filter)
+		items, nextCursor, indexComplete, err := repo.ListTraffic(cursor, limit, r.URL.Query().Get("q"))
+		var queryErr *domain.QueryError
+		if errors.As(err, &queryErr) {
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
+			return
+		}
 		if err != nil {
-			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
 			return
 		}
 		slices.Reverse(items)
-		writeJSON(w, r, http.StatusOK, trafficListFromSummaries(items, nextCursor))
+		list := trafficListFromSummaries(items, nextCursor)
+		list.Index = &trafficIndex{Complete: indexComplete}
+		writeJSON(w, r, http.StatusOK, list)
 	})
 	mux.HandleFunc("GET /traffic/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(r.PathValue("id"))
@@ -176,35 +200,90 @@ func decodeMetadataBody(r *http.Request) (map[string]any, error) {
 	return body, nil
 }
 
-// parseTrafficListQuery reads limit, cursor, and filter query parameters.
-func parseTrafficListQuery(r *http.Request) (limit int, cursor *uuid.UUID, filter domain.TrafficListFilter, ok bool) {
+// invalidQuery is the 400 body for an invalid traffic query. Position is the
+// 1-based character offset of the problem in q, omitted when the problem is
+// not in q.
+type invalidQuery struct {
+	Error    string `json:"error"`
+	Message  string `json:"message"`
+	Position int    `json:"position,omitempty"`
+}
+
+// removedTrafficListParameter reports the first removed list parameter in
+// query, with a message naming the query clause that replaces it. Callers
+// that still send one get an error instead of unfiltered traffic.
+func removedTrafficListParameter(query url.Values) (string, bool) {
+	for _, name := range []string{"host", "method", "path", "status_code"} {
+		if !query.Has(name) {
+			continue
+		}
+		value := query.Get(name)
+		var clause string
+		switch name {
+		case "host":
+			clause = "host = " + quoteQueryString(cmp.Or(value, "example.com"))
+		case "method":
+			clause = "method = " + quoteQueryString(cmp.Or(value, "GET"))
+		case "path":
+			// The removed parameter matched a path prefix.
+			clause = "path = " + quoteQueryString(cmp.Or(value, "/")+"*")
+		case "status_code":
+			if _, err := strconv.Atoi(value); err != nil {
+				value = "200"
+			}
+			clause = "status_code = " + value
+		}
+		return fmt.Sprintf("the %s parameter was removed; use q=%s", name, clause), true
+	}
+	return "", false
+}
+
+// quoteQueryString quotes value as an AIP-160 string literal. Only quotes,
+// backslashes, and control characters are escaped, with escapes AIP-160
+// defines; other characters, including non-ASCII, are written as they are.
+func quoteQueryString(value string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range strings.ToValidUTF8(value, "\uFFFD") {
+		switch {
+		case r == '"' || r == '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case unicode.IsControl(r):
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// parseTrafficListQuery reads the limit and cursor query parameters.
+func parseTrafficListQuery(r *http.Request) (limit int, cursor *uuid.UUID, ok bool) {
 	query := r.URL.Query()
 	limit = 200
 	if raw := query.Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed < 1 || parsed > 500 {
-			return 0, nil, filter, false
+			return 0, nil, false
 		}
 		limit = parsed
 	}
 	if raw := query.Get("cursor"); raw != "" {
 		parsed, err := uuid.Parse(raw)
 		if err != nil {
-			return 0, nil, filter, false
+			return 0, nil, false
 		}
 		cursor = &parsed
 	}
-	filter.Host = query.Get("host")
-	filter.Method = query.Get("method")
-	filter.PathPrefix = query.Get("path")
-	if raw := query.Get("status_code"); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil {
-			return 0, nil, filter, false
-		}
-		filter.StatusCode = &parsed
-	}
-	return limit, cursor, filter, true
+	return limit, cursor, true
 }
 
 // trafficListFromSummaries maps repository summaries to a list response.

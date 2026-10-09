@@ -48,7 +48,7 @@ func TestArmoryCommands(t *testing.T) {
 		{name: "run start", args: []string{"armory", "run", "start", runID}, response: run, method: http.MethodPost, path: "/armory/run/" + runID + "/start", wantStderr: "armory run " + runID + " started successfully\n"},
 		{name: "run cancel", args: []string{"armory", "run", "cancel", runID}, response: run, method: http.MethodPost, path: "/armory/run/" + runID + "/cancel", wantStderr: "armory run " + runID + " cancelled successfully\n"},
 		{name: "run delete", args: []string{"armory", "run", "delete", runID}, response: `{"id":"` + runID + `"}` + "\n", method: http.MethodDelete, path: "/armory/run/" + runID, wantStderr: "armory run " + runID + " deleted successfully\n"},
-		{name: "run traffic", args: []string{"armory", "run", "traffic", runID, "--limit", "10", "--cursor", templateID}, response: `{"items":[{"id":"` + templateID + `","method":"GET","host":"example.com","path":"/login","status_code":200,"length":"12"}],"next_cursor":"` + runID + `"}` + "\n", method: http.MethodGet, path: "/armory/run/" + runID + "/traffic", query: "cursor=" + templateID + "&limit=10", wantStdout: templateID + "  GET  example.com  /login  200  12\n"},
+		{name: "run traffic", args: []string{"armory", "run", "traffic", runID, "--limit", "10", "--cursor", templateID}, response: `{"items":[{"id":"` + templateID + `","method":"GET","host":"example.com","path":"/login","status_code":200,"length":"12"}],"next_cursor":"` + runID + `","index":{"complete":false}}` + "\n", method: http.MethodGet, path: "/armory/run/" + runID + "/traffic", query: "cursor=" + templateID + "&limit=10", wantStdout: templateID + "  GET  example.com  /login  200  12\n"},
 	} {
 		t.Run("should encode "+test.name, func(t *testing.T) {
 			configDir := serviceConfigDir(t)
@@ -69,10 +69,10 @@ func TestArmoryCommands(t *testing.T) {
 				t.Fatalf("\nwanted stdout:\n%q\ngot:\n%q", test.wantStdout, stdout)
 			}
 			if test.name == "run traffic" {
-				test.wantStderr = "next_cursor=" + runID + "\n"
+				test.wantStderr = "next_cursor=" + runID + "\nnotice: the traffic index is still building; text results may be incomplete\n"
 			}
 			if stderr != test.wantStderr {
-				t.Fatalf("\nwanted:\nnext cursor on stderr\ngot:\n%s", stderr)
+				t.Fatalf("\nwanted stderr:\n%q\ngot:\n%q", test.wantStderr, stderr)
 			}
 		})
 	}
