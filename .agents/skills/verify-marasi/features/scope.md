@@ -1,6 +1,6 @@
 # Scope check
 
-Users test whether a URL falls inside the running instance's scope without sending traffic. The verdict comes from the live in-memory scope rules. A fresh project loads the compass extension, which clears rules and installs excludes, so the instance is not allow-all. There is no `scope add` or `scope remove` command. `extension call` and settings cannot add a rule. `extension update` can, because the new Lua runs immediately and any extension can call `marasi:scope()`.
+Users test whether a URL falls inside the running instance's scope without sending traffic. The verdict comes from the live in-memory scope rules. A fresh project loads the compass extension, which clears rules and installs excludes, so the instance is not allow-all. There is no `scope add` or `scope remove` command. Custom Lua can change rules and the default policy through `marasi:scope()`: `extension update` executes source immediately, and `extension call` can invoke a function that changes them. Replacing settings alone does not add rules.
 
 ## Sub-features
 
@@ -17,10 +17,10 @@ Run `scope check "example.com/path?q=1"` and require `tested_url: https://exampl
 
 ## Gotchas
 
-- A miss is allow-all: `in_scope` true with `rule` null. Compass has already installed excludes by the time the first check runs, so `www.gstatic.com` and `www.googleapis.com` are out of scope. `example.com` still misses and allows.
+- A miss uses the live default policy. In a fresh project it allows: `in_scope` true with `rule` null. Custom Lua can set `marasi:scope():set_default_allow(false)`, making an unmatched URL return false with `rule` null. Compass has already installed excludes by the time the first check runs, so `www.gstatic.com` and `www.googleapis.com` are out of scope. `example.com` still misses and allows under the fresh-project policy.
 - `tested_url` is the normalized URL, not the input. A schemeless input gains `https://`; surrounding whitespace is trimmed.
 - When no rule matches, JSON `rule` is `null` and human output omits both the `rule:` and `match_type:` lines.
-- `compass_enabled: false` does not disable filtering. The verdict still applies the scope rules.
+- `compass_enabled: false` does not disable Scope check evaluation: the verdict still applies the live rules. Disabling Compass skips its traffic-processing hooks; the check is not proof that Compass will filter a proxied request.
 - `scope check` never mutates rules and publishes no event.
 - Bare `scope` requires the `check` subcommand. `scope check` takes exactly one positional URL; there is no `--url` flag.
 - An empty or unparseable URL fails with `checking scope: bad_request`. A missing instance fails with `instance $VERIFY_INSTANCE is not running`.

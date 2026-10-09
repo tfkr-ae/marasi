@@ -25,6 +25,6 @@ For HTTPS, trust `$VERIFY_CONFIG_DIR/marasi_cert.pem` with `curl --cacert` and r
 - `NO_PROXY` commonly contains localhost. `--proxy` alone may bypass Marasi, so include `--noproxy ''`.
 - The origin certificate is checked by the system trust store on the outbound hop. A self-signed local origin returns 502. There is no flag to skip that check. Use a publicly trusted host for the HTTPS drive.
 - `events` is live and has no replay. Subscribe before the request. stderr is `: connected`; stdout is `event-name json`.
-- A successful origin response alone does not prove capture. The events CLI and traffic CLI are the evidence.
+- A successful origin response alone does not prove capture. The events CLI and traffic CLI are the evidence. Events follow queueing, not database commit; retry traffic reads briefly until the matching pair and response are persisted.
 - `traffic get --json` base64-encodes `request.raw` and `response.raw`. Headers and body are inside those raw messages, not separate fields.
 - The local origin is a real production boundary. Do not replace Marasi's proxy or repository with test doubles.
