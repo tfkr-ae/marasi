@@ -61,8 +61,9 @@ type TrafficRepository interface {
 	// that match query. An empty query matches all traffic. A nil cursor
 	// starts at the newest row. nextCursor is the last returned item's id when
 	// another older page exists, otherwise nil. indexComplete reports whether
-	// every pair is in the traffic index; text conditions can miss pairs while
-	// it is false. An invalid query returns a *QueryError.
+	// every pair is in the traffic index, apart from pairs the index build
+	// skipped because they could not be indexed; text conditions can miss
+	// pairs while it is false. An invalid query returns a *QueryError.
 	ListTraffic(cursor *uuid.UUID, limit int, query string) (items []*RequestResponseSummary, nextCursor *uuid.UUID, indexComplete bool, err error)
 
 	// GetMetadata returns the metadata map for a specific request ID.

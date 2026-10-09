@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +10,9 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,15 +74,50 @@ func missingFromIndex(t *testing.T, path string) int {
 	return missing
 }
 
+// breakPairMetadata makes the metadata of the pair at path unreadable as JSON,
+// so the pair cannot be indexed, and returns the pair's id.
+func breakPairMetadata(t *testing.T, project, path string) uuid.UUID {
+	t.Helper()
+	connection, err := sqlx.Connect("sqlite", "file:"+project)
+	if err != nil {
+		t.Fatalf("opening project: %v", err)
+	}
+	defer connection.Close()
+	var id uuid.UUID
+	if err := connection.Get(&id, `UPDATE request SET metadata = 'not json' WHERE path = ? RETURNING id`, path); err != nil {
+		t.Fatalf("breaking metadata: %v", err)
+	}
+	return id
+}
+
+// lockedBuffer collects log output written from other goroutines.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // indexPacer runs the real build batches but holds each batch of the paced
 // project until the test steps it or releases the build.
 type indexPacer struct {
-	paced   string
-	mu      sync.Mutex
-	indexed map[string]int
-	calls   chan indexCall
-	step    chan struct{}
-	free    chan struct{}
+	paced      string
+	batchBytes int
+	mu         sync.Mutex
+	indexed    map[string]int
+	calls      chan indexCall
+	step       chan struct{}
+	free       chan struct{}
 }
 
 type indexCall struct {
@@ -89,18 +127,19 @@ type indexCall struct {
 
 func paceIndexBuild(lifecycle *ProjectLifecycle, paced string) *indexPacer {
 	pacer := &indexPacer{
-		paced:   paced,
-		indexed: map[string]int{},
-		calls:   make(chan indexCall, 100),
-		step:    make(chan struct{}),
-		free:    make(chan struct{}),
+		paced:      paced,
+		batchBytes: indexBuildBatchBytes,
+		indexed:    map[string]int{},
+		calls:      make(chan indexCall, 100),
+		step:       make(chan struct{}),
+		free:       make(chan struct{}),
 	}
 	lifecycle.indexBatch = pacer.batch
 	return pacer
 }
 
 func (pacer *indexPacer) batch(ctx context.Context, path string, builder trafficIndexBuilder) (int, bool, error) {
-	if path == pacer.paced {
+	if path == pacer.paced && !pacer.released() {
 		pacer.calls <- indexCall{path: path, ctx: ctx}
 		select {
 		case <-pacer.step:
@@ -109,7 +148,7 @@ func (pacer *indexPacer) batch(ctx context.Context, path string, builder traffic
 			return 0, false, ctx.Err()
 		}
 	}
-	indexed, remaining, err := builder.IndexMissingTraffic(indexBuildBatchSize)
+	indexed, remaining, err := builder.IndexMissingTraffic(pacer.batchBytes)
 	pacer.mu.Lock()
 	pacer.indexed[path] += indexed
 	pacer.mu.Unlock()
@@ -131,6 +170,15 @@ func (pacer *indexPacer) waitBatch(t *testing.T) indexCall {
 // release lets the paced project's build run without pausing.
 func (pacer *indexPacer) release() {
 	close(pacer.free)
+}
+
+func (pacer *indexPacer) released() bool {
+	select {
+	case <-pacer.free:
+		return true
+	default:
+		return false
+	}
 }
 
 func (pacer *indexPacer) indexedPairs(path string) int {
@@ -244,7 +292,7 @@ func TestTrafficIndexBuild(t *testing.T) {
 				failures--
 				return 0, false, errors.New("database is locked")
 			}
-			return builder.IndexMissingTraffic(indexBuildBatchSize)
+			return builder.IndexMissingTraffic(indexBuildBatchBytes)
 		}
 
 		openProjectPath(t, lifecycle, path)
@@ -264,6 +312,77 @@ func TestTrafficIndexBuild(t *testing.T) {
 		}
 	})
 
+	t.Run("should skip a pair that keeps failing to index, log it, and still announce completion", func(t *testing.T) {
+		path := canonicalProjectPath(t, filepath.Join(t.TempDir(), "broken.marasi"))
+		seedUnindexedProject(t, path, 20)
+		broken := breakPairMetadata(t, path, "/item/7")
+		_, lifecycle, subscriber := newIndexServer(t)
+		logs := &lockedBuffer{}
+		lifecycle.logger = slog.New(slog.NewTextHandler(logs, nil))
+
+		openProjectPath(t, lifecycle, path)
+
+		want := fmt.Sprintf("traffic.index_complete {\"project\":%q}", path)
+		if got := nextEvent(subscriber, 30*time.Second); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, got)
+		}
+		if got := missingFromIndex(t, path); got != 1 {
+			t.Fatalf("\nwanted:\nonly the broken pair missing\ngot:\n%d", got)
+		}
+		skips := strings.Count(logs.String(), "Skipped a pair the traffic index could not index")
+		if skips != 1 || !strings.Contains(logs.String(), "id="+broken.String()) {
+			t.Fatalf("\nwanted:\none skip logged for %s\ngot:\n%s", broken, logs.String())
+		}
+	})
+
+	t.Run("should announce completion when the only missing pair is skipped", func(t *testing.T) {
+		path := canonicalProjectPath(t, filepath.Join(t.TempDir(), "only-broken.marasi"))
+		seedUnindexedProject(t, path, 1)
+		breakPairMetadata(t, path, "/item/0")
+		_, lifecycle, subscriber := newIndexServer(t)
+
+		openProjectPath(t, lifecycle, path)
+
+		want := fmt.Sprintf("traffic.index_complete {\"project\":%q}", path)
+		if got := nextEvent(subscriber, 30*time.Second); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, got)
+		}
+	})
+
+	t.Run("should finish the batch in flight before a switch closes the project", func(t *testing.T) {
+		dir := t.TempDir()
+		path := canonicalProjectPath(t, filepath.Join(dir, "busy.marasi"))
+		other := canonicalProjectPath(t, filepath.Join(dir, "other.marasi"))
+		seedUnindexedProject(t, path, 10)
+		_, lifecycle, _ := newIndexServer(t)
+		started := make(chan struct{})
+		var finished atomic.Bool
+		lifecycle.indexBatch = func(ctx context.Context, batchPath string, builder trafficIndexBuilder) (int, bool, error) {
+			if batchPath != path {
+				return 0, false, nil
+			}
+			close(started)
+			// A batch transaction does not stop when the build is
+			// cancelled; it commits or rolls back first.
+			select {
+			case <-ctx.Done():
+			case <-time.After(10 * time.Second):
+				return 0, false, errors.New("the switch did not cancel the build")
+			}
+			time.Sleep(100 * time.Millisecond)
+			finished.Store(true)
+			return 0, false, ctx.Err()
+		}
+
+		openProjectPath(t, lifecycle, path)
+		<-started
+		openProjectPath(t, lifecycle, other)
+
+		if !finished.Load() {
+			t.Fatalf("\nwanted:\nthe switch to wait for the batch in flight\ngot:\nthe project closed while the batch was still running")
+		}
+	})
+
 	t.Run("should cancel the build on a project switch and resume on reopen", func(t *testing.T) {
 		dir := t.TempDir()
 		path := canonicalProjectPath(t, filepath.Join(dir, "large.marasi"))
@@ -271,6 +390,8 @@ func TestTrafficIndexBuild(t *testing.T) {
 		seedUnindexedProject(t, path, 250)
 		server, lifecycle, subscriber := newIndexServer(t)
 		pacer := paceIndexBuild(lifecycle, path)
+		// Every pair is larger than one byte, so each batch indexes one.
+		pacer.batchBytes = 1
 
 		openProjectPath(t, lifecycle, path)
 		pacer.waitBatch(t)
@@ -284,8 +405,8 @@ func TestTrafficIndexBuild(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("the switch did not cancel the build")
 		}
-		if got := missingFromIndex(t, path); got != 150 {
-			t.Fatalf("\nwanted:\n150 pairs left after one batch\ngot:\n%d", got)
+		if got := missingFromIndex(t, path); got != 249 {
+			t.Fatalf("\nwanted:\n249 pairs left after one batch\ngot:\n%d", got)
 		}
 		if got := nextEvent(subscriber, 0); got != fmt.Sprintf("project.opened {\"project\":%q}", other) {
 			t.Fatalf("\nwanted:\nproject.opened only\ngot:\n%q", got)
