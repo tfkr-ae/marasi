@@ -26,5 +26,6 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Scope check | `scope check` | [scope check](scope.md) |
 | Proxy logs | `logs`, list pagination with `--limit` and `--cursor` | [proxy logs](logs.md) |
 | CA certificate | `certificate get`, `--format pem` or `der` | [CA certificate](certificate.md) |
+| Agent skill | `skill` | [agent skill](agent-skill.md) |
 
 When a change touches one row, read that feature file and cover every entry point it names. There is no bundled script. A command that inspects or acts on captured traffic is proven only after real client traffic has gone through the proxy.

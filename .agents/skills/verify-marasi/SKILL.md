@@ -1,6 +1,6 @@
 ---
 name: verify-marasi
-description: Verify Marasi's CLI-driven proxy service when a change needs proof through a real launched instance, service instance listing, a proxied HTTP request, persisted traffic inspection, traffic metadata and note control, event subscription, launchpad replay, test-case control, finding control, artifact control, Checkpoint control, Chrome control, waypoint control, wordlist control, Armory template and run control, extension control, report template and export control, proxy log inspection, CA certificate fetch, project listing, WebSocket connection control, or scope check.
+description: Verify Marasi's CLI-driven proxy service when a change needs proof through a real launched instance, service instance listing, a proxied HTTP request, persisted traffic inspection, traffic metadata and note control, event subscription, launchpad replay, test-case control, finding control, artifact control, Checkpoint control, Chrome control, waypoint control, wordlist control, Armory template and run control, extension control, report template and export control, proxy log inspection, CA certificate fetch, project listing, WebSocket connection control, scope check, or the printed agent skill.
 ---
 
 # Verify Marasi
@@ -73,6 +73,8 @@ After `project open` to a different project, `project` no longer matches `$VERIF
 ## Drive
 
 Use the same `--config-dir` and `--instance` on every command. Prefer `--json`. Use `curl` for proxy traffic. Read `features/README.md` and the feature file before choosing coverage. A proof is incomplete if that file has another user entry point the run ignores.
+
+Commands that read piped stdin treat any stdin that is not a character device as input. An agent shell's stdin is often a pipe or socket. Then `notes set` with trailing text or `--file`, and `traffic metadata update --file`, fail with `requires exactly one of ...`. Without `--file` or `--raw-file`, `checkpoint forward`, `websocket inject`, `launchpad launch`, `extension update`, `extension settings set`, and `armory run validate` read that stdin to EOF, which can block. Pipe the input you mean, or run the command with `</dev/null`. `/dev/null` is a character device, so `checkpoint forward </dev/null` sends the original bytes.
 
 Commands that inspect, list, filter, replay, or otherwise act on captured traffic are not proven against an empty project. Send real client traffic through `proxy_listener`, then run the `marasi` command and assert on the traffic or state that command changes.
 

@@ -5,7 +5,7 @@ Users list stored request/response pairs and open one pair to inspect its metada
 ## Sub-features
 
 - List the newest page of traffic with `traffic list`.
-- Filter by exact host, exact method, exact status code, or path prefix.
+- Narrow the list with an AIP-160 query, `-q` or `--query`. `traffic list --help` lists the fields: exact-case `=`/`!=` with `*` at either end on `host`, `method`, `scheme`, `path`, and `content_type`; comparisons on `status_code`, `requested_at`, and `responded_at`; type-strict `metadata.<key>`; and case-insensitive `:` text search on `request_head`, `request_body`, `response_head`, `response_body`, `note`, and `metadata`, or bare text across all of them. Combine with `AND`, `OR`, `NOT`, `-`, and parentheses.
 - Limit page size and continue with `--cursor`.
 - Read one pair by UUID with `traffic get "$TRAFFIC_ID"`.
 - Read one pair's metadata with `traffic metadata get "$TRAFFIC_ID"`.

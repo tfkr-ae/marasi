@@ -18,7 +18,7 @@ Start a service first. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --inst
 
 ## Driving it with shell and curl
 
-Run `launchpad create --name Login --description variants --json` and save `id`. Run `launchpad list --json` and require that id. Run `launchpad update "$PAD_ID" --description replay --json`. Link a captured request with `launchpad link "$PAD_ID" --request "$TRAFFIC_ID" --json`. Pipe `GET /launchpad-proof.txt HTTP/1.1` with CRLF or LF line endings, a `Host` of the local origin, and a blank line to `launchpad launch "$PAD_ID" --scheme http --json` and require `{"status":"launched"}`. Retry `launchpad get "$PAD_ID" --json` until it contains both the linked id and a new `/launchpad-proof.txt` row. Confirm that launched path with `traffic list -q 'path = "/launchpad-proof.txt"' --json`.
+Run `launchpad create --name Login --description variants --json` and save `id`. Run `launchpad list --json` and require that id. Run `launchpad update "$PAD_ID" --description replay --json`. Link a captured request with `launchpad link "$PAD_ID" --request "$TRAFFIC_ID" --json`. Pipe `GET /launchpad-proof.txt HTTP/1.1` with CRLF or LF line endings, a `Host` of the local origin, and a blank line to `launchpad launch "$PAD_ID" --scheme http --json` and require `{"status":"launched"}`. Retry `launchpad get "$PAD_ID" --json` until it contains both the linked id and a new `/launchpad-proof.txt` row. Confirm that launched path with `traffic list -q 'path = "/launchpad-proof.txt"' --json`. Require that row's `metadata` to be `{"launchpad":true,"launchpad_id":"$PAD_ID"}`. `traffic list -q 'metadata.launchpad = true' --json` and `-q "metadata.launchpad_id = \"$PAD_ID\""` must return it, and `-q 'metadata.launchpad = "true"'` must not, because the stored value is a JSON boolean.
 
 ## Gotchas
 
@@ -26,6 +26,6 @@ Run `launchpad create --name Login --description variants --json` and save `id`.
 - Launch needs `--scheme http` or `https`, and either `--raw-file` or piped stdin. A TTY stdin fails. The raw bytes must be parseable HTTP with a non-empty `Host` and a header/body blank line. CRLF works; LF-only is accepted.
 - The working copy is the raw bytes you supply. Linked members are not replayed and are not required to launch.
 - Launch returns `{"status":"launched"}` after the proxied round trip. The new traffic row is inserted and auto-linked concurrently, so it may not be visible yet. Retry `launchpad get` and `traffic list` until the launched path appears.
-- Launch sends through the proxy listener, persists a new traffic row, and auto-links that row to the pad.
+- Launch sends through the proxy listener, persists a new traffic row, and auto-links that row to the pad. Marasi tags the request with an `x-launchpad-id` header, turns it into the `launchpad` and `launchpad_id` metadata keys, and removes it before sending. The stored raw request does not contain it.
 - Link and launch look up ids in the currently open project. After opening a different project, previous pads and request ids are not visible. Opening the current path does not hide them.
 - Duplicate link of the same request to the same pad returns a conflict.
