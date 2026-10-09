@@ -27,6 +27,6 @@ Run `notes get "$TRAFFIC_ID" --json` after setting and require the same `id` and
 - `notes set` on a missing request id returns not found. Invalid UUIDs fail before repository lookup.
 - Clearing a pair with no note returns not found.
 - List pages newest remaining noted rows. Human list writes `next_cursor=$NEXT_CURSOR` to stderr; JSON keeps it in `next_cursor`.
-- `has_note` in metadata is the JSON number `1` after a note is set. It is not boolean `true`.
+- `notes set` stores `has_note` as the JSON number `1`. A later `traffic metadata update` while the note exists stores boolean `true` instead; the note remains readable. Clearing the note removes the key.
 - Notes belong to the currently open project. After opening a different project, previous notes are not visible. Opening the current path does not hide them.
 - Set publishes `note.updated`. Clear publishes `note.deleted`. Subscribe with `events` before the mutation; the stream has no replay.
