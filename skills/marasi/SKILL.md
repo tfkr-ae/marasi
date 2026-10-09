@@ -98,7 +98,7 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 | Redirect an upstream connection | `waypoint` | Maps an original host:port to an override host:port without changing DNS. |
 | Launch a proxied browser | `chrome` | Register an executable path and profile before launch. |
 | Record methodology and vulnerabilities | `test-case`, `finding` | Link captured request IDs as evidence. |
-| Attach evidence files | `artifact` | Uploads must link to a finding, a test case, or both. |
+| Attach evidence files | `artifact` | Uploads require exactly one of `--finding` or `--test-case`, never both. |
 | Modify traffic with Lua | `extension` | Inspect source and settings before enabling or calling an extension. |
 | Manage attack inputs | `wordlist` | `add` moves the source file. Copy it first if the original must remain. |
 | Automate requests from templates | `armory` | Validate inputs before creating a run. Creation does not start it. Starting sends traffic. |
