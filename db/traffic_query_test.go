@@ -233,6 +233,26 @@ func TestTrafficRepo_ListTrafficQueryPaging(t *testing.T) {
 // nothing to someone writing a query.
 var parserTokenName = regexp.MustCompile(`\b(WS|TEXT|STRING|NUM|HEX)\b|trailing token`)
 
+func TestTrafficRepo_ListTrafficQueryLimits(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	captureTextPairs(t, repo, textSearchPairs())
+
+	// The most deeply nested queries allowed must still run in SQLite.
+	for name, query := range map[string]string{
+		"200 text terms":       strings.Repeat(`"abc" `, 200),
+		"200 negated terms":    strings.Repeat(`NOT "abc" `, 100),
+		"199 nested NOTs":      strings.Repeat(`NOT (`, 199) + `metadata.a.b = "v"` + strings.Repeat(`)`, 199),
+		"200 ORed comparisons": strings.Repeat(`metadata.k != "v" OR `, 199) + `status_code >= 200`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, _, err := repo.ListTraffic(nil, 10, query); err != nil {
+				t.Fatalf("\nwanted:\nthe query to run\ngot:\n%v", err)
+			}
+		})
+	}
+}
+
 func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
 	repo, teardown := setupTestDB(t)
 	defer teardown()
@@ -273,6 +293,9 @@ func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
 		{query: `host = "é" AND status_code = "x"`, message: `status_code needs a whole number`, position: 30},
 		{query: `host = "é" AND stauts = 5`, message: `unknown field "stauts"`, position: 16},
 		{query: strings.Repeat(" ", maxQueryLength) + `host = "a"`, message: `query is longer than`, position: 1},
+		{query: strings.Repeat(`"abc" `, 201), message: `query nests more than 200 conditions`, position: 1},
+		{query: strings.Repeat(`"abc" AND `, 200) + `"abc"`, message: `query nests more than 200 conditions`, position: 1},
+		{query: strings.Repeat(`NOT (`, 200) + `"abc"` + strings.Repeat(`)`, 200), message: `query nests more than 200 conditions`, position: 1001},
 	}
 	for _, test := range tests {
 		t.Run(test.query, func(t *testing.T) {

@@ -17,6 +17,12 @@ import (
 // recursive parser and translator run away.
 const maxQueryLength = 8192
 
+// maxQueryDepth caps how deeply a query's conditions nest. AND and OR chains
+// nest one level per condition, as does each NOT, and SQLite rejects an
+// expression nested more than 1000 levels, so a query within the length cap
+// could still fail as a database error instead of an invalid query.
+const maxQueryDepth = 200
+
 // trafficFieldKind is how a declared traffic field is compared.
 type trafficFieldKind int
 
@@ -122,6 +128,7 @@ type queryTranslator struct {
 	lead      int
 	positions map[int64]int32
 	args      []any
+	depth     int
 }
 
 // position converts a byte offset in the trimmed query to a 1-based character
@@ -232,6 +239,11 @@ func describeTokenType(what string) string {
 
 // condition translates a boolean expression.
 func (t *queryTranslator) condition(e *expr.Expr) (string, error) {
+	t.depth++
+	defer func() { t.depth-- }()
+	if t.depth > maxQueryDepth {
+		return "", t.errorAt(e, "query nests more than %d conditions; use fewer conditions or less nesting", maxQueryDepth)
+	}
 	call := e.GetCallExpr()
 	if call == nil {
 		// Bare text searches every indexed text part.
