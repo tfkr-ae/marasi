@@ -61,9 +61,14 @@ func requestLogOptions(req *http.Request) []func(*domain.Log) error {
 }
 
 // failWebSocketHandshake writes a proxy log for a handshake the proxy cannot
-// complete and returns an error that closes the client connection.
+// complete, marks the upgrade request's websocket.state failed so it is not
+// mistaken for a handshake still in flight, and returns an error that closes
+// the client connection.
 func failWebSocketHandshake(proxy *Proxy, res *http.Response, cause error) error {
 	_ = proxy.WriteLog("ERROR", fmt.Sprintf("WebSocket handshake failed: %v", cause), requestLogOptions(res.Request)...)
+	if requestID, ok := core.RequestIDFromContext(res.Request.Context()); ok {
+		proxy.updateWebSocketRequestState(requestID, "failed")
+	}
 	return fmt.Errorf("%w: %w", ErrDropped, cause)
 }
 

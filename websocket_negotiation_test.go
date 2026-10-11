@@ -34,6 +34,9 @@ type negotiationResult struct {
 	// stored is the raw handshake response Marasi stored, or empty when none
 	// was stored.
 	stored string
+	// requestState is the websocket.state stored on the upgrade request when
+	// the proxy closed the connection without a response.
+	requestState any
 }
 
 // negotiateThroughProxy sends one upgrade request with clientOffer through a
@@ -194,6 +197,16 @@ func negotiateThroughProxy(t *testing.T, clientOffer []string, upstreamAccept []
 				break waitForLog
 			}
 		}
+		stateDeadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(stateDeadline) {
+			if metadata, err := repository.GetMetadata(requestID); err == nil {
+				result.requestState = metadata["websocket.state"]
+				if result.requestState != "pending" {
+					break
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	return result
 }
@@ -302,6 +315,9 @@ func TestProxy_WebSocketDeflateNegotiation(t *testing.T) {
 		}
 		if result.logs[0].Level != "ERROR" || !strings.Contains(result.logs[0].Message, "client_max_window_bits") {
 			t.Fatalf("\nwanted:\nERROR log naming client_max_window_bits\ngot:\n%s %q", result.logs[0].Level, result.logs[0].Message)
+		}
+		if result.requestState != "failed" {
+			t.Fatalf("\nwanted:\nwebsocket.state failed on the upgrade request\ngot:\n%v", result.requestState)
 		}
 	})
 }
