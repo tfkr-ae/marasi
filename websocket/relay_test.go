@@ -10,6 +10,37 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestConnection_SettersPanicAfterRun(t *testing.T) {
+	setters := map[string]func(*Connection){
+		"SetDeflate":               func(c *Connection) { c.SetDeflate(nil) },
+		"SetMaxMessageSize":        func(c *Connection) { c.SetMaxMessageSize(10) },
+		"SetStreamFunc":            func(c *Connection) { c.SetStreamFunc(nil) },
+		"SetProgressHandler":       func(c *Connection) { c.SetProgressHandler(nil) },
+		"SetMessageTooBigHandler":  func(c *Connection) { c.SetMessageTooBigHandler(nil) },
+		"SetInflateFailureHandler": func(c *Connection) { c.SetInflateFailureHandler(nil) },
+		"SetShutdownHandler":       func(c *Connection) { c.SetShutdownHandler(nil) },
+	}
+	for name, set := range setters {
+		t.Run("should panic when "+name+" is called after Run", func(t *testing.T) {
+			relay := startRelay(t)
+			deadline := time.Now().Add(5 * time.Second)
+			for !relay.connection.running.Load() {
+				if time.Now().After(deadline) {
+					t.Fatalf("relay did not start")
+				}
+				time.Sleep(time.Millisecond)
+			}
+
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("\nwanted:\na panic\ngot:\nnone")
+				}
+			}()
+			set(relay.connection)
+		})
+	}
+}
+
 // runningRelay is a Connection running between two in-memory peers.
 type runningRelay struct {
 	connection *Connection
