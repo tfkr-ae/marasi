@@ -27,7 +27,7 @@ func main() {
 		verbose        bool
 	)
 	flag.StringVar(&config.Binary, "marasi", "dist/marasi", "marasi binary")
-	flag.StringVar(&config.Image, "image", "crossbario/autobahn-testsuite", "Autobahn testsuite image")
+	flag.StringVar(&config.Image, "image", autobahn.Image, "Autobahn testsuite image")
 	flag.StringVar(&config.OutDir, "out", "dist/autobahn", "working directory for specs and reports")
 	flag.StringVar(&config.BaselineDir, "baseline", "internal/autobahn/baseline", "direct baseline directory")
 	flag.StringVar(&cases, "cases", "*", "comma-separated Autobahn case patterns, for example 3.*,7.9.*")

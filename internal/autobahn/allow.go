@@ -8,15 +8,21 @@ type AllowedDeviation struct {
 	Reason string
 }
 
-// heldMessageReason explains the 6.4.1–6.4.4 allowance.
-const heldMessageReason = "held messages are not streamed: the proxy buffers the whole message " +
-	"for Checkpoint or the extension, so the peer sees the invalid UTF-8 late (spec: Streaming when not held)"
+// wholeMessageReason explains the 6.4.1–6.4.4 allowance.
+const wholeMessageReason = "the proxy forwards whole messages, so the peer sees the invalid UTF-8 " +
+	"only once the message completes; RFC 6455 does not require forwarding before then (spec: No streaming)"
 
-// allowList maps a run to the cases it may deviate on.
+// wholeMessageCases are the cases that send invalid UTF-8 partway through a
+// message and expect the peer to fail fast.
+var wholeMessageCases = []string{"6.4.1", "6.4.2", "6.4.3", "6.4.4"}
+
+// allowList maps a run to the cases it may deviate on. Every proxied run
+// forwards whole messages.
 var allowList = map[string][]string{
-	RunCheckpointForward: {"6.4.1", "6.4.2", "6.4.3", "6.4.4"},
-	RunCheckpointEdit:    {"6.4.1", "6.4.2", "6.4.3", "6.4.4"},
-	RunExtension:         {"6.4.1", "6.4.2", "6.4.3", "6.4.4"},
+	RunProxy:             wholeMessageCases,
+	RunCheckpointForward: wholeMessageCases,
+	RunCheckpointEdit:    wholeMessageCases,
+	RunExtension:         wholeMessageCases,
 }
 
 // SplitAllowed separates the deviations the spec accepts for run from the
@@ -27,7 +33,7 @@ func SplitAllowed(run string, deviations []Deviation) (kept []Deviation, allowed
 		if slices.Contains(allowList[run], deviation.Case) &&
 			slices.Equal(deviation.Fields, []string{"behavior"}) &&
 			deviation.Got.Behavior == "NON-STRICT" {
-			allowed = append(allowed, AllowedDeviation{Deviation: deviation, Reason: heldMessageReason})
+			allowed = append(allowed, AllowedDeviation{Deviation: deviation, Reason: wholeMessageReason})
 			continue
 		}
 		kept = append(kept, deviation)

@@ -31,6 +31,9 @@ type negotiationResult struct {
 	record *domain.WebSocketConnection
 	// logs are the proxy logs written for the upgrade request.
 	logs []domain.Log
+	// stored is the raw handshake response Marasi stored, or empty when none
+	// was stored.
+	stored string
 }
 
 // negotiateThroughProxy sends one upgrade request with clientOffer through a
@@ -81,6 +84,7 @@ func negotiateThroughProxy(t *testing.T, clientOffer []string, upstreamAccept []
 	}
 
 	requestIDs := make(chan uuid.UUID, 1)
+	storedResponses := make(chan string, 1)
 	logs := make(chan domain.Log, 16)
 	proxy, err := New(
 		WithConfigDir(t.TempDir()),
@@ -90,7 +94,10 @@ func negotiateThroughProxy(t *testing.T, clientOffer []string, upstreamAccept []
 			requestIDs <- req.ID
 			return nil
 		}),
-		WithResponseHandler(func(domain.ProxyResponse) error { return nil }),
+		WithResponseHandler(func(response domain.ProxyResponse) error {
+			storedResponses <- string(response.Raw)
+			return nil
+		}),
 		WithLogHandler(func(log domain.Log) error {
 			logs <- log
 			return nil
@@ -167,6 +174,11 @@ func negotiateThroughProxy(t *testing.T, clientOffer []string, upstreamAccept []
 		}
 		if result.record == nil {
 			t.Fatalf("timed out waiting for the stored WebSocket connection")
+		}
+		select {
+		case result.stored = <-storedResponses:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for the stored handshake response")
 		}
 	} else {
 		deadline := time.After(5 * time.Second)
@@ -265,6 +277,13 @@ func TestProxy_WebSocketDeflateNegotiation(t *testing.T) {
 		}
 		if got, want := result.response.Header.Values("Sec-WebSocket-Extensions"), []string{"permessage-deflate"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("\nwanted client accept:\n%q\ngot:\n%q", want, got)
+		}
+		stored, err := http.ReadResponse(bufio.NewReader(strings.NewReader(result.stored)), nil)
+		if err != nil {
+			t.Fatalf("parsing the stored response %q: %v", result.stored, err)
+		}
+		if got, want := stored.Header.Values("Sec-WebSocket-Extensions"), []string{"permessage-deflate"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("\nwanted stored accept, as the client got it:\n%q\ngot:\n%q", want, got)
 		}
 	})
 

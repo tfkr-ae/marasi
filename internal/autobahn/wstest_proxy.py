@@ -28,8 +28,12 @@ if proxy:
         finally:
             factory.proxy = None
 
-    fuzzing.connectWS = connect_ws
-    testee.connectWS = connect_ws
+    # The modes look connectWS up in their own module. If a testsuite version
+    # stops importing it there, patching would silently do nothing and the
+    # run would bypass the proxy.
+    for module in (fuzzing, testee):
+        assert hasattr(module, "connectWS"), "%s has no connectWS to patch" % module.__name__
+        module.connectWS = connect_ws
 
     original_handshake = protocol.WebSocketClientProtocol.startHandshake
 

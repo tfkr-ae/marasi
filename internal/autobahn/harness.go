@@ -2,6 +2,7 @@ package autobahn
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -17,6 +18,14 @@ const (
 	RunCheckpointEdit    = "checkpoint-edit"
 	RunExtension         = "extension"
 )
+
+// Image is the Autobahn testsuite image, pinned by digest so a new upstream
+// push cannot change the verdicts under the committed baseline.
+const Image = "crossbario/autobahn-testsuite@sha256:519915fb568b04c9383f70a1c405ae3ff44ab9e35835b085239c258b6fac3074"
+
+// errNotProxied reports a proxied suite that sent no WebSocket traffic
+// through Marasi, so its verdicts say nothing about the proxy.
+var errNotProxied = errors.New("no WebSocket connection went through the proxy")
 
 // Config selects what the harness runs.
 type Config struct {
@@ -54,8 +63,11 @@ func Run(ctx context.Context, config Config) ([]SuiteResult, error) {
 
 func (c Config) run(ctx context.Context, run string) ([]SuiteResult, error) {
 	proxy := ""
+	var instance *Instance
 	if run != RunDirect {
-		instance, stop, err := c.startInstance(ctx, run)
+		var stop func()
+		var err error
+		instance, stop, err = c.startInstance(ctx, run)
 		if err != nil {
 			return nil, err
 		}
@@ -64,11 +76,26 @@ func (c Config) run(ctx context.Context, run string) ([]SuiteResult, error) {
 	}
 
 	var results []SuiteResult
+	var err error
 	for _, mode := range c.Modes {
 		for _, peer := range c.Peers {
 			fmt.Fprintf(c.Log, "== %s %s/%s\n", run, mode, peer)
 			result := SuiteResult{Run: run, Mode: mode, Peer: peer}
+			var before string
+			if instance != nil {
+				if before, err = instance.NewestWebSocket(ctx); err != nil {
+					result.Err = err
+					results = append(results, result)
+					continue
+				}
+			}
 			report, err := c.suite(ctx, run, mode, peer, proxy)
+			if err == nil && instance != nil {
+				var after string
+				if after, err = instance.NewestWebSocket(ctx); err == nil {
+					err = checkProxied(before, after)
+				}
+			}
 			if err != nil {
 				result.Err = err
 				results = append(results, result)
@@ -166,4 +193,14 @@ func (c Config) mergeBaseline(mode, peer string, report Report) error {
 		baseline[id] = result
 	}
 	return WriteBaseline(file, baseline)
+}
+
+// checkProxied fails unless the newest WebSocket connection the instance
+// recorded changed during a suite: before and after are its ID, or empty
+// when there is none.
+func checkProxied(before, after string) error {
+	if after == "" || after == before {
+		return errNotProxied
+	}
+	return nil
 }
