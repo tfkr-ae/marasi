@@ -362,6 +362,29 @@ func TestRelay_SendsNothingAfterItsClose(t *testing.T) {
 	}
 }
 
+func TestRelay_RecordsAnIncompleteCompressedMessage(t *testing.T) {
+	compressed := Frame{Fin: false, Rsv1: true, Opcode: OpText, Payload: corruptDeflate}
+	next := Frame{Fin: true, Opcode: OpText, Payload: []byte("next")}
+
+	type seen struct {
+		message     domain.WebSocketMessage
+		passthrough bool
+	}
+	recorded := make(chan seen, 4)
+	relay := startRelayWith(t, func(message *Message) error {
+		recorded <- seen{message.ToDomain(), message.Passthrough}
+		return nil
+	}, withDeflate(contextTakeover))
+	writeFrames(relay.client, true, compressed, next)
+
+	assertSameFrame(t, compressed, readFrame(t, relay.upstream))
+	got := <-recorded
+	if !got.passthrough || !got.message.Compressed || got.message.Metadata["incomplete"] != true || !bytes.Equal(got.message.Payload, corruptDeflate) {
+		t.Fatalf("\nwanted recorded message:\npassthrough, compressed, incomplete, payload %x\ngot:\npassthrough %t, compressed %t, metadata %v, payload %x",
+			corruptDeflate, got.passthrough, got.message.Compressed, got.message.Metadata, got.message.Payload)
+	}
+}
+
 func TestRelay_ClearsRsv1WhenAnEditIsNotCompressed(t *testing.T) {
 	toPing := func(message *Message) error {
 		if message.Opcode == OpText {
