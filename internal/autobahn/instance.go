@@ -76,6 +76,27 @@ func (i *Instance) cli(ctx context.Context, stdin []byte, args ...string) ([]byt
 	return out, nil
 }
 
+// NewestWebSocket returns the ID of the newest WebSocket connection the
+// instance recorded, or "" when there is none.
+func (i *Instance) NewestWebSocket(ctx context.Context) (string, error) {
+	out, err := i.cli(ctx, nil, "websocket", "list", "--limit", "1", "--json")
+	if err != nil {
+		return "", err
+	}
+	var list struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(out, &list); err != nil {
+		return "", fmt.Errorf("decoding websocket list: %w", err)
+	}
+	if len(list.Items) == 0 {
+		return "", nil
+	}
+	return list.Items[0].ID, nil
+}
+
 // EnableWebSocketCheckpoint turns on global WebSocket Checkpoint, so every
 // message is held until something forwards or drops it.
 func (i *Instance) EnableWebSocketCheckpoint(ctx context.Context) error {
