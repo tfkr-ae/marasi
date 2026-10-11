@@ -51,6 +51,10 @@ type Message struct {
 	// incomplete marks a message cut short by a protocol violation: a new
 	// message started before its final frame.
 	incomplete bool
+	// compressTo is the receiver's compressor for a message the proxy
+	// itself sends compressed (an injection). Its stored Compressed then
+	// reports what goes on the wire, not what was asked for.
+	compressTo *deflater
 }
 
 // IsBinary reports whether the message carries a binary payload.
@@ -67,12 +71,23 @@ func (m *Message) ToDomain() domain.WebSocketMessage {
 		Direction:    m.Direction,
 		Opcode:       m.Opcode,
 		FrameCount:   m.FrameCount,
-		Compressed:   m.Compressed,
+		Compressed:   m.wireCompressed(),
 		Payload:      append([]byte(nil), m.Payload...),
 		IsBinary:     m.Opcode == OpBinary,
 		CreatedAt:    m.CreatedAt,
 		Metadata:     maps.Clone(m.Metadata),
 	}
+}
+
+// wireCompressed reports whether the message is compressed on the wire. For
+// a relayed message that is the sender's leg. For a message the proxy sends
+// compressed, it is false when a hook made it a control frame or when the
+// receiver's compressor sends it uncompressed.
+func (m *Message) wireCompressed() bool {
+	if m.compressTo == nil || !m.Compressed {
+		return m.Compressed
+	}
+	return (m.Opcode == OpText || m.Opcode == OpBinary) && m.compressTo.compresses(m.Payload)
 }
 
 // NewMessage creates a one-frame message for the given connection.

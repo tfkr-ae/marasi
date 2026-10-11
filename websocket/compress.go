@@ -104,6 +104,22 @@ func newDeflater(noContextTakeover bool, windowBits int) *deflater {
 	return d
 }
 
+// compresses reports whether deflate would send payload compressed. It
+// changes no state, so it may run outside the leg's lock: toward a full
+// window the answer is always yes, and Huffman-only output depends on
+// payload alone.
+func (d *deflater) compresses(payload []byte) bool {
+	if !d.huffmanOnly {
+		return true
+	}
+	var buf bytes.Buffer
+	// The level is valid, so NewWriter cannot fail.
+	writer, _ := flate.NewWriter(&buf, flate.HuffmanOnly)
+	_, _ = writer.Write(payload)
+	_ = writer.Flush()
+	return len(bytes.TrimSuffix(buf.Bytes(), syncTail)) < len(payload)
+}
+
 // deflate returns the payload to send and whether it is compressed. The
 // result is only valid until the next call.
 func (d *deflater) deflate(payload []byte) ([]byte, bool) {

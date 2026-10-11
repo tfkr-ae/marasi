@@ -409,6 +409,9 @@ func (c *Connection) Inject(direction string, opcode int, payload []byte, option
 	}
 	message.Metadata["injected"] = true
 	message.Compressed = out.deflater != nil && !options.NeverCompress && (opcode == OpText || opcode == OpBinary)
+	if message.Compressed {
+		message.compressTo = out.deflater
+	}
 
 	if c.process != nil {
 		if err := c.process(message); err != nil {
