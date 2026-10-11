@@ -253,6 +253,60 @@ func TestWebSocketRepo_GetConnection(t *testing.T) {
 		}
 	})
 
+	t.Run("should return negotiated deflate and removed extensions", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		connID, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("creating uuid: %v", err)
+		}
+
+		want := &domain.WebSocketConnection{
+			ID:        connID,
+			RequestID: testRequest(t, repo, map[string]any{}),
+			State:     "open",
+			Transport: "ws",
+			Host:      "marasi.app",
+			Path:      "/ws",
+			StartedAt: time.Now().UTC().Truncate(time.Millisecond),
+			Deflate: &domain.WebSocketDeflate{
+				ServerNoContextTakeover: true,
+				ClientNoContextTakeover: false,
+				ServerMaxWindowBits:     15,
+				ClientMaxWindowBits:     10,
+			},
+			RemovedExtensions: []string{"x-webkit-deflate-frame", "foo"},
+		}
+
+		if err := repo.InsertConnection(want); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := repo.UpdateConnection(&domain.WebSocketConnection{ID: connID, State: "closed"}); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want.State = "closed"
+
+		byID, err := repo.GetConnection(connID)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		byRequest, err := repo.GetConnectionByRequestID(want.RequestID)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		listed, _, err := repo.ListConnections(nil, 10)
+		if err != nil || len(listed) != 1 {
+			t.Fatalf("\nwanted:\none connection\ngot:\n%v %v", listed, err)
+		}
+
+		for _, got := range []*domain.WebSocketConnection{byID, byRequest, listed[0]} {
+			if !reflect.DeepEqual(want, got) {
+				t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+			}
+		}
+	})
+
 	t.Run("should error if connection does not exist", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
