@@ -139,9 +139,10 @@ func (m *Message) outgoing() []Frame {
 	if !compress && m.unchanged() {
 		return m.frames
 	}
+	// RSV1 marks a compressed payload. The receiver's leg sets it when it
+	// compresses this frame; the payload is never compressed here.
 	frame := Frame{Fin: !m.incomplete, Opcode: m.Opcode, Payload: m.Payload, deflate: compress}
 	if len(m.frames) > 0 {
-		frame.Rsv1 = m.frames[0].Rsv1 && !compress
 		frame.Rsv2 = m.frames[0].Rsv2
 		frame.Rsv3 = m.frames[0].Rsv3
 	}
