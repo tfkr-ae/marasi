@@ -3,6 +3,7 @@ package websocket
 import (
 	"bytes"
 	"compress/flate"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -32,8 +33,15 @@ func newInflater(noContextTakeover bool) *inflater {
 	return &inflater{noContextTakeover: noContextTakeover}
 }
 
-// inflate returns the uncompressed payload of one compressed message.
-func (f *inflater) inflate(payload []byte) ([]byte, error) {
+// errInflatedTooLarge reports a compressed message that inflates to more than
+// the size limit.
+var errInflatedTooLarge = errors.New("too large")
+
+// inflate returns the uncompressed payload of one compressed message. It
+// stops once the output goes over limit bytes, so it never holds more than
+// limit+1 bytes of output, and returns errInflatedTooLarge. A limit of zero
+// or less means no limit.
+func (f *inflater) inflate(payload []byte, limit int64) ([]byte, error) {
 	source := io.MultiReader(bytes.NewReader(payload), bytes.NewReader(inflateTail))
 	var dict []byte
 	if !f.noContextTakeover {
@@ -45,9 +53,16 @@ func (f *inflater) inflate(payload []byte) ([]byte, error) {
 		return nil, fmt.Errorf("resetting inflater: %w", err)
 	}
 
-	out, err := io.ReadAll(f.reader)
+	var output io.Reader = f.reader
+	if limit > 0 {
+		output = io.LimitReader(f.reader, limit+1)
+	}
+	out, err := io.ReadAll(output)
 	if err != nil {
 		return nil, fmt.Errorf("inflating message: %w", err)
+	}
+	if limit > 0 && int64(len(out)) > limit {
+		return nil, fmt.Errorf("%w: inflated message is over the %d-byte limit", errInflatedTooLarge, limit)
 	}
 	if !f.noContextTakeover {
 		f.dict = lastWindow(f.dict, out)

@@ -29,6 +29,9 @@ const (
 	CloseGoingAway = 1001
 	// CloseNoStatusReceived is used when a close frame has no status code.
 	CloseNoStatusReceived = 1005
+	// CloseInvalidPayload indicates message data that does not fit the
+	// message type, such as compressed data that cannot be inflated.
+	CloseInvalidPayload = 1007
 	// CloseMessageTooBig indicates a message too big to process.
 	CloseMessageTooBig = 1009
 )

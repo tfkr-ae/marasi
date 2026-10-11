@@ -36,9 +36,22 @@ type MessageTooBig struct {
 	// Direction is the side that sent the message.
 	Direction string
 	// Size is the message size in bytes once its current frame is counted.
+	// For an inflated message it is the bytes inflated before inflating
+	// stopped: one more than the limit.
 	Size int64
 	// Limit is the size limit in bytes.
 	Limit int64
+	// Inflated reports that the message is compressed and went over the
+	// limit as it was inflated.
+	Inflated bool
+}
+
+// InflateFailure describes a compressed message the proxy could not inflate.
+type InflateFailure struct {
+	// Direction is the side that sent the message.
+	Direction string
+	// Err is the inflate error.
+	Err error
 }
 
 // frameSink receives the frames relayed toward one peer.
@@ -346,8 +359,12 @@ func (in *inbound) finish(incomplete bool) error {
 			// What arrived cannot be inflated as a message. Forward its
 			// frames unchanged so the receiver sees the violation.
 			message.Compressed = false
-		} else if err := in.inflate(message); err != nil {
-			return err
+		} else {
+			payload, err := in.c.inflaters[in.source].inflate(message.Payload, in.c.maxMessageSize)
+			if err != nil {
+				return in.failInflate(message, err)
+			}
+			message.Payload = payload
 		}
 	}
 
@@ -355,13 +372,32 @@ func (in *inbound) finish(incomplete bool) error {
 	return err
 }
 
-// inflate replaces a compressed message's payload with its inflated bytes.
-func (in *inbound) inflate(message *Message) error {
-	payload, err := in.c.inflaters[in.source].inflate(message.Payload)
-	if err != nil {
-		return fmt.Errorf("websocket message from %s: %w", in.source, err)
+// failInflate handles a compressed message that cannot be inflated
+// (ADR-0028). The proxy cannot forward it, so it records the message as the
+// compressed bytes received, with the error, and closes the connection: 1007
+// to the sender, or 1009 when it inflates to over the size limit, and 1001
+// to the receiver.
+func (in *inbound) failInflate(message *Message, inflateErr error) error {
+	c := in.c
+	message.Metadata["inflate_error"] = inflateErr.Error()
+	// The message is only recorded: no hook may hold or change it, and it is
+	// not forwarded.
+	message.Passthrough = true
+	if _, err := c.handleMessage(message, in.out); err != nil {
+		return err
 	}
-	message.Payload = payload
+
+	if errors.Is(inflateErr, errInflatedTooLarge) {
+		in.closeLegs(CloseMessageTooBig)
+		if c.onTooBig != nil {
+			c.onTooBig(MessageTooBig{Direction: in.source, Size: c.maxMessageSize + 1, Limit: c.maxMessageSize, Inflated: true})
+		}
+		return nil
+	}
+	in.closeLegs(CloseInvalidPayload)
+	if c.onInflate != nil {
+		c.onInflate(InflateFailure{Direction: in.source, Err: inflateErr})
+	}
 	return nil
 }
 
@@ -469,22 +505,30 @@ func (in *inbound) overLimit(length, size int64) bool {
 	if c.maxMessageSize <= 0 || length <= c.maxMessageSize-size {
 		return false
 	}
-	in.discarding = true
-	tooBig := MessageTooBig{Direction: in.source, Size: size + length, Limit: c.maxMessageSize}
-	if c.closing.CompareAndSwap(false, true) {
-		c.setCloseDetails(CloseMessageTooBig, "")
-		toSender := Frame{Fin: true, Opcode: OpClose, Payload: closePayload(CloseMessageTooBig)}
-		toReceiver := Frame{Fin: true, Opcode: OpClose, Payload: closePayload(CloseGoingAway)}
-		if in.source == DirectionFromClient {
-			_ = c.sendCloseFrames(toSender, toReceiver, false)
-		} else {
-			_ = c.sendCloseFrames(toReceiver, toSender, false)
-		}
-	}
+	in.closeLegs(CloseMessageTooBig)
 	if c.onTooBig != nil {
-		c.onTooBig(tooBig)
+		c.onTooBig(MessageTooBig{Direction: in.source, Size: size + length, Limit: c.maxMessageSize})
 	}
 	return true
+}
+
+// closeLegs closes the connection because of what the source sent: code to
+// the sender and 1001 to the receiver. The source's later data is read and
+// dropped while the close handshake runs.
+func (in *inbound) closeLegs(code int) {
+	c := in.c
+	in.discarding = true
+	if !c.closing.CompareAndSwap(false, true) {
+		return
+	}
+	c.setCloseDetails(code, "")
+	toSender := Frame{Fin: true, Opcode: OpClose, Payload: closePayload(code)}
+	toReceiver := Frame{Fin: true, Opcode: OpClose, Payload: closePayload(CloseGoingAway)}
+	if in.source == DirectionFromClient {
+		_ = c.sendCloseFrames(toSender, toReceiver, false)
+	} else {
+		_ = c.sendCloseFrames(toReceiver, toSender, false)
+	}
 }
 
 // discard reads and drops a payload of length bytes.
