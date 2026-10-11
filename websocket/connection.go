@@ -94,6 +94,9 @@ type Connection struct {
 	mu          sync.RWMutex
 	closeCode   int
 	closeReason string
+	// closeOwned is set once the proxy starts the close itself. The close
+	// details are then the proxy's, and no peer's close replaces them.
+	closeOwned bool
 
 	process    ProcessFunc
 	onShutdown func(uuid.UUID)
@@ -459,7 +462,7 @@ func (c *Connection) beginClose(code int, reason string) (Frame, error) {
 	if !c.closing.CompareAndSwap(false, true) {
 		return Frame{}, ErrConnectionClosed
 	}
-	c.setCloseDetails(code, reason)
+	c.ownCloseDetails(code, reason)
 	return frame, nil
 }
 
@@ -541,10 +544,26 @@ func (c *Connection) CloseDetails() (code int, reason string) {
 	return c.closeCode, c.closeReason
 }
 
+// setCloseDetails records a close a peer sent, unless the proxy started the
+// close itself.
 func (c *Connection) setCloseDetails(code int, reason string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.closeOwned {
+		return
+	}
+	c.closeCode = code
+	c.closeReason = reason
+}
+
+// ownCloseDetails records the close the proxy starts. The peers' replies do
+// not replace it.
+func (c *Connection) ownCloseDetails(code int, reason string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.closeOwned = true
 	c.closeCode = code
 	c.closeReason = reason
 }
