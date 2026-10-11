@@ -302,3 +302,18 @@ func TestRelay_DeflateBomb(t *testing.T) {
 		}
 	})
 }
+
+func TestRelay_ClearsRsv1WhenAnEditIsNotCompressed(t *testing.T) {
+	toPing := func(message *Message) error {
+		if message.Opcode == OpText {
+			message.Opcode = OpPing
+			message.Payload = []byte("ping")
+		}
+		return nil
+	}
+	relay := startRelayWith(t, toPing, withDeflate(contextTakeover))
+	client := newPeerCompressor(t, false)
+	writeFrames(relay.client, true, Frame{Fin: true, Rsv1: true, Opcode: OpText, Payload: client.compress([]byte("hello"))})
+
+	assertSameFrame(t, Frame{Fin: true, Opcode: OpPing, Payload: []byte("ping")}, readFrame(t, relay.upstream))
+}
