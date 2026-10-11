@@ -280,9 +280,13 @@ func (in *inbound) finish(incomplete bool) error {
 	}
 	if message.Compressed {
 		if incomplete {
-			// What arrived cannot be inflated as a message. Forward its
-			// frames unchanged so the receiver sees the violation.
-			message.Compressed = false
+			// What arrived cannot be inflated as a message, so no hook can
+			// see it as one. Forward its frames unchanged so the receiver
+			// sees the violation, and record the compressed bytes.
+			if err := in.out.writeFrames(message.frames...); err != nil {
+				return fmt.Errorf("%w: %w", errForwarding, err)
+			}
+			message.Passthrough = true
 		} else {
 			payload, err := in.c.inflaters[in.source].inflate(message.Payload, in.c.maxMessageSize)
 			if err != nil {
@@ -335,7 +339,6 @@ func (in *inbound) recordUnfinished() {
 	in.pending = nil
 	message.incomplete = true
 	message.Metadata["incomplete"] = true
-	message.Compressed = false
 	_ = in.out.writeFrames(message.frames...)
 	message.Passthrough = true
 	if in.c.process != nil {
