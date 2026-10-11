@@ -214,6 +214,10 @@ func WriteFrame(w io.Writer, frame Frame, mask bool) error {
 		payload = maskedPayload
 	}
 
+	if len(payload) == 0 {
+		return nil
+	}
+
 	if _, err := w.Write(payload); err != nil {
 		return fmt.Errorf("writing frame payload: %w", err)
 	}

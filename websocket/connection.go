@@ -24,6 +24,10 @@ const (
 	DirectionFromServer = "server"
 	// CloseHandshakeTimeout bounds the local close handshake.
 	CloseHandshakeTimeout = time.Second
+	// RelayedCloseTimeout bounds a close handshake between the peers. It runs
+	// from the first relayed close frame; the peers normally finish it by
+	// dropping TCP well before then.
+	RelayedCloseTimeout = 5 * time.Second
 )
 
 // ProcessFunc processes a live message before it is forwarded.
@@ -74,6 +78,11 @@ type Connection struct {
 	closedRecord chan domain.WebSocketConnection
 	closing      atomic.Bool
 	running      atomic.Bool
+	// closeRelayed is set once a peer's close frame has been relayed. The
+	// relay then keeps both directions open so the reply close reaches the
+	// other peer, and tears down when a peer drops TCP.
+	closeRelayed        atomic.Bool
+	relayedCloseTimeout time.Duration
 
 	mu          sync.RWMutex
 	closeCode   int
@@ -102,6 +111,8 @@ func NewConnection(
 		process:      process,
 		done:         make(chan struct{}),
 		closedRecord: make(chan domain.WebSocketConnection, 1),
+
+		relayedCloseTimeout: RelayedCloseTimeout,
 	}
 }
 
@@ -195,7 +206,7 @@ func (c *Connection) relayFrames(
 
 		frame, err := ReadFrame(reader)
 		if err != nil {
-			if c.closing.Load() {
+			if c.closing.Load() || c.closeRelayed.Load() {
 				return nil
 			}
 			return fmt.Errorf("reading websocket frame: %w", err)
@@ -214,15 +225,35 @@ func (c *Connection) relayFrames(
 			continue
 		}
 
-		stop, err := c.handleFrame(frame, source, writeFrame)
+		isClose, err := c.handleFrame(frame, source, writeFrame)
 		if err != nil {
 			return err
 		}
 
-		if stop {
-			return nil
+		if isClose {
+			if c.closing.Load() {
+				return nil
+			}
+			c.noteCloseRelayed()
 		}
 	}
+}
+
+// noteCloseRelayed marks the peers' close handshake as started and, while the
+// relay runs, bounds how long it may take.
+func (c *Connection) noteCloseRelayed() {
+	if !c.closeRelayed.CompareAndSwap(false, true) || !c.running.Load() {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(c.relayedCloseTimeout)
+		defer timer.Stop()
+		select {
+		case <-c.done:
+		case <-timer.C:
+			_ = c.shutdown()
+		}
+	}()
 }
 
 func (c *Connection) shutdown() error {
@@ -270,12 +301,12 @@ func (c *Connection) Run() error {
 	}()
 
 	firstErr := <-results
-	locallyClosing := c.closing.Load()
+	closeHandshake := c.closing.Load() || c.closeRelayed.Load()
 
 	shutdownErr := c.shutdown()
 
 	<-results
-	if locallyClosing {
+	if closeHandshake {
 		return nil
 	}
 

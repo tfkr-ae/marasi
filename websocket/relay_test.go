@@ -40,6 +40,7 @@ func startRelay(t *testing.T) *runningRelay {
 		upstream:   upstreamPeer,
 		result:     make(chan error, 1),
 	}
+	relay.connection.relayedCloseTimeout = 200 * time.Millisecond
 	go func() { relay.result <- relay.connection.Run() }()
 
 	return relay
@@ -78,6 +79,78 @@ func assertSameFrame(t *testing.T, want, got Frame) {
 		!bytes.Equal(got.Payload, want.Payload) {
 		t.Fatalf("\nwanted frame:\n%+v\ngot:\n%+v", want, got)
 	}
+}
+
+func TestRelay_ForwardsProtocolViolationsUnchanged(t *testing.T) {
+	tests := []struct {
+		name  string
+		frame Frame
+	}{
+		{name: "should forward RSV bits with no extension", frame: Frame{Fin: true, Rsv1: true, Rsv2: true, Rsv3: true, Opcode: OpText, Payload: []byte("hi")}},
+		{name: "should forward a reserved data opcode", frame: Frame{Fin: true, Opcode: 0x3}},
+		{name: "should forward a reserved control opcode", frame: Frame{Fin: true, Opcode: 0xB, Payload: []byte("x")}},
+		{name: "should forward an oversized ping", frame: Frame{Fin: true, Opcode: OpPing, Payload: bytes.Repeat([]byte{'p'}, 126)}},
+		{name: "should forward a fragmented ping", frame: Frame{Fin: false, Opcode: OpPing, Payload: []byte("frag")}},
+		{name: "should forward invalid UTF-8 in text", frame: Frame{Fin: true, Opcode: OpText, Payload: []byte{0xce, 0xba, 0xff}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+" from the client", func(t *testing.T) {
+			relay := startRelay(t)
+			assertSameFrame(t, tt.frame, relay.relayFromClient(t, tt.frame))
+		})
+		t.Run(tt.name+" from the server", func(t *testing.T) {
+			relay := startRelay(t)
+			assertSameFrame(t, tt.frame, relay.relayFromServer(t, tt.frame))
+		})
+	}
+}
+
+func (r *runningRelay) assertReturnsCleanly(t *testing.T) {
+	t.Helper()
+	select {
+	case err := <-r.result:
+		if err != nil {
+			t.Fatalf("Run() returned unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("\nwanted Run state:\n%q\ngot:\n%q", "returned", "blocked")
+	}
+}
+
+func TestRelay_CompletesTheCloseHandshake(t *testing.T) {
+	closeFrame := Frame{Fin: true, Opcode: OpClose, Payload: []byte{0x03, 0xe8}}
+
+	t.Run("should relay the server's reply to a client close", func(t *testing.T) {
+		relay := startRelay(t)
+
+		relay.relayFromClient(t, closeFrame)
+		assertSameFrame(t, closeFrame, relay.relayFromServer(t, closeFrame))
+
+		_ = relay.upstream.Close()
+		relay.assertReturnsCleanly(t)
+	})
+
+	t.Run("should relay the client's reply to a server close", func(t *testing.T) {
+		relay := startRelay(t)
+
+		relay.relayFromServer(t, closeFrame)
+		assertSameFrame(t, closeFrame, relay.relayFromClient(t, closeFrame))
+
+		_ = relay.upstream.Close()
+		relay.assertReturnsCleanly(t)
+		if _, err := ReadFrame(relay.client); err == nil {
+			t.Fatalf("\nwanted client connection:\n%q\ngot:\n%q", "closed", "open")
+		}
+	})
+
+	t.Run("should stop waiting for a reply that never comes", func(t *testing.T) {
+		relay := startRelay(t)
+
+		relay.relayFromClient(t, closeFrame)
+
+		relay.assertReturnsCleanly(t)
+	})
 }
 
 func TestRelay_RecordsInvalidCloseOnTheStoredMessage(t *testing.T) {
