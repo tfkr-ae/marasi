@@ -597,7 +597,7 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		return fmt.Errorf("clearing websocket client deadline: %w", err)
 	}
 
-	deflate, removedExtensions := mirrorWebSocketNegotiation(proxy, res)
+	deflate, removedExtensions := webSocketNegotiated(res.Request)
 	if err := res.Write(bufferedClient); err != nil {
 		return fmt.Errorf("writing websocket handshake response: %w", err)
 	}

@@ -564,6 +564,7 @@ func WithDefaultModifierPipeline() func(*Proxy) error {
 		proxy.AddResponseModifier(CompassResponseModifier)
 		proxy.AddResponseModifier(ExtensionsResponseModifier)
 		proxy.AddResponseModifier(CheckpointResponseModifier)
+		proxy.AddResponseModifier(WebSocketNegotiationModifier)
 		proxy.AddResponseModifier(WriteResponseModifier)
 		proxy.AddResponseModifier(WebSocketHandoffModifier)
 		return nil
