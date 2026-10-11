@@ -10,13 +10,14 @@ import (
 
 // SuiteResult is one mode and peer under one run, compared to the baseline.
 type SuiteResult struct {
-	Run        string      // direct, proxy, checkpoint-forward, checkpoint-edit, extension
-	Mode       string      // fuzzingclient or fuzzingserver
-	Peer       string      // strict or lenient
-	Cases      int         // cases the run reported
-	Deviations []Deviation // cases that differ from the baseline
-	Timing     Timing      // 9.x durations, tracked but not compared
-	Err        error       // harness failure; the suite produced no report
+	Run        string             // direct, proxy, checkpoint-forward, checkpoint-edit, extension
+	Mode       string             // fuzzingclient or fuzzingserver
+	Peer       string             // strict or lenient
+	Cases      int                // cases the run reported
+	Deviations []Deviation        // cases that differ from the baseline
+	Allowed    []AllowedDeviation // deviations the spec accepts for this run
+	Timing     Timing             // 9.x durations, tracked but not compared
+	Err        error              // harness failure; the suite produced no report
 }
 
 // Suite names the mode and peer, for example fuzzingclient/strict.
@@ -37,6 +38,17 @@ func WriteTable(w io.Writer, results []SuiteResult) {
 		}
 	}
 	_ = table.Flush()
+	if hasAllowed(results) {
+		fmt.Fprintln(w)
+		allowed := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(allowed, "RUN\tSUITE\tALLOWED\tREASON")
+		for _, result := range results {
+			for _, deviation := range result.Allowed {
+				fmt.Fprintf(allowed, "%s\t%s\t%s\t%s\n", result.Run, result.Suite(), deviation.Case, deviation.Reason)
+			}
+		}
+		_ = allowed.Flush()
+	}
 	fmt.Fprintln(w)
 	for _, result := range results {
 		if result.Err != nil {
@@ -47,7 +59,11 @@ func WriteTable(w io.Writer, results []SuiteResult) {
 		if result.Timing.Run > 0 {
 			timing = fmt.Sprintf(", 9.x %dms (baseline %dms)", result.Timing.Run, result.Timing.Baseline)
 		}
-		fmt.Fprintf(w, "%s  %s  %d cases, %d deviations%s\n", result.Run, result.Suite(), result.Cases, len(result.Deviations), timing)
+		allowed := ""
+		if len(result.Allowed) > 0 {
+			allowed = fmt.Sprintf(", %d allowed", len(result.Allowed))
+		}
+		fmt.Fprintf(w, "%s  %s  %d cases, %d deviations%s%s\n", result.Run, result.Suite(), result.Cases, len(result.Deviations), allowed, timing)
 	}
 }
 
@@ -66,4 +82,13 @@ func describe(result Result, fields []string, absent string) string {
 		clean = "clean"
 	}
 	return strings.Join([]string{result.Behavior, result.BehaviorClose, closeCode, clean}, " ")
+}
+
+func hasAllowed(results []SuiteResult) bool {
+	for _, result := range results {
+		if len(result.Allowed) > 0 {
+			return true
+		}
+	}
+	return false
 }
