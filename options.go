@@ -115,6 +115,9 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 		if err := viperInstance.Unmarshal(&proxy.Config); err != nil {
 			return fmt.Errorf("unmarshalling config to struct : %w", err)
 		}
+		if err := proxy.Config.validate(); err != nil {
+			return fmt.Errorf("invalid configuration : %w", err)
+		}
 		proxy.Config.viper = viperInstance
 
 		proxy.Config.DesktopOS = runtime.GOOS
