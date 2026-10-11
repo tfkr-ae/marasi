@@ -52,32 +52,35 @@ func negotiateWebSocketExtensions(res *http.Response) (webSocketNegotiation, err
 	return webSocketNegotiation{accept: slices.Clone(accept), deflate: deflate}, nil
 }
 
+// requestLogOptions ties a proxy log to the request, when it has an ID.
+func requestLogOptions(req *http.Request) []func(*domain.Log) error {
+	if requestID, ok := core.RequestIDFromContext(req.Context()); ok {
+		return []func(*domain.Log) error{core.LogWithReqResID(requestID)}
+	}
+	return nil
+}
+
 // failWebSocketHandshake writes a proxy log for a handshake the proxy cannot
 // complete and returns an error that closes the client connection.
 func failWebSocketHandshake(proxy *Proxy, res *http.Response, cause error) error {
-	var options []func(*domain.Log) error
-	if requestID, ok := core.RequestIDFromContext(res.Request.Context()); ok {
-		options = append(options, core.LogWithReqResID(requestID))
-	}
-	_ = proxy.WriteLog("ERROR", fmt.Sprintf("WebSocket handshake failed: %v", cause), options...)
+	_ = proxy.WriteLog("ERROR", fmt.Sprintf("WebSocket handshake failed: %v", cause), requestLogOptions(res.Request)...)
 	return fmt.Errorf("%w: %w", ErrDropped, cause)
 }
 
-// mirrorWebSocketNegotiation sets the client's extension response to exactly
-// what the upstream accepted, undoing any edit made after the upstream answered.
-// It returns the negotiated deflate configuration and the removed offers.
-func mirrorWebSocketNegotiation(proxy *Proxy, res *http.Response) (*domain.WebSocketDeflate, []string) {
-	removed, _ := res.Request.Context().Value(webSocketRemovedExtensionsKey{}).([]string)
+// WebSocketNegotiationModifier sets the client's extension response to
+// exactly what the upstream accepted, undoing any edit made after the
+// upstream answered. It runs after Extensions and Checkpoint and before
+// WriteResponseModifier, so the stored response is the one the client gets.
+func WebSocketNegotiationModifier(proxy *Proxy, res *http.Response) error {
+	if !marasiws.IsUpgradeResponse(res) {
+		return nil
+	}
 	negotiation, ok := res.Request.Context().Value(webSocketNegotiationKey{}).(webSocketNegotiation)
 	if !ok {
-		return nil, removed
+		return nil
 	}
 
 	if !slices.Equal(res.Header.Values(marasiws.ExtensionsHeader), negotiation.accept) {
-		var options []func(*domain.Log) error
-		if requestID, ok := core.RequestIDFromContext(res.Request.Context()); ok {
-			options = append(options, core.LogWithReqResID(requestID))
-		}
 		_ = proxy.WriteLog(
 			"WARN",
 			fmt.Sprintf(
@@ -85,12 +88,20 @@ func mirrorWebSocketNegotiation(proxy *Proxy, res *http.Response) (*domain.WebSo
 				marasiws.ExtensionsHeader,
 				negotiation.accept,
 			),
-			options...,
+			requestLogOptions(res.Request)...,
 		)
 	}
 	res.Header.Del(marasiws.ExtensionsHeader)
 	for _, value := range negotiation.accept {
 		res.Header.Add(marasiws.ExtensionsHeader, value)
 	}
+	return nil
+}
+
+// webSocketNegotiated returns the negotiated deflate configuration of an
+// upgrade, or nil, and the extension offers removed from its request.
+func webSocketNegotiated(req *http.Request) (*domain.WebSocketDeflate, []string) {
+	removed, _ := req.Context().Value(webSocketRemovedExtensionsKey{}).([]string)
+	negotiation, _ := req.Context().Value(webSocketNegotiationKey{}).(webSocketNegotiation)
 	return negotiation.deflate, removed
 }
