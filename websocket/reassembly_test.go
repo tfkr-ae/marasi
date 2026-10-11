@@ -141,6 +141,38 @@ func TestRelay_LimitsMessageSize(t *testing.T) {
 		}
 	})
 
+	stored := []struct {
+		name    string
+		frames  []Frame
+		stream  bool
+		payload []byte
+		size    int64
+	}{
+		{"should store the bytes buffered before the limit", []Frame{first, second}, false, []byte("123456"), 12},
+		{"should store a streamed message without its payload", []Frame{first, second}, true, nil, 12},
+		{"should store a single frame over the limit without its payload", []Frame{{Fin: true, Opcode: OpBinary, Payload: []byte("12345678901")}}, false, nil, 11},
+	}
+	for _, tt := range stored {
+		t.Run(tt.name, func(t *testing.T) {
+			process, recorded := recordMessages()
+			relay := startRelayWith(t, process, func(c *Connection) {
+				c.SetMaxMessageSize(10)
+				c.SetStreamFunc(func(string, int) bool { return tt.stream })
+			})
+			writeFrames(relay.client, true, tt.frames...)
+			if tt.stream {
+				readFrame(t, relay.upstream)
+			}
+
+			message := receiveHeld(t, recorded)
+			if message.Opcode != tt.frames[0].Opcode || !bytes.Equal(message.Payload, tt.payload) ||
+				message.Metadata["too_large"] != true || message.Metadata["size_seen"] != tt.size {
+				t.Fatalf("\nwanted stored message:\nopcode %d, %q, too_large, size_seen %d\ngot:\nopcode %d, %q, metadata %v",
+					tt.frames[0].Opcode, tt.payload, tt.size, message.Opcode, message.Payload, message.Metadata)
+			}
+		})
+	}
+
 	t.Run("should apply the limit to a message from the server", func(t *testing.T) {
 		relay := startRelayWith(t, nil, func(c *Connection) { c.SetMaxMessageSize(10) })
 		writeFrames(relay.upstream, false, first, second)

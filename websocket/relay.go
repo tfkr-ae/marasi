@@ -306,7 +306,7 @@ func (c *Connection) relay(reader io.Reader, out frameSink, source string) error
 // control relays one control frame. It reports whether the relay should stop.
 func (in *inbound) control(frame Frame, length int64) (stop bool, err error) {
 	c := in.c
-	if in.overLimit(length, 0) {
+	if in.overLimit(frame, length, nil) {
 		return false, in.discard(length)
 	}
 	if frame.Payload, err = in.readPayload(frame, length, nil); err != nil {
@@ -352,11 +352,7 @@ func (in *inbound) data(frame Frame, length int64) error {
 		}
 	}
 
-	var size int64
-	if in.pending != nil {
-		size = int64(len(in.pending.Payload))
-	}
-	if in.overLimit(length, size) {
+	if in.overLimit(frame, length, in.pending) {
 		in.dropPending()
 		return in.discard(length)
 	}
@@ -577,19 +573,48 @@ func (in *inbound) progress(partial int64) {
 	})
 }
 
-// overLimit reports whether a frame of length bytes, on a message already
-// holding size bytes, goes over the size limit. If so it closes the
-// connection: 1009 to the sender and 1001 to the receiver.
-func (in *inbound) overLimit(length, size int64) bool {
+// overLimit reports whether frame, of length bytes, goes over the size limit
+// on the message it belongs to: pending, or a new message when pending is
+// nil. If so it records that message and closes the connection: 1009 to the
+// sender and 1001 to the receiver.
+func (in *inbound) overLimit(frame Frame, length int64, pending *Message) bool {
 	c := in.c
+	var size int64
+	if pending != nil {
+		size = int64(len(pending.Payload))
+	}
 	if c.maxMessageSize <= 0 || length <= c.maxMessageSize-size {
 		return false
 	}
+	in.recordTooLarge(frame, pending, size+length)
 	in.closeLegs(CloseMessageTooBig)
 	if c.onTooBig != nil {
 		c.onTooBig(MessageTooBig{Direction: in.source, Size: size + length, Limit: c.maxMessageSize})
 	}
 	return true
+}
+
+// recordTooLarge records a message that went over the size limit, as the
+// bytes buffered so far: none for a new or streamed message. Like a message
+// that cannot be inflated, it is only recorded, never held or forwarded.
+func (in *inbound) recordTooLarge(frame Frame, pending *Message, size int64) {
+	c := in.c
+	message := pending
+	if message == nil {
+		var err error
+		if message, err = newMessage(c.ID, c.RequestID, in.source); err != nil {
+			return
+		}
+		message.Opcode = frame.Opcode
+	} else if in.streamed {
+		message.Payload = nil
+	}
+	message.Metadata["too_large"] = true
+	message.Metadata["size_seen"] = size
+	message.Passthrough = true
+	if c.process != nil {
+		_ = c.process(message)
+	}
 }
 
 // closeLegs closes the connection because of what the source sent: code to
