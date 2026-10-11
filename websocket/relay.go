@@ -88,12 +88,33 @@ type leg struct {
 	// message is held from the first to the last frame of a streamed data
 	// message, and while an injected message goes out.
 	message sync.Mutex
+	// closed is set, with mu held, once the proxy sent its own close frame
+	// to the peer. No frame goes out after it (RFC 6455 §5.5.1).
+	closed bool
 }
 
+// writeFrames writes frames to the peer. After the proxy's own close frame
+// went out, frames are dropped.
 func (l *leg) writeFrames(frames ...Frame) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.writeLocked(frames...)
+}
 
+// writeClose writes the proxy's own close frame. It is the last frame the
+// peer gets.
+func (l *leg) writeClose(frames ...Frame) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	err := l.writeLocked(frames...)
+	l.closed = true
+	return err
+}
+
+func (l *leg) writeLocked(frames ...Frame) error {
+	if l.closed {
+		return nil
+	}
 	for _, frame := range frames {
 		if frame.deflate {
 			frame.deflate = false
@@ -124,13 +145,15 @@ type frameStream struct {
 	offset  int64
 	scratch []byte
 	err     error
+	// drop is set when the leg is closed: nothing of the frame goes out.
+	drop bool
 }
 
 // beginFrame starts streaming frame, with a payload of length bytes. It holds
 // the leg until end is called.
 func (l *leg) beginFrame(frame Frame, length int64) *frameStream {
 	l.mu.Lock()
-	stream := &frameStream{leg: l}
+	stream := &frameStream{leg: l, drop: l.closed}
 	if l.mask {
 		stream.key, stream.err = newMaskKey()
 	}
@@ -141,7 +164,7 @@ func (l *leg) beginFrame(frame Frame, length int64) *frameStream {
 // write forwards the next payload bytes. The header goes out with the first
 // bytes. After a failed write the rest of the frame is not sent.
 func (s *frameStream) write(p []byte) {
-	if s.err != nil || len(p) == 0 {
+	if s.drop || s.err != nil || len(p) == 0 {
 		return
 	}
 	out := append(s.scratch[:0], s.header...)
@@ -161,7 +184,7 @@ func (s *frameStream) write(p []byte) {
 // end finishes the frame and releases the leg.
 func (s *frameStream) end() error {
 	defer s.leg.mu.Unlock()
-	if s.err == nil && s.header != nil {
+	if !s.drop && s.err == nil && s.header != nil {
 		if _, err := s.leg.w.Write(s.header); err != nil {
 			s.err = fmt.Errorf("%s: %w", s.leg.errPrefix, err)
 		}
@@ -239,8 +262,10 @@ func (in *inbound) control(frame Frame, length int64) (stop bool, err error) {
 		return false, err
 	}
 
-	if c.closing.Load() && frame.Opcode == OpClose {
-		if in.source == DirectionFromClient {
+	if c.closing.Load() {
+		// The proxy sent its own close, so it relays nothing more. A peer's
+		// close reply finishes the handshake.
+		if frame.Opcode != OpClose || in.source == DirectionFromClient {
 			return false, nil
 		}
 		return c.handleFrame(frame, in.source, frameFunc(func(Frame) error { return nil }))
@@ -262,7 +287,9 @@ func (in *inbound) control(frame Frame, length int64) (stop bool, err error) {
 // data adds one data frame to the message in progress, forwarding the message
 // once its final frame is in.
 func (in *inbound) data(frame Frame, length int64) error {
-	if in.discarding {
+	if in.discarding || in.c.closing.Load() {
+		// The proxy sent its own close: nothing more goes to either peer.
+		in.dropPending()
 		return in.discard(length)
 	}
 

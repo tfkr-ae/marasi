@@ -472,8 +472,8 @@ func (c *Connection) sendCloseFrames(toClient, toUpstream Frame, ensureTimeout b
 			}
 		}()
 	}
-	clientErr := c.writeToClient(toClient)
-	upstreamErr := c.sendGeneratedClose(toUpstream, DirectionFromClient, c.writeToUpstream)
+	clientErr := c.clientLeg.writeClose(toClient)
+	upstreamErr := c.sendGeneratedClose(toUpstream, DirectionFromClient, c.upstreamLeg)
 	if c.running.Load() {
 		return errors.Join(clientErr, upstreamErr)
 	}
@@ -489,7 +489,7 @@ func (c *Connection) sendCloseFrames(toClient, toUpstream Frame, ensureTimeout b
 func (c *Connection) sendGeneratedClose(
 	frame Frame,
 	direction string,
-	writeFrame func(Frame) error,
+	out *leg,
 ) error {
 	message, err := NewMessage(c.ID, c.RequestID, direction, frame)
 	if err != nil {
@@ -503,12 +503,7 @@ func (c *Connection) sendGeneratedClose(
 		}
 	}
 
-	for _, frame := range message.outgoing() {
-		if err := writeFrame(frame); err != nil {
-			return err
-		}
-	}
-	return nil
+	return out.writeClose(message.outgoing()...)
 }
 
 // SendToUpstream sends a frame toward the upstream server through the process path.
