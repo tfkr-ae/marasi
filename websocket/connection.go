@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -114,16 +115,17 @@ func NewConnection(
 	upstream io.ReadWriteCloser,
 	process ProcessFunc,
 ) *Connection {
+	done := make(chan struct{})
 	return &Connection{
 		ID:           id,
 		RequestID:    requestID,
 		clientReader: clientReader,
 		client:       client,
 		upstream:     upstream,
-		clientLeg:    &leg{w: client, errPrefix: "writing websocket frame to client"},
-		upstreamLeg:  &leg{w: upstream, mask: true, errPrefix: "writing websocket frame upstream"},
+		clientLeg:    newLeg(client, false, "writing websocket frame to client", done),
+		upstreamLeg:  newLeg(upstream, true, "writing websocket frame upstream", done),
 		process:      process,
-		done:         make(chan struct{}),
+		done:         done,
 		closedRecord: make(chan domain.WebSocketConnection, 1),
 
 		relayedCloseTimeout: RelayedCloseTimeout,
@@ -368,8 +370,10 @@ type InjectOptions struct {
 // Inject sends a message as if it originated from direction.
 // Injected messages are marked with metadata["injected"] = true. On a
 // connection with permessage-deflate, a text or binary message is compressed
-// by the leg's compressor unless options.NeverCompress is set.
-func (c *Connection) Inject(direction string, opcode int, payload []byte, options InjectOptions) (domain.WebSocketMessage, error) {
+// by the leg's compressor unless options.NeverCompress is set. While a
+// streamed message is going out, the injection waits for it to finish; it
+// stops waiting when ctx ends or the connection closes.
+func (c *Connection) Inject(ctx context.Context, direction string, opcode int, payload []byte, options InjectOptions) (domain.WebSocketMessage, error) {
 	if c.isClosed() {
 		return domain.WebSocketMessage{}, ErrConnectionClosed
 	}
@@ -405,7 +409,7 @@ func (c *Connection) Inject(direction string, opcode int, payload []byte, option
 		return stored, nil
 	}
 
-	if err := out.writeMessage(message.outgoing()...); err != nil {
+	if err := out.writeMessage(ctx, message.outgoing()...); err != nil {
 		return domain.WebSocketMessage{}, fmt.Errorf("writing injected websocket frame: %w", err)
 	}
 

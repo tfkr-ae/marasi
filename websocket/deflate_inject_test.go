@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"testing"
 
 	"github.com/tfkr-ae/marasi/domain"
@@ -40,7 +41,7 @@ func TestRelay_DeflateDropsAndInjections(t *testing.T) {
 
 		injected := make(chan domain.WebSocketMessage, 1)
 		go func() {
-			message, err := relay.connection.Inject(DirectionFromClient, OpText, []byte(sent[0]), InjectOptions{})
+			message, err := relay.connection.Inject(context.Background(), DirectionFromClient, OpText, []byte(sent[0]), InjectOptions{})
 			if err != nil {
 				t.Errorf("injecting: %v", err)
 			}
@@ -65,7 +66,7 @@ func TestRelay_DeflateDropsAndInjections(t *testing.T) {
 
 		injected := make(chan domain.WebSocketMessage, 1)
 		go func() {
-			message, err := relay.connection.Inject(DirectionFromServer, OpText, []byte("plain"), InjectOptions{NeverCompress: true})
+			message, err := relay.connection.Inject(context.Background(), DirectionFromServer, OpText, []byte("plain"), InjectOptions{NeverCompress: true})
 			if err != nil {
 				t.Errorf("injecting: %v", err)
 			}
@@ -80,7 +81,9 @@ func TestRelay_DeflateDropsAndInjections(t *testing.T) {
 	t.Run("should send an injected message uncompressed without deflate", func(t *testing.T) {
 		relay := startRelay(t)
 
-		go func() { _, _ = relay.connection.Inject(DirectionFromServer, OpText, []byte("plain"), InjectOptions{}) }()
+		go func() {
+			_, _ = relay.connection.Inject(context.Background(), DirectionFromServer, OpText, []byte("plain"), InjectOptions{})
+		}()
 		assertSameFrame(t, Frame{Fin: true, Opcode: OpText, Payload: []byte("plain")}, readFrame(t, relay.client))
 	})
 }
