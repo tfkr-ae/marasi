@@ -20,7 +20,9 @@ func TestSplitAllowed(t *testing.T) {
 		Fields: []string{"behavior", "remoteCloseCode", "wasClean"},
 	}
 	other := nonStrict
-	other.Case = "6.4.2"
+	other.Case = "6.3.1"
+	early := nonStrict
+	early.Case = "6.4.1"
 
 	tests := []struct {
 		name        string
@@ -35,6 +37,7 @@ func TestSplitAllowed(t *testing.T) {
 		{name: "should keep it in the untouched run", run: RunProxy, deviations: []Deviation{nonStrict}, wantKept: []Deviation{nonStrict}},
 		{name: "should keep a deviation beyond the verdict", run: RunCheckpointForward, deviations: []Deviation{unclean}, wantKept: []Deviation{unclean}},
 		{name: "should keep any other case", run: RunCheckpointForward, deviations: []Deviation{other}, wantKept: []Deviation{other}},
+		{name: "should allow a NON-STRICT 6.4.1 held across a pause", run: RunCheckpointForward, deviations: []Deviation{early}, wantAllowed: []string{"6.4.1"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -8,15 +8,15 @@ type AllowedDeviation struct {
 	Reason string
 }
 
-// heldMessageReason explains the 6.4.3 and 6.4.4 allowance.
+// heldMessageReason explains the 6.4.1–6.4.4 allowance.
 const heldMessageReason = "held messages are not streamed: the proxy buffers the whole message " +
 	"for Checkpoint or the extension, so the peer sees the invalid UTF-8 late (spec: Streaming when not held)"
 
 // allowList maps a run to the cases it may deviate on.
 var allowList = map[string][]string{
-	RunCheckpointForward: {"6.4.3", "6.4.4"},
-	RunCheckpointEdit:    {"6.4.3", "6.4.4"},
-	RunExtension:         {"6.4.3", "6.4.4"},
+	RunCheckpointForward: {"6.4.1", "6.4.2", "6.4.3", "6.4.4"},
+	RunCheckpointEdit:    {"6.4.1", "6.4.2", "6.4.3", "6.4.4"},
+	RunExtension:         {"6.4.1", "6.4.2", "6.4.3", "6.4.4"},
 }
 
 // SplitAllowed separates the deviations the spec accepts for run from the
