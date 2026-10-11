@@ -516,6 +516,7 @@ func WithBasePipeline() func(*Proxy) error {
 					return nil
 				}
 				if errors.Is(err, ErrDropped) {
+					proxy.markDroppedWebSocketHandshake(res, err)
 					if session, ok := core.SessionFromContext(res.Request.Context()); ok {
 						conn, _, err := session.Hijack()
 						if err != nil {
