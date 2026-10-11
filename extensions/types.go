@@ -1279,6 +1279,14 @@ func RegisterWebSocketMessageType(extension *Runtime) {
 		return 1
 	}
 
+	// compressed reports whether the message was compressed with
+	// permessage-deflate on the wire. payload() is always uncompressed.
+	funcs["compressed"] = func(l *lua.State) int {
+		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
+		l.PushBoolean(message.Compressed)
+		return 1
+	}
+
 	funcs["is_binary"] = func(l *lua.State) int {
 		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
 		l.PushBoolean(message.IsBinary())

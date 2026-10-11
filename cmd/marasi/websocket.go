@@ -27,6 +27,7 @@ func init() {
 	websocketInjectCmd.Flags().StringVar(&websocketInjectDirection, "direction", "", "Frame direction: client or server. Required")
 	websocketInjectCmd.Flags().IntVar(&websocketInjectOpcode, "opcode", 0, "WebSocket opcode from 0 to 15. Required")
 	websocketInjectCmd.Flags().StringVar(&websocketInjectFile, "file", "", "Read frame bytes from a file. If omitted, use piped stdin or an empty payload")
+	websocketInjectCmd.Flags().StringVar(&websocketInjectCompress, "compress", "auto", "With permessage-deflate: auto compresses text and binary messages for the receiver, never sends them uncompressed")
 	websocketCloseCmd.Flags().IntVar(&websocketCloseCode, "code", 0, "WebSocket close status code. Omit to leave it unset")
 	websocketCloseCmd.Flags().StringVar(&websocketCloseReason, "reason", "", "Close reason text")
 	websocketCmd.AddCommand(websocketListCmd, websocketGetCmd, websocketMessagesCmd, websocketInjectCmd, websocketCloseCmd)
@@ -46,6 +47,7 @@ var websocketMessagesCursor string
 var websocketInjectDirection string
 var websocketInjectOpcode int
 var websocketInjectFile string
+var websocketInjectCompress string
 var websocketCloseCode int
 var websocketCloseReason string
 
@@ -93,6 +95,13 @@ var websocketInjectCmd = &cobra.Command{
 		if !cmd.Flags().Changed("opcode") || websocketInjectOpcode < 0 || websocketInjectOpcode > 15 {
 			return errors.New("websocket inject --opcode must be an integer from 0 to 15")
 		}
+		if websocketInjectCompress != "auto" && websocketInjectCompress != "never" {
+			return errors.New("websocket inject --compress must be auto or never")
+		}
+		var compress string
+		if cmd.Flags().Changed("compress") {
+			compress = websocketInjectCompress
+		}
 		var raw []byte
 		var err error
 		if cmd.Flags().Changed("file") {
@@ -122,7 +131,8 @@ var websocketInjectCmd = &cobra.Command{
 			Direction string `json:"direction"`
 			Opcode    int    `json:"opcode"`
 			Payload   string `json:"payload"`
-		}{websocketInjectDirection, websocketInjectOpcode, base64.StdEncoding.EncodeToString(raw)})
+			Compress  string `json:"compress,omitempty"`
+		}{websocketInjectDirection, websocketInjectOpcode, base64.StdEncoding.EncodeToString(raw), compress})
 		if err != nil {
 			return fmt.Errorf("encoding websocket injection: %w", err)
 		}

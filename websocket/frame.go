@@ -56,6 +56,10 @@ type Frame struct {
 	Key [4]byte
 	// Payload is the unmasked frame payload.
 	Payload []byte
+
+	// deflate marks an uncompressed payload that the leg compresses for its
+	// peer as it writes the frame, setting RSV1 when it does (ADR-0028).
+	deflate bool
 }
 
 // IsControl reports whether the frame is a control frame.

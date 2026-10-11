@@ -65,6 +65,10 @@ type leg struct {
 	w         io.Writer
 	mask      bool
 	errPrefix string
+	// deflater compresses messages for the peer when the connection
+	// negotiated permessage-deflate. It is used with mu held, so messages
+	// are compressed in the order they go out.
+	deflater *deflater
 
 	// mu is held while a frame, or an unchanged message's frames, go out.
 	mu sync.Mutex
@@ -78,6 +82,12 @@ func (l *leg) writeFrames(frames ...Frame) error {
 	defer l.mu.Unlock()
 
 	for _, frame := range frames {
+		if frame.deflate {
+			frame.deflate = false
+			if l.deflater != nil {
+				frame.Payload, frame.Rsv1 = l.deflater.deflate(frame.Payload)
+			}
+		}
 		if err := WriteFrame(l.w, frame, l.mask); err != nil {
 			return fmt.Errorf("%s: %w", l.errPrefix, err)
 		}
@@ -304,8 +314,12 @@ func (in *inbound) start(frame Frame) error {
 	in.pending = message
 	in.lastProgress = time.Time{}
 
-	// A compressed message (RSV1) is buffered whole: inflating it on each
-	// leg needs the whole message (ADR-0028).
+	// A compressed message is buffered whole: it is inflated and compressed
+	// again for the receiver (ADR-0028). Without deflate, RSV1 is a protocol
+	// violation and the message goes through unchanged, but unstreamed.
+	if frame.Rsv1 && in.c.inflaters != nil {
+		message.Compressed = true
+	}
 	out, canStream := in.out.(*leg)
 	if canStream && !frame.Rsv1 && in.c.stream != nil && in.c.stream(in.source, frame.Opcode) {
 		out.message.Lock()
@@ -327,9 +341,28 @@ func (in *inbound) finish(incomplete bool) error {
 		message.Passthrough = true
 		in.releaseStream()
 	}
+	if message.Compressed {
+		if incomplete {
+			// What arrived cannot be inflated as a message. Forward its
+			// frames unchanged so the receiver sees the violation.
+			message.Compressed = false
+		} else if err := in.inflate(message); err != nil {
+			return err
+		}
+	}
 
 	_, err := in.c.handleMessage(message, in.out)
 	return err
+}
+
+// inflate replaces a compressed message's payload with its inflated bytes.
+func (in *inbound) inflate(message *Message) error {
+	payload, err := in.c.inflaters[in.source].inflate(message.Payload)
+	if err != nil {
+		return fmt.Errorf("websocket message from %s: %w", in.source, err)
+	}
+	message.Payload = payload
+	return nil
 }
 
 // recordUnfinished records a message whose source stopped before its final
@@ -342,6 +375,7 @@ func (in *inbound) recordUnfinished() {
 	in.pending = nil
 	message.incomplete = true
 	message.Metadata["incomplete"] = true
+	message.Compressed = false
 	if !in.streamed {
 		_ = in.out.writeFrames(message.frames...)
 	}

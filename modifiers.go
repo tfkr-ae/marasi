@@ -687,6 +687,7 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		upstream,
 		process,
 	)
+	connection.SetDeflate(deflate)
 	if proxy.WebSocketInterceptor != nil {
 		connection.SetShutdownHandler(proxy.cancelWebSocketCheckpoint)
 	}
