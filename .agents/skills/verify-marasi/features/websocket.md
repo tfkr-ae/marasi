@@ -29,6 +29,7 @@ While the client is still held, run `printf 'hello' | websocket inject "$CONNECT
 ## Gotchas
 
 - `websocket get` takes the connection id. `traffic websocket` takes the upgrade request id. The other id fails with `getting websocket connection: not_found` or `getting traffic websocket: not_found`.
+- The proxy forwards only `permessage-deflate` offers upstream. Other `Sec-WebSocket-Extensions` offers are removed and listed in `removed_extensions`. The client gets the upstream's accept unchanged, and `deflate` holds the negotiated parameters, or null when the upstream declined. If the upstream accepts something no offer allowed, the proxy closes the client without a `101`, stores no connection, and writes an `ERROR` log naming the upstream's response.
 - JSON list and JSON messages are newest first. Human list prints that order. Human messages reverses the page, so the oldest row of that page prints first. `next_cursor` is the oldest id on the page. The next page is older. Human `next_cursor=` is stderr. An empty human list prints nothing.
 - List and messages default to `--limit 200`. The service accepts 1 through 500. Other query keys are ignored.
 - Inject requires both `--direction` and `--opcode`. A TTY stdin is an empty payload, not a prompt. `--file` beats a pipe. `client` is written upstream. `server` is written to the holding client.
