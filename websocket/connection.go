@@ -102,7 +102,6 @@ type Connection struct {
 	// inflaters decompress each peer's compressed messages, by the
 	// direction they come from. They are nil without permessage-deflate.
 	inflaters  map[string]*inflater
-	stream     StreamFunc
 	onProgress func(domain.WebSocketMessageProgress)
 	onTooBig   func(MessageTooBig)
 	onInflate  func(InflateFailure)
@@ -164,14 +163,6 @@ func (c *Connection) SetDeflate(params *domain.WebSocketDeflate) {
 	}
 	c.upstreamLeg.deflater = newDeflater(params.ClientNoContextTakeover, params.ClientMaxWindowBits)
 	c.clientLeg.deflater = newDeflater(params.ServerNoContextTakeover, params.ServerMaxWindowBits)
-}
-
-// SetStreamFunc registers the check that decides, as each data message
-// starts, whether the relay may forward its bytes as they arrive. Call it
-// before Run; it panics after.
-func (c *Connection) SetStreamFunc(stream StreamFunc) {
-	c.mustNotHaveStarted("SetStreamFunc")
-	c.stream = stream
 }
 
 // SetProgressHandler registers a callback for messages whose frames are still
@@ -246,7 +237,7 @@ func (c *Connection) handleFrame(
 }
 
 // handleMessage processes a whole message and forwards it unless it was
-// dropped or already streamed. It reports whether the message is a close.
+// dropped or only recorded (Passthrough). It reports whether the message is a close.
 func (c *Connection) handleMessage(message *Message, out frameSink) (isClose bool, err error) {
 	received := message.Opcode
 
@@ -429,7 +420,7 @@ func (c *Connection) Inject(direction string, opcode int, payload []byte, option
 		return stored, nil
 	}
 
-	if err := out.writeMessage(message.outgoing()...); err != nil {
+	if err := out.writeFrames(message.outgoing()...); err != nil {
 		return domain.WebSocketMessage{}, fmt.Errorf("writing injected websocket frame: %w", err)
 	}
 

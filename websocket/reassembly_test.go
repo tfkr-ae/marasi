@@ -2,8 +2,6 @@ package websocket
 
 import (
 	"bytes"
-	"fmt"
-	"io"
 	"net"
 	"testing"
 	"time"
@@ -142,25 +140,17 @@ func TestRelay_LimitsMessageSize(t *testing.T) {
 	stored := []struct {
 		name    string
 		frames  []Frame
-		stream  bool
 		payload []byte
 		size    int64
 	}{
-		{"should store the bytes buffered before the limit", []Frame{first, second}, false, []byte("123456"), 12},
-		{"should store a streamed message without its payload", []Frame{first, second}, true, nil, 12},
-		{"should store a single frame over the limit without its payload", []Frame{{Fin: true, Opcode: OpBinary, Payload: []byte("12345678901")}}, false, nil, 11},
+		{"should store the bytes buffered before the limit", []Frame{first, second}, []byte("123456"), 12},
+		{"should store a single frame over the limit without its payload", []Frame{{Fin: true, Opcode: OpBinary, Payload: []byte("12345678901")}}, nil, 11},
 	}
 	for _, tt := range stored {
 		t.Run(tt.name, func(t *testing.T) {
 			process, recorded := recordMessages()
-			relay := startRelayWith(t, process, func(c *Connection) {
-				c.SetMaxMessageSize(10)
-				c.SetStreamFunc(func(string, int) bool { return tt.stream })
-			})
+			relay := startRelayWith(t, process, func(c *Connection) { c.SetMaxMessageSize(10) })
 			writeFrames(relay.client, true, tt.frames...)
-			if tt.stream {
-				readFrame(t, relay.upstream)
-			}
 
 			message := receiveHeld(t, recorded)
 			if message.Opcode != tt.frames[0].Opcode || !bytes.Equal(message.Payload, tt.payload) ||
@@ -179,74 +169,18 @@ func TestRelay_LimitsMessageSize(t *testing.T) {
 		assertCloseCode(t, CloseMessageTooBig, readFrame(t, relay.upstream))
 	})
 
-	t.Run("should apply the limit mid-stream after earlier frames went out", func(t *testing.T) {
-		relay := startRelayWith(t, nil, func(c *Connection) {
-			c.SetMaxMessageSize(10)
-			c.SetStreamFunc(func(string, int) bool { return true })
-		})
-		writeFrames(relay.client, true, first, second)
-
-		assertSameFrame(t, first, readFrame(t, relay.upstream))
-		assertCloseCode(t, CloseMessageTooBig, readFrame(t, relay.client))
-		assertCloseCode(t, CloseGoingAway, readFrame(t, relay.upstream))
-	})
 }
 
-func TestRelay_StreamsMessagesNoHookCanHold(t *testing.T) {
-	t.Run("should forward payload bytes before the frame is complete", func(t *testing.T) {
-		recorded := make(chan *Message, 1)
-		relay := startRelayWith(t, func(message *Message) error {
-			recorded <- message
-			return nil
-		}, func(c *Connection) {
-			c.SetStreamFunc(func(direction string, opcode int) bool {
-				return direction == DirectionFromClient && opcode == OpText
-			})
-		})
+func TestRelay_ForwardsWholeMessages(t *testing.T) {
+	t.Run("should forward nothing of a message before its final frame", func(t *testing.T) {
+		first := Frame{Fin: false, Opcode: OpText, Payload: []byte("Hel")}
+		ping := Frame{Fin: true, Opcode: OpPing, Payload: []byte("p")}
+		last := Frame{Fin: true, Opcode: OpContinuation, Payload: []byte("lo")}
+		relay := startRelay(t)
+		writeFrames(relay.client, true, first, ping, last)
 
-		var wire bytes.Buffer
-		if err := WriteFrame(&wire, Frame{Fin: true, Opcode: OpText, Payload: []byte("abcdef")}, true); err != nil {
-			t.Fatalf("encoding frame: %v", err)
-		}
-		encoded := wire.Bytes()
-		const headerLength = 6
-		written := make(chan error, 1)
-		go func() {
-			_, err := relay.client.Write(encoded[:headerLength+3])
-			written <- err
-		}()
-
-		got := make([]byte, headerLength+3)
-		if _, err := io.ReadFull(relay.upstream, got); err != nil {
-			t.Fatalf("reading streamed bytes: %v", err)
-		}
-		var key [4]byte
-		copy(key[:], got[2:6])
-		maskBytes(got[headerLength:], key, 0)
-		if got[0] != 0x81 || got[1] != 0x80|6 || string(got[headerLength:]) != "abc" {
-			t.Fatalf("\nwanted first bytes:\n%x then %q\ngot:\n%x then %q", []byte{0x81, 0x86}, "abc", got[:2], got[headerLength:])
-		}
-		if err := <-written; err != nil {
-			t.Fatalf("writing first chop: %v", err)
-		}
-
-		go func() {
-			_, err := relay.client.Write(encoded[headerLength+3:])
-			written <- err
-		}()
-		rest := make([]byte, 3)
-		if _, err := io.ReadFull(relay.upstream, rest); err != nil {
-			t.Fatalf("reading the rest: %v", err)
-		}
-		maskBytes(rest, key, 3)
-		if string(rest) != "def" {
-			t.Fatalf("\nwanted rest:\n%q\ngot:\n%q", "def", rest)
-		}
-
-		message := <-recorded
-		if !message.Passthrough || string(message.Payload) != "abcdef" || message.FrameCount != 1 {
-			t.Fatalf("\nwanted recorded passthrough message:\n%q, 1 frame\ngot:\n%q, %d frames, passthrough %v",
-				"abcdef", message.Payload, message.FrameCount, message.Passthrough)
+		for _, want := range []Frame{ping, first, last} {
+			assertSameFrame(t, want, readFrame(t, relay.upstream))
 		}
 	})
 
@@ -255,8 +189,6 @@ func TestRelay_StreamsMessagesNoHookCanHold(t *testing.T) {
 		relay := startRelayWith(t, func(message *Message) error {
 			recorded <- message
 			return nil
-		}, func(c *Connection) {
-			c.SetStreamFunc(func(string, int) bool { return true })
 		})
 		frames := []Frame{
 			{Fin: false, Opcode: OpBinary, Payload: []byte{1, 2}},
@@ -274,28 +206,6 @@ func TestRelay_StreamsMessagesNoHookCanHold(t *testing.T) {
 				[]byte{1, 2, 3, 4, 5}, OpBinary, message.Payload, message.Opcode, message.FrameCount)
 		}
 	})
-}
-
-func TestRelay_DoesNotStreamCompressedMessages(t *testing.T) {
-	recorded := make(chan *Message, 1)
-	relay := startRelayWith(t, func(message *Message) error {
-		recorded <- message
-		return nil
-	}, func(c *Connection) {
-		c.SetStreamFunc(func(string, int) bool { return true })
-	})
-	frames := []Frame{
-		{Fin: false, Rsv1: true, Opcode: OpText, Payload: []byte{0xf2, 0x48}},
-		{Fin: true, Opcode: OpContinuation, Payload: []byte{0x01, 0x00}},
-	}
-	writeFrames(relay.client, true, frames...)
-
-	for _, want := range frames {
-		assertSameFrame(t, want, readFrame(t, relay.upstream))
-	}
-	if message := <-recorded; message.Passthrough {
-		t.Fatalf("\nwanted compressed message:\nbuffered\ngot:\nstreamed")
-	}
 }
 
 func TestRelay_AnnouncesMessagesStillArriving(t *testing.T) {
@@ -353,17 +263,13 @@ func TestRelay_ForwardsFragmentViolations(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		for _, streamed := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s, streamed %v", tt.name, streamed), func(t *testing.T) {
-				relay := startRelayWith(t, nil, func(c *Connection) {
-					c.SetStreamFunc(func(string, int) bool { return streamed })
-				})
-				writeFrames(relay.client, true, tt.frames...)
+		t.Run(tt.name, func(t *testing.T) {
+			relay := startRelay(t)
+			writeFrames(relay.client, true, tt.frames...)
 
-				for _, want := range tt.frames {
-					assertSameFrame(t, want, readFrame(t, relay.upstream))
-				}
-			})
-		}
+			for _, want := range tt.frames {
+				assertSameFrame(t, want, readFrame(t, relay.upstream))
+			}
+		})
 	}
 }

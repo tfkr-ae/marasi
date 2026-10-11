@@ -18,18 +18,13 @@ const (
 	// message.
 	ProgressInterval = 100 * time.Millisecond
 
-	// readChunk bounds one read of a frame payload, so a streamed frame
+	// readChunk bounds one read of a frame payload, so a large frame
 	// moves on in pieces as it arrives.
 	readChunk = 32 * 1024
 	// initialPayloadCap bounds the buffer allocated up front for a payload,
 	// so a header that claims a huge length does not allocate it.
 	initialPayloadCap = 1024 * 1024
 )
-
-// StreamFunc reports whether a data message that starts now, in direction
-// with opcode, may be forwarded as its bytes arrive. It returns true only
-// when no hook can hold or change the message.
-type StreamFunc func(direction string, opcode int) bool
 
 // MessageTooBig describes a message that went over the size limit.
 type MessageTooBig struct {
@@ -59,7 +54,7 @@ type frameSink interface {
 	writeFrames(frames ...Frame) error
 }
 
-// frameFunc adapts a function to a frameSink. It cannot stream.
+// frameFunc adapts a function to a frameSink.
 type frameFunc func(Frame) error
 
 func (f frameFunc) writeFrames(frames ...Frame) error {
@@ -71,9 +66,8 @@ func (f frameFunc) writeFrames(frames ...Frame) error {
 	return nil
 }
 
-// leg writes frames to one peer. Frames from different writers never
-// interleave, and a data message streamed frame by frame is not interleaved
-// with another data message.
+// leg writes frames to one peer. Each call writes its frames together, so
+// frames from different writers never interleave.
 type leg struct {
 	w         io.Writer
 	mask      bool
@@ -83,11 +77,8 @@ type leg struct {
 	// are compressed in the order they go out.
 	deflater *deflater
 
-	// mu is held while a frame, or an unchanged message's frames, go out.
+	// mu is held while a message's frames go out.
 	mu sync.Mutex
-	// message is held from the first to the last frame of a streamed data
-	// message, and while an injected message goes out.
-	message sync.Mutex
 	// closed is set, with mu held, once the proxy sent its own close frame
 	// to the peer. No frame goes out after it (RFC 6455 §5.5.1).
 	closed bool
@@ -129,69 +120,6 @@ func (l *leg) writeLocked(frames ...Frame) error {
 	return nil
 }
 
-// writeMessage writes a message's frames, waiting for any streamed message to
-// finish first.
-func (l *leg) writeMessage(frames ...Frame) error {
-	l.message.Lock()
-	defer l.message.Unlock()
-	return l.writeFrames(frames...)
-}
-
-// frameStream forwards one frame whose payload is written as it arrives.
-type frameStream struct {
-	leg     *leg
-	header  []byte
-	key     [4]byte
-	offset  int64
-	scratch []byte
-	err     error
-	// drop is set when the leg is closed: nothing of the frame goes out.
-	drop bool
-}
-
-// beginFrame starts streaming frame, with a payload of length bytes. It holds
-// the leg until end is called.
-func (l *leg) beginFrame(frame Frame, length int64) *frameStream {
-	l.mu.Lock()
-	stream := &frameStream{leg: l, drop: l.closed}
-	if l.mask {
-		stream.key, stream.err = newMaskKey()
-	}
-	stream.header = appendFrameHeader(nil, frame, length, l.mask, stream.key)
-	return stream
-}
-
-// write forwards the next payload bytes. The header goes out with the first
-// bytes. After a failed write the rest of the frame is not sent.
-func (s *frameStream) write(p []byte) {
-	if s.drop || s.err != nil || len(p) == 0 {
-		return
-	}
-	out := append(s.scratch[:0], s.header...)
-	start := len(out)
-	out = append(out, p...)
-	if s.leg.mask {
-		maskBytes(out[start:], s.key, s.offset)
-	}
-	s.scratch = out
-	s.header = nil
-	s.offset += int64(len(p))
-	if _, err := s.leg.w.Write(out); err != nil {
-		s.err = fmt.Errorf("%s: %w", s.leg.errPrefix, err)
-	}
-}
-
-// end finishes the frame and releases the leg.
-func (s *frameStream) end() error {
-	defer s.leg.mu.Unlock()
-	if !s.drop && s.err == nil && s.header != nil {
-		if _, err := s.leg.w.Write(s.header); err != nil {
-			s.err = fmt.Errorf("%s: %w", s.leg.errPrefix, err)
-		}
-	}
-	return s.err
-}
-
 // inbound is the state of one direction's relay.
 type inbound struct {
 	c      *Connection
@@ -200,9 +128,7 @@ type inbound struct {
 	source string
 
 	// pending is the data message whose frames are arriving.
-	pending *Message
-	// streamed marks pending as forwarded as its bytes arrive.
-	streamed     bool
+	pending      *Message
 	lastProgress time.Time
 	// discarding is set once the source went over the size limit. Its data
 	// is read and dropped while the close handshake runs.
@@ -213,7 +139,6 @@ type inbound struct {
 // them to out. Control frames go through at once, also between fragments.
 func (c *Connection) relay(reader io.Reader, out frameSink, source string) error {
 	in := &inbound{c: c, reader: reader, out: out, source: source}
-	defer in.releaseStream()
 
 	for {
 		select {
@@ -258,7 +183,7 @@ func (in *inbound) control(frame Frame, length int64) (stop bool, err error) {
 	if in.overLimit(frame, length, nil) {
 		return false, in.discard(length)
 	}
-	if frame.Payload, err = in.readPayload(frame, length, nil); err != nil {
+	if frame.Payload, err = in.readPayload(frame, length); err != nil {
 		return false, err
 	}
 
@@ -312,15 +237,7 @@ func (in *inbound) data(frame Frame, length int64) error {
 		}
 	}
 
-	var stream *frameStream
-	if in.streamed {
-		stream = in.out.(*leg).beginFrame(frame, length)
-	}
-	payload, err := in.readPayload(frame, length, stream)
-	var forwardErr error
-	if stream != nil {
-		forwardErr = stream.end()
-	}
+	payload, err := in.readPayload(frame, length)
 	if err != nil {
 		return err
 	}
@@ -328,19 +245,13 @@ func (in *inbound) data(frame Frame, length int64) error {
 	in.pending.addFrame(frame)
 
 	if frame.Fin {
-		if err := in.finish(false); err != nil {
-			return err
-		}
-	} else {
-		in.progress(0)
+		return in.finish(false)
 	}
-	if forwardErr != nil {
-		return fmt.Errorf("%w: %w", errForwarding, forwardErr)
-	}
+	in.progress(0)
 	return nil
 }
 
-// start begins a data message and decides whether it is streamed.
+// start begins a data message.
 func (in *inbound) start(frame Frame) error {
 	message, err := newMessage(in.c.ID, in.c.RequestID, in.source)
 	if err != nil {
@@ -350,32 +261,22 @@ func (in *inbound) start(frame Frame) error {
 	in.pending = message
 	in.lastProgress = time.Time{}
 
-	// A compressed message is buffered whole: it is inflated and compressed
-	// again for the receiver (ADR-0028). Without deflate, RSV1 is a protocol
-	// violation and the message goes through unchanged, but unstreamed.
+	// A compressed message is inflated and compressed again for the
+	// receiver (ADR-0028). Without deflate, RSV1 is a protocol violation and
+	// the message goes through unchanged.
 	if frame.Rsv1 && in.c.inflaters != nil {
 		message.Compressed = true
-	}
-	out, canStream := in.out.(*leg)
-	if canStream && !frame.Rsv1 && in.c.stream != nil && in.c.stream(in.source, frame.Opcode) {
-		out.message.Lock()
-		in.streamed = true
 	}
 	return nil
 }
 
-// finish completes the pending message: a streamed one is recorded, any other
-// is processed and forwarded.
+// finish completes the pending message: it is processed and forwarded.
 func (in *inbound) finish(incomplete bool) error {
 	message := in.pending
 	in.pending = nil
 	if incomplete {
 		message.incomplete = true
 		message.Metadata["incomplete"] = true
-	}
-	if in.streamed {
-		message.Passthrough = true
-		in.releaseStream()
 	}
 	if message.Compressed {
 		if incomplete {
@@ -435,10 +336,7 @@ func (in *inbound) recordUnfinished() {
 	message.incomplete = true
 	message.Metadata["incomplete"] = true
 	message.Compressed = false
-	if !in.streamed {
-		_ = in.out.writeFrames(message.frames...)
-	}
-	in.releaseStream()
+	_ = in.out.writeFrames(message.frames...)
 	message.Passthrough = true
 	if in.c.process != nil {
 		_ = in.c.process(message)
@@ -448,19 +346,10 @@ func (in *inbound) recordUnfinished() {
 // dropPending abandons the pending message.
 func (in *inbound) dropPending() {
 	in.pending = nil
-	in.releaseStream()
-}
-
-func (in *inbound) releaseStream() {
-	if in.streamed {
-		in.streamed = false
-		in.out.(*leg).message.Unlock()
-	}
 }
 
 // readPayload reads a frame payload of length bytes in chunks, unmasking it.
-// When stream is set, each chunk is forwarded as it arrives.
-func (in *inbound) readPayload(frame Frame, length int64, stream *frameStream) ([]byte, error) {
+func (in *inbound) readPayload(frame Frame, length int64) ([]byte, error) {
 	payload := make([]byte, 0, min(length, initialPayloadCap))
 	var read int64
 	for read < length {
@@ -474,9 +363,6 @@ func (in *inbound) readPayload(frame Frame, length int64, stream *frameStream) (
 			}
 			payload = payload[:len(payload)+n]
 			read += int64(n)
-			if stream != nil {
-				stream.write(piece)
-			}
 			if read < length && !frame.IsControl() {
 				in.progress(read)
 			}
@@ -516,7 +402,6 @@ func (in *inbound) progress(partial int64) {
 		Opcode:       in.pending.Opcode,
 		Bytes:        int64(len(in.pending.Payload)) + partial,
 		Frames:       frames,
-		Streamed:     in.streamed,
 	})
 }
 
@@ -542,7 +427,7 @@ func (in *inbound) overLimit(frame Frame, length int64, pending *Message) bool {
 }
 
 // recordTooLarge records a message that went over the size limit, as the
-// bytes buffered so far: none for a new or streamed message. Like a message
+// bytes buffered so far: none for a new message. Like a message
 // that cannot be inflated, it is only recorded, never held or forwarded.
 func (in *inbound) recordTooLarge(frame Frame, pending *Message, size int64) {
 	c := in.c
@@ -553,8 +438,6 @@ func (in *inbound) recordTooLarge(frame Frame, pending *Message, size int64) {
 			return
 		}
 		message.Opcode = frame.Opcode
-	} else if in.streamed {
-		message.Payload = nil
 	}
 	message.Metadata["too_large"] = true
 	message.Metadata["size_seen"] = size

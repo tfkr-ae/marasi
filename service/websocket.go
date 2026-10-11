@@ -69,7 +69,6 @@ type webSocketProgressResponse struct {
 	Opcode       int       `json:"opcode"`
 	Bytes        int64     `json:"bytes"`
 	Frames       int       `json:"frames"`
-	Streamed     bool      `json:"streamed"`
 }
 
 type webSocketMessageList struct {
@@ -431,7 +430,6 @@ func (s *Server) HandleWebSocketProgress(progress domain.WebSocketMessageProgres
 		Opcode:       progress.Opcode,
 		Bytes:        progress.Bytes,
 		Frames:       progress.Frames,
-		Streamed:     progress.Streamed,
 	})
 	return nil
 }
