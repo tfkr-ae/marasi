@@ -40,9 +40,9 @@ type Message struct {
 	Dropped bool
 	// Skipped indicates later extension processing should stop while still forwarding.
 	Skipped bool
-	// Passthrough reports that the relay forwards the message without holding
-	// or changing it: its bytes were streamed as they arrived. Process records
-	// a passthrough message and runs no hooks on it.
+	// Passthrough reports that the message is only recorded: the relay does
+	// not forward it as processed, so no hook may hold or change it. Process
+	// records a passthrough message and runs no hooks on it.
 	Passthrough bool
 
 	// frames are the frames as received. An unchanged message is forwarded

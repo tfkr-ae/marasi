@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,7 +21,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/compass"
 	"github.com/tfkr-ae/marasi/core"
-	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
 	"github.com/tfkr-ae/marasi/rawhttp"
@@ -2265,84 +2263,6 @@ func TestShouldInterceptWebSocketMessage(t *testing.T) {
 		}
 		if len(proxy.DBWriteChannel) != 1 {
 			t.Fatalf("wanted log write count: %d\ngot: %d", 1, len(proxy.DBWriteChannel))
-		}
-	})
-}
-
-func TestWebSocketMessageMayStream(t *testing.T) {
-	const noHooks = `
-		function processRequest(request)
-		end
-	`
-	const interceptHook = `
-		function interceptWebSocketMessage(message)
-			return false
-		end
-	`
-	const processHook = `
-		function processWebSocketMessage(message)
-		end
-	`
-	tests := []struct {
-		name              string
-		checkpoint        string
-		checkpointEnabled bool
-		workshop          string
-		workshopEnabled   bool
-		global            bool
-		want              bool
-	}{
-		{name: "should stream when no hook is defined", checkpoint: noHooks, checkpointEnabled: true, workshop: noHooks, workshopEnabled: true, want: true},
-		{name: "should not stream with global interception on", checkpoint: noHooks, checkpointEnabled: true, workshop: noHooks, workshopEnabled: true, global: true, want: false},
-		{name: "should stream with global interception on and checkpoint disabled", checkpoint: noHooks, workshop: noHooks, workshopEnabled: true, global: true, want: true},
-		{name: "should not stream when checkpoint defines interceptWebSocketMessage", checkpoint: interceptHook, checkpointEnabled: true, workshop: noHooks, workshopEnabled: true, want: false},
-		{name: "should stream when a disabled checkpoint defines interceptWebSocketMessage", checkpoint: interceptHook, workshop: noHooks, workshopEnabled: true, want: true},
-		{name: "should not stream when an extension defines processWebSocketMessage", checkpoint: noHooks, checkpointEnabled: true, workshop: processHook, workshopEnabled: true, want: false},
-		{name: "should stream when a disabled extension defines processWebSocketMessage", checkpoint: noHooks, checkpointEnabled: true, workshop: processHook, want: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			proxy := newTestProxy(t,
-				&domain.Extension{ID: testExtensions["checkpoint"].ID, Name: "checkpoint", LuaContent: tt.checkpoint},
-				&domain.Extension{ID: testExtensions["workshop"].ID, Name: "workshop", LuaContent: tt.workshop},
-			)
-			checkpoint, _ := proxy.GetExtension("checkpoint")
-			checkpoint.Data.Enabled = tt.checkpointEnabled
-			workshop, _ := proxy.GetExtension("workshop")
-			workshop.Data.Enabled = tt.workshopEnabled
-			proxy.SetWebSocketIntercept(tt.global)
-
-			if got := webSocketMessageMayStream(proxy); got != tt.want {
-				t.Fatalf("\nwanted:\n%t\ngot:\n%t", tt.want, got)
-			}
-		})
-	}
-
-	t.Run("should stream with the default extensions of a new project", func(t *testing.T) {
-		dbConnection, err := db.New(":memory:", slog.New(slog.NewTextHandler(io.Discard, nil)))
-		if err != nil {
-			t.Fatalf("creating in-memory database: %v", err)
-		}
-		repository := db.NewProxyRepo(dbConnection)
-		defer repository.Close()
-		defaults, err := repository.GetExtensions()
-		if err != nil {
-			t.Fatalf("getting default extensions: %v", err)
-		}
-		proxy := newTestProxy(t, defaults...)
-
-		if !webSocketMessageMayStream(proxy) {
-			t.Fatalf("\nwanted:\ntrue\ngot:\nfalse")
-		}
-	})
-
-	t.Run("should not stream with global interception on and no checkpoint", func(t *testing.T) {
-		proxy := &Proxy{}
-		proxy.SetWebSocketIntercept(true)
-
-		if webSocketMessageMayStream(proxy) {
-			t.Fatalf("\nwanted:\nfalse\ngot:\ntrue")
 		}
 	})
 }

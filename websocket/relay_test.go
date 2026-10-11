@@ -14,7 +14,6 @@ func TestConnection_SettersPanicAfterRun(t *testing.T) {
 	setters := map[string]func(*Connection){
 		"SetDeflate":               func(c *Connection) { c.SetDeflate(nil) },
 		"SetMaxMessageSize":        func(c *Connection) { c.SetMaxMessageSize(10) },
-		"SetStreamFunc":            func(c *Connection) { c.SetStreamFunc(nil) },
 		"SetProgressHandler":       func(c *Connection) { c.SetProgressHandler(nil) },
 		"SetMessageTooBigHandler":  func(c *Connection) { c.SetMessageTooBigHandler(nil) },
 		"SetInflateFailureHandler": func(c *Connection) { c.SetInflateFailureHandler(nil) },
