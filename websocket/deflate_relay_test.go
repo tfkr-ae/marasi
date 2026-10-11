@@ -5,9 +5,13 @@ import (
 	"compress/flate"
 	"errors"
 	"io"
+	"maps"
 	"net"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/tfkr-ae/marasi/domain"
 )
@@ -205,6 +209,69 @@ func readCloses(t *testing.T, relay *runningRelay, d direction) (toSender, toRec
 	return sent.frame, received.frame
 }
 
+// finishCloseHandshake has each peer reply with the close it got, as RFC 6455
+// §5.5.1 asks, waits for the connection to end, and returns the close code
+// it recorded.
+func finishCloseHandshake(t *testing.T, relay *runningRelay, d direction, toSender, toReceiver Frame) int {
+	t.Helper()
+	writeFrames(d.sender(relay), d.mask, toSender)
+	writeFrames(d.receiver(relay), !d.mask, toReceiver)
+	select {
+	case <-relay.result:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for the connection to end")
+	}
+	code, _ := relay.connection.CloseDetails()
+	return code
+}
+
+// recordCloses returns a process function that passes every message to next,
+// when given, and keeps every close message it sees.
+func recordCloses(next ProcessFunc) (ProcessFunc, func() []domain.WebSocketMessage) {
+	var mu sync.Mutex
+	var closes []domain.WebSocketMessage
+	process := func(message *Message) error {
+		if message.Opcode == OpClose {
+			mu.Lock()
+			closes = append(closes, message.ToDomain())
+			mu.Unlock()
+		}
+		if next != nil {
+			return next(message)
+		}
+		return nil
+	}
+	return process, func() []domain.WebSocketMessage {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(closes)
+	}
+}
+
+// assertGeneratedCloses checks that the proxy stored the two closes it sent
+// because of what d's sender sent: code toward the sender, and 1001 toward
+// the receiver. A close toward a peer is stored in the direction of that
+// peer's messages' receiver, as if the other peer sent it.
+func assertGeneratedCloses(t *testing.T, closes []domain.WebSocketMessage, d direction, code int) {
+	t.Helper()
+	towardSender := DirectionFromServer
+	if d.source == DirectionFromServer {
+		towardSender = DirectionFromClient
+	}
+	want := map[string]int{towardSender: code, d.source: CloseGoingAway}
+	got := map[string]int{}
+	for _, message := range closes {
+		if generated, _ := message.Metadata["generated"].(bool); !generated {
+			continue
+		}
+		closeCode, _, _ := ParseClosePayload(message.Payload)
+		got[message.Direction] = closeCode
+	}
+	if !maps.Equal(want, got) {
+		t.Fatalf("\nwanted generated closes by direction:\n%v\ngot:\n%v", want, got)
+	}
+}
+
 // assertStoredUninflated checks that message was stored as the compressed
 // bytes received, with the inflate error containing wantError.
 func assertStoredUninflated(t *testing.T, message domain.WebSocketMessage, source string, payload []byte, wantError string) {
@@ -220,6 +287,7 @@ func TestRelay_CorruptDeflate(t *testing.T) {
 	for _, tt := range bothDirections {
 		t.Run("should store, announce, and close with 1007 and 1001 "+tt.name, func(t *testing.T) {
 			process, recorded := recordMessages()
+			process, closes := recordCloses(process)
 			failures := make(chan InflateFailure, 1)
 			relay := startRelayWith(t, process, withDeflate(contextTakeover), func(c *Connection) {
 				c.SetInflateFailureHandler(func(failure InflateFailure) { failures <- failure })
@@ -235,9 +303,10 @@ func TestRelay_CorruptDeflate(t *testing.T) {
 			if failure.Direction != tt.source || failure.Err == nil {
 				t.Fatalf("\nwanted failure:\nfrom %s with an error\ngot:\n%+v", tt.source, failure)
 			}
-			if code, _ := relay.connection.CloseDetails(); code != CloseInvalidPayload {
-				t.Fatalf("\nwanted close code:\n%d\ngot:\n%d", CloseInvalidPayload, code)
+			if code := finishCloseHandshake(t, relay, tt, toSender, toReceiver); code != CloseInvalidPayload {
+				t.Fatalf("\nwanted close code after the handshake:\n%d\ngot:\n%d", CloseInvalidPayload, code)
 			}
+			assertGeneratedCloses(t, closes(), tt, CloseInvalidPayload)
 		})
 	}
 }
@@ -270,6 +339,7 @@ func TestRelay_DeflateBomb(t *testing.T) {
 	for _, tt := range bothDirections {
 		t.Run("should stop at the limit and close with 1009 and 1001 "+tt.name, func(t *testing.T) {
 			process, recorded := recordMessages()
+			process, closes := recordCloses(process)
 			tooBig := make(chan MessageTooBig, 1)
 			relay := startRelayWith(t, process, withDeflate(contextTakeover), func(c *Connection) {
 				c.SetMaxMessageSize(limit)
@@ -286,9 +356,10 @@ func TestRelay_DeflateBomb(t *testing.T) {
 			if got := <-tooBig; got != want {
 				t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
 			}
-			if code, _ := relay.connection.CloseDetails(); code != CloseMessageTooBig {
-				t.Fatalf("\nwanted close code:\n%d\ngot:\n%d", CloseMessageTooBig, code)
+			if code := finishCloseHandshake(t, relay, tt, toSender, toReceiver); code != CloseMessageTooBig {
+				t.Fatalf("\nwanted close code after the handshake:\n%d\ngot:\n%d", CloseMessageTooBig, code)
 			}
+			assertGeneratedCloses(t, closes(), tt, CloseMessageTooBig)
 		})
 	}
 
