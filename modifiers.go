@@ -703,9 +703,19 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		})
 	}
 	connection.SetMessageTooBigHandler(func(tooBig marasiws.MessageTooBig) {
+		message := fmt.Sprintf("a %s message of %d bytes is over", tooBig.Direction, tooBig.Size)
+		if tooBig.Inflated {
+			message = fmt.Sprintf("a compressed %s message inflates to over", tooBig.Direction)
+		}
 		_ = proxy.WriteLog("WARN", fmt.Sprintf(
-			"WebSocket %s closed: a %s message of %d bytes is over the %d-byte limit. Sent 1009 to the sender and 1001 to the receiver.",
-			connectionID, tooBig.Direction, tooBig.Size, tooBig.Limit,
+			"WebSocket %s closed: %s the %d-byte limit. Sent 1009 to the sender and 1001 to the receiver.",
+			connectionID, message, tooBig.Limit,
+		), core.LogWithReqResID(requestID))
+	})
+	connection.SetInflateFailureHandler(func(failure marasiws.InflateFailure) {
+		_ = proxy.WriteLog("WARN", fmt.Sprintf(
+			"WebSocket %s closed: a compressed %s message cannot be inflated (%v). Sent 1007 to the sender and 1001 to the receiver.",
+			connectionID, failure.Direction, failure.Err,
 		), core.LogWithReqResID(requestID))
 	})
 
