@@ -101,6 +101,7 @@ type Connection struct {
 	stream     StreamFunc
 	onProgress func(domain.WebSocketMessageProgress)
 	onTooBig   func(MessageTooBig)
+	onInflate  func(InflateFailure)
 }
 
 // NewConnection creates a connection that relays between client and upstream.
@@ -175,6 +176,13 @@ func (c *Connection) SetProgressHandler(handler func(domain.WebSocketMessageProg
 // over the size limit, after the close frames are sent.
 func (c *Connection) SetMessageTooBigHandler(handler func(MessageTooBig)) {
 	c.onTooBig = handler
+}
+
+// SetInflateFailureHandler registers a callback invoked when a compressed
+// message cannot be inflated, after the message is processed and the close
+// frames are sent.
+func (c *Connection) SetInflateFailureHandler(handler func(InflateFailure)) {
+	c.onInflate = handler
 }
 
 // ClosedRecord receives the final in-memory connection state after the relay ends.
