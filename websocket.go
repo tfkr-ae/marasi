@@ -78,13 +78,15 @@ func (proxy *Proxy) GetWebSocketMessages(requestID uuid.UUID) ([]*domain.WebSock
 	return proxy.WebSocketRepo.GetMessagesByRequestID(requestID)
 }
 
-// InjectWebSocketMessage injects a frame into a live connection.
-// direction must be client or server.
+// InjectWebSocketMessage injects a message into a live connection.
+// direction must be client or server. With permessage-deflate the message is
+// compressed by the leg's compressor unless options.NeverCompress is set.
 func (proxy *Proxy) InjectWebSocketMessage(
 	requestID uuid.UUID,
 	direction string,
 	opcode int,
 	payload []byte,
+	options marasiws.InjectOptions,
 ) (domain.WebSocketMessage, error) {
 	if proxy.WebSocketRegistry == nil {
 		return domain.WebSocketMessage{}, fmt.Errorf("%w: %s", ErrWebSocketConnectionNotFound, requestID)
@@ -96,7 +98,7 @@ func (proxy *Proxy) InjectWebSocketMessage(
 
 	switch direction {
 	case marasiws.DirectionFromClient, marasiws.DirectionFromServer:
-		return connection.Inject(direction, opcode, payload)
+		return connection.Inject(direction, opcode, payload, options)
 	default:
 		return domain.WebSocketMessage{}, fmt.Errorf("%w: %q", ErrWebSocketDirection, direction)
 	}
