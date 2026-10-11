@@ -65,7 +65,7 @@ func TestWebSocketConnectionControlRoutesAndEvents(t *testing.T) {
 	if err := json.Unmarshal(openedBody, &fields); err != nil {
 		t.Fatalf("decoding websocket connection: %v", err)
 	}
-	for _, name := range []string{"id", "request_id", "state", "transport", "host", "path", "started_at", "closed_at", "close_code", "close_reason"} {
+	for _, name := range []string{"id", "request_id", "state", "transport", "host", "path", "started_at", "closed_at", "close_code", "close_reason", "deflate", "removed_extensions"} {
 		if _, ok := fields[name]; !ok {
 			t.Fatalf("\nwanted:\n%s field\ngot:\n%s", name, openedBody)
 		}
@@ -106,6 +106,47 @@ func TestWebSocketConnectionControlRoutesAndEvents(t *testing.T) {
 		t.Fatalf("\nwanted event and closed get to have the same connection JSON:\n%s\ngot:\n%s", closedData+"\n", got)
 	}
 	assertWebSocketControlResponse(t, control.URL+"/traffic/"+opened.RequestID.String()+"/websocket", http.StatusOK, closedBody)
+}
+
+func TestWebSocketConnectionNegotiatedExtensions(t *testing.T) {
+	control, originURL, proxyAddress, _, _ := newWebSocketControlFixture(t)
+	stream, events := connectEventStream(t, control.URL)
+	defer stream.Body.Close()
+
+	connection, request := upgradeWebSocketThroughProxy(t, proxyAddress, originURL, "x-foo, permessage-deflate; client_max_window_bits")
+	defer connection.Close()
+	response, err := http.ReadResponse(bufio.NewReader(connection), request)
+	if err != nil {
+		t.Fatalf("reading websocket upgrade response: %v", err)
+	}
+	response.Body.Close()
+	if got := response.Header.Get("Sec-WebSocket-Extensions"); got != "permessage-deflate; server_no_context_takeover; client_max_window_bits=10" {
+		t.Fatalf("\nwanted:\nthe origin's deflate accept\ngot:\n%q", got)
+	}
+
+	openedData := readWebSocketEventData(t, events, "websocket.opened")
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(openedData), &fields); err != nil {
+		t.Fatalf("decoding websocket.opened: %v", err)
+	}
+	wantDeflate := `{"server_no_context_takeover":true,"client_no_context_takeover":false,"server_max_window_bits":15,"client_max_window_bits":10}`
+	if got := string(fields["deflate"]); got != wantDeflate {
+		t.Fatalf("\nwanted deflate:\n%s\ngot:\n%s", wantDeflate, got)
+	}
+	if got := string(fields["removed_extensions"]); got != `["x-foo"]` {
+		t.Fatalf("\nwanted removed_extensions:\n%s\ngot:\n%s", `["x-foo"]`, got)
+	}
+
+	var opened struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(openedData), &opened); err != nil {
+		t.Fatalf("decoding websocket.opened: %v", err)
+	}
+	body := waitForWebSocketState(t, control.URL+"/websocket/"+opened.ID.String(), "open")
+	if got := string(body); got != openedData+"\n" {
+		t.Fatalf("\nwanted stored connection JSON:\n%s\ngot:\n%s", openedData+"\n", got)
+	}
 }
 
 func TestWebSocketConnectionList(t *testing.T) {
@@ -751,7 +792,7 @@ func TestWebSocketClose(t *testing.T) {
 	if n, err := connection.Read(next[:]); n != 0 || !errors.Is(err, io.EOF) {
 		t.Fatalf("\nwanted:\npeer connection EOF after close frame\ngot:\n%d bytes and %v", n, err)
 	}
-	want := fmt.Sprintf(`{"id":%q,"request_id":%q,"state":"closed","transport":"ws","host":%q,"path":"/socket?test=1","started_at":%q,"closed_at":%q,"close_code":1000,"close_reason":"done"}`+"\n", opened.ID, opened.RequestID, strings.TrimPrefix(originURL, "http://"), opened.StartedAt, *result.ClosedAt)
+	want := fmt.Sprintf(`{"id":%q,"request_id":%q,"state":"closed","transport":"ws","host":%q,"path":"/socket?test=1","started_at":%q,"closed_at":%q,"close_code":1000,"close_reason":"done","deflate":null,"removed_extensions":[]}`+"\n", opened.ID, opened.RequestID, strings.TrimPrefix(originURL, "http://"), opened.StartedAt, *result.ClosedAt)
 	if string(body) != want {
 		t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, body)
 	}
@@ -840,7 +881,11 @@ func newWebSocketControlFixture(t *testing.T, upstreamFrames ...chan marasiws.Fr
 		defer connection.Close()
 
 		accept := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
-		if _, err := fmt.Fprintf(buffered, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: %s\r\n\r\n", base64.StdEncoding.EncodeToString(accept[:])); err != nil {
+		extensions := ""
+		if strings.Contains(r.Header.Get("Sec-WebSocket-Extensions"), "permessage-deflate; client_max_window_bits") {
+			extensions = "Sec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover; client_max_window_bits=10\r\n"
+		}
+		if _, err := fmt.Fprintf(buffered, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: %s\r\n%s\r\n", base64.StdEncoding.EncodeToString(accept[:]), extensions); err != nil {
 			return
 		}
 		if err := buffered.Flush(); err != nil {
@@ -929,7 +974,9 @@ func newWebSocketControlFixture(t *testing.T, upstreamFrames ...chan marasiws.Fr
 	return control, origin.URL, net.JoinHostPort(proxy.Addr, proxy.Port), proxy, dbConnection
 }
 
-func upgradeWebSocketThroughProxy(t *testing.T, proxyAddress, originURL string) (net.Conn, *http.Request) {
+// upgradeWebSocketThroughProxy sends an upgrade request through the proxy.
+// extensionOffer, when given, is sent as Sec-WebSocket-Extensions.
+func upgradeWebSocketThroughProxy(t *testing.T, proxyAddress, originURL string, extensionOffer ...string) (net.Conn, *http.Request) {
 	t.Helper()
 	connection, err := net.Dial("tcp", proxyAddress)
 	if err != nil {
@@ -956,7 +1003,11 @@ func upgradeWebSocketThroughProxy(t *testing.T, proxyAddress, originURL string) 
 	request.Header.Set("Upgrade", "websocket")
 	request.Header.Set("Sec-WebSocket-Key", key)
 	request.Header.Set("Sec-WebSocket-Version", "13")
-	if _, err := fmt.Fprintf(connection, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n", request.URL.String(), parsedOrigin.Host, key); err != nil {
+	extensions := ""
+	for _, offer := range extensionOffer {
+		extensions += "Sec-WebSocket-Extensions: " + offer + "\r\n"
+	}
+	if _, err := fmt.Fprintf(connection, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n%s\r\n", request.URL.String(), parsedOrigin.Host, key, extensions); err != nil {
 		connection.Close()
 		t.Fatalf("writing websocket request: %v", err)
 	}

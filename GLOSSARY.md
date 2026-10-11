@@ -81,6 +81,10 @@ _Avoid_: frame, stream, checkpoint item
 One protocol unit on the wire that carries all or part of a WebSocket message. It is not stored on its own and has no id.
 _Avoid_: message, packet, chunk
 
+**WebSocket extension**:
+A protocol extension that the client offers and the upstream accepts in the `Sec-WebSocket-Extensions` handshake header. The proxy forwards only permessage-deflate (RFC 7692). It removes any other offer and records the name on the WebSocket connection. Not an Extension.
+_Avoid_: extension on its own, plugin
+
 **Waypoint**:
 A pairing of an original host:port with an override host:port, stored in the open project and identified by the original host:port.
 _Avoid_: host override, redirect, DNS override, way point

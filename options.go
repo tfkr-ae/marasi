@@ -553,6 +553,7 @@ func WithDefaultModifierPipeline() func(*Proxy) error {
 		proxy.AddRequestModifier(OverrideWaypointsModifier)
 		proxy.AddRequestModifier(ExtensionsRequestModifier)
 		proxy.AddRequestModifier(CheckpointRequestModifier)
+		proxy.AddRequestModifier(WebSocketOffersModifier)
 		proxy.AddRequestModifier(WriteRequestModifier)
 
 		// Response Modifiers

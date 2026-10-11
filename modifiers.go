@@ -470,6 +470,10 @@ func WebSocketPrepareModifier(proxy *Proxy, res *http.Response) error {
 			res.Body,
 		)
 	}
+	negotiation, err := negotiateWebSocketExtensions(res)
+	if err != nil {
+		return failWebSocketHandshake(proxy, res, err)
+	}
 	metadata, ok := core.MetadataFromContext(res.Request.Context())
 	if !ok {
 		return ErrMetadataNotFound
@@ -482,6 +486,11 @@ func WebSocketPrepareModifier(proxy *Proxy, res *http.Response) error {
 		res.Request,
 		upstream,
 	)
+	res.Request = res.Request.WithContext(context.WithValue(
+		res.Request.Context(),
+		webSocketNegotiationKey{},
+		negotiation,
+	))
 
 	res.Body = http.NoBody
 	res.ContentLength = 0
@@ -612,6 +621,7 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		return fmt.Errorf("clearing websocket client deadline: %w", err)
 	}
 
+	deflate, removedExtensions := mirrorWebSocketNegotiation(proxy, res)
 	if err := res.Write(bufferedClient); err != nil {
 		return fmt.Errorf("writing websocket handshake response: %w", err)
 	}
@@ -711,6 +721,9 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		Host:      res.Request.Host,
 		Path:      path,
 		StartedAt: time.Now(),
+
+		Deflate:           deflate,
+		RemovedExtensions: removedExtensions,
 	}
 
 	release, _ := res.Request.Context().Value(projectReleaseKey{}).(func())
