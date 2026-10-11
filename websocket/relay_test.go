@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bytes"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -19,6 +20,13 @@ type runningRelay struct {
 
 func startRelay(t *testing.T) *runningRelay {
 	t.Helper()
+	return startRelayWith(t, nil)
+}
+
+// startRelayWith starts a relay whose messages pass through process. configure,
+// when given, sets the connection up before it runs.
+func startRelayWith(t *testing.T, process ProcessFunc, configure ...func(*Connection)) *runningRelay {
+	t.Helper()
 
 	clientConnection, clientPeer := net.Pipe()
 	upstreamConnection, upstreamPeer := net.Pipe()
@@ -35,12 +43,15 @@ func startRelay(t *testing.T) *runningRelay {
 	}
 
 	relay := &runningRelay{
-		connection: NewConnection(uuid.Nil, uuid.Nil, clientConnection, clientConnection, upstreamConnection, nil),
+		connection: NewConnection(uuid.Nil, uuid.Nil, clientConnection, clientConnection, upstreamConnection, process),
 		client:     clientPeer,
 		upstream:   upstreamPeer,
 		result:     make(chan error, 1),
 	}
 	relay.connection.relayedCloseTimeout = 200 * time.Millisecond
+	for _, apply := range configure {
+		apply(relay.connection)
+	}
 	go func() { relay.result <- relay.connection.Run() }()
 
 	return relay
@@ -185,6 +196,58 @@ func (u *closingUpstream) Read(p []byte) (int, error) {
 }
 
 func (u *closingUpstream) Close() error { return nil }
+
+// droppingUpstream is a peer that drops TCP as soon as a close frame reaches
+// it: its reads return EOF while the write of the close is still returning.
+type droppingUpstream struct {
+	written  bytes.Buffer
+	dropped  chan struct{}
+	readDone chan struct{}
+}
+
+func (u *droppingUpstream) Write(p []byte) (int, error) {
+	u.written.Write(p)
+	if frame, err := ReadFrame(bytes.NewReader(u.written.Bytes())); err == nil && frame.Opcode == OpClose {
+		close(u.dropped)
+		<-u.readDone
+		// Give the relay reading this peer time to act on the EOF.
+		time.Sleep(50 * time.Millisecond)
+	}
+	return len(p), nil
+}
+
+func (u *droppingUpstream) Read([]byte) (int, error) {
+	<-u.dropped
+	close(u.readDone)
+	return 0, io.EOF
+}
+
+func (u *droppingUpstream) Close() error { return nil }
+
+func TestRelay_PeerDroppingTCPOnCloseIsACleanEnd(t *testing.T) {
+	upstream := &droppingUpstream{dropped: make(chan struct{}), readDone: make(chan struct{})}
+	clientConnection, clientPeer := net.Pipe()
+	defer clientPeer.Close()
+	if err := clientPeer.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("setting client peer deadline: %v", err)
+	}
+	connection := NewConnection(uuid.Nil, uuid.Nil, clientConnection, clientConnection, upstream, nil)
+	result := make(chan error, 1)
+	go func() { result <- connection.Run() }()
+
+	if err := WriteFrame(clientPeer, Frame{Fin: true, Opcode: OpClose, Payload: []byte{0x03, 0xe8}}, true); err != nil {
+		t.Fatalf("writing client close: %v", err)
+	}
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("Run() returned unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("\nwanted Run state:\n%q\ngot:\n%q", "returned", "blocked")
+	}
+}
 
 func TestRelay_ReplyCloseSurvivesAFailedWriteAfterClose(t *testing.T) {
 	closeFrame := Frame{Fin: true, Opcode: OpClose, Payload: []byte{0x03, 0xe8}}

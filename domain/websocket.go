@@ -59,7 +59,30 @@ type WebSocketDeflate struct {
 	ClientMaxWindowBits int
 }
 
-// WebSocketMessage is a persisted WebSocket frame snapshot.
+// WebSocketMessageProgress announces a message whose frames are still
+// arriving. It is not stored; the whole message is, once complete.
+type WebSocketMessageProgress struct {
+	// MessageID is the ID the message gets once complete.
+	MessageID uuid.UUID
+	// ConnectionID is the connection that carries the message.
+	ConnectionID uuid.UUID
+	// RequestID is the HTTP upgrade request that opened the connection.
+	RequestID uuid.UUID
+	// Direction is client or server.
+	Direction string
+	// Opcode is the message opcode.
+	Opcode int
+	// Bytes is how many payload bytes have arrived so far.
+	Bytes int64
+	// Frames is how many frames have started arriving so far.
+	Frames int
+	// Streamed reports that the bytes are forwarded as they arrive. When
+	// false, nothing is forwarded until the message is complete.
+	Streamed bool
+}
+
+// WebSocketMessage is a persisted WebSocket message snapshot: a whole text or
+// binary message, or a single ping, pong, or close (ADR-0027).
 type WebSocketMessage struct {
 	// ID uniquely identifies the message.
 	ID uuid.UUID
@@ -69,11 +92,11 @@ type WebSocketMessage struct {
 	RequestID uuid.UUID
 	// Direction is client or server.
 	Direction string
-	// Opcode is the WebSocket frame opcode.
+	// Opcode is the message opcode: the opcode of its first frame.
 	Opcode int
-	// Fin indicates whether this was the final fragment.
-	Fin bool
-	// Payload is the frame payload.
+	// FrameCount is how many frames carried the message on the wire.
+	FrameCount int
+	// Payload is the whole message payload.
 	Payload []byte
 	// IsBinary reports whether the opcode was binary.
 	IsBinary bool

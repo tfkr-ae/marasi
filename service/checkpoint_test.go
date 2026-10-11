@@ -570,7 +570,7 @@ func startCheckpointWebSocketHold(t *testing.T, proxy *marasi.Proxy) (uuid.UUID,
 		ConnectionID: uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809"),
 		RequestID:    uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a"),
 		Direction:    marasiws.DirectionFromClient,
-		Frame:        marasiws.Frame{Opcode: marasiws.OpText, Payload: []byte("held")},
+		Opcode:       marasiws.OpText, Payload: []byte("held"),
 	}
 	done := make(chan error, 1)
 	go func() {

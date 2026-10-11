@@ -99,6 +99,9 @@ type Proxy struct {
 	OnWebSocketOpen func(domain.WebSocketConnection) error
 	// OnWebSocketMessage is called for each processed WebSocket message.
 	OnWebSocketMessage func(domain.WebSocketMessage) error
+	// OnWebSocketProgress is called while a WebSocket message's frames are
+	// still arriving. It runs on the relay and must not block.
+	OnWebSocketProgress func(domain.WebSocketMessageProgress) error
 	// OnWebSocketClose is called when a WebSocket connection closes.
 	OnWebSocketClose func(domain.WebSocketConnection) error
 	// OnWebSocketIntercept is called when a WebSocket message is paused for inspection.

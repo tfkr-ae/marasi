@@ -68,12 +68,9 @@ func TestInterceptor_ResolveModifiesMessage(t *testing.T) {
 	message := &Message{
 		ID:           newInterceptionTestMessageID(t),
 		ConnectionID: uuid.New(),
-		Frame: Frame{
-			Fin:     true,
-			Opcode:  OpText,
-			Payload: []byte("original"),
-		},
-		Metadata: map[string]any{"source": "test"},
+		Opcode:       OpText,
+		Payload:      []byte("original"),
+		Metadata:     map[string]any{"source": "test"},
 	}
 
 	notified, result := startTestInterception(interceptor, message)
@@ -93,8 +90,8 @@ func TestInterceptor_ResolveModifiesMessage(t *testing.T) {
 		t.Fatalf("wanted: %d\ngot: %d", 1, len(pending))
 	}
 	pending[0].Payload[0] = 'X'
-	if string(message.Frame.Payload) != "original" {
-		t.Fatalf("wanted live payload: %q\ngot: %q", "original", message.Frame.Payload)
+	if string(message.Payload) != "original" {
+		t.Fatalf("wanted live payload: %q\ngot: %q", "original", message.Payload)
 	}
 
 	err := interceptor.Resolve(message.ID, InterceptionDecision{
@@ -112,11 +109,11 @@ func TestInterceptor_ResolveModifiesMessage(t *testing.T) {
 	if message.Dropped {
 		t.Fatalf("wanted dropped: false\ngot: true")
 	}
-	if message.Frame.Opcode != OpBinary {
-		t.Fatalf("wanted: %d\ngot: %d", OpBinary, message.Frame.Opcode)
+	if message.Opcode != OpBinary {
+		t.Fatalf("wanted: %d\ngot: %d", OpBinary, message.Opcode)
 	}
-	if len(message.Frame.Payload) != 0 {
-		t.Fatalf("wanted empty payload\ngot: %q", message.Frame.Payload)
+	if len(message.Payload) != 0 {
+		t.Fatalf("wanted empty payload\ngot: %q", message.Payload)
 	}
 	if message.Metadata["intercepted"] != true {
 		t.Fatalf("wanted intercepted metadata: true\ngot: %v", message.Metadata["intercepted"])
@@ -134,11 +131,8 @@ func TestInterceptor_ResolveDropsMessage(t *testing.T) {
 	message := &Message{
 		ID:           newInterceptionTestMessageID(t),
 		ConnectionID: uuid.New(),
-		Frame: Frame{
-			Fin:     true,
-			Opcode:  OpText,
-			Payload: []byte("drop me"),
-		},
+		Opcode:       OpText,
+		Payload:      []byte("drop me"),
 	}
 
 	notified, result := startTestInterception(interceptor, message)
@@ -301,7 +295,7 @@ func TestInterceptor_CancelConnection(t *testing.T) {
 	if err := interceptor.Resolve(other.ID, InterceptionDecision{
 		Resume:  true,
 		Opcode:  OpText,
-		Payload: bytes.Clone(other.Frame.Payload),
+		Payload: bytes.Clone(other.Payload),
 	}); err != nil {
 		t.Fatalf("resolving other interception: %v", err)
 	}
