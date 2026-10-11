@@ -1,7 +1,6 @@
 package marasi
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -82,9 +81,7 @@ func (proxy *Proxy) GetWebSocketMessages(requestID uuid.UUID) ([]*domain.WebSock
 // InjectWebSocketMessage injects a message into a live connection.
 // direction must be client or server. With permessage-deflate the message is
 // compressed by the leg's compressor unless options.NeverCompress is set.
-// Waiting for a streamed message to finish stops when ctx ends.
 func (proxy *Proxy) InjectWebSocketMessage(
-	ctx context.Context,
 	requestID uuid.UUID,
 	direction string,
 	opcode int,
@@ -101,7 +98,7 @@ func (proxy *Proxy) InjectWebSocketMessage(
 
 	switch direction {
 	case marasiws.DirectionFromClient, marasiws.DirectionFromServer:
-		return connection.Inject(ctx, direction, opcode, payload, options)
+		return connection.Inject(direction, opcode, payload, options)
 	default:
 		return domain.WebSocketMessage{}, fmt.Errorf("%w: %q", ErrWebSocketDirection, direction)
 	}

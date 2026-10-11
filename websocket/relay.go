@@ -1,7 +1,6 @@
 package websocket
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -87,42 +86,11 @@ type leg struct {
 	// mu is held while a frame, or an unchanged message's frames, go out.
 	mu sync.Mutex
 	// message is held from the first to the last frame of a streamed data
-	// message, and while a sent or injected message goes out. It is a
-	// channel so a writer waiting for it can give up (lockMessage).
-	message chan struct{}
-	// done is closed when the connection shuts down.
-	done <-chan struct{}
+	// message, and while an injected message goes out.
+	message sync.Mutex
 	// closed is set, with mu held, once the proxy sent its own close frame
 	// to the peer. No frame goes out after it (RFC 6455 §5.5.1).
 	closed bool
-}
-
-func newLeg(w io.Writer, mask bool, errPrefix string, done <-chan struct{}) *leg {
-	return &leg{w: w, mask: mask, errPrefix: errPrefix, message: make(chan struct{}, 1), done: done}
-}
-
-// lockMessage waits for the message lock. It gives up when ctx ends, or with
-// ErrConnectionClosed when the connection shuts down, so a peer that stalls
-// a streamed message cannot block the caller forever.
-func (l *leg) lockMessage(ctx context.Context) error {
-	select {
-	case l.message <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-l.done:
-		return ErrConnectionClosed
-	}
-	select {
-	case <-l.done:
-		l.unlockMessage()
-		return ErrConnectionClosed
-	default:
-		return nil
-	}
-}
-
-func (l *leg) unlockMessage() {
-	<-l.message
 }
 
 // writeFrames writes frames to the peer. After the proxy's own close frame
@@ -162,30 +130,11 @@ func (l *leg) writeLocked(frames ...Frame) error {
 }
 
 // writeMessage writes a message's frames, waiting for any streamed message to
-// finish first. It gives up waiting as lockMessage does. A write that fails
-// because the connection shut down meanwhile reports ErrConnectionClosed.
-func (l *leg) writeMessage(ctx context.Context, frames ...Frame) error {
-	if err := l.lockMessage(ctx); err != nil {
-		return err
-	}
-	defer l.unlockMessage()
-	err := l.writeFrames(frames...)
-	if err != nil {
-		select {
-		case <-l.done:
-			return fmt.Errorf("%w: %w", ErrConnectionClosed, err)
-		default:
-		}
-	}
-	return err
-}
-
-// wholeMessages writes each message to a leg after any streamed message
-// finishes, so it never goes out between a streamed message's fragments.
-type wholeMessages struct{ leg *leg }
-
-func (w wholeMessages) writeFrames(frames ...Frame) error {
-	return w.leg.writeMessage(context.Background(), frames...)
+// finish first.
+func (l *leg) writeMessage(frames ...Frame) error {
+	l.message.Lock()
+	defer l.message.Unlock()
+	return l.writeFrames(frames...)
 }
 
 // frameStream forwards one frame whose payload is written as it arrives.
@@ -409,9 +358,7 @@ func (in *inbound) start(frame Frame) error {
 	}
 	out, canStream := in.out.(*leg)
 	if canStream && !frame.Rsv1 && in.c.stream != nil && in.c.stream(in.source, frame.Opcode) {
-		if err := out.lockMessage(context.Background()); err != nil {
-			return err
-		}
+		out.message.Lock()
 		in.streamed = true
 	}
 	return nil
@@ -507,7 +454,7 @@ func (in *inbound) dropPending() {
 func (in *inbound) releaseStream() {
 	if in.streamed {
 		in.streamed = false
-		in.out.(*leg).unlockMessage()
+		in.out.(*leg).message.Unlock()
 	}
 }
 
