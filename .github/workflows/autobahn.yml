@@ -1,0 +1,37 @@
+name: Autobahn
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  pull_request:
+    paths:
+      - 'websocket/**'
+      - 'modifiers.go'
+      - 'extensions/**'
+      - 'transport.go'
+      - 'internal/autobahn/**'
+  workflow_dispatch:
+
+jobs:
+  autobahn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: docker pull crossbario/autobahn-testsuite
+      # direct runs first and refreshes the baseline on this runner, so the
+      # comparison is not thrown by timing differences from the machine that
+      # committed it. The diff shows any direct verdict that moved.
+      - run: make autobahn RUNS=direct,proxy,checkpoint-forward,checkpoint-edit,extension
+      - if: always()
+        run: git diff --stat --exit-code internal/autobahn/baseline || git diff internal/autobahn/baseline
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autobahn-reports
+          path: dist/autobahn/
+          if-no-files-found: ignore
