@@ -84,3 +84,63 @@ func TestRelay_DeflateDropsAndInjections(t *testing.T) {
 		assertSameFrame(t, Frame{Fin: true, Opcode: OpText, Payload: []byte("plain")}, readFrame(t, relay.client))
 	})
 }
+
+func TestRelay_StoresWhetherAnInjectionWentCompressed(t *testing.T) {
+	smallClientWindow := domain.WebSocketDeflate{ServerMaxWindowBits: 10, ClientMaxWindowBits: 15}
+	toPing := func(message *Message) error {
+		message.Opcode = OpPing
+		return nil
+	}
+	tests := []struct {
+		name    string
+		process ProcessFunc
+		params  domain.WebSocketDeflate
+		payload string
+		want    Frame
+	}{
+		{
+			name:    "should store uncompressed when Huffman-only is not smaller",
+			params:  smallClientWindow,
+			payload: "a",
+			want:    Frame{Fin: true, Opcode: OpText, Payload: []byte("a")},
+		},
+		{
+			name:    "should store uncompressed when a hook makes it a control frame",
+			process: toPing,
+			params:  contextTakeover,
+			payload: "ping",
+			want:    Frame{Fin: true, Opcode: OpPing, Payload: []byte("ping")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stored := make(chan domain.WebSocketMessage, 1)
+			process := func(message *Message) error {
+				if tt.process != nil {
+					if err := tt.process(message); err != nil {
+						return err
+					}
+				}
+				stored <- message.ToDomain()
+				return nil
+			}
+			relay := startRelayWith(t, process, withDeflate(tt.params))
+
+			returned := make(chan domain.WebSocketMessage, 1)
+			go func() {
+				message, err := relay.connection.Inject(DirectionFromServer, OpText, []byte(tt.payload), InjectOptions{})
+				if err != nil {
+					t.Errorf("injecting: %v", err)
+				}
+				returned <- message
+			}()
+			assertSameFrame(t, tt.want, readFrame(t, relay.client))
+			if got := <-stored; got.Compressed {
+				t.Fatalf("\nwanted stored:\nuncompressed\ngot:\ncompressed")
+			}
+			if got := <-returned; got.Compressed {
+				t.Fatalf("\nwanted returned:\nuncompressed\ngot:\ncompressed")
+			}
+		})
+	}
+}
