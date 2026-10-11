@@ -51,11 +51,24 @@ type webSocketMessageResponse struct {
 	RequestID    uuid.UUID      `json:"request_id"`
 	Direction    string         `json:"direction"`
 	Opcode       int            `json:"opcode"`
-	Fin          bool           `json:"fin"`
+	FrameCount   int            `json:"frame_count"`
 	Payload      []byte         `json:"payload"`
 	IsBinary     bool           `json:"is_binary"`
 	CreatedAt    time.Time      `json:"created_at"`
 	Metadata     map[string]any `json:"metadata"`
+}
+
+// webSocketProgressResponse announces a message whose frames are still
+// arriving. message_id is the ID the message has once complete.
+type webSocketProgressResponse struct {
+	MessageID    uuid.UUID `json:"message_id"`
+	ConnectionID uuid.UUID `json:"connection_id"`
+	RequestID    uuid.UUID `json:"request_id"`
+	Direction    string    `json:"direction"`
+	Opcode       int       `json:"opcode"`
+	Bytes        int64     `json:"bytes"`
+	Frames       int       `json:"frames"`
+	Streamed     bool      `json:"streamed"`
 }
 
 type webSocketMessageList struct {
@@ -353,7 +366,7 @@ func webSocketMessageFromDomain(message domain.WebSocketMessage, requestID uuid.
 	}
 	return webSocketMessageResponse{
 		ID: message.ID, ConnectionID: message.ConnectionID, RequestID: requestID,
-		Direction: message.Direction, Opcode: message.Opcode, Fin: message.Fin,
+		Direction: message.Direction, Opcode: message.Opcode, FrameCount: message.FrameCount,
 		Payload: payload, IsBinary: message.IsBinary, CreatedAt: message.CreatedAt, Metadata: metadata,
 	}
 }
@@ -396,7 +409,22 @@ func (s *Server) HandleWebSocketClose(connection domain.WebSocketConnection) err
 	return nil
 }
 
-// HandleWebSocketMessage publishes a frame after it has been resolved for storage.
+// HandleWebSocketProgress publishes a message whose frames are still arriving.
+func (s *Server) HandleWebSocketProgress(progress domain.WebSocketMessageProgress) error {
+	s.events.publish("websocket.progress", webSocketProgressResponse{
+		MessageID:    progress.MessageID,
+		ConnectionID: progress.ConnectionID,
+		RequestID:    progress.RequestID,
+		Direction:    progress.Direction,
+		Opcode:       progress.Opcode,
+		Bytes:        progress.Bytes,
+		Frames:       progress.Frames,
+		Streamed:     progress.Streamed,
+	})
+	return nil
+}
+
+// HandleWebSocketMessage publishes a whole message after it has been resolved for storage.
 func (s *Server) HandleWebSocketMessage(message domain.WebSocketMessage) error {
 	s.events.publish("websocket.message", webSocketMessageFromDomain(message, message.RequestID))
 	return nil

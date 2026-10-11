@@ -91,8 +91,8 @@ func (i *Interceptor) Resolve(messageID uuid.UUID, decision InterceptionDecision
 
 	if decision.Resume {
 		pending.message.Dropped = false
-		pending.message.Frame.Opcode = decision.Opcode
-		pending.message.Frame.Payload = bytes.Clone(decision.Payload)
+		pending.message.Opcode = decision.Opcode
+		pending.message.Payload = bytes.Clone(decision.Payload)
 	} else {
 		pending.message.Dropped = true
 	}

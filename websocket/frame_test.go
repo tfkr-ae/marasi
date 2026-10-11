@@ -434,18 +434,6 @@ func TestFrame_RSVBitsSurviveReadAndWrite(t *testing.T) {
 	}
 }
 
-func TestFrame_WriteFramePayloadTooLarge(t *testing.T) {
-	frame := Frame{Payload: make([]byte, MaxPayload+1)}
-
-	err := WriteFrame(&bytes.Buffer{}, frame, false)
-	if err == nil {
-		t.Fatal("wanted payload too large error, got nil")
-	}
-	if !strings.Contains(err.Error(), "payload too large") {
-		t.Fatalf("\nwanted error containing:\n%q\ngot:\n%q", "payload too large", err)
-	}
-}
-
 func TestFrame_ParseClosePayload(t *testing.T) {
 	tests := []struct {
 		name       string

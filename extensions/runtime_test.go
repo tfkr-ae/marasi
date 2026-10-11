@@ -232,10 +232,8 @@ func TestRuntime_ShouldInterceptWebSocketMessage(t *testing.T) {
 		`
 		ext, _ := setupTestExtension(t, luaCode)
 		message := &marasiws.Message{
-			Frame: marasiws.Frame{
-				Opcode:  marasiws.OpText,
-				Payload: []byte("intercept me"),
-			},
+			Opcode:  marasiws.OpText,
+			Payload: []byte("intercept me"),
 		}
 
 		got, err := ext.ShouldInterceptWebSocketMessage(message)
@@ -308,8 +306,8 @@ func TestRuntime_CallWebSocketMessageHandler(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if string(message.Frame.Payload) != "modified" {
-			t.Fatalf("\nwanted:\n%q\ngot:\n%q", "modified", message.Frame.Payload)
+		if string(message.Payload) != "modified" {
+			t.Fatalf("\nwanted:\n%q\ngot:\n%q", "modified", message.Payload)
 		}
 	})
 

@@ -233,6 +233,18 @@ func WithWebSocketMessageHandler(handler func(domain.WebSocketMessage) error) fu
 	}
 }
 
+// WithWebSocketProgressHandler takes a handler function that will be executed
+// while a WebSocket message's frames are still arriving. It must not block.
+func WithWebSocketProgressHandler(handler func(domain.WebSocketMessageProgress) error) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnWebSocketProgress != nil {
+			return errors.New("proxy already has a websocket progress handler defined")
+		}
+		proxy.OnWebSocketProgress = handler
+		return nil
+	}
+}
+
 // WithWebSocketCloseHandler takes a handler function that will be executed when a WebSocket connection closes.
 func WithWebSocketCloseHandler(handler func(domain.WebSocketConnection) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
