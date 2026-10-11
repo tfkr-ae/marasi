@@ -10,7 +10,7 @@ Users list proxied WebSocket connections, open one, page its stored messages, an
 - List stored messages with `websocket messages CONNECTION_ID`.
 - Page messages with `--limit` and `--cursor`.
 - Open the connection for a traffic pair with `traffic websocket REQUEST_ID`.
-- Inject a message as one frame with `websocket inject CONNECTION_ID --direction client|server --opcode N`, from `--file` or stdin.
+- Inject a message as one frame with `websocket inject CONNECTION_ID --direction client|server --opcode N`, from `--file` or stdin. With permessage-deflate, `--compress never` sends it uncompressed.
 - Close a live connection with `websocket close CONNECTION_ID`, optionally `--code` and `--reason`.
 - Choose human-readable or `--json` output.
 
@@ -30,6 +30,7 @@ While the client is still held, run `printf 'hello' | websocket inject "$CONNECT
 
 - `websocket get` takes the connection id. `traffic websocket` takes the upgrade request id. The other id fails with `getting websocket connection: not_found` or `getting traffic websocket: not_found`.
 - The proxy forwards only `permessage-deflate` offers upstream. Other `Sec-WebSocket-Extensions` offers are removed and listed in `removed_extensions`. The client gets the upstream's accept unchanged, and `deflate` holds the negotiated parameters, or null when the upstream declined. If the upstream accepts something no offer allowed, the proxy closes the client without a `101`, stores no connection, and writes an `ERROR` log naming the upstream's response.
+- With permessage-deflate, the proxy inflates each compressed message and compresses it again for the receiver with its own compressor, so the bytes differ on the two legs (ADR-0028). A stored message has the uncompressed `payload` and `compressed` true; Lua sees `message:payload()` uncompressed and `message:compressed()`. An injected text or binary message is compressed by default (`compressed` true); `--compress never` (API `"compress":"never"`) sends it uncompressed. Toward a peer whose `*_max_window_bits` is below 15, the proxy compresses Huffman-only and sends a message uncompressed when that is not smaller, so `compressed` describes the sender's leg.
 - JSON list and JSON messages are newest first. Human list prints that order. Human messages reverses the page, so the oldest row of that page prints first. `next_cursor` is the oldest id on the page. The next page is older. Human `next_cursor=` is stderr. An empty human list prints nothing.
 - List and messages default to `--limit 200`. The service accepts 1 through 500. Other query keys are ignored.
 - Inject requires both `--direction` and `--opcode`. A TTY stdin is an empty payload, not a prompt. `--file` beats a pipe. `client` is written upstream. `server` is written to the holding client.
