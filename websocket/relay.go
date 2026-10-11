@@ -459,7 +459,7 @@ func (in *inbound) closeLegs(code int) {
 	if !c.closing.CompareAndSwap(false, true) {
 		return
 	}
-	c.setCloseDetails(code, "")
+	c.ownCloseDetails(code, "")
 	toSender := Frame{Fin: true, Opcode: OpClose, Payload: closePayload(code)}
 	toReceiver := Frame{Fin: true, Opcode: OpClose, Payload: closePayload(CloseGoingAway)}
 	if in.source == DirectionFromClient {
