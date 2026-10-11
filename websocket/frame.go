@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -37,6 +38,13 @@ const MaxPayload = 64 * 1024 * 1024
 type Frame struct {
 	// Fin indicates whether this is the final fragment of a message.
 	Fin bool
+	// Rsv1 is the first reserved bit. Without a negotiated extension it is a
+	// protocol violation, which the relay forwards for the peer to judge.
+	Rsv1 bool
+	// Rsv2 is the second reserved bit.
+	Rsv2 bool
+	// Rsv3 is the third reserved bit.
+	Rsv3 bool
 	// Opcode is the frame opcode.
 	Opcode int
 	// Masked indicates whether the payload is masked.
@@ -69,6 +77,9 @@ func ReadFrame(r io.Reader) (Frame, error) {
 	}
 
 	fin := header[0]&0x80 != 0
+	rsv1 := header[0]&0x40 != 0
+	rsv2 := header[0]&0x20 != 0
+	rsv3 := header[0]&0x10 != 0
 	opcode := int(header[0] & 0x0f)
 	masked := header[1]&0x80 != 0
 	payloadLength := int64(header[1] & 0x7f)
@@ -118,6 +129,9 @@ func ReadFrame(r io.Reader) (Frame, error) {
 
 	return Frame{
 		Fin:     fin,
+		Rsv1:    rsv1,
+		Rsv2:    rsv2,
+		Rsv3:    rsv3,
 		Opcode:  opcode,
 		Masked:  masked,
 		Key:     maskKey,
@@ -136,6 +150,15 @@ func WriteFrame(w io.Writer, frame Frame, mask bool) error {
 	firstHeaderByte := byte(frame.Opcode & 0x0f)
 	if frame.Fin {
 		firstHeaderByte |= 0x80
+	}
+	if frame.Rsv1 {
+		firstHeaderByte |= 0x40
+	}
+	if frame.Rsv2 {
+		firstHeaderByte |= 0x20
+	}
+	if frame.Rsv3 {
+		firstHeaderByte |= 0x10
 	}
 
 	var header []byte
@@ -191,6 +214,10 @@ func WriteFrame(w io.Writer, frame Frame, mask bool) error {
 		payload = maskedPayload
 	}
 
+	if len(payload) == 0 {
+		return nil
+	}
+
 	if _, err := w.Write(payload); err != nil {
 		return fmt.Errorf("writing frame payload: %w", err)
 	}
@@ -218,6 +245,20 @@ func ParseClosePayload(payload []byte) (code int, reason string, err error) {
 	}
 
 	return code, string(reasonBytes), nil
+}
+
+// closeDetailsSeen reads the code and reason from any close payload, valid or
+// not. A one-byte payload has no code (0); an invalid UTF-8 reason has its bad
+// bytes replaced so it can be stored.
+func closeDetailsSeen(payload []byte) (code int, reason string) {
+	switch len(payload) {
+	case 0:
+		return CloseNoStatusReceived, ""
+	case 1:
+		return 0, ""
+	}
+	code = int(binary.BigEndian.Uint16(payload[:2]))
+	return code, strings.ToValidUTF8(string(payload[2:]), "\uFFFD")
 }
 
 // EncodeClosePayload encodes a close status code and reason into a payload.
