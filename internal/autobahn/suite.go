@@ -56,25 +56,37 @@ func (s Suite) Run(ctx context.Context, mode, peer, proxy string) (Report, error
 	if err := os.RemoveAll(reports); err != nil {
 		return nil, err
 	}
-	port, err := freePort()
-	if err != nil {
-		return nil, err
-	}
-	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-
-	switch mode {
-	case ModeFuzzingClient:
-		err = s.runFuzzingClient(ctx, peer, proxy, address)
-	case ModeFuzzingServer:
-		err = s.runFuzzingServer(ctx, peer, proxy, address)
-	default:
-		err = fmt.Errorf("unknown mode %q", mode)
+	// A free port can be taken again before the server binds it, so a server
+	// that never listens gets a fresh port and another attempt.
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		var port int
+		if port, err = freePort(); err != nil {
+			return nil, err
+		}
+		address := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+		switch mode {
+		case ModeFuzzingClient:
+			err = s.runFuzzingClient(ctx, peer, proxy, address)
+		case ModeFuzzingServer:
+			err = s.runFuzzingServer(ctx, peer, proxy, address)
+		default:
+			return nil, fmt.Errorf("unknown mode %q", mode)
+		}
+		var startErr serverStartError
+		if !errors.As(err, &startErr) {
+			break
+		}
+		fmt.Fprintf(s.Log, "attempt %d: %v\n", attempt, err)
 	}
 	if err != nil {
 		return nil, err
 	}
 	return LoadReport(reports, peer)
 }
+
+// serverStartError is a server that did not listen on its port in time.
+type serverStartError struct{ error }
 
 func (s Suite) spec(extra map[string]any) error {
 	spec := map[string]any{
@@ -101,13 +113,15 @@ func nonNil(values []string) []string {
 }
 
 func (s Suite) runFuzzingClient(ctx context.Context, peer, proxy, upstream string) error {
+	var stop func(logs bool)
 	switch peer {
 	case PeerStrict:
-		stop, err := s.startContainer(ctx, "wstest", "-m", "testeeserver", "-w", "ws://"+upstream)
+		var err error
+		stop, err = s.startContainer(ctx, "wstest", "-m", "testeeserver", "-w", "ws://"+upstream)
 		if err != nil {
 			return err
 		}
-		defer stop()
+		defer func() { stop(false) }()
 	case PeerLenient:
 		listener, err := net.Listen("tcp", upstream)
 		if err != nil {
@@ -119,7 +133,11 @@ func (s Suite) runFuzzingClient(ctx context.Context, peer, proxy, upstream strin
 		return fmt.Errorf("unknown peer %q", peer)
 	}
 	if err := waitForPort(ctx, upstream); err != nil {
-		return fmt.Errorf("waiting for %s server: %w", peer, err)
+		if stop != nil {
+			stop(true)
+			stop = func(bool) {}
+		}
+		return serverStartError{fmt.Errorf("waiting for %s server: %w", peer, err)}
 	}
 	if err := s.spec(map[string]any{
 		"servers": []map[string]any{{"agent": peer, "url": "ws://" + upstream}},
@@ -137,10 +155,11 @@ func (s Suite) runFuzzingServer(ctx context.Context, peer, proxy, upstream strin
 	if err != nil {
 		return err
 	}
-	defer stop()
 	if err := waitForPort(ctx, upstream); err != nil {
-		return fmt.Errorf("waiting for fuzzingserver: %w", err)
+		stop(true)
+		return serverStartError{fmt.Errorf("waiting for fuzzingserver: %w", err)}
 	}
+	defer stop(false)
 	switch peer {
 	case PeerStrict:
 		err = s.runContainer(ctx, proxy, "pypy", "/work/wstest_proxy.py", "-m", "testeeclient", "-w", "ws://"+upstream, "-i", peer)
@@ -191,8 +210,9 @@ func (s Suite) runContainer(ctx context.Context, proxy string, command ...string
 	}
 }
 
-// startContainer runs the image in the background and returns its stop function.
-func (s Suite) startContainer(ctx context.Context, command ...string) (func(), error) {
+// startContainer runs the image in the background and returns its stop
+// function, which first copies the container's output to the log when asked.
+func (s Suite) startContainer(ctx context.Context, command ...string) (func(logs bool), error) {
 	name := containerName()
 	args := append(s.dockerArgs(name, ""), command...)
 	args = append([]string{args[0], "-d"}, args[1:]...)
@@ -201,7 +221,14 @@ func (s Suite) startContainer(ctx context.Context, command ...string) (func(), e
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("starting %v: %w", command, err)
 	}
-	return func() { removeContainer(name) }, nil
+	return func(logs bool) {
+		if logs {
+			cmd := exec.Command("docker", "logs", name)
+			cmd.Stdout, cmd.Stderr = s.Log, s.Log
+			_ = cmd.Run()
+		}
+		removeContainer(name)
+	}, nil
 }
 
 func removeContainer(name string) {
