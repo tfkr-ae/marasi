@@ -149,6 +149,72 @@ func TestWebSocketConnectionNegotiatedExtensions(t *testing.T) {
 	}
 }
 
+func TestWebSocketInjectCompression(t *testing.T) {
+	upstreamFrames := make(chan marasiws.Frame, 4)
+	control, originURL, proxyAddress, _, _ := newWebSocketControlFixture(t, upstreamFrames)
+	stream, events := connectEventStream(t, control.URL)
+	t.Cleanup(func() { stream.Body.Close() })
+	connection, request := upgradeWebSocketThroughProxy(t, proxyAddress, originURL, "permessage-deflate; client_max_window_bits")
+	t.Cleanup(func() { connection.Close() })
+	upgrade, err := http.ReadResponse(bufio.NewReader(connection), request)
+	if err != nil {
+		t.Fatalf("reading websocket upgrade response: %v", err)
+	}
+	upgrade.Body.Close()
+	var opened struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(readWebSocketEventData(t, events, "websocket.opened")), &opened); err != nil {
+		t.Fatalf("decoding opened connection: %v", err)
+	}
+	path := control.URL + "/websocket/" + opened.ID.String() + "/inject"
+	waitForWebSocketState(t, control.URL+"/websocket/"+opened.ID.String(), "open")
+	text := strings.Repeat("a", 200)
+	encoded := base64.StdEncoding.EncodeToString([]byte(text))
+
+	for _, test := range []struct {
+		name       string
+		compress   string
+		compressed bool
+	}{
+		{name: "should compress by default on a deflate connection", compressed: true},
+		{name: "should compress when compress is auto", compress: `,"compress":"auto"`, compressed: true},
+		{name: "should not compress when compress is never", compress: `,"compress":"never"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body := `{"direction":"client","opcode":1,"payload":"` + encoded + `"` + test.compress + `}`
+			response, err := http.Post(path, "application/json", strings.NewReader(body))
+			if err != nil {
+				t.Fatalf("injecting: %v", err)
+			}
+			var stored struct {
+				Payload    []byte `json:"payload"`
+				Compressed bool   `json:"compressed"`
+			}
+			err = json.NewDecoder(response.Body).Decode(&stored)
+			response.Body.Close()
+			readWebSocketEventData(t, events, "websocket.message")
+			if err != nil || response.StatusCode != http.StatusOK || stored.Compressed != test.compressed || string(stored.Payload) != text {
+				t.Fatalf("\nwanted:\n200, compressed %v, the uncompressed payload\ngot:\n%d, %+v, %v", test.compressed, response.StatusCode, stored, err)
+			}
+			select {
+			case frame := <-upstreamFrames:
+				if frame.Rsv1 != test.compressed || test.compressed == (string(frame.Payload) == text) {
+					t.Fatalf("\nwanted upstream frame:\nRSV1 %v\ngot:\n%+v", test.compressed, frame)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("upstream did not receive injected frame")
+			}
+		})
+	}
+
+	t.Run("should reject an unknown compress value", func(t *testing.T) {
+		for _, compress := range []string{`"sometimes"`, `null`, `true`} {
+			assertWebSocketInjectError(t, path, `{"direction":"client","opcode":1,"compress":`+compress+`}`, http.StatusBadRequest, "invalid_websocket_request")
+		}
+	})
+}
+
 func TestWebSocketConnectionList(t *testing.T) {
 	control, originURL, proxyAddress, _, _ := newWebSocketControlFixture(t)
 

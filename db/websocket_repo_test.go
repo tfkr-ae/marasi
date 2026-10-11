@@ -404,6 +404,7 @@ func TestWebSocketRepo_InsertMessage(t *testing.T) {
 			Direction:    "client",
 			Opcode:       1,
 			FrameCount:   3,
+			Compressed:   true,
 			Payload:      []byte("hello"),
 			IsBinary:     false,
 			CreatedAt:    wantTime,

@@ -185,8 +185,28 @@ func TestWebSocketInjectCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("should send compress never only when asked", func(t *testing.T) {
+		for _, test := range []struct {
+			flags []string
+			want  string
+		}{
+			{flags: []string{"--compress", "never"}, want: `{"direction":"client","opcode":1,"payload":"","compress":"never"}`},
+			{flags: []string{"--compress", "auto"}, want: `{"direction":"client","opcode":1,"payload":"","compress":"auto"}`},
+		} {
+			configDir := serviceConfigDir(t)
+			sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+			args := append(baseArgs(configDir), append([]string{"--direction", "client", "--opcode", "1"}, test.flags...)...)
+			if _, _, err := runMarasi(binary, args...); err != nil {
+				t.Fatalf("injecting with %v: %v", test.flags, err)
+			}
+			if got := sent.snapshot(); got.Body != test.want {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", test.want, got.Body)
+			}
+		}
+	})
+
 	t.Run("should reject missing or bad flags before dialing", func(t *testing.T) {
-		for _, flags := range [][]string{{}, {"--direction", "client"}, {"--opcode", "1"}, {"--direction", "other", "--opcode", "1"}, {"--direction", "client", "--opcode", "-1"}, {"--direction", "client", "--opcode", "16"}, {"--direction", "client", "--opcode", "bad"}} {
+		for _, flags := range [][]string{{"--direction", "client", "--opcode", "1", "--compress", "sometimes"}, {}, {"--direction", "client"}, {"--opcode", "1"}, {"--direction", "other", "--opcode", "1"}, {"--direction", "client", "--opcode", "-1"}, {"--direction", "client", "--opcode", "16"}, {"--direction", "client", "--opcode", "bad"}} {
 			configDir := serviceConfigDir(t)
 			sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 			args := append(baseArgs(configDir), flags...)

@@ -28,6 +28,10 @@ type Message struct {
 	Payload []byte
 	// FrameCount is how many frames carried the message on the wire.
 	FrameCount int
+	// Compressed reports that the message is compressed with
+	// permessage-deflate on the wire. Payload is always uncompressed. The
+	// proxy compresses a compressed message again for the receiver.
+	Compressed bool
 	// Metadata stores extension and proxy annotations for the message.
 	Metadata map[string]any
 	// CreatedAt is when the message was created by the proxy.
@@ -63,6 +67,7 @@ func (m *Message) ToDomain() domain.WebSocketMessage {
 		Direction:    m.Direction,
 		Opcode:       m.Opcode,
 		FrameCount:   m.FrameCount,
+		Compressed:   m.Compressed,
 		Payload:      append([]byte(nil), m.Payload...),
 		IsBinary:     m.Opcode == OpBinary,
 		CreatedAt:    m.CreatedAt,
@@ -125,16 +130,18 @@ func (m *Message) unchanged() bool {
 	return len(rest) == 0
 }
 
-// outgoing returns the frames to forward: the frames as received when the
-// message is unchanged, otherwise one frame with the message's opcode and
-// payload.
+// outgoing returns the frames to forward. A compressed text or binary message
+// goes as one frame that the receiver's leg compresses. Any other message goes
+// with the frames as received when it is unchanged, otherwise as one frame
+// with the message's opcode and payload.
 func (m *Message) outgoing() []Frame {
-	if m.unchanged() {
+	compress := m.Compressed && (m.Opcode == OpText || m.Opcode == OpBinary)
+	if !compress && m.unchanged() {
 		return m.frames
 	}
-	frame := Frame{Fin: !m.incomplete, Opcode: m.Opcode, Payload: m.Payload}
+	frame := Frame{Fin: !m.incomplete, Opcode: m.Opcode, Payload: m.Payload, deflate: compress}
 	if len(m.frames) > 0 {
-		frame.Rsv1 = m.frames[0].Rsv1
+		frame.Rsv1 = m.frames[0].Rsv1 && !compress
 		frame.Rsv2 = m.frames[0].Rsv2
 		frame.Rsv3 = m.frames[0].Rsv3
 	}
