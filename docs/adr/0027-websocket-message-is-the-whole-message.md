@@ -1,0 +1,7 @@
+# A WebSocket message is the whole message, not a frame
+
+Marasi's WebSocket message is the RFC 6455 message: a complete text or binary message reassembled from its frames, or a single ping, pong, or close. Checkpoint holds it, `processWebSocketMessage` and `interceptWebSocketMessage` see it, and the open project stores it as one item. Frames are a wire detail with no id. Control frames that arrive between the fragments of a held message are relayed at once and are not queued behind it, which RFC 6455 allows. We decided this because permessage-deflate (RFC 7692) compresses whole messages, so a frame-level item cannot be decompressed, inspected, or edited. Testers also reason about messages, not fragments.
+
+**Considered options:** keep one item per frame and reassemble only for inspection; store both messages and frames, each with its own UUID. Rejected because the first cannot edit a compressed message without editing across several held items. The second doubles the ids and the Checkpoint items for a detail that fits in metadata on the message.
+
+**Consequences:** the proxy buffers a fragmented message until its last frame arrives, so the message is not forwarded, held, or stored before then. A progress event announces a message while its frames are still arriving, so the live view shows why nothing has been forwarded yet. The frame-level `fin` and `opcode`-per-frame fields on a stored message no longer describe one frame.

@@ -1,0 +1,9 @@
+# The proxy terminates permessage-deflate on each leg
+
+When a WebSocket connection negotiates permessage-deflate (RFC 7692), Marasi is the deflate endpoint on both legs. It inflates each message from the sender and deflates it again for the receiver with its own compressor, so the compressed bytes on the two legs differ even when no one edits the message. We decided this because, with context takeover, each compressed message depends on the sender's earlier output. If the proxy edits one message and passes the others through, the receiver's window drifts from the sender's and every later message is corrupted. Owning both compressors makes an edit, a drop, or an injection safe at any point in the connection.
+
+**Considered options:** pass compressed bytes through and inflate a shadow copy for display; pass through until the first edit, then switch to recompression. Rejected because the first cannot support edits, drops, or injections, and the second has a second code path that only edits exercise.
+
+**Consequences:** "transparent" for WebSocket means the same messages and close behaviour as a direct connection, not the same bytes. The open project stores the inflated payload and a compressed flag, not the compressed bytes.
+
+Inflating makes the proxy an endpoint for one kind of input: data it cannot inflate. It cannot forward that data, because the receiver's decompressor was fed the proxy's output and the sender's bytes refer to a history the receiver never saw. So the proxy stores the message as the compressed bytes it received, with the inflate error, announces it like any other message, closes the sender's leg with 1007 and the receiver's with 1001, and writes a proxy log. Inflated bytes count against the per-message size limit, so a decompression bomb stops at the limit with 1009 to the sender instead of exhausting the service instance. Testing how a peer handles corrupt deflate is a job for raw-frame injection, not for relayed traffic.
