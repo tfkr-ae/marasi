@@ -118,24 +118,29 @@ func TestRelay_LimitsMessageSize(t *testing.T) {
 	first := Frame{Fin: false, Opcode: OpText, Payload: []byte("123456")}
 	second := Frame{Fin: true, Opcode: OpContinuation, Payload: []byte("789012")}
 
-	t.Run("should close with 1009 to the sender and 1001 to the receiver", func(t *testing.T) {
-		tooBig := make(chan MessageTooBig, 1)
-		relay := startRelayWith(t, nil, func(c *Connection) {
-			c.SetMaxMessageSize(10)
-			c.SetMessageTooBigHandler(func(event MessageTooBig) { tooBig <- event })
-		})
-		writeFrames(relay.client, true, first, second)
+	for _, tt := range bothDirections {
+		t.Run("should close with 1009 to the sender and 1001 to the receiver "+tt.name, func(t *testing.T) {
+			tooBig := make(chan MessageTooBig, 1)
+			process, closes := recordCloses(nil)
+			relay := startRelayWith(t, process, func(c *Connection) {
+				c.SetMaxMessageSize(10)
+				c.SetMessageTooBigHandler(func(event MessageTooBig) { tooBig <- event })
+			})
+			writeFrames(tt.sender(relay), tt.mask, first, second)
 
-		assertCloseCode(t, CloseMessageTooBig, readFrame(t, relay.client))
-		assertCloseCode(t, CloseGoingAway, readFrame(t, relay.upstream))
-		want := MessageTooBig{Direction: DirectionFromClient, Size: 12, Limit: 10}
-		if got := <-tooBig; got != want {
-			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
-		}
-		if code, _ := relay.connection.CloseDetails(); code != CloseMessageTooBig {
-			t.Fatalf("\nwanted close code:\n%d\ngot:\n%d", CloseMessageTooBig, code)
-		}
-	})
+			toSender, toReceiver := readCloses(t, relay, tt)
+			assertCloseCode(t, CloseMessageTooBig, toSender)
+			assertCloseCode(t, CloseGoingAway, toReceiver)
+			want := MessageTooBig{Direction: tt.source, Size: 12, Limit: 10}
+			if got := <-tooBig; got != want {
+				t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+			}
+			if code := finishCloseHandshake(t, relay, tt, toSender, toReceiver); code != CloseMessageTooBig {
+				t.Fatalf("\nwanted close code after the handshake:\n%d\ngot:\n%d", CloseMessageTooBig, code)
+			}
+			assertGeneratedCloses(t, closes(), tt, CloseMessageTooBig)
+		})
+	}
 
 	stored := []struct {
 		name    string
@@ -160,14 +165,6 @@ func TestRelay_LimitsMessageSize(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("should apply the limit to a message from the server", func(t *testing.T) {
-		relay := startRelayWith(t, nil, func(c *Connection) { c.SetMaxMessageSize(10) })
-		writeFrames(relay.upstream, false, first, second)
-
-		assertCloseCode(t, CloseGoingAway, readFrame(t, relay.client))
-		assertCloseCode(t, CloseMessageTooBig, readFrame(t, relay.upstream))
-	})
 
 }
 

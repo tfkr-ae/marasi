@@ -451,21 +451,21 @@ func (in *inbound) recordTooLarge(frame Frame, pending *Message, size int64) {
 }
 
 // closeLegs closes the connection because of what the source sent: code to
-// the sender and 1001 to the receiver. The source's later data is read and
-// dropped while the close handshake runs.
+// the sender and 1001 to the receiver, both stored as generated messages. The
+// source's later data is read and dropped while the close handshake runs.
 func (in *inbound) closeLegs(code int) {
 	c := in.c
 	in.discarding = true
 	if !c.closing.CompareAndSwap(false, true) {
 		return
 	}
-	c.setCloseDetails(code, "")
+	c.ownCloseDetails(code, "")
 	toSender := Frame{Fin: true, Opcode: OpClose, Payload: closePayload(code)}
 	toReceiver := Frame{Fin: true, Opcode: OpClose, Payload: closePayload(CloseGoingAway)}
 	if in.source == DirectionFromClient {
-		_ = c.sendCloseFrames(toSender, toReceiver, false)
+		_ = c.sendCloseFrames(toSender, toReceiver, true, false)
 	} else {
-		_ = c.sendCloseFrames(toReceiver, toSender, false)
+		_ = c.sendCloseFrames(toReceiver, toSender, true, false)
 	}
 }
 
