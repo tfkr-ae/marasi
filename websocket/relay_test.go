@@ -40,6 +40,11 @@ func TestConnection_SettersPanicAfterRun(t *testing.T) {
 	}
 }
 
+// relayFrames relays frames from reader to writeFrame.
+func (c *Connection) relayFrames(reader io.Reader, writeFrame func(Frame) error, source string) error {
+	return c.relay(reader, frameFunc(writeFrame), source)
+}
+
 // runningRelay is a Connection running between two in-memory peers.
 type runningRelay struct {
 	connection *Connection
