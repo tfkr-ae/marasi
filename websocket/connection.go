@@ -82,6 +82,10 @@ type Connection struct {
 	closedRecord chan domain.WebSocketConnection
 	closing      atomic.Bool
 	running      atomic.Bool
+	// started is set when Run begins and stays set. The setters configure
+	// fields the relay goroutines read without locks, so they must run
+	// before it.
+	started atomic.Bool
 	// closeRelayed is set once a peer's close frame has been relayed. The
 	// relay then keeps both directions open so the reply close reaches the
 	// other peer, and tears down when a peer drops TCP.
@@ -134,8 +138,9 @@ func NewConnection(
 }
 
 // SetMaxMessageSize sets the per-message size limit in bytes. A value of zero
-// or less keeps the current limit.
+// or less keeps the current limit. Call it before Run; it panics after.
 func (c *Connection) SetMaxMessageSize(limit int64) {
+	c.mustNotHaveStarted("SetMaxMessageSize")
 	if limit > 0 {
 		c.maxMessageSize = limit
 	}
@@ -146,8 +151,9 @@ func (c *Connection) SetMaxMessageSize(limit int64) {
 // inflater and deflater: the client's parameters govern messages from the
 // client, inflated from the client and deflated toward the upstream, and the
 // server's govern messages from the server. A nil params means no deflate.
-// Call it before Run.
+// Call it before Run; it panics after.
 func (c *Connection) SetDeflate(params *domain.WebSocketDeflate) {
+	c.mustNotHaveStarted("SetDeflate")
 	if params == nil {
 		c.inflaters = nil
 		c.upstreamLeg.deflater = nil
@@ -163,28 +169,43 @@ func (c *Connection) SetDeflate(params *domain.WebSocketDeflate) {
 }
 
 // SetStreamFunc registers the check that decides, as each data message
-// starts, whether the relay may forward its bytes as they arrive.
+// starts, whether the relay may forward its bytes as they arrive. Call it
+// before Run; it panics after.
 func (c *Connection) SetStreamFunc(stream StreamFunc) {
+	c.mustNotHaveStarted("SetStreamFunc")
 	c.stream = stream
 }
 
 // SetProgressHandler registers a callback for messages whose frames are still
-// arriving. It runs on the relay goroutine and must not block.
+// arriving. It runs on the relay goroutine and must not block. Call it before
+// Run; it panics after.
 func (c *Connection) SetProgressHandler(handler func(domain.WebSocketMessageProgress)) {
+	c.mustNotHaveStarted("SetProgressHandler")
 	c.onProgress = handler
 }
 
 // SetMessageTooBigHandler registers a callback invoked when a message goes
-// over the size limit, after the close frames are sent.
+// over the size limit, after the close frames are sent. Call it before Run;
+// it panics after.
 func (c *Connection) SetMessageTooBigHandler(handler func(MessageTooBig)) {
+	c.mustNotHaveStarted("SetMessageTooBigHandler")
 	c.onTooBig = handler
 }
 
 // SetInflateFailureHandler registers a callback invoked when a compressed
 // message cannot be inflated, after the message is processed and the close
-// frames are sent.
+// frames are sent. Call it before Run; it panics after.
 func (c *Connection) SetInflateFailureHandler(handler func(InflateFailure)) {
+	c.mustNotHaveStarted("SetInflateFailureHandler")
 	c.onInflate = handler
+}
+
+// mustNotHaveStarted panics when Run has begun: setter configures what the
+// relay goroutines read without synchronisation.
+func (c *Connection) mustNotHaveStarted(setter string) {
+	if c.started.Load() {
+		panic("websocket: Connection." + setter + " called after Run")
+	}
 }
 
 // ClosedRecord receives the final in-memory connection state after the relay ends.
@@ -301,13 +322,16 @@ func (c *Connection) shutdown() error {
 	return c.closeErr
 }
 
-// SetShutdownHandler registers a callback invoked once when the connection shuts down.
+// SetShutdownHandler registers a callback invoked once when the connection
+// shuts down. Call it before Run; it panics after.
 func (c *Connection) SetShutdownHandler(handler func(uuid.UUID)) {
+	c.mustNotHaveStarted("SetShutdownHandler")
 	c.onShutdown = handler
 }
 
 // Run starts bidirectional frame relay and blocks until the connection closes.
 func (c *Connection) Run() error {
+	c.started.Store(true)
 	c.running.Store(true)
 	defer c.running.Store(false)
 
