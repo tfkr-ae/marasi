@@ -147,6 +147,14 @@ func (c *Connection) handleFrame(
 		return false, fmt.Errorf("creating websocket message: %w", err)
 	}
 
+	if frame.Opcode == OpClose {
+		// An invalid close payload is relayed unchanged so the receiving
+		// endpoint judges it; the relay only records what it saw.
+		if _, _, err := ParseClosePayload(frame.Payload); err != nil {
+			message.Metadata["close_error"] = err.Error()
+		}
+	}
+
 	if c.process != nil {
 		if err := c.process(message); err != nil {
 			return false, fmt.Errorf("processing websocket message: %w", err)
@@ -157,14 +165,7 @@ func (c *Connection) handleFrame(
 		message.Frame.Opcode == OpClose
 
 	if isClose {
-		code, reason, err := ParseClosePayload(message.Frame.Payload)
-		if err != nil {
-			return false, fmt.Errorf(
-				"parsing websocket close payload: %w",
-				err,
-			)
-		}
-
+		code, reason := closeDetailsSeen(message.Frame.Payload)
 		c.setCloseDetails(code, reason)
 	}
 
