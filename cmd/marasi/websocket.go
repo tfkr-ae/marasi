@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"unicode/utf8"
@@ -332,6 +333,13 @@ func writeWebSocketConnectionHuman(body []byte, stdout io.Writer) error {
 		ClosedAt    *string `json:"closed_at"`
 		CloseCode   int     `json:"close_code"`
 		CloseReason string  `json:"close_reason"`
+		Deflate     *struct {
+			ServerNoContextTakeover bool `json:"server_no_context_takeover"`
+			ClientNoContextTakeover bool `json:"client_no_context_takeover"`
+			ServerMaxWindowBits     int  `json:"server_max_window_bits"`
+			ClientMaxWindowBits     int  `json:"client_max_window_bits"`
+		} `json:"deflate"`
+		RemovedExtensions []string `json:"removed_extensions"`
 	}
 	if err := json.Unmarshal(body, &connection); err != nil {
 		return fmt.Errorf("decoding websocket connection: %w", err)
@@ -340,8 +348,18 @@ func writeWebSocketConnectionHuman(body []byte, stdout io.Writer) error {
 	if connection.ClosedAt != nil {
 		closedAt = *connection.ClosedAt
 	}
+	deflate := "null"
+	if d := connection.Deflate; d != nil {
+		deflate = fmt.Sprintf(
+			"server_no_context_takeover=%t client_no_context_takeover=%t server_max_window_bits=%d client_max_window_bits=%d",
+			d.ServerNoContextTakeover,
+			d.ClientNoContextTakeover,
+			d.ServerMaxWindowBits,
+			d.ClientMaxWindowBits,
+		)
+	}
 	_, err := fmt.Fprintf(stdout,
-		"id: %s\nrequest_id: %s\nstate: %s\ntransport: %s\nhost: %s\npath: %s\nstarted_at: %s\nclosed_at: %s\nclose_code: %d\nclose_reason: %s\n",
+		"id: %s\nrequest_id: %s\nstate: %s\ntransport: %s\nhost: %s\npath: %s\nstarted_at: %s\nclosed_at: %s\nclose_code: %d\nclose_reason: %s\ndeflate: %s\nremoved_extensions: %s\n",
 		connection.ID,
 		connection.RequestID,
 		connection.State,
@@ -352,6 +370,8 @@ func writeWebSocketConnectionHuman(body []byte, stdout io.Writer) error {
 		closedAt,
 		connection.CloseCode,
 		connection.CloseReason,
+		deflate,
+		strings.Join(connection.RemovedExtensions, ", "),
 	)
 	return err
 }

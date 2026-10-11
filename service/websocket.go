@@ -27,6 +27,17 @@ type webSocketConnectionResponse struct {
 	ClosedAt    *time.Time `json:"closed_at"`
 	CloseCode   int        `json:"close_code"`
 	CloseReason string     `json:"close_reason"`
+	// Deflate is null when the connection does not use permessage-deflate.
+	Deflate           *webSocketDeflateResponse `json:"deflate"`
+	RemovedExtensions []string                  `json:"removed_extensions"`
+}
+
+// webSocketDeflateResponse is the negotiated permessage-deflate configuration (RFC 7692).
+type webSocketDeflateResponse struct {
+	ServerNoContextTakeover bool `json:"server_no_context_takeover"`
+	ClientNoContextTakeover bool `json:"client_no_context_takeover"`
+	ServerMaxWindowBits     int  `json:"server_max_window_bits"`
+	ClientMaxWindowBits     int  `json:"client_max_window_bits"`
 }
 
 type webSocketConnectionList struct {
@@ -361,17 +372,28 @@ func webSocketMessageFromDomain(message domain.WebSocketMessage, requestID uuid.
 }
 
 func webSocketConnectionFromDomain(connection domain.WebSocketConnection) webSocketConnectionResponse {
+	var deflate *webSocketDeflateResponse
+	if connection.Deflate != nil {
+		params := webSocketDeflateResponse(*connection.Deflate)
+		deflate = &params
+	}
+	removed := connection.RemovedExtensions
+	if removed == nil {
+		removed = []string{}
+	}
 	return webSocketConnectionResponse{
-		ID:          connection.ID,
-		RequestID:   connection.RequestID,
-		State:       connection.State,
-		Transport:   connection.Transport,
-		Host:        connection.Host,
-		Path:        connection.Path,
-		StartedAt:   connection.StartedAt,
-		ClosedAt:    connection.ClosedAt,
-		CloseCode:   connection.CloseCode,
-		CloseReason: connection.CloseReason,
+		Deflate:           deflate,
+		RemovedExtensions: removed,
+		ID:                connection.ID,
+		RequestID:         connection.RequestID,
+		State:             connection.State,
+		Transport:         connection.Transport,
+		Host:              connection.Host,
+		Path:              connection.Path,
+		StartedAt:         connection.StartedAt,
+		ClosedAt:          connection.ClosedAt,
+		CloseCode:         connection.CloseCode,
+		CloseReason:       connection.CloseReason,
 	}
 }
 

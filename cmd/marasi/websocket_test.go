@@ -280,7 +280,7 @@ func TestWebSocketGetCommands(t *testing.T) {
 	const (
 		connectionID = "0193802f-f0e7-73d9-a764-06d21e367809"
 		requestID    = "0193802f-f0e7-73d9-a764-06d21e36780a"
-		body         = `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","request_id":"0193802f-f0e7-73d9-a764-06d21e36780a","state":"open","transport":"wss","host":"example.com","path":"/chat?room=1","started_at":"2026-01-02T03:04:05Z","closed_at":null,"close_code":0,"close_reason":""}` + "\n"
+		body         = `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","request_id":"0193802f-f0e7-73d9-a764-06d21e36780a","state":"open","transport":"wss","host":"example.com","path":"/chat?room=1","started_at":"2026-01-02T03:04:05Z","closed_at":null,"close_code":0,"close_reason":"","deflate":null,"removed_extensions":[]}` + "\n"
 		wantHuman    = "id: " + connectionID + "\n" +
 			"request_id: " + requestID + "\n" +
 			"state: open\n" +
@@ -290,8 +290,26 @@ func TestWebSocketGetCommands(t *testing.T) {
 			"started_at: 2026-01-02T03:04:05Z\n" +
 			"closed_at: null\n" +
 			"close_code: 0\n" +
-			"close_reason: \n"
+			"close_reason: \n" +
+			"deflate: null\n" +
+			"removed_extensions: \n"
 	)
+
+	t.Run("websocket get prints negotiated deflate and removed extensions", func(t *testing.T) {
+		const deflateBody = `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","request_id":"0193802f-f0e7-73d9-a764-06d21e36780a","state":"open","transport":"ws","host":"example.com","path":"/chat","started_at":"2026-01-02T03:04:05Z","closed_at":null,"close_code":0,"close_reason":"","deflate":{"server_no_context_takeover":true,"client_no_context_takeover":false,"server_max_window_bits":12,"client_max_window_bits":15},"removed_extensions":["x-webkit-deflate-frame","foo"]}` + "\n"
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, deflateBody)
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "websocket", "get", connectionID)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := "deflate: server_no_context_takeover=true client_no_context_takeover=false server_max_window_bits=12 client_max_window_bits=15\n" +
+			"removed_extensions: x-webkit-deflate-frame, foo\n"
+		if !strings.HasSuffix(stdout, "close_reason: \n"+want) || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout ending %q\ngot:\nstdout %q\nstderr %q", want, stdout, stderr)
+		}
+	})
 
 	for _, test := range []struct {
 		name string
