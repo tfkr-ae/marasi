@@ -72,9 +72,10 @@ make autobahn EXCLUDE='9.*,12.*,13.*' VERBOSE=1
 
 Reports are written to `dist/autobahn/<run>/<mode>-<peer>/` and the run log to
 `dist/autobahn/autobahn.log`. `RUNS=direct,proxy` refreshes the baseline before
-comparing. The strict peers negotiate permessage-deflate, so 12.x and 13.x are
-most of the run time: about 12 minutes per strict suite on an arm64 Mac, where
-the amd64 image runs under emulation.
+comparing. On an arm64 Mac, where the amd64 image runs under emulation, the
+direct baseline takes about 20 minutes and a full `make autobahn` about 30. The
+strict peers negotiate permessage-deflate, so 12.x and 13.x are most of a direct
+strict suite.
 
 A build without Make uses `go build -o marasi ./cmd/marasi`, or
 `go build -o marasi.exe ./cmd/marasi` on Windows. If a parent `go.work` excludes
