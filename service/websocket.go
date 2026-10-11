@@ -157,7 +157,7 @@ func addWebSocketRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			return
 		}
 		release()
-		message, err := proxy.InjectWebSocketMessage(r.Context(), connection.RequestID, direction, opcode, payload, options)
+		message, err := proxy.InjectWebSocketMessage(connection.RequestID, direction, opcode, payload, options)
 		if errors.Is(err, marasi.ErrWebSocketConnectionNotFound) || errors.Is(err, marasiws.ErrConnectionClosed) {
 			writeJSON(w, r, http.StatusConflict, map[string]string{"error": "websocket_not_open"})
 			return

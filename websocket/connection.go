@@ -2,7 +2,6 @@ package websocket
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -119,17 +118,16 @@ func NewConnection(
 	upstream io.ReadWriteCloser,
 	process ProcessFunc,
 ) *Connection {
-	done := make(chan struct{})
 	return &Connection{
 		ID:           id,
 		RequestID:    requestID,
 		clientReader: clientReader,
 		client:       client,
 		upstream:     upstream,
-		clientLeg:    newLeg(client, false, "writing websocket frame to client", done),
-		upstreamLeg:  newLeg(upstream, true, "writing websocket frame upstream", done),
+		clientLeg:    &leg{w: client, errPrefix: "writing websocket frame to client"},
+		upstreamLeg:  &leg{w: upstream, mask: true, errPrefix: "writing websocket frame upstream"},
 		process:      process,
-		done:         done,
+		done:         make(chan struct{}),
 		closedRecord: make(chan domain.WebSocketConnection, 1),
 
 		relayedCloseTimeout: RelayedCloseTimeout,
@@ -375,7 +373,7 @@ func (c *Connection) SendToClient(frame Frame) error {
 	_, err := c.handleFrame(
 		frame,
 		DirectionFromServer,
-		wholeMessages{c.clientLeg},
+		c.clientLeg,
 	)
 	if err != nil {
 		return fmt.Errorf("sending websocket frame to client: %w", err)
@@ -394,10 +392,8 @@ type InjectOptions struct {
 // Inject sends a message as if it originated from direction.
 // Injected messages are marked with metadata["injected"] = true. On a
 // connection with permessage-deflate, a text or binary message is compressed
-// by the leg's compressor unless options.NeverCompress is set. While a
-// streamed message is going out, the injection waits for it to finish; it
-// stops waiting when ctx ends or the connection closes.
-func (c *Connection) Inject(ctx context.Context, direction string, opcode int, payload []byte, options InjectOptions) (domain.WebSocketMessage, error) {
+// by the leg's compressor unless options.NeverCompress is set.
+func (c *Connection) Inject(direction string, opcode int, payload []byte, options InjectOptions) (domain.WebSocketMessage, error) {
 	if c.isClosed() {
 		return domain.WebSocketMessage{}, ErrConnectionClosed
 	}
@@ -433,7 +429,7 @@ func (c *Connection) Inject(ctx context.Context, direction string, opcode int, p
 		return stored, nil
 	}
 
-	if err := out.writeMessage(ctx, message.outgoing()...); err != nil {
+	if err := out.writeMessage(message.outgoing()...); err != nil {
 		return domain.WebSocketMessage{}, fmt.Errorf("writing injected websocket frame: %w", err)
 	}
 
@@ -543,7 +539,7 @@ func (c *Connection) SendToUpstream(frame Frame) error {
 	_, err := c.handleFrame(
 		frame,
 		DirectionFromClient,
-		wholeMessages{c.upstreamLeg},
+		c.upstreamLeg,
 	)
 	if err != nil {
 		return fmt.Errorf("sending websocket frame upstream: %w", err)

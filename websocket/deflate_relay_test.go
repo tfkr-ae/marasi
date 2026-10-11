@@ -325,8 +325,8 @@ func TestRelay_SendsNothingAfterItsClose(t *testing.T) {
 	const limit = 64 * 1024
 	bomb := deflateBomb(t, 16*limit)
 	causes := []struct {
-		name  string
-		frame Frame
+		name    string
+		frame   Frame
 	}{
 		{"corrupt deflate", Frame{Fin: true, Rsv1: true, Opcode: OpText, Payload: corruptDeflate}},
 		{"a deflate bomb", Frame{Fin: true, Rsv1: true, Opcode: OpBinary, Payload: bomb}},
