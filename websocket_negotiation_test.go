@@ -34,8 +34,9 @@ type negotiationResult struct {
 	// stored is the raw handshake response Marasi stored, or empty when none
 	// was stored.
 	stored string
-	// requestState is the websocket.state stored on the upgrade request when
-	// the proxy closed the connection without a response.
+	// requestState is the websocket.state stored on the upgrade request, read
+	// while the connection is open or after the proxy closed it without a
+	// response.
 	requestState any
 }
 
@@ -183,6 +184,16 @@ func negotiateThroughProxy(t *testing.T, clientOffer []string, upstreamAccept []
 		case <-time.After(5 * time.Second):
 			t.Fatalf("timed out waiting for the stored handshake response")
 		}
+		stateDeadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(stateDeadline) {
+			if metadata, err := repository.GetMetadata(requestID); err == nil {
+				result.requestState = metadata["websocket.state"]
+				if result.requestState != "pending" {
+					break
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	} else {
 		deadline := time.After(5 * time.Second)
 	waitForLog:
@@ -225,6 +236,9 @@ func TestProxy_WebSocketDeflateNegotiation(t *testing.T) {
 		}
 		if result.response == nil || result.response.StatusCode != http.StatusSwitchingProtocols {
 			t.Fatalf("\nwanted:\n101 response\ngot:\n%v", result.response)
+		}
+		if result.requestState != "open" {
+			t.Fatalf("\nwanted:\nwebsocket.state open on the upgrade request while connected\ngot:\n%v", result.requestState)
 		}
 		wantAccept := []string{"permessage-deflate; server_no_context_takeover; client_max_window_bits=10"}
 		if got := result.response.Header.Values("Sec-WebSocket-Extensions"); !reflect.DeepEqual(got, wantAccept) {
@@ -297,6 +311,21 @@ func TestProxy_WebSocketDeflateNegotiation(t *testing.T) {
 		}
 		if got, want := stored.Header.Values("Sec-WebSocket-Extensions"), []string{"permessage-deflate"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("\nwanted stored accept, as the client got it:\n%q\ngot:\n%q", want, got)
+		}
+	})
+
+	t.Run("should mark the request dropped when an extension drops the upgrade response", func(t *testing.T) {
+		result := negotiateThroughProxy(t,
+			nil,
+			nil,
+			"function processResponse(res)\n\tres:drop()\nend\n",
+		)
+
+		if result.response != nil {
+			t.Fatalf("\nwanted:\nno handshake response\ngot:\n%d", result.response.StatusCode)
+		}
+		if result.requestState != "dropped" {
+			t.Fatalf("\nwanted:\nwebsocket.state dropped on the upgrade request\ngot:\n%v", result.requestState)
 		}
 	})
 

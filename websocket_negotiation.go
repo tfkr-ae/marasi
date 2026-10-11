@@ -2,6 +2,7 @@ package marasi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -60,6 +61,10 @@ func requestLogOptions(req *http.Request) []func(*domain.Log) error {
 	return nil
 }
 
+// errWebSocketHandshakeFailed marks a handshake the proxy rejected, so the
+// response pipeline does not record it as dropped.
+var errWebSocketHandshakeFailed = errors.New("websocket handshake failed")
+
 // failWebSocketHandshake writes a proxy log for a handshake the proxy cannot
 // complete, marks the upgrade request's websocket.state failed so it is not
 // mistaken for a handshake still in flight, and returns an error that closes
@@ -69,7 +74,7 @@ func failWebSocketHandshake(proxy *Proxy, res *http.Response, cause error) error
 	if requestID, ok := core.RequestIDFromContext(res.Request.Context()); ok {
 		proxy.updateWebSocketRequestState(requestID, "failed")
 	}
-	return fmt.Errorf("%w: %w", ErrDropped, cause)
+	return fmt.Errorf("%w: %w: %w", ErrDropped, errWebSocketHandshakeFailed, cause)
 }
 
 // WebSocketNegotiationModifier sets the client's extension response to
