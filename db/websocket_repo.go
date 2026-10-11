@@ -40,6 +40,7 @@ type dbWebSocketMessage struct {
 	Direction    string    `db:"direction"`
 	Opcode       int       `db:"opcode"`
 	FrameCount   int       `db:"frame_count"`
+	Compressed   bool      `db:"compressed"`
 	Payload      []byte    `db:"payload"`
 	IsBinary     int       `db:"is_binary"`
 	CreatedAt    time.Time `db:"created_at"`
@@ -122,6 +123,7 @@ func fromDomainWebSocketMessage(msg *domain.WebSocketMessage) *dbWebSocketMessag
 		Direction:    msg.Direction,
 		Opcode:       msg.Opcode,
 		FrameCount:   msg.FrameCount,
+		Compressed:   msg.Compressed,
 		Payload:      msg.Payload,
 		IsBinary:     isBinary,
 		CreatedAt:    msg.CreatedAt,
@@ -136,6 +138,7 @@ func toDomainWebSocketMessage(row *dbWebSocketMessage) *domain.WebSocketMessage 
 		Direction:    row.Direction,
 		Opcode:       row.Opcode,
 		FrameCount:   row.FrameCount,
+		Compressed:   row.Compressed,
 		Payload:      row.Payload,
 		IsBinary:     row.IsBinary != 0,
 		CreatedAt:    row.CreatedAt,
@@ -276,9 +279,9 @@ func (repo *Repository) ListConnections(cursor *uuid.UUID, limit int) ([]*domain
 func (repo *Repository) InsertMessage(msg *domain.WebSocketMessage) error {
 	row := fromDomainWebSocketMessage(msg)
 	query := `INSERT INTO websocket_messages(
-				id, connection_id, direction, opcode, frame_count, payload, is_binary, created_at, metadata
+				id, connection_id, direction, opcode, frame_count, compressed, payload, is_binary, created_at, metadata
 			  ) VALUES (
-				:id, :connection_id, :direction, :opcode, :frame_count, :payload, :is_binary, :created_at, :metadata
+				:id, :connection_id, :direction, :opcode, :frame_count, :compressed, :payload, :is_binary, :created_at, :metadata
 			  )`
 
 	_, err := repo.dbConn.NamedExec(query, row)
@@ -291,7 +294,7 @@ func (repo *Repository) InsertMessage(msg *domain.WebSocketMessage) error {
 
 func (repo *Repository) GetMessage(id uuid.UUID) (*domain.WebSocketMessage, error) {
 	var row dbWebSocketMessage
-	query := `SELECT id, connection_id, direction, opcode, frame_count, payload, is_binary, created_at, metadata
+	query := `SELECT id, connection_id, direction, opcode, frame_count, compressed, payload, is_binary, created_at, metadata
 			  FROM websocket_messages
 			  WHERE id = ?`
 
@@ -305,7 +308,7 @@ func (repo *Repository) GetMessage(id uuid.UUID) (*domain.WebSocketMessage, erro
 
 func (repo *Repository) GetMessages(connectionID uuid.UUID) ([]*domain.WebSocketMessage, error) {
 	var rows []dbWebSocketMessage
-	query := `SELECT id, connection_id, direction, opcode, frame_count, payload, is_binary, created_at, metadata
+	query := `SELECT id, connection_id, direction, opcode, frame_count, compressed, payload, is_binary, created_at, metadata
 			  FROM websocket_messages
 			  WHERE connection_id = ?
 			  ORDER BY id ASC`
@@ -325,7 +328,7 @@ func (repo *Repository) GetMessages(connectionID uuid.UUID) ([]*domain.WebSocket
 
 // ListMessages returns a newest-first page of stored frames older than cursor.
 func (repo *Repository) ListMessages(connectionID uuid.UUID, cursor *uuid.UUID, limit int) ([]*domain.WebSocketMessage, *uuid.UUID, error) {
-	query := `SELECT id, connection_id, direction, opcode, frame_count, payload, is_binary, created_at, metadata
+	query := `SELECT id, connection_id, direction, opcode, frame_count, compressed, payload, is_binary, created_at, metadata
 			  FROM websocket_messages WHERE connection_id = ?`
 	args := []any{connectionID}
 	if cursor != nil {
@@ -368,7 +371,7 @@ func (repo *Repository) CountMessages(connectionID uuid.UUID) (int, error) {
 
 func (repo *Repository) GetMessagesByRequestID(requestID uuid.UUID) ([]*domain.WebSocketMessage, error) {
 	var rows []dbWebSocketMessage
-	query := `SELECT m.id, m.connection_id, m.direction, m.opcode, m.frame_count, m.payload, m.is_binary, m.created_at, m.metadata
+	query := `SELECT m.id, m.connection_id, m.direction, m.opcode, m.frame_count, m.compressed, m.payload, m.is_binary, m.created_at, m.metadata
 			  FROM websocket_messages m
 			  JOIN websocket_connections c ON c.id = m.connection_id
 			  WHERE c.request_id = ?

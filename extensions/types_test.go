@@ -534,6 +534,7 @@ func TestWebSocketMessageType(t *testing.T) {
 		Opcode:       marasiws.OpText,
 		Payload:      []byte("Hello from Marasi"),
 		FrameCount:   3,
+		Compressed:   true,
 		Metadata:     map[string]any{"source": "test"},
 	}
 	withMessage := func(runtime *Runtime) error {
@@ -554,6 +555,7 @@ func TestWebSocketMessageType(t *testing.T) {
 			payload = message:payload(),
 			length = message:length(),
 			frame_count = message:frame_count(),
+			compressed = message:compressed(),
 			is_binary = message:is_binary(),
 			metadata = message:metadata(),
 			string_value = tostring(message),
@@ -576,6 +578,7 @@ func TestWebSocketMessageType(t *testing.T) {
 		"payload":       "Hello from Marasi",
 		"length":        float64(len("Hello from Marasi")),
 		"frame_count":   float64(3),
+		"compressed":    true,
 		"is_binary":     false,
 		"metadata":      map[string]any{"source": "test"},
 		"string_value": fmt.Sprintf(

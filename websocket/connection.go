@@ -95,9 +95,12 @@ type Connection struct {
 	onShutdown func(uuid.UUID)
 
 	maxMessageSize int64
-	stream         StreamFunc
-	onProgress     func(domain.WebSocketMessageProgress)
-	onTooBig       func(MessageTooBig)
+	// inflaters decompress each peer's compressed messages, by the
+	// direction they come from. They are nil without permessage-deflate.
+	inflaters  map[string]*inflater
+	stream     StreamFunc
+	onProgress func(domain.WebSocketMessageProgress)
+	onTooBig   func(MessageTooBig)
 }
 
 // NewConnection creates a connection that relays between client and upstream.
@@ -133,6 +136,27 @@ func (c *Connection) SetMaxMessageSize(limit int64) {
 	if limit > 0 {
 		c.maxMessageSize = limit
 	}
+}
+
+// SetDeflate makes the proxy the permessage-deflate endpoint on both legs
+// with the negotiated params (ADR-0028). Each direction gets its own
+// inflater and deflater: the client's parameters govern messages from the
+// client, inflated from the client and deflated toward the upstream, and the
+// server's govern messages from the server. A nil params means no deflate.
+// Call it before Run.
+func (c *Connection) SetDeflate(params *domain.WebSocketDeflate) {
+	if params == nil {
+		c.inflaters = nil
+		c.upstreamLeg.deflater = nil
+		c.clientLeg.deflater = nil
+		return
+	}
+	c.inflaters = map[string]*inflater{
+		DirectionFromClient: newInflater(params.ClientNoContextTakeover),
+		DirectionFromServer: newInflater(params.ServerNoContextTakeover),
+	}
+	c.upstreamLeg.deflater = newDeflater(params.ClientNoContextTakeover, params.ClientMaxWindowBits)
+	c.clientLeg.deflater = newDeflater(params.ServerNoContextTakeover, params.ServerMaxWindowBits)
 }
 
 // SetStreamFunc registers the check that decides, as each data message
@@ -326,9 +350,18 @@ func (c *Connection) SendToClient(frame Frame) error {
 	return nil
 }
 
-// Inject sends a frame as if it originated from direction.
-// Injected messages are marked with metadata["injected"] = true.
-func (c *Connection) Inject(direction string, opcode int, payload []byte) (domain.WebSocketMessage, error) {
+// InjectOptions controls how an injected message goes out.
+type InjectOptions struct {
+	// NeverCompress sends a text or binary message uncompressed even when
+	// the connection negotiated permessage-deflate.
+	NeverCompress bool
+}
+
+// Inject sends a message as if it originated from direction.
+// Injected messages are marked with metadata["injected"] = true. On a
+// connection with permessage-deflate, a text or binary message is compressed
+// by the leg's compressor unless options.NeverCompress is set.
+func (c *Connection) Inject(direction string, opcode int, payload []byte, options InjectOptions) (domain.WebSocketMessage, error) {
 	if c.isClosed() {
 		return domain.WebSocketMessage{}, ErrConnectionClosed
 	}
@@ -352,6 +385,7 @@ func (c *Connection) Inject(direction string, opcode int, payload []byte) (domai
 		return domain.WebSocketMessage{}, fmt.Errorf("creating injected websocket message: %w", err)
 	}
 	message.Metadata["injected"] = true
+	message.Compressed = out.deflater != nil && !options.NeverCompress && (opcode == OpText || opcode == OpBinary)
 
 	if c.process != nil {
 		if err := c.process(message); err != nil {

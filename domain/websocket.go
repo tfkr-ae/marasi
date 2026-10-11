@@ -96,6 +96,9 @@ type WebSocketMessage struct {
 	Opcode int
 	// FrameCount is how many frames carried the message on the wire.
 	FrameCount int
+	// Compressed reports that the message was compressed with
+	// permessage-deflate on the wire. Payload is always uncompressed.
+	Compressed bool
 	// Payload is the whole message payload.
 	Payload []byte
 	// IsBinary reports whether the opcode was binary.
