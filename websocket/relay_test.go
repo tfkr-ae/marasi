@@ -153,6 +153,69 @@ func TestRelay_CompletesTheCloseHandshake(t *testing.T) {
 	})
 }
 
+// closingUpstream accepts writes until it has received a close frame, then
+// fails them, as a peer that dropped TCP does. Reads deliver reply only after
+// a write has failed, then EOF.
+type closingUpstream struct {
+	written    bytes.Buffer
+	gotClose   bool
+	writeFails chan struct{}
+	failOnce   bool
+	reply      *bytes.Reader
+}
+
+func (u *closingUpstream) Write(p []byte) (int, error) {
+	if u.gotClose {
+		if !u.failOnce {
+			u.failOnce = true
+			close(u.writeFails)
+		}
+		return 0, net.ErrClosed
+	}
+	u.written.Write(p)
+	if frame, err := ReadFrame(bytes.NewReader(u.written.Bytes())); err == nil && frame.Opcode == OpClose {
+		u.gotClose = true
+	}
+	return len(p), nil
+}
+
+func (u *closingUpstream) Read(p []byte) (int, error) {
+	<-u.writeFails
+	return u.reply.Read(p)
+}
+
+func (u *closingUpstream) Close() error { return nil }
+
+func TestRelay_ReplyCloseSurvivesAFailedWriteAfterClose(t *testing.T) {
+	closeFrame := Frame{Fin: true, Opcode: OpClose, Payload: []byte{0x03, 0xe8}}
+	var reply bytes.Buffer
+	if err := WriteFrame(&reply, closeFrame, false); err != nil {
+		t.Fatalf("encoding reply close: %v", err)
+	}
+	upstream := &closingUpstream{writeFails: make(chan struct{}), reply: bytes.NewReader(reply.Bytes())}
+
+	clientConnection, clientPeer := net.Pipe()
+	defer clientPeer.Close()
+	if err := clientPeer.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("setting client peer deadline: %v", err)
+	}
+	connection := NewConnection(uuid.Nil, uuid.Nil, clientConnection, clientConnection, upstream, nil)
+	go func() { _ = connection.Run() }()
+
+	if err := WriteFrame(clientPeer, closeFrame, true); err != nil {
+		t.Fatalf("writing client close: %v", err)
+	}
+	if err := WriteFrame(clientPeer, Frame{Fin: true, Opcode: OpPing}, true); err != nil {
+		t.Fatalf("writing client ping after close: %v", err)
+	}
+
+	got, err := ReadFrame(clientPeer)
+	if err != nil {
+		t.Fatalf("\nwanted reply close at client\ngot error:\n%v", err)
+	}
+	assertSameFrame(t, closeFrame, got)
+}
+
 func TestRelay_RecordsInvalidCloseOnTheStoredMessage(t *testing.T) {
 	var seen map[string]any
 	connection := NewConnection(uuid.Nil, uuid.Nil, nil, &testReadWriteCloser{}, &testReadWriteCloser{},
