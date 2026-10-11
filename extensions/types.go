@@ -1245,37 +1245,37 @@ func RegisterWebSocketMessageType(extension *Runtime) {
 
 	funcs["opcode"] = func(l *lua.State) int {
 		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
-		l.PushInteger(message.Frame.Opcode)
+		l.PushInteger(message.Opcode)
 		return 1
 	}
 
 	funcs["set_opcode"] = func(l *lua.State) int {
 		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
-		message.Frame.Opcode = lua.CheckInteger(l, 2)
+		message.Opcode = lua.CheckInteger(l, 2)
 		return 0
 	}
 
 	funcs["payload"] = func(l *lua.State) int {
 		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
-		l.PushString(string(message.Frame.Payload))
+		l.PushString(string(message.Payload))
 		return 1
 	}
 
 	funcs["set_payload"] = func(l *lua.State) int {
 		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
-		message.Frame.Payload = []byte(lua.CheckString(l, 2))
+		message.Payload = []byte(lua.CheckString(l, 2))
 		return 0
 	}
 
 	funcs["length"] = func(l *lua.State) int {
 		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
-		l.PushInteger(len(message.Frame.Payload))
+		l.PushInteger(len(message.Payload))
 		return 1
 	}
 
-	funcs["fin"] = func(l *lua.State) int {
+	funcs["frame_count"] = func(l *lua.State) int {
 		message := lua.CheckUserData(l, 1, "wsmsg").(*marasiws.Message)
-		l.PushBoolean(message.Frame.Fin)
+		l.PushInteger(message.FrameCount)
 		return 1
 	}
 
@@ -1330,8 +1330,8 @@ func RegisterWebSocketMessageType(extension *Runtime) {
 			message.ID,
 			message.ConnectionID,
 			message.Direction,
-			message.Frame.Opcode,
-			len(message.Frame.Payload),
+			message.Opcode,
+			len(message.Payload),
 		))
 		return 1
 	})

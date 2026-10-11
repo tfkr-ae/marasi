@@ -29,6 +29,9 @@ type Config struct {
 	DesktopOS      string              `mapstructure:"desktop_os"` // Operating system identifier
 	ChromeDirs     []chrome.PathConfig `mapstructure:"chrome_dirs"`
 	ChromeProfiles []string            `mapstructure:"chrome_profiles"`
+	// WebSocketMaxMessageSize is the per-message WebSocket size limit in
+	// bytes. Zero or unset means websocket.DefaultMaxMessageSize (64 MiB).
+	WebSocketMaxMessageSize int64 `mapstructure:"websocket_max_message_size"`
 }
 
 // AddChromeProfile adds a chrome profile to the configuration.

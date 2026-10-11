@@ -524,6 +524,30 @@ func shouldInterceptWebSocketMessage(proxy *Proxy, message *marasiws.Message) bo
 	return shouldIntercept
 }
 
+// webSocketMessageMayStream reports whether a data message starting now may be
+// forwarded as its bytes arrive: no hook can hold or change it. That needs no
+// enabled extension defining processWebSocketMessage, and Checkpoint unable to
+// hold: disabled, or global interception off and no interceptWebSocketMessage.
+func webSocketMessageMayStream(proxy *Proxy) bool {
+	for _, extension := range proxy.Extensions {
+		if extension == nil || extension.Data == nil || !extension.MetadataSnapshot().Enabled || extension.Data.Name == "checkpoint" {
+			continue
+		}
+		if extension.HasFunction("processWebSocketMessage") {
+			return false
+		}
+	}
+
+	checkpoint, ok := proxy.GetExtension("checkpoint")
+	if ok && (checkpoint.Data == nil || !checkpoint.MetadataSnapshot().Enabled) {
+		return true
+	}
+	if proxy.GetWebSocketIntercept() {
+		return false
+	}
+	return !ok || !checkpoint.HasFunction("interceptWebSocketMessage")
+}
+
 // processWebSocketMessageExtensions runs enabled non-checkpoint extensions against a live message.
 // Dropped and skipped messages stop further extension processing.
 // An interrupted hook drops the message.
@@ -599,7 +623,9 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 	var connection *marasiws.Connection
 	process := func(message *marasiws.Message) error {
 		generated, _ := message.Metadata["generated"].(bool)
-		if !generated {
+		// A passthrough message was already forwarded as it arrived, so no
+		// hook may hold or change it; it is only recorded.
+		if !generated && !message.Passthrough {
 			processWebSocketMessageExtensions(proxy, message)
 
 			if !message.Dropped && shouldInterceptWebSocketMessage(proxy, message) {
@@ -654,6 +680,23 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 	if proxy.WebSocketInterceptor != nil {
 		connection.SetShutdownHandler(proxy.cancelWebSocketCheckpoint)
 	}
+	if proxy.Config != nil {
+		connection.SetMaxMessageSize(proxy.Config.WebSocketMaxMessageSize)
+	}
+	connection.SetStreamFunc(func(string, int) bool {
+		return webSocketMessageMayStream(proxy)
+	})
+	if proxy.OnWebSocketProgress != nil {
+		connection.SetProgressHandler(func(progress domain.WebSocketMessageProgress) {
+			_ = proxy.OnWebSocketProgress(progress)
+		})
+	}
+	connection.SetMessageTooBigHandler(func(tooBig marasiws.MessageTooBig) {
+		_ = proxy.WriteLog("WARN", fmt.Sprintf(
+			"WebSocket %s closed: a %s message of %d bytes is over the %d-byte limit. Sent 1009 to the sender and 1001 to the receiver.",
+			connectionID, tooBig.Direction, tooBig.Size, tooBig.Limit,
+		), core.LogWithReqResID(requestID))
+	})
 
 	path := res.Request.URL.Path
 	if res.Request.URL.RawQuery != "" {

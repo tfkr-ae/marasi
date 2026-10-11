@@ -19,6 +19,13 @@ type runningRelay struct {
 
 func startRelay(t *testing.T) *runningRelay {
 	t.Helper()
+	return startRelayWith(t, nil)
+}
+
+// startRelayWith starts a relay whose messages pass through process. configure,
+// when given, sets the connection up before it runs.
+func startRelayWith(t *testing.T, process ProcessFunc, configure ...func(*Connection)) *runningRelay {
+	t.Helper()
 
 	clientConnection, clientPeer := net.Pipe()
 	upstreamConnection, upstreamPeer := net.Pipe()
@@ -35,12 +42,15 @@ func startRelay(t *testing.T) *runningRelay {
 	}
 
 	relay := &runningRelay{
-		connection: NewConnection(uuid.Nil, uuid.Nil, clientConnection, clientConnection, upstreamConnection, nil),
+		connection: NewConnection(uuid.Nil, uuid.Nil, clientConnection, clientConnection, upstreamConnection, process),
 		client:     clientPeer,
 		upstream:   upstreamPeer,
 		result:     make(chan error, 1),
 	}
 	relay.connection.relayedCloseTimeout = 200 * time.Millisecond
+	for _, apply := range configure {
+		apply(relay.connection)
+	}
 	go func() { relay.result <- relay.connection.Run() }()
 
 	return relay

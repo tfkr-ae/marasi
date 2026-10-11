@@ -404,8 +404,8 @@ func TestConnection_RelayFramesProcessesSource(t *testing.T) {
 			if got.Direction != tt.source {
 				t.Fatalf("\nwanted direction:\n%q\ngot:\n%q", tt.source, got.Direction)
 			}
-			if got.Frame.Opcode != OpClose {
-				t.Fatalf("\nwanted Opcode:\n%d\ngot:\n%d", OpClose, got.Frame.Opcode)
+			if got.Opcode != OpClose {
+				t.Fatalf("\nwanted Opcode:\n%d\ngot:\n%d", OpClose, got.Opcode)
 			}
 		})
 	}
@@ -446,7 +446,7 @@ func TestConnection_CloseDetails(t *testing.T) {
 			name:    "modified close",
 			payload: normalPayload,
 			process: func(message *Message) error {
-				message.Frame.Payload = modifiedPayload
+				message.Payload = modifiedPayload
 				return nil
 			},
 			wantCode:   1001,
@@ -522,9 +522,9 @@ func TestConnection_CloseDetails(t *testing.T) {
 
 func TestConnection_RelayFramesForwardsModification(t *testing.T) {
 	process := func(message *Message) error {
-		if message.Frame.Opcode == OpText {
-			message.Frame.Opcode = OpBinary
-			message.Frame.Payload = []byte("modified")
+		if message.Opcode == OpText {
+			message.Opcode = OpBinary
+			message.Payload = []byte("modified")
 		}
 		return nil
 	}
@@ -563,7 +563,7 @@ func TestConnection_RelayFramesForwardsModification(t *testing.T) {
 
 func TestConnection_RelayFramesDropsMessage(t *testing.T) {
 	process := func(message *Message) error {
-		if message.Frame.Opcode == OpText {
+		if message.Opcode == OpText {
 			message.Dropped = true
 		}
 		return nil
@@ -734,8 +734,8 @@ func TestConnection_SendFrame(t *testing.T) {
 			var gotDirection string
 			process := func(message *Message) error {
 				gotDirection = message.Direction
-				message.Frame.Opcode = OpBinary
-				message.Frame.Payload = []byte("modified")
+				message.Opcode = OpBinary
+				message.Payload = []byte("modified")
 				return nil
 			}
 			client := &testReadWriteCloser{}
@@ -1047,8 +1047,8 @@ func TestConnection_Close(t *testing.T) {
 	if message.Direction != DirectionFromClient {
 		t.Fatalf("\nwanted direction:\n%q\ngot:\n%q", DirectionFromClient, message.Direction)
 	}
-	if message.Frame.Opcode != OpClose {
-		t.Fatalf("\nwanted opcode:\n%d\ngot:\n%d", OpClose, message.Frame.Opcode)
+	if message.Opcode != OpClose {
+		t.Fatalf("\nwanted opcode:\n%d\ngot:\n%d", OpClose, message.Opcode)
 	}
 	if generated, _ := message.Metadata["generated"].(bool); !generated {
 		t.Fatalf("\nwanted generated metadata:\n%v\ngot:\n%v", true, message.Metadata["generated"])
