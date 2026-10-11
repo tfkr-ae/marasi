@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -20,6 +21,17 @@ type dbWebSocketConnection struct {
 	ClosedAt    sql.NullTime `db:"closed_at"`
 	CloseCode   int          `db:"close_code"`
 	CloseReason string       `db:"close_reason"`
+	// Deflate is the negotiated permessage-deflate configuration as JSON, or NULL.
+	Deflate           sql.NullString `db:"deflate"`
+	RemovedExtensions StringArray    `db:"removed_extensions"`
+}
+
+// dbWebSocketDeflate is the stored JSON form of domain.WebSocketDeflate.
+type dbWebSocketDeflate struct {
+	ServerNoContextTakeover bool `json:"server_no_context_takeover"`
+	ClientNoContextTakeover bool `json:"client_no_context_takeover"`
+	ServerMaxWindowBits     int  `json:"server_max_window_bits"`
+	ClientMaxWindowBits     int  `json:"client_max_window_bits"`
 }
 
 type dbWebSocketMessage struct {
@@ -34,27 +46,36 @@ type dbWebSocketMessage struct {
 	Metadata     Metadata  `db:"metadata"`
 }
 
-func fromDomainWebSocketConnection(c *domain.WebSocketConnection) *dbWebSocketConnection {
+func fromDomainWebSocketConnection(c *domain.WebSocketConnection) (*dbWebSocketConnection, error) {
 	row := &dbWebSocketConnection{
-		ID:          c.ID,
-		RequestID:   c.RequestID,
-		State:       c.State,
-		Transport:   c.Transport,
-		Host:        c.Host,
-		Path:        c.Path,
-		StartedAt:   c.StartedAt,
-		CloseCode:   c.CloseCode,
-		CloseReason: c.CloseReason,
+		RemovedExtensions: StringArray(c.RemovedExtensions),
+		ID:                c.ID,
+		RequestID:         c.RequestID,
+		State:             c.State,
+		Transport:         c.Transport,
+		Host:              c.Host,
+		Path:              c.Path,
+		StartedAt:         c.StartedAt,
+		CloseCode:         c.CloseCode,
+		CloseReason:       c.CloseReason,
 	}
 
 	if c.ClosedAt != nil {
 		row.ClosedAt = sql.NullTime{Time: *c.ClosedAt, Valid: true}
 	}
 
-	return row
+	if c.Deflate != nil {
+		deflate, err := json.Marshal(dbWebSocketDeflate(*c.Deflate))
+		if err != nil {
+			return nil, fmt.Errorf("encoding websocket deflate parameters: %w", err)
+		}
+		row.Deflate = sql.NullString{String: string(deflate), Valid: true}
+	}
+
+	return row, nil
 }
 
-func toDomainWebSocketConnection(row *dbWebSocketConnection) *domain.WebSocketConnection {
+func toDomainWebSocketConnection(row *dbWebSocketConnection) (*domain.WebSocketConnection, error) {
 	c := &domain.WebSocketConnection{
 		ID:          row.ID,
 		RequestID:   row.RequestID,
@@ -72,7 +93,20 @@ func toDomainWebSocketConnection(row *dbWebSocketConnection) *domain.WebSocketCo
 		c.ClosedAt = &t
 	}
 
-	return c
+	if len(row.RemovedExtensions) > 0 {
+		c.RemovedExtensions = []string(row.RemovedExtensions)
+	}
+
+	if row.Deflate.Valid {
+		var deflate dbWebSocketDeflate
+		if err := json.Unmarshal([]byte(row.Deflate.String), &deflate); err != nil {
+			return nil, fmt.Errorf("decoding websocket deflate parameters of connection %s: %w", row.ID, err)
+		}
+		params := domain.WebSocketDeflate(deflate)
+		c.Deflate = &params
+	}
+
+	return c, nil
 }
 
 func fromDomainWebSocketMessage(msg *domain.WebSocketMessage) *dbWebSocketMessage {
@@ -115,16 +149,21 @@ func toDomainWebSocketMessage(row *dbWebSocketMessage) *domain.WebSocketMessage 
 }
 
 func (repo *Repository) InsertConnection(conn *domain.WebSocketConnection) error {
-	row := fromDomainWebSocketConnection(conn)
+	row, err := fromDomainWebSocketConnection(conn)
+	if err != nil {
+		return fmt.Errorf("inserting websocket connection %s : %w", conn.ID, err)
+	}
 	query := `INSERT INTO websocket_connections(
 				id, request_id, state, transport, host, path,
-				started_at, closed_at, close_code, close_reason
+				started_at, closed_at, close_code, close_reason,
+				deflate, removed_extensions
 			  ) VALUES (
 				:id, :request_id, :state, :transport, :host, :path,
-				:started_at, :closed_at, :close_code, :close_reason
+				:started_at, :closed_at, :close_code, :close_reason,
+				:deflate, :removed_extensions
 			  )`
 
-	_, err := repo.dbConn.NamedExec(query, row)
+	_, err = repo.dbConn.NamedExec(query, row)
 	if err != nil {
 		return fmt.Errorf("inserting websocket connection %s : %w", conn.ID, err)
 	}
@@ -172,7 +211,8 @@ func (repo *Repository) UpdateConnection(conn *domain.WebSocketConnection) error
 func (repo *Repository) GetConnection(id uuid.UUID) (*domain.WebSocketConnection, error) {
 	var row dbWebSocketConnection
 	query := `SELECT id, request_id, state, transport, host, path,
-					 started_at, closed_at, close_code, close_reason
+					 started_at, closed_at, close_code, close_reason,
+					 deflate, removed_extensions
 			  FROM websocket_connections
 			  WHERE id = ?`
 
@@ -181,13 +221,14 @@ func (repo *Repository) GetConnection(id uuid.UUID) (*domain.WebSocketConnection
 		return nil, fmt.Errorf("getting websocket connection %s : %w", id, err)
 	}
 
-	return toDomainWebSocketConnection(&row), nil
+	return toDomainWebSocketConnection(&row)
 }
 
 func (repo *Repository) GetConnectionByRequestID(requestID uuid.UUID) (*domain.WebSocketConnection, error) {
 	var row dbWebSocketConnection
 	query := `SELECT id, request_id, state, transport, host, path,
-					 started_at, closed_at, close_code, close_reason
+					 started_at, closed_at, close_code, close_reason,
+					 deflate, removed_extensions
 			  FROM websocket_connections
 			  WHERE request_id = ?`
 
@@ -196,13 +237,14 @@ func (repo *Repository) GetConnectionByRequestID(requestID uuid.UUID) (*domain.W
 		return nil, fmt.Errorf("getting websocket connection for request %s : %w", requestID, err)
 	}
 
-	return toDomainWebSocketConnection(&row), nil
+	return toDomainWebSocketConnection(&row)
 }
 
 // ListConnections returns a newest-first page of connections older than cursor.
 func (repo *Repository) ListConnections(cursor *uuid.UUID, limit int) ([]*domain.WebSocketConnection, *uuid.UUID, error) {
 	query := `SELECT id, request_id, state, transport, host, path,
-					 started_at, closed_at, close_code, close_reason
+					 started_at, closed_at, close_code, close_reason,
+					 deflate, removed_extensions
 			  FROM websocket_connections`
 	var args []any
 	if cursor != nil {
@@ -222,7 +264,11 @@ func (repo *Repository) ListConnections(cursor *uuid.UUID, limit int) ([]*domain
 	}
 	items := make([]*domain.WebSocketConnection, len(rows))
 	for i := range rows {
-		items[i] = toDomainWebSocketConnection(&rows[i])
+		item, err := toDomainWebSocketConnection(&rows[i])
+		if err != nil {
+			return nil, nil, fmt.Errorf("listing websocket connections: %w", err)
+		}
+		items[i] = item
 	}
 	var nextCursor *uuid.UUID
 	if hasMore {
