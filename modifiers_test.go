@@ -2559,6 +2559,8 @@ func TestWebSocketHandoffModifier(t *testing.T) {
 		if upstreamFrame.Opcode != marasiws.OpClose {
 			t.Fatalf("wanted: %d\ngot: %d", marasiws.OpClose, upstreamFrame.Opcode)
 		}
+		// The upstream ends the close handshake by dropping TCP.
+		_ = upstreamPeer.Close()
 
 		messageItem := receiveSessionDBWrite(t, proxy.DBWriteChannel)
 		message, ok := messageItem.(*domain.WebSocketMessage)

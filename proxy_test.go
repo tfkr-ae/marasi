@@ -808,6 +808,8 @@ func TestProxy_RunWebSocketSession(t *testing.T) {
 		if _, readErr := marasiws.ReadFrame(upstreamPeer); readErr != nil {
 			t.Fatalf("reading upstream close frame: %v", readErr)
 		}
+		// The upstream ends the close handshake by dropping TCP.
+		_ = upstreamPeer.Close()
 
 		select {
 		case sessionErr := <-runResult:

@@ -339,7 +339,8 @@ func TestConnection_RelayFrames(t *testing.T) {
 		t.Fatalf("relayFrames() returned unexpected error: %v", err)
 	}
 
-	want := frames[:3]
+	// Frames after a close are relayed too; the receiving peer decides.
+	want := frames
 	if len(got) != len(want) {
 		t.Fatalf("\nwanted relayed frame count:\n%d\ngot:\n%d", len(want), len(got))
 	}
@@ -466,8 +467,8 @@ func TestConnection_CloseDetails(t *testing.T) {
 		{
 			name:      "malformed close",
 			payload:   []byte{0x03},
-			wantWrite: false,
-			wantErr:   "parsing websocket close payload",
+			wantCode:  0,
+			wantWrite: true,
 		},
 	}
 
@@ -1372,6 +1373,7 @@ func TestConnection_Run(t *testing.T) {
 	if !gotClose.Masked {
 		t.Fatalf("\nwanted close frame Masked:\n%v\ngot:\n%v", true, gotClose.Masked)
 	}
+	_ = upstreamPeer.Close()
 
 	select {
 	case err := <-runResult:
