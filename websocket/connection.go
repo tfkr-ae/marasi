@@ -212,6 +212,12 @@ func (c *Connection) handleMessage(message *Message, out frameSink) (isClose boo
 	if message.Passthrough || message.Dropped {
 		return isClose, nil
 	}
+	if isClose && !c.closing.Load() {
+		// Mark the handshake before the close goes out: the receiving peer
+		// may drop TCP as soon as it reads it, and the other direction must
+		// then see a clean end, not a read error.
+		c.noteCloseRelayed()
+	}
 	if err := out.writeFrames(message.outgoing()...); err != nil {
 		return false, fmt.Errorf("%w: %w", errForwarding, err)
 	}
