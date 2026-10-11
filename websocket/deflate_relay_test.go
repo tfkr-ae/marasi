@@ -302,3 +302,100 @@ func TestRelay_DeflateBomb(t *testing.T) {
 		}
 	})
 }
+
+// framesUntilEnd reads frames from peer in the background until the
+// connection ends, and returns them.
+func framesUntilEnd(peer net.Conn) <-chan []Frame {
+	out := make(chan []Frame, 1)
+	go func() {
+		var frames []Frame
+		for {
+			frame, err := ReadFrame(peer)
+			if err != nil {
+				out <- frames
+				return
+			}
+			frames = append(frames, frame)
+		}
+	}()
+	return out
+}
+
+func TestRelay_SendsNothingAfterItsClose(t *testing.T) {
+	const limit = 64 * 1024
+	bomb := deflateBomb(t, 16*limit)
+	causes := []struct {
+		name  string
+		frame Frame
+	}{
+		{"corrupt deflate", Frame{Fin: true, Rsv1: true, Opcode: OpText, Payload: corruptDeflate}},
+		{"a deflate bomb", Frame{Fin: true, Rsv1: true, Opcode: OpBinary, Payload: bomb}},
+		{"a message over the limit", Frame{Fin: true, Opcode: OpBinary, Payload: make([]byte, limit+1)}},
+	}
+	later := []Frame{
+		{Fin: true, Opcode: OpPing, Payload: []byte("ping")},
+		{Fin: true, Opcode: OpPong, Payload: []byte("pong")},
+		{Fin: true, Opcode: OpText, Payload: []byte("data")},
+	}
+	closeReply := Frame{Fin: true, Opcode: OpClose, Payload: closePayload(CloseNormalClosure)}
+
+	for _, cause := range causes {
+		for _, tt := range bothDirections {
+			t.Run("should only finish the close handshake after "+cause.name+" "+tt.name, func(t *testing.T) {
+				relay := startRelayWith(t, nil, withDeflate(contextTakeover), func(c *Connection) { c.SetMaxMessageSize(limit) })
+				writeFrames(tt.sender(relay), tt.mask, cause.frame)
+				readCloses(t, relay, tt)
+
+				atSender, atReceiver := framesUntilEnd(tt.sender(relay)), framesUntilEnd(tt.receiver(relay))
+				fromSender := writeFrames(tt.sender(relay), tt.mask, later...)
+				fromReceiver := writeFrames(tt.receiver(relay), !tt.mask, later...)
+				<-fromSender
+				<-fromReceiver
+				<-writeFrames(relay.client, true, closeReply)
+				<-writeFrames(relay.upstream, false, closeReply)
+
+				if sender, receiver := <-atSender, <-atReceiver; len(sender) > 0 || len(receiver) > 0 {
+					t.Fatalf("\nwanted after the close:\nno frames\ngot:\nsender %+v\nreceiver %+v", sender, receiver)
+				}
+			})
+		}
+	}
+}
+
+func TestRelay_RecordsAnIncompleteCompressedMessage(t *testing.T) {
+	compressed := Frame{Fin: false, Rsv1: true, Opcode: OpText, Payload: corruptDeflate}
+	next := Frame{Fin: true, Opcode: OpText, Payload: []byte("next")}
+
+	type seen struct {
+		message     domain.WebSocketMessage
+		passthrough bool
+	}
+	recorded := make(chan seen, 4)
+	relay := startRelayWith(t, func(message *Message) error {
+		recorded <- seen{message.ToDomain(), message.Passthrough}
+		return nil
+	}, withDeflate(contextTakeover))
+	writeFrames(relay.client, true, compressed, next)
+
+	assertSameFrame(t, compressed, readFrame(t, relay.upstream))
+	got := <-recorded
+	if !got.passthrough || !got.message.Compressed || got.message.Metadata["incomplete"] != true || !bytes.Equal(got.message.Payload, corruptDeflate) {
+		t.Fatalf("\nwanted recorded message:\npassthrough, compressed, incomplete, payload %x\ngot:\npassthrough %t, compressed %t, metadata %v, payload %x",
+			corruptDeflate, got.passthrough, got.message.Compressed, got.message.Metadata, got.message.Payload)
+	}
+}
+
+func TestRelay_ClearsRsv1WhenAnEditIsNotCompressed(t *testing.T) {
+	toPing := func(message *Message) error {
+		if message.Opcode == OpText {
+			message.Opcode = OpPing
+			message.Payload = []byte("ping")
+		}
+		return nil
+	}
+	relay := startRelayWith(t, toPing, withDeflate(contextTakeover))
+	client := newPeerCompressor(t, false)
+	writeFrames(relay.client, true, Frame{Fin: true, Rsv1: true, Opcode: OpText, Payload: client.compress([]byte("hello"))})
+
+	assertSameFrame(t, Frame{Fin: true, Opcode: OpPing, Payload: []byte("ping")}, readFrame(t, relay.upstream))
+}

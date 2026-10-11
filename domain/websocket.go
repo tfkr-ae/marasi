@@ -76,9 +76,6 @@ type WebSocketMessageProgress struct {
 	Bytes int64
 	// Frames is how many frames have started arriving so far.
 	Frames int
-	// Streamed reports that the bytes are forwarded as they arrive. When
-	// false, nothing is forwarded until the message is complete.
-	Streamed bool
 }
 
 // WebSocketMessage is a persisted WebSocket message snapshot: a whole text or

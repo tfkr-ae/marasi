@@ -533,30 +533,6 @@ func shouldInterceptWebSocketMessage(proxy *Proxy, message *marasiws.Message) bo
 	return shouldIntercept
 }
 
-// webSocketMessageMayStream reports whether a data message starting now may be
-// forwarded as its bytes arrive: no hook can hold or change it. That needs no
-// enabled extension defining processWebSocketMessage, and Checkpoint unable to
-// hold: disabled, or global interception off and no interceptWebSocketMessage.
-func webSocketMessageMayStream(proxy *Proxy) bool {
-	for _, extension := range proxy.Extensions {
-		if extension == nil || extension.Data == nil || !extension.MetadataSnapshot().Enabled || extension.Data.Name == "checkpoint" {
-			continue
-		}
-		if extension.HasFunction("processWebSocketMessage") {
-			return false
-		}
-	}
-
-	checkpoint, ok := proxy.GetExtension("checkpoint")
-	if ok && (checkpoint.Data == nil || !checkpoint.MetadataSnapshot().Enabled) {
-		return true
-	}
-	if proxy.GetWebSocketIntercept() {
-		return false
-	}
-	return !ok || !checkpoint.HasFunction("interceptWebSocketMessage")
-}
-
 // processWebSocketMessageExtensions runs enabled non-checkpoint extensions against a live message.
 // Dropped and skipped messages stop further extension processing.
 // An interrupted hook drops the message.
@@ -621,7 +597,7 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		return fmt.Errorf("clearing websocket client deadline: %w", err)
 	}
 
-	deflate, removedExtensions := mirrorWebSocketNegotiation(proxy, res)
+	deflate, removedExtensions := webSocketNegotiated(res.Request)
 	if err := res.Write(bufferedClient); err != nil {
 		return fmt.Errorf("writing websocket handshake response: %w", err)
 	}
@@ -633,8 +609,8 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 	var connection *marasiws.Connection
 	process := func(message *marasiws.Message) error {
 		generated, _ := message.Metadata["generated"].(bool)
-		// A passthrough message was already forwarded as it arrived, so no
-		// hook may hold or change it; it is only recorded.
+		// A passthrough message is only recorded: the relay cannot forward
+		// it as processed, so no hook may hold or change it.
 		if !generated && !message.Passthrough {
 			processWebSocketMessageExtensions(proxy, message)
 
@@ -694,9 +670,6 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 	if proxy.Config != nil {
 		connection.SetMaxMessageSize(proxy.Config.WebSocketMaxMessageSize)
 	}
-	connection.SetStreamFunc(func(string, int) bool {
-		return webSocketMessageMayStream(proxy)
-	})
 	if proxy.OnWebSocketProgress != nil {
 		connection.SetProgressHandler(func(progress domain.WebSocketMessageProgress) {
 			_ = proxy.OnWebSocketProgress(progress)

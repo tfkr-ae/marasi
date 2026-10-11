@@ -81,6 +81,10 @@ type Connection struct {
 	closedRecord chan domain.WebSocketConnection
 	closing      atomic.Bool
 	running      atomic.Bool
+	// started is set when Run begins and stays set. The setters configure
+	// fields the relay goroutines read without locks, so they must run
+	// before it.
+	started atomic.Bool
 	// closeRelayed is set once a peer's close frame has been relayed. The
 	// relay then keeps both directions open so the reply close reaches the
 	// other peer, and tears down when a peer drops TCP.
@@ -98,7 +102,6 @@ type Connection struct {
 	// inflaters decompress each peer's compressed messages, by the
 	// direction they come from. They are nil without permessage-deflate.
 	inflaters  map[string]*inflater
-	stream     StreamFunc
 	onProgress func(domain.WebSocketMessageProgress)
 	onTooBig   func(MessageTooBig)
 	onInflate  func(InflateFailure)
@@ -132,8 +135,9 @@ func NewConnection(
 }
 
 // SetMaxMessageSize sets the per-message size limit in bytes. A value of zero
-// or less keeps the current limit.
+// or less keeps the current limit. Call it before Run; it panics after.
 func (c *Connection) SetMaxMessageSize(limit int64) {
+	c.mustNotHaveStarted("SetMaxMessageSize")
 	if limit > 0 {
 		c.maxMessageSize = limit
 	}
@@ -144,8 +148,9 @@ func (c *Connection) SetMaxMessageSize(limit int64) {
 // inflater and deflater: the client's parameters govern messages from the
 // client, inflated from the client and deflated toward the upstream, and the
 // server's govern messages from the server. A nil params means no deflate.
-// Call it before Run.
+// Call it before Run; it panics after.
 func (c *Connection) SetDeflate(params *domain.WebSocketDeflate) {
+	c.mustNotHaveStarted("SetDeflate")
 	if params == nil {
 		c.inflaters = nil
 		c.upstreamLeg.deflater = nil
@@ -160,29 +165,36 @@ func (c *Connection) SetDeflate(params *domain.WebSocketDeflate) {
 	c.clientLeg.deflater = newDeflater(params.ServerNoContextTakeover, params.ServerMaxWindowBits)
 }
 
-// SetStreamFunc registers the check that decides, as each data message
-// starts, whether the relay may forward its bytes as they arrive.
-func (c *Connection) SetStreamFunc(stream StreamFunc) {
-	c.stream = stream
-}
-
 // SetProgressHandler registers a callback for messages whose frames are still
-// arriving. It runs on the relay goroutine and must not block.
+// arriving. It runs on the relay goroutine and must not block. Call it before
+// Run; it panics after.
 func (c *Connection) SetProgressHandler(handler func(domain.WebSocketMessageProgress)) {
+	c.mustNotHaveStarted("SetProgressHandler")
 	c.onProgress = handler
 }
 
 // SetMessageTooBigHandler registers a callback invoked when a message goes
-// over the size limit, after the close frames are sent.
+// over the size limit, after the close frames are sent. Call it before Run;
+// it panics after.
 func (c *Connection) SetMessageTooBigHandler(handler func(MessageTooBig)) {
+	c.mustNotHaveStarted("SetMessageTooBigHandler")
 	c.onTooBig = handler
 }
 
 // SetInflateFailureHandler registers a callback invoked when a compressed
 // message cannot be inflated, after the message is processed and the close
-// frames are sent.
+// frames are sent. Call it before Run; it panics after.
 func (c *Connection) SetInflateFailureHandler(handler func(InflateFailure)) {
+	c.mustNotHaveStarted("SetInflateFailureHandler")
 	c.onInflate = handler
+}
+
+// mustNotHaveStarted panics when Run has begun: setter configures what the
+// relay goroutines read without synchronisation.
+func (c *Connection) mustNotHaveStarted(setter string) {
+	if c.started.Load() {
+		panic("websocket: Connection." + setter + " called after Run")
+	}
 }
 
 // ClosedRecord receives the final in-memory connection state after the relay ends.
@@ -225,7 +237,7 @@ func (c *Connection) handleFrame(
 }
 
 // handleMessage processes a whole message and forwards it unless it was
-// dropped or already streamed. It reports whether the message is a close.
+// dropped or only recorded (Passthrough). It reports whether the message is a close.
 func (c *Connection) handleMessage(message *Message, out frameSink) (isClose bool, err error) {
 	received := message.Opcode
 
@@ -255,15 +267,6 @@ func (c *Connection) handleMessage(message *Message, out frameSink) (isClose boo
 	}
 
 	return isClose, nil
-}
-
-// relayFrames relays frames from reader to writeFrame. It never streams.
-func (c *Connection) relayFrames(
-	reader io.Reader,
-	writeFrame func(Frame) error,
-	source string,
-) error {
-	return c.relay(reader, frameFunc(writeFrame), source)
 }
 
 // noteCloseRelayed marks the peers' close handshake as started and, while the
@@ -299,13 +302,16 @@ func (c *Connection) shutdown() error {
 	return c.closeErr
 }
 
-// SetShutdownHandler registers a callback invoked once when the connection shuts down.
+// SetShutdownHandler registers a callback invoked once when the connection
+// shuts down. Call it before Run; it panics after.
 func (c *Connection) SetShutdownHandler(handler func(uuid.UUID)) {
+	c.mustNotHaveStarted("SetShutdownHandler")
 	c.onShutdown = handler
 }
 
 // Run starts bidirectional frame relay and blocks until the connection closes.
 func (c *Connection) Run() error {
+	c.started.Store(true)
 	c.running.Store(true)
 	defer c.running.Store(false)
 
@@ -394,6 +400,9 @@ func (c *Connection) Inject(direction string, opcode int, payload []byte, option
 	}
 	message.Metadata["injected"] = true
 	message.Compressed = out.deflater != nil && !options.NeverCompress && (opcode == OpText || opcode == OpBinary)
+	if message.Compressed {
+		message.compressTo = out.deflater
+	}
 
 	if c.process != nil {
 		if err := c.process(message); err != nil {
@@ -405,7 +414,7 @@ func (c *Connection) Inject(direction string, opcode int, payload []byte, option
 		return stored, nil
 	}
 
-	if err := out.writeMessage(message.outgoing()...); err != nil {
+	if err := out.writeFrames(message.outgoing()...); err != nil {
 		return domain.WebSocketMessage{}, fmt.Errorf("writing injected websocket frame: %w", err)
 	}
 
@@ -472,8 +481,8 @@ func (c *Connection) sendCloseFrames(toClient, toUpstream Frame, ensureTimeout b
 			}
 		}()
 	}
-	clientErr := c.writeToClient(toClient)
-	upstreamErr := c.sendGeneratedClose(toUpstream, DirectionFromClient, c.writeToUpstream)
+	clientErr := c.clientLeg.writeClose(toClient)
+	upstreamErr := c.sendGeneratedClose(toUpstream, DirectionFromClient, c.upstreamLeg)
 	if c.running.Load() {
 		return errors.Join(clientErr, upstreamErr)
 	}
@@ -489,7 +498,7 @@ func (c *Connection) sendCloseFrames(toClient, toUpstream Frame, ensureTimeout b
 func (c *Connection) sendGeneratedClose(
 	frame Frame,
 	direction string,
-	writeFrame func(Frame) error,
+	out *leg,
 ) error {
 	message, err := NewMessage(c.ID, c.RequestID, direction, frame)
 	if err != nil {
@@ -503,12 +512,7 @@ func (c *Connection) sendGeneratedClose(
 		}
 	}
 
-	for _, frame := range message.outgoing() {
-		if err := writeFrame(frame); err != nil {
-			return err
-		}
-	}
-	return nil
+	return out.writeClose(message.outgoing()...)
 }
 
 // SendToUpstream sends a frame toward the upstream server through the process path.

@@ -69,7 +69,6 @@ type webSocketProgressResponse struct {
 	Opcode       int       `json:"opcode"`
 	Bytes        int64     `json:"bytes"`
 	Frames       int       `json:"frames"`
-	Streamed     bool      `json:"streamed"`
 }
 
 type webSocketMessageList struct {
@@ -134,7 +133,7 @@ func addWebSocketRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
 			return
 		}
-		direction, opcode, payload, options, err := decodeWebSocketInject(r)
+		inject, err := decodeWebSocketInject(r)
 		if err != nil {
 			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_websocket_request"})
 			return
@@ -157,7 +156,7 @@ func addWebSocketRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			return
 		}
 		release()
-		message, err := proxy.InjectWebSocketMessage(connection.RequestID, direction, opcode, payload, options)
+		message, err := proxy.InjectWebSocketMessage(connection.RequestID, inject.direction, inject.opcode, inject.payload, inject.options)
 		if errors.Is(err, marasi.ErrWebSocketConnectionNotFound) || errors.Is(err, marasiws.ErrConnectionClosed) {
 			writeJSON(w, r, http.StatusConflict, map[string]string{"error": "websocket_not_open"})
 			return
@@ -304,66 +303,71 @@ func decodeWebSocketClose(r *http.Request) (int, string, error) {
 	return code, reason, nil
 }
 
+// injectRequest is a decoded inject request.
+type injectRequest struct {
+	direction string
+	opcode    int
+	payload   []byte
+	options   marasiws.InjectOptions
+}
+
 // decodeWebSocketInject decodes an inject request: direction, opcode, an
 // optional base64 payload, and an optional compress of "auto" (the default:
 // compress by the leg's rules) or "never".
-func decodeWebSocketInject(r *http.Request) (string, int, []byte, marasiws.InjectOptions, error) {
+func decodeWebSocketInject(r *http.Request) (injectRequest, error) {
 	invalid := errors.New("invalid websocket request")
 	decoder := json.NewDecoder(r.Body)
 	var fields map[string]json.RawMessage
 	if err := decoder.Decode(&fields); err != nil || fields == nil {
-		return "", 0, nil, marasiws.InjectOptions{}, invalid
+		return injectRequest{}, invalid
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return "", 0, nil, marasiws.InjectOptions{}, invalid
+		return injectRequest{}, invalid
 	}
-	var direction string
-	var opcode int
-	var payload []byte
-	var options marasiws.InjectOptions
+	var request injectRequest
 	if len(fields) < 2 || len(fields) > 4 {
-		return "", 0, nil, marasiws.InjectOptions{}, invalid
+		return injectRequest{}, invalid
 	}
 	for name, raw := range fields {
 		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-			return "", 0, nil, marasiws.InjectOptions{}, invalid
+			return injectRequest{}, invalid
 		}
 		switch name {
 		case "direction":
-			if err := json.Unmarshal(raw, &direction); err != nil || direction != "client" && direction != "server" {
-				return "", 0, nil, marasiws.InjectOptions{}, invalid
+			if err := json.Unmarshal(raw, &request.direction); err != nil || request.direction != "client" && request.direction != "server" {
+				return injectRequest{}, invalid
 			}
 		case "opcode":
-			if err := json.Unmarshal(raw, &opcode); err != nil || opcode < 0 || opcode > 15 {
-				return "", 0, nil, marasiws.InjectOptions{}, invalid
+			if err := json.Unmarshal(raw, &request.opcode); err != nil || request.opcode < 0 || request.opcode > 15 {
+				return injectRequest{}, invalid
 			}
 		case "payload":
 			var encoded string
 			if err := json.Unmarshal(raw, &encoded); err != nil {
-				return "", 0, nil, marasiws.InjectOptions{}, invalid
+				return injectRequest{}, invalid
 			}
 			var err error
-			payload, err = base64.StdEncoding.DecodeString(encoded)
+			request.payload, err = base64.StdEncoding.DecodeString(encoded)
 			if err != nil {
-				return "", 0, nil, marasiws.InjectOptions{}, invalid
+				return injectRequest{}, invalid
 			}
 		case "compress":
 			var compress string
 			if err := json.Unmarshal(raw, &compress); err != nil || compress != "auto" && compress != "never" {
-				return "", 0, nil, marasiws.InjectOptions{}, invalid
+				return injectRequest{}, invalid
 			}
-			options.NeverCompress = compress == "never"
+			request.options.NeverCompress = compress == "never"
 		default:
-			return "", 0, nil, marasiws.InjectOptions{}, invalid
+			return injectRequest{}, invalid
 		}
 	}
 	if _, ok := fields["direction"]; !ok {
-		return "", 0, nil, marasiws.InjectOptions{}, invalid
+		return injectRequest{}, invalid
 	}
 	if _, ok := fields["opcode"]; !ok {
-		return "", 0, nil, marasiws.InjectOptions{}, invalid
+		return injectRequest{}, invalid
 	}
-	return direction, opcode, payload, options, nil
+	return request, nil
 }
 
 func webSocketMessageFromDomain(message domain.WebSocketMessage, requestID uuid.UUID) webSocketMessageResponse {
@@ -431,7 +435,6 @@ func (s *Server) HandleWebSocketProgress(progress domain.WebSocketMessageProgres
 		Opcode:       progress.Opcode,
 		Bytes:        progress.Bytes,
 		Frames:       progress.Frames,
-		Streamed:     progress.Streamed,
 	})
 	return nil
 }

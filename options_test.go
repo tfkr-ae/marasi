@@ -156,6 +156,31 @@ func TestWithWordlistManager(t *testing.T) {
 	})
 }
 
+func TestWithConfigDir_WebSocketMaxMessageSize(t *testing.T) {
+	load := func(t *testing.T, yaml string) (*Proxy, error) {
+		t.Helper()
+		configDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(configDir, "marasi_config.yaml"), []byte(yaml), 0o600); err != nil {
+			t.Fatalf("writing config: %v", err)
+		}
+		return New(WithConfigDir(configDir))
+	}
+
+	t.Run("should reject a negative limit", func(t *testing.T) {
+		if _, err := load(t, "websocket_max_message_size: -1\n"); err == nil || !strings.Contains(err.Error(), "websocket_max_message_size") {
+			t.Fatalf("\nwanted:\nan error naming websocket_max_message_size\ngot:\n%v", err)
+		}
+	})
+
+	for _, yaml := range []string{"websocket_max_message_size: 0\n", "websocket_max_message_size: 1024\n"} {
+		t.Run("should accept "+strings.TrimSpace(yaml), func(t *testing.T) {
+			if _, err := load(t, yaml); err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+		})
+	}
+}
+
 func TestWithTLS(t *testing.T) {
 	newProxy := func(t *testing.T, configDir string, option func(*Proxy) error) *Proxy {
 		t.Helper()

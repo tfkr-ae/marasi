@@ -6,11 +6,16 @@ on:
   pull_request:
     paths:
       - 'websocket/**'
+      - 'websocket*.go'
       - 'modifiers.go'
       - 'extensions/**'
       - 'transport.go'
       - 'internal/autobahn/**'
   workflow_dispatch:
+
+env:
+  # Keep in step with autobahn.Image in internal/autobahn/harness.go.
+  AUTOBAHN_IMAGE: crossbario/autobahn-testsuite@sha256:519915fb568b04c9383f70a1c405ae3ff44ab9e35835b085239c258b6fac3074
 
 jobs:
   autobahn:
@@ -22,13 +27,26 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: docker pull crossbario/autobahn-testsuite
-      # direct runs first and refreshes the baseline on this runner, so the
-      # comparison is not thrown by timing differences from the machine that
-      # committed it. The diff shows any direct verdict that moved.
-      - run: make autobahn RUNS=direct,proxy,checkpoint-forward,checkpoint-edit,extension
+      - run: docker pull "$AUTOBAHN_IMAGE"
+      # The gate: every proxied run is compared to the committed direct
+      # baseline, and the job fails on any deviation the harness does not
+      # allow. A direct run here would rewrite that baseline first and hide
+      # a regression, so it does not run in this step.
+      - run: make autobahn RUNS=proxy,checkpoint-forward,checkpoint-edit,extension
+      # Informational only: rerun direct on this runner into a copy of the
+      # baseline and show which direct verdicts differ from the committed
+      # ones. Some verdicts depend on timing, so a difference here explains
+      # a deviation above; it never passes or fails the job.
       - if: always()
-        run: git diff --stat --exit-code internal/autobahn/baseline || git diff internal/autobahn/baseline
+        continue-on-error: true
+        run: |
+          mkdir -p dist/autobahn/direct-baseline
+          cp internal/autobahn/baseline/*.json dist/autobahn/direct-baseline/
+          go run ./internal/autobahn/cmd/autobahn -runs direct \
+            -baseline dist/autobahn/direct-baseline -out dist/autobahn/direct-refresh
+          git diff --no-index --stat internal/autobahn/baseline dist/autobahn/direct-baseline \
+            && echo "direct verdicts match the committed baseline" \
+            || git diff --no-index internal/autobahn/baseline dist/autobahn/direct-baseline || true
       - if: always()
         uses: actions/upload-artifact@v4
         with:
