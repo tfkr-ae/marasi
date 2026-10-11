@@ -34,6 +34,29 @@ type WebSocketConnection struct {
 	CloseCode int
 	// CloseReason is the WebSocket close reason string.
 	CloseReason string
+	// Deflate is the negotiated permessage-deflate configuration, or nil when
+	// the connection does not use deflate.
+	Deflate *WebSocketDeflate
+	// RemovedExtensions lists the WebSocket extensions the proxy removed from
+	// the client's offer before forwarding it upstream.
+	RemovedExtensions []string
+}
+
+// WebSocketDeflate is the permessage-deflate configuration (RFC 7692) that the
+// upstream accepted and the client received for one WebSocket connection.
+type WebSocketDeflate struct {
+	// ServerNoContextTakeover reports that the upstream resets its compression
+	// context after each message.
+	ServerNoContextTakeover bool
+	// ClientNoContextTakeover reports that the client resets its compression
+	// context after each message.
+	ClientNoContextTakeover bool
+	// ServerMaxWindowBits is the upstream's LZ77 window size, 8 to 15.
+	// It is 15 when the upstream did not limit it.
+	ServerMaxWindowBits int
+	// ClientMaxWindowBits is the client's LZ77 window size, 8 to 15.
+	// It is 15 when the upstream did not limit it.
+	ClientMaxWindowBits int
 }
 
 // WebSocketMessage is a persisted WebSocket frame snapshot.
