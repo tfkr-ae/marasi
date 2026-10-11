@@ -1,16 +1,16 @@
 # WebSocket
 
-Users list proxied WebSocket connections, open one, page its stored frames, and, while both peers stay connected, inject a frame or close the connection. The upgrade is also a traffic pair. `traffic websocket` opens the connection from that pair's id.
+Users list proxied WebSocket connections, open one, page its stored messages, and, while both peers stay connected, inject a message or close the connection. A stored message is the whole RFC 6455 message, reassembled from its frames, or a single ping, pong, or close (ADR-0027). The upgrade is also a traffic pair. `traffic websocket` opens the connection from that pair's id.
 
 ## Sub-features
 
 - List saved connections with `websocket list`.
 - Page that list with `--limit` and `--cursor`.
 - Read one connection with `websocket get CONNECTION_ID`.
-- List stored frames with `websocket messages CONNECTION_ID`.
-- Page frames with `--limit` and `--cursor`.
+- List stored messages with `websocket messages CONNECTION_ID`.
+- Page messages with `--limit` and `--cursor`.
 - Open the connection for a traffic pair with `traffic websocket REQUEST_ID`.
-- Inject a frame with `websocket inject CONNECTION_ID --direction client|server --opcode N`, from `--file` or stdin.
+- Inject a message as one frame with `websocket inject CONNECTION_ID --direction client|server --opcode N`, from `--file` or stdin.
 - Close a live connection with `websocket close CONNECTION_ID`, optionally `--code` and `--reason`.
 - Choose human-readable or `--json` output.
 
@@ -36,4 +36,8 @@ While the client is still held, run `printf 'hello' | websocket inject "$CONNECT
 - Close does not validate `--code` locally. Omitted code and `--code 0` become 1000. `1005` and `1006` are rejected. The reason must be UTF-8 and at most 123 bytes. Human close prints `websocket ID closed` on stderr and hides the record.
 - Inject and close need the live connection. If the client drops TCP first, state becomes `error` with `close_code` 1006. Inject then fails with `injecting websocket message: websocket_not_open`. Close fails with `closing websocket connection: websocket_not_open`.
 - Storage lags the open and message events. Retry list and messages. Subscribe with `events` before the upgrade if you need `websocket.opened`, `websocket.message`, or `websocket.closed`. The stream has no replay.
+- A fragmented message is stored, published as `websocket.message`, and held by Checkpoint only once its final frame arrives. `frame_count` says how many frames carried it; there is no `fin` field. Its `id` is assigned when the first frame arrives, so it can sort before a ping that arrived between its fragments. Ping, pong, and close frames between fragments are stored and forwarded at once.
+- While a message's frames are still arriving, the `events` stream sends `websocket.progress` with `message_id` (the id the message gets once complete), `bytes`, `frames`, and `streamed`, at most every 100 ms. It is never stored.
+- With no hook able to hold or change a message (no enabled extension defines `processWebSocketMessage`, and Checkpoint is disabled or has `websocket-intercept` off and no `interceptWebSocketMessage`), the relay forwards bytes as they arrive (`streamed` true). Otherwise nothing is forwarded until the message is complete. A message whose first frame sets RSV1 (compressed) is never streamed.
+- The per-message limit is `websocket_max_message_size` in `marasi_config.yaml`, in bytes, 64 MiB when unset. Over it, the sender gets close 1009, the receiver 1001, the connection records `close_code` 1009, and a `WARN` log names the direction, size, and limit.
 - This is not `checkpoint websocket-intercept`. If that flag is on, inject waits until the held frame is forwarded or dropped. Leave it off for this feature.
