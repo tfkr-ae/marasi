@@ -269,15 +269,6 @@ func (c *Connection) handleMessage(message *Message, out frameSink) (isClose boo
 	return isClose, nil
 }
 
-// relayFrames relays frames from reader to writeFrame. It never streams.
-func (c *Connection) relayFrames(
-	reader io.Reader,
-	writeFrame func(Frame) error,
-	source string,
-) error {
-	return c.relay(reader, frameFunc(writeFrame), source)
-}
-
 // noteCloseRelayed marks the peers' close handshake as started and, while the
 // relay runs, bounds how long it may take.
 func (c *Connection) noteCloseRelayed() {
