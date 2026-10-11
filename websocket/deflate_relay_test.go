@@ -287,6 +287,7 @@ func TestRelay_CorruptDeflate(t *testing.T) {
 	for _, tt := range bothDirections {
 		t.Run("should store, announce, and close with 1007 and 1001 "+tt.name, func(t *testing.T) {
 			process, recorded := recordMessages()
+			process, closes := recordCloses(process)
 			failures := make(chan InflateFailure, 1)
 			relay := startRelayWith(t, process, withDeflate(contextTakeover), func(c *Connection) {
 				c.SetInflateFailureHandler(func(failure InflateFailure) { failures <- failure })
@@ -305,6 +306,7 @@ func TestRelay_CorruptDeflate(t *testing.T) {
 			if code := finishCloseHandshake(t, relay, tt, toSender, toReceiver); code != CloseInvalidPayload {
 				t.Fatalf("\nwanted close code after the handshake:\n%d\ngot:\n%d", CloseInvalidPayload, code)
 			}
+			assertGeneratedCloses(t, closes(), tt, CloseInvalidPayload)
 		})
 	}
 }
@@ -337,6 +339,7 @@ func TestRelay_DeflateBomb(t *testing.T) {
 	for _, tt := range bothDirections {
 		t.Run("should stop at the limit and close with 1009 and 1001 "+tt.name, func(t *testing.T) {
 			process, recorded := recordMessages()
+			process, closes := recordCloses(process)
 			tooBig := make(chan MessageTooBig, 1)
 			relay := startRelayWith(t, process, withDeflate(contextTakeover), func(c *Connection) {
 				c.SetMaxMessageSize(limit)
@@ -356,6 +359,7 @@ func TestRelay_DeflateBomb(t *testing.T) {
 			if code := finishCloseHandshake(t, relay, tt, toSender, toReceiver); code != CloseMessageTooBig {
 				t.Fatalf("\nwanted close code after the handshake:\n%d\ngot:\n%d", CloseMessageTooBig, code)
 			}
+			assertGeneratedCloses(t, closes(), tt, CloseMessageTooBig)
 		})
 	}
 

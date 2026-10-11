@@ -121,7 +121,8 @@ func TestRelay_LimitsMessageSize(t *testing.T) {
 	for _, tt := range bothDirections {
 		t.Run("should close with 1009 to the sender and 1001 to the receiver "+tt.name, func(t *testing.T) {
 			tooBig := make(chan MessageTooBig, 1)
-			relay := startRelayWith(t, nil, func(c *Connection) {
+			process, closes := recordCloses(nil)
+			relay := startRelayWith(t, process, func(c *Connection) {
 				c.SetMaxMessageSize(10)
 				c.SetMessageTooBigHandler(func(event MessageTooBig) { tooBig <- event })
 			})
@@ -137,6 +138,7 @@ func TestRelay_LimitsMessageSize(t *testing.T) {
 			if code := finishCloseHandshake(t, relay, tt, toSender, toReceiver); code != CloseMessageTooBig {
 				t.Fatalf("\nwanted close code after the handshake:\n%d\ngot:\n%d", CloseMessageTooBig, code)
 			}
+			assertGeneratedCloses(t, closes(), tt, CloseMessageTooBig)
 		})
 	}
 
