@@ -467,12 +467,14 @@ func (c *Connection) beginClose(code int, reason string) (Frame, error) {
 }
 
 func (c *Connection) sendClose(frame Frame, ensureTimeout bool) error {
-	return c.sendCloseFrames(frame, frame, ensureTimeout)
+	return c.sendCloseFrames(frame, frame, false, ensureTimeout)
 }
 
 // sendCloseFrames sends toClient to the client and toUpstream to the upstream,
-// bounding the handshake that follows.
-func (c *Connection) sendCloseFrames(toClient, toUpstream Frame, ensureTimeout bool) error {
+// bounding the handshake that follows. The close to the upstream is stored as
+// a generated message, and so is the close to the client when storeToClient
+// is set.
+func (c *Connection) sendCloseFrames(toClient, toUpstream Frame, storeToClient, ensureTimeout bool) error {
 	if c.running.Load() || ensureTimeout {
 		go func() {
 			timer := time.NewTimer(CloseHandshakeTimeout)
@@ -484,7 +486,12 @@ func (c *Connection) sendCloseFrames(toClient, toUpstream Frame, ensureTimeout b
 			}
 		}()
 	}
-	clientErr := c.clientLeg.writeClose(toClient)
+	var clientErr error
+	if storeToClient {
+		clientErr = c.sendGeneratedClose(toClient, DirectionFromServer, c.clientLeg)
+	} else {
+		clientErr = c.clientLeg.writeClose(toClient)
+	}
 	upstreamErr := c.sendGeneratedClose(toUpstream, DirectionFromClient, c.upstreamLeg)
 	if c.running.Load() {
 		return errors.Join(clientErr, upstreamErr)
