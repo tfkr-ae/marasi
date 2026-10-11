@@ -597,3 +597,31 @@ func waitForCheckpointID(t *testing.T, binary, configDir, wantType string) strin
 	t.Fatalf("timed out waiting for checkpoint %s", wantType)
 	return ""
 }
+
+func TestWriteCheckpointGetEndsTerminalOutputWithNewline(t *testing.T) {
+	item := func(payload string) []byte {
+		return []byte(fmt.Sprintf(`{"type":"websocket","payload":%q}`, base64.StdEncoding.EncodeToString([]byte(payload))))
+	}
+	tests := []struct {
+		name     string
+		payload  string
+		terminal bool
+		want     string
+	}{
+		{name: "should add a newline on a terminal so the prompt cannot hide the payload", payload: "Test", terminal: true, want: "Test\n"},
+		{name: "should not double a newline the payload already ends with", payload: "Test\n", terminal: true, want: "Test\n"},
+		{name: "should write nothing on a terminal for an empty payload", payload: "", terminal: true, want: ""},
+		{name: "should keep piped output byte-exact for get, edit, forward", payload: "Test", terminal: false, want: "Test"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := writeCheckpointGet(item(tt.payload), &out, tt.terminal); err != nil {
+				t.Fatalf("\nwanted:\nnil error\ngot:\n%v", err)
+			}
+			if out.String() != tt.want {
+				t.Fatalf("\nwanted:\n%q\ngot:\n%q", tt.want, out.String())
+			}
+		})
+	}
+}
