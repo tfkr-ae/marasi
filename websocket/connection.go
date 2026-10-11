@@ -17,6 +17,9 @@ import (
 // ErrConnectionClosed is returned when operating on a closed connection.
 var ErrConnectionClosed = errors.New("websocket connection is closed")
 
+// errForwarding marks a failure to write a relayed frame to its peer.
+var errForwarding = errors.New("forwarding websocket frame")
+
 const (
 	// DirectionFromClient marks a message originating from the client.
 	DirectionFromClient = "client"
@@ -182,10 +185,7 @@ func (c *Connection) handleFrame(
 
 	if !message.Dropped {
 		if err := writeFrame(message.Frame); err != nil {
-			return false, fmt.Errorf(
-				"forwarding websocket frame: %w",
-				err,
-			)
+			return false, fmt.Errorf("%w: %w", errForwarding, err)
 		}
 	}
 
@@ -227,6 +227,12 @@ func (c *Connection) relayFrames(
 
 		isClose, err := c.handleFrame(frame, source, writeFrame)
 		if err != nil {
+			// Once a close is relayed, a peer may drop TCP while the other
+			// still sends. Drop what can't be delivered and keep reading, so
+			// the reply close still reaches its peer.
+			if c.closeRelayed.Load() && errors.Is(err, errForwarding) {
+				continue
+			}
 			return err
 		}
 
