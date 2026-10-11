@@ -1,0 +1,18 @@
+{
+   "strict": {
+      "1.1.1": {
+         "behavior": "OK",
+         "behaviorClose": "UNCLEAN",
+         "duration": 3,
+         "remoteCloseCode": null,
+         "reportfile": "strict_case_1_1_1.json"
+      },
+      "3.7": {
+         "behavior": "OK",
+         "behaviorClose": "OK",
+         "duration": 2,
+         "remoteCloseCode": 1002,
+         "reportfile": "strict_case_3_7.json"
+      }
+   }
+}
