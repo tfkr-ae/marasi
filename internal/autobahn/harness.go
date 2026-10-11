@@ -86,7 +86,7 @@ func (c Config) run(ctx context.Context, run string) ([]SuiteResult, error) {
 					result.Err = err
 				} else {
 					selected := baseline.Select(c.Cases, c.Exclude)
-					result.Deviations = Compare(selected, report)
+					result.Deviations, result.Allowed = SplitAllowed(run, Compare(selected, report))
 					result.Timing = PerformanceTiming(selected, report)
 				}
 			}

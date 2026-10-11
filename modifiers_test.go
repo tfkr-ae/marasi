@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/compass"
 	"github.com/tfkr-ae/marasi/core"
+	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
 	"github.com/tfkr-ae/marasi/rawhttp"
@@ -2316,6 +2318,24 @@ func TestWebSocketMessageMayStream(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("should stream with the default extensions of a new project", func(t *testing.T) {
+		dbConnection, err := db.New(":memory:", slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err != nil {
+			t.Fatalf("creating in-memory database: %v", err)
+		}
+		repository := db.NewProxyRepo(dbConnection)
+		defer repository.Close()
+		defaults, err := repository.GetExtensions()
+		if err != nil {
+			t.Fatalf("getting default extensions: %v", err)
+		}
+		proxy := newTestProxy(t, defaults...)
+
+		if !webSocketMessageMayStream(proxy) {
+			t.Fatalf("\nwanted:\ntrue\ngot:\nfalse")
+		}
+	})
 
 	t.Run("should not stream with global interception on and no checkpoint", func(t *testing.T) {
 		proxy := &Proxy{}

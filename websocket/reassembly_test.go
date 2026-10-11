@@ -244,6 +244,28 @@ func TestRelay_StreamsMessagesNoHookCanHold(t *testing.T) {
 	})
 }
 
+func TestRelay_DoesNotStreamCompressedMessages(t *testing.T) {
+	recorded := make(chan *Message, 1)
+	relay := startRelayWith(t, func(message *Message) error {
+		recorded <- message
+		return nil
+	}, func(c *Connection) {
+		c.SetStreamFunc(func(string, int) bool { return true })
+	})
+	frames := []Frame{
+		{Fin: false, Rsv1: true, Opcode: OpText, Payload: []byte{0xf2, 0x48}},
+		{Fin: true, Opcode: OpContinuation, Payload: []byte{0x01, 0x00}},
+	}
+	writeFrames(relay.client, true, frames...)
+
+	for _, want := range frames {
+		assertSameFrame(t, want, readFrame(t, relay.upstream))
+	}
+	if message := <-recorded; message.Passthrough {
+		t.Fatalf("\nwanted compressed message:\nbuffered\ngot:\nstreamed")
+	}
+}
+
 func TestRelay_AnnouncesMessagesStillArriving(t *testing.T) {
 	progress := make(chan domain.WebSocketMessageProgress, 4)
 	recorded := make(chan *Message, 1)

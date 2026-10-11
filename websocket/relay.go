@@ -304,8 +304,10 @@ func (in *inbound) start(frame Frame) error {
 	in.pending = message
 	in.lastProgress = time.Time{}
 
+	// A compressed message (RSV1) is buffered whole: inflating it on each
+	// leg needs the whole message (ADR-0028).
 	out, canStream := in.out.(*leg)
-	if canStream && in.c.stream != nil && in.c.stream(in.source, frame.Opcode) {
+	if canStream && !frame.Rsv1 && in.c.stream != nil && in.c.stream(in.source, frame.Opcode) {
 		out.message.Lock()
 		in.streamed = true
 	}
