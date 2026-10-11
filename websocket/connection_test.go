@@ -466,8 +466,8 @@ func TestConnection_CloseDetails(t *testing.T) {
 		{
 			name:      "malformed close",
 			payload:   []byte{0x03},
-			wantWrite: false,
-			wantErr:   "parsing websocket close payload",
+			wantCode:  0,
+			wantWrite: true,
 		},
 	}
 

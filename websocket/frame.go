@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -240,6 +241,20 @@ func ParseClosePayload(payload []byte) (code int, reason string, err error) {
 	}
 
 	return code, string(reasonBytes), nil
+}
+
+// closeDetailsSeen reads the code and reason from any close payload, valid or
+// not. A one-byte payload has no code (0); an invalid UTF-8 reason has its bad
+// bytes replaced so it can be stored.
+func closeDetailsSeen(payload []byte) (code int, reason string) {
+	switch len(payload) {
+	case 0:
+		return CloseNoStatusReceived, ""
+	case 1:
+		return 0, ""
+	}
+	code = int(binary.BigEndian.Uint16(payload[:2]))
+	return code, strings.ToValidUTF8(string(payload[2:]), "\uFFFD")
 }
 
 // EncodeClosePayload encodes a close status code and reason into a payload.
