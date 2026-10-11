@@ -2356,6 +2356,40 @@ func TestProcessWebSocketMessageExtensions(t *testing.T) {
 		}
 	})
 
+	t.Run("a hook calling the removed message:fin() should fail open with an ERROR log", func(t *testing.T) {
+		proxy := newTestProxy(t, &domain.Extension{
+			ID:   uuid.New(),
+			Name: "old",
+			LuaContent: `
+				function processWebSocketMessage(message)
+					if message:fin() then
+						message:set_payload("changed")
+					end
+				end
+			`,
+		})
+		enableExtensions(proxy)
+		message := &marasiws.Message{Opcode: marasiws.OpText, Payload: []byte("hello")}
+
+		processWebSocketMessageExtensions(proxy, message)
+
+		if message.Dropped || message.Opcode != marasiws.OpText || string(message.Payload) != "hello" {
+			t.Fatalf("\nwanted:\nunchanged text %q, not dropped\ngot:\nopcode %d %q, dropped %t", "hello", message.Opcode, message.Payload, message.Dropped)
+		}
+		var levels []string
+		for len(proxy.DBWriteChannel) > 0 {
+			switch log := (<-proxy.DBWriteChannel).(type) {
+			case *domain.Log:
+				levels = append(levels, log.Level+": "+log.Message)
+			case domain.Log:
+				levels = append(levels, log.Level+": "+log.Message)
+			}
+		}
+		if len(levels) != 1 || !strings.HasPrefix(levels[0], "ERROR: Running processWebSocketMessage") {
+			t.Fatalf("\nwanted:\none ERROR log for processWebSocketMessage\ngot:\n%q", levels)
+		}
+	})
+
 	t.Run("skipped message should stop later extensions without dropping", func(t *testing.T) {
 		proxy := newTestProxy(t,
 			&domain.Extension{
