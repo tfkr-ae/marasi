@@ -349,7 +349,7 @@ func (c *Connection) SendToClient(frame Frame) error {
 	_, err := c.handleFrame(
 		frame,
 		DirectionFromServer,
-		c.clientLeg,
+		wholeMessages{c.clientLeg},
 	)
 	if err != nil {
 		return fmt.Errorf("sending websocket frame to client: %w", err)
@@ -515,7 +515,7 @@ func (c *Connection) SendToUpstream(frame Frame) error {
 	_, err := c.handleFrame(
 		frame,
 		DirectionFromClient,
-		c.upstreamLeg,
+		wholeMessages{c.upstreamLeg},
 	)
 	if err != nil {
 		return fmt.Errorf("sending websocket frame upstream: %w", err)

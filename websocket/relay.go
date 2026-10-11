@@ -137,6 +137,14 @@ func (l *leg) writeMessage(frames ...Frame) error {
 	return l.writeFrames(frames...)
 }
 
+// wholeMessages writes each message to a leg after any streamed message
+// finishes, so it never goes out between a streamed message's fragments.
+type wholeMessages struct{ leg *leg }
+
+func (w wholeMessages) writeFrames(frames ...Frame) error {
+	return w.leg.writeMessage(frames...)
+}
+
 // frameStream forwards one frame whose payload is written as it arrives.
 type frameStream struct {
 	leg     *leg

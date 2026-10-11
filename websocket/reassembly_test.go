@@ -244,6 +244,54 @@ func TestRelay_StreamsMessagesNoHookCanHold(t *testing.T) {
 	})
 }
 
+func TestRelay_SendsAfterAStreamedMessage(t *testing.T) {
+	first := Frame{Fin: false, Opcode: OpBinary, Payload: []byte{1, 2}}
+	last := Frame{Fin: true, Opcode: OpContinuation, Payload: []byte{3}}
+	sent := Frame{Fin: true, Opcode: OpText, Payload: []byte("sent")}
+
+	tests := []struct {
+		name   string
+		sender func(*runningRelay) net.Conn
+		mask   bool
+		peer   func(*runningRelay) net.Conn
+		send   func(*Connection, Frame) error
+	}{
+		{
+			name:   "should not send to the client between the fragments of a streamed message",
+			sender: func(r *runningRelay) net.Conn { return r.upstream },
+			peer:   func(r *runningRelay) net.Conn { return r.client },
+			send:   (*Connection).SendToClient,
+		},
+		{
+			name:   "should not send upstream between the fragments of a streamed message",
+			sender: func(r *runningRelay) net.Conn { return r.client },
+			mask:   true,
+			peer:   func(r *runningRelay) net.Conn { return r.upstream },
+			send:   (*Connection).SendToUpstream,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			relay := startRelayWith(t, nil, func(c *Connection) {
+				c.SetStreamFunc(func(string, int) bool { return true })
+			})
+			writeFrames(tt.sender(relay), tt.mask, first)
+			assertSameFrame(t, first, readFrame(t, tt.peer(relay)))
+
+			result := make(chan error, 1)
+			go func() { result <- tt.send(relay.connection, sent) }()
+			time.Sleep(50 * time.Millisecond)
+			writeFrames(tt.sender(relay), tt.mask, last)
+
+			assertSameFrame(t, last, readFrame(t, tt.peer(relay)))
+			assertSameFrame(t, sent, readFrame(t, tt.peer(relay)))
+			if err := <-result; err != nil {
+				t.Fatalf("sending: %v", err)
+			}
+		})
+	}
+}
+
 func TestRelay_DoesNotStreamCompressedMessages(t *testing.T) {
 	recorded := make(chan *Message, 1)
 	relay := startRelayWith(t, func(message *Message) error {
