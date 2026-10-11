@@ -2,6 +2,8 @@ package websocket
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -287,6 +289,74 @@ func TestRelay_SendsAfterAStreamedMessage(t *testing.T) {
 			assertSameFrame(t, sent, readFrame(t, tt.peer(relay)))
 			if err := <-result; err != nil {
 				t.Fatalf("sending: %v", err)
+			}
+		})
+	}
+}
+
+func TestRelay_StopsWaitingForAStalledStreamedMessage(t *testing.T) {
+	first := Frame{Fin: false, Opcode: OpBinary, Payload: []byte{1, 2}}
+
+	// stalled starts a relay with a streamed message from the server whose
+	// final frame never comes.
+	stalled := func(t *testing.T) *runningRelay {
+		t.Helper()
+		relay := startRelayWith(t, nil, func(c *Connection) {
+			c.SetStreamFunc(func(string, int) bool { return true })
+		})
+		writeFrames(relay.upstream, false, first)
+		assertSameFrame(t, first, readFrame(t, relay.client))
+		return relay
+	}
+	returned := func(t *testing.T, result <-chan error) error {
+		t.Helper()
+		select {
+		case err := <-result:
+			return err
+		case <-time.After(2 * time.Second):
+			t.Fatalf("still waiting for the streamed message")
+			return nil
+		}
+	}
+
+	t.Run("should return from an injection when its request is cancelled", func(t *testing.T) {
+		relay := stalled(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			_, err := relay.connection.Inject(ctx, DirectionFromServer, OpText, []byte("x"), InjectOptions{})
+			result <- err
+		}()
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+
+		if err := returned(t, result); !errors.Is(err, context.Canceled) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", context.Canceled, err)
+		}
+	})
+
+	sends := []struct {
+		name string
+		send func(*Connection) error
+	}{
+		{"an injection", func(c *Connection) error {
+			_, err := c.Inject(context.Background(), DirectionFromServer, OpText, []byte("x"), InjectOptions{})
+			return err
+		}},
+		{"a send", func(c *Connection) error {
+			return c.SendToClient(Frame{Fin: true, Opcode: OpText, Payload: []byte("x")})
+		}},
+	}
+	for _, tt := range sends {
+		t.Run("should return from "+tt.name+" when the connection closes", func(t *testing.T) {
+			relay := stalled(t)
+			result := make(chan error, 1)
+			go func() { result <- tt.send(relay.connection) }()
+			time.Sleep(50 * time.Millisecond)
+			_ = relay.upstream.Close()
+
+			if err := returned(t, result); !errors.Is(err, ErrConnectionClosed) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", ErrConnectionClosed, err)
 			}
 		})
 	}

@@ -1519,6 +1519,7 @@ func TestProxy_WebSocketControlAPIs(t *testing.T) {
 		result := make(chan error, 1)
 		go func() {
 			_, err := proxy.InjectWebSocketMessage(
+				context.Background(),
 				connection.RequestID,
 				marasiws.DirectionFromClient,
 				marasiws.OpText,
@@ -1557,6 +1558,7 @@ func TestProxy_WebSocketControlAPIs(t *testing.T) {
 		result := make(chan error, 1)
 		go func() {
 			_, err := proxy.InjectWebSocketMessage(
+				context.Background(),
 				connection.RequestID,
 				marasiws.DirectionFromServer,
 				marasiws.OpBinary,
@@ -1618,7 +1620,7 @@ func TestProxy_WebSocketControlAPIs(t *testing.T) {
 		if _, exists := proxy.GetWebSocketConnection(requestID); exists {
 			t.Fatalf("wanted live connection exists: false\ngot: true")
 		}
-		if _, err := proxy.InjectWebSocketMessage(requestID, marasiws.DirectionFromClient, marasiws.OpText, nil, marasiws.InjectOptions{}); !errors.Is(err, ErrWebSocketConnectionNotFound) {
+		if _, err := proxy.InjectWebSocketMessage(context.Background(), requestID, marasiws.DirectionFromClient, marasiws.OpText, nil, marasiws.InjectOptions{}); !errors.Is(err, ErrWebSocketConnectionNotFound) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrWebSocketConnectionNotFound, err)
 		}
 		if err := proxy.CloseWebSocket(requestID, 1000, ""); !errors.Is(err, ErrWebSocketConnectionNotFound) {
@@ -1632,7 +1634,7 @@ func TestProxy_WebSocketControlAPIs(t *testing.T) {
 	t.Run("invalid injection direction returns an error", func(t *testing.T) {
 		proxy, connection, _, _ := newLiveConnection(t, nil)
 
-		_, err := proxy.InjectWebSocketMessage(connection.RequestID, "invalid", marasiws.OpText, nil, marasiws.InjectOptions{})
+		_, err := proxy.InjectWebSocketMessage(context.Background(), connection.RequestID, "invalid", marasiws.OpText, nil, marasiws.InjectOptions{})
 		if !errors.Is(err, ErrWebSocketDirection) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrWebSocketDirection, err)
 		}
@@ -2363,6 +2365,7 @@ func TestProxy_LaunchWebSocket(t *testing.T) {
 	}
 
 	if _, err := proxy.InjectWebSocketMessage(
+		context.Background(),
 		requestID,
 		marasiws.DirectionFromClient,
 		marasiws.OpText,
