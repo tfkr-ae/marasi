@@ -338,6 +338,17 @@ func (extension *Runtime) ShouldInterceptResponse(res *http.Response) (bool, err
 	return should, nil
 }
 
+// HasFunction reports whether the Lua script defines a global function name.
+func (extension *Runtime) HasFunction(name string) bool {
+	extension.Mu.Lock()
+	defer extension.Mu.Unlock()
+
+	extension.LuaState.Global(name)
+	defined := extension.LuaState.IsFunction(-1)
+	extension.LuaState.Pop(1)
+	return defined
+}
+
 // ShouldInterceptWebSocketMessage calls the `interceptWebSocketMessage` function in the Lua script
 // to determine if the given WebSocket message should be intercepted.
 func (extension *Runtime) ShouldInterceptWebSocketMessage(message *marasiws.Message) (bool, error) {

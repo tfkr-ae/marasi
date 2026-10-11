@@ -29,9 +29,12 @@ const (
 	CloseGoingAway = 1001
 	// CloseNoStatusReceived is used when a close frame has no status code.
 	CloseNoStatusReceived = 1005
+	// CloseMessageTooBig indicates a message too big to process.
+	CloseMessageTooBig = 1009
 )
 
-// MaxPayload is the largest accepted WebSocket payload size.
+// MaxPayload is the largest frame payload ReadFrame accepts. The relay does
+// not use it: its limit is per message and configurable.
 const MaxPayload = 64 * 1024 * 1024
 
 // Frame is a single WebSocket protocol frame.
@@ -67,86 +70,100 @@ func (f Frame) IsData() bool {
 		f.Opcode == OpContinuation
 }
 
-// ReadFrame reads and decodes one WebSocket frame from r.
+// ReadFrame reads and decodes one WebSocket frame from r. It rejects a frame
+// longer than MaxPayload.
 func ReadFrame(r io.Reader) (Frame, error) {
+	frame, length, err := readFrameHeader(r)
+	if err != nil {
+		return Frame{}, err
+	}
+
+	if length > MaxPayload {
+		return Frame{}, fmt.Errorf("websocket payload too large: %d", length)
+	}
+
+	payload := make([]byte, length)
+	if length > 0 {
+		if _, err := io.ReadFull(r, payload); err != nil {
+			return Frame{}, fmt.Errorf("reading payload : %w", err)
+		}
+	}
+	if frame.Masked {
+		maskBytes(payload, frame.Key, 0)
+	}
+	frame.Payload = payload
+
+	return frame, nil
+}
+
+// readFrameHeader reads one frame up to its payload. It returns the frame
+// with no payload and the payload length.
+func readFrameHeader(r io.Reader) (Frame, int64, error) {
 	var header [2]byte
 
 	_, err := io.ReadFull(r, header[:])
 	if err != nil {
-		return Frame{}, fmt.Errorf("reading header bytes : %w", err)
+		return Frame{}, 0, fmt.Errorf("reading header bytes : %w", err)
 	}
 
-	fin := header[0]&0x80 != 0
-	rsv1 := header[0]&0x40 != 0
-	rsv2 := header[0]&0x20 != 0
-	rsv3 := header[0]&0x10 != 0
-	opcode := int(header[0] & 0x0f)
-	masked := header[1]&0x80 != 0
+	frame := Frame{
+		Fin:    header[0]&0x80 != 0,
+		Rsv1:   header[0]&0x40 != 0,
+		Rsv2:   header[0]&0x20 != 0,
+		Rsv3:   header[0]&0x10 != 0,
+		Opcode: int(header[0] & 0x0f),
+		Masked: header[1]&0x80 != 0,
+	}
 	payloadLength := int64(header[1] & 0x7f)
 
 	switch payloadLength {
 	case 126:
 		var extended [2]byte
 		if _, err := io.ReadFull(r, extended[:]); err != nil {
-			return Frame{}, fmt.Errorf("reading 16-bit extended payload length : %w", err)
+			return Frame{}, 0, fmt.Errorf("reading 16-bit extended payload length : %w", err)
 		}
 		payloadLength = int64(binary.BigEndian.Uint16(extended[:]))
 	case 127:
 		var extended [8]byte
 		if _, err := io.ReadFull(r, extended[:]); err != nil {
-			return Frame{}, fmt.Errorf("reading 64-bit extended payload length : %w", err)
+			return Frame{}, 0, fmt.Errorf("reading 64-bit extended payload length : %w", err)
 		}
 		rawLength := binary.BigEndian.Uint64(extended[:])
 		if rawLength > math.MaxInt64 {
-			return Frame{}, fmt.Errorf("invalid 64-bit payload length: %d", rawLength)
+			return Frame{}, 0, fmt.Errorf("invalid 64-bit payload length: %d", rawLength)
 		}
 		payloadLength = int64(rawLength)
 	}
 
-	if payloadLength > MaxPayload {
-		return Frame{}, fmt.Errorf("websocket payload too large: %d", payloadLength)
-	}
-
-	var maskKey [4]byte
-	if masked {
-		if _, err := io.ReadFull(r, maskKey[:]); err != nil {
-			return Frame{}, fmt.Errorf("reading mask key : %w", err)
+	if frame.Masked {
+		if _, err := io.ReadFull(r, frame.Key[:]); err != nil {
+			return Frame{}, 0, fmt.Errorf("reading mask key : %w", err)
 		}
 	}
 
-	payload := make([]byte, payloadLength)
-	if payloadLength > 0 {
-		if _, err := io.ReadFull(r, payload); err != nil {
-			return Frame{}, fmt.Errorf("reading payload : %w", err)
-		}
-	}
-
-	if masked {
-		for i := range payload {
-			payload[i] ^= maskKey[i%4]
-		}
-	}
-
-	return Frame{
-		Fin:     fin,
-		Rsv1:    rsv1,
-		Rsv2:    rsv2,
-		Rsv3:    rsv3,
-		Opcode:  opcode,
-		Masked:  masked,
-		Key:     maskKey,
-		Payload: payload,
-	}, nil
+	return frame, payloadLength, nil
 }
 
-// WriteFrame encodes and writes frame to w.
-// When mask is true, a random masking key is generated and applied.
-func WriteFrame(w io.Writer, frame Frame, mask bool) error {
-	payloadLength := len(frame.Payload)
-	if payloadLength > MaxPayload {
-		return fmt.Errorf("payload too large: %d", payloadLength)
+// maskBytes applies key to p in place. offset is the position of p[0] in the
+// frame payload.
+func maskBytes(p []byte, key [4]byte, offset int64) {
+	for i := range p {
+		p[i] ^= key[(offset+int64(i))%4]
 	}
+}
 
+// newMaskKey returns a random masking key.
+func newMaskKey() ([4]byte, error) {
+	var key [4]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		return key, fmt.Errorf("generating masking key: %w", err)
+	}
+	return key, nil
+}
+
+// appendFrameHeader appends the header of frame, with a payload of length
+// bytes, to dst. When mask is true it sets the mask bit and appends key.
+func appendFrameHeader(dst []byte, frame Frame, length int64, mask bool, key [4]byte) []byte {
 	firstHeaderByte := byte(frame.Opcode & 0x0f)
 	if frame.Fin {
 		firstHeaderByte |= 0x80
@@ -160,9 +177,7 @@ func WriteFrame(w io.Writer, frame Frame, mask bool) error {
 	if frame.Rsv3 {
 		firstHeaderByte |= 0x10
 	}
-
-	var header []byte
-	header = append(header, firstHeaderByte)
+	dst = append(dst, firstHeaderByte)
 
 	secondHeaderByte := byte(0)
 	if mask {
@@ -170,56 +185,43 @@ func WriteFrame(w io.Writer, frame Frame, mask bool) error {
 	}
 
 	switch {
-	case payloadLength <= 125:
-		secondHeaderByte |= byte(payloadLength)
-		header = append(header, secondHeaderByte)
-	case payloadLength <= math.MaxUint16:
-		secondHeaderByte |= 126
-		header = append(header, secondHeaderByte)
-
-		var extendedLength [2]byte
-		binary.BigEndian.PutUint16(extendedLength[:], uint16(payloadLength))
-		header = append(header, extendedLength[:]...)
+	case length <= 125:
+		dst = append(dst, secondHeaderByte|byte(length))
+	case length <= math.MaxUint16:
+		dst = append(dst, secondHeaderByte|126)
+		dst = binary.BigEndian.AppendUint16(dst, uint16(length))
 	default:
-		secondHeaderByte |= 127
-		header = append(header, secondHeaderByte)
-
-		var extendedLength [8]byte
-		binary.BigEndian.PutUint64(extendedLength[:], uint64(payloadLength))
-		header = append(header, extendedLength[:]...)
+		dst = append(dst, secondHeaderByte|127)
+		dst = binary.BigEndian.AppendUint64(dst, uint64(length))
 	}
-
-	_, err := w.Write(header)
-	if err != nil {
-		return fmt.Errorf("writing frame header : %w", err)
-	}
-
-	payload := frame.Payload
 
 	if mask {
-		var key [4]byte
-		if _, err := rand.Read(key[:]); err != nil {
-			return fmt.Errorf("generating masking key: %w", err)
-		}
+		dst = append(dst, key[:]...)
+	}
+	return dst
+}
 
-		if _, err := w.Write(key[:]); err != nil {
-			return fmt.Errorf("writing masking key: %w", err)
+// WriteFrame encodes frame and writes it to w in one call.
+// When mask is true, a random masking key is generated and applied.
+func WriteFrame(w io.Writer, frame Frame, mask bool) error {
+	var key [4]byte
+	if mask {
+		var err error
+		if key, err = newMaskKey(); err != nil {
+			return err
 		}
-
-		maskedPayload := make([]byte, len(payload))
-		for i := range payload {
-			maskedPayload[i] = payload[i] ^ key[i%4]
-		}
-
-		payload = maskedPayload
 	}
 
-	if len(payload) == 0 {
-		return nil
+	length := int64(len(frame.Payload))
+	encoded := appendFrameHeader(make([]byte, 0, 14+length), frame, length, mask, key)
+	headerLength := len(encoded)
+	encoded = append(encoded, frame.Payload...)
+	if mask {
+		maskBytes(encoded[headerLength:], key, 0)
 	}
 
-	if _, err := w.Write(payload); err != nil {
-		return fmt.Errorf("writing frame payload: %w", err)
+	if _, err := w.Write(encoded); err != nil {
+		return fmt.Errorf("writing frame : %w", err)
 	}
 
 	return nil
