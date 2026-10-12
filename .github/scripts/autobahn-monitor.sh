@@ -8,6 +8,12 @@ mkdir -p "$(dirname "$out")"
 # Pressure stall: the share of the last 10 s in which some, or all, tasks
 # waited on that resource.
 psi() { [ -r "/proc/pressure/$1" ] || return 0; awk -v k="$1" '{ split($2, a, "="); v[$1]=a[2] } END { printf "%s=%s/%s ", k, v["some"], v["full"] }' "/proc/pressure/$1"; }
+# The runner's hardware, which varies between jobs: PyPy sizes its GC
+# nursery from the CPU cache.
+{
+  echo "[monitor] cpu: $(awk -F': ' '/^model name/ { print $2; exit }' /proc/cpuinfo), $(nproc) cores, caches $(for c in /sys/devices/system/cpu/cpu0/cache/index*; do echo "L$(cat $c/level)$(cut -c1 $c/type)=$(cat $c/size)"; done | paste -sd ' ')"
+  echo "[monitor] kernel: $(uname -r), memory: $(awk '/^MemTotal/ { print int($2/1024) "M" }' /proc/meminfo)"
+} | tee -a "$out"
 i=0
 while true; do
   now=$(date -u +%H:%M:%S)
