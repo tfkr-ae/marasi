@@ -176,7 +176,9 @@ func (s Suite) runFuzzingServer(ctx context.Context, peer, proxy, upstream strin
 
 func (s Suite) dockerArgs(name, proxy string) []string {
 	// The image is amd64-only; naming the platform keeps arm64 hosts quiet.
-	args := []string{"run", "--rm", "--name", name, "--platform", "linux/amd64", "--network", "host", "-v", s.Dir + ":/work"}
+	// Unbuffered output makes each "Running test case" line reach the log
+	// when the case starts, not in batches.
+	args := []string{"run", "--rm", "--name", name, "--platform", "linux/amd64", "--network", "host", "-e", "PYTHONUNBUFFERED=1", "-v", s.Dir + ":/work"}
 	if proxy != "" {
 		args = append(args, "-e", "WSTEST_PROXY="+proxy)
 	}

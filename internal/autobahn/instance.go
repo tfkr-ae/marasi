@@ -1,6 +1,7 @@
 package autobahn
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -164,22 +166,91 @@ type Resolver struct {
 	Failed    atomic.Int64 // forwards the service rejected
 }
 
-// Run resolves items until ctx ends.
+// resolverPoll is how often the resolver lists held items when no
+// checkpoint.held event woke it. Events wake it at once; the poll only
+// covers an event stream that dropped or has not connected yet.
+const resolverPoll = 50 * time.Millisecond
+
+// Run resolves items until ctx ends. Every hold in a suite waits for the
+// resolver, so it lists again as soon as a checkpoint.held event arrives
+// instead of sleeping between polls.
 func (r *Resolver) Run(ctx context.Context, instance *Instance) {
 	client := service.NewClient(filepath.Join(instance.ConfigDir, "instances", instance.Name+".sock"))
 	defer client.Close()
+	wake := make(chan struct{}, 1)
+	subscribed := make(chan struct{})
+	go watchHolds(ctx, client, wake, subscribed)
+	select {
+	case <-subscribed:
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+	}
 	for ctx.Err() == nil {
 		items, err := r.pending(ctx, client)
 		if err != nil || len(items) == 0 {
 			select {
 			case <-ctx.Done():
-			case <-time.After(time.Millisecond):
+			case <-wake:
+			case <-time.After(resolverPoll):
 			}
 			continue
 		}
 		for _, item := range items {
 			r.forward(ctx, client, item)
 		}
+	}
+}
+
+// watchHolds signals wake on every checkpoint.held event until ctx ends,
+// subscribing again when the service drops the stream. subscribed is closed
+// once the first subscription is live.
+func watchHolds(ctx context.Context, client *service.Client, wake chan<- struct{}, subscribed chan<- struct{}) {
+	var once sync.Once
+	for ctx.Err() == nil {
+		_ = streamHolds(ctx, client, wake, func() { once.Do(func() { close(subscribed) }) })
+		select {
+		case <-ctx.Done():
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func streamHolds(ctx context.Context, client *service.Client, wake chan<- struct{}, onSubscribed func()) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/events", nil)
+	if err != nil {
+		return err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("subscribing to events: %s", response.Status)
+	}
+	// The service subscribes before it sends the response headers.
+	onSubscribed()
+
+	held := []byte("event: checkpoint.held")
+	reader := bufio.NewReaderSize(response.Body, 64<<10)
+	midLine := false
+	for {
+		line, err := reader.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			// A long data line; only event lines matter.
+			midLine = true
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !midLine && bytes.HasPrefix(line, held) {
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+		}
+		midLine = false
 	}
 }
 
