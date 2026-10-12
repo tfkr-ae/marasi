@@ -47,20 +47,14 @@ func TestMessage_NewMessage(t *testing.T) {
 	if got.Direction != "client" {
 		t.Fatalf("\nwanted direction:\n%q\ngot:\n%q", "client", got.Direction)
 	}
-	if got.Frame.Fin != frame.Fin {
-		t.Fatalf("\nwanted Fin:\n%v\ngot:\n%v", frame.Fin, got.Frame.Fin)
+	if got.FrameCount != 1 {
+		t.Fatalf("\nwanted FrameCount:\n%d\ngot:\n%d", 1, got.FrameCount)
 	}
-	if got.Frame.Opcode != frame.Opcode {
-		t.Fatalf("\nwanted Opcode:\n%d\ngot:\n%d", frame.Opcode, got.Frame.Opcode)
+	if got.Opcode != frame.Opcode {
+		t.Fatalf("\nwanted Opcode:\n%d\ngot:\n%d", frame.Opcode, got.Opcode)
 	}
-	if got.Frame.Masked != frame.Masked {
-		t.Fatalf("\nwanted Masked:\n%v\ngot:\n%v", frame.Masked, got.Frame.Masked)
-	}
-	if got.Frame.Key != frame.Key {
-		t.Fatalf("\nwanted Key:\n%x\ngot:\n%x", frame.Key, got.Frame.Key)
-	}
-	if !bytes.Equal(got.Frame.Payload, frame.Payload) {
-		t.Fatalf("\nwanted payload:\n%q\ngot:\n%q", frame.Payload, got.Frame.Payload)
+	if !bytes.Equal(got.Payload, frame.Payload) {
+		t.Fatalf("\nwanted payload:\n%q\ngot:\n%q", frame.Payload, got.Payload)
 	}
 	if got.Metadata == nil {
 		t.Fatal("wanted initialized metadata, got nil")
@@ -95,7 +89,7 @@ func TestMessage_IsBinary(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			message := &Message{Frame: Frame{Opcode: tt.opcode}}
+			message := &Message{Opcode: tt.opcode}
 			got := message.IsBinary()
 			if got != tt.want {
 				t.Fatalf("\nwanted:\n%v\ngot:\n%v", tt.want, got)
@@ -119,13 +113,9 @@ func TestMessage_ToDomain(t *testing.T) {
 		ID:           messageID,
 		ConnectionID: connectionID,
 		Direction:    "server",
-		Frame: Frame{
-			Fin:     true,
-			Opcode:  OpBinary,
-			Masked:  true,
-			Key:     [4]byte{1, 2, 3, 4},
-			Payload: []byte("original"),
-		},
+		Opcode:       OpBinary,
+		Payload:      []byte("original"),
+		FrameCount:   3,
 		Metadata: map[string]any{
 			"source": "upstream",
 		},
@@ -147,8 +137,8 @@ func TestMessage_ToDomain(t *testing.T) {
 	if got.Opcode != OpBinary {
 		t.Fatalf("\nwanted Opcode:\n%d\ngot:\n%d", OpBinary, got.Opcode)
 	}
-	if !got.Fin {
-		t.Fatal("wanted Fin to be true, got false")
+	if got.FrameCount != 3 {
+		t.Fatalf("\nwanted FrameCount:\n%d\ngot:\n%d", 3, got.FrameCount)
 	}
 	if !got.IsBinary {
 		t.Fatal("wanted IsBinary to be true, got false")
@@ -163,7 +153,7 @@ func TestMessage_ToDomain(t *testing.T) {
 		t.Fatalf("\nwanted metadata source:\n%q\ngot:\n%v", "upstream", got.Metadata["source"])
 	}
 
-	message.Frame.Payload[0] = 'X'
+	message.Payload[0] = 'X'
 	message.Metadata["source"] = "modified"
 	if !bytes.Equal(got.Payload, []byte("original")) {
 		t.Fatalf("domain payload changed with message payload: %q", got.Payload)
@@ -174,8 +164,8 @@ func TestMessage_ToDomain(t *testing.T) {
 
 	got.Payload[1] = 'Y'
 	got.Metadata["source"] = "domain"
-	if !bytes.Equal(message.Frame.Payload, []byte("Xriginal")) {
-		t.Fatalf("message payload changed with domain payload: %q", message.Frame.Payload)
+	if !bytes.Equal(message.Payload, []byte("Xriginal")) {
+		t.Fatalf("message payload changed with domain payload: %q", message.Payload)
 	}
 	if message.Metadata["source"] != "modified" {
 		t.Fatalf("message metadata changed with domain metadata: %v", message.Metadata["source"])

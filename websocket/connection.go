@@ -17,6 +17,9 @@ import (
 // ErrConnectionClosed is returned when operating on a closed connection.
 var ErrConnectionClosed = errors.New("websocket connection is closed")
 
+// errForwarding marks a failure to write a relayed frame to its peer.
+var errForwarding = errors.New("forwarding websocket frame")
+
 const (
 	// DirectionFromClient marks a message originating from the client.
 	DirectionFromClient = "client"
@@ -24,6 +27,10 @@ const (
 	DirectionFromServer = "server"
 	// CloseHandshakeTimeout bounds the local close handshake.
 	CloseHandshakeTimeout = time.Second
+	// RelayedCloseTimeout bounds a close handshake between the peers. It runs
+	// from the first relayed close frame; the peers normally finish it by
+	// dropping TCP well before then.
+	RelayedCloseTimeout = 5 * time.Second
 )
 
 // ProcessFunc processes a live message before it is forwarded.
@@ -65,8 +72,8 @@ type Connection struct {
 	client       io.ReadWriteCloser
 	upstream     io.ReadWriteCloser
 
-	clientWriteMu   sync.Mutex
-	upstreamWriteMu sync.Mutex
+	clientLeg   *leg
+	upstreamLeg *leg
 
 	closeOnce    sync.Once
 	closeErr     error
@@ -74,13 +81,33 @@ type Connection struct {
 	closedRecord chan domain.WebSocketConnection
 	closing      atomic.Bool
 	running      atomic.Bool
+	// started is set when Run begins and stays set. The setters configure
+	// fields the relay goroutines read without locks, so they must run
+	// before it.
+	started atomic.Bool
+	// closeRelayed is set once a peer's close frame has been relayed. The
+	// relay then keeps both directions open so the reply close reaches the
+	// other peer, and tears down when a peer drops TCP.
+	closeRelayed        atomic.Bool
+	relayedCloseTimeout time.Duration
 
 	mu          sync.RWMutex
 	closeCode   int
 	closeReason string
+	// closeOwned is set once the proxy starts the close itself. The close
+	// details are then the proxy's, and no peer's close replaces them.
+	closeOwned bool
 
 	process    ProcessFunc
 	onShutdown func(uuid.UUID)
+
+	maxMessageSize int64
+	// inflaters decompress each peer's compressed messages, by the
+	// direction they come from. They are nil without permessage-deflate.
+	inflaters  map[string]*inflater
+	onProgress func(domain.WebSocketMessageProgress)
+	onTooBig   func(MessageTooBig)
+	onInflate  func(InflateFailure)
 }
 
 // NewConnection creates a connection that relays between client and upstream.
@@ -99,9 +126,77 @@ func NewConnection(
 		clientReader: clientReader,
 		client:       client,
 		upstream:     upstream,
+		clientLeg:    &leg{w: client, errPrefix: "writing websocket frame to client"},
+		upstreamLeg:  &leg{w: upstream, mask: true, errPrefix: "writing websocket frame upstream"},
 		process:      process,
 		done:         make(chan struct{}),
 		closedRecord: make(chan domain.WebSocketConnection, 1),
+
+		relayedCloseTimeout: RelayedCloseTimeout,
+		maxMessageSize:      DefaultMaxMessageSize,
+	}
+}
+
+// SetMaxMessageSize sets the per-message size limit in bytes. A value of zero
+// or less keeps the current limit. Call it before Run; it panics after.
+func (c *Connection) SetMaxMessageSize(limit int64) {
+	c.mustNotHaveStarted("SetMaxMessageSize")
+	if limit > 0 {
+		c.maxMessageSize = limit
+	}
+}
+
+// SetDeflate makes the proxy the permessage-deflate endpoint on both legs
+// with the negotiated params (ADR-0028). Each direction gets its own
+// inflater and deflater: the client's parameters govern messages from the
+// client, inflated from the client and deflated toward the upstream, and the
+// server's govern messages from the server. A nil params means no deflate.
+// Call it before Run; it panics after.
+func (c *Connection) SetDeflate(params *domain.WebSocketDeflate) {
+	c.mustNotHaveStarted("SetDeflate")
+	if params == nil {
+		c.inflaters = nil
+		c.upstreamLeg.deflater = nil
+		c.clientLeg.deflater = nil
+		return
+	}
+	c.inflaters = map[string]*inflater{
+		DirectionFromClient: newInflater(params.ClientNoContextTakeover),
+		DirectionFromServer: newInflater(params.ServerNoContextTakeover),
+	}
+	c.upstreamLeg.deflater = newDeflater(params.ClientNoContextTakeover, params.ClientMaxWindowBits)
+	c.clientLeg.deflater = newDeflater(params.ServerNoContextTakeover, params.ServerMaxWindowBits)
+}
+
+// SetProgressHandler registers a callback for messages whose frames are still
+// arriving. It runs on the relay goroutine and must not block. Call it before
+// Run; it panics after.
+func (c *Connection) SetProgressHandler(handler func(domain.WebSocketMessageProgress)) {
+	c.mustNotHaveStarted("SetProgressHandler")
+	c.onProgress = handler
+}
+
+// SetMessageTooBigHandler registers a callback invoked when a message goes
+// over the size limit, after the close frames are sent. Call it before Run;
+// it panics after.
+func (c *Connection) SetMessageTooBigHandler(handler func(MessageTooBig)) {
+	c.mustNotHaveStarted("SetMessageTooBigHandler")
+	c.onTooBig = handler
+}
+
+// SetInflateFailureHandler registers a callback invoked when a compressed
+// message cannot be inflated, after the message is processed and the close
+// frames are sent. Call it before Run; it panics after.
+func (c *Connection) SetInflateFailureHandler(handler func(InflateFailure)) {
+	c.mustNotHaveStarted("SetInflateFailureHandler")
+	c.onInflate = handler
+}
+
+// mustNotHaveStarted panics when Run has begun: setter configures what the
+// relay goroutines read without synchronisation.
+func (c *Connection) mustNotHaveStarted(setter string) {
+	if c.started.Load() {
+		panic("websocket: Connection." + setter + " called after Run")
 	}
 }
 
@@ -116,36 +211,38 @@ func (c *Connection) PublishClosedRecord(record domain.WebSocketConnection) {
 }
 
 func (c *Connection) writeToClient(frame Frame) error {
-	c.clientWriteMu.Lock()
-	defer c.clientWriteMu.Unlock()
-
-	if err := WriteFrame(c.client, frame, false); err != nil {
-		return fmt.Errorf("writing websocket frame to client: %w", err)
-	}
-
-	return nil
+	return c.clientLeg.writeFrames(frame)
 }
 
 func (c *Connection) writeToUpstream(frame Frame) error {
-	c.upstreamWriteMu.Lock()
-	defer c.upstreamWriteMu.Unlock()
-
-	if err := WriteFrame(c.upstream, frame, true); err != nil {
-		return fmt.Errorf("writing websocket frame upstream: %w", err)
-	}
-
-	return nil
+	return c.upstreamLeg.writeFrames(frame)
 }
 
 func (c *Connection) handleFrame(
 	frame Frame,
 	source string,
-	writeFrame func(Frame) error,
+	out frameSink,
 ) (stop bool, err error) {
 	message, err := NewMessage(c.ID, c.RequestID, source, frame)
 	if err != nil {
 		return false, fmt.Errorf("creating websocket message: %w", err)
 	}
+
+	if frame.Opcode == OpClose {
+		// An invalid close payload is relayed unchanged so the receiving
+		// endpoint judges it; the relay only records what it saw.
+		if _, _, err := ParseClosePayload(frame.Payload); err != nil {
+			message.Metadata["close_error"] = err.Error()
+		}
+	}
+
+	return c.handleMessage(message, out)
+}
+
+// handleMessage processes a whole message and forwards it unless it was
+// dropped or only recorded (Passthrough). It reports whether the message is a close.
+func (c *Connection) handleMessage(message *Message, out frameSink) (isClose bool, err error) {
+	received := message.Opcode
 
 	if c.process != nil {
 		if err := c.process(message); err != nil {
@@ -153,75 +250,43 @@ func (c *Connection) handleFrame(
 		}
 	}
 
-	isClose := frame.Opcode == OpClose ||
-		message.Frame.Opcode == OpClose
-
+	isClose = received == OpClose || message.Opcode == OpClose
 	if isClose {
-		code, reason, err := ParseClosePayload(message.Frame.Payload)
-		if err != nil {
-			return false, fmt.Errorf(
-				"parsing websocket close payload: %w",
-				err,
-			)
-		}
-
+		code, reason := closeDetailsSeen(message.Payload)
 		c.setCloseDetails(code, reason)
 	}
 
-	if !message.Dropped {
-		if err := writeFrame(message.Frame); err != nil {
-			return false, fmt.Errorf(
-				"forwarding websocket frame: %w",
-				err,
-			)
-		}
+	if message.Passthrough || message.Dropped {
+		return isClose, nil
+	}
+	if isClose && !c.closing.Load() {
+		// Mark the handshake before the close goes out: the receiving peer
+		// may drop TCP as soon as it reads it, and the other direction must
+		// then see a clean end, not a read error.
+		c.noteCloseRelayed()
+	}
+	if err := out.writeFrames(message.outgoing()...); err != nil {
+		return false, fmt.Errorf("%w: %w", errForwarding, err)
 	}
 
 	return isClose, nil
 }
 
-func (c *Connection) relayFrames(
-	reader io.Reader,
-	writeFrame func(Frame) error,
-	source string,
-) error {
-	for {
+// noteCloseRelayed marks the peers' close handshake as started and, while the
+// relay runs, bounds how long it may take.
+func (c *Connection) noteCloseRelayed() {
+	if !c.closeRelayed.CompareAndSwap(false, true) || !c.running.Load() {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(c.relayedCloseTimeout)
+		defer timer.Stop()
 		select {
 		case <-c.done:
-			return nil
-		default:
+		case <-timer.C:
+			_ = c.shutdown()
 		}
-
-		frame, err := ReadFrame(reader)
-		if err != nil {
-			if c.closing.Load() {
-				return nil
-			}
-			return fmt.Errorf("reading websocket frame: %w", err)
-		}
-		if c.closing.Load() && frame.Opcode == OpClose {
-			if source == DirectionFromClient {
-				continue
-			}
-			stop, err := c.handleFrame(frame, source, func(Frame) error { return nil })
-			if err != nil {
-				return err
-			}
-			if stop {
-				return nil
-			}
-			continue
-		}
-
-		stop, err := c.handleFrame(frame, source, writeFrame)
-		if err != nil {
-			return err
-		}
-
-		if stop {
-			return nil
-		}
-	}
+	}()
 }
 
 func (c *Connection) shutdown() error {
@@ -240,41 +305,60 @@ func (c *Connection) shutdown() error {
 	return c.closeErr
 }
 
-// SetShutdownHandler registers a callback invoked once when the connection shuts down.
+// SetShutdownHandler registers a callback invoked once when the connection
+// shuts down. Call it before Run; it panics after.
 func (c *Connection) SetShutdownHandler(handler func(uuid.UUID)) {
+	c.mustNotHaveStarted("SetShutdownHandler")
 	c.onShutdown = handler
 }
 
 // Run starts bidirectional frame relay and blocks until the connection closes.
 func (c *Connection) Run() error {
+	c.started.Store(true)
 	c.running.Store(true)
 	defer c.running.Store(false)
 
 	results := make(chan error, 2)
 
 	go func() {
-		results <- c.relayFrames(
+		results <- c.relay(
 			c.clientReader,
-			c.writeToUpstream,
+			c.upstreamLeg,
 			DirectionFromClient,
 		)
 	}()
 
 	go func() {
-		results <- c.relayFrames(
+		results <- c.relay(
 			c.upstream,
-			c.writeToClient,
+			c.clientLeg,
 			DirectionFromServer,
 		)
 	}()
 
 	firstErr := <-results
-	locallyClosing := c.closing.Load()
+	drained := false
+	if errors.Is(firstErr, errForwarding) && !c.closing.Load() && !c.closeRelayed.Load() {
+		// The peer this direction wrote to is gone, but what it sent before
+		// it left, often its close, may still be unread by the other
+		// direction. That direction reads the gone peer, so it ends soon;
+		// let it relay the close before both legs are closed.
+		timer := time.NewTimer(c.relayedCloseTimeout)
+		select {
+		case <-results:
+			drained = true
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
+	closeHandshake := c.closing.Load() || c.closeRelayed.Load()
 
 	shutdownErr := c.shutdown()
 
-	<-results
-	if locallyClosing {
+	if !drained {
+		<-results
+	}
+	if closeHandshake {
 		return nil
 	}
 
@@ -290,7 +374,7 @@ func (c *Connection) SendToClient(frame Frame) error {
 	_, err := c.handleFrame(
 		frame,
 		DirectionFromServer,
-		c.writeToClient,
+		c.clientLeg,
 	)
 	if err != nil {
 		return fmt.Errorf("sending websocket frame to client: %w", err)
@@ -299,19 +383,28 @@ func (c *Connection) SendToClient(frame Frame) error {
 	return nil
 }
 
-// Inject sends a frame as if it originated from direction.
-// Injected messages are marked with metadata["injected"] = true.
-func (c *Connection) Inject(direction string, opcode int, payload []byte) (domain.WebSocketMessage, error) {
+// InjectOptions controls how an injected message goes out.
+type InjectOptions struct {
+	// NeverCompress sends a text or binary message uncompressed even when
+	// the connection negotiated permessage-deflate.
+	NeverCompress bool
+}
+
+// Inject sends a message as if it originated from direction.
+// Injected messages are marked with metadata["injected"] = true. On a
+// connection with permessage-deflate, a text or binary message is compressed
+// by the leg's compressor unless options.NeverCompress is set.
+func (c *Connection) Inject(direction string, opcode int, payload []byte, options InjectOptions) (domain.WebSocketMessage, error) {
 	if c.isClosed() {
 		return domain.WebSocketMessage{}, ErrConnectionClosed
 	}
 
-	var writeFrame func(Frame) error
+	var out *leg
 	switch direction {
 	case DirectionFromClient:
-		writeFrame = c.writeToUpstream
+		out = c.upstreamLeg
 	case DirectionFromServer:
-		writeFrame = c.writeToClient
+		out = c.clientLeg
 	default:
 		return domain.WebSocketMessage{}, fmt.Errorf("invalid websocket inject direction: %q", direction)
 	}
@@ -325,6 +418,10 @@ func (c *Connection) Inject(direction string, opcode int, payload []byte) (domai
 		return domain.WebSocketMessage{}, fmt.Errorf("creating injected websocket message: %w", err)
 	}
 	message.Metadata["injected"] = true
+	message.Compressed = out.deflater != nil && !options.NeverCompress && (opcode == OpText || opcode == OpBinary)
+	if message.Compressed {
+		message.compressTo = out.deflater
+	}
 
 	if c.process != nil {
 		if err := c.process(message); err != nil {
@@ -336,7 +433,7 @@ func (c *Connection) Inject(direction string, opcode int, payload []byte) (domai
 		return stored, nil
 	}
 
-	if err := writeFrame(message.Frame); err != nil {
+	if err := out.writeFrames(message.outgoing()...); err != nil {
 		return domain.WebSocketMessage{}, fmt.Errorf("writing injected websocket frame: %w", err)
 	}
 
@@ -381,11 +478,19 @@ func (c *Connection) beginClose(code int, reason string) (Frame, error) {
 	if !c.closing.CompareAndSwap(false, true) {
 		return Frame{}, ErrConnectionClosed
 	}
-	c.setCloseDetails(code, reason)
+	c.ownCloseDetails(code, reason)
 	return frame, nil
 }
 
 func (c *Connection) sendClose(frame Frame, ensureTimeout bool) error {
+	return c.sendCloseFrames(frame, frame, false, ensureTimeout)
+}
+
+// sendCloseFrames sends toClient to the client and toUpstream to the upstream,
+// bounding the handshake that follows. The close to the upstream is stored as
+// a generated message, and so is the close to the client when storeToClient
+// is set.
+func (c *Connection) sendCloseFrames(toClient, toUpstream Frame, storeToClient, ensureTimeout bool) error {
 	if c.running.Load() || ensureTimeout {
 		go func() {
 			timer := time.NewTimer(CloseHandshakeTimeout)
@@ -397,8 +502,13 @@ func (c *Connection) sendClose(frame Frame, ensureTimeout bool) error {
 			}
 		}()
 	}
-	clientErr := c.writeToClient(frame)
-	upstreamErr := c.sendGeneratedClose(frame, DirectionFromClient, c.writeToUpstream)
+	var clientErr error
+	if storeToClient {
+		clientErr = c.sendGeneratedClose(toClient, DirectionFromServer, c.clientLeg)
+	} else {
+		clientErr = c.clientLeg.writeClose(toClient)
+	}
+	upstreamErr := c.sendGeneratedClose(toUpstream, DirectionFromClient, c.upstreamLeg)
 	if c.running.Load() {
 		return errors.Join(clientErr, upstreamErr)
 	}
@@ -414,7 +524,7 @@ func (c *Connection) sendClose(frame Frame, ensureTimeout bool) error {
 func (c *Connection) sendGeneratedClose(
 	frame Frame,
 	direction string,
-	writeFrame func(Frame) error,
+	out *leg,
 ) error {
 	message, err := NewMessage(c.ID, c.RequestID, direction, frame)
 	if err != nil {
@@ -428,7 +538,7 @@ func (c *Connection) sendGeneratedClose(
 		}
 	}
 
-	return writeFrame(message.Frame)
+	return out.writeClose(message.outgoing()...)
 }
 
 // SendToUpstream sends a frame toward the upstream server through the process path.
@@ -440,7 +550,7 @@ func (c *Connection) SendToUpstream(frame Frame) error {
 	_, err := c.handleFrame(
 		frame,
 		DirectionFromClient,
-		c.writeToUpstream,
+		c.upstreamLeg,
 	)
 	if err != nil {
 		return fmt.Errorf("sending websocket frame upstream: %w", err)
@@ -457,10 +567,26 @@ func (c *Connection) CloseDetails() (code int, reason string) {
 	return c.closeCode, c.closeReason
 }
 
+// setCloseDetails records a close a peer sent, unless the proxy started the
+// close itself.
 func (c *Connection) setCloseDetails(code int, reason string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.closeOwned {
+		return
+	}
+	c.closeCode = code
+	c.closeReason = reason
+}
+
+// ownCloseDetails records the close the proxy starts. The peers' replies do
+// not replace it.
+func (c *Connection) ownCloseDetails(code int, reason string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.closeOwned = true
 	c.closeCode = code
 	c.closeReason = reason
 }

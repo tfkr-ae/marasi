@@ -99,6 +99,9 @@ type Proxy struct {
 	OnWebSocketOpen func(domain.WebSocketConnection) error
 	// OnWebSocketMessage is called for each processed WebSocket message.
 	OnWebSocketMessage func(domain.WebSocketMessage) error
+	// OnWebSocketProgress is called while a WebSocket message's frames are
+	// still arriving. It runs on the relay and must not block.
+	OnWebSocketProgress func(domain.WebSocketMessageProgress) error
 	// OnWebSocketClose is called when a WebSocket connection closes.
 	OnWebSocketClose func(domain.WebSocketConnection) error
 	// OnWebSocketIntercept is called when a WebSocket message is paused for inspection.
@@ -621,6 +624,11 @@ func (proxy *Proxy) WriteToDB() {
 			if proxy.OnLog != nil {
 				proxy.OnLog(*castItem)
 			}
+		case *webSocketRequestState:
+			// Logged by the waiting caller: a log sent from here could block
+			// this writer on its own full channel.
+			castItem.err = proxy.applyWebSocketRequestState(castItem.requestID, castItem.state)
+			close(castItem.done)
 		case *dbWriteBarrier:
 			close(castItem.done)
 		default:

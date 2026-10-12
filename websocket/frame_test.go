@@ -396,15 +396,41 @@ func TestFrame_WriteFrame(t *testing.T) {
 	}
 }
 
-func TestFrame_WriteFramePayloadTooLarge(t *testing.T) {
-	frame := Frame{Payload: make([]byte, MaxPayload+1)}
-
-	err := WriteFrame(&bytes.Buffer{}, frame, false)
-	if err == nil {
-		t.Fatal("wanted payload too large error, got nil")
+func TestFrame_RSVBitsSurviveReadAndWrite(t *testing.T) {
+	tests := []struct {
+		name       string
+		firstByte  byte
+		rsv1, rsv2 bool
+		rsv3       bool
+	}{
+		{name: "should keep RSV1", firstByte: 0x80 | 0x40 | OpText, rsv1: true},
+		{name: "should keep RSV2", firstByte: 0x80 | 0x20 | OpText, rsv2: true},
+		{name: "should keep RSV3", firstByte: 0x80 | 0x10 | OpText, rsv3: true},
+		{name: "should keep all RSV bits", firstByte: 0x80 | 0x70 | OpBinary, rsv1: true, rsv2: true, rsv3: true},
 	}
-	if !strings.Contains(err.Error(), "payload too large") {
-		t.Fatalf("\nwanted error containing:\n%q\ngot:\n%q", "payload too large", err)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wire := []byte{tt.firstByte, 0x02, 'h', 'i'}
+
+			frame, err := ReadFrame(bytes.NewReader(wire))
+			if err != nil {
+				t.Fatalf("ReadFrame() returned unexpected error: %v", err)
+			}
+			got := [3]bool{frame.Rsv1, frame.Rsv2, frame.Rsv3}
+			want := [3]bool{tt.rsv1, tt.rsv2, tt.rsv3}
+			if got != want {
+				t.Fatalf("\nwanted RSV bits:\n%v\ngot:\n%v", want, got)
+			}
+
+			var out bytes.Buffer
+			if err := WriteFrame(&out, frame, false); err != nil {
+				t.Fatalf("WriteFrame() returned unexpected error: %v", err)
+			}
+			if !bytes.Equal(out.Bytes(), wire) {
+				t.Fatalf("\nwanted wire bytes:\n%x\ngot:\n%x", wire, out.Bytes())
+			}
+		})
 	}
 }
 

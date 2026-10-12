@@ -2232,7 +2232,7 @@ func TestShouldInterceptWebSocketMessage(t *testing.T) {
 				return message:opcode() == 1
 			end
 		`, true)
-		message := &marasiws.Message{Frame: marasiws.Frame{Opcode: marasiws.OpText}}
+		message := &marasiws.Message{Opcode: marasiws.OpText}
 
 		if !shouldInterceptWebSocketMessage(proxy, message) {
 			t.Fatalf("wanted: true\ngot: false")
@@ -2307,15 +2307,15 @@ func TestProcessWebSocketMessageExtensions(t *testing.T) {
 			},
 		)
 		enableExtensions(proxy)
-		message := &marasiws.Message{Frame: marasiws.Frame{Opcode: marasiws.OpText}}
+		message := &marasiws.Message{Opcode: marasiws.OpText}
 
 		processWebSocketMessageExtensions(proxy, message)
 
-		if string(message.Frame.Payload) != "first" {
-			t.Fatalf("wanted: %q\ngot: %q", "first", message.Frame.Payload)
+		if string(message.Payload) != "first" {
+			t.Fatalf("wanted: %q\ngot: %q", "first", message.Payload)
 		}
-		if message.Frame.Opcode != marasiws.OpBinary {
-			t.Fatalf("wanted: %d\ngot: %d", marasiws.OpBinary, message.Frame.Opcode)
+		if message.Opcode != marasiws.OpBinary {
+			t.Fatalf("wanted: %d\ngot: %d", marasiws.OpBinary, message.Opcode)
 		}
 		if message.Dropped {
 			t.Fatalf("wanted dropped: false\ngot: true")
@@ -2351,8 +2351,42 @@ func TestProcessWebSocketMessageExtensions(t *testing.T) {
 		if !message.Dropped {
 			t.Fatalf("wanted dropped: true\ngot: false")
 		}
-		if len(message.Frame.Payload) != 0 {
-			t.Fatalf("wanted empty payload\ngot: %q", message.Frame.Payload)
+		if len(message.Payload) != 0 {
+			t.Fatalf("wanted empty payload\ngot: %q", message.Payload)
+		}
+	})
+
+	t.Run("a hook calling the removed message:fin() should fail open with an ERROR log", func(t *testing.T) {
+		proxy := newTestProxy(t, &domain.Extension{
+			ID:   uuid.New(),
+			Name: "old",
+			LuaContent: `
+				function processWebSocketMessage(message)
+					if message:fin() then
+						message:set_payload("changed")
+					end
+				end
+			`,
+		})
+		enableExtensions(proxy)
+		message := &marasiws.Message{Opcode: marasiws.OpText, Payload: []byte("hello")}
+
+		processWebSocketMessageExtensions(proxy, message)
+
+		if message.Dropped || message.Opcode != marasiws.OpText || string(message.Payload) != "hello" {
+			t.Fatalf("\nwanted:\nunchanged text %q, not dropped\ngot:\nopcode %d %q, dropped %t", "hello", message.Opcode, message.Payload, message.Dropped)
+		}
+		var levels []string
+		for len(proxy.DBWriteChannel) > 0 {
+			switch log := (<-proxy.DBWriteChannel).(type) {
+			case *domain.Log:
+				levels = append(levels, log.Level+": "+log.Message)
+			case domain.Log:
+				levels = append(levels, log.Level+": "+log.Message)
+			}
+		}
+		if len(levels) != 1 || !strings.HasPrefix(levels[0], "ERROR: Running processWebSocketMessage") {
+			t.Fatalf("\nwanted:\none ERROR log for processWebSocketMessage\ngot:\n%q", levels)
 		}
 	})
 
@@ -2559,6 +2593,8 @@ func TestWebSocketHandoffModifier(t *testing.T) {
 		if upstreamFrame.Opcode != marasiws.OpClose {
 			t.Fatalf("wanted: %d\ngot: %d", marasiws.OpClose, upstreamFrame.Opcode)
 		}
+		// The upstream ends the close handshake by dropping TCP.
+		_ = upstreamPeer.Close()
 
 		messageItem := receiveSessionDBWrite(t, proxy.DBWriteChannel)
 		message, ok := messageItem.(*domain.WebSocketMessage)

@@ -531,12 +531,11 @@ func TestWebSocketMessageType(t *testing.T) {
 		ConnectionID: connectionID,
 		RequestID:    requestID,
 		Direction:    marasiws.DirectionFromClient,
-		Frame: marasiws.Frame{
-			Fin:     true,
-			Opcode:  marasiws.OpText,
-			Payload: []byte("Hello from Marasi"),
-		},
-		Metadata: map[string]any{"source": "test"},
+		Opcode:       marasiws.OpText,
+		Payload:      []byte("Hello from Marasi"),
+		FrameCount:   3,
+		Compressed:   true,
+		Metadata:     map[string]any{"source": "test"},
 	}
 	withMessage := func(runtime *Runtime) error {
 		runtime.LuaState.PushUserData(message)
@@ -555,7 +554,8 @@ func TestWebSocketMessageType(t *testing.T) {
 			opcode = message:opcode(),
 			payload = message:payload(),
 			length = message:length(),
-			fin = message:fin(),
+			frame_count = message:frame_count(),
+			compressed = message:compressed(),
 			is_binary = message:is_binary(),
 			metadata = message:metadata(),
 			string_value = tostring(message),
@@ -577,7 +577,8 @@ func TestWebSocketMessageType(t *testing.T) {
 		"opcode":        float64(marasiws.OpText),
 		"payload":       "Hello from Marasi",
 		"length":        float64(len("Hello from Marasi")),
-		"fin":           true,
+		"frame_count":   float64(3),
+		"compressed":    true,
 		"is_binary":     false,
 		"metadata":      map[string]any{"source": "test"},
 		"string_value": fmt.Sprintf(
@@ -593,6 +594,10 @@ func TestWebSocketMessageType(t *testing.T) {
 		t.Fatalf("wanted:\n%v\ngot:\n%v", want, got)
 	}
 
+	if err := extension.ExecuteLua(`return message:fin()`); err == nil {
+		t.Fatalf("\nwanted message:fin() to fail, it was removed\ngot:\nnil")
+	}
+
 	err = extension.ExecuteLua(`
 		message:set_opcode(2)
 		message:set_payload("modified")
@@ -603,11 +608,11 @@ func TestWebSocketMessageType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("executing websocket message Lua mutations: %v", err)
 	}
-	if message.Frame.Opcode != marasiws.OpBinary {
-		t.Fatalf("wanted: %d\ngot: %d", marasiws.OpBinary, message.Frame.Opcode)
+	if message.Opcode != marasiws.OpBinary {
+		t.Fatalf("wanted: %d\ngot: %d", marasiws.OpBinary, message.Opcode)
 	}
-	if string(message.Frame.Payload) != "modified" {
-		t.Fatalf("wanted: %q\ngot: %q", "modified", message.Frame.Payload)
+	if string(message.Payload) != "modified" {
+		t.Fatalf("wanted: %q\ngot: %q", "modified", message.Payload)
 	}
 	if !message.Dropped {
 		t.Fatalf("wanted dropped: true\ngot: false")

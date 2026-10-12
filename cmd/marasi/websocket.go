@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"unicode/utf8"
@@ -26,6 +27,7 @@ func init() {
 	websocketInjectCmd.Flags().StringVar(&websocketInjectDirection, "direction", "", "Frame direction: client or server. Required")
 	websocketInjectCmd.Flags().IntVar(&websocketInjectOpcode, "opcode", 0, "WebSocket opcode from 0 to 15. Required")
 	websocketInjectCmd.Flags().StringVar(&websocketInjectFile, "file", "", "Read frame bytes from a file. If omitted, use piped stdin or an empty payload")
+	websocketInjectCmd.Flags().StringVar(&websocketInjectCompress, "compress", "auto", "With permessage-deflate: auto compresses text and binary messages for the receiver, never sends them uncompressed")
 	websocketCloseCmd.Flags().IntVar(&websocketCloseCode, "code", 0, "WebSocket close status code. Omit to leave it unset")
 	websocketCloseCmd.Flags().StringVar(&websocketCloseReason, "reason", "", "Close reason text")
 	websocketCmd.AddCommand(websocketListCmd, websocketGetCmd, websocketMessagesCmd, websocketInjectCmd, websocketCloseCmd)
@@ -45,6 +47,7 @@ var websocketMessagesCursor string
 var websocketInjectDirection string
 var websocketInjectOpcode int
 var websocketInjectFile string
+var websocketInjectCompress string
 var websocketCloseCode int
 var websocketCloseReason string
 
@@ -92,6 +95,13 @@ var websocketInjectCmd = &cobra.Command{
 		if !cmd.Flags().Changed("opcode") || websocketInjectOpcode < 0 || websocketInjectOpcode > 15 {
 			return errors.New("websocket inject --opcode must be an integer from 0 to 15")
 		}
+		if websocketInjectCompress != "auto" && websocketInjectCompress != "never" {
+			return errors.New("websocket inject --compress must be auto or never")
+		}
+		var compress string
+		if cmd.Flags().Changed("compress") {
+			compress = websocketInjectCompress
+		}
 		var raw []byte
 		var err error
 		if cmd.Flags().Changed("file") {
@@ -121,7 +131,8 @@ var websocketInjectCmd = &cobra.Command{
 			Direction string `json:"direction"`
 			Opcode    int    `json:"opcode"`
 			Payload   string `json:"payload"`
-		}{websocketInjectDirection, websocketInjectOpcode, base64.StdEncoding.EncodeToString(raw)})
+			Compress  string `json:"compress,omitempty"`
+		}{websocketInjectDirection, websocketInjectOpcode, base64.StdEncoding.EncodeToString(raw), compress})
 		if err != nil {
 			return fmt.Errorf("encoding websocket injection: %w", err)
 		}
@@ -332,6 +343,13 @@ func writeWebSocketConnectionHuman(body []byte, stdout io.Writer) error {
 		ClosedAt    *string `json:"closed_at"`
 		CloseCode   int     `json:"close_code"`
 		CloseReason string  `json:"close_reason"`
+		Deflate     *struct {
+			ServerNoContextTakeover bool `json:"server_no_context_takeover"`
+			ClientNoContextTakeover bool `json:"client_no_context_takeover"`
+			ServerMaxWindowBits     int  `json:"server_max_window_bits"`
+			ClientMaxWindowBits     int  `json:"client_max_window_bits"`
+		} `json:"deflate"`
+		RemovedExtensions []string `json:"removed_extensions"`
 	}
 	if err := json.Unmarshal(body, &connection); err != nil {
 		return fmt.Errorf("decoding websocket connection: %w", err)
@@ -340,8 +358,18 @@ func writeWebSocketConnectionHuman(body []byte, stdout io.Writer) error {
 	if connection.ClosedAt != nil {
 		closedAt = *connection.ClosedAt
 	}
+	deflate := "null"
+	if d := connection.Deflate; d != nil {
+		deflate = fmt.Sprintf(
+			"server_no_context_takeover=%t client_no_context_takeover=%t server_max_window_bits=%d client_max_window_bits=%d",
+			d.ServerNoContextTakeover,
+			d.ClientNoContextTakeover,
+			d.ServerMaxWindowBits,
+			d.ClientMaxWindowBits,
+		)
+	}
 	_, err := fmt.Fprintf(stdout,
-		"id: %s\nrequest_id: %s\nstate: %s\ntransport: %s\nhost: %s\npath: %s\nstarted_at: %s\nclosed_at: %s\nclose_code: %d\nclose_reason: %s\n",
+		"id: %s\nrequest_id: %s\nstate: %s\ntransport: %s\nhost: %s\npath: %s\nstarted_at: %s\nclosed_at: %s\nclose_code: %d\nclose_reason: %s\ndeflate: %s\nremoved_extensions: %s\n",
 		connection.ID,
 		connection.RequestID,
 		connection.State,
@@ -352,6 +380,8 @@ func writeWebSocketConnectionHuman(body []byte, stdout io.Writer) error {
 		closedAt,
 		connection.CloseCode,
 		connection.CloseReason,
+		deflate,
+		strings.Join(connection.RemovedExtensions, ", "),
 	)
 	return err
 }

@@ -74,8 +74,16 @@ The proxied socket opened by one request/response pair, identified by its own UU
 _Avoid_: stream, socket, session
 
 **WebSocket message**:
-A frame on a WebSocket connection, stored in the open project and identified by its own UUID.
-_Avoid_: stream, checkpoint item
+A complete text or binary message, or a single ping, pong, or close, on a WebSocket connection. Stored in the open project and identified by its own UUID. A text or binary message may arrive in several WebSocket frames.
+_Avoid_: frame, stream, checkpoint item
+
+**WebSocket frame**:
+One protocol unit on the wire that carries all or part of a WebSocket message. It is not stored on its own and has no id.
+_Avoid_: message, packet, chunk
+
+**WebSocket extension**:
+A protocol extension that the client offers and the upstream accepts in the `Sec-WebSocket-Extensions` handshake header. The proxy forwards only permessage-deflate (RFC 7692). It removes any other offer and records the name on the WebSocket connection. Not an Extension.
+_Avoid_: extension on its own, plugin
 
 **Waypoint**:
 A pairing of an original host:port with an override host:port, stored in the open project and identified by the original host:port.

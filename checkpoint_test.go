@@ -114,7 +114,7 @@ func TestCheckpointPending(t *testing.T) {
 		message := &marasiws.Message{
 			ID:           messageID,
 			ConnectionID: uuid.New(),
-			Frame:        marasiws.Frame{Opcode: marasiws.OpText, Payload: []byte("held")},
+			Opcode:       marasiws.OpText, Payload: []byte("held"),
 		}
 		wsDone := make(chan error, 1)
 		go func() {
@@ -260,7 +260,7 @@ func TestCheckpointPending(t *testing.T) {
 		message := &marasiws.Message{
 			ID:           messageID,
 			ConnectionID: uuid.New(),
-			Frame:        marasiws.Frame{Opcode: marasiws.OpText, Payload: []byte("original")},
+			Opcode:       marasiws.OpText, Payload: []byte("original"),
 		}
 		done := make(chan error, 1)
 		go func() {
@@ -276,11 +276,11 @@ func TestCheckpointPending(t *testing.T) {
 		if err := receiveHoldResult(t, done); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
-		if message.Frame.Opcode != marasiws.OpBinary {
-			t.Fatalf("wanted opcode: %d\ngot: %d", marasiws.OpBinary, message.Frame.Opcode)
+		if message.Opcode != marasiws.OpBinary {
+			t.Fatalf("wanted opcode: %d\ngot: %d", marasiws.OpBinary, message.Opcode)
 		}
-		if string(message.Frame.Payload) != "edited" {
-			t.Fatalf("wanted payload: %q\ngot: %q", "edited", message.Frame.Payload)
+		if string(message.Payload) != "edited" {
+			t.Fatalf("wanted payload: %q\ngot: %q", "edited", message.Payload)
 		}
 	})
 

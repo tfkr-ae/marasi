@@ -71,7 +71,7 @@ var checkpointGetCmd = &cobra.Command{
 			_, err = cmd.OutOrStdout().Write(body)
 			return err
 		}
-		return writeCheckpointGet(body, cmd.OutOrStdout())
+		return writeCheckpointGet(body, cmd.OutOrStdout(), writesToTerminal(cmd.OutOrStdout()))
 	},
 }
 
@@ -243,7 +243,10 @@ func writeCheckpointList(body []byte, stdout io.Writer) error {
 	return nil
 }
 
-func writeCheckpointGet(body []byte, stdout io.Writer) error {
+// writeCheckpointGet writes the item's bytes unchanged, so get, edit, and
+// forward round-trip exactly. On a terminal it ends the output with a newline,
+// or the shell prompt can overwrite a payload such as "Test".
+func writeCheckpointGet(body []byte, stdout io.Writer, terminal bool) error {
 	var item struct {
 		Type    string `json:"type"`
 		Raw     []byte `json:"raw"`
@@ -256,6 +259,19 @@ func writeCheckpointGet(body []byte, stdout io.Writer) error {
 	if item.Type == "websocket" {
 		data = item.Payload
 	}
+	if terminal && len(data) > 0 && data[len(data)-1] != '\n' {
+		data = append(data, '\n')
+	}
 	_, err := stdout.Write(data)
 	return err
+}
+
+// writesToTerminal reports whether stdout is a terminal rather than a pipe or file.
+func writesToTerminal(stdout io.Writer) bool {
+	file, ok := stdout.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }

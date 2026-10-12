@@ -106,6 +106,31 @@ func TestNewMemory(t *testing.T) {
 	}
 }
 
+func TestNewPragmas(t *testing.T) {
+	t.Run("should open a project file in WAL mode with a busy timeout and foreign keys", func(t *testing.T) {
+		connection, err := New(filepath.Join(t.TempDir(), "pragmas.marasi"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err != nil {
+			t.Fatalf("opening database: %v", err)
+		}
+		t.Cleanup(func() { _ = connection.Close() })
+
+		want := map[string]string{
+			"journal_mode": "wal",
+			"busy_timeout": "5000",
+			"foreign_keys": "1",
+		}
+		for pragma, wantValue := range want {
+			var got string
+			if err := connection.Get(&got, "PRAGMA "+pragma); err != nil {
+				t.Fatalf("reading PRAGMA %s: %v", pragma, err)
+			}
+			if got != wantValue {
+				t.Fatalf("\nwanted PRAGMA %s:\n%s\ngot:\n%s", pragma, wantValue, got)
+			}
+		}
+	})
+}
+
 func setupTestDB(t *testing.T) (*Repository, func()) {
 	t.Helper()
 

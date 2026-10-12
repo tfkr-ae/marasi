@@ -470,6 +470,10 @@ func WebSocketPrepareModifier(proxy *Proxy, res *http.Response) error {
 			res.Body,
 		)
 	}
+	negotiation, err := negotiateWebSocketExtensions(res)
+	if err != nil {
+		return failWebSocketHandshake(proxy, res, err)
+	}
 	metadata, ok := core.MetadataFromContext(res.Request.Context())
 	if !ok {
 		return ErrMetadataNotFound
@@ -482,6 +486,11 @@ func WebSocketPrepareModifier(proxy *Proxy, res *http.Response) error {
 		res.Request,
 		upstream,
 	)
+	res.Request = res.Request.WithContext(context.WithValue(
+		res.Request.Context(),
+		webSocketNegotiationKey{},
+		negotiation,
+	))
 
 	res.Body = http.NoBody
 	res.ContentLength = 0
@@ -588,6 +597,7 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		return fmt.Errorf("clearing websocket client deadline: %w", err)
 	}
 
+	deflate, removedExtensions := webSocketNegotiated(res.Request)
 	if err := res.Write(bufferedClient); err != nil {
 		return fmt.Errorf("writing websocket handshake response: %w", err)
 	}
@@ -599,7 +609,9 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 	var connection *marasiws.Connection
 	process := func(message *marasiws.Message) error {
 		generated, _ := message.Metadata["generated"].(bool)
-		if !generated {
+		// A passthrough message is only recorded: the relay cannot forward
+		// it as processed, so no hook may hold or change it.
+		if !generated && !message.Passthrough {
 			processWebSocketMessageExtensions(proxy, message)
 
 			if !message.Dropped && shouldInterceptWebSocketMessage(proxy, message) {
@@ -651,9 +663,34 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		upstream,
 		process,
 	)
+	connection.SetDeflate(deflate)
 	if proxy.WebSocketInterceptor != nil {
 		connection.SetShutdownHandler(proxy.cancelWebSocketCheckpoint)
 	}
+	if proxy.Config != nil {
+		connection.SetMaxMessageSize(proxy.Config.WebSocketMaxMessageSize)
+	}
+	if proxy.OnWebSocketProgress != nil {
+		connection.SetProgressHandler(func(progress domain.WebSocketMessageProgress) {
+			_ = proxy.OnWebSocketProgress(progress)
+		})
+	}
+	connection.SetMessageTooBigHandler(func(tooBig marasiws.MessageTooBig) {
+		message := fmt.Sprintf("a %s message of %d bytes is over", tooBig.Direction, tooBig.Size)
+		if tooBig.Inflated {
+			message = fmt.Sprintf("a compressed %s message inflates to over", tooBig.Direction)
+		}
+		_ = proxy.WriteLog("WARN", fmt.Sprintf(
+			"WebSocket %s closed: %s the %d-byte limit. Sent 1009 to the sender and 1001 to the receiver.",
+			connectionID, message, tooBig.Limit,
+		), core.LogWithReqResID(requestID))
+	})
+	connection.SetInflateFailureHandler(func(failure marasiws.InflateFailure) {
+		_ = proxy.WriteLog("WARN", fmt.Sprintf(
+			"WebSocket %s closed: a compressed %s message cannot be inflated (%v). Sent 1007 to the sender and 1001 to the receiver.",
+			connectionID, failure.Direction, failure.Err,
+		), core.LogWithReqResID(requestID))
+	})
 
 	path := res.Request.URL.Path
 	if res.Request.URL.RawQuery != "" {
@@ -668,6 +705,9 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		Host:      res.Request.Host,
 		Path:      path,
 		StartedAt: time.Now(),
+
+		Deflate:           deflate,
+		RemovedExtensions: removedExtensions,
 	}
 
 	release, _ := res.Request.Context().Value(projectReleaseKey{}).(func())
