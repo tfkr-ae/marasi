@@ -22,7 +22,8 @@ jobs:
   autobahn:
     name: autobahn (${{ matrix.run }}, ${{ matrix.mode }})
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    # Two suites, each under the harness's 75-minute -suite-limit.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
