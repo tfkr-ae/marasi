@@ -430,7 +430,7 @@ func WriteRequestModifier(proxy *Proxy, req *http.Request) error {
 		if err != nil {
 			return fmt.Errorf("%w : %w", ErrProxyRequest, err)
 		}
-		proxy.DBWriteChannel <- proxyRequest
+		proxy.debugQueueDB("request", proxyRequest) // [DEBUG-ab7c]
 		if proxy.OnRequest == nil {
 			return ErrRequestHandlerUndefined
 		} else {
@@ -608,6 +608,11 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 
 	var connection *marasiws.Connection
 	process := func(message *marasiws.Message) error {
+		processStarted := time.Now() // [DEBUG-ab7c]
+		var heldAt time.Time         // [DEBUG-ab7c]
+		defer func() {               // [DEBUG-ab7c]
+			proxy.debugSlowStep("websocket process", processStarted, "connection", connectionID, "direction", message.Direction, "opcode", message.Opcode, "size", len(message.Payload), "to_hold_ms", debugSince(processStarted, heldAt))
+		}()
 		generated, _ := message.Metadata["generated"].(bool)
 		// A passthrough message is only recorded: the relay cannot forward
 		// it as processed, so no hook may hold or change it.
@@ -619,6 +624,7 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 					return errors.New("websocket interceptor not configured")
 				}
 				err := proxy.WebSocketInterceptor.Intercept(message, func(snapshot domain.WebSocketMessage) {
+					heldAt = time.Now() // [DEBUG-ab7c]
 					proxy.noteWebSocketHold(message)
 					if proxy.OnWebSocketIntercept == nil {
 						return
@@ -644,7 +650,7 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		}
 
 		snapshot := message.ToDomain()
-		proxy.DBWriteChannel <- &snapshot
+		proxy.debugQueueDB("websocket message", &snapshot) // [DEBUG-ab7c]
 		if proxy.OnWebSocketMessage != nil {
 			_ = proxy.OnWebSocketMessage(snapshot)
 		}
@@ -903,7 +909,7 @@ func WriteResponseModifier(proxy *Proxy, res *http.Response) error {
 	if err != nil {
 		return fmt.Errorf("%w : %w", ErrProxyResponse, err)
 	}
-	proxy.DBWriteChannel <- proxyResponse
+	proxy.debugQueueDB("response", proxyResponse) // [DEBUG-ab7c]
 	if proxy.OnResponse == nil {
 		return ErrResponseHandlerUndefined
 	} else {

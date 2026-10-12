@@ -1,6 +1,7 @@
 package autobahn
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -178,7 +179,9 @@ func (s Suite) dockerArgs(name, proxy string) []string {
 	// The image is amd64-only; naming the platform keeps arm64 hosts quiet.
 	// Unbuffered output makes each "Running test case" line reach the log
 	// when the case starts, not in batches.
-	args := []string{"run", "--rm", "--name", name, "--platform", "linux/amd64", "--network", "host", "-e", "PYTHONUNBUFFERED=1", "-v", s.Dir + ":/work"}
+	// Containers are removed by removeContainer, not --rm, so a container
+	// that exits on its own can still be inspected.
+	args := []string{"run", "--name", name, "--platform", "linux/amd64", "--network", "host", "-e", "PYTHONUNBUFFERED=1", "-v", s.Dir + ":/work"}
 	if proxy != "" {
 		args = append(args, "-e", "WSTEST_PROXY="+proxy)
 	}
@@ -202,8 +205,11 @@ func (s Suite) runContainer(ctx context.Context, proxy string, command ...string
 	select {
 	case err := <-done:
 		if err != nil {
+			s.logState(name)
+			removeContainer(name)
 			return fmt.Errorf("docker %v: %w", command, err)
 		}
+		removeContainer(name)
 		return nil
 	case <-ctx.Done():
 		removeContainer(name)
@@ -224,6 +230,7 @@ func (s Suite) startContainer(ctx context.Context, command ...string) (func(logs
 		return nil, fmt.Errorf("starting %v: %w", command, err)
 	}
 	return func(logs bool) {
+		s.logState(name)
 		if logs {
 			cmd := exec.Command("docker", "logs", name)
 			cmd.Stdout, cmd.Stderr = s.Log, s.Log
@@ -231,6 +238,17 @@ func (s Suite) startContainer(ctx context.Context, command ...string) (func(logs
 		}
 		removeContainer(name)
 	}, nil
+}
+
+// logState logs a container's exit state, including whether the kernel
+// OOM-killed it, unless it is still running.
+func (s Suite) logState(name string) {
+	out, err := exec.Command("docker", "inspect", "--format",
+		"{{.State.Status}} exit={{.State.ExitCode}} oomkilled={{.State.OOMKilled}} error={{printf \"%q\" .State.Error}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}", name).Output()
+	if err != nil || bytes.HasPrefix(out, []byte("running ")) {
+		return
+	}
+	fmt.Fprintf(s.Log, "container %s: %s", name, out)
 }
 
 func removeContainer(name string) {

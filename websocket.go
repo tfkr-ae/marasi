@@ -199,7 +199,7 @@ func (proxy *Proxy) runWebSocketSessionWithRelease(connection *marasiws.Connecti
 	record.ClosedAt = nil
 
 	openRecord := record
-	proxy.DBWriteChannel <- &openRecord
+	proxy.debugQueueDB("websocket open", &openRecord) // [DEBUG-ab7c]
 
 	if proxy.OnWebSocketOpen != nil {
 		_ = proxy.OnWebSocketOpen(openRecord)
@@ -227,9 +227,9 @@ func (proxy *Proxy) runWebSocketSessionWithRelease(connection *marasiws.Connecti
 	}
 
 	proxy.updateWebSocketRequestState(connection.RequestID, closedRecord.State)
-	proxy.DBWriteChannel <- &domain.WebSocketConnectionUpdate{
+	proxy.debugQueueDB("websocket close", &domain.WebSocketConnectionUpdate{ // [DEBUG-ab7c]
 		Connection: closedRecord,
-	}
+	})
 
 	return runErr
 }
@@ -267,8 +267,10 @@ func (proxy *Proxy) updateWebSocketRequestState(requestID uuid.UUID, state strin
 	var err error
 	if proxy.dbWriterStarted.Load() && proxy.DBWriteChannel != nil {
 		change := &webSocketRequestState{requestID: requestID, state: state, done: make(chan struct{})}
+		stateStarted := time.Now() // [DEBUG-ab7c]
 		proxy.DBWriteChannel <- change
 		<-change.done
+		proxy.debugSlowStep("websocket request state", stateStarted, "state", state) // [DEBUG-ab7c]
 		err = change.err
 	} else {
 		err = proxy.applyWebSocketRequestState(requestID, state)
