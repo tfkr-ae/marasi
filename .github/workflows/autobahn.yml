@@ -7,20 +7,33 @@ on:
     paths:
       - 'websocket/**'
       - 'websocket*.go'
-      - 'modifiers.go'
-      - 'extensions/**'
-      - 'transport.go'
       - 'internal/autobahn/**'
+      - '.github/workflows/autobahn.yml'
   workflow_dispatch:
+
+# A new push to the same PR cancels the run still going on the old head.
+concurrency:
+  group: autobahn-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   # Keep in step with autobahn.Image in internal/autobahn/harness.go.
   AUTOBAHN_IMAGE: crossbario/autobahn-testsuite@sha256:519915fb568b04c9383f70a1c405ae3ff44ab9e35835b085239c258b6fac3074
 
 jobs:
+  # The gate: every proxied run is compared to the committed direct baseline,
+  # and a job fails on any deviation the harness does not allow. Each run and
+  # mode is its own job, so they run in parallel and one failure does not
+  # stop the others.
   autobahn:
+    name: autobahn (${{ matrix.run }}, ${{ matrix.mode }})
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [proxy, checkpoint-forward, checkpoint-edit, extension]
+        mode: [fuzzingclient, fuzzingserver]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -28,21 +41,41 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: docker pull "$AUTOBAHN_IMAGE"
-      # The gate: every proxied run is compared to the committed direct
-      # baseline, and the job fails on any deviation the harness does not
-      # allow. A direct run here would rewrite that baseline first and hide
-      # a regression, so it does not run in this step.
-      - run: make autobahn RUNS=proxy,checkpoint-forward,checkpoint-edit,extension
-      # Informational only: rerun direct on this runner into a copy of the
-      # baseline and show which direct verdicts differ from the committed
-      # ones. Some verdicts depend on timing, so a difference here explains
-      # a deviation above; it never passes or fails the job.
+      # VERBOSE streams the Autobahn output into the job log, so a run that
+      # stalls or loses its runner still shows how far it got.
+      - run: make autobahn RUNS=${{ matrix.run }} MODES=${{ matrix.mode }} VERBOSE=1
       - if: always()
-        continue-on-error: true
-        run: |
+        uses: actions/upload-artifact@v4
+        with:
+          name: autobahn-${{ matrix.run }}-${{ matrix.mode }}
+          path: dist/autobahn/
+          if-no-files-found: ignore
+
+  # Informational only: rerun direct on this runner into a copy of the
+  # baseline and show which direct verdicts differ from the committed ones.
+  # Some verdicts depend on timing, so a difference here explains a deviation
+  # in the gate; it never passes or fails the workflow. A direct run in the
+  # gate would rewrite that baseline first and hide a regression.
+  direct-baseline:
+    name: direct baseline (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [fuzzingclient, fuzzingserver]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: docker pull "$AUTOBAHN_IMAGE"
+      - run: |
           mkdir -p dist/autobahn/direct-baseline
           cp internal/autobahn/baseline/*.json dist/autobahn/direct-baseline/
-          go run ./internal/autobahn/cmd/autobahn -runs direct \
+          go run ./internal/autobahn/cmd/autobahn -runs direct -modes ${{ matrix.mode }} -verbose \
             -baseline dist/autobahn/direct-baseline -out dist/autobahn/direct-refresh
           git diff --no-index --stat internal/autobahn/baseline dist/autobahn/direct-baseline \
             && echo "direct verdicts match the committed baseline" \
@@ -50,6 +83,6 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: autobahn-reports
+          name: autobahn-direct-${{ matrix.mode }}
           path: dist/autobahn/
           if-no-files-found: ignore
