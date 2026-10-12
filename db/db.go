@@ -73,7 +73,9 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 		}
 		dsn = (&url.URL{Scheme: "file", Path: path}).String()
 	}
-	db, err := sqlx.Connect("sqlite", dsn+"?_journal=WAL&_timeout=5000&_fk=true")
+	// modernc.org/sqlite reads only _pragma parameters; it ignores the
+	// _journal, _timeout, and _fk spellings of other drivers.
+	db, err := sqlx.Connect("sqlite", dsn+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 
 	if err != nil {
 		dbLogger.Error("Failed to connect to database", "error", err)
