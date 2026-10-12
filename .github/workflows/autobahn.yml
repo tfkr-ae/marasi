@@ -1,0 +1,46 @@
+name: Autobahn
+
+# Autobahn is a local check (see "Autobahn checks" in README.md). On GitHub
+# runners its timing-sensitive cases fail intermittently, so this workflow runs
+# only on demand, to investigate the suite on a runner.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: autobahn-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep in step with autobahn.Image in internal/autobahn/harness.go.
+  AUTOBAHN_IMAGE: crossbario/autobahn-testsuite@sha256:519915fb568b04c9383f70a1c405ae3ff44ab9e35835b085239c258b6fac3074
+
+jobs:
+  # The gate: every proxied run is compared to the committed direct baseline,
+  # and a job fails on any deviation the harness does not allow. Each run and
+  # mode is its own job, so they run in parallel and one failure does not
+  # stop the others.
+  autobahn:
+    name: autobahn (${{ matrix.run }}, ${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [proxy, checkpoint-forward, checkpoint-edit, extension]
+        mode: [fuzzingclient, fuzzingserver]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: docker pull "$AUTOBAHN_IMAGE"
+      # VERBOSE streams the Autobahn output into the job log, so a run that
+      # stalls or loses its runner still shows how far it got.
+      - run: make autobahn RUNS=${{ matrix.run }} MODES=${{ matrix.mode }} VERBOSE=1
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autobahn-${{ matrix.run }}-${{ matrix.mode }}
+          path: dist/autobahn/
+          if-no-files-found: ignore

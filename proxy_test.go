@@ -808,6 +808,8 @@ func TestProxy_RunWebSocketSession(t *testing.T) {
 		if _, readErr := marasiws.ReadFrame(upstreamPeer); readErr != nil {
 			t.Fatalf("reading upstream close frame: %v", readErr)
 		}
+		// The upstream ends the close handshake by dropping TCP.
+		_ = upstreamPeer.Close()
 
 		select {
 		case sessionErr := <-runResult:
@@ -1521,6 +1523,7 @@ func TestProxy_WebSocketControlAPIs(t *testing.T) {
 				marasiws.DirectionFromClient,
 				marasiws.OpText,
 				[]byte("to upstream"),
+				marasiws.InjectOptions{},
 			)
 			result <- err
 		}()
@@ -1558,6 +1561,7 @@ func TestProxy_WebSocketControlAPIs(t *testing.T) {
 				marasiws.DirectionFromServer,
 				marasiws.OpBinary,
 				[]byte("to client"),
+				marasiws.InjectOptions{},
 			)
 			result <- err
 		}()
@@ -1614,7 +1618,7 @@ func TestProxy_WebSocketControlAPIs(t *testing.T) {
 		if _, exists := proxy.GetWebSocketConnection(requestID); exists {
 			t.Fatalf("wanted live connection exists: false\ngot: true")
 		}
-		if _, err := proxy.InjectWebSocketMessage(requestID, marasiws.DirectionFromClient, marasiws.OpText, nil); !errors.Is(err, ErrWebSocketConnectionNotFound) {
+		if _, err := proxy.InjectWebSocketMessage(requestID, marasiws.DirectionFromClient, marasiws.OpText, nil, marasiws.InjectOptions{}); !errors.Is(err, ErrWebSocketConnectionNotFound) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrWebSocketConnectionNotFound, err)
 		}
 		if err := proxy.CloseWebSocket(requestID, 1000, ""); !errors.Is(err, ErrWebSocketConnectionNotFound) {
@@ -1628,7 +1632,7 @@ func TestProxy_WebSocketControlAPIs(t *testing.T) {
 	t.Run("invalid injection direction returns an error", func(t *testing.T) {
 		proxy, connection, _, _ := newLiveConnection(t, nil)
 
-		_, err := proxy.InjectWebSocketMessage(connection.RequestID, "invalid", marasiws.OpText, nil)
+		_, err := proxy.InjectWebSocketMessage(connection.RequestID, "invalid", marasiws.OpText, nil, marasiws.InjectOptions{})
 		if !errors.Is(err, ErrWebSocketDirection) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrWebSocketDirection, err)
 		}
@@ -2363,6 +2367,7 @@ func TestProxy_LaunchWebSocket(t *testing.T) {
 		marasiws.DirectionFromClient,
 		marasiws.OpText,
 		[]byte("launchpad"),
+		marasiws.InjectOptions{},
 	); err != nil {
 		t.Fatalf("injecting websocket message: %v", err)
 	}

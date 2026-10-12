@@ -115,6 +115,9 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 		if err := viperInstance.Unmarshal(&proxy.Config); err != nil {
 			return fmt.Errorf("unmarshalling config to struct : %w", err)
 		}
+		if err := proxy.Config.validate(); err != nil {
+			return fmt.Errorf("invalid configuration : %w", err)
+		}
 		proxy.Config.viper = viperInstance
 
 		proxy.Config.DesktopOS = runtime.GOOS
@@ -229,6 +232,18 @@ func WithWebSocketMessageHandler(handler func(domain.WebSocketMessage) error) fu
 			return errors.New("proxy already has a websocket message handler defined")
 		}
 		proxy.OnWebSocketMessage = handler
+		return nil
+	}
+}
+
+// WithWebSocketProgressHandler takes a handler function that will be executed
+// while a WebSocket message's frames are still arriving. It must not block.
+func WithWebSocketProgressHandler(handler func(domain.WebSocketMessageProgress) error) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnWebSocketProgress != nil {
+			return errors.New("proxy already has a websocket progress handler defined")
+		}
+		proxy.OnWebSocketProgress = handler
 		return nil
 	}
 }
@@ -501,6 +516,7 @@ func WithBasePipeline() func(*Proxy) error {
 					return nil
 				}
 				if errors.Is(err, ErrDropped) {
+					proxy.markDroppedWebSocketHandshake(res, err)
 					if session, ok := core.SessionFromContext(res.Request.Context()); ok {
 						conn, _, err := session.Hijack()
 						if err != nil {
@@ -541,6 +557,7 @@ func WithDefaultModifierPipeline() func(*Proxy) error {
 		proxy.AddRequestModifier(OverrideWaypointsModifier)
 		proxy.AddRequestModifier(ExtensionsRequestModifier)
 		proxy.AddRequestModifier(CheckpointRequestModifier)
+		proxy.AddRequestModifier(WebSocketOffersModifier)
 		proxy.AddRequestModifier(WriteRequestModifier)
 
 		// Response Modifiers
@@ -551,6 +568,7 @@ func WithDefaultModifierPipeline() func(*Proxy) error {
 		proxy.AddResponseModifier(CompassResponseModifier)
 		proxy.AddResponseModifier(ExtensionsResponseModifier)
 		proxy.AddResponseModifier(CheckpointResponseModifier)
+		proxy.AddResponseModifier(WebSocketNegotiationModifier)
 		proxy.AddResponseModifier(WriteResponseModifier)
 		proxy.AddResponseModifier(WebSocketHandoffModifier)
 		return nil

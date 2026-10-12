@@ -29,6 +29,19 @@ type Config struct {
 	DesktopOS      string              `mapstructure:"desktop_os"` // Operating system identifier
 	ChromeDirs     []chrome.PathConfig `mapstructure:"chrome_dirs"`
 	ChromeProfiles []string            `mapstructure:"chrome_profiles"`
+	// WebSocketMaxMessageSize is the per-message WebSocket size limit in
+	// bytes, set by websocket_max_message_size in marasi_config.yaml. Zero or
+	// unset means websocket.DefaultMaxMessageSize (64 MiB). A negative value
+	// is rejected when the config loads.
+	WebSocketMaxMessageSize int64 `mapstructure:"websocket_max_message_size"`
+}
+
+// validate rejects values the loaded configuration cannot use.
+func (cfg *Config) validate() error {
+	if cfg.WebSocketMaxMessageSize < 0 {
+		return fmt.Errorf("websocket_max_message_size is %d: use 0 for the 64 MiB default or a positive number of bytes", cfg.WebSocketMaxMessageSize)
+	}
+	return nil
 }
 
 // AddChromeProfile adds a chrome profile to the configuration.
@@ -154,6 +167,9 @@ func (cfg *Config) ReloadChrome() error {
 	loaded := Config{viper: config, ConfigDir: cfg.ConfigDir, DesktopOS: cfg.DesktopOS}
 	if err := config.Unmarshal(&loaded); err != nil {
 		return fmt.Errorf("unmarshalling config to struct: %w", err)
+	}
+	if err := loaded.validate(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
 	}
 	if loaded.ChromeDirs == nil {
 		loaded.ChromeDirs = []chrome.PathConfig{}

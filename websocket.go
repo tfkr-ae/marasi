@@ -3,9 +3,11 @@ package marasi
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
@@ -78,13 +80,15 @@ func (proxy *Proxy) GetWebSocketMessages(requestID uuid.UUID) ([]*domain.WebSock
 	return proxy.WebSocketRepo.GetMessagesByRequestID(requestID)
 }
 
-// InjectWebSocketMessage injects a frame into a live connection.
-// direction must be client or server.
+// InjectWebSocketMessage injects a message into a live connection.
+// direction must be client or server. With permessage-deflate the message is
+// compressed by the leg's compressor unless options.NeverCompress is set.
 func (proxy *Proxy) InjectWebSocketMessage(
 	requestID uuid.UUID,
 	direction string,
 	opcode int,
 	payload []byte,
+	options marasiws.InjectOptions,
 ) (domain.WebSocketMessage, error) {
 	if proxy.WebSocketRegistry == nil {
 		return domain.WebSocketMessage{}, fmt.Errorf("%w: %s", ErrWebSocketConnectionNotFound, requestID)
@@ -96,7 +100,7 @@ func (proxy *Proxy) InjectWebSocketMessage(
 
 	switch direction {
 	case marasiws.DirectionFromClient, marasiws.DirectionFromServer:
-		return connection.Inject(direction, opcode, payload)
+		return connection.Inject(direction, opcode, payload, options)
 	default:
 		return domain.WebSocketMessage{}, fmt.Errorf("%w: %q", ErrWebSocketDirection, direction)
 	}
@@ -230,19 +234,55 @@ func (proxy *Proxy) runWebSocketSessionWithRelease(connection *marasiws.Connecti
 	return runErr
 }
 
-// updateWebSocketRequestState merges websocket.state into the request metadata row.
+// markDroppedWebSocketHandshake records websocket.state dropped on an upgrade
+// request whose response a user or extension dropped. A handshake the proxy
+// rejected keeps the failed state it already recorded.
+func (proxy *Proxy) markDroppedWebSocketHandshake(res *http.Response, err error) {
+	if errors.Is(err, ErrWebSocketHandshakeFailed) || !marasiws.IsUpgradeRequest(res.Request) {
+		return
+	}
+	if requestID, ok := core.RequestIDFromContext(res.Request.Context()); ok {
+		proxy.updateWebSocketRequestState(requestID, "dropped")
+	}
+}
+
+// webSocketRequestState is a queued websocket.state change for an upgrade
+// request. The DB writer applies it after the request insert queued before
+// it, then closes done.
+type webSocketRequestState struct {
+	requestID uuid.UUID
+	state     string
+	err       error
+	done      chan struct{}
+}
+
+// updateWebSocketRequestState merges websocket.state into the request metadata
+// row. The row is inserted by the DB writer, so the change goes through the
+// same queue and lands after it. It returns once the change is stored.
 func (proxy *Proxy) updateWebSocketRequestState(requestID uuid.UUID, state string) {
 	if proxy.TrafficRepo == nil {
 		return
 	}
 
+	var err error
+	if proxy.dbWriterStarted.Load() && proxy.DBWriteChannel != nil {
+		change := &webSocketRequestState{requestID: requestID, state: state, done: make(chan struct{})}
+		proxy.DBWriteChannel <- change
+		<-change.done
+		err = change.err
+	} else {
+		err = proxy.applyWebSocketRequestState(requestID, state)
+	}
+	if err != nil {
+		_ = proxy.WriteLog("ERROR", err.Error())
+	}
+}
+
+// applyWebSocketRequestState writes websocket.state into the request metadata row.
+func (proxy *Proxy) applyWebSocketRequestState(requestID uuid.UUID, state string) error {
 	metadata, err := proxy.TrafficRepo.GetMetadata(requestID)
 	if err != nil {
-		_ = proxy.WriteLog(
-			"ERROR",
-			fmt.Sprintf("getting metadata for websocket request %s : %s", requestID, err.Error()),
-		)
-		return
+		return fmt.Errorf("getting metadata for websocket request %s : %w", requestID, err)
 	}
 	if metadata == nil {
 		metadata = make(map[string]any)
@@ -250,9 +290,7 @@ func (proxy *Proxy) updateWebSocketRequestState(requestID uuid.UUID, state strin
 	metadata["websocket.state"] = state
 
 	if err := proxy.TrafficRepo.UpdateMetadata(metadata, requestID); err != nil {
-		_ = proxy.WriteLog(
-			"ERROR",
-			fmt.Sprintf("updating websocket state metadata for %s : %s", requestID, err.Error()),
-		)
+		return fmt.Errorf("updating websocket state metadata for %s : %w", requestID, err)
 	}
+	return nil
 }

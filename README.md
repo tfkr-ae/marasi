@@ -53,6 +53,57 @@ The source requires Go 1.26 or later. These commands run from the repository roo
 | `make windows-amd64` | Builds `dist/marasi-windows-amd64.exe`. |
 | `make all` | Builds the targets listed by `TARGETS` in [Makefile](Makefile). |
 | `make test` | Runs `go test ./...`. |
+| `make autobahn` | Runs the Autobahn WebSocket testsuite in Docker through a Marasi service instance. It prints each case whose verdict, close code, or clean close differs from the committed direct baseline, and exits non-zero on any deviation outside 9.x. |
+| `make autobahn-baseline` | Runs the selected cases with no proxy and merges them into `internal/autobahn/baseline/`. |
+
+The Autobahn targets need Docker with host networking. Both modes
+(`fuzzingclient`, `fuzzingserver`) run against two peers: Autobahn's strict
+testee and the harness's lenient echo peer. `make autobahn` runs four runs:
+`proxy` (no interception), `checkpoint-forward` (global WebSocket Checkpoint
+with an auto-resolver that forwards each item unchanged), `checkpoint-edit` (the
+resolver forwards each item as an edit with the same bytes), and `extension` (a
+workshop `processWebSocketMessage` sets each payload to itself). Variables narrow
+a run:
+
+```bash
+make autobahn CASES='3.*,7.9.*' RUNS=proxy MODES=fuzzingclient PEERS=strict
+make autobahn EXCLUDE='9.*,12.*,13.*' VERBOSE=1
+```
+
+Reports are written to `dist/autobahn/<run>/<mode>-<peer>/` and the run log to
+`dist/autobahn/autobahn.log`. `RUNS=direct,proxy` refreshes the baseline before
+comparing. On an arm64 Mac, where the amd64 image runs under emulation, the
+direct baseline takes about 20 minutes and a full `make autobahn` about 30. The
+strict peers negotiate permessage-deflate, so 12.x and 13.x are most of a direct
+strict suite.
+
+### Autobahn checks
+
+Autobahn runs locally, not on pull requests. Run it on a change to
+`websocket/`, `websocket*.go`, or `internal/autobahn/`:
+
+1. Before you push, run the quick check. It skips the large-message (9.x) and
+   compression (12.x, 13.x) sections and takes about 7 minutes:
+
+   ```bash
+   make autobahn EXCLUDE='9.*,12.*,13.*'
+   ```
+
+2. Before you merge, run the full suite. It takes about 1.5 to 2 hours on an
+   arm64 Mac:
+
+   ```bash
+   make autobahn
+   ```
+
+Both commands exit non-zero on a deviation from the committed baseline. The
+6.4.1 to 6.4.4 cases are allowed and listed separately. If a deviation looks
+unrelated to the change, run `make autobahn-baseline` and compare the
+baseline diff before you commit it: the baseline changes only with the pinned
+Autobahn image or the harness.
+
+The Autobahn workflow in GitHub Actions runs only when you start it
+manually, to investigate the suite on a GitHub runner.
 
 A build without Make uses `go build -o marasi ./cmd/marasi`, or
 `go build -o marasi.exe ./cmd/marasi` on Windows. If a parent `go.work` excludes
