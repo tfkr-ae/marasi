@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -25,6 +26,7 @@ type Instance struct {
 	ConfigDir string // scratch config directory owned by the harness
 	Name      string // instance name
 	Proxy     string // proxy listener host:port
+	KeepLog   string // where Stop copies the instance log, or empty
 }
 
 // StartInstance launches a detached service instance in a scratch config
@@ -51,9 +53,15 @@ func StartInstance(ctx context.Context, binary, project string) (*Instance, erro
 	return instance, nil
 }
 
-// Stop stops the instance and removes its config directory.
+// Stop stops the instance, copies its log to KeepLog when set, and removes
+// its config directory.
 func (i *Instance) Stop() {
 	_, _ = i.cli(context.Background(), nil, "service", "stop", "--json")
+	if i.KeepLog != "" {
+		if data, err := os.ReadFile(filepath.Join(i.ConfigDir, "instances", i.Name+".log")); err == nil {
+			_ = os.WriteFile(i.KeepLog, data, 0o644)
+		}
+	}
 	_ = os.RemoveAll(i.ConfigDir)
 }
 
@@ -162,6 +170,7 @@ func (i *Instance) InstallEchoExtension(ctx context.Context) error {
 // opcode as an edit, taking the same path as a real edit.
 type Resolver struct {
 	Edit      bool
+	Log       io.Writer    // [DEBUG-ab7c] slow control calls, or nil
 	Forwarded atomic.Int64 // items forwarded
 	Failed    atomic.Int64 // forwards the service rejected
 }
@@ -260,7 +269,19 @@ type heldMessage struct {
 	Opcode  int    `json:"opcode"`
 }
 
+// resolverSlow is the control call time over which the resolver logs the
+// call. [DEBUG-ab7c]
+const resolverSlow = 100 * time.Millisecond
+
+// logSlow logs call when it took longer than resolverSlow. [DEBUG-ab7c]
+func (r *Resolver) logSlow(call string, started time.Time, detail string) {
+	if elapsed := time.Since(started); r.Log != nil && elapsed > resolverSlow {
+		fmt.Fprintf(r.Log, "[DEBUG-ab7c] %s resolver %s took %dms %s\n", time.Now().UTC().Format(time.RFC3339Nano), call, elapsed.Milliseconds(), detail)
+	}
+}
+
 func (r *Resolver) pending(ctx context.Context, client *service.Client) ([]heldMessage, error) {
+	started := time.Now() // [DEBUG-ab7c]
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/checkpoint?kind=websocket", nil)
 	if err != nil {
 		return nil, err
@@ -276,6 +297,7 @@ func (r *Resolver) pending(ctx context.Context, client *service.Client) ([]heldM
 	if err := json.NewDecoder(response.Body).Decode(&list); err != nil {
 		return nil, err
 	}
+	r.logSlow("list", started, fmt.Sprintf("items=%d", len(list.Items))) // [DEBUG-ab7c]
 	return list.Items, nil
 }
 
@@ -296,6 +318,8 @@ func (r *Resolver) forward(ctx context.Context, client *service.Client, item hel
 		return
 	}
 	request.Header.Set("Content-Type", "application/json")
+	started := time.Now()                                                                                      // [DEBUG-ab7c]
+	defer func() { r.logSlow("forward", started, fmt.Sprintf("id=%s size=%d", item.ID, len(item.Payload))) }() // [DEBUG-ab7c]
 	response, err := client.Do(request)
 	if err != nil {
 		r.Failed.Add(1)

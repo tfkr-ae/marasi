@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"time"
 )
@@ -142,6 +143,9 @@ func (c Config) startInstance(ctx context.Context, run string) (*Instance, func(
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := os.MkdirAll(filepath.Join(c.OutDir, run), 0o755); err == nil {
+		instance.KeepLog = filepath.Join(c.OutDir, run, "marasi.log")
+	}
 	stops := []func(){instance.Stop}
 	stop := func() {
 		for i := len(stops) - 1; i >= 0; i-- {
@@ -155,7 +159,7 @@ func (c Config) startInstance(ctx context.Context, run string) (*Instance, func(
 			stop()
 			return nil, nil, err
 		}
-		resolver := &Resolver{Edit: run == RunCheckpointEdit}
+		resolver := &Resolver{Edit: run == RunCheckpointEdit, Log: c.Log}
 		resolveCtx, cancel := context.WithCancel(context.Background())
 		done := make(chan struct{})
 		go func() {

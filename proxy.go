@@ -568,6 +568,7 @@ func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
 // It handles proxy traffic, websocket traffic, and log items.
 func (proxy *Proxy) WriteToDB() {
 	for proxyItem := range proxy.DBWriteChannel {
+		writeStarted := time.Now() // [DEBUG-ab7c]
 		switch castItem := proxyItem.(type) {
 		case *domain.ProxyRequest:
 			err := proxy.TrafficRepo.InsertRequest(castItem)
@@ -634,6 +635,7 @@ func (proxy *Proxy) WriteToDB() {
 		default:
 			log.Print(castItem)
 		}
+		proxy.debugSlowStep("db write", writeStarted, "type", debugType(proxyItem), "queued", len(proxy.DBWriteChannel)) // [DEBUG-ab7c]
 	}
 }
 

@@ -36,8 +36,21 @@ jobs:
           cache: true
       - run: docker pull "$AUTOBAHN_IMAGE"
       # VERBOSE streams the Autobahn output into the job log, so a run that
-      # stalls or loses its runner still shows how far it got.
-      - run: make autobahn RUNS=${{ matrix.run }} MODES=${{ matrix.mode }} VERBOSE=1
+      # stalls or loses its runner still shows how far it got. The resource
+      # monitor and the kernel log stream alongside it for the same reason.
+      - run: |
+          .github/scripts/autobahn-monitor.sh dist/autobahn/monitor.log &
+          sudo dmesg --follow-new --time-format iso | sed -u 's/^/[kernel] /' &
+          trap 'sudo pkill -f "dmesg --follow-new"; kill %1' EXIT
+          make autobahn RUNS=${{ matrix.run }} MODES=${{ matrix.mode }} VERBOSE=1
+      - name: Kernel and memory state
+        if: always()
+        run: |
+          free -m
+          swapon --show
+          grep -H . /proc/pressure/*
+          sudo dmesg --time-format iso | grep -iE 'oom|killed process|out of memory|hung task|blocked for more' || echo 'no OOM or hung-task messages'
+          docker ps -a
       - if: always()
         uses: actions/upload-artifact@v4
         with:
