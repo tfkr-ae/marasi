@@ -35,7 +35,10 @@ func main() {
 	flag.StringVar(&modes, "modes", "fuzzingclient,fuzzingserver", "suite modes")
 	flag.StringVar(&peers, "peers", "strict,lenient", "upstream peers")
 	flag.StringVar(&runs, "runs", "proxy,checkpoint-forward,checkpoint-edit,extension", "runs; direct rewrites the baseline")
-	flag.DurationVar(&config.SuiteLimit, "suite-limit", 45*time.Minute, "time limit per mode and peer")
+	// The limit only catches a hung suite. A strict suite through
+	// checkpoint-edit takes 43 to 45 minutes on a GitHub runner, holding and
+	// editing every message of the 12.x and 13.x compression cases.
+	flag.DurationVar(&config.SuiteLimit, "suite-limit", 75*time.Minute, "time limit per mode and peer")
 	flag.BoolVar(&verbose, "verbose", false, "stream Autobahn output")
 	flag.Parse()
 
