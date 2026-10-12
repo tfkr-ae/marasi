@@ -181,7 +181,12 @@ func (s Suite) dockerArgs(name, proxy string) []string {
 	// when the case starts, not in batches.
 	// Containers are removed by removeContainer, not --rm, so a container
 	// that exits on its own can still be inspected.
-	args := []string{"run", "--name", name, "--platform", "linux/amd64", "--network", "host", "-e", "PYTHONUNBUFFERED=1", "-v", s.Dir + ":/work"}
+	//
+	// PyPy sizes its GC nursery from the "cache size" in /proc/cpuinfo,
+	// which is the L3 on Intel hosts: 130 MB on some GitHub runners, where
+	// wstest then grows to 6-10 GB and the kernel OOM-kills it. A fixed 4 MB
+	// nursery, what PyPy picks on AMD hosts, keeps memory the same on any host.
+	args := []string{"run", "--name", name, "--platform", "linux/amd64", "--network", "host", "-e", "PYTHONUNBUFFERED=1", "-e", "PYPY_GC_NURSERY=4MB", "-v", s.Dir + ":/work"}
 	if proxy != "" {
 		args = append(args, "-e", "WSTEST_PROXY="+proxy)
 	}
