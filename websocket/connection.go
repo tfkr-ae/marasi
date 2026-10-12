@@ -337,11 +337,27 @@ func (c *Connection) Run() error {
 	}()
 
 	firstErr := <-results
+	drained := false
+	if errors.Is(firstErr, errForwarding) && !c.closing.Load() && !c.closeRelayed.Load() {
+		// The peer this direction wrote to is gone, but what it sent before
+		// it left, often its close, may still be unread by the other
+		// direction. That direction reads the gone peer, so it ends soon;
+		// let it relay the close before both legs are closed.
+		timer := time.NewTimer(c.relayedCloseTimeout)
+		select {
+		case <-results:
+			drained = true
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
 	closeHandshake := c.closing.Load() || c.closeRelayed.Load()
 
 	shutdownErr := c.shutdown()
 
-	<-results
+	if !drained {
+		<-results
+	}
 	if closeHandshake {
 		return nil
 	}

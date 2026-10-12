@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -312,6 +313,70 @@ func TestRelay_ReplyCloseSurvivesAFailedWriteAfterClose(t *testing.T) {
 		t.Fatalf("\nwanted reply close at client\ngot error:\n%v", err)
 	}
 	assertSameFrame(t, closeFrame, got)
+}
+
+// goneClient is a client that sent a close and dropped TCP: reads deliver
+// what it sent, then EOF, and every write fails.
+type goneClient struct {
+	sent        *bytes.Reader
+	writeFailed chan struct{}
+	failOnce    sync.Once
+}
+
+func (c *goneClient) Read(p []byte) (int, error) { return c.sent.Read(p) }
+
+func (c *goneClient) Write([]byte) (int, error) {
+	c.failOnce.Do(func() { close(c.writeFailed) })
+	return 0, net.ErrClosed
+}
+
+func (c *goneClient) Close() error { return nil }
+
+func TestRelay_ClientCloseReachesUpstreamWhenAWriteToTheClientFailsFirst(t *testing.T) {
+	closeFrame := Frame{Fin: true, Opcode: OpClose, Payload: []byte{0x03, 0xea}}
+	var sent bytes.Buffer
+	if err := WriteFrame(&sent, closeFrame, true); err != nil {
+		t.Fatalf("encoding client close: %v", err)
+	}
+	client := &goneClient{sent: bytes.NewReader(sent.Bytes()), writeFailed: make(chan struct{})}
+
+	// The client's close is still being processed when the write of the
+	// upstream's frame to the gone client fails.
+	process := func(message *Message) error {
+		if message.Opcode == OpClose && message.Direction == DirectionFromClient {
+			<-client.writeFailed
+			time.Sleep(50 * time.Millisecond)
+		}
+		return nil
+	}
+
+	upstreamConnection, upstreamPeer := net.Pipe()
+	defer upstreamPeer.Close()
+	if err := upstreamPeer.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("setting upstream peer deadline: %v", err)
+	}
+	connection := NewConnection(uuid.Nil, uuid.Nil, client, client, upstreamConnection, process)
+	result := make(chan error, 1)
+	go func() { result <- connection.Run() }()
+
+	if err := WriteFrame(upstreamPeer, Frame{Fin: true, Opcode: OpText, Payload: []byte("late")}, false); err != nil {
+		t.Fatalf("writing upstream text: %v", err)
+	}
+
+	got, err := ReadFrame(upstreamPeer)
+	if err != nil {
+		t.Fatalf("\nwanted the client's close at the upstream\ngot error:\n%v", err)
+	}
+	assertSameFrame(t, closeFrame, got)
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("Run() returned unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("\nwanted Run state:\n%q\ngot:\n%q", "returned", "blocked")
+	}
 }
 
 func TestRelay_RecordsInvalidCloseOnTheStoredMessage(t *testing.T) {
