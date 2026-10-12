@@ -624,6 +624,11 @@ func (proxy *Proxy) WriteToDB() {
 			if proxy.OnLog != nil {
 				proxy.OnLog(*castItem)
 			}
+		case *webSocketRequestState:
+			// Logged by the waiting caller: a log sent from here could block
+			// this writer on its own full channel.
+			castItem.err = proxy.applyWebSocketRequestState(castItem.requestID, castItem.state)
+			close(castItem.done)
 		case *dbWriteBarrier:
 			close(castItem.done)
 		default:

@@ -61,9 +61,13 @@ func requestLogOptions(req *http.Request) []func(*domain.Log) error {
 	return nil
 }
 
-// errWebSocketHandshakeFailed marks a handshake the proxy rejected, so the
-// response pipeline does not record it as dropped.
-var errWebSocketHandshakeFailed = errors.New("websocket handshake failed")
+// ErrWebSocketHandshakeFailed marks an upgrade the proxy rejected, such as an
+// upstream extension response it cannot honour. The error also matches
+// ErrDropped, as the client connection is closed; use errors.Is with this
+// sentinel to tell a failed handshake from a response a user or extension
+// dropped. The upgrade request's websocket.state is already "failed" when the
+// error is returned.
+var ErrWebSocketHandshakeFailed = errors.New("websocket handshake failed")
 
 // failWebSocketHandshake writes a proxy log for a handshake the proxy cannot
 // complete, marks the upgrade request's websocket.state failed so it is not
@@ -74,7 +78,7 @@ func failWebSocketHandshake(proxy *Proxy, res *http.Response, cause error) error
 	if requestID, ok := core.RequestIDFromContext(res.Request.Context()); ok {
 		proxy.updateWebSocketRequestState(requestID, "failed")
 	}
-	return fmt.Errorf("%w: %w: %w", ErrDropped, errWebSocketHandshakeFailed, cause)
+	return fmt.Errorf("%w: %w: %w", ErrDropped, ErrWebSocketHandshakeFailed, cause)
 }
 
 // WebSocketNegotiationModifier sets the client's extension response to

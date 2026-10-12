@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha1"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -40,10 +41,23 @@ type negotiationResult struct {
 	requestState any
 }
 
+// slowRequestInsertRepo delays every request insert, as a slow machine does,
+// so writes that race the queued insert land first.
+type slowRequestInsertRepo struct {
+	domain.TrafficRepository
+	delay time.Duration
+}
+
+func (repo slowRequestInsertRepo) InsertRequest(req *domain.ProxyRequest) error {
+	time.Sleep(repo.delay)
+	return repo.TrafficRepository.InsertRequest(req)
+}
+
 // negotiateThroughProxy sends one upgrade request with clientOffer through a
 // proxy to an upstream that answers with upstreamAccept. workshopLua replaces
-// the workshop extension when it is not empty.
-func negotiateThroughProxy(t *testing.T, clientOffer []string, upstreamAccept []string, workshopLua string) negotiationResult {
+// the workshop extension when it is not empty. configure, when given, runs on
+// the proxy before it serves.
+func negotiateThroughProxy(t *testing.T, clientOffer []string, upstreamAccept []string, workshopLua string, configure ...func(*Proxy)) negotiationResult {
 	t.Helper()
 
 	upstreamOffers := make(chan []string, 1)
@@ -112,6 +126,9 @@ func negotiateThroughProxy(t *testing.T, clientOffer []string, upstreamAccept []
 	if err != nil {
 		repository.Close()
 		t.Fatalf("creating proxy: %v", err)
+	}
+	for _, apply := range configure {
+		apply(proxy)
 	}
 	listener, err := proxy.GetListener("127.0.0.1", "0")
 	if err != nil {
@@ -347,6 +364,55 @@ func TestProxy_WebSocketDeflateNegotiation(t *testing.T) {
 		}
 		if result.requestState != "failed" {
 			t.Fatalf("\nwanted:\nwebsocket.state failed on the upgrade request\ngot:\n%v", result.requestState)
+		}
+	})
+	delayRequestInsert := func(proxy *Proxy) {
+		proxy.TrafficRepo = slowRequestInsertRepo{TrafficRepository: proxy.TrafficRepo, delay: 200 * time.Millisecond}
+	}
+
+	t.Run("should keep the failed state when the request insert is slow", func(t *testing.T) {
+		result := negotiateThroughProxy(t,
+			[]string{"permessage-deflate"},
+			[]string{"permessage-deflate; client_max_window_bits=10"},
+			"",
+			delayRequestInsert,
+		)
+
+		if result.response != nil {
+			t.Fatalf("\nwanted:\nno handshake response\ngot:\n%d", result.response.StatusCode)
+		}
+		if result.requestState != "failed" {
+			t.Fatalf("\nwanted:\nwebsocket.state failed on the upgrade request\ngot:\n%v", result.requestState)
+		}
+	})
+
+	t.Run("should keep the dropped state when the request insert is slow", func(t *testing.T) {
+		result := negotiateThroughProxy(t,
+			nil,
+			nil,
+			"function processResponse(res)\n\tres:drop()\nend\n",
+			delayRequestInsert,
+		)
+
+		if result.response != nil {
+			t.Fatalf("\nwanted:\nno handshake response\ngot:\n%d", result.response.StatusCode)
+		}
+		if result.requestState != "dropped" {
+			t.Fatalf("\nwanted:\nwebsocket.state dropped on the upgrade request\ngot:\n%v", result.requestState)
+		}
+	})
+}
+
+func TestFailWebSocketHandshake(t *testing.T) {
+	t.Run("should return an error matching ErrWebSocketHandshakeFailed and ErrDropped", func(t *testing.T) {
+		proxy := &Proxy{DBWriteChannel: make(chan any, 1)}
+		req := httptest.NewRequest(http.MethodGet, "http://example.com/socket", nil)
+		cause := errors.New("upstream accepted an extension no one offered")
+
+		err := failWebSocketHandshake(proxy, &http.Response{Request: req}, cause)
+
+		if !errors.Is(err, ErrWebSocketHandshakeFailed) || !errors.Is(err, ErrDropped) || !errors.Is(err, cause) {
+			t.Fatalf("\nwanted:\nan error matching ErrWebSocketHandshakeFailed, ErrDropped and the cause\ngot:\n%v", err)
 		}
 	})
 }

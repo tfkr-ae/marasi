@@ -238,7 +238,7 @@ func (proxy *Proxy) runWebSocketSessionWithRelease(connection *marasiws.Connecti
 // request whose response a user or extension dropped. A handshake the proxy
 // rejected keeps the failed state it already recorded.
 func (proxy *Proxy) markDroppedWebSocketHandshake(res *http.Response, err error) {
-	if errors.Is(err, errWebSocketHandshakeFailed) || !marasiws.IsUpgradeRequest(res.Request) {
+	if errors.Is(err, ErrWebSocketHandshakeFailed) || !marasiws.IsUpgradeRequest(res.Request) {
 		return
 	}
 	if requestID, ok := core.RequestIDFromContext(res.Request.Context()); ok {
@@ -246,19 +246,43 @@ func (proxy *Proxy) markDroppedWebSocketHandshake(res *http.Response, err error)
 	}
 }
 
-// updateWebSocketRequestState merges websocket.state into the request metadata row.
+// webSocketRequestState is a queued websocket.state change for an upgrade
+// request. The DB writer applies it after the request insert queued before
+// it, then closes done.
+type webSocketRequestState struct {
+	requestID uuid.UUID
+	state     string
+	err       error
+	done      chan struct{}
+}
+
+// updateWebSocketRequestState merges websocket.state into the request metadata
+// row. The row is inserted by the DB writer, so the change goes through the
+// same queue and lands after it. It returns once the change is stored.
 func (proxy *Proxy) updateWebSocketRequestState(requestID uuid.UUID, state string) {
 	if proxy.TrafficRepo == nil {
 		return
 	}
 
+	var err error
+	if proxy.dbWriterStarted.Load() && proxy.DBWriteChannel != nil {
+		change := &webSocketRequestState{requestID: requestID, state: state, done: make(chan struct{})}
+		proxy.DBWriteChannel <- change
+		<-change.done
+		err = change.err
+	} else {
+		err = proxy.applyWebSocketRequestState(requestID, state)
+	}
+	if err != nil {
+		_ = proxy.WriteLog("ERROR", err.Error())
+	}
+}
+
+// applyWebSocketRequestState writes websocket.state into the request metadata row.
+func (proxy *Proxy) applyWebSocketRequestState(requestID uuid.UUID, state string) error {
 	metadata, err := proxy.TrafficRepo.GetMetadata(requestID)
 	if err != nil {
-		_ = proxy.WriteLog(
-			"ERROR",
-			fmt.Sprintf("getting metadata for websocket request %s : %s", requestID, err.Error()),
-		)
-		return
+		return fmt.Errorf("getting metadata for websocket request %s : %w", requestID, err)
 	}
 	if metadata == nil {
 		metadata = make(map[string]any)
@@ -266,9 +290,7 @@ func (proxy *Proxy) updateWebSocketRequestState(requestID uuid.UUID, state strin
 	metadata["websocket.state"] = state
 
 	if err := proxy.TrafficRepo.UpdateMetadata(metadata, requestID); err != nil {
-		_ = proxy.WriteLog(
-			"ERROR",
-			fmt.Sprintf("updating websocket state metadata for %s : %s", requestID, err.Error()),
-		)
+		return fmt.Errorf("updating websocket state metadata for %s : %w", requestID, err)
 	}
+	return nil
 }
