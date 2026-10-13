@@ -16,21 +16,47 @@ type dbLaunchpad struct {
 	ID          uuid.UUID `db:"id"`          // Unique identifier for the launchpad.
 	Description string    `db:"description"` // Description of the launchpad.
 	Name        string    `db:"name"`        // Name of the launchpad.
+
+	EntryCount      int            `db:"entry_count"`       // Number of linked request/response pairs.
+	NewestRequestID sql.NullString `db:"newest_request_id"` // Request id of the newest entry; NULL if none.
+	LastStatusCode  sql.NullInt64  `db:"last_status_code"`  // Newest entry's status code; NULL if none.
 }
 
 // toDomainLaunchpad converts a dbLaunchpad to a domain.Launchpad.
 func toDomainLaunchpad(dbLaunchpad *dbLaunchpad) *domain.Launchpad {
-	return &domain.Launchpad{
+	launchpad := &domain.Launchpad{
 		ID:          dbLaunchpad.ID,
 		Description: dbLaunchpad.Description,
 		Name:        dbLaunchpad.Name,
+		EntryCount:  dbLaunchpad.EntryCount,
 	}
+	if dbLaunchpad.LastStatusCode.Valid {
+		code := int(dbLaunchpad.LastStatusCode.Int64)
+		launchpad.LastStatusCode = &code
+	}
+	return launchpad
 }
 
-// GetLaunchpads retrieves all launchpads from the database.
+// launchpadSummaryQuery selects launchpads with their entry count and the
+// status code of their newest entry in one aggregate statement. Callers append
+// the GROUP BY. The newest entry has the greatest request id, so it is the last
+// entry in GetLaunchpadRequests order. Because the query has exactly one max()
+// aggregate, SQLite takes the bare r.status_code from the row that holds
+// MAX(r.id). A newest entry with no response yet (status_code -1 or NULL)
+// gives NULL; the query does not fall back to an older entry.
+const launchpadSummaryQuery = `SELECT
+		l.id, l.name, l.description,
+		COUNT(r.id) AS entry_count,
+		MAX(r.id) AS newest_request_id,
+		CASE WHEN r.status_code > 0 THEN r.status_code END AS last_status_code
+	FROM launchpad l
+	LEFT JOIN launchpad_request lr ON lr.launchpad_id = l.id
+	LEFT JOIN request r ON r.id = lr.request_id`
+
+// GetLaunchpads retrieves all launchpads with their entry summaries.
 func (repo *Repository) GetLaunchpads() ([]*domain.Launchpad, error) {
 	var dbLaunchpads []*dbLaunchpad
-	query := `SELECT * FROM launchpad ORDER BY id ASC`
+	query := launchpadSummaryQuery + ` GROUP BY l.id ORDER BY l.id ASC`
 
 	err := repo.dbConn.Select(&dbLaunchpads, query)
 	if err != nil {
@@ -44,10 +70,11 @@ func (repo *Repository) GetLaunchpads() ([]*domain.Launchpad, error) {
 	return domainLaunchpads, nil
 }
 
-// GetLaunchpad retrieves one launchpad by id.
+// GetLaunchpad retrieves one launchpad by id with its entry summary.
 func (repo *Repository) GetLaunchpad(id uuid.UUID) (*domain.Launchpad, error) {
 	var launchpad dbLaunchpad
-	if err := repo.dbConn.Get(&launchpad, `SELECT * FROM launchpad WHERE id = ?`, id); err != nil {
+	query := launchpadSummaryQuery + ` WHERE l.id = ? GROUP BY l.id`
+	if err := repo.dbConn.Get(&launchpad, query, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, domain.ErrLaunchpadNotFound
 		}

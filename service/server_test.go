@@ -705,7 +705,7 @@ func TestLaunchpadControlAPI(t *testing.T) {
 		}, order: []uuid.UUID{id, older}}
 		server := newTestServer(&marasi.Proxy{LaunchpadRepo: repo}, func() {})
 		response := requestLaunchpad(server, http.MethodGet, "/launchpad", "")
-		want := `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","name":"New","description":"newest"},{"id":"0193802f-f0e7-73d9-a764-06d21e367809","name":"Old","description":"oldest"}]}` + "\n"
+		want := `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","name":"New","description":"newest","entry_count":0,"last_status_code":null},{"id":"0193802f-f0e7-73d9-a764-06d21e367809","name":"Old","description":"oldest","entry_count":0,"last_status_code":null}]}` + "\n"
 		if response.Code != http.StatusOK || response.Body.String() != want {
 			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
 		}
