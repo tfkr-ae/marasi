@@ -22,6 +22,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"maps"
 	"mime"
 	"net"
 	"net/http"
@@ -485,7 +486,6 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyReque
 			Method:      req.Method,
 			Host:        req.Host,
 			Path:        path,
-			Metadata:    metadata,
 			RequestedAt: requestTime,
 		}
 
@@ -501,8 +501,12 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyReque
 
 		proxyRequest.Raw = domain.RawField(rawReq)
 		if prettified != "" {
-			proxyRequest.Metadata["prettified-request"] = prettified
+			// Kept on the request's own metadata too, so the response write keeps it.
+			metadata["prettified-request"] = prettified
 		}
+		// The response pipeline goes on changing the request's metadata while
+		// the database writer stores this request, so the request gets its own copy.
+		proxyRequest.Metadata = maps.Clone(metadata)
 		return proxyRequest, nil
 	}
 	return nil, fmt.Errorf("metadata not set")
