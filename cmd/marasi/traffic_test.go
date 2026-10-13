@@ -627,10 +627,18 @@ func TestLaunchpadCommands(t *testing.T) {
 		{
 			name:       "list",
 			args:       []string{"launchpad", "list"},
-			response:   `{"items":[{"id":"` + id + `","name":"Login","description":"Try variants"}]}` + "\n",
+			response:   `{"items":[{"id":"` + id + `","name":"Login","description":"Try variants","entry_count":500,"last_status_code":404}]}` + "\n",
 			method:     http.MethodGet,
 			path:       "/launchpad",
-			wantStdout: id + "  Login  Try variants\n",
+			wantStdout: id + "  Login  Try variants  500  404\n",
+		},
+		{
+			name:       "list empty and in-flight launchpads",
+			args:       []string{"launchpad", "list"},
+			response:   `{"items":[{"id":"` + id + `","name":"Empty","description":"","entry_count":0,"last_status_code":null},{"id":"` + requestID + `","name":"Sending","description":"","entry_count":2,"last_status_code":null}]}` + "\n",
+			method:     http.MethodGet,
+			path:       "/launchpad",
+			wantStdout: id + "  Empty      0  -\n" + requestID + "  Sending    2  -\n",
 		},
 		{
 			name:       "get",
