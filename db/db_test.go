@@ -107,7 +107,7 @@ func TestNewMemory(t *testing.T) {
 }
 
 func TestNewPragmas(t *testing.T) {
-	t.Run("should open a project file in WAL mode with a busy timeout and foreign keys", func(t *testing.T) {
+	t.Run("should open a project file in WAL mode with normal sync, a busy timeout, and foreign keys", func(t *testing.T) {
 		connection, err := New(filepath.Join(t.TempDir(), "pragmas.marasi"), slog.New(slog.NewTextHandler(io.Discard, nil)))
 		if err != nil {
 			t.Fatalf("opening database: %v", err)
@@ -116,6 +116,7 @@ func TestNewPragmas(t *testing.T) {
 
 		want := map[string]string{
 			"journal_mode": "wal",
+			"synchronous":  "1",
 			"busy_timeout": "5000",
 			"foreign_keys": "1",
 		}
