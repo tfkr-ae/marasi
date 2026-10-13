@@ -155,6 +155,9 @@ type Proxy struct {
 	launchpadWS          map[io.Closer]struct{}
 	launchMu             sync.Mutex
 	launches             map[uuid.UUID]*launchEntry
+	finishedLaunches     map[uuid.UUID]domain.Launch // launches that left the registry, kept across project switches
+	finishedOrder        []uuid.UUID                 // finishedLaunches ids, oldest finish first
+	finishedLaunchLimit  int                         // bound on finishedLaunches; 0 means maxFinishedLaunches
 	newLaunchID          func() (uuid.UUID, error)
 
 	TrafficRepo   domain.TrafficRepository   // Repository for traffic data.

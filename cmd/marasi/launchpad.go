@@ -256,7 +256,7 @@ func runLaunch(cmd *cobra.Command, path string, body launchpadRequest) error {
 	if err != nil {
 		return err
 	}
-	final, err := waitForLaunch(ctx, launchPath)
+	final, err := waitForLaunch(ctx, started.LaunchID, launchPath)
 	if err != nil && ctx.Err() != nil {
 		// Restore default signal handling so a second interrupt ends the command.
 		stop()
@@ -269,8 +269,9 @@ func runLaunch(cmd *cobra.Command, path string, body launchpadRequest) error {
 }
 
 // waitForLaunch reads the launch at launchPath until it leaves pending.
-func waitForLaunch(ctx context.Context, launchPath string) (instanceResponse, error) {
-	const operation = "reading launch"
+// A failed read names the launch, so the caller knows which launch to look up.
+func waitForLaunch(ctx context.Context, launchID, launchPath string) (instanceResponse, error) {
+	operation := "reading launch " + launchID
 	for {
 		called, err := callInstance(ctx, http.MethodGet, launchPath, "", nil)
 		if err != nil {

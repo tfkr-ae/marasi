@@ -22,6 +22,11 @@ import (
 // The pipeline honors it only on internal requests and never forwards it.
 const launchIDHeader = "x-marasi-launch-id"
 
+// maxFinishedLaunches bounds how many finished launches the proxy keeps in
+// memory, most recently finished first. They stay readable by id for the
+// life of the process, whichever project is open.
+const maxFinishedLaunches = 1024
+
 // launchEntry is a launch held in the registry until it reaches a terminal state.
 type launchEntry struct {
 	launch      domain.Launch
@@ -188,9 +193,10 @@ func (proxy *Proxy) Launches() []domain.Launch {
 }
 
 // GetLaunch returns a launch by id. A launch is read from the registry until
-// its final state is stored, then from its stored pair's metadata, so a
-// launch id stays valid for good. It returns domain.ErrLaunchNotFound when
-// the id is neither live nor a launch's pair.
+// its final state is stored, then from the finished launches kept in memory
+// (see maxFinishedLaunches), whichever project is open, and after that from
+// its stored pair's metadata in the open project, so a launch id stays valid
+// for good. It returns domain.ErrLaunchNotFound when the id is none of these.
 func (proxy *Proxy) GetLaunch(id uuid.UUID) (domain.Launch, error) {
 	proxy.launchMu.Lock()
 	entry, ok := proxy.launches[id]
@@ -202,7 +208,11 @@ func (proxy *Proxy) GetLaunch(id uuid.UUID) (domain.Launch, error) {
 		proxy.launchMu.Unlock()
 		return launch, nil
 	}
+	finished, ok := proxy.finishedLaunches[id]
 	proxy.launchMu.Unlock()
+	if ok {
+		return finished, nil
+	}
 	return proxy.storedLaunch(id)
 }
 
@@ -228,7 +238,11 @@ func (proxy *Proxy) CancelLaunch(id uuid.UUID) (domain.Launch, error) {
 		launch.Status = domain.LaunchCancelled
 		return launch, nil
 	}
+	finished, ok := proxy.finishedLaunches[id]
 	proxy.launchMu.Unlock()
+	if ok {
+		return finished, domain.ErrLaunchFinished
+	}
 
 	stored, err := proxy.storedLaunch(id)
 	if err != nil {
@@ -340,6 +354,31 @@ func (proxy *Proxy) removeLaunch(id uuid.UUID) {
 	proxy.launchMu.Lock()
 	defer proxy.launchMu.Unlock()
 	delete(proxy.launches, id)
+}
+
+// retireLaunch moves a finished launch from the registry to the finished
+// launches kept in memory, in one step so it is never unreadable in between.
+// Only the most recently finished launches are kept.
+func (proxy *Proxy) retireLaunch(final domain.Launch) {
+	proxy.launchMu.Lock()
+	defer proxy.launchMu.Unlock()
+	delete(proxy.launches, final.ID)
+	if proxy.finishedLaunches == nil {
+		proxy.finishedLaunches = make(map[uuid.UUID]domain.Launch)
+	}
+	if _, kept := proxy.finishedLaunches[final.ID]; kept {
+		proxy.finishedOrder = slices.DeleteFunc(proxy.finishedOrder, func(id uuid.UUID) bool { return id == final.ID })
+	}
+	proxy.finishedLaunches[final.ID] = final
+	proxy.finishedOrder = append(proxy.finishedOrder, final.ID)
+	limit := proxy.finishedLaunchLimit
+	if limit <= 0 {
+		limit = maxFinishedLaunches
+	}
+	for len(proxy.finishedOrder) > limit {
+		delete(proxy.finishedLaunches, proxy.finishedOrder[0])
+		proxy.finishedOrder = proxy.finishedOrder[1:]
+	}
 }
 
 // claimLaunch marks a pending launch as used by the request pipeline.
@@ -507,7 +546,7 @@ func (proxy *Proxy) finishLaunch(id uuid.UUID) {
 			log.Printf("recording launch %s outcome : %v", id, err)
 		}
 	}
-	proxy.removeLaunch(id)
+	proxy.retireLaunch(final)
 	entry.cancel()
 	close(entry.done)
 	if proxy.OnLaunchFinished != nil {

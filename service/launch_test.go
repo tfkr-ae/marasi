@@ -251,6 +251,14 @@ func TestLaunchControlAPI(t *testing.T) {
 				t.Fatalf("\nwanted:\n%s\ngot:\nno more events", want)
 			}
 		}
+		read := requestLaunchpad(server, http.MethodGet, "/launch/"+id.String(), "")
+		wantRead := `{"launch_id":"` + id.String() + `","launchpad_id":"` + launchpad.String() + `","status":"failed","reason":"interrupted"}` + "\n"
+		if read.Code != http.StatusOK || read.Body.String() != wantRead {
+			t.Fatalf("\nwanted:\nGET /launch/{id} in the next project 200 %s\ngot:\n%d %s", wantRead, read.Code, read.Body.String())
+		}
+		if refused := requestLaunchpad(server, http.MethodPost, "/launch/"+id.String()+"/cancel", ""); refused.Code != http.StatusConflict {
+			t.Fatalf("\nwanted:\ncancel in the next project 409\ngot:\n%d %s", refused.Code, refused.Body.String())
+		}
 		if err := lifecycle.Shutdown(); err != nil {
 			t.Fatalf("shutting down: %v", err)
 		}
