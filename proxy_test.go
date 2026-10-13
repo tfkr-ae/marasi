@@ -853,9 +853,24 @@ func newWebSocketCheckpointHarness(
 	onHeld func(*webSocketCheckpointHarness, domain.WebSocketMessage),
 ) *webSocketCheckpointHarness {
 	t.Helper()
+	var frames []marasiws.Frame
+	if serverPush != nil {
+		frames = []marasiws.Frame{{Fin: true, Opcode: marasiws.OpText, Payload: serverPush}}
+	}
+	return newWebSocketCheckpointHarnessFrames(t, frames, onHeld)
+}
+
+// newWebSocketCheckpointHarnessFrames serves a proxy whose origin sends serverFrames
+// right after its handshake, then reads client frames until the connection closes.
+func newWebSocketCheckpointHarnessFrames(
+	t *testing.T,
+	serverFrames []marasiws.Frame,
+	onHeld func(*webSocketCheckpointHarness, domain.WebSocketMessage),
+) *webSocketCheckpointHarness {
+	t.Helper()
 	harness := &webSocketCheckpointHarness{
 		originConns:  make(chan net.Conn, 4),
-		originFrames: make(chan marasiws.Frame, 4),
+		originFrames: make(chan marasiws.Frame, 8),
 		held:         make(chan domain.WebSocketMessage, 4),
 		abandoned:    make(chan domain.CheckpointItem, 4),
 		messages:     make(chan domain.WebSocketMessage, 4),
@@ -873,8 +888,8 @@ func newWebSocketCheckpointHarness(
 			"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: %s\r\n\r\n",
 			base64.StdEncoding.EncodeToString(accept[:]),
 		)
-		if serverPush != nil {
-			_ = marasiws.WriteFrame(buffered, marasiws.Frame{Fin: true, Opcode: marasiws.OpText, Payload: serverPush}, false)
+		for _, frame := range serverFrames {
+			_ = marasiws.WriteFrame(buffered, frame, false)
 		}
 		if err := buffered.Flush(); err != nil {
 			return
@@ -1227,6 +1242,136 @@ func TestProxy_CheckpointWebSocketHoldEndsWhenOriginCloses(t *testing.T) {
 		case <-time.After(200 * time.Millisecond):
 		}
 	})
+}
+
+// consecutiveMessageFrames returns two messages and then "after". Fragmented messages
+// are split into two frames each.
+func consecutiveMessageFrames(fragmented bool) []marasiws.Frame {
+	message := func(first, rest string) []marasiws.Frame {
+		if !fragmented {
+			return []marasiws.Frame{{Fin: true, Opcode: marasiws.OpText, Payload: []byte(first + rest)}}
+		}
+		return []marasiws.Frame{
+			{Fin: false, Opcode: marasiws.OpText, Payload: []byte(first)},
+			{Fin: true, Opcode: marasiws.OpContinuation, Payload: []byte(rest)},
+		}
+	}
+	frames := message("first ", "message")
+	frames = append(frames, message("second ", "message")...)
+	return append(frames, marasiws.Frame{Fin: true, Opcode: marasiws.OpText, Payload: []byte("after")})
+}
+
+// readTextMessages reassembles n text messages from frames, failing on a timeout.
+func readTextMessages(t *testing.T, n int, next func() (marasiws.Frame, error)) []string {
+	t.Helper()
+	var messages []string
+	var current []byte
+	for len(messages) < n {
+		frame, err := next()
+		if err != nil {
+			t.Fatalf("reading frame after %q: %v", messages, err)
+		}
+		if frame.Opcode != marasiws.OpText && frame.Opcode != marasiws.OpContinuation {
+			continue
+		}
+		current = append(current, frame.Payload...)
+		if frame.Fin {
+			messages = append(messages, string(current))
+			current = nil
+		}
+	}
+	return messages
+}
+
+func assertHeldPayload(t *testing.T, held domain.WebSocketMessage, want string) {
+	t.Helper()
+	if string(held.Payload) != want {
+		t.Fatalf("wanted held: %q\ngot: %q", want, held.Payload)
+	}
+}
+
+func TestProxy_CheckpointWebSocketConsecutiveHolds(t *testing.T) {
+	edited := []byte("edited")
+	for _, fragmented := range []bool{true, false} {
+		name := "single-frame"
+		if fragmented {
+			name = "fragmented"
+		}
+
+		t.Run("should hold the next server message after a forward when the origin sent both and idles ("+name+")", func(t *testing.T) {
+			harness := newWebSocketCheckpointHarnessFrames(t, consecutiveMessageFrames(fragmented), nil)
+			holdServerMessages(t, harness)
+			client, buffered := harness.open(t)
+			defer client.Close()
+
+			first := receiveHeldWebSocketMessage(t, harness.held)
+			assertHeldPayload(t, first, "first message")
+			if err := harness.proxy.ForwardCheckpoint(first.ID, CheckpointForward{Payload: &edited}); err != nil {
+				t.Fatalf("forwarding: %v", err)
+			}
+			second := receiveHeldWebSocketMessage(t, harness.held)
+			assertHeldPayload(t, second, "second message")
+			if err := harness.proxy.DropCheckpoint(second.ID); err != nil {
+				t.Fatalf("dropping: %v", err)
+			}
+			after := receiveHeldWebSocketMessage(t, harness.held)
+			assertHeldPayload(t, after, "after")
+			if err := harness.proxy.ForwardCheckpoint(after.ID, CheckpointForward{}); err != nil {
+				t.Fatalf("forwarding: %v", err)
+			}
+
+			if err := client.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				t.Fatalf("setting client read deadline: %v", err)
+			}
+			got := readTextMessages(t, 2, func() (marasiws.Frame, error) { return marasiws.ReadFrame(buffered.Reader) })
+			if got[0] != "edited" || got[1] != "after" {
+				t.Fatalf("wanted: %q\ngot: %q", []string{"edited", "after"}, got)
+			}
+		})
+
+		t.Run("should hold the next client message after a forward when the client sent both and idles ("+name+")", func(t *testing.T) {
+			harness := newWebSocketCheckpointHarness(t, nil, nil)
+			harness.proxy.SetWebSocketIntercept(true)
+			client, buffered := harness.open(t)
+			defer client.Close()
+			for _, frame := range consecutiveMessageFrames(fragmented) {
+				if err := marasiws.WriteFrame(buffered, frame, true); err != nil {
+					t.Fatalf("writing frame: %v", err)
+				}
+			}
+			if err := buffered.Flush(); err != nil {
+				t.Fatalf("flushing frames: %v", err)
+			}
+
+			first := receiveHeldWebSocketMessage(t, harness.held)
+			assertHeldPayload(t, first, "first message")
+			if err := harness.proxy.ForwardCheckpoint(first.ID, CheckpointForward{Payload: &edited}); err != nil {
+				t.Fatalf("forwarding: %v", err)
+			}
+			second := receiveHeldWebSocketMessage(t, harness.held)
+			assertHeldPayload(t, second, "second message")
+			if err := harness.proxy.DropCheckpoint(second.ID); err != nil {
+				t.Fatalf("dropping: %v", err)
+			}
+			after := receiveHeldWebSocketMessage(t, harness.held)
+			assertHeldPayload(t, after, "after")
+			if err := harness.proxy.ForwardCheckpoint(after.ID, CheckpointForward{}); err != nil {
+				t.Fatalf("forwarding: %v", err)
+			}
+
+			got := readTextMessages(t, 2, func() (marasiws.Frame, error) {
+				select {
+				case frame := <-harness.originFrames:
+					return frame, nil
+				case <-time.After(5 * time.Second):
+					return marasiws.Frame{}, errors.New("timed out waiting for an origin frame")
+				}
+			})
+			if got[0] != "edited" || got[1] != "after" {
+				t.Fatalf("wanted: %q\ngot: %q", []string{"edited", "after"}, got)
+			}
+		})
+	}
 }
 
 type websocketRepositoryStub struct {
