@@ -351,12 +351,37 @@ func (proxy *Proxy) claimLaunch(id uuid.UUID) (domain.Launch, launchClaim) {
 	return entry.launch, launchClaimed
 }
 
-// launchAwaitingClaim reports whether id is a pending launch the pipeline has not claimed yet.
-func (proxy *Proxy) launchAwaitingClaim(id uuid.UUID) bool {
+// launchIs reports whether id is in the registry and its entry is in the given state.
+func (proxy *Proxy) launchIs(id uuid.UUID, state func(*launchEntry) bool) bool {
 	proxy.launchMu.Lock()
 	defer proxy.launchMu.Unlock()
 	entry, ok := proxy.launches[id]
-	return ok && !entry.claimed
+	return ok && state(entry)
+}
+
+// isLaunch reports whether req is a launch: claimed by the pipeline, or
+// naming a launch that waits for its claim, as it does before Setup runs.
+func (proxy *Proxy) isLaunch(req *http.Request) bool {
+	if _, ok := core.LaunchpadIDFromContext(req.Context()); ok {
+		return true
+	}
+	id, ok := requestedLaunchID(req.Context())
+	return ok && proxy.launchIs(id, func(entry *launchEntry) bool { return !entry.claimed })
+}
+
+// compassSkips reports whether Compass marked req out of scope. A launch is
+// deliberate and must appear in its launchpad, so Compass runs on it but its
+// skip decision does not apply (ADR-0031): the mark is cleared and the launch
+// goes on through the pipeline. A Compass drop still applies to a launch.
+func (proxy *Proxy) compassSkips(req *http.Request) bool {
+	if skip, ok := core.SkipFlagFromContext(req.Context()); !ok || !skip {
+		return false
+	}
+	if !proxy.isLaunch(req) {
+		return true
+	}
+	*req = *core.ContextWithSkipFlag(req, false)
+	return false
 }
 
 // recordLaunchFailure records why the pipeline failed a claimed launch.
@@ -374,30 +399,23 @@ func (proxy *Proxy) recordLaunchFailure(id uuid.UUID, reason string) {
 	}
 }
 
-// recordLaunchDropped records that the pipeline dropped a claimed launch.
-// A request that never claimed a launch, such as a second claim, has no
-// request id in its context, so it cannot fail the launch it named.
+// recordLaunchDropped records that the pipeline dropped a launch.
+// Compass runs before Setup claims a launch, so a launch dropped there is
+// claimed here. A second claim of a launch was refused by Setup, so it cannot
+// claim the launch again here and cannot fail the launch it named.
 func (proxy *Proxy) recordLaunchDropped(req *http.Request) {
-	if id, ok := core.RequestIDFromContext(req.Context()); ok {
-		proxy.recordLaunchFailure(id, domain.LaunchReasonDropped)
+	id, ok := core.RequestIDFromContext(req.Context())
+	if !ok {
+		launchID, named := requestedLaunchID(req.Context())
+		if !named {
+			return
+		}
+		if _, claim := proxy.claimLaunch(launchID); claim != launchClaimed {
+			return
+		}
+		id = launchID
 	}
-}
-
-// isClaimedLaunch reports whether id is a pending launch the pipeline has claimed.
-func (proxy *Proxy) isClaimedLaunch(id uuid.UUID) bool {
-	proxy.launchMu.Lock()
-	defer proxy.launchMu.Unlock()
-	entry, ok := proxy.launches[id]
-	return ok && entry.claimed
-}
-
-// launchStoredElsewhere reports whether id belongs to a launch whose pair
-// collided with an existing row, so writes for it must not touch that row.
-func (proxy *Proxy) launchStoredElsewhere(id uuid.UUID) bool {
-	proxy.launchMu.Lock()
-	defer proxy.launchMu.Unlock()
-	entry, ok := proxy.launches[id]
-	return ok && entry.duplicate
+	proxy.recordLaunchFailure(id, domain.LaunchReasonDropped)
 }
 
 // launchClient returns a client that opens one connection per launch and

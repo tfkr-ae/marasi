@@ -586,7 +586,8 @@ func (proxy *Proxy) WriteToDB() {
 		case *domain.ProxyRequest:
 			proxy.writeRequest(castItem)
 		case *domain.ProxyResponse:
-			if proxy.launchStoredElsewhere(castItem.ID) {
+			// A launch whose pair collided with an existing row must not write over that row.
+			if proxy.launchIs(castItem.ID, func(entry *launchEntry) bool { return entry.duplicate }) {
 				continue
 			}
 			err := proxy.TrafficRepo.InsertResponse(castItem)
@@ -637,7 +638,7 @@ func (proxy *Proxy) writeRequest(request *domain.ProxyRequest) {
 	err := proxy.TrafficRepo.InsertRequest(request)
 	if err != nil {
 		log.Println(err)
-		if proxy.isClaimedLaunch(request.ID) {
+		if proxy.launchIs(request.ID, func(entry *launchEntry) bool { return entry.claimed }) {
 			if _, getErr := proxy.TrafficRepo.GetMetadata(request.ID); getErr == nil {
 				// The UUID is taken. A launch must not write over that pair.
 				proxy.recordLaunchFailure(request.ID, domain.LaunchReasonDuplicateID)
