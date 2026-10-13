@@ -9,9 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -719,7 +721,7 @@ func TestLaunchpadCommands(t *testing.T) {
 		}
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, "{\"launch_id\":\"01938034-298e-73dc-b640-eb321b621154\",\"status\":\"pending\"}\n")
 
-		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "launch", id, "--scheme", "http", "--raw-file", rawFile)
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "launch", id, "--scheme", "http", "--raw-file", rawFile, "--detach")
 		wantBody := `{"raw":"` + base64.StdEncoding.EncodeToString(raw) + `","scheme":"http"}`
 		got := sent.snapshot()
 		if err != nil || stdout != "" || stderr != "launch 01938034-298e-73dc-b640-eb321b621154 pending\n" || got.Method != http.MethodPost || got.Path != "/launchpad/"+id+"/launch" || got.Body != wantBody {
@@ -733,7 +735,7 @@ func TestLaunchpadCommands(t *testing.T) {
 		body := "{\"launch_id\":\"01938034-298e-73dc-b640-eb321b621154\",\"status\":\"pending\"}\n"
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 		var stdout, stderr bytes.Buffer
-		command := exec.Command(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "launch", id, "--scheme", "https", "--json")
+		command := exec.Command(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "launch", id, "--scheme", "https", "--json", "--detach")
 		command.Stdin = bytes.NewReader(raw)
 		command.Stdout = &stdout
 		command.Stderr = &stderr
@@ -831,6 +833,215 @@ func TestLaunchpadCancelCommand(t *testing.T) {
 			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
 				t.Fatalf("\nwanted:\ninvalid invocation\ngot:\naccepted %v", args)
 			}
+		}
+	})
+}
+
+// fakeLaunchService serves a launch start, then answers each read of the launch
+// with the next record in reads, repeating the last one. Cancel answers with
+// cancelStatus and cancelBody. readSeen is closed on the first read.
+type fakeLaunchService struct {
+	sent     *cannedControlRequest
+	readSeen chan struct{}
+}
+
+func startFakeLaunchService(t *testing.T, configDir, launchpadID, launchID string, reads []string, cancelStatus int, cancelBody string) *fakeLaunchService {
+	t.Helper()
+	fake := &fakeLaunchService{readSeen: make(chan struct{})}
+	var mu sync.Mutex
+	readCount := 0
+	fake.sent = startCannedControlAPIHandler(t, configDir, "work", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/launchpad/"+launchpadID+"/launch":
+			io.WriteString(w, `{"launch_id":"`+launchID+`","status":"pending"}`+"\n")
+		case r.Method == http.MethodGet && r.URL.Path == "/launch/"+launchID:
+			mu.Lock()
+			read := reads[min(readCount, len(reads)-1)]
+			if readCount == 0 {
+				close(fake.readSeen)
+			}
+			readCount++
+			mu.Unlock()
+			if read == "" {
+				w.WriteHeader(http.StatusNotFound)
+				io.WriteString(w, `{"error":"not_found"}`+"\n")
+				return
+			}
+			io.WriteString(w, read)
+		case r.Method == http.MethodPost && r.URL.Path == "/launch/"+launchID+"/cancel":
+			w.WriteHeader(cancelStatus)
+			io.WriteString(w, cancelBody)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `{"error":"not_found"}`+"\n")
+		}
+	})
+	return fake
+}
+
+// paths lists the method and path of every request the fake service received.
+func (fake *fakeLaunchService) paths() []string {
+	var paths []string
+	for _, request := range fake.sent.requests() {
+		paths = append(paths, request.Method+" "+request.Path)
+	}
+	return paths
+}
+
+func TestLaunchpadLaunchCommand(t *testing.T) {
+	binary := buildMarasi(t)
+	launchpadID := "01938032-1b17-7243-b035-e6a9f4645904"
+	launchID := "01938034-298e-73dc-b640-eb321b621154"
+	record := func(status, reason string) string {
+		body := `{"launch_id":"` + launchID + `","launchpad_id":"` + launchpadID + `","status":"` + status + `"`
+		if reason != "" {
+			body += `,"reason":"` + reason + `"`
+		}
+		return body + "}\n"
+	}
+	pending := record("pending", "")
+	raw := "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
+	launch := func(configDir string, extra ...string) *exec.Cmd {
+		args := append([]string{"--config-dir", configDir, "--instance", "work", "launchpad", "launch", launchpadID, "--scheme", "http"}, extra...)
+		command := exec.Command(binary, args...)
+		command.Stdin = strings.NewReader(raw)
+		return command
+	}
+	run := func(command *exec.Cmd) (string, string, error) {
+		var stdout, stderr bytes.Buffer
+		command.Stdout = &stdout
+		command.Stderr = &stderr
+		err := command.Run()
+		return stdout.String(), stderr.String(), err
+	}
+
+	t.Run("should wait for the launch and print its final record", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		fake := startFakeLaunchService(t, configDir, launchpadID, launchID, []string{pending, pending, record("completed", "")}, http.StatusOK, "")
+
+		stdout, stderr, err := run(launch(configDir))
+
+		want := "launch " + launchID + " pending\nlaunch " + launchID + " completed\n"
+		if err != nil || stdout != "" || stderr != want {
+			t.Fatalf("\nwanted:\nstderr %q, empty stdout, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+		for _, path := range fake.paths() {
+			if strings.HasSuffix(path, "/cancel") {
+				t.Fatalf("\nwanted:\nno cancel\ngot:\n%v", fake.paths())
+			}
+		}
+	})
+
+	t.Run("should write only the final record in JSON mode", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		completed := record("completed", "")
+		startFakeLaunchService(t, configDir, launchpadID, launchID, []string{pending, completed}, http.StatusOK, "")
+
+		stdout, stderr, err := run(launch(configDir, "--json"))
+
+		if err != nil || stdout != completed || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", completed, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should read a launch that finished before the command looked", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		cancelled := record("cancelled", "")
+		startFakeLaunchService(t, configDir, launchpadID, launchID, []string{"", cancelled}, http.StatusOK, "")
+
+		stdout, stderr, err := run(launch(configDir, "--json"))
+
+		if err != nil || stdout != cancelled || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", cancelled, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should exit non-zero when the launch failed", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startFakeLaunchService(t, configDir, launchpadID, launchID, []string{pending, record("failed", "network_error")}, http.StatusOK, "")
+		want := "launching launchpad request: launch " + launchID + " failed (network_error)"
+
+		stdout, stderr, err := run(launch(configDir))
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || stdout != "" || !strings.Contains(stderr, want) {
+			t.Fatalf("\nwanted:\nexit 1 with stderr containing %q\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+
+		stdout, stderr, err = run(launch(configDir, "--json"))
+		assertJSONCommandError(t, stdout, stderr, err, want)
+	})
+
+	interrupt := func(t *testing.T, fake *fakeLaunchService, command *exec.Cmd) (string, string, error) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		command.Stdout = &stdout
+		command.Stderr = &stderr
+		if err := command.Start(); err != nil {
+			t.Fatalf("starting launch command: %v", err)
+		}
+		select {
+		case <-fake.readSeen:
+		case <-time.After(5 * time.Second):
+			command.Process.Kill()
+			t.Fatal("launch command did not read its launch")
+		}
+		if err := command.Process.Signal(os.Interrupt); err != nil {
+			command.Process.Kill()
+			t.Fatalf("interrupting launch command: %v", err)
+		}
+		err := command.Wait()
+		return stdout.String(), stderr.String(), err
+	}
+
+	for name, args := range map[string][]string{"human": nil, "JSON": {"--json"}} {
+		t.Run("should cancel the launch on interrupt in "+name+" mode", func(t *testing.T) {
+			if runtime.GOOS == "windows" {
+				t.Skip("os.Interrupt cannot be sent to a Windows process")
+			}
+			configDir := serviceConfigDir(t)
+			cancelled := record("cancelled", "")
+			fake := startFakeLaunchService(t, configDir, launchpadID, launchID, []string{pending}, http.StatusOK, cancelled)
+
+			stdout, stderr, err := interrupt(t, fake, launch(configDir, args...))
+
+			wantStdout, wantStderr := "", "launch "+launchID+" pending\nlaunch "+launchID+" cancelled\n"
+			if len(args) > 0 {
+				wantStdout, wantStderr = cancelled, ""
+			}
+			paths := fake.paths()
+			if err != nil || stdout != wantStdout || stderr != wantStderr || paths[len(paths)-1] != "POST /launch/"+launchID+"/cancel" {
+				t.Fatalf("\nwanted:\ncancel request, stdout %q, stderr %q, nil error\ngot:\nrequests %v, stdout %q, stderr %q, error %v", wantStdout, wantStderr, paths, stdout, stderr, err)
+			}
+		})
+	}
+
+	t.Run("should exit non-zero when the interrupted launch already finished", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("os.Interrupt cannot be sent to a Windows process")
+		}
+		configDir := serviceConfigDir(t)
+		finished := `{"error":"launch_finished","launch_id":"` + launchID + `","launchpad_id":"` + launchpadID + `","status":"completed"}` + "\n"
+		fake := startFakeLaunchService(t, configDir, launchpadID, launchID, []string{pending}, http.StatusConflict, finished)
+
+		stdout, stderr, err := interrupt(t, fake, launch(configDir, "--json"))
+
+		assertJSONCommandError(t, stdout, stderr, err, "cancelling launch: launch_finished: launch "+launchID+" is completed")
+	})
+
+	t.Run("should print the start response and return with --detach", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		fake := startFakeLaunchService(t, configDir, launchpadID, launchID, []string{pending}, http.StatusOK, "")
+
+		stdout, stderr, err := run(launch(configDir, "--detach"))
+		if err != nil || stdout != "" || stderr != "launch "+launchID+" pending\n" || len(fake.paths()) != 1 {
+			t.Fatalf("\nwanted:\none start request and the pending line on stderr\ngot:\nrequests %v, stdout %q, stderr %q, error %v", fake.paths(), stdout, stderr, err)
+		}
+
+		stdout, stderr, err = run(launch(configDir, "--detach", "--json"))
+		want := `{"launch_id":"` + launchID + `","status":"pending"}` + "\n"
+		if err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
 	})
 }

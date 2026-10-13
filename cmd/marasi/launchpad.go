@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"os/signal"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -23,6 +25,7 @@ var launchpadUpdateDescription string
 var launchpadLinkRequest string
 var launchpadLaunchScheme string
 var launchpadLaunchRawFile string
+var launchpadLaunchDetach bool
 
 type launchpadRequest struct {
 	Name        *string `json:"name,omitempty"`
@@ -42,6 +45,7 @@ func init() {
 	launchpadLinkCmd.MarkFlagRequired("request")
 	launchpadLaunchCmd.Flags().StringVar(&launchpadLaunchScheme, "scheme", "", "Request scheme: http or https. Required")
 	launchpadLaunchCmd.Flags().StringVar(&launchpadLaunchRawFile, "raw-file", "", "Read the raw HTTP request from a file. If omitted, read it from stdin")
+	launchpadLaunchCmd.Flags().BoolVar(&launchpadLaunchDetach, "detach", false, "Print the launch id and pending status, and return without waiting for the launch to finish")
 	launchpadLaunchCmd.MarkFlagRequired("scheme")
 	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadLaunchCmd, launchpadCancelCmd)
 	rootCmd.AddCommand(launchpadCmd)
@@ -131,8 +135,8 @@ var launchpadLinkCmd = &cobra.Command{
 
 var launchpadLaunchCmd = &cobra.Command{
 	Use:   "launch UUID",
-	Short: "Start a launch of a raw HTTP working copy",
-	Long:  "Start a launch of a raw HTTP working copy for a launchpad. Pass --raw-file or piped stdin. Set --scheme to http or https. The command prints the launch id and its pending status, and returns without waiting for the launch to finish. The launch id is the UUID of the traffic pair the launch creates.",
+	Short: "Launch a raw HTTP working copy and wait for its outcome",
+	Long:  "Launch a raw HTTP working copy for a launchpad. Pass --raw-file or piped stdin. Set --scheme to http or https. The launch id is the UUID of the traffic pair the launch creates.\n\nBy default the command waits until the launch ends and prints its final record: completed, cancelled, or failed with a reason. A failed launch exits non-zero. An interrupt (Ctrl-C or SIGTERM) while waiting cancels the launch and prints the cancelled record. If the launch finished before the cancel took effect, the command exits non-zero and reports the launch's final status.\n\nWith --detach the command prints the launch id and its pending status, and returns without waiting. Use launchpad cancel to cancel a detached launch.\n\nWith --json the command writes one JSON value: the final launch record, the start response with --detach, or an error.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if launchpadLaunchScheme != "http" && launchpadLaunchScheme != "https" {
@@ -166,14 +170,14 @@ var launchpadLaunchCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return runLaunchpadCommand(cmd, http.MethodPost, path, "launching launchpad request", "launch", launchpadRequest{Raw: &encoded, Scheme: &launchpadLaunchScheme})
+		return runLaunch(cmd, path, launchpadRequest{Raw: &encoded, Scheme: &launchpadLaunchScheme})
 	},
 }
 
 var launchpadCancelCmd = &cobra.Command{
 	Use:   "cancel LAUNCH_ID",
 	Short: "Cancel a pending launch",
-	Long:  "Cancel a pending launch by its launch id, including a launch started by another client. The launch ends as cancelled and its traffic pair records launch.status cancelled. If the launch already finished, the command exits non-zero and reports the launch's final status.",
+	Long:  "Cancel a pending launch by its launch id, including a launch started by another client. The launch ends as cancelled and its traffic pair records launch.status cancelled. Use it for a launch started with launchpad launch --detach or by another client; interrupting a waiting launchpad launch cancels its own launch. If the launch already finished, the command exits non-zero and reports the launch's final status.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path, err := serviceIDPath("/launch/", args[0], "/cancel")
@@ -200,6 +204,141 @@ func launchCancelError(operation string, response instanceResponse) error {
 		return fmt.Errorf("%s: launch_finished: launch %s is %s (%s)", operation, finished.LaunchID, finished.Status, finished.Reason)
 	}
 	return fmt.Errorf("%s: launch_finished: launch %s is %s", operation, finished.LaunchID, finished.Status)
+}
+
+// launchPollInterval is how often a waiting launch command reads its launch.
+const launchPollInterval = 100 * time.Millisecond
+
+// launchUnreadableGrace bounds how long a started launch may read as not found.
+// A launch leaves the registry a moment before its outcome is stored on its pair.
+const launchUnreadableGrace = 5 * time.Second
+
+type launchRecord struct {
+	LaunchID string `json:"launch_id"`
+	Status   string `json:"status"`
+	Reason   string `json:"reason"`
+}
+
+// runLaunch starts a launch and, unless --detach is set, waits for its final
+// record. An interrupt while waiting cancels the launch and reports the result.
+func runLaunch(cmd *cobra.Command, path string, body launchpadRequest) error {
+	const operation = "launching launchpad request"
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("encoding launchpad request: %w", err)
+	}
+	called, err := callInstance(ctx, http.MethodPost, path, "application/json", bytes.NewReader(encoded))
+	if err != nil {
+		return err
+	}
+	if err := rejectInstanceStatus(operation, called, jsonOutput); err != nil {
+		return err
+	}
+	var started launchRecord
+	if err := json.Unmarshal(called.Body, &started); err != nil || started.LaunchID == "" || started.Status == "" {
+		return errors.New("decoding launchpad response")
+	}
+	if launchpadLaunchDetach && jsonOutput {
+		_, err = cmd.OutOrStdout().Write(called.Body)
+		return err
+	}
+	if !jsonOutput {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "launch %s %s\n", started.LaunchID, started.Status); err != nil {
+			return err
+		}
+	}
+	if launchpadLaunchDetach {
+		return nil
+	}
+
+	launchPath, err := serviceIDPath("/launch/", started.LaunchID, "")
+	if err != nil {
+		return err
+	}
+	final, err := waitForLaunch(ctx, launchPath)
+	if err != nil && ctx.Err() != nil {
+		// Restore default signal handling so a second interrupt ends the command.
+		stop()
+		return cancelInterruptedLaunch(cmd, launchPath)
+	}
+	if err != nil {
+		return err
+	}
+	return writeLaunchRecord(cmd, operation, final)
+}
+
+// waitForLaunch reads the launch at launchPath until it leaves pending.
+func waitForLaunch(ctx context.Context, launchPath string) (instanceResponse, error) {
+	const operation = "reading launch"
+	var unreadableSince time.Time
+	for {
+		called, err := callInstance(ctx, http.MethodGet, launchPath, "", nil)
+		if err != nil {
+			return instanceResponse{}, err
+		}
+		switch called.StatusCode {
+		case http.StatusOK:
+			var record launchRecord
+			if err := json.Unmarshal(called.Body, &record); err != nil || record.Status == "" {
+				return instanceResponse{}, errors.New("decoding launch response")
+			}
+			if record.Status != "pending" {
+				return called, nil
+			}
+			unreadableSince = time.Time{}
+		case http.StatusNotFound:
+			if unreadableSince.IsZero() {
+				unreadableSince = time.Now()
+			} else if time.Since(unreadableSince) > launchUnreadableGrace {
+				return instanceResponse{}, rejectInstanceStatus(operation, called, jsonOutput)
+			}
+		default:
+			return instanceResponse{}, rejectInstanceStatus(operation, called, jsonOutput)
+		}
+		select {
+		case <-ctx.Done():
+			return instanceResponse{}, ctx.Err()
+		case <-time.After(launchPollInterval):
+		}
+	}
+}
+
+// cancelInterruptedLaunch cancels the launch the command was waiting for and
+// prints the cancelled record. A launch that finished first is an error.
+func cancelInterruptedLaunch(cmd *cobra.Command, launchPath string) error {
+	const operation = "cancelling launch"
+	called, err := callInstance(cmd.Context(), http.MethodPost, launchPath+"/cancel", "", nil)
+	if err != nil {
+		return err
+	}
+	if called.StatusCode != http.StatusOK {
+		return launchCancelError(operation, called)
+	}
+	return writeLaunchRecord(cmd, operation, called)
+}
+
+// writeLaunchRecord prints a final launch record. A failed launch is an error
+// that names its reason, so the command exits non-zero.
+func writeLaunchRecord(cmd *cobra.Command, operation string, response instanceResponse) error {
+	var record launchRecord
+	if err := json.Unmarshal(response.Body, &record); err != nil || record.LaunchID == "" || record.Status == "" {
+		return errors.New("decoding launch response")
+	}
+	if record.Status == "failed" {
+		if record.Reason != "" {
+			return fmt.Errorf("%s: launch %s failed (%s)", operation, record.LaunchID, record.Reason)
+		}
+		return fmt.Errorf("%s: launch %s failed", operation, record.LaunchID)
+	}
+	if jsonOutput {
+		_, err := cmd.OutOrStdout().Write(response.Body)
+		return err
+	}
+	_, err := fmt.Fprintf(cmd.ErrOrStderr(), "launch %s %s\n", record.LaunchID, record.Status)
+	return err
 }
 
 func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action string, body launchpadRequest) error {
@@ -252,16 +391,6 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 			return errors.New("decoding launchpad response")
 		}
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "request %s linked to launchpad %s successfully\n", result.RequestID, result.LaunchpadID)
-		return err
-	case "launch":
-		var result struct {
-			LaunchID string `json:"launch_id"`
-			Status   string `json:"status"`
-		}
-		if err := json.Unmarshal(response, &result); err != nil || result.LaunchID == "" || result.Status == "" {
-			return errors.New("decoding launchpad response")
-		}
-		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "launch %s %s\n", result.LaunchID, result.Status)
 		return err
 	case "cancel":
 		var result struct {
