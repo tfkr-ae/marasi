@@ -606,6 +606,7 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		return fmt.Errorf("flushing websocket handshake response: %w", err)
 	}
 
+	clientConnection := proxy.clientConnection(res.Request.RemoteAddr)
 	var connection *marasiws.Connection
 	process := func(message *marasiws.Message) error {
 		generated, _ := message.Metadata["generated"].(bool)
@@ -620,6 +621,11 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 				}
 				err := proxy.WebSocketInterceptor.Intercept(message, func(snapshot domain.WebSocketMessage) {
 					proxy.noteWebSocketHold(message)
+					if clientConnection != nil && message.Direction == marasiws.DirectionFromClient {
+						// Nothing reads the client while its message is held, so watch
+						// it: a client that closes abandons the hold (ADR-0030).
+						clientConnection.Watch(func() { proxy.abandonWebSocketCheckpoint(connectionID) })
+					}
 					if proxy.OnWebSocketIntercept == nil {
 						return
 					}
@@ -665,7 +671,7 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 	)
 	connection.SetDeflate(deflate)
 	if proxy.WebSocketInterceptor != nil {
-		connection.SetShutdownHandler(proxy.cancelWebSocketCheckpoint)
+		connection.SetShutdownHandler(proxy.abandonWebSocketCheckpoint)
 	}
 	if proxy.Config != nil {
 		connection.SetMaxMessageSize(proxy.Config.WebSocketMaxMessageSize)

@@ -833,6 +833,280 @@ func TestProxy_CheckpointHoldEndsWhenClientLeaves(t *testing.T) {
 	})
 }
 
+// webSocketCheckpointHarness is a served proxy in front of a WebSocket origin, with
+// Checkpoint WebSocket holds, abandons, and origin frames reported on channels.
+type webSocketCheckpointHarness struct {
+	proxy        *Proxy
+	origin       *httptest.Server
+	originFrames chan marasiws.Frame
+	held         chan domain.WebSocketMessage
+	abandoned    chan domain.CheckpointItem
+	messages     chan domain.WebSocketMessage
+}
+
+// newWebSocketCheckpointHarness serves a proxy whose origin sends serverPush, when set,
+// right after its handshake. onHeld runs inside the WebSocket intercept callback.
+func newWebSocketCheckpointHarness(
+	t *testing.T,
+	serverPush []byte,
+	onHeld func(*webSocketCheckpointHarness, domain.WebSocketMessage),
+) *webSocketCheckpointHarness {
+	t.Helper()
+	harness := &webSocketCheckpointHarness{
+		originFrames: make(chan marasiws.Frame, 4),
+		held:         make(chan domain.WebSocketMessage, 4),
+		abandoned:    make(chan domain.CheckpointItem, 4),
+		messages:     make(chan domain.WebSocketMessage, 4),
+	}
+	harness.origin = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		connection, buffered, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+		accept := sha1.Sum([]byte(req.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+		fmt.Fprintf(
+			buffered,
+			"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: %s\r\n\r\n",
+			base64.StdEncoding.EncodeToString(accept[:]),
+		)
+		if serverPush != nil {
+			_ = marasiws.WriteFrame(buffered, marasiws.Frame{Fin: true, Opcode: marasiws.OpText, Payload: serverPush}, false)
+		}
+		if err := buffered.Flush(); err != nil {
+			return
+		}
+		for {
+			frame, err := marasiws.ReadFrame(buffered)
+			if err != nil || frame.Opcode == marasiws.OpClose {
+				return
+			}
+			harness.originFrames <- frame
+		}
+	}))
+	t.Cleanup(harness.origin.Close)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dbConnection, err := db.New(":memory:", logger)
+	if err != nil {
+		t.Fatalf("creating in-memory database: %v", err)
+	}
+	repository := db.NewProxyRepo(dbConnection)
+	defaultExtensions, err := repository.GetExtensions()
+	if err != nil {
+		repository.Close()
+		t.Fatalf("getting default extensions: %v", err)
+	}
+	proxy, err := New(
+		WithConfigDir(t.TempDir()),
+		WithDefaultRepositories(repository),
+		WithExtensions(defaultExtensions),
+		WithRequestHandler(func(domain.ProxyRequest) error { return nil }),
+		WithResponseHandler(func(domain.ProxyResponse) error { return nil }),
+		WithLogHandler(func(domain.Log) error { return nil }),
+		WithWebSocketMessageHandler(func(message domain.WebSocketMessage) error {
+			harness.messages <- message
+			return nil
+		}),
+		WithWebSocketInterceptHandler(func(message domain.WebSocketMessage) error {
+			if onHeld != nil {
+				onHeld(harness, message)
+			}
+			harness.held <- message
+			return nil
+		}),
+		WithCheckpointAbandonedHandler(func(item domain.CheckpointItem) error {
+			harness.abandoned <- item
+			return nil
+		}),
+		WithBasePipeline(),
+		WithDefaultModifierPipeline(),
+	)
+	if err != nil {
+		repository.Close()
+		t.Fatalf("creating proxy: %v", err)
+	}
+	harness.proxy = proxy
+
+	proxyListener, err := proxy.GetListener("127.0.0.1", "0")
+	if err != nil {
+		proxy.Close()
+		t.Fatalf("creating proxy listener: %v", err)
+	}
+	serveResult := make(chan error, 1)
+	go func() { serveResult <- proxy.Serve(proxyListener) }()
+	t.Cleanup(func() {
+		proxy.Close()
+		select {
+		case <-serveResult:
+		case <-time.After(5 * time.Second):
+		}
+	})
+	return harness
+}
+
+// open upgrades a client connection through the proxy. The caller owns the connection.
+func (harness *webSocketCheckpointHarness) open(t *testing.T) (net.Conn, *bufio.ReadWriter) {
+	t.Helper()
+	client, err := net.Dial("tcp", net.JoinHostPort(harness.proxy.Addr, harness.proxy.Port))
+	if err != nil {
+		t.Fatalf("dialing proxy: %v", err)
+	}
+	if err := client.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		client.Close()
+		t.Fatalf("setting client deadline: %v", err)
+	}
+	buffered := bufio.NewReadWriter(bufio.NewReader(client), bufio.NewWriter(client))
+	fmt.Fprintf(
+		buffered,
+		"GET %s/socket HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+		harness.origin.URL,
+		strings.TrimPrefix(harness.origin.URL, "http://"),
+	)
+	if err := buffered.Flush(); err != nil {
+		client.Close()
+		t.Fatalf("writing upgrade request: %v", err)
+	}
+	response, err := http.ReadResponse(buffered.Reader, &http.Request{Method: http.MethodGet})
+	if err != nil {
+		client.Close()
+		t.Fatalf("reading upgrade response: %v", err)
+	}
+	if response.StatusCode != http.StatusSwitchingProtocols {
+		client.Close()
+		t.Fatalf("wanted: %d\ngot: %d", http.StatusSwitchingProtocols, response.StatusCode)
+	}
+	return client, buffered
+}
+
+func writeClientText(t *testing.T, buffered *bufio.ReadWriter, payload string) {
+	t.Helper()
+	if err := marasiws.WriteFrame(buffered, marasiws.Frame{Fin: true, Opcode: marasiws.OpText, Payload: []byte(payload)}, true); err != nil {
+		t.Fatalf("writing text frame: %v", err)
+	}
+	if err := buffered.Flush(); err != nil {
+		t.Fatalf("flushing text frame: %v", err)
+	}
+}
+
+func receiveHeldWebSocketMessage(t *testing.T, held <-chan domain.WebSocketMessage) domain.WebSocketMessage {
+	t.Helper()
+	select {
+	case message := <-held:
+		return message
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the WebSocket hold")
+		return domain.WebSocketMessage{}
+	}
+}
+
+// assertWebSocketAbandoned checks that held was abandoned through the callback,
+// left Checkpoint, and was recorded as dropped.
+func assertWebSocketAbandoned(t *testing.T, harness *webSocketCheckpointHarness, held domain.WebSocketMessage) {
+	t.Helper()
+	abandoned := receiveCheckpointItem(t, harness.abandoned, "the abandoned WebSocket message")
+	if abandoned.ID != held.ID || abandoned.Type != domain.CheckpointTypeWebSocket || abandoned.ConnectionID != held.ConnectionID {
+		t.Fatalf("\nwanted:\n%s %s %s\ngot:\n%s %s %s",
+			held.ID, domain.CheckpointTypeWebSocket, held.ConnectionID,
+			abandoned.ID, abandoned.Type, abandoned.ConnectionID)
+	}
+	if items := harness.proxy.CheckpointItems(); len(items) != 0 {
+		t.Fatalf("wanted no pending Checkpoint items\ngot: %v", items)
+	}
+	if err := harness.proxy.ForwardCheckpoint(held.ID, CheckpointForward{}); !errors.Is(err, ErrCheckpointNotFound) {
+		t.Fatalf("wanted: %v\ngot: %v", ErrCheckpointNotFound, err)
+	}
+	select {
+	case message := <-harness.messages:
+		if message.ID != held.ID || message.Metadata["dropped"] != true {
+			t.Fatalf("\nwanted:\n%s dropped\ngot:\n%s dropped=%v", held.ID, message.ID, message.Metadata["dropped"])
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the abandoned message record")
+	}
+}
+
+func TestProxy_CheckpointWebSocketHoldEndsWhenConnectionCloses(t *testing.T) {
+	t.Run("should abandon a held client message when its client closes", func(t *testing.T) {
+		harness := newWebSocketCheckpointHarness(t, nil, nil)
+		harness.proxy.SetWebSocketIntercept(true)
+		client, buffered := harness.open(t)
+		defer client.Close()
+
+		writeClientText(t, buffered, "held")
+		held := receiveHeldWebSocketMessage(t, harness.held)
+		client.Close()
+
+		assertWebSocketAbandoned(t, harness, held)
+		select {
+		case frame := <-harness.originFrames:
+			t.Fatalf("the origin received an abandoned message: %q", frame.Payload)
+		case <-time.After(200 * time.Millisecond):
+		}
+	})
+
+	t.Run("should abandon a held server message when its client closes", func(t *testing.T) {
+		harness := newWebSocketCheckpointHarness(t, []byte("held"), nil)
+		checkpoint, ok := harness.proxy.GetExtension("checkpoint")
+		if !ok {
+			t.Fatal("getting checkpoint extension")
+		}
+		if err := checkpoint.ExecuteLua(`function interceptWebSocketMessage(message) return true end`); err != nil {
+			t.Fatalf("updating checkpoint: %v", err)
+		}
+		client, _ := harness.open(t)
+		defer client.Close()
+
+		held := receiveHeldWebSocketMessage(t, harness.held)
+		if held.Direction != marasiws.DirectionFromServer {
+			t.Fatalf("wanted: %s\ngot: %s", marasiws.DirectionFromServer, held.Direction)
+		}
+		client.Close()
+
+		assertWebSocketAbandoned(t, harness, held)
+	})
+
+	t.Run("should let a forward that resolved the message first stand", func(t *testing.T) {
+		clients := make(chan net.Conn, 1)
+		// The forward lands before the client leaves, so the close finds nothing to abandon.
+		harness := newWebSocketCheckpointHarness(t, nil, func(harness *webSocketCheckpointHarness, message domain.WebSocketMessage) {
+			if err := harness.proxy.ForwardCheckpoint(message.ID, CheckpointForward{}); err != nil {
+				t.Errorf("forwarding: %v", err)
+			}
+			(<-clients).Close()
+		})
+		harness.proxy.SetWebSocketIntercept(true)
+		client, buffered := harness.open(t)
+		defer client.Close()
+		clients <- client
+
+		writeClientText(t, buffered, "forwarded")
+		held := receiveHeldWebSocketMessage(t, harness.held)
+
+		select {
+		case frame := <-harness.originFrames:
+			if string(frame.Payload) != "forwarded" {
+				t.Fatalf("wanted: %q\ngot: %q", "forwarded", frame.Payload)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the forwarded message did not reach the origin")
+		}
+		select {
+		case message := <-harness.messages:
+			if message.ID != held.ID || message.Metadata["dropped"] == true {
+				t.Fatalf("\nwanted:\n%s forwarded\ngot:\n%s dropped=%v", held.ID, message.ID, message.Metadata["dropped"])
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for the forwarded message record")
+		}
+		select {
+		case item := <-harness.abandoned:
+			t.Fatalf("a forwarded message was abandoned: %s", item.ID)
+		case <-time.After(200 * time.Millisecond):
+		}
+	})
+}
+
 type websocketRepositoryStub struct {
 	connection *domain.WebSocketConnection
 	messages   []*domain.WebSocketMessage
