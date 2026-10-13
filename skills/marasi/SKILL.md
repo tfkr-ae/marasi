@@ -76,7 +76,6 @@ A capture is complete when `traffic get` returns the matching request and respon
 ```sh
 -q 'status_code >= 500 AND host = "*.example.com"'
 -q 'response_body:"password" OR response_head:"set-cookie"'
--q 'metadata.launchpad = true'
 -q 'launchpad:* AND response_body:"token"'
 -q 'metadata.launch.status = "cancelled"'
 -q 'method = "POST" AND (path = "/api/*" OR path = "/graphql")'
