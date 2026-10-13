@@ -25,7 +25,7 @@ type Instance struct {
 	ConfigDir string // scratch config directory owned by the harness
 	Name      string // instance name
 	Proxy     string // proxy listener host:port
-	KeepLog   string // where Stop copies the instance log, or empty
+	LogCopy   string // file Stop copies the instance log to, or empty
 }
 
 // StartInstance launches a detached service instance in a scratch config
@@ -52,13 +52,13 @@ func StartInstance(ctx context.Context, binary, project string) (*Instance, erro
 	return instance, nil
 }
 
-// Stop stops the instance, copies its log to KeepLog when set, and removes
+// Stop stops the instance, copies its log to LogCopy when set, and removes
 // its config directory.
 func (i *Instance) Stop() {
 	_, _ = i.cli(context.Background(), nil, "service", "stop", "--json")
-	if i.KeepLog != "" {
+	if i.LogCopy != "" {
 		if data, err := os.ReadFile(filepath.Join(i.ConfigDir, "instances", i.Name+".log")); err == nil {
-			_ = os.WriteFile(i.KeepLog, data, 0o644)
+			_ = os.WriteFile(i.LogCopy, data, 0o644)
 		}
 	}
 	_ = os.RemoveAll(i.ConfigDir)

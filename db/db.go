@@ -75,12 +75,7 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 	}
 	// modernc.org/sqlite reads only _pragma parameters; it ignores the
 	// _journal, _timeout, and _fk spellings of other drivers.
-	//
-	// In WAL mode, synchronous NORMAL fsyncs only at checkpoints, not on
-	// every commit. The WebSocket relay waits on the single DB writer, so a
-	// commit's fsync stalled live connections for hundreds of milliseconds
-	// on a slow disk. A Marasi crash loses nothing; an OS crash or power
-	// loss can lose the last commits before a checkpoint.
+	// synchronous NORMAL fsyncs only at WAL checkpoints (ADR-0029).
 	db, err := sqlx.Connect("sqlite", dsn+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 
 	if err != nil {

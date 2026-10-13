@@ -22,8 +22,9 @@ jobs:
   autobahn:
     name: autobahn (${{ matrix.run }}, ${{ matrix.mode }})
     runs-on: ubuntu-latest
-    # Two suites, each under the harness's 75-minute -suite-limit.
-    timeout-minutes: 120
+    # Two suites, each ended by the harness's 75-minute -suite-limit, so
+    # the harness reports even when both hang.
+    timeout-minutes: 165
     strategy:
       fail-fast: false
       matrix:
@@ -41,11 +42,14 @@ jobs:
       # monitor and the kernel log stream alongside it for the same reason.
       - run: |
           .github/scripts/autobahn-monitor.sh dist/autobahn/monitor.log &
+          monitor=$!
           sudo dmesg --follow-new --time-format iso | sed -u 's/^/[kernel] /' &
-          trap 'sudo pkill -f "dmesg --follow-new"; kill %1' EXIT
+          trap 'kill $monitor; sudo pkill -x dmesg' EXIT
           make autobahn RUNS=${{ matrix.run }} MODES=${{ matrix.mode }} VERBOSE=1
       - name: Kernel and memory state
         if: always()
+        # Diagnostics only: a missing file or no match must not fail the job.
+        shell: bash {0}
         run: |
           free -m
           swapon --show
