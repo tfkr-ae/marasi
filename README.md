@@ -15,7 +15,7 @@ projects, and supports Lua extensions. The proxy is also available as a Go libra
 - Captured traffic with complete HTTP requests and responses, metadata, and notes.
 - Checkpoint to hold, forward, and drop in-flight requests, responses, and WebSocket messages.
 - WebSocket inspection, frame injection, and live connection control.
-- Launchpad to group captured pairs and send modified raw HTTP requests.
+- Launchpad to group captured pairs and launch modified raw HTTP requests.
 - Armory request templates with payload positions and wordlist-driven runs.
 - Test cases, findings, and artifacts to record assessment work and link evidence.
 - Report generation with configurable templates.
