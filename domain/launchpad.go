@@ -59,7 +59,7 @@ type Launchpad struct {
 	EntryCount int
 	// LastStatusCode is the response status code of the newest entry, in the
 	// order GetLaunchpadRequests returns entries. It is nil when the launchpad
-	// has no entries or its newest entry has no response yet.
+	// has no entries or its newest entry has no response (in flight, cancelled, or failed).
 	LastStatusCode *int
 }
 
