@@ -9,7 +9,7 @@ Users group captured traffic into named launchpads in the open project and fire 
 - Read one pad and its linked traffic with `launchpad get`.
 - Rename or describe a pad with `launchpad update`.
 - Attach an existing request UUID with `launchpad link --request`.
-- Send a working copy with `launchpad launch --scheme` and `--raw-file` or piped stdin.
+- Send a working copy with `launchpad launch --scheme` and `--raw-file` or piped stdin, waiting for its final record by default or returning at once with `--detach`.
 - Cancel a pending launch by its launch id with `launchpad cancel`.
 - Choose human-readable or `--json` output.
 
@@ -28,7 +28,8 @@ To prove cancel, serve an origin path that never answers, launch it, and save `l
 - `--name` is required on create and must be non-empty. Update requires `--name` or `--description`.
 - Launch needs `--scheme http` or `https`, and either `--raw-file` or piped stdin. A TTY stdin fails. The raw bytes must be parseable HTTP with a non-empty `Host` and a header/body blank line. CRLF works; LF-only is accepted.
 - The working copy is the raw bytes you supply. Linked members are not replayed and are not required to launch.
-- Launch returns `{"launch_id":"…","status":"pending"}` as soon as the launch is accepted, before the round trip. `GET /launch` lists pending launches and `GET /launch/{id}` reads one while it is pending. The launch then ends as `completed`, `cancelled`, or `failed` (with a `reason`), published as `launch.completed`, `launch.cancelled`, or `launch.failed`, and the outcome is merged into the row's `metadata.launch`. Retry `launchpad get` and `traffic list` until the launched path and its `metadata.launch` appear.
+- Without `--detach`, the CLI polls `GET /launch/{id}` and prints the final record. A failed launch exits 1 with `launching launchpad request: launch $LAUNCH_ID failed (upstream_error)` (or another reason), in `{"error":…}` under `--json`. SIGINT or SIGTERM while waiting cancels the launch and exits 0 with the cancelled record.
+- `POST /launchpad/{id}/launch` and `--detach` return `{"launch_id":"…","status":"pending"}` as soon as the launch is accepted, before the round trip. `GET /launch` lists pending launches and `GET /launch/{id}` reads one while it is pending. The launch then ends as `completed`, `cancelled`, or `failed` (with a `reason`), published as `launch.completed`, `launch.cancelled`, or `launch.failed`, and the outcome is merged into the row's `metadata.launch`. Retry `launchpad get` and `traffic list` until the launched path and its `metadata.launch` appear.
 - `POST /launch/{id}/cancel` (`launchpad cancel`) works from any client, not just the one that launched. It cancels the proxy client's request, so the upstream round trip is abandoned and no response is stored. A finished launch returns 409 `{"error":"launch_finished",…}` with its final record, read from the stored pair's `metadata.launch`. An id that is not a launch returns 404 `not_found`.
 - Launch sends through the proxy listener, persists a new traffic row, and auto-links that row to the pad. The proxy client tags the request with an internal `x-marasi-launch-id` header. Marasi honors it only from its own client for a pending launch, uses it as the row id, sets the `launchpad` and `launchpad_id` metadata keys from the launch, and removes it before sending. The stored raw request does not contain it. The header from any other client is removed and ignored.
 - Link and launch look up ids in the currently open project. After opening a different project, previous pads and request ids are not visible. Opening the current path does not hide them.
