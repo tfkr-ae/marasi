@@ -117,19 +117,31 @@ func (repo *Repository) DeleteLaunchpad(launchpadID uuid.UUID) error {
 	return nil
 }
 
-// GetLaunchpadRequests retrieves all requests associated with a specific launchpad.
-func (repo *Repository) GetLaunchpadRequests(id uuid.UUID) ([]*domain.RequestResponseSummary, error) {
-	var dbRequests []*dbRequestResponseSummary
-	query := `SELECT
-			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
-			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
-			  json_remove(r.metadata, '$.prettified-request', '$.prettified-response') AS metadata
-		      FROM request r
-		      JOIN launchpad_request lr ON r.id = lr.request_id
-		      WHERE lr.launchpad_id = ?
-		      ORDER BY r.id ASC`
+// GetLaunchpadRequests retrieves the requests linked to a launchpad that
+// match trafficQuery, oldest first. The read is the launchpad's membership
+// plus the translated traffic query. An invalid query returns a
+// *domain.QueryError.
+func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string) ([]*domain.RequestResponseSummary, error) {
+	translated, err := translateTrafficQuery(trafficQuery)
+	if err != nil {
+		return nil, err
+	}
 
-	err := repo.dbConn.Select(&dbRequests, query, id)
+	query := `SELECT
+			  id, scheme, method, host, path, requested_at,
+			  status, status_code, content_type, length, responded_at,
+			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
+		      FROM request
+		      WHERE ` + launchpadMember
+	args := append(make([]any, 0, len(translated.args)+1), id)
+	if translated.where != "" {
+		query += ` AND (` + translated.where + `)`
+		args = append(args, translated.args...)
+	}
+	query += ` ORDER BY id ASC`
+
+	var dbRequests []*dbRequestResponseSummary
+	err = repo.dbConn.Select(&dbRequests, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("getting launchpad requests: %w", err)
 	}

@@ -129,7 +129,7 @@ func (s *stubLaunchpadRepository) UpdateLaunchpad(id uuid.UUID, name, descriptio
 	return nil
 }
 
-func (s *stubLaunchpadRepository) GetLaunchpadRequests(id uuid.UUID) ([]*domain.RequestResponseSummary, error) {
+func (s *stubLaunchpadRepository) GetLaunchpadRequests(id uuid.UUID, _ string) ([]*domain.RequestResponseSummary, error) {
 	items := s.members[id]
 	if items == nil {
 		return []*domain.RequestResponseSummary{}, nil

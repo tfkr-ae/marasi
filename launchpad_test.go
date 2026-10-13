@@ -101,7 +101,7 @@ func (h *launchHarness) waitFinished(t *testing.T) domain.Launch {
 
 func (h *launchHarness) launchpadMembers(t *testing.T) []uuid.UUID {
 	t.Helper()
-	members, err := h.repository.GetLaunchpadRequests(h.launchpadID)
+	members, err := h.repository.GetLaunchpadRequests(h.launchpadID, "")
 	if err != nil {
 		t.Fatalf("getting launchpad members: %v", err)
 	}
