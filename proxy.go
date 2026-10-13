@@ -582,38 +582,7 @@ func (proxy *Proxy) WriteToDB() {
 	for proxyItem := range proxy.DBWriteChannel {
 		switch castItem := proxyItem.(type) {
 		case *domain.ProxyRequest:
-			err := proxy.TrafficRepo.InsertRequest(castItem)
-			if err != nil {
-				log.Println(err)
-				if proxy.isClaimedLaunch(castItem.ID) {
-					if _, getErr := proxy.TrafficRepo.GetMetadata(castItem.ID); getErr == nil {
-						// The UUID is taken. A launch must not write over that pair.
-						proxy.recordLaunchFailure(castItem.ID, domain.LaunchReasonDuplicateID)
-					}
-				}
-				continue
-			}
-
-			if val, ok := castItem.Metadata["launchpad_id"]; ok {
-				if launchpadID, ok := val.(uuid.UUID); ok {
-					err := proxy.LaunchpadRepo.LinkRequestToLaunchpad(castItem.ID, launchpadID)
-					if err != nil {
-						log.Printf("linking request to launchpad: %v", err)
-					}
-				}
-			}
-
-			if runID, ok := castItem.Metadata["armory_run_id"].(uuid.UUID); ok {
-				if proxy.Armory == nil {
-					log.Printf("linking request to armory run: armory service is not configured")
-				} else if repo := proxy.Armory.Repo(); repo == nil {
-					log.Printf("linking request to armory run: armory repository is not configured")
-				} else {
-					if err := repo.CreateArmoryEntry(&domain.ArmoryEntry{RunID: runID, RequestID: castItem.ID}); err != nil {
-						log.Printf("linking request to armory run: %v", err)
-					}
-				}
-			}
+			proxy.writeRequest(castItem)
 		case *domain.ProxyResponse:
 			if proxy.launchStoredElsewhere(castItem.ID) {
 				continue
@@ -656,6 +625,43 @@ func (proxy *Proxy) WriteToDB() {
 			close(castItem.done)
 		default:
 			log.Print(castItem)
+		}
+	}
+}
+
+// writeRequest stores a request and links it to its launchpad and Armory run.
+// It runs on the database writer.
+func (proxy *Proxy) writeRequest(request *domain.ProxyRequest) {
+	err := proxy.TrafficRepo.InsertRequest(request)
+	if err != nil {
+		log.Println(err)
+		if proxy.isClaimedLaunch(request.ID) {
+			if _, getErr := proxy.TrafficRepo.GetMetadata(request.ID); getErr == nil {
+				// The UUID is taken. A launch must not write over that pair.
+				proxy.recordLaunchFailure(request.ID, domain.LaunchReasonDuplicateID)
+			}
+		}
+		return
+	}
+
+	if val, ok := request.Metadata["launchpad_id"]; ok {
+		if launchpadID, ok := val.(uuid.UUID); ok {
+			err := proxy.LaunchpadRepo.LinkRequestToLaunchpad(request.ID, launchpadID)
+			if err != nil {
+				log.Printf("linking request to launchpad: %v", err)
+			}
+		}
+	}
+
+	if runID, ok := request.Metadata["armory_run_id"].(uuid.UUID); ok {
+		if proxy.Armory == nil {
+			log.Printf("linking request to armory run: armory service is not configured")
+		} else if repo := proxy.Armory.Repo(); repo == nil {
+			log.Printf("linking request to armory run: armory repository is not configured")
+		} else {
+			if err := repo.CreateArmoryEntry(&domain.ArmoryEntry{RunID: runID, RequestID: request.ID}); err != nil {
+				log.Printf("linking request to armory run: %v", err)
+			}
 		}
 	}
 }
