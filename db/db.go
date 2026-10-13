@@ -75,7 +75,8 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 	}
 	// modernc.org/sqlite reads only _pragma parameters; it ignores the
 	// _journal, _timeout, and _fk spellings of other drivers.
-	db, err := sqlx.Connect("sqlite", dsn+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+	// synchronous NORMAL fsyncs only at WAL checkpoints (ADR-0029).
+	db, err := sqlx.Connect("sqlite", dsn+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 
 	if err != nil {
 		dbLogger.Error("Failed to connect to database", "error", err)
