@@ -1225,32 +1225,31 @@ func TestLaunchpadLaunchCommand(t *testing.T) {
 	})
 }
 
-type cannedControlRequest struct {
-	mu          sync.Mutex
+// controlRequest is one request the canned control API received.
+type controlRequest struct {
 	Method      string
 	Path        string
 	RawQuery    string
 	Body        string
 	ContentType string
-	history     []cannedControlRequest
 }
 
-func (got *cannedControlRequest) snapshot() cannedControlRequest {
-	got.mu.Lock()
-	defer got.mu.Unlock()
-	return cannedControlRequest{
-		Method:      got.Method,
-		Path:        got.Path,
-		RawQuery:    got.RawQuery,
-		Body:        got.Body,
-		ContentType: got.ContentType,
-	}
+type cannedControlRequest struct {
+	mu sync.Mutex
+	controlRequest
+	history []controlRequest
 }
 
-func (got *cannedControlRequest) requests() []cannedControlRequest {
+func (got *cannedControlRequest) snapshot() controlRequest {
 	got.mu.Lock()
 	defer got.mu.Unlock()
-	out := make([]cannedControlRequest, len(got.history))
+	return got.controlRequest
+}
+
+func (got *cannedControlRequest) requests() []controlRequest {
+	got.mu.Lock()
+	defer got.mu.Unlock()
+	out := make([]controlRequest, len(got.history))
 	copy(out, got.history)
 	return out
 }
@@ -1258,7 +1257,7 @@ func (got *cannedControlRequest) requests() []cannedControlRequest {
 func (got *cannedControlRequest) reset() {
 	got.mu.Lock()
 	defer got.mu.Unlock()
-	got.Method, got.Path, got.RawQuery, got.Body, got.ContentType = "", "", "", "", ""
+	got.controlRequest = controlRequest{}
 	got.history = nil
 }
 
@@ -1290,13 +1289,7 @@ func startCannedControlAPIHandler(t *testing.T, configDir, name string, handle h
 		got.RawQuery = r.URL.RawQuery
 		got.Body = string(requestBody)
 		got.ContentType = r.Header.Get("Content-Type")
-		got.history = append(got.history, cannedControlRequest{
-			Method:      got.Method,
-			Path:        got.Path,
-			RawQuery:    got.RawQuery,
-			Body:        got.Body,
-			ContentType: got.ContentType,
-		})
+		got.history = append(got.history, got.controlRequest)
 		got.mu.Unlock()
 		handle(w, r)
 	})}
