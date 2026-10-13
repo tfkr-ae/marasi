@@ -27,18 +27,21 @@ const (
 	LaunchFailed LaunchStatus = "failed"
 )
 
+// LaunchReason says why a launch failed.
+type LaunchReason string
+
 const (
 	// LaunchReasonDuplicateID means the launch's pair could not be stored
 	// because a pair with the same UUID already exists.
-	LaunchReasonDuplicateID = "duplicate_id"
+	LaunchReasonDuplicateID LaunchReason = "duplicate_id"
 	// LaunchReasonUpstreamError means the proxy could not complete the round trip to the upstream.
-	LaunchReasonUpstreamError = "upstream_error"
+	LaunchReasonUpstreamError LaunchReason = "upstream_error"
 	// LaunchReasonNetworkError means the launch could not be sent through the proxy.
-	LaunchReasonNetworkError = "network_error"
+	LaunchReasonNetworkError LaunchReason = "network_error"
 	// LaunchReasonDropped means an extension or a Checkpoint drop stopped the launch in the proxy.
-	LaunchReasonDropped = "dropped"
+	LaunchReasonDropped LaunchReason = "dropped"
 	// LaunchReasonInterrupted means a project switch or service stop ended the launch.
-	LaunchReasonInterrupted = "interrupted"
+	LaunchReasonInterrupted LaunchReason = "interrupted"
 )
 
 // Launch is a raw request sent from a launchpad through the proxy.
@@ -47,5 +50,5 @@ type Launch struct {
 	ID          uuid.UUID    // Launch id, equal to the pair's UUID.
 	LaunchpadID uuid.UUID    // Launchpad the launch belongs to.
 	Status      LaunchStatus // Lifecycle state.
-	Reason      string       // Why a failed launch failed. Empty otherwise.
+	Reason      LaunchReason // Why a failed launch failed. Empty otherwise.
 }

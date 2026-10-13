@@ -221,8 +221,7 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 		switch claim {
 		case launchClaimed:
 			uuid = launch.ID
-			metadata["launchpad"] = true
-			metadata["launchpad_id"] = launch.LaunchpadID
+			setLaunchMetadata(metadata, launch)
 			*req = *core.ContextWithLaunchpadID(req, launch.LaunchpadID)
 		case launchAlreadyClaimed:
 			proxy.WriteLog("WARN", fmt.Sprintf("Dropped a second claim of launch %s", launchID))
