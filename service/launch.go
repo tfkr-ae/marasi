@@ -42,16 +42,16 @@ func addLaunchRoutes(raw *http.ServeMux, proxy *marasi.Proxy) {
 	raw.HandleFunc("GET /launch/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
-			writeLaunchpadError(w, r, http.StatusBadRequest, "bad_request")
+			writeLaunchError(w, r, http.StatusBadRequest, "bad_request")
 			return
 		}
 		launch, err := proxy.GetLaunch(id)
 		if errors.Is(err, domain.ErrLaunchNotFound) {
-			writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
+			writeLaunchError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
 		if err != nil {
-			writeLaunchpadError(w, r, http.StatusInternalServerError, "internal_server_error")
+			writeLaunchError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
 		writeJSON(w, r, http.StatusOK, launchRecordFromDomain(launch))
@@ -62,17 +62,17 @@ func addLaunchRoutes(raw *http.ServeMux, proxy *marasi.Proxy) {
 	raw.HandleFunc("POST /launch/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
-			writeLaunchpadError(w, r, http.StatusBadRequest, "bad_request")
+			writeLaunchError(w, r, http.StatusBadRequest, "bad_request")
 			return
 		}
 		launch, err := proxy.CancelLaunch(id)
 		switch {
 		case errors.Is(err, domain.ErrLaunchNotFound):
-			writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
+			writeLaunchError(w, r, http.StatusNotFound, "not_found")
 		case errors.Is(err, domain.ErrLaunchFinished):
 			writeJSON(w, r, http.StatusConflict, launchFinished{Error: "launch_finished", launchRecord: launchRecordFromDomain(launch)})
 		case err != nil:
-			writeLaunchpadError(w, r, http.StatusInternalServerError, "internal_server_error")
+			writeLaunchError(w, r, http.StatusInternalServerError, "internal_server_error")
 		default:
 			writeJSON(w, r, http.StatusOK, launchRecordFromDomain(launch))
 		}
@@ -86,12 +86,19 @@ type launchFinished struct {
 	launchRecord
 }
 
+// writeLaunchError writes a launch route's error code.
+func writeLaunchError(w http.ResponseWriter, r *http.Request, status int, code string) {
+	writeJSON(w, r, status, struct {
+		Error string `json:"error"`
+	}{Error: code})
+}
+
 func launchRecordFromDomain(launch domain.Launch) launchRecord {
 	return launchRecord{
 		LaunchID:    launch.ID,
 		LaunchpadID: launch.LaunchpadID,
 		Status:      string(launch.Status),
-		Reason:      launch.Reason,
+		Reason:      string(launch.Reason),
 	}
 }
 

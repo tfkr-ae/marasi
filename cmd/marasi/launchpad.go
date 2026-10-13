@@ -180,11 +180,13 @@ var launchpadCancelCmd = &cobra.Command{
 	Long:  "Cancel a pending launch by its launch id, including a launch started by another client. The launch ends as cancelled and its traffic pair records launch.status cancelled. Use it for a launch started with launchpad launch --detach or by another client; interrupting a waiting launchpad launch cancels its own launch. If the launch already finished, the command exits non-zero and reports the launch's final status.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		path, err := serviceIDPath("/launch/", args[0], "/cancel")
+		launchPath, err := serviceIDPath("/launch/", args[0], "")
 		if err != nil {
 			return err
 		}
-		return runLaunchpadCommand(cmd, http.MethodPost, path, "cancelling launch", "cancel", launchpadRequest{})
+		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return cancelLaunch(ctx, cmd, launchPath)
 	},
 }
 
@@ -258,7 +260,7 @@ func runLaunch(cmd *cobra.Command, path string, body launchpadRequest) error {
 	if err != nil && ctx.Err() != nil {
 		// Restore default signal handling so a second interrupt ends the command.
 		stop()
-		return cancelInterruptedLaunch(cmd, launchPath)
+		return cancelLaunch(cmd.Context(), cmd, launchPath)
 	}
 	if err != nil {
 		return err
@@ -292,11 +294,11 @@ func waitForLaunch(ctx context.Context, launchPath string) (instanceResponse, er
 	}
 }
 
-// cancelInterruptedLaunch cancels the launch the command was waiting for and
-// prints the cancelled record. A launch that finished first is an error.
-func cancelInterruptedLaunch(cmd *cobra.Command, launchPath string) error {
+// cancelLaunch cancels the launch at launchPath and prints the cancelled
+// record. A launch that finished first is an error that names its final status.
+func cancelLaunch(ctx context.Context, cmd *cobra.Command, launchPath string) error {
 	const operation = "cancelling launch"
-	called, err := callInstance(cmd.Context(), http.MethodPost, launchPath+"/cancel", "", nil)
+	called, err := callInstance(ctx, http.MethodPost, launchPath+"/cancel", "", nil)
 	if err != nil {
 		return err
 	}
@@ -343,9 +345,6 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 	if err != nil {
 		return err
 	}
-	if action == "cancel" && called.StatusCode != http.StatusOK {
-		return launchCancelError(operation, called)
-	}
 	if err := rejectInstanceStatus(operation, called, jsonOutput); err != nil {
 		return err
 	}
@@ -377,16 +376,6 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 			return errors.New("decoding launchpad response")
 		}
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "request %s linked to launchpad %s successfully\n", result.RequestID, result.LaunchpadID)
-		return err
-	case "cancel":
-		var result struct {
-			LaunchID string `json:"launch_id"`
-			Status   string `json:"status"`
-		}
-		if err := json.Unmarshal(response, &result); err != nil || result.LaunchID == "" || result.Status == "" {
-			return errors.New("decoding launch response")
-		}
-		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "launch %s %s\n", result.LaunchID, result.Status)
 		return err
 	default:
 		return fmt.Errorf("unsupported launchpad action %q", action)

@@ -29,7 +29,7 @@ type launchEntry struct {
 	cancel      context.CancelFunc   // cancels the proxy client's request context
 	done        chan struct{}        // closed once the launch is terminal
 	outcome     domain.Launch        // terminal state reported by the proxy client
-	failReason  string               // failure the pipeline recorded; wins over outcome
+	failReason  domain.LaunchReason  // failure the pipeline recorded; wins over outcome
 	duplicate   bool                 // storing the pair hit an existing row
 	cancelled   bool                 // CancelLaunch was called while pending; wins over everything
 	interrupted bool                 // a project switch or service stop ended it; wins over failures
@@ -153,7 +153,8 @@ func (proxy *Proxy) startLaunch(raw string, launchpadID string, useHttps bool) (
 // launchedRequest records a launch's request as the proxy client sends it,
 // before any internal header is added, under the launch id.
 func launchedRequest(req *http.Request, launch domain.Launch) (*domain.ProxyRequest, error) {
-	metadata := map[string]any{"launchpad": true, "launchpad_id": launch.LaunchpadID}
+	metadata := make(map[string]any)
+	setLaunchMetadata(metadata, launch)
 	snapshot := core.ContextWithMetadata(core.ContextWithRequestTime(req, time.Now()), metadata)
 	launched, err := NewProxyRequest(snapshot, launch.ID)
 	if err != nil {
@@ -162,6 +163,12 @@ func launchedRequest(req *http.Request, launch domain.Launch) (*domain.ProxyRequ
 	// NewProxyRequest buffers the body on the snapshot; hand it back to the request.
 	req.Body = snapshot.Body
 	return launched, nil
+}
+
+// setLaunchMetadata marks a launch's pair as launched from its launchpad.
+func setLaunchMetadata(metadata map[string]any, launch domain.Launch) {
+	metadata["launchpad"] = true
+	metadata["launchpad_id"] = launch.LaunchpadID
 }
 
 // Launches returns the pending launches, oldest first.
@@ -296,7 +303,7 @@ func (proxy *Proxy) storedLaunch(id uuid.UUID) (domain.Launch, error) {
 	reason, _ := outcome["reason"].(string)
 	launchpadID, _ := metadata["launchpad_id"].(string)
 	launchpad, _ := uuid.Parse(launchpadID)
-	return domain.Launch{ID: id, LaunchpadID: launchpad, Status: domain.LaunchStatus(status), Reason: reason}, nil
+	return domain.Launch{ID: id, LaunchpadID: launchpad, Status: domain.LaunchStatus(status), Reason: domain.LaunchReason(reason)}, nil
 }
 
 // registerLaunch adds a pending launch under an id the registry does not already hold.
@@ -386,7 +393,7 @@ func (proxy *Proxy) compassSkips(req *http.Request) bool {
 
 // recordLaunchFailure records why the pipeline failed a claimed launch.
 // It does nothing for ordinary traffic. The first recorded reason stands.
-func (proxy *Proxy) recordLaunchFailure(id uuid.UUID, reason string) {
+func (proxy *Proxy) recordLaunchFailure(id uuid.UUID, reason domain.LaunchReason) {
 	proxy.launchMu.Lock()
 	defer proxy.launchMu.Unlock()
 	entry, ok := proxy.launches[id]
@@ -461,7 +468,7 @@ func (proxy *Proxy) runLaunch(id uuid.UUID, client *http.Client, req *http.Reque
 // endLaunch records the proxy client's outcome and finishes the launch.
 // When the database writer runs, the launch finishes from the writer so its
 // metadata update follows the pair's own writes.
-func (proxy *Proxy) endLaunch(id uuid.UUID, status domain.LaunchStatus, reason string) {
+func (proxy *Proxy) endLaunch(id uuid.UUID, status domain.LaunchStatus, reason domain.LaunchReason) {
 	proxy.launchMu.Lock()
 	entry, ok := proxy.launches[id]
 	if ok {
