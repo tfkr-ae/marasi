@@ -72,12 +72,12 @@ type trafficRequest struct {
 
 // trafficResponse is the response half of a traffic detail.
 type trafficResponse struct {
-	Status      string    `json:"status"`       // HTTP status text
-	StatusCode  int       `json:"status_code"`  // HTTP status code; -1 if none yet
-	ContentType string    `json:"content_type"` // response content type
-	Length      string    `json:"length"`       // content length
-	Raw         []byte    `json:"raw"`          // complete raw HTTP response
-	RespondedAt time.Time `json:"responded_at"` // when the response arrived
+	Status      string     `json:"status"`       // HTTP status text
+	StatusCode  int        `json:"status_code"`  // HTTP status code; -1 if none yet
+	ContentType string     `json:"content_type"` // response content type
+	Length      string     `json:"length"`       // content length
+	Raw         []byte     `json:"raw"`          // complete raw HTTP response
+	RespondedAt *time.Time `json:"responded_at"` // when the response arrived; nil if none
 }
 
 // addTrafficRoutes registers traffic and metadata control routes.
@@ -309,12 +309,17 @@ func trafficSummaryFromDomain(item *domain.RequestResponseSummary) trafficSummar
 		Length:      item.Length,
 		Metadata:    metadataWithoutPrettified(item.Metadata),
 		RequestedAt: item.RequestedAt,
-	}
-	if !item.RespondedAt.IsZero() {
-		respondedAt := item.RespondedAt
-		summary.RespondedAt = &respondedAt
+		RespondedAt: respondedAt(item.RespondedAt),
 	}
 	return summary
+}
+
+// respondedAt returns the response time, or nil when the pair has no response.
+func respondedAt(at time.Time) *time.Time {
+	if at.IsZero() {
+		return nil
+	}
+	return &at
 }
 
 // trafficDetailFromRow maps a repository row to a detail response.
@@ -338,7 +343,7 @@ func trafficDetailFromRow(row *domain.RequestResponseRow) trafficDetail {
 			ContentType: row.Response.ContentType,
 			Length:      row.Response.Length,
 			Raw:         row.Response.Raw,
-			RespondedAt: row.Response.RespondedAt,
+			RespondedAt: respondedAt(row.Response.RespondedAt),
 		},
 	}
 }

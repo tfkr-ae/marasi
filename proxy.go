@@ -22,6 +22,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"maps"
 	"mime"
 	"net"
 	"net/http"
@@ -94,7 +95,12 @@ type Proxy struct {
 	// OnIntercept runs synchronously after an HTTP Checkpoint item becomes pending.
 	// Its return error is ignored. A blocking callback blocks the intercepted execution.
 	OnIntercept func(item domain.CheckpointItem) error
-	OnLog       func(log domain.Log) error // Function to be ran on each log event - used by the GUI application to handle new log entries
+	// OnCheckpointAbandoned runs after a Checkpoint item is dropped because its
+	// client left or its WebSocket connection closed (ADR-0030). It is not called for a
+	// forward or drop that resolved the item first.
+	// Its return error is ignored.
+	OnCheckpointAbandoned func(item domain.CheckpointItem) error
+	OnLog                 func(log domain.Log) error // Function to be ran on each log event - used by the GUI application to handle new log entries
 	// OnWebSocketOpen is called when a WebSocket connection opens.
 	OnWebSocketOpen func(domain.WebSocketConnection) error
 	// OnWebSocketMessage is called for each processed WebSocket message.
@@ -105,7 +111,11 @@ type Proxy struct {
 	// OnWebSocketClose is called when a WebSocket connection closes.
 	OnWebSocketClose func(domain.WebSocketConnection) error
 	// OnWebSocketIntercept is called when a WebSocket message is paused for inspection.
-	OnWebSocketIntercept  func(domain.WebSocketMessage) error
+	OnWebSocketIntercept func(domain.WebSocketMessage) error
+	// OnLaunchStarted is called once a launch is accepted, before it is sent.
+	OnLaunchStarted func(domain.Launch)
+	// OnLaunchFinished is called once per launch when it reaches a terminal state.
+	OnLaunchFinished      func(domain.Launch)
 	Addr                  string                // IP Address of the proxy
 	Port                  string                // Port of the proxy
 	Client                *http.Client          // HTTP Client that is used by the repeater functionality (autoconfigured to use the proxy)
@@ -143,6 +153,12 @@ type Proxy struct {
 	dbWriterStarted      atomic.Bool
 	launchpadWSMu        sync.Mutex
 	launchpadWS          map[io.Closer]struct{}
+	launchMu             sync.Mutex
+	launches             map[uuid.UUID]*launchEntry
+	finishedLaunches     map[uuid.UUID]domain.Launch // launches that left the registry, kept across project switches
+	finishedOrder        []uuid.UUID                 // finishedLaunches ids, oldest finish first
+	finishedLaunchLimit  int                         // bound on finishedLaunches; 0 means maxFinishedLaunches
+	newLaunchID          func() (uuid.UUID, error)
 
 	TrafficRepo   domain.TrafficRepository   // Repository for traffic data.
 	LaunchpadRepo domain.LaunchpadRepository // Repository for launchpad data.
@@ -316,8 +332,10 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 }
 
 // SetProjectResources replaces every project-owned dependency. Callers must
-// block project work before calling it.
+// block project work before calling it. Pending launches are interrupted
+// first, so their outcomes are written to the project they were launched in.
 func (proxy *Proxy) SetProjectResources(resources ProjectResources) {
+	proxy.InterruptLaunches()
 	proxy.TrafficRepo = resources.Repository
 	proxy.LaunchpadRepo = resources.Repository
 	proxy.ArmoryRepo = resources.Repository
@@ -471,7 +489,6 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyReque
 			Method:      req.Method,
 			Host:        req.Host,
 			Path:        path,
-			Metadata:    metadata,
 			RequestedAt: requestTime,
 		}
 
@@ -487,8 +504,12 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyReque
 
 		proxyRequest.Raw = domain.RawField(rawReq)
 		if prettified != "" {
-			proxyRequest.Metadata["prettified-request"] = prettified
+			// Kept on the request's own metadata too, so the response write keeps it.
+			metadata["prettified-request"] = prettified
 		}
+		// The response pipeline goes on changing the request's metadata while
+		// the database writer stores this request, so the request gets its own copy.
+		proxyRequest.Metadata = maps.Clone(metadata)
 		return proxyRequest, nil
 	}
 	return nil, fmt.Errorf("metadata not set")
@@ -570,33 +591,12 @@ func (proxy *Proxy) WriteToDB() {
 	for proxyItem := range proxy.DBWriteChannel {
 		switch castItem := proxyItem.(type) {
 		case *domain.ProxyRequest:
-			err := proxy.TrafficRepo.InsertRequest(castItem)
-			if err != nil {
-				log.Println(err)
+			proxy.writeRequest(castItem)
+		case *domain.ProxyResponse:
+			// A launch whose pair collided with an existing row must not write over that row.
+			if proxy.launchIs(castItem.ID, func(entry *launchEntry) bool { return entry.duplicate }) {
 				continue
 			}
-
-			if val, ok := castItem.Metadata["launchpad_id"]; ok {
-				if launchpadID, ok := val.(uuid.UUID); ok {
-					err := proxy.LaunchpadRepo.LinkRequestToLaunchpad(castItem.ID, launchpadID)
-					if err != nil {
-						log.Printf("linking request to launchpad: %v", err)
-					}
-				}
-			}
-
-			if runID, ok := castItem.Metadata["armory_run_id"].(uuid.UUID); ok {
-				if proxy.Armory == nil {
-					log.Printf("linking request to armory run: armory service is not configured")
-				} else if repo := proxy.Armory.Repo(); repo == nil {
-					log.Printf("linking request to armory run: armory repository is not configured")
-				} else {
-					if err := repo.CreateArmoryEntry(&domain.ArmoryEntry{RunID: runID, RequestID: castItem.ID}); err != nil {
-						log.Printf("linking request to armory run: %v", err)
-					}
-				}
-			}
-		case *domain.ProxyResponse:
 			err := proxy.TrafficRepo.InsertResponse(castItem)
 			if err != nil {
 				log.Println(err)
@@ -629,10 +629,49 @@ func (proxy *Proxy) WriteToDB() {
 			// this writer on its own full channel.
 			castItem.err = proxy.applyWebSocketRequestState(castItem.requestID, castItem.state)
 			close(castItem.done)
+		case *launchOutcomeWrite:
+			proxy.finishLaunch(castItem.id)
 		case *dbWriteBarrier:
 			close(castItem.done)
 		default:
 			log.Print(castItem)
+		}
+	}
+}
+
+// writeRequest stores a request and links it to its launchpad and Armory run.
+// It runs on the database writer.
+func (proxy *Proxy) writeRequest(request *domain.ProxyRequest) {
+	err := proxy.TrafficRepo.InsertRequest(request)
+	if err != nil {
+		log.Println(err)
+		if proxy.launchIs(request.ID, func(entry *launchEntry) bool { return entry.claimed }) {
+			if _, getErr := proxy.TrafficRepo.GetMetadata(request.ID); getErr == nil {
+				// The UUID is taken. A launch must not write over that pair.
+				proxy.recordLaunchFailure(request.ID, domain.LaunchReasonDuplicateID)
+			}
+		}
+		return
+	}
+
+	if val, ok := request.Metadata["launchpad_id"]; ok {
+		if launchpadID, ok := val.(uuid.UUID); ok {
+			err := proxy.LaunchpadRepo.LinkRequestToLaunchpad(request.ID, launchpadID)
+			if err != nil {
+				log.Printf("linking request to launchpad: %v", err)
+			}
+		}
+	}
+
+	if runID, ok := request.Metadata["armory_run_id"].(uuid.UUID); ok {
+		if proxy.Armory == nil {
+			log.Printf("linking request to armory run: armory service is not configured")
+		} else if repo := proxy.Armory.Repo(); repo == nil {
+			log.Printf("linking request to armory run: armory repository is not configured")
+		} else {
+			if err := repo.CreateArmoryEntry(&domain.ArmoryEntry{RunID: runID, RequestID: request.ID}); err != nil {
+				log.Printf("linking request to armory run: %v", err)
+			}
 		}
 	}
 }
@@ -740,7 +779,7 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 		return err
 	}
 	roundTripper := newMarasiTransport(proxy.Cert, proxy.dialTransport)
-	proxy.martianProxy.SetRoundTripper(roundTripper)
+	proxy.martianProxy.SetRoundTripper(&launchFailureRoundTripper{proxy: proxy, base: roundTripper})
 	proxy.listenerMu.Lock()
 	proxy.activeListener = activeListener
 	serveDone := make(chan struct{})
@@ -781,6 +820,9 @@ func (proxy *Proxy) CloseTransportContext(ctx context.Context) error {
 func (proxy *Proxy) close(ctx context.Context, closeDatabase bool) error {
 	stopForceClose := context.AfterFunc(ctx, proxy.ForceCloseTransport)
 	defer stopForceClose()
+	// A stop interrupts pending launches instead of waiting for them, and
+	// records their outcomes while the project and its writer are still open.
+	proxy.InterruptLaunches()
 	proxy.webSocketLifecycleMu.Lock()
 	proxy.webSocketsClosing = true
 	proxy.webSocketLifecycleMu.Unlock()
@@ -876,10 +918,8 @@ const maxEagerBody = 1 << 20
 // so hooks are watched. A larger, chunked, or Expect: 100-continue body is watched once it
 // has been read through.
 func (proxy *Proxy) watchClient(req *http.Request) {
-	proxy.connectionMu.Lock()
-	conn, ok := proxy.clientConnections[req.RemoteAddr]
-	proxy.connectionMu.Unlock()
-	if !ok {
+	conn := proxy.clientConnection(req.RemoteAddr)
+	if conn == nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(req.Context())
@@ -900,6 +940,14 @@ func (proxy *Proxy) watchClient(req *http.Request) {
 		return
 	}
 	req.Body = &watchAtEOF{ReadCloser: req.Body, watch: func() { conn.Watch(cancel) }}
+}
+
+// clientConnection returns the watched client socket for remoteAddr, or nil when the
+// client did not come through the proxy listener.
+func (proxy *Proxy) clientConnection(remoteAddr string) *listener.WatchedConn {
+	proxy.connectionMu.Lock()
+	defer proxy.connectionMu.Unlock()
+	return proxy.clientConnections[remoteAddr]
 }
 
 // watchAtEOF starts watching the client once the request body has been read through.

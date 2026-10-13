@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/martian"
 	"github.com/google/martian/mitm"
+	"github.com/google/uuid"
 	"github.com/spf13/viper"
 	"github.com/tfkr-ae/marasi/chrome"
 	"github.com/tfkr-ae/marasi/core"
@@ -177,6 +178,41 @@ func WithInterceptHandler(handler func(item domain.CheckpointItem) error) func(*
 			return errors.New("proxy already has an intercept handler defined")
 		}
 		proxy.OnIntercept = handler
+		return nil
+	}
+}
+
+// WithLaunchStartedHandler sets OnLaunchStarted, called once a launch is accepted.
+func WithLaunchStartedHandler(handler func(domain.Launch)) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnLaunchStarted != nil {
+			return errors.New("proxy already has a launch started handler defined")
+		}
+		proxy.OnLaunchStarted = handler
+		return nil
+	}
+}
+
+// WithLaunchFinishedHandler sets OnLaunchFinished, called once per launch on its terminal state.
+func WithLaunchFinishedHandler(handler func(domain.Launch)) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnLaunchFinished != nil {
+			return errors.New("proxy already has a launch finished handler defined")
+		}
+		proxy.OnLaunchFinished = handler
+		return nil
+	}
+}
+
+// WithCheckpointAbandonedHandler sets OnCheckpointAbandoned for Checkpoint items
+// dropped because their client left or their WebSocket connection closed. Its return
+// error is ignored.
+func WithCheckpointAbandonedHandler(handler func(item domain.CheckpointItem) error) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnCheckpointAbandoned != nil {
+			return errors.New("proxy already has a checkpoint abandoned handler defined")
+		}
+		proxy.OnCheckpointAbandoned = handler
 		return nil
 	}
 }
@@ -487,13 +523,23 @@ func WithBasePipeline() func(*Proxy) error {
 					internal = true
 				}
 				req.Header.Del("Proxy-Authorization")
+				// Only the proxy's own client may name a launch. The header never leaves the proxy.
+				launchID, launchErr := uuid.Parse(req.Header.Get(launchIDHeader))
+				req.Header.Del(launchIDHeader)
 				release, err := proxy.admitWork(req.Context(), internal)
 				if err != nil {
 					return err
 				}
-				*req = *req.WithContext(context.WithValue(req.Context(), projectReleaseKey{}, release))
+				ctx := context.WithValue(req.Context(), projectReleaseKey{}, release)
+				if internal && launchErr == nil {
+					ctx = context.WithValue(ctx, launchIDKey{}, launchID)
+				}
+				*req = *req.WithContext(ctx)
 				proxy.watchClient(req)
 				err = proxy.Modifiers.ModifyRequest(req)
+				if errors.Is(err, ErrDropped) {
+					proxy.recordLaunchDropped(req)
+				}
 				if err == nil || errors.Is(err, ErrDropped) || errors.Is(err, ErrSkipPipeline) {
 					if err != nil {
 						release()
@@ -511,11 +557,17 @@ func WithBasePipeline() func(*Proxy) error {
 				if release, ok := res.Request.Context().Value(projectReleaseKey{}).(func()); ok {
 					defer release()
 				}
+				// A launch whose client left was cancelled or interrupted. Its
+				// round trip was abandoned, so it has no response to process or store.
+				if _, launch := core.LaunchpadIDFromContext(res.Request.Context()); launch && res.Request.Context().Err() != nil {
+					return nil
+				}
 				err := proxy.Modifiers.ModifyResponse(res)
 				if err == nil || errors.Is(err, ErrSkipPipeline) {
 					return nil
 				}
 				if errors.Is(err, ErrDropped) {
+					proxy.recordLaunchDropped(res.Request)
 					proxy.markDroppedWebSocketHandshake(res, err)
 					if session, ok := core.SessionFromContext(res.Request.Context()); ok {
 						conn, _, err := session.Hijack()
@@ -540,6 +592,15 @@ func WithBasePipeline() func(*Proxy) error {
 }
 
 type projectReleaseKey struct{}
+
+// launchIDKey holds the launch id an internal request named.
+type launchIDKey struct{}
+
+// requestedLaunchID returns the launch id an internal request named, if any.
+func requestedLaunchID(ctx context.Context) (uuid.UUID, bool) {
+	id, ok := ctx.Value(launchIDKey{}).(uuid.UUID)
+	return id, ok
+}
 
 // WithDefaultModifierPipeline will apply the default modifier pipelines
 // The default processing order is: waypoint overrides → extensions → interception → database storage.

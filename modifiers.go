@@ -112,23 +112,6 @@ func (f martianResModifierFunc) ModifyResponse(res *http.Response) error {
 	return f(res)
 }
 
-// isLaunchpad checks if the request contains a launchpad ID header, indicating
-// it was sent from a launchpad replay operation.
-//
-// Parameters:
-//   - req: The HTTP request to check
-//
-// Returns:
-//   - bool: Whether the request is from a launchpad
-//   - uuid.UUID: The launchpad ID, or uuid.Nil if not a launchpad request
-func isLaunchpad(req *http.Request) (bool, uuid.UUID) {
-	launchpadId := req.Header.Get("x-launchpad-id")
-	if launchpadId, err := uuid.Parse(launchpadId); err == nil {
-		return true, launchpadId
-	}
-	return false, uuid.Nil
-}
-
 // armoryRunID returns the Armory run ID carried by an internal request header.
 func armoryRunID(req *http.Request) (uuid.UUID, bool) {
 	runID, err := uuid.Parse(req.Header.Get(armoryRunIDHeader))
@@ -221,7 +204,8 @@ func SkipConnectRequestModifier(proxy *Proxy, req *http.Request) error {
 }
 
 // SetupRequestModifier initializes request IDs, timing, metadata, and the Martian session.
-// It also captures internal Launchpad and Armory correlation IDs.
+// It also captures internal Launchpad and Armory correlation IDs. A claimed launch's id
+// becomes the pair's UUID, and a second claim of the same launch is dropped.
 func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 	*req = *core.ContextWithRequestTime(req, time.Now())
 	metadata := make(map[string]any)
@@ -230,14 +214,20 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 		return fmt.Errorf("generating uuid for request : %w", err)
 	}
 
-	// Requests coming from launchpad will have x-launchpad-id set as a header
-	if isLaunchpad, launchpadID := isLaunchpad(req); isLaunchpad {
-		metadata["launchpad"] = true
-		metadata["launchpad_id"] = launchpadID
-		*req = *core.ContextWithLaunchpadID(req, launchpadID)
-
-		// Header is removed after processing
-		req.Header.Del("x-launchpad-id")
+	// An internal request naming a pending, unclaimed launch becomes that
+	// launch's pair. Any other launch id is ignored and the request is ordinary traffic.
+	if launchID, ok := requestedLaunchID(req.Context()); ok {
+		launch, claim := proxy.claimLaunch(launchID)
+		switch claim {
+		case launchClaimed:
+			uuid = launch.ID
+			setLaunchMetadata(metadata, launch)
+			*req = *core.ContextWithLaunchpadID(req, launch.LaunchpadID)
+		case launchAlreadyClaimed:
+			proxy.WriteLog("WARN", fmt.Sprintf("Dropped a second claim of launch %s", launchID))
+			martian.NewContext(req).SkipRoundTrip()
+			return ErrDropped
+		}
 	}
 
 	if runID, exists := armoryRunID(req); exists {
@@ -293,6 +283,7 @@ func OverrideWaypointsModifier(proxy *Proxy, req *http.Request) error {
 // CompassRequestModifier will run the `processRequest` function in the compass extension to determine if the request is in scope.
 // After `processRequest`, it will check if the request is passed through (nil), skipped (`ErrSkipPipeline`), or dropped (`ErrDropped`).
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
+// Compass's skip decision does not apply to a launch (see compassSkips).
 func CompassRequestModifier(proxy *Proxy, req *http.Request) error {
 	if compassExt, ok := proxy.GetExtension("compass"); ok {
 		if !compassExt.MetadataSnapshot().Enabled {
@@ -307,7 +298,7 @@ func CompassRequestModifier(proxy *Proxy, req *http.Request) error {
 			}
 			// Continue as a err in Lua should not bring down the proxy
 		}
-		if skip, ok := core.SkipFlagFromContext(req.Context()); ok && skip {
+		if proxy.compassSkips(req) {
 			return ErrSkipPipeline
 		}
 
@@ -606,6 +597,13 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		return fmt.Errorf("flushing websocket handshake response: %w", err)
 	}
 
+	// Both peers are read through a watch, above TLS and buffering, so a watch reads
+	// frames and can tell a peer that closes after its close frame from one that leaves.
+	watchedClient := marasiws.NewWatchedStream(&marasiws.HijackedConn{
+		Conn:       client,
+		ReadWriter: bufferedClient,
+	})
+	watchedUpstream := marasiws.NewWatchedStream(upstream)
 	var connection *marasiws.Connection
 	process := func(message *marasiws.Message) error {
 		generated, _ := message.Metadata["generated"].(bool)
@@ -620,6 +618,23 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 				}
 				err := proxy.WebSocketInterceptor.Intercept(message, func(snapshot domain.WebSocketMessage) {
 					proxy.noteWebSocketHold(message)
+					// Nothing reads the sender while its message is held, so watch it: a
+					// client or origin that leaves abandons the hold (ADR-0030). The other
+					// side is still read, so its close ends the connection. A sender that
+					// closes after its close frame has not left (see WatchedStream).
+					//
+					// A held close frame is not watched: its sender closes the socket next
+					// as part of closing (RFC 6455 7.1.1, 7.1.7), and abandoning would drop
+					// the close frame the other side needs. The other side's close still
+					// ends that hold.
+					abandon := func() { proxy.abandonWebSocketCheckpoint(connectionID) }
+					switch {
+					case snapshot.Opcode == marasiws.OpClose:
+					case message.Direction == marasiws.DirectionFromClient:
+						watchedClient.Watch(abandon)
+					case message.Direction == marasiws.DirectionFromServer:
+						watchedUpstream.Watch(abandon)
+					}
 					if proxy.OnWebSocketIntercept == nil {
 						return
 					}
@@ -651,21 +666,17 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		return nil
 	}
 
-	clientStream := &marasiws.HijackedConn{
-		Conn:       client,
-		ReadWriter: bufferedClient,
-	}
 	connection = marasiws.NewConnection(
 		connectionID,
 		requestID,
-		clientStream,
-		clientStream,
-		upstream,
+		watchedClient,
+		watchedClient,
+		watchedUpstream,
 		process,
 	)
 	connection.SetDeflate(deflate)
 	if proxy.WebSocketInterceptor != nil {
-		connection.SetShutdownHandler(proxy.cancelWebSocketCheckpoint)
+		connection.SetShutdownHandler(proxy.abandonWebSocketCheckpoint)
 	}
 	if proxy.Config != nil {
 		connection.SetMaxMessageSize(proxy.Config.WebSocketMaxMessageSize)
@@ -785,6 +796,7 @@ func CompressedResponseModifier(proxy *Proxy, res *http.Response) error {
 // CompassResponseModifier will run the `processResponse` function in the compass extension to determine if the response is in scope.
 // After `processResponse`, it will check if the response is passed through (nil), skipped (`ErrSkipPipeline`), or dropped (`ErrDropped`).
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
+// Compass's skip decision does not apply to a launch (see compassSkips).
 func CompassResponseModifier(proxy *Proxy, res *http.Response) error {
 	if compassExt, ok := proxy.GetExtension("compass"); ok {
 		if !compassExt.MetadataSnapshot().Enabled {
@@ -798,7 +810,7 @@ func CompassResponseModifier(proxy *Proxy, res *http.Response) error {
 			}
 			// Continue as a err in Lua should not bring down the proxy
 		}
-		if skip, ok := core.SkipFlagFromContext(res.Request.Context()); ok && skip {
+		if proxy.compassSkips(res.Request) {
 			return ErrSkipPipeline
 		}
 

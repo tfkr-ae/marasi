@@ -136,6 +136,9 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 	}
 	targetProject := &openProject{path: path, resources: resources, unlock: unlock}
 
+	// A launch held at Checkpoint keeps the project busy. Interrupt pending
+	// launches first, so they end in the project they were launched in.
+	lifecycle.proxy.InterruptLaunches()
 	old := lifecycle.openProject()
 	unblock, err := lifecycle.waitForHandoff(ctx, old)
 	if err != nil {
@@ -280,6 +283,7 @@ func (lifecycle *ProjectLifecycle) Shutdown() error {
 	if project == nil {
 		return nil
 	}
+	lifecycle.proxy.InterruptLaunches()
 	unblock, err := lifecycle.gate.block(context.Background(), nil)
 	if err != nil {
 		return err

@@ -150,6 +150,26 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		assertNoCheckpointEvent(t, subscriber)
 	})
 
+	t.Run("should publish checkpoint.dropped when a held item's client leaves", func(t *testing.T) {
+		server, proxy := newCheckpointServer(t)
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+		proxy.SetIntercept(true)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		_, reqID, done := startCheckpointHTTPHoldContext(t, proxy, ctx)
+		waitForCheckpointItems(t, proxy, 1)
+		drainCheckpointHeld(t, subscriber)
+
+		cancel()
+		if err := receiveCheckpointHold(t, done); !errors.Is(err, marasi.ErrDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", marasi.ErrDropped, err)
+		}
+		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request"}`, reqID))
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint", ""), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false}`+"\n")
+		assertNoCheckpointEvent(t, subscriber)
+	})
+
 	t.Run("should reject invalid forward drop and flag bodies without events", func(t *testing.T) {
 		server, proxy := newCheckpointServer(t)
 		subscriber := server.events.subscribe()
@@ -388,21 +408,6 @@ func TestCheckpointServiceStop(t *testing.T) {
 			t.Fatal("wanted no pending checkpoint items after stop")
 		}
 	})
-
-	t.Run("should not publish sse when websocket teardown cancels a hold", func(t *testing.T) {
-		server, proxy := newCheckpointServer(t)
-		subscriber := server.events.subscribe()
-		defer server.events.unsubscribe(subscriber)
-		_, done := startCheckpointWebSocketHold(t, proxy)
-		waitForCheckpointItems(t, proxy, 1)
-		drainCheckpointHeld(t, subscriber)
-
-		proxy.WebSocketInterceptor.CancelConnection(uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809"))
-		if err := receiveCheckpointHold(t, done); err != nil {
-			t.Fatalf("wanted: nil\ngot: %v", err)
-		}
-		assertNoCheckpointEvent(t, subscriber)
-	})
 }
 
 func TestCheckpointEventFrames(t *testing.T) {
@@ -501,6 +506,7 @@ func newCheckpointServer(t *testing.T) (*Server, *marasi.Proxy) {
 	server := newTestServer(proxy, func() {})
 	if err := proxy.WithOptions(
 		marasi.WithInterceptHandler(server.HandleIntercept),
+		marasi.WithCheckpointAbandonedHandler(server.HandleCheckpointAbandoned),
 		marasi.WithWebSocketInterceptHandler(server.HandleWebSocketIntercept),
 	); err != nil {
 		t.Fatalf("installing checkpoint notify: %v", err)
@@ -510,7 +516,14 @@ func newCheckpointServer(t *testing.T) (*Server, *marasi.Proxy) {
 
 func startCheckpointHTTPHold(t *testing.T, proxy *marasi.Proxy) (*http.Request, uuid.UUID, <-chan error) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+	return startCheckpointHTTPHoldContext(t, proxy, context.Background())
+}
+
+// startCheckpointHTTPHoldContext holds a request whose context is ctx, so cancelling
+// ctx stands in for its client leaving.
+func startCheckpointHTTPHoldContext(t *testing.T, proxy *marasi.Proxy, ctx context.Context) (*http.Request, uuid.UUID, <-chan error) {
+	t.Helper()
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "https://marasi.app", nil)
 	_, remove, err := martian.TestContext(req, nil, nil)
 	if err != nil {
 		t.Fatalf("applying martian context: %v", err)

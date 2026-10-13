@@ -90,14 +90,14 @@ func TestHumanListColumnsStayBounded(t *testing.T) {
 	t.Run("launchpad list truncates name and description before aligning", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		long := strings.Repeat("A", 80)
-		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"`+id+`","name":"`+long+`","description":"`+long+`"},{"id":"`+other+`","name":"short","description":"ok"}]}`)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"`+id+`","name":"`+long+`","description":"`+long+`","entry_count":500,"last_status_code":200},{"id":"`+other+`","name":"short","description":"ok","entry_count":0,"last_status_code":null}]}`)
 
 		stdout, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "launchpad", "list")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := id + "  " + truncated + "  " + truncated + "\n" +
-			other + "  short" + strings.Repeat(" ", 35) + "  ok\n"
+		want := id + "  " + truncated + "  " + truncated + "  500  200\n" +
+			other + "  short" + strings.Repeat(" ", 35) + "  ok" + strings.Repeat(" ", 38) + "  0    -\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, stdout)
 		}

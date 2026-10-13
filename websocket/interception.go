@@ -126,7 +126,8 @@ func (i *Interceptor) Pending() []domain.WebSocketMessage {
 }
 
 // CancelConnection drops and unblocks all pending messages for a connection.
-func (i *Interceptor) CancelConnection(connectionID uuid.UUID) {
+// It returns the messages it actually removed; one resolved first is not among them.
+func (i *Interceptor) CancelConnection(connectionID uuid.UUID) []domain.WebSocketMessage {
 	i.mu.Lock()
 
 	var cancelled []*pendingInterception
@@ -142,9 +143,12 @@ func (i *Interceptor) CancelConnection(connectionID uuid.UUID) {
 
 	i.mu.Unlock()
 
+	messages := make([]domain.WebSocketMessage, 0, len(cancelled))
 	for _, pending := range cancelled {
+		messages = append(messages, pending.message.ToDomain())
 		close(pending.done)
 	}
+	return messages
 }
 
 // CancelAll drops and unblocks every pending interception.

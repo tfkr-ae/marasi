@@ -379,6 +379,14 @@ func (s *Server) HandleIntercept(item domain.CheckpointItem) error {
 	return nil
 }
 
+// HandleCheckpointAbandoned publishes checkpoint.dropped after a Checkpoint item is
+// dropped because its client left or its WebSocket connection closed. The payload
+// matches a user drop. It always returns nil.
+func (s *Server) HandleCheckpointAbandoned(item domain.CheckpointItem) error {
+	s.events.publish("checkpoint.dropped", checkpointResolvedEvent{ID: item.ID, Type: item.Type})
+	return nil
+}
+
 // HandleWebSocketIntercept publishes checkpoint.held after a WebSocket item is
 // pending. It always returns nil so notify cannot drop the hold or wait for subscribers.
 func (s *Server) HandleWebSocketIntercept(message domain.WebSocketMessage) error {
