@@ -159,7 +159,7 @@ func (c Config) startInstance(ctx context.Context, run string) (*Instance, func(
 			stop()
 			return nil, nil, err
 		}
-		resolver := &Resolver{Edit: run == RunCheckpointEdit, Log: c.Log}
+		resolver := &Resolver{Edit: run == RunCheckpointEdit}
 		resolveCtx, cancel := context.WithCancel(context.Background())
 		done := make(chan struct{})
 		go func() {
