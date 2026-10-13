@@ -79,7 +79,7 @@ var launchpadCreateCmd = &cobra.Command{
 var launchpadListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List launchpads oldest-first",
-	Long:  "List launchpads oldest-first. Each row shows the launchpad id, name, description, entry count, and the status code of the newest entry. The status shows - when the launchpad has no entries or its newest entry has no response yet.\n\nWith --json the command writes the control API body: {\"items\":[...]}, where each item has entry_count and last_status_code (null when there is no status).",
+	Long:  "List launchpads oldest-first. Each row shows the launchpad id, name, description, entry count, and the status code of the newest entry. The status shows - when the launchpad has no entries or its newest entry has no response, because it is still in flight or ended without one.\n\nWith --json the command writes the control API body: {\"items\":[...]}, where each item has entry_count and last_status_code (null when there is no status).",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return runLaunchpadCommand(cmd, http.MethodGet, "/launchpad", "listing launchpads", "list", launchpadRequest{})
