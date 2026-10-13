@@ -93,6 +93,10 @@ _Avoid_: host override, redirect, DNS override, way point
 A named group of request/response pairs, each an ordinary traffic pair linked to the group rather than copied. A launchpad may have no members.
 _Avoid_: Repeater, folder, tag
 
+**Launch**:
+Sending a raw request from a launchpad through the proxy. Its request/response pair joins the launchpad, and the launch id is that pair's UUID. A launch is pending until it is completed, cancelled, or failed.
+_Avoid_: replay, repeat, send
+
 **Armory**:
 The request-template and run capability of a service instance. It is not stored and has no id.
 _Avoid_: Intruder, fuzzer, using Armory as a control API collection or as a synonym for template or run
