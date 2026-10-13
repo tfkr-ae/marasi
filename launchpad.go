@@ -33,6 +33,7 @@ type launchEntry struct {
 	duplicate   bool                 // storing the pair hit an existing row
 	cancelled   bool                 // CancelLaunch was called while pending; wins over everything
 	interrupted bool                 // a project switch or service stop ended it; wins over failures
+	finished    bool                 // its final state is fixed and being stored; it leaves once stored
 	launched    *domain.ProxyRequest // the request as launched, stored if the pipeline never wrote it
 }
 
@@ -128,9 +129,7 @@ func (proxy *Proxy) startLaunch(raw string, launchpadID string, useHttps bool) (
 	}
 	launched, err := launchedRequest(req, entry.launch)
 	if err != nil {
-		proxy.launchMu.Lock()
-		delete(proxy.launches, entry.launch.ID)
-		proxy.launchMu.Unlock()
+		proxy.removeLaunch(entry.launch.ID)
 		cancel()
 		return nil, err
 	}
@@ -171,7 +170,9 @@ func (proxy *Proxy) Launches() []domain.Launch {
 	defer proxy.launchMu.Unlock()
 	launches := make([]domain.Launch, 0, len(proxy.launches))
 	for _, entry := range proxy.launches {
-		launches = append(launches, entry.launch)
+		if !entry.finished {
+			launches = append(launches, entry.launch)
+		}
 	}
 	slices.SortFunc(launches, func(a, b domain.Launch) int {
 		return bytes.Compare(a.ID[:], b.ID[:])
@@ -179,15 +180,18 @@ func (proxy *Proxy) Launches() []domain.Launch {
 	return launches
 }
 
-// GetLaunch returns a launch by id. A pending launch is read from the
-// registry. Once the launch has left the registry it is read from its stored
-// pair's metadata, so a launch id stays valid for good. It returns
-// domain.ErrLaunchNotFound when the id is neither live nor a launch's pair.
+// GetLaunch returns a launch by id. A launch is read from the registry until
+// its final state is stored, then from its stored pair's metadata, so a
+// launch id stays valid for good. It returns domain.ErrLaunchNotFound when
+// the id is neither live nor a launch's pair.
 func (proxy *Proxy) GetLaunch(id uuid.UUID) (domain.Launch, error) {
 	proxy.launchMu.Lock()
 	entry, ok := proxy.launches[id]
 	if ok {
 		launch := entry.launch
+		if entry.finished {
+			launch = entry.final()
+		}
 		proxy.launchMu.Unlock()
 		return launch, nil
 	}
@@ -324,6 +328,13 @@ func (proxy *Proxy) registerLaunch(launchpadID uuid.UUID, cancel context.CancelF
 	}
 }
 
+// removeLaunch takes a launch out of the registry.
+func (proxy *Proxy) removeLaunch(id uuid.UUID) {
+	proxy.launchMu.Lock()
+	defer proxy.launchMu.Unlock()
+	delete(proxy.launches, id)
+}
+
 // claimLaunch marks a pending launch as used by the request pipeline.
 // Only the first claim of an id succeeds.
 func (proxy *Proxy) claimLaunch(id uuid.UUID) (domain.Launch, launchClaim) {
@@ -354,7 +365,7 @@ func (proxy *Proxy) recordLaunchFailure(id uuid.UUID, reason string) {
 	proxy.launchMu.Lock()
 	defer proxy.launchMu.Unlock()
 	entry, ok := proxy.launches[id]
-	if !ok || !entry.claimed || entry.failReason != "" {
+	if !ok || !entry.claimed || entry.finished || entry.failReason != "" {
 		return
 	}
 	entry.failReason = reason
@@ -449,26 +460,29 @@ func (proxy *Proxy) endLaunch(id uuid.UUID, status domain.LaunchStatus, reason s
 	proxy.finishLaunch(id)
 }
 
-// finishLaunch removes a launch from the registry, records its terminal state
-// in the pair's metadata, and reports it.
+// finishLaunch fixes a launch's terminal state, records it in the pair's
+// metadata, and reports it. The launch stays in the registry, readable as
+// finished, until its state is stored, so it is never unreadable in between.
 func (proxy *Proxy) finishLaunch(id uuid.UUID) {
 	proxy.launchMu.Lock()
 	entry, ok := proxy.launches[id]
+	var final domain.Launch
 	if ok {
-		delete(proxy.launches, id)
+		entry.finished = true
+		final = entry.final()
 	}
 	proxy.launchMu.Unlock()
 	if !ok {
 		return
 	}
 
-	final := entry.final()
 	if !entry.duplicate {
 		proxy.storeLaunchedRequest(entry)
 		if err := proxy.applyLaunchOutcome(final); err != nil {
 			log.Printf("recording launch %s outcome : %v", id, err)
 		}
 	}
+	proxy.removeLaunch(id)
 	entry.cancel()
 	close(entry.done)
 	if proxy.OnLaunchFinished != nil {

@@ -209,10 +209,6 @@ func launchCancelError(operation string, response instanceResponse) error {
 // launchPollInterval is how often a waiting launch command reads its launch.
 const launchPollInterval = 100 * time.Millisecond
 
-// launchUnreadableGrace bounds how long a started launch may read as not found.
-// A launch leaves the registry a moment before its outcome is stored on its pair.
-const launchUnreadableGrace = 5 * time.Second
-
 type launchRecord struct {
 	LaunchID string `json:"launch_id"`
 	Status   string `json:"status"`
@@ -273,30 +269,20 @@ func runLaunch(cmd *cobra.Command, path string, body launchpadRequest) error {
 // waitForLaunch reads the launch at launchPath until it leaves pending.
 func waitForLaunch(ctx context.Context, launchPath string) (instanceResponse, error) {
 	const operation = "reading launch"
-	var unreadableSince time.Time
 	for {
 		called, err := callInstance(ctx, http.MethodGet, launchPath, "", nil)
 		if err != nil {
 			return instanceResponse{}, err
 		}
-		switch called.StatusCode {
-		case http.StatusOK:
-			var record launchRecord
-			if err := json.Unmarshal(called.Body, &record); err != nil || record.Status == "" {
-				return instanceResponse{}, errors.New("decoding launch response")
-			}
-			if record.Status != "pending" {
-				return called, nil
-			}
-			unreadableSince = time.Time{}
-		case http.StatusNotFound:
-			if unreadableSince.IsZero() {
-				unreadableSince = time.Now()
-			} else if time.Since(unreadableSince) > launchUnreadableGrace {
-				return instanceResponse{}, rejectInstanceStatus(operation, called, jsonOutput)
-			}
-		default:
-			return instanceResponse{}, rejectInstanceStatus(operation, called, jsonOutput)
+		if err := rejectInstanceStatus(operation, called, jsonOutput); err != nil {
+			return instanceResponse{}, err
+		}
+		var record launchRecord
+		if err := json.Unmarshal(called.Body, &record); err != nil || record.Status == "" {
+			return instanceResponse{}, errors.New("decoding launch response")
+		}
+		if record.Status != "pending" {
+			return called, nil
 		}
 		select {
 		case <-ctx.Done():
