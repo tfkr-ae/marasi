@@ -1,13 +1,21 @@
 name: Autobahn
 
-# Autobahn is a local check (see "Autobahn checks" in README.md). On GitHub
-# runners its timing-sensitive cases fail intermittently, so this workflow runs
-# only on demand, to investigate the suite on a runner.
+# See "Autobahn checks" in README.md.
 on:
+  schedule:
+    - cron: '0 3 * * 1'
+  pull_request:
+    paths:
+      - 'websocket/**'
+      - 'websocket*.go'
+      - 'internal/autobahn/**'
+      - '.github/workflows/autobahn.yml'
+      - '.github/scripts/autobahn-monitor.sh'
   workflow_dispatch:
 
+# A new push to the same PR cancels the run still going on the old head.
 concurrency:
-  group: autobahn-${{ github.ref }}
+  group: autobahn-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
