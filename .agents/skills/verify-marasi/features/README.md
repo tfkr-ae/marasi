@@ -11,7 +11,7 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Notes | `notes set`, `notes get`, `notes list`, list pagination, `notes clear` | [notes](notes.md) |
 | Project open | `project open --name`, `project open --path`, `project switch`, `project list` | [project open](project-open.md) |
 | Events | `events` | [events](events.md) |
-| Launchpad | `launchpad create`, `launchpad list`, `launchpad get`, `launchpad update`, `launchpad link`, `launchpad launch`, `launchpad cancel` | [launchpad](launchpad.md) |
+| Launchpad | `launchpad create`, `launchpad list`, `launchpad get`, `launchpad update`, `launchpad link`, `launchpad launch`, `launchpad pending`, `launchpad status`, `launchpad cancel` | [launchpad](launchpad.md) |
 | Test case | `test-case create`, `test-case list`, `test-case get`, `test-case list-requests`, `test-case update`, `test-case delete`, `test-case link`, `test-case unlink`, `test-case checklist` | [test case](test-case.md) |
 | Finding | `finding create`, `finding list`, `finding get`, `finding list-requests`, `finding update`, `finding delete`, `finding link`, `finding unlink` | [finding](finding.md) |
 | Artifact | `artifact upload`, `artifact list`, `artifact get`, `artifact download`, `artifact delete` | [artifact](artifact.md) |

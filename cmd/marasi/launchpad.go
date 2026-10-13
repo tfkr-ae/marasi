@@ -47,7 +47,7 @@ func init() {
 	launchpadLaunchCmd.Flags().StringVar(&launchpadLaunchRawFile, "raw-file", "", "Read the raw HTTP request from a file. If omitted, read it from stdin")
 	launchpadLaunchCmd.Flags().BoolVar(&launchpadLaunchDetach, "detach", false, "Print the launch id and pending status, and return without waiting for the launch to finish")
 	launchpadLaunchCmd.MarkFlagRequired("scheme")
-	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadLaunchCmd, launchpadCancelCmd)
+	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadLaunchCmd, launchpadPendingCmd, launchpadStatusCmd, launchpadCancelCmd)
 	rootCmd.AddCommand(launchpadCmd)
 }
 
@@ -172,6 +172,51 @@ var launchpadLaunchCmd = &cobra.Command{
 		}
 		return runLaunch(cmd, path, launchpadRequest{Raw: &encoded, Scheme: &launchpadLaunchScheme})
 	},
+}
+
+var launchpadPendingCmd = &cobra.Command{
+	Use:   "pending",
+	Short: "List pending launches",
+	Long:  "List the launches that are still pending, including launches started by other clients. Each row shows the launch id, the launchpad id, and the status. A launch leaves the list when it is completed, cancelled, or failed. Use launchpad status to read a finished launch, and launchpad cancel to cancel a pending one.\n\nWith --json the command writes the control API body: {\"items\":[...]}.",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return runLaunchpadCommand(cmd, http.MethodGet, "/launch", "listing pending launches", "pending", launchpadRequest{})
+	},
+}
+
+var launchpadStatusCmd = &cobra.Command{
+	Use:   "status LAUNCH_ID",
+	Short: "Get one launch, pending or finished",
+	Long:  "Get a launch by its launch id, including a launch started by another client. The command prints the launch id, the launchpad id, and the status: pending, completed, cancelled, or failed. A finished launch also shows its reason when it has one. The command exits zero for any launch it finds, including a failed launch. An unknown launch id exits non-zero with not_found.\n\nWith --json the command writes the launch record from the control API.",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := serviceIDPath("/launch/", args[0], "")
+		if err != nil {
+			return err
+		}
+		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return readLaunch(ctx, cmd, path)
+	},
+}
+
+// readLaunch prints the launch at launchPath. Like cancelLaunch, a refused read
+// reports the control API error in human mode too, so an unknown launch reads
+// as not_found.
+func readLaunch(ctx context.Context, cmd *cobra.Command, launchPath string) error {
+	const operation = "reading launch"
+	called, err := callInstance(ctx, http.MethodGet, launchPath, "", nil)
+	if err != nil {
+		return err
+	}
+	if called.StatusCode != http.StatusOK {
+		return controlAPIError(operation, called.Status, called.Body)
+	}
+	if jsonOutput {
+		_, err = cmd.OutOrStdout().Write(called.Body)
+		return err
+	}
+	return writeLaunchStatusHuman(called.Body, cmd.OutOrStdout())
 }
 
 var launchpadCancelCmd = &cobra.Command{
@@ -359,6 +404,8 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 		return writeLaunchpadListHuman(response, cmd.OutOrStdout())
 	case "get":
 		return writeLaunchpadGetHuman(response, cmd.OutOrStdout())
+	case "pending":
+		return writeLaunchListHuman(response, cmd.OutOrStdout())
 	case "create", "update":
 		var result struct {
 			ID string `json:"id"`
@@ -399,6 +446,44 @@ func writeLaunchpadListHuman(body []byte, stdout io.Writer) error {
 		fmt.Fprintf(writer, "%s\t%s\t%s\n", item.ID, truncateDisplay(item.Name, trafficPathDisplayLimit), truncateDisplay(item.Description, trafficPathDisplayLimit))
 	}
 	return writer.Flush()
+}
+
+func writeLaunchListHuman(body []byte, stdout io.Writer) error {
+	var response struct {
+		Items []struct {
+			LaunchID    string `json:"launch_id"`
+			LaunchpadID string `json:"launchpad_id"`
+			Status      string `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return fmt.Errorf("decoding launch list: %w", err)
+	}
+	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	for _, item := range response.Items {
+		fmt.Fprintf(writer, "%s\t%s\t%s\n", item.LaunchID, item.LaunchpadID, item.Status)
+	}
+	return writer.Flush()
+}
+
+func writeLaunchStatusHuman(body []byte, stdout io.Writer) error {
+	var record struct {
+		LaunchID    string `json:"launch_id"`
+		LaunchpadID string `json:"launchpad_id"`
+		Status      string `json:"status"`
+		Reason      string `json:"reason"`
+	}
+	if err := json.Unmarshal(body, &record); err != nil || record.LaunchID == "" || record.Status == "" {
+		return errors.New("decoding launch response")
+	}
+	if _, err := fmt.Fprintf(stdout, "launch_id: %s\nlaunchpad_id: %s\nstatus: %s\n", record.LaunchID, record.LaunchpadID, record.Status); err != nil {
+		return err
+	}
+	if record.Reason != "" {
+		_, err := fmt.Fprintf(stdout, "reason: %s\n", record.Reason)
+		return err
+	}
+	return nil
 }
 
 func writeLaunchpadGetHuman(body []byte, stdout io.Writer) error {
