@@ -76,6 +76,7 @@ A capture is complete when `traffic get` returns the matching request and respon
 -q 'status_code >= 500 AND host = "*.example.com"'
 -q 'response_body:"password" OR response_head:"set-cookie"'
 -q 'metadata.launchpad = true'
+-q 'metadata.launch.status = "cancelled"'
 -q 'method = "POST" AND (path = "/api/*" OR path = "/graphql")'
 ```
 
@@ -92,7 +93,7 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 | Change listener address or pause capture | `listener` | `start` and `update` require both `--address` and `--port`. Stopping the listener leaves the service running. |
 | Find named project files | `project list` | Lists projects under the selected config directory. |
 | Annotate captured traffic | `notes`, `traffic metadata` | Metadata updates replace the JSON rather than merge it. |
-| Replay an edited HTTP request | `launchpad` | Create a launchpad, optionally link captured traffic, then launch raw HTTP bytes. `launch` requires `--scheme`, either `http` or `https`. |
+| Replay an edited HTTP request | `launchpad` | Create a launchpad, optionally link captured traffic, then launch raw HTTP bytes. `launch` requires `--scheme`, either `http` or `https`. It waits for the final record, and an interrupt cancels the launch. A failed launch exits non-zero with its id in the error. `--detach` returns the pending launch id at once; end it early with `launchpad cancel`. The launch id is the id of the traffic pair it stores. |
 | Hold, edit, forward, or drop traffic | `checkpoint` | HTTP edits replace the whole raw request or response, not just its body. WebSocket edits replace the payload. Interception can leave clients waiting. |
 | Inspect or inject WebSocket messages | `websocket`, `traffic websocket` | Injection and close require a live connection. Choose direction and opcode explicitly. |
 | Redirect an upstream connection | `waypoint` | Maps an original host:port to an override host:port without changing DNS. |
@@ -108,9 +109,9 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 
 ## Verify and finish
 
-After each change, read the affected record or status. After replay or an Armory run, inspect the resulting captured traffic. After report export or artifact download, inspect the output file. Report the instance, project, relevant IDs, and output paths, or the failed command and its error.
+After each change, read the affected record or status. After a launch, run `traffic get <launch_id>` and check `metadata.launch.status`: `completed`, `cancelled`, or `failed` with a `metadata.launch.reason`. After an Armory run, inspect the resulting captured traffic. After report export or artifact download, inspect the output file. Report the instance, project, relevant IDs, and output paths, or the failed command and its error.
 
-Stop event subscribers you started. Resolve held Checkpoint items and restore interception settings you changed. Stop only a service this session started, unless the user requests otherwise:
+Stop event subscribers you started. Cancel detached launches you started that you no longer need. Resolve held Checkpoint items and restore interception settings you changed. Stop only a service this session started, unless the user requests otherwise:
 
 ```sh
 marasi --config-dir "$CONFIG_DIR" --instance "$INSTANCE" service stop --json
