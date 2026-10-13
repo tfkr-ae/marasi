@@ -16,10 +16,12 @@ var ErrLaunchpadAlreadyLinked = errors.New("request already linked to launchpad"
 // It provides methods for creating, retrieving, updating, and deleting launchpads,
 // as well as managing the requests associated with them.
 type LaunchpadRepository interface {
-	// GetLaunchpads retrieves all launchpads configured in the application.
+	// GetLaunchpads retrieves all launchpads configured in the application,
+	// each with its entry count and newest entry's status code.
 	// It returns a slice of Launchpad pointers.
 	GetLaunchpads() ([]*Launchpad, error)
-	// GetLaunchpad returns the launchpad identified by id.
+	// GetLaunchpad returns the launchpad identified by id, with its entry
+	// count and newest entry's status code.
 	// It returns ErrLaunchpadNotFound if the launchpad does not exist.
 	GetLaunchpad(id uuid.UUID) (*Launchpad, error)
 
@@ -52,6 +54,13 @@ type Launchpad struct {
 	ID          uuid.UUID // Unique identifier for the launchpad.
 	Name        string    // The name of the launchpad.
 	Description string    // A brief description of the launchpad's purpose.
+
+	// EntryCount is the number of request/response pairs linked to the launchpad.
+	EntryCount int
+	// LastStatusCode is the response status code of the newest entry, in the
+	// order GetLaunchpadRequests returns entries. It is nil when the launchpad
+	// has no entries or its newest entry has no response yet.
+	LastStatusCode *int
 }
 
 // LaunchpadRequest represents the association between a Launchpad and a ProxyRequest.
