@@ -673,17 +673,11 @@ func TestProxy_LaunchStoresItsRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("should run, store, and link a launch out of scope for Compass", func(t *testing.T) {
+	t.Run("should run Compass on a launch out of scope and ignore only its skip decision", func(t *testing.T) {
 		h := startLaunchHarness(t)
 		origin := startLaunchOrigin(t)
-		compass, ok := h.proxy.GetExtension("compass")
-		if !ok {
-			t.Fatal("getting compass extension")
-		}
-		if err := compass.ExecuteLua(`function processRequest(request) request:skip() end
-function processResponse(response) response:skip() end`); err != nil {
-			t.Fatalf("updating compass: %v", err)
-		}
+		h.compass(t, `function processRequest(request) request:headers():set("X-Compass", "request") request:skip() end
+function processResponse(response) response:headers():set("X-Compass", "response") response:skip() end`)
 		marker, ok := h.proxy.GetExtension("workshop")
 		if !ok {
 			t.Fatal("getting workshop extension")
@@ -709,7 +703,61 @@ function processResponse(response) response:skip() end`); err != nil {
 		if got := row.Metadata["workshop"]; !reflect.DeepEqual(got, map[string]any{"pipeline": "ran"}) || row.Response.StatusCode != http.StatusOK {
 			t.Fatalf("\nwanted:\npipeline ran and response stored\ngot:\n%v %d", row.Metadata, row.Response.StatusCode)
 		}
+		if !strings.Contains(string(row.Request.Raw), "X-Compass: request\r\n") || !strings.Contains(string(row.Response.Raw), "X-Compass: response\r\n") {
+			t.Fatalf("\nwanted:\nCompass ran on the request and the response\ngot:\n%q\n%q", row.Request.Raw, row.Response.Raw)
+		}
 	})
+
+	t.Run("should fail a launch Compass drops with dropped and store it as launched", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+		h.compass(t, `function processRequest(request) request:drop() end`)
+
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/compass-dropped"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+
+		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchFailed, Reason: domain.LaunchReasonDropped}
+		if got := h.waitFinished(t); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		h.assertStoredAsLaunched(t, id, "/compass-dropped", map[string]any{"status": "failed", "reason": "dropped"})
+		select {
+		case seen := <-origin.seen:
+			t.Fatalf("\nwanted:\nno request at the origin\ngot:\n%s", seen.URL.Path)
+		default:
+		}
+	})
+
+	t.Run("should fail a launch whose response Compass drops with dropped", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+		h.compass(t, `function processResponse(response) response:drop() end`)
+
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/response-dropped"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+
+		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchFailed, Reason: domain.LaunchReasonDropped}
+		if got := h.waitFinished(t); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		h.assertStoredAsLaunched(t, id, "/response-dropped", map[string]any{"status": "failed", "reason": "dropped"})
+	})
+}
+
+// compass replaces the Compass extension's script.
+func (h *launchHarness) compass(t *testing.T, script string) {
+	t.Helper()
+	compass, ok := h.proxy.GetExtension("compass")
+	if !ok {
+		t.Fatal("getting compass extension")
+	}
+	if err := compass.ExecuteLua(script); err != nil {
+		t.Fatalf("updating compass: %v", err)
+	}
 }
 
 func TestProxy_GetLaunchAfterItFinished(t *testing.T) {
