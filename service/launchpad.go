@@ -168,13 +168,12 @@ func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, e
 			writeLaunchpadRepositoryError(w, r, err)
 			return
 		}
-		if err := proxy.Launch(string(raw), id.String(), useHTTPS); err != nil {
+		launchID, err := proxy.Launch(string(raw), id.String(), useHTTPS)
+		if err != nil {
 			writeLaunchpadError(w, r, http.StatusBadRequest, "invalid_launchpad_request")
 			return
 		}
-		writeJSON(w, r, http.StatusOK, struct {
-			Status string `json:"status"`
-		}{Status: "launched"})
+		writeJSON(w, r, http.StatusOK, launchStarted{LaunchID: launchID, Status: string(domain.LaunchPending)})
 	})
 
 	mux.HandleFunc("POST /launchpad/{id}", func(w http.ResponseWriter, r *http.Request) {

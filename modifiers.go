@@ -112,23 +112,6 @@ func (f martianResModifierFunc) ModifyResponse(res *http.Response) error {
 	return f(res)
 }
 
-// isLaunchpad checks if the request contains a launchpad ID header, indicating
-// it was sent from a launchpad replay operation.
-//
-// Parameters:
-//   - req: The HTTP request to check
-//
-// Returns:
-//   - bool: Whether the request is from a launchpad
-//   - uuid.UUID: The launchpad ID, or uuid.Nil if not a launchpad request
-func isLaunchpad(req *http.Request) (bool, uuid.UUID) {
-	launchpadId := req.Header.Get("x-launchpad-id")
-	if launchpadId, err := uuid.Parse(launchpadId); err == nil {
-		return true, launchpadId
-	}
-	return false, uuid.Nil
-}
-
 // armoryRunID returns the Armory run ID carried by an internal request header.
 func armoryRunID(req *http.Request) (uuid.UUID, bool) {
 	runID, err := uuid.Parse(req.Header.Get(armoryRunIDHeader))
@@ -221,7 +204,8 @@ func SkipConnectRequestModifier(proxy *Proxy, req *http.Request) error {
 }
 
 // SetupRequestModifier initializes request IDs, timing, metadata, and the Martian session.
-// It also captures internal Launchpad and Armory correlation IDs.
+// It also captures internal Launchpad and Armory correlation IDs. A claimed launch's id
+// becomes the pair's UUID, and a second claim of the same launch is dropped.
 func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 	*req = *core.ContextWithRequestTime(req, time.Now())
 	metadata := make(map[string]any)
@@ -230,14 +214,21 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 		return fmt.Errorf("generating uuid for request : %w", err)
 	}
 
-	// Requests coming from launchpad will have x-launchpad-id set as a header
-	if isLaunchpad, launchpadID := isLaunchpad(req); isLaunchpad {
-		metadata["launchpad"] = true
-		metadata["launchpad_id"] = launchpadID
-		*req = *core.ContextWithLaunchpadID(req, launchpadID)
-
-		// Header is removed after processing
-		req.Header.Del("x-launchpad-id")
+	// An internal request naming a pending, unclaimed launch becomes that
+	// launch's pair. Any other launch id is ignored and the request is ordinary traffic.
+	if launchID, ok := requestedLaunchID(req.Context()); ok {
+		launch, claim := proxy.claimLaunch(launchID)
+		switch claim {
+		case launchClaimed:
+			uuid = launch.ID
+			metadata["launchpad"] = true
+			metadata["launchpad_id"] = launch.LaunchpadID
+			*req = *core.ContextWithLaunchpadID(req, launch.LaunchpadID)
+		case launchAlreadyClaimed:
+			proxy.WriteLog("WARN", fmt.Sprintf("Dropped a second claim of launch %s", launchID))
+			martian.NewContext(req).SkipRoundTrip()
+			return ErrDropped
+		}
 	}
 
 	if runID, exists := armoryRunID(req); exists {

@@ -426,6 +426,8 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 		marasi.WithWebSocketProgressHandler(serviceServer.HandleWebSocketProgress),
 		marasi.WithWebSocketCloseHandler(serviceServer.HandleWebSocketClose),
 		marasi.WithWebSocketInterceptHandler(serviceServer.HandleWebSocketIntercept),
+		marasi.WithLaunchStartedHandler(serviceServer.HandleLaunchStarted),
+		marasi.WithLaunchFinishedHandler(serviceServer.HandleLaunchFinished),
 	); handlerErr != nil {
 		return fmt.Errorf("installing traffic event handlers: %w", handlerErr)
 	}
