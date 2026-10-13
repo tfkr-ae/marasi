@@ -79,8 +79,14 @@ strict suite.
 
 ### Autobahn checks
 
-Autobahn runs locally, not on pull requests. Run it on a change to
-`websocket/`, `websocket*.go`, or `internal/autobahn/`:
+The Autobahn workflow in GitHub Actions runs the full suite on every pull
+request that changes `websocket/`, `websocket*.go`, `internal/autobahn/`, or
+the workflow, every Monday, and when you start it manually. A job fails on any
+deviation from the committed baseline. On a failure, the job's artifact holds
+the per-case reports, Marasi's log, and a resource log, and the job log shows
+kernel OOM messages.
+
+Run it locally on a change to the same paths:
 
 1. Before you push, run the quick check. It skips the large-message (9.x) and
    compression (12.x, 13.x) sections and takes about 7 minutes:
@@ -101,9 +107,6 @@ Both commands exit non-zero on a deviation from the committed baseline. The
 unrelated to the change, run `make autobahn-baseline` and compare the
 baseline diff before you commit it: the baseline changes only with the pinned
 Autobahn image or the harness.
-
-The Autobahn workflow in GitHub Actions runs only when you start it
-manually, to investigate the suite on a GitHub runner.
 
 A build without Make uses `go build -o marasi ./cmd/marasi`, or
 `go build -o marasi.exe ./cmd/marasi` on Windows. If a parent `go.work` excludes
