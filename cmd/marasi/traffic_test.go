@@ -837,6 +837,124 @@ func TestLaunchpadCancelCommand(t *testing.T) {
 	})
 }
 
+func TestLaunchpadPendingCommand(t *testing.T) {
+	binary := buildMarasi(t)
+	launchpadID := "01938032-1b17-7243-b035-e6a9f4645904"
+	first := "01938034-298e-73dc-b640-eb321b621154"
+	second := "01938035-298e-73dc-b640-eb321b621154"
+	pending := `{"items":[{"launch_id":"` + first + `","launchpad_id":"` + launchpadID + `","status":"pending"},{"launch_id":"` + second + `","launchpad_id":"` + launchpadID + `","status":"pending"}]}` + "\n"
+
+	t.Run("should list pending launches one per row", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, pending)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "pending")
+
+		want := first + "  " + launchpadID + "  pending\n" + second + "  " + launchpadID + "  pending\n"
+		got := sent.snapshot()
+		if err != nil || stdout != want || stderr != "" || got.Method != http.MethodGet || got.Path != "/launch" {
+			t.Fatalf("\nwanted:\nGET /launch and stdout %q\ngot:\n%s %s, stdout %q, stderr %q, error %v", want, got.Method, got.Path, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should print nothing when no launch is pending", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[]}`+"\n")
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "pending")
+
+		if err != nil || stdout != "" || stderr != "" {
+			t.Fatalf("\nwanted:\nempty stdout and stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+	})
+
+	t.Run("should pass the list through in JSON mode", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, pending)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "pending", "--json")
+
+		if err != nil || stdout != pending || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", pending, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should reject arguments", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		if _, _, err := runMarasi(binary, "--config-dir", configDir, "launchpad", "pending", first); err == nil {
+			t.Fatal("\nwanted:\ninvalid invocation\ngot:\naccepted an argument")
+		}
+	})
+}
+
+func TestLaunchpadStatusCommand(t *testing.T) {
+	binary := buildMarasi(t)
+	launchpadID := "01938032-1b17-7243-b035-e6a9f4645904"
+	launchID := "01938034-298e-73dc-b640-eb321b621154"
+	pending := `{"launch_id":"` + launchID + `","launchpad_id":"` + launchpadID + `","status":"pending"}` + "\n"
+	failed := `{"launch_id":"` + launchID + `","launchpad_id":"` + launchpadID + `","status":"failed","reason":"upstream_error"}` + "\n"
+
+	t.Run("should print a pending launch", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, pending)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "status", launchID)
+
+		want := "launch_id: " + launchID + "\nlaunchpad_id: " + launchpadID + "\nstatus: pending\n"
+		got := sent.snapshot()
+		if err != nil || stdout != want || stderr != "" || got.Method != http.MethodGet || got.Path != "/launch/"+launchID {
+			t.Fatalf("\nwanted:\nGET /launch/%s and stdout %q\ngot:\n%s %s, stdout %q, stderr %q, error %v", launchID, want, got.Method, got.Path, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should print a failed launch with its reason and exit zero", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, failed)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "status", launchID)
+
+		want := "launch_id: " + launchID + "\nlaunchpad_id: " + launchpadID + "\nstatus: failed\nreason: upstream_error\n"
+		if err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should pass the record through in JSON mode", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, failed)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "status", launchID, "--json")
+
+		if err != nil || stdout != failed || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", failed, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should exit non-zero with not_found for an unknown launch", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusNotFound, `{"error":"not_found"}`)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "status", launchID)
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || stdout != "" || !strings.Contains(stderr, "reading launch: not_found") {
+			t.Fatalf("\nwanted:\nexit 1 with stderr containing %q\ngot:\nstdout %q, stderr %q, error %v", "reading launch: not_found", stdout, stderr, err)
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "status", launchID, "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "reading launch: not_found")
+	})
+
+	t.Run("should reject a missing or malformed launch id", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		for _, args := range [][]string{{"launchpad", "status"}, {"launchpad", "status", "not-a-uuid"}} {
+			commandArgs := append([]string{"--config-dir", configDir}, args...)
+			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
+				t.Fatalf("\nwanted:\ninvalid invocation\ngot:\naccepted %v", args)
+			}
+		}
+	})
+}
+
 // fakeLaunchService serves a launch start, then answers each read of the launch
 // with the next record in reads, repeating the last one. Cancel answers with
 // cancelStatus and cancelBody. readSeen is closed on the first read.
