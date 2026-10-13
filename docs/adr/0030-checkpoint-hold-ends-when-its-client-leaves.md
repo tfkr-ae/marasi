@@ -1,0 +1,5 @@
+# A Checkpoint hold ends when its client leaves
+
+ADR-0026 cancels the request context when a client disconnects, but a Checkpoint hold waited only for a forward or drop, so a request or response held for a client that had left stayed in Checkpoint until someone resolved it, and every connected GUI kept showing it. An HTTP hold now also ends when its request context is cancelled, and a WebSocket message hold ends when its connection closes. The item is removed and published as `checkpoint.dropped`, and the held item fails closed the same way as a user drop (ADR-0025). Removal happens under the Checkpoint lock, so exactly one of a forward, a drop, or the abandon resolves an item, and a forward or drop that wins the race stands. Cancelling a launch relies on this to free a launch held at Checkpoint (ADR-0031).
+
+**Considered options:** drop the Checkpoint item only when a launch is cancelled. Rejected because a browser tab closed while its request is held leaves the same ghost item, and one cancellation path through the request context covers both.
