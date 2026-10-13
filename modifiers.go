@@ -597,7 +597,12 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		return fmt.Errorf("flushing websocket handshake response: %w", err)
 	}
 
-	clientConnection := proxy.clientConnection(res.Request.RemoteAddr)
+	// Both peers are read through a watch, above TLS and buffering, so a watch reads
+	// frames and can tell a peer that closes after its close frame from one that leaves.
+	watchedClient := marasiws.NewWatchedStream(&marasiws.HijackedConn{
+		Conn:       client,
+		ReadWriter: bufferedClient,
+	})
 	watchedUpstream := marasiws.NewWatchedStream(upstream)
 	var connection *marasiws.Connection
 	process := func(message *marasiws.Message) error {
@@ -614,20 +619,19 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 				err := proxy.WebSocketInterceptor.Intercept(message, func(snapshot domain.WebSocketMessage) {
 					proxy.noteWebSocketHold(message)
 					// Nothing reads the sender while its message is held, so watch it: a
-					// client or origin that closes abandons the hold (ADR-0030). The other
-					// side is still read, so its close ends the connection.
+					// client or origin that leaves abandons the hold (ADR-0030). The other
+					// side is still read, so its close ends the connection. A sender that
+					// closes after its close frame has not left (see WatchedStream).
 					//
-					// A close frame is not watched: its sender closes the socket next as
-					// part of closing (RFC 6455 7.1.1, 7.1.7), and abandoning would drop
+					// A held close frame is not watched: its sender closes the socket next
+					// as part of closing (RFC 6455 7.1.1, 7.1.7), and abandoning would drop
 					// the close frame the other side needs. The other side's close still
 					// ends that hold.
 					abandon := func() { proxy.abandonWebSocketCheckpoint(connectionID) }
 					switch {
 					case snapshot.Opcode == marasiws.OpClose:
 					case message.Direction == marasiws.DirectionFromClient:
-						if clientConnection != nil {
-							clientConnection.Watch(abandon)
-						}
+						watchedClient.Watch(abandon)
 					case message.Direction == marasiws.DirectionFromServer:
 						watchedUpstream.Watch(abandon)
 					}
@@ -662,15 +666,11 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		return nil
 	}
 
-	clientStream := &marasiws.HijackedConn{
-		Conn:       client,
-		ReadWriter: bufferedClient,
-	}
 	connection = marasiws.NewConnection(
 		connectionID,
 		requestID,
-		clientStream,
-		clientStream,
+		watchedClient,
+		watchedClient,
 		watchedUpstream,
 		process,
 	)
