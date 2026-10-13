@@ -840,6 +840,7 @@ type webSocketCheckpointHarness struct {
 	origin       *httptest.Server
 	originConns  chan net.Conn
 	originFrames chan marasiws.Frame
+	originCloses chan marasiws.Frame
 	held         chan domain.WebSocketMessage
 	abandoned    chan domain.CheckpointItem
 	messages     chan domain.WebSocketMessage
@@ -871,6 +872,7 @@ func newWebSocketCheckpointHarnessFrames(
 	harness := &webSocketCheckpointHarness{
 		originConns:  make(chan net.Conn, 4),
 		originFrames: make(chan marasiws.Frame, 8),
+		originCloses: make(chan marasiws.Frame, 1),
 		held:         make(chan domain.WebSocketMessage, 4),
 		abandoned:    make(chan domain.CheckpointItem, 4),
 		messages:     make(chan domain.WebSocketMessage, 4),
@@ -896,7 +898,11 @@ func newWebSocketCheckpointHarnessFrames(
 		}
 		for {
 			frame, err := marasiws.ReadFrame(buffered)
-			if err != nil || frame.Opcode == marasiws.OpClose {
+			if err != nil {
+				return
+			}
+			if frame.Opcode == marasiws.OpClose {
+				harness.originCloses <- frame
 				return
 			}
 			harness.originFrames <- frame
@@ -1084,6 +1090,45 @@ func TestProxy_CheckpointWebSocketHoldEndsWhenConnectionCloses(t *testing.T) {
 		assertWebSocketAbandoned(t, harness, held)
 	})
 
+	t.Run("should keep a held close frame when its client closes after sending it", func(t *testing.T) {
+		// A client that fails the connection sends its close frame and then closes the
+		// TCP connection (RFC 6455 7.1.7), so that close must not drop the close frame.
+		harness := newWebSocketCheckpointHarness(t, nil, nil)
+		harness.proxy.SetWebSocketIntercept(true)
+		client, buffered := harness.open(t)
+		defer client.Close()
+
+		closePayload := []byte{0x03, 0xef}
+		if err := marasiws.WriteFrame(buffered, marasiws.Frame{Fin: true, Opcode: marasiws.OpClose, Payload: closePayload}, true); err != nil {
+			t.Fatalf("writing close frame: %v", err)
+		}
+		if err := buffered.Flush(); err != nil {
+			t.Fatalf("flushing close frame: %v", err)
+		}
+		held := receiveHeldWebSocketMessage(t, harness.held)
+		if held.Opcode != int(marasiws.OpClose) {
+			t.Fatalf("wanted held opcode: %d\ngot: %d", marasiws.OpClose, held.Opcode)
+		}
+		client.Close()
+		select {
+		case item := <-harness.abandoned:
+			t.Fatalf("a held close frame was abandoned when its client closed: %s", item.ID)
+		case <-time.After(200 * time.Millisecond):
+		}
+		if err := harness.proxy.ForwardCheckpoint(held.ID, CheckpointForward{}); err != nil {
+			t.Fatalf("forwarding: %v", err)
+		}
+
+		select {
+		case frame := <-harness.originCloses:
+			if !bytes.Equal(frame.Payload, closePayload) {
+				t.Fatalf("wanted: close %x\ngot: close %x", closePayload, frame.Payload)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the forwarded close frame did not reach the origin")
+		}
+	})
+
 	t.Run("should let a forward that resolved the message first stand", func(t *testing.T) {
 		clients := make(chan net.Conn, 1)
 		// The forward lands before the client leaves, so the close finds nothing to abandon.
@@ -1209,6 +1254,42 @@ func TestProxy_CheckpointWebSocketHoldEndsWhenOriginCloses(t *testing.T) {
 		case frame := <-harness.originFrames:
 			t.Fatalf("the origin received an abandoned message: %q", frame.Payload)
 		case <-time.After(200 * time.Millisecond):
+		}
+	})
+
+	t.Run("should keep a held close frame when its origin closes after sending it", func(t *testing.T) {
+		// RFC 6455 has the server close the TCP connection right after its close frame,
+		// so that close ends the handshake rather than leaving the hold.
+		closeFrame := marasiws.Frame{Fin: true, Opcode: marasiws.OpClose, Payload: []byte{0x03, 0xe8}}
+		harness := newWebSocketCheckpointHarnessFrames(t, []marasiws.Frame{closeFrame}, nil)
+		holdServerMessages(t, harness)
+		client, buffered := harness.open(t)
+		defer client.Close()
+		origin := receiveOriginConnection(t, harness)
+
+		held := receiveHeldWebSocketMessage(t, harness.held)
+		if held.Opcode != int(marasiws.OpClose) {
+			t.Fatalf("wanted held opcode: %d\ngot: %d", marasiws.OpClose, held.Opcode)
+		}
+		origin.Close()
+		select {
+		case item := <-harness.abandoned:
+			t.Fatalf("a held close frame was abandoned when its origin closed: %s", item.ID)
+		case <-time.After(200 * time.Millisecond):
+		}
+		if err := harness.proxy.ForwardCheckpoint(held.ID, CheckpointForward{}); err != nil {
+			t.Fatalf("forwarding: %v", err)
+		}
+
+		if err := client.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatalf("setting client read deadline: %v", err)
+		}
+		frame, err := marasiws.ReadFrame(buffered.Reader)
+		if err != nil {
+			t.Fatalf("reading the close frame: %v", err)
+		}
+		if frame.Opcode != marasiws.OpClose || !bytes.Equal(frame.Payload, closeFrame.Payload) {
+			t.Fatalf("wanted: close %x\ngot: opcode %d %x", closeFrame.Payload, frame.Opcode, frame.Payload)
 		}
 	})
 

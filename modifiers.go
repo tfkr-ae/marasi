@@ -616,13 +616,19 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 					// Nothing reads the sender while its message is held, so watch it: a
 					// client or origin that closes abandons the hold (ADR-0030). The other
 					// side is still read, so its close ends the connection.
+					//
+					// A close frame is not watched: its sender closes the socket next as
+					// part of closing (RFC 6455 7.1.1, 7.1.7), and abandoning would drop
+					// the close frame the other side needs. The other side's close still
+					// ends that hold.
 					abandon := func() { proxy.abandonWebSocketCheckpoint(connectionID) }
-					switch message.Direction {
-					case marasiws.DirectionFromClient:
+					switch {
+					case snapshot.Opcode == marasiws.OpClose:
+					case message.Direction == marasiws.DirectionFromClient:
 						if clientConnection != nil {
 							clientConnection.Watch(abandon)
 						}
-					case marasiws.DirectionFromServer:
+					case message.Direction == marasiws.DirectionFromServer:
 						watchedUpstream.Watch(abandon)
 					}
 					if proxy.OnWebSocketIntercept == nil {
