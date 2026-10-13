@@ -30,6 +30,7 @@ type launchEntry struct {
 	outcome    domain.Launch      // terminal state reported by the proxy client
 	failReason string             // failure the pipeline recorded; wins over outcome
 	duplicate  bool               // storing the pair hit an existing row
+	cancelled  bool               // CancelLaunch was called while pending; wins over everything
 }
 
 type launchClaim int
@@ -130,6 +131,77 @@ func (proxy *Proxy) GetLaunch(id uuid.UUID) (domain.Launch, error) {
 		return domain.Launch{}, domain.ErrLaunchNotFound
 	}
 	return entry.launch, nil
+}
+
+// CancelLaunch cancels a pending launch by cancelling the proxy client's
+// request context, and returns the launch as it will end: cancelled.
+//
+// A launch that has already reached a terminal state is returned with its
+// final state and domain.ErrLaunchFinished. An id that names no launch
+// returns domain.ErrLaunchNotFound.
+func (proxy *Proxy) CancelLaunch(id uuid.UUID) (domain.Launch, error) {
+	proxy.launchMu.Lock()
+	entry, ok := proxy.launches[id]
+	if ok {
+		if entry.outcome.Status != "" {
+			final := entry.final()
+			proxy.launchMu.Unlock()
+			return final, domain.ErrLaunchFinished
+		}
+		entry.cancelled = true
+		launch := entry.launch
+		proxy.launchMu.Unlock()
+		entry.cancel()
+		launch.Status = domain.LaunchCancelled
+		return launch, nil
+	}
+	proxy.launchMu.Unlock()
+
+	stored, err := proxy.storedLaunch(id)
+	if err != nil {
+		return domain.Launch{}, err
+	}
+	return stored, domain.ErrLaunchFinished
+}
+
+// final returns the launch's terminal state. A cancel wins over everything,
+// and a failure the pipeline recorded wins over the proxy client's outcome.
+// It must be called with launchMu held, or after the entry left the registry.
+func (entry *launchEntry) final() domain.Launch {
+	final := entry.outcome
+	final.ID, final.LaunchpadID = entry.launch.ID, entry.launch.LaunchpadID
+	switch {
+	case entry.cancelled:
+		final.Status, final.Reason = domain.LaunchCancelled, ""
+	case entry.failReason != "":
+		final.Status, final.Reason = domain.LaunchFailed, entry.failReason
+	}
+	return final
+}
+
+// storedLaunch reads a finished launch from its stored pair's metadata.
+// It returns domain.ErrLaunchNotFound when the pair is missing or did not
+// come from a finished launch.
+func (proxy *Proxy) storedLaunch(id uuid.UUID) (domain.Launch, error) {
+	if proxy.TrafficRepo == nil {
+		return domain.Launch{}, domain.ErrLaunchNotFound
+	}
+	metadata, err := proxy.TrafficRepo.GetMetadata(id)
+	if err != nil {
+		return domain.Launch{}, domain.ErrLaunchNotFound
+	}
+	outcome, ok := metadata["launch"].(map[string]any)
+	if !ok {
+		return domain.Launch{}, domain.ErrLaunchNotFound
+	}
+	status, _ := outcome["status"].(string)
+	if status == "" {
+		return domain.Launch{}, domain.ErrLaunchNotFound
+	}
+	reason, _ := outcome["reason"].(string)
+	launchpadID, _ := metadata["launchpad_id"].(string)
+	launchpad, _ := uuid.Parse(launchpadID)
+	return domain.Launch{ID: id, LaunchpadID: launchpad, Status: domain.LaunchStatus(status), Reason: reason}, nil
 }
 
 // registerLaunch adds a pending launch under an id the registry does not already hold.
@@ -282,10 +354,7 @@ func (proxy *Proxy) finishLaunch(id uuid.UUID) {
 		return
 	}
 
-	final := entry.outcome
-	if entry.failReason != "" {
-		final.Status, final.Reason = domain.LaunchFailed, entry.failReason
-	}
+	final := entry.final()
 	if !entry.duplicate {
 		if err := proxy.applyLaunchOutcome(final); err != nil {
 			log.Printf("recording launch %s outcome : %v", id, err)

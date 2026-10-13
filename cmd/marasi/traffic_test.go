@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -762,6 +763,75 @@ func TestLaunchpadCommands(t *testing.T) {
 		startCannedControlAPI(t, configDir, "api", http.StatusNotFound, `{"error":"not_found"}`)
 		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "api", "launchpad", "get", id, "--json")
 		assertJSONCommandError(t, stdout, stderr, err, "getting launchpad: not_found")
+	})
+}
+
+func TestLaunchpadCancelCommand(t *testing.T) {
+	binary := buildMarasi(t)
+	launchID := "01938034-298e-73dc-b640-eb321b621154"
+	cancelled := `{"launch_id":"` + launchID + `","launchpad_id":"01938032-1b17-7243-b035-e6a9f4645904","status":"cancelled"}` + "\n"
+
+	t.Run("should cancel a launch by id", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, cancelled)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "cancel", launchID)
+
+		got := sent.snapshot()
+		if err != nil || stdout != "" || stderr != "launch "+launchID+" cancelled\n" || got.Method != http.MethodPost || got.Path != "/launch/"+launchID+"/cancel" {
+			t.Fatalf("\nwanted:\nPOST /launch/%s/cancel and success on stderr\ngot:\n%s %s, stdout %q, stderr %q, error %v", launchID, got.Method, got.Path, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should pass the cancelled record through in JSON mode", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, cancelled)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "cancel", launchID, "--json")
+
+		if err != nil || stdout != cancelled || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", cancelled, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should exit non-zero with the final status when the launch already finished", func(t *testing.T) {
+		finished := `{"error":"launch_finished","launch_id":"` + launchID + `","launchpad_id":"01938032-1b17-7243-b035-e6a9f4645904","status":"failed","reason":"upstream_error"}` + "\n"
+		want := "cancelling launch: launch_finished: launch " + launchID + " is failed (upstream_error)"
+
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusConflict, finished)
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "cancel", launchID)
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || stdout != "" || !strings.Contains(stderr, want) {
+			t.Fatalf("\nwanted:\nexit 1 with stderr containing %q\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "cancel", launchID, "--json")
+		assertJSONCommandError(t, stdout, stderr, err, want)
+	})
+
+	t.Run("should exit non-zero with not_found for an unknown launch", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusNotFound, `{"error":"not_found"}`)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "cancel", launchID)
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || stdout != "" || !strings.Contains(stderr, "cancelling launch: not_found") {
+			t.Fatalf("\nwanted:\nexit 1 with stderr containing %q\ngot:\nstdout %q, stderr %q, error %v", "cancelling launch: not_found", stdout, stderr, err)
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "cancel", launchID, "--json")
+		assertJSONCommandError(t, stdout, stderr, err, "cancelling launch: not_found")
+	})
+
+	t.Run("should reject a missing or malformed launch id", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		for _, args := range [][]string{{"launchpad", "cancel"}, {"launchpad", "cancel", "not-a-uuid"}} {
+			commandArgs := append([]string{"--config-dir", configDir}, args...)
+			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
+				t.Fatalf("\nwanted:\ninvalid invocation\ngot:\naccepted %v", args)
+			}
+		}
 	})
 }
 

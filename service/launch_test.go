@@ -125,4 +125,54 @@ func TestLaunchControlAPI(t *testing.T) {
 		assertLaunchpadError(t, requestLaunchpad(server, http.MethodGet, "/launch/0193802f-f0e7-73d9-a764-06d21e367809", ""), http.StatusNotFound, "not_found")
 		assertLaunchpadError(t, requestLaunchpad(server, http.MethodGet, "/launch/not-a-uuid", ""), http.StatusBadRequest, "bad_request")
 	})
+
+	t.Run("should cancel a pending launch and publish launch.cancelled", func(t *testing.T) {
+		received := make(chan struct{}, 1)
+		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			received <- struct{}{}
+			<-r.Context().Done()
+		}))
+		defer origin.Close()
+		server := newLaunchServer(t, launchpadID, origin)
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		id := startLaunch(t, server, launchpadID, launchBody(origin, "/slow"))
+		<-received
+
+		record := `{"launch_id":"` + id.String() + `","launchpad_id":"` + launchpadID.String() + `","status":"cancelled"}`
+		if response := requestLaunchpad(server, http.MethodPost, "/launch/"+id.String()+"/cancel", ""); response.Code != http.StatusOK || response.Body.String() != record+"\n" {
+			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", record, response.Code, response.Body.String())
+		}
+		nextEvent(subscriber, 5*time.Second)
+		if got, want := nextEvent(subscriber, 5*time.Second), "launch.cancelled "+record; got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should refuse to cancel a finished launch with its final status", func(t *testing.T) {
+		id := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+		repo := &stubTrafficRepository{row: &domain.RequestResponseRow{
+			Request: domain.ProxyRequest{ID: id},
+			Metadata: map[string]any{
+				"launchpad":    true,
+				"launchpad_id": launchpadID.String(),
+				"launch":       map[string]any{"status": "failed", "reason": "upstream_error"},
+			},
+		}}
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+
+		response := requestLaunchpad(server, http.MethodPost, "/launch/"+id.String()+"/cancel", "")
+
+		want := `{"error":"launch_finished","launch_id":"` + id.String() + `","launchpad_id":"` + launchpadID.String() + `","status":"failed","reason":"upstream_error"}` + "\n"
+		if response.Code != http.StatusConflict || response.Body.String() != want {
+			t.Fatalf("\nwanted:\n409 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("should not cancel unknown or bad ids", func(t *testing.T) {
+		server := newTestServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
+		assertLaunchpadError(t, requestLaunchpad(server, http.MethodPost, "/launch/0193802f-f0e7-73d9-a764-06d21e367809/cancel", ""), http.StatusNotFound, "not_found")
+		assertLaunchpadError(t, requestLaunchpad(server, http.MethodPost, "/launch/not-a-uuid/cancel", ""), http.StatusBadRequest, "bad_request")
+	})
 }

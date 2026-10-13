@@ -553,6 +553,11 @@ func WithBasePipeline() func(*Proxy) error {
 				if release, ok := res.Request.Context().Value(projectReleaseKey{}).(func()); ok {
 					defer release()
 				}
+				// A launch whose client left was cancelled or interrupted. Its
+				// round trip was abandoned, so it has no response to process or store.
+				if _, launch := core.LaunchpadIDFromContext(res.Request.Context()); launch && res.Request.Context().Err() != nil {
+					return nil
+				}
 				err := proxy.Modifiers.ModifyResponse(res)
 				if err == nil || errors.Is(err, ErrSkipPipeline) {
 					return nil
