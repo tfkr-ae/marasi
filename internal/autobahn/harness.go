@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"time"
 )
@@ -148,6 +149,12 @@ func (c Config) startInstance(ctx context.Context, run string) (*Instance, func(
 			stops[i]()
 		}
 	}
+	// The instance log goes into the reports, so a failed run keeps it.
+	if err := os.MkdirAll(filepath.Join(c.OutDir, run), 0o755); err != nil {
+		stop()
+		return nil, nil, err
+	}
+	instance.LogCopy = filepath.Join(c.OutDir, run, "marasi.log")
 	switch run {
 	case RunProxy:
 	case RunCheckpointForward, RunCheckpointEdit:
