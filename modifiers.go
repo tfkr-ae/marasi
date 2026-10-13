@@ -284,7 +284,11 @@ func OverrideWaypointsModifier(proxy *Proxy, req *http.Request) error {
 // CompassRequestModifier will run the `processRequest` function in the compass extension to determine if the request is in scope.
 // After `processRequest`, it will check if the request is passed through (nil), skipped (`ErrSkipPipeline`), or dropped (`ErrDropped`).
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
+// A launch is deliberate and must appear in its launchpad, so Compass does not see it (ADR-0031).
 func CompassRequestModifier(proxy *Proxy, req *http.Request) error {
+	if id, ok := requestedLaunchID(req.Context()); ok && proxy.launchAwaitingClaim(id) {
+		return nil
+	}
 	if compassExt, ok := proxy.GetExtension("compass"); ok {
 		if !compassExt.MetadataSnapshot().Enabled {
 			return nil
@@ -782,7 +786,11 @@ func CompressedResponseModifier(proxy *Proxy, res *http.Response) error {
 // CompassResponseModifier will run the `processResponse` function in the compass extension to determine if the response is in scope.
 // After `processResponse`, it will check if the response is passed through (nil), skipped (`ErrSkipPipeline`), or dropped (`ErrDropped`).
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
+// A launch's response is not seen by Compass either.
 func CompassResponseModifier(proxy *Proxy, res *http.Response) error {
+	if _, launch := core.LaunchpadIDFromContext(res.Request.Context()); launch {
+		return nil
+	}
 	if compassExt, ok := proxy.GetExtension("compass"); ok {
 		if !compassExt.MetadataSnapshot().Enabled {
 			return nil

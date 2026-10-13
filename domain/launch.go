@@ -35,6 +35,8 @@ const (
 	LaunchReasonUpstreamError = "upstream_error"
 	// LaunchReasonNetworkError means the launch could not be sent through the proxy.
 	LaunchReasonNetworkError = "network_error"
+	// LaunchReasonDropped means an extension or a Checkpoint drop stopped the launch in the proxy.
+	LaunchReasonDropped = "dropped"
 )
 
 // Launch is a raw request sent from a launchpad through the proxy.

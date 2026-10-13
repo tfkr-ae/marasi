@@ -537,6 +537,9 @@ func WithBasePipeline() func(*Proxy) error {
 				*req = *req.WithContext(ctx)
 				proxy.watchClient(req)
 				err = proxy.Modifiers.ModifyRequest(req)
+				if errors.Is(err, ErrDropped) {
+					proxy.recordLaunchDropped(req)
+				}
 				if err == nil || errors.Is(err, ErrDropped) || errors.Is(err, ErrSkipPipeline) {
 					if err != nil {
 						release()
@@ -564,6 +567,7 @@ func WithBasePipeline() func(*Proxy) error {
 					return nil
 				}
 				if errors.Is(err, ErrDropped) {
+					proxy.recordLaunchDropped(res.Request)
 					proxy.markDroppedWebSocketHandshake(res, err)
 					if session, ok := core.SessionFromContext(res.Request.Context()); ok {
 						conn, _, err := session.Hijack()
