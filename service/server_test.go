@@ -791,7 +791,7 @@ func TestLaunchpadControlAPI(t *testing.T) {
 		assertLaunchpadError(t, requestLaunchpad(missingPair, http.MethodPost, "/launchpad/"+id.String()+"/link", `{"request_id":"`+requestID.String()+`"}`), http.StatusNotFound, "not_found")
 	})
 
-	t.Run("should launch a working copy without publishing a launch event", func(t *testing.T) {
+	t.Run("should launch a working copy and return its launch id", func(t *testing.T) {
 		received := make(chan *http.Request, 1)
 		origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			received <- r
@@ -802,22 +802,18 @@ func TestLaunchpadControlAPI(t *testing.T) {
 		raw := "POST /login HTTP/1.1\r\nHost: " + host + "\r\nContent-Length: 4\r\n\r\nbody"
 		repo := &stubLaunchpadRepository{items: map[uuid.UUID]*domain.Launchpad{id: {ID: id, Name: "Login"}}}
 		server := newTestServer(&marasi.Proxy{LaunchpadRepo: repo, Client: origin.Client()}, func() {})
-		subscriber := server.events.subscribe()
-		defer server.events.unsubscribe(subscriber)
 
 		body := `{"raw":"` + base64.StdEncoding.EncodeToString([]byte(raw)) + `","scheme":"https"}`
 		response := requestLaunchpad(server, http.MethodPost, "/launchpad/"+id.String()+"/launch", body)
-		if response.Code != http.StatusOK || response.Body.String() != "{\"status\":\"launched\"}\n" {
-			t.Fatalf("\nwanted:\n200 launched\ngot:\n%d %s", response.Code, response.Body.String())
+		var started struct {
+			LaunchID string `json:"launch_id"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &started); err != nil || response.Code != http.StatusOK || response.Body.String() != `{"launch_id":"`+started.LaunchID+`","status":"pending"}`+"\n" {
+			t.Fatalf("\nwanted:\n200 pending launch\ngot:\n%d %s", response.Code, response.Body.String())
 		}
 		request := <-received
-		if request.Method != http.MethodPost || request.URL.Path != "/login" || request.Header.Get("x-launchpad-id") != id.String() {
-			t.Fatalf("\nwanted:\nPOST /login with launchpad %s\ngot:\n%s %s with launchpad %s", id, request.Method, request.URL.Path, request.Header.Get("x-launchpad-id"))
-		}
-		select {
-		case event := <-subscriber.events:
-			t.Fatalf("\nwanted:\nno launch event\ngot:\n%s", event.name)
-		default:
+		if request.Method != http.MethodPost || request.URL.Path != "/login" || request.Header.Get("x-marasi-launch-id") != started.LaunchID {
+			t.Fatalf("\nwanted:\nPOST /login with launch %s\ngot:\n%s %s with launch %s", started.LaunchID, request.Method, request.URL.Path, request.Header.Get("x-marasi-launch-id"))
 		}
 	})
 
