@@ -766,6 +766,63 @@ func TestProxy_GetLaunchAfterItFinished(t *testing.T) {
 	})
 }
 
+// outcomeGate holds the database writer while it stores a launch's outcome.
+type outcomeGate struct {
+	domain.TrafficRepository
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (gate *outcomeGate) UpdateMetadata(metadata map[string]any, ids ...uuid.UUID) error {
+	if _, ok := metadata["launch"]; ok {
+		close(gate.entered)
+		<-gate.release
+	}
+	return gate.TrafficRepository.UpdateMetadata(metadata, ids...)
+}
+
+func TestProxy_LaunchReadableWhileItsOutcomeIsStored(t *testing.T) {
+	t.Run("should read and refuse to cancel a finished launch before its outcome is stored", func(t *testing.T) {
+		gate := &outcomeGate{entered: make(chan struct{}), release: make(chan struct{})}
+		var release sync.Once
+		h := startLaunchHarness(t, func(proxy *Proxy) error {
+			gate.TrafficRepository = proxy.TrafficRepo
+			proxy.TrafficRepo = gate
+			return nil
+		})
+		t.Cleanup(func() { release.Do(func() { close(gate.release) }) })
+		origin := startLaunchOrigin(t)
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/done"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+		select {
+		case <-gate.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for the launch outcome to be stored")
+		}
+
+		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchCompleted}
+		if got, err := h.proxy.GetLaunch(id); err != nil || got != want {
+			t.Fatalf("\nwanted:\nGetLaunch %+v, nil\ngot:\n%+v, %v", want, got, err)
+		}
+		if got, err := h.proxy.CancelLaunch(id); !errors.Is(err, domain.ErrLaunchFinished) || got != want {
+			t.Fatalf("\nwanted:\nCancelLaunch %+v, %v\ngot:\n%+v, %v", want, domain.ErrLaunchFinished, got, err)
+		}
+		if got := h.proxy.Launches(); len(got) != 0 {
+			t.Fatalf("\nwanted:\nno pending launches\ngot:\n%v", got)
+		}
+
+		release.Do(func() { close(gate.release) })
+		if got := h.waitFinished(t); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		if got, err := h.proxy.GetLaunch(id); err != nil || got != want {
+			t.Fatalf("\nwanted:\nGetLaunch %+v, nil\ngot:\n%+v, %v", want, got, err)
+		}
+	})
+}
+
 // blockingWorkshop loads script into the workshop extension. Cleanup cancels
 // the runtime, so a hook that never returns cannot block proxy.Close.
 func (h *launchHarness) blockingWorkshop(t *testing.T, script string) *extensions.Runtime {

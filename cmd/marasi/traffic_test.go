@@ -945,15 +945,15 @@ func TestLaunchpadLaunchCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("should read a launch that finished before the command looked", func(t *testing.T) {
+	t.Run("should exit non-zero at once when the launch cannot be read", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		cancelled := record("cancelled", "")
-		startFakeLaunchService(t, configDir, launchpadID, launchID, []string{"", cancelled}, http.StatusOK, "")
+		fake := startFakeLaunchService(t, configDir, launchpadID, launchID, []string{"", record("cancelled", "")}, http.StatusOK, "")
 
 		stdout, stderr, err := run(launch(configDir, "--json"))
 
-		if err != nil || stdout != cancelled || stderr != "" {
-			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", cancelled, stdout, stderr, err)
+		assertJSONCommandError(t, stdout, stderr, err, "reading launch: not_found")
+		if paths := fake.paths(); len(paths) != 2 {
+			t.Fatalf("\nwanted:\none start and one read\ngot:\n%v", paths)
 		}
 	})
 
