@@ -5,7 +5,7 @@ Users record findings in the open project, optionally point them at a test case,
 ## Sub-features
 
 - Create with `finding create --title`.
-- List newest first with `finding list`.
+- List newest first with `finding list`. Order is by creation time to the second; findings created in the same second keep creation order.
 - Read one finding and its linked traffic with `finding get`.
 - List linked traffic oldest-first with `finding list-requests UUID`.
 - Change title, severity, CVSS fields, writeup, treatment plan, or related test case with `finding update`.
