@@ -53,7 +53,7 @@ func init() {
 
 var launchpadCmd = &cobra.Command{
 	Use:   "launchpad",
-	Short: "Create launchpads and send raw HTTP requests",
+	Short: "Create launchpads and launch raw HTTP requests",
 }
 
 var launchpadCreateCmd = &cobra.Command{
