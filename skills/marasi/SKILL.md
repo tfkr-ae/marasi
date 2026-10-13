@@ -71,11 +71,13 @@ A capture is complete when `traffic get` returns the matching request and respon
 - `host`, `method`, `scheme`, `path` and `content_type` use `=` or `!=` with exact case. A `*` at the start or end of the value matches anything there.
 - `status_code` and the timestamps take comparisons. Timestamps are quoted RFC 3339.
 - `metadata.<key>` compares the JSON value at that key and is type-strict. Quote strings, but leave booleans and numbers bare.
+- `launchpad` is launchpad membership. `launchpad = "<launchpad id>"` matches pairs in that launchpad, `launchpad != "<launchpad id>"` matches pairs not in it, including pairs in no launchpad, and `launchpad:*` matches pairs in any launchpad. It finds linked captured traffic as well as launched pairs, which `metadata.launchpad_id` does not.
 
 ```sh
 -q 'status_code >= 500 AND host = "*.example.com"'
 -q 'response_body:"password" OR response_head:"set-cookie"'
 -q 'metadata.launchpad = true'
+-q 'launchpad:* AND response_body:"token"'
 -q 'metadata.launch.status = "cancelled"'
 -q 'method = "POST" AND (path = "/api/*" OR path = "/graphql")'
 ```
@@ -93,7 +95,7 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 | Change listener address or pause capture | `listener` | `start` and `update` require both `--address` and `--port`. Stopping the listener leaves the service running. |
 | Find named project files | `project list` | Lists projects under the selected config directory. |
 | Annotate captured traffic | `notes`, `traffic metadata` | Metadata updates replace the JSON rather than merge it. |
-| Launch an edited HTTP request | `launchpad` | Create a launchpad, optionally link captured traffic, then launch raw HTTP bytes. `launch` requires `--scheme`, either `http` or `https`. It waits for the final record, and an interrupt cancels the launch. A failed launch exits non-zero with its id in the error. `--detach` returns the pending launch id at once; end it early with `launchpad cancel`. `launchpad pending` lists pending launches; `launchpad status` reads one, pending or finished. The launch id is the id of the traffic pair it stores. |
+| Launch an edited HTTP request | `launchpad` | Create a launchpad, optionally link captured traffic, then launch raw HTTP bytes. `launch` requires `--scheme`, either `http` or `https`. It waits for the final record, and an interrupt cancels the launch. A failed launch exits non-zero with its id in the error. `--detach` returns the pending launch id at once; end it early with `launchpad cancel`. `launchpad pending` lists pending launches; `launchpad status` reads one, pending or finished. The launch id is the id of the traffic pair it stores. `launchpad get -q` narrows a launchpad's entries with the same query as `traffic list -q`. |
 | Hold, edit, forward, or drop traffic | `checkpoint` | HTTP edits replace the whole raw request or response, not just its body. WebSocket edits replace the payload. Interception can leave clients waiting. |
 | Inspect or inject WebSocket messages | `websocket`, `traffic websocket` | Injection and close require a live connection. Choose direction and opcode explicitly. |
 | Redirect an upstream connection | `waypoint` | Maps an original host:port to an override host:port without changing DNS. |

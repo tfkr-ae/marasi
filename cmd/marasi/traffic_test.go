@@ -331,7 +331,7 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		for _, want := range []string{"-q, --query", "host", "method", "scheme", "path", "content_type", "status_code", "requested_at", "responded_at", "metadata.<key>", "request_head", "request_body", "response_head", "response_body", "response_body:\"password\"", "note:\"idor candidate\"", "metadata:\"workshop\"", "at least 3 characters", "OR binds tighter than AND"} {
+		for _, want := range []string{"-q, --query", "host", "method", "scheme", "path", "content_type", "status_code", "requested_at", "responded_at", "metadata.<key>", "request_head", "request_body", "response_head", "response_body", "response_body:\"password\"", "note:\"idor candidate\"", "metadata:\"workshop\"", "launchpad = \"<launchpad id>\"", "launchpad != \"<launchpad id>\"", "launchpad:*", "including pairs in no launchpad", "at least 3 characters", "OR binds tighter than AND"} {
 			if !strings.Contains(stdout, want) {
 				t.Fatalf("\nwanted help containing:\n%s\ngot:\n%s", want, stdout)
 			}
@@ -699,6 +699,46 @@ func TestLaunchpadCommands(t *testing.T) {
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
+	})
+
+	for _, flag := range []string{"--query", "-q"} {
+		t.Run("should send get "+flag+" as the q query parameter", func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"id":"`+id+`","name":"Login","description":"","items":[]}`)
+			_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "launchpad", "get", id, flag, `response_body:"token" AND status_code >= 500`)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			got := sent.snapshot()
+			want := "q=response_body%3A%22token%22+AND+status_code+%3E%3D+500"
+			if got.Method != http.MethodGet || got.Path != "/launchpad/"+id || got.RawQuery != want {
+				t.Fatalf("\nwanted:\nGET /launchpad/%s?%s\ngot:\n%s %s?%s", id, want, got.Method, got.Path, got.RawQuery)
+			}
+		})
+	}
+
+	t.Run("should send no q query parameter on get without --query", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"id":"`+id+`","name":"Login","description":"","items":[]}`)
+		if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "get", id); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got := sent.snapshot(); got.RawQuery != "" {
+			t.Fatalf("\nwanted:\nno query\ngot:\n%s", got.RawQuery)
+		}
+	})
+
+	t.Run("should print a get query error with its position", func(t *testing.T) {
+		want := `getting launchpad: invalid_query: "nope" is not a launchpad id; use a launchpad UUID at position 13`
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"invalid_query","message":"\"nope\" is not a launchpad id; use a launchpad UUID","position":13}`)
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "get", id, "-q", `launchpad = "nope"`)
+		if err == nil || stdout != "" || !strings.Contains(stderr, want) {
+			t.Fatalf("\nwanted:\nstderr containing %s\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "get", id, "-q", `launchpad = "nope"`, "--json")
+		assertJSONCommandError(t, stdout, stderr, err, want)
 	})
 
 	t.Run("should pass link success through in JSON mode", func(t *testing.T) {
@@ -1264,6 +1304,7 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	t.Helper()
 	oldJSON := jsonOutput
 	oldQuery, oldLimit, oldCursor := trafficListQueryText, trafficListLimit, trafficListCursor
+	oldLaunchpadQuery := launchpadGetQuery
 	oldConfigDir, oldInstance, oldInstancePath := configDir, instance, instancePath
 	var outBuf, errBuf bytes.Buffer
 	rootCmd.SetArgs(args)
@@ -1272,6 +1313,7 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	t.Cleanup(func() {
 		jsonOutput = oldJSON
 		trafficListQueryText, trafficListLimit, trafficListCursor = oldQuery, oldLimit, oldCursor
+		launchpadGetQuery = oldLaunchpadQuery
 		configDir, instance, instancePath = oldConfigDir, oldInstance, oldInstancePath
 		rootCmd.SetArgs(nil)
 		rootCmd.SetOut(nil)

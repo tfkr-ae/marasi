@@ -318,7 +318,7 @@ func TestLaunchpadRepo_GetLaunchpadRequests(t *testing.T) {
 
 		_ = testRequest(t, repo, nil)
 
-		requests, err := repo.GetLaunchpadRequests(launchpadID)
+		requests, err := repo.GetLaunchpadRequests(launchpadID, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -363,7 +363,7 @@ func TestLaunchpadRepo_GetLaunchpadRequests(t *testing.T) {
 			t.Fatalf("linking req4 to launchpad 2: %v", err)
 		}
 
-		got, err := repo.GetLaunchpadRequests(launchpadID)
+		got, err := repo.GetLaunchpadRequests(launchpadID, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -395,7 +395,7 @@ func TestLaunchpadRepo_GetLaunchpadRequests(t *testing.T) {
 
 		nonExistentID := uuid.MustParse("01937f5d-351a-7e68-936d-61a7a25661a3")
 
-		requests, err := repo.GetLaunchpadRequests(nonExistentID)
+		requests, err := repo.GetLaunchpadRequests(nonExistentID, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -423,7 +423,7 @@ func TestLaunchpadRepo_LinkRequestToLaunchpad(t *testing.T) {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
-		requests, err := repo.GetLaunchpadRequests(launchpadID)
+		requests, err := repo.GetLaunchpadRequests(launchpadID, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -517,7 +517,7 @@ func TestLaunchpadRepo_LinkRequestToLaunchpad(t *testing.T) {
 		}
 
 		for _, launchpadID := range []uuid.UUID{first, second} {
-			members, err := repo.GetLaunchpadRequests(launchpadID)
+			members, err := repo.GetLaunchpadRequests(launchpadID, "")
 			if err != nil {
 				t.Fatalf("getting members for %s: %v", launchpadID, err)
 			}

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -26,6 +27,7 @@ var launchpadLinkRequest string
 var launchpadLaunchScheme string
 var launchpadLaunchRawFile string
 var launchpadLaunchDetach bool
+var launchpadGetQuery string
 
 type launchpadRequest struct {
 	Name        *string `json:"name,omitempty"`
@@ -39,6 +41,7 @@ func init() {
 	launchpadCreateCmd.Flags().StringVar(&launchpadCreateName, "name", "", "Launchpad name")
 	launchpadCreateCmd.Flags().StringVar(&launchpadCreateDescription, "description", "", "Launchpad description")
 	launchpadCreateCmd.MarkFlagRequired("name")
+	launchpadGetCmd.Flags().StringVarP(&launchpadGetQuery, "query", "q", "", "AIP-160 traffic query that narrows the entries; see marasi traffic list --help")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateName, "name", "", "Launchpad name")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateDescription, "description", "", "Launchpad description")
 	launchpadLinkCmd.Flags().StringVar(&launchpadLinkRequest, "request", "", "UUID of the request/response pair")
@@ -83,12 +86,20 @@ var launchpadListCmd = &cobra.Command{
 
 var launchpadGetCmd = &cobra.Command{
 	Use:   "get UUID",
-	Short: "Get one launchpad",
-	Args:  cobra.ExactArgs(1),
+	Short: "Get one launchpad and its entries",
+	Long: `Get one launchpad and its entries, oldest first.
+
+--query (-q) takes the same AIP-160 query as marasi traffic list and keeps
+only the entries that match it. See marasi traffic list --help for the fields.`,
+	Example: `  marasi launchpad get UUID -q 'response_body:"token" AND status_code >= 500'`,
+	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path, err := serviceIDPath("/launchpad/", args[0], "")
 		if err != nil {
 			return err
+		}
+		if launchpadGetQuery != "" {
+			path += "?" + url.Values{"q": {launchpadGetQuery}}.Encode()
 		}
 		return runLaunchpadCommand(cmd, http.MethodGet, path, "getting launchpad", "get", launchpadRequest{})
 	},
