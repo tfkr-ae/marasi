@@ -598,6 +598,7 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 	}
 
 	clientConnection := proxy.clientConnection(res.Request.RemoteAddr)
+	watchedUpstream := marasiws.NewWatchedStream(upstream)
 	var connection *marasiws.Connection
 	process := func(message *marasiws.Message) error {
 		generated, _ := message.Metadata["generated"].(bool)
@@ -612,10 +613,17 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 				}
 				err := proxy.WebSocketInterceptor.Intercept(message, func(snapshot domain.WebSocketMessage) {
 					proxy.noteWebSocketHold(message)
-					if clientConnection != nil && message.Direction == marasiws.DirectionFromClient {
-						// Nothing reads the client while its message is held, so watch
-						// it: a client that closes abandons the hold (ADR-0030).
-						clientConnection.Watch(func() { proxy.abandonWebSocketCheckpoint(connectionID) })
+					// Nothing reads the sender while its message is held, so watch it: a
+					// client or origin that closes abandons the hold (ADR-0030). The other
+					// side is still read, so its close ends the connection.
+					abandon := func() { proxy.abandonWebSocketCheckpoint(connectionID) }
+					switch message.Direction {
+					case marasiws.DirectionFromClient:
+						if clientConnection != nil {
+							clientConnection.Watch(abandon)
+						}
+					case marasiws.DirectionFromServer:
+						watchedUpstream.Watch(abandon)
 					}
 					if proxy.OnWebSocketIntercept == nil {
 						return
@@ -657,7 +665,7 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 		requestID,
 		clientStream,
 		clientStream,
-		upstream,
+		watchedUpstream,
 		process,
 	)
 	connection.SetDeflate(deflate)
