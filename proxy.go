@@ -328,8 +328,10 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 }
 
 // SetProjectResources replaces every project-owned dependency. Callers must
-// block project work before calling it.
+// block project work before calling it. Pending launches are interrupted
+// first, so their outcomes are written to the project they were launched in.
 func (proxy *Proxy) SetProjectResources(resources ProjectResources) {
+	proxy.InterruptLaunches()
 	proxy.TrafficRepo = resources.Repository
 	proxy.LaunchpadRepo = resources.Repository
 	proxy.ArmoryRepo = resources.Repository
@@ -810,6 +812,9 @@ func (proxy *Proxy) CloseTransportContext(ctx context.Context) error {
 func (proxy *Proxy) close(ctx context.Context, closeDatabase bool) error {
 	stopForceClose := context.AfterFunc(ctx, proxy.ForceCloseTransport)
 	defer stopForceClose()
+	// A stop interrupts pending launches instead of waiting for them, and
+	// records their outcomes while the project and its writer are still open.
+	proxy.InterruptLaunches()
 	proxy.webSocketLifecycleMu.Lock()
 	proxy.webSocketsClosing = true
 	proxy.webSocketLifecycleMu.Unlock()
