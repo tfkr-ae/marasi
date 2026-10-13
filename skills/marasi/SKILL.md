@@ -1,6 +1,6 @@
 ---
 name: marasi
-description: Use the Marasi CLI to capture and inspect proxy traffic, replay requests, manage assessment evidence, and export reports.
+description: Use the Marasi CLI to capture and inspect proxy traffic, launch edited requests, manage assessment evidence, and export reports.
 disable-model-invocation: true
 ---
 
@@ -93,7 +93,7 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 | Change listener address or pause capture | `listener` | `start` and `update` require both `--address` and `--port`. Stopping the listener leaves the service running. |
 | Find named project files | `project list` | Lists projects under the selected config directory. |
 | Annotate captured traffic | `notes`, `traffic metadata` | Metadata updates replace the JSON rather than merge it. |
-| Replay an edited HTTP request | `launchpad` | Create a launchpad, optionally link captured traffic, then launch raw HTTP bytes. `launch` requires `--scheme`, either `http` or `https`. It waits for the final record, and an interrupt cancels the launch. A failed launch exits non-zero with its id in the error. `--detach` returns the pending launch id at once; end it early with `launchpad cancel`. The launch id is the id of the traffic pair it stores. |
+| Launch an edited HTTP request | `launchpad` | Create a launchpad, optionally link captured traffic, then launch raw HTTP bytes. `launch` requires `--scheme`, either `http` or `https`. It waits for the final record, and an interrupt cancels the launch. A failed launch exits non-zero with its id in the error. `--detach` returns the pending launch id at once; end it early with `launchpad cancel`. The launch id is the id of the traffic pair it stores. |
 | Hold, edit, forward, or drop traffic | `checkpoint` | HTTP edits replace the whole raw request or response, not just its body. WebSocket edits replace the payload. Interception can leave clients waiting. |
 | Inspect or inject WebSocket messages | `websocket`, `traffic websocket` | Injection and close require a live connection. Choose direction and opcode explicitly. |
 | Redirect an upstream connection | `waypoint` | Maps an original host:port to an override host:port without changing DNS. |
