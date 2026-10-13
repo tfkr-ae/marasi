@@ -94,8 +94,9 @@ type Proxy struct {
 	// OnIntercept runs synchronously after an HTTP Checkpoint item becomes pending.
 	// Its return error is ignored. A blocking callback blocks the intercepted execution.
 	OnIntercept func(item domain.CheckpointItem) error
-	// OnCheckpointAbandoned runs after an HTTP Checkpoint item is dropped because its
-	// client left (ADR-0030). It is not called for a forward or drop that resolved the item first.
+	// OnCheckpointAbandoned runs after a Checkpoint item is dropped because its
+	// client left or its WebSocket connection closed (ADR-0030). It is not called for a
+	// forward or drop that resolved the item first.
 	// Its return error is ignored.
 	OnCheckpointAbandoned func(item domain.CheckpointItem) error
 	OnLog                 func(log domain.Log) error // Function to be ran on each log event - used by the GUI application to handle new log entries
@@ -880,10 +881,8 @@ const maxEagerBody = 1 << 20
 // so hooks are watched. A larger, chunked, or Expect: 100-continue body is watched once it
 // has been read through.
 func (proxy *Proxy) watchClient(req *http.Request) {
-	proxy.connectionMu.Lock()
-	conn, ok := proxy.clientConnections[req.RemoteAddr]
-	proxy.connectionMu.Unlock()
-	if !ok {
+	conn := proxy.clientConnection(req.RemoteAddr)
+	if conn == nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(req.Context())
@@ -904,6 +903,14 @@ func (proxy *Proxy) watchClient(req *http.Request) {
 		return
 	}
 	req.Body = &watchAtEOF{ReadCloser: req.Body, watch: func() { conn.Watch(cancel) }}
+}
+
+// clientConnection returns the watched client socket for remoteAddr, or nil when the
+// client did not come through the proxy listener.
+func (proxy *Proxy) clientConnection(remoteAddr string) *listener.WatchedConn {
+	proxy.connectionMu.Lock()
+	defer proxy.connectionMu.Unlock()
+	return proxy.clientConnections[remoteAddr]
 }
 
 // watchAtEOF starts watching the client once the request body has been read through.

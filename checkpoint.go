@@ -467,20 +467,32 @@ func (proxy *Proxy) forgetCheckpoint(id uuid.UUID) {
 	proxy.checkpoint.order = removeCheckpointID(proxy.checkpoint.order, id)
 }
 
-func (proxy *Proxy) cancelWebSocketCheckpoint(connectionID uuid.UUID) {
+// abandonWebSocketCheckpoint drops the messages held for a connection that closed
+// (ADR-0030) and reports each through OnCheckpointAbandoned. Removal happens under
+// the interceptor lock, so a forward or drop that resolved a message first wins.
+func (proxy *Proxy) abandonWebSocketCheckpoint(connectionID uuid.UUID) {
+	var abandoned []domain.WebSocketMessage
 	if proxy.WebSocketInterceptor != nil {
-		proxy.WebSocketInterceptor.CancelConnection(connectionID)
+		abandoned = proxy.WebSocketInterceptor.CancelConnection(connectionID)
 	}
 	if proxy.checkpoint == nil {
 		return
 	}
 	proxy.checkpoint.mu.Lock()
-	defer proxy.checkpoint.mu.Unlock()
 	for messageID, heldConnectionID := range proxy.checkpoint.wsConn {
 		if heldConnectionID != connectionID {
 			continue
 		}
 		delete(proxy.checkpoint.wsConn, messageID)
 		proxy.checkpoint.order = removeCheckpointID(proxy.checkpoint.order, messageID)
+	}
+	notify := proxy.OnCheckpointAbandoned
+	proxy.checkpoint.mu.Unlock()
+
+	if notify == nil {
+		return
+	}
+	for _, message := range abandoned {
+		_ = notify(checkpointItemFromWebSocket(message))
 	}
 }

@@ -181,8 +181,9 @@ func WithInterceptHandler(handler func(item domain.CheckpointItem) error) func(*
 	}
 }
 
-// WithCheckpointAbandonedHandler sets OnCheckpointAbandoned for HTTP Checkpoint items
-// dropped because their client left. Its return error is ignored.
+// WithCheckpointAbandonedHandler sets OnCheckpointAbandoned for Checkpoint items
+// dropped because their client left or their WebSocket connection closed. Its return
+// error is ignored.
 func WithCheckpointAbandonedHandler(handler func(item domain.CheckpointItem) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		if proxy.OnCheckpointAbandoned != nil {

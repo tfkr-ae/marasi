@@ -408,21 +408,6 @@ func TestCheckpointServiceStop(t *testing.T) {
 			t.Fatal("wanted no pending checkpoint items after stop")
 		}
 	})
-
-	t.Run("should not publish sse when websocket teardown cancels a hold", func(t *testing.T) {
-		server, proxy := newCheckpointServer(t)
-		subscriber := server.events.subscribe()
-		defer server.events.unsubscribe(subscriber)
-		_, done := startCheckpointWebSocketHold(t, proxy)
-		waitForCheckpointItems(t, proxy, 1)
-		drainCheckpointHeld(t, subscriber)
-
-		proxy.WebSocketInterceptor.CancelConnection(uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809"))
-		if err := receiveCheckpointHold(t, done); err != nil {
-			t.Fatalf("wanted: nil\ngot: %v", err)
-		}
-		assertNoCheckpointEvent(t, subscriber)
-	})
 }
 
 func TestCheckpointEventFrames(t *testing.T) {
