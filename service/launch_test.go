@@ -170,6 +170,26 @@ func TestLaunchControlAPI(t *testing.T) {
 		}
 	})
 
+	t.Run("should read a finished launch from its stored pair", func(t *testing.T) {
+		id := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+		repo := &stubTrafficRepository{row: &domain.RequestResponseRow{
+			Request: domain.ProxyRequest{ID: id},
+			Metadata: map[string]any{
+				"launchpad":    true,
+				"launchpad_id": launchpadID.String(),
+				"launch":       map[string]any{"status": "cancelled"},
+			},
+		}}
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+
+		response := requestLaunchpad(server, http.MethodGet, "/launch/"+id.String(), "")
+
+		want := `{"launch_id":"` + id.String() + `","launchpad_id":"` + launchpadID.String() + `","status":"cancelled"}` + "\n"
+		if response.Code != http.StatusOK || response.Body.String() != want {
+			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
+		}
+	})
+
 	t.Run("should not cancel unknown or bad ids", func(t *testing.T) {
 		server := newTestServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
 		assertLaunchpadError(t, requestLaunchpad(server, http.MethodPost, "/launch/0193802f-f0e7-73d9-a764-06d21e367809/cancel", ""), http.StatusNotFound, "not_found")
