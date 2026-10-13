@@ -42,7 +42,7 @@ func toDomainLaunchpad(dbLaunchpad *dbLaunchpad) *domain.Launchpad {
 // the GROUP BY. The newest entry has the greatest request id, so it is the last
 // entry in GetLaunchpadRequests order. Because the query has exactly one max()
 // aggregate, SQLite takes the bare r.status_code from the row that holds
-// MAX(r.id). A newest entry with no response yet (status_code -1 or NULL)
+// MAX(r.id). A newest entry with no response (status_code -1 or NULL)
 // gives NULL; the query does not fall back to an older entry.
 const launchpadSummaryQuery = `SELECT
 		l.id, l.name, l.description,
