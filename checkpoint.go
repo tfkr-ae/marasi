@@ -2,6 +2,7 @@ package marasi
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -293,13 +294,51 @@ func (proxy *Proxy) holdHTTP(item domain.CheckpointItem, req *http.Request, res 
 		_ = notify(cloneCheckpointItem(item))
 	}
 
-	<-pending.done
+	select {
+	case <-pending.done:
+	case <-checkpointHoldContext(req, res).Done():
+		proxy.abandonHTTP(pending)
+		<-pending.done
+	}
 	return httpHoldResult{
 		dropped:           pending.dropped,
 		interceptResponse: pending.interceptResponse,
 		rebuiltReq:        pending.rebuiltReq,
 		rebuiltRes:        pending.rebuiltRes,
 	}, nil
+}
+
+// checkpointHoldContext returns the context that ends an HTTP hold: the request's,
+// or for a response the context of the response's request.
+func checkpointHoldContext(req *http.Request, res *http.Response) context.Context {
+	if req != nil {
+		return req.Context()
+	}
+	if res != nil && res.Request != nil {
+		return res.Request.Context()
+	}
+	return context.Background()
+}
+
+// abandonHTTP drops a held item whose client left. A forward or drop that already
+// removed it wins, and the abandon does nothing.
+func (proxy *Proxy) abandonHTTP(pending *pendingHTTP) {
+	id := pending.item.ID
+	proxy.checkpoint.mu.Lock()
+	if proxy.checkpoint.http[id] != pending {
+		proxy.checkpoint.mu.Unlock()
+		return
+	}
+	pending.dropped = true
+	delete(proxy.checkpoint.http, id)
+	proxy.checkpoint.order = removeCheckpointID(proxy.checkpoint.order, id)
+	notify := proxy.OnCheckpointAbandoned
+	proxy.checkpoint.mu.Unlock()
+	close(pending.done)
+
+	if notify != nil {
+		_ = notify(cloneCheckpointItem(pending.item))
+	}
 }
 
 func (proxy *Proxy) forwardHTTP(id uuid.UUID, fwd CheckpointForward) error {
