@@ -24,15 +24,16 @@ const launchIDHeader = "x-marasi-launch-id"
 
 // launchEntry is a launch held in the registry until it reaches a terminal state.
 type launchEntry struct {
-	launch     domain.Launch
-	claimed    bool                 // the pipeline has used the id as a pair UUID
-	cancel     context.CancelFunc   // cancels the proxy client's request context
-	done       chan struct{}        // closed once the launch is terminal
-	outcome    domain.Launch        // terminal state reported by the proxy client
-	failReason string               // failure the pipeline recorded; wins over outcome
-	duplicate  bool                 // storing the pair hit an existing row
-	cancelled  bool                 // CancelLaunch was called while pending; wins over everything
-	launched   *domain.ProxyRequest // the request as launched, stored if the pipeline never wrote it
+	launch      domain.Launch
+	claimed     bool                 // the pipeline has used the id as a pair UUID
+	cancel      context.CancelFunc   // cancels the proxy client's request context
+	done        chan struct{}        // closed once the launch is terminal
+	outcome     domain.Launch        // terminal state reported by the proxy client
+	failReason  string               // failure the pipeline recorded; wins over outcome
+	duplicate   bool                 // storing the pair hit an existing row
+	cancelled   bool                 // CancelLaunch was called while pending; wins over everything
+	interrupted bool                 // a project switch or service stop ended it; wins over failures
+	launched    *domain.ProxyRequest // the request as launched, stored if the pipeline never wrote it
 }
 
 type launchClaim int
@@ -204,7 +205,7 @@ func (proxy *Proxy) CancelLaunch(id uuid.UUID) (domain.Launch, error) {
 	proxy.launchMu.Lock()
 	entry, ok := proxy.launches[id]
 	if ok {
-		if entry.outcome.Status != "" {
+		if entry.outcome.Status != "" || entry.interrupted {
 			final := entry.final()
 			proxy.launchMu.Unlock()
 			return final, domain.ErrLaunchFinished
@@ -225,8 +226,35 @@ func (proxy *Proxy) CancelLaunch(id uuid.UUID) (domain.Launch, error) {
 	return stored, domain.ErrLaunchFinished
 }
 
+// InterruptLaunches ends every pending launch as failed with reason
+// interrupted, because the open project is being switched or the service is
+// stopping. It cancels each launch and returns once all of them have ended,
+// so their outcomes are written to the project they were launched in.
+//
+// A launch already cancelled stays cancelled, and one that already reached a
+// terminal state keeps it. Both are still waited for.
+func (proxy *Proxy) InterruptLaunches() {
+	proxy.launchMu.Lock()
+	entries := make([]*launchEntry, 0, len(proxy.launches))
+	for _, entry := range proxy.launches {
+		if entry.outcome.Status == "" && !entry.cancelled {
+			entry.interrupted = true
+		}
+		entries = append(entries, entry)
+	}
+	proxy.launchMu.Unlock()
+
+	for _, entry := range entries {
+		entry.cancel()
+	}
+	for _, entry := range entries {
+		<-entry.done
+	}
+}
+
 // final returns the launch's terminal state. A cancel wins over everything,
-// and a failure the pipeline recorded wins over the proxy client's outcome.
+// an interruption wins over failures it caused, and a failure the pipeline
+// recorded wins over the proxy client's outcome.
 // It must be called with launchMu held, or after the entry left the registry.
 func (entry *launchEntry) final() domain.Launch {
 	final := entry.outcome
@@ -234,6 +262,8 @@ func (entry *launchEntry) final() domain.Launch {
 	switch {
 	case entry.cancelled:
 		final.Status, final.Reason = domain.LaunchCancelled, ""
+	case entry.interrupted:
+		final.Status, final.Reason = domain.LaunchFailed, domain.LaunchReasonInterrupted
 	case entry.failReason != "":
 		final.Status, final.Reason = domain.LaunchFailed, entry.failReason
 	}
