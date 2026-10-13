@@ -19,8 +19,15 @@ type launchpadSummary struct {
 	Description string    `json:"description"`
 }
 
+// launchpadListItem is one launchpad in the GET /launchpad response body.
+type launchpadListItem struct {
+	launchpadSummary
+	EntryCount     int  `json:"entry_count"`      // number of linked request/response pairs
+	LastStatusCode *int `json:"last_status_code"` // newest entry's status code; null if empty or in flight
+}
+
 type launchpadList struct {
-	Items []launchpadSummary `json:"items"`
+	Items []launchpadListItem `json:"items"`
 }
 
 type launchpadDetail struct {
@@ -52,9 +59,13 @@ func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, e
 			writeLaunchpadError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		items := make([]launchpadSummary, 0, len(launchpads))
+		items := make([]launchpadListItem, 0, len(launchpads))
 		for _, launchpad := range launchpads {
-			items = append(items, launchpadSummaryFromDomain(launchpad))
+			items = append(items, launchpadListItem{
+				launchpadSummary: launchpadSummaryFromDomain(launchpad),
+				EntryCount:       launchpad.EntryCount,
+				LastStatusCode:   launchpad.LastStatusCode,
+			})
 		}
 		writeJSON(w, r, http.StatusOK, launchpadList{Items: items})
 	})

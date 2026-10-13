@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -75,6 +76,7 @@ var launchpadCreateCmd = &cobra.Command{
 var launchpadListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List launchpads oldest-first",
+	Long:  "List launchpads oldest-first. Each row shows the launchpad id, name, description, entry count, and the status code of the newest entry. The status shows - when the launchpad has no entries or its newest entry has no response yet.\n\nWith --json the command writes the control API body: {\"items\":[...]}, where each item has entry_count and last_status_code (null when there is no status).",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return runLaunchpadCommand(cmd, http.MethodGet, "/launchpad", "listing launchpads", "list", launchpadRequest{})
@@ -433,9 +435,11 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 func writeLaunchpadListHuman(body []byte, stdout io.Writer) error {
 	var response struct {
 		Items []struct {
-			ID          string `json:"id"`
-			Name        string `json:"name"`
-			Description string `json:"description"`
+			ID             string `json:"id"`
+			Name           string `json:"name"`
+			Description    string `json:"description"`
+			EntryCount     int    `json:"entry_count"`
+			LastStatusCode *int   `json:"last_status_code"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
@@ -443,7 +447,12 @@ func writeLaunchpadListHuman(body []byte, stdout io.Writer) error {
 	}
 	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	for _, item := range response.Items {
-		fmt.Fprintf(writer, "%s\t%s\t%s\n", item.ID, truncateDisplay(item.Name, trafficPathDisplayLimit), truncateDisplay(item.Description, trafficPathDisplayLimit))
+		// "-" marks a launchpad with no entries or a newest entry still in flight.
+		lastStatus := "-"
+		if item.LastStatusCode != nil {
+			lastStatus = strconv.Itoa(*item.LastStatusCode)
+		}
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%d\t%s\n", item.ID, truncateDisplay(item.Name, trafficPathDisplayLimit), truncateDisplay(item.Description, trafficPathDisplayLimit), item.EntryCount, lastStatus)
 	}
 	return writer.Flush()
 }
