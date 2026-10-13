@@ -951,9 +951,22 @@ func TestLaunchpadLaunchCommand(t *testing.T) {
 
 		stdout, stderr, err := run(launch(configDir, "--json"))
 
-		assertJSONCommandError(t, stdout, stderr, err, "reading launch: not_found")
+		assertJSONCommandError(t, stdout, stderr, err, "reading launch "+launchID+": not_found")
 		if paths := fake.paths(); len(paths) != 2 {
 			t.Fatalf("\nwanted:\none start and one read\ngot:\n%v", paths)
+		}
+	})
+
+	t.Run("should name the launch when a waiting launch can no longer be read", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startFakeLaunchService(t, configDir, launchpadID, launchID, []string{pending, ""}, http.StatusOK, "")
+		want := "reading launch " + launchID + ": 404 Not Found"
+
+		stdout, stderr, err := run(launch(configDir))
+
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || stdout != "" || !strings.Contains(stderr, want) {
+			t.Fatalf("\nwanted:\nexit 1 with stderr containing %q\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
 	})
 

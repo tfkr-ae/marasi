@@ -761,7 +761,7 @@ func (h *launchHarness) compass(t *testing.T, script string) {
 }
 
 func TestProxy_GetLaunchAfterItFinished(t *testing.T) {
-	t.Run("should read a completed launch from its stored pair", func(t *testing.T) {
+	t.Run("should read a completed launch once it has finished", func(t *testing.T) {
 		h := startLaunchHarness(t)
 		origin := startLaunchOrigin(t)
 		id, err := h.proxy.Launch(rawGet(origin.Server, "/done"), h.launchpadID.String(), false)
@@ -778,7 +778,7 @@ func TestProxy_GetLaunchAfterItFinished(t *testing.T) {
 		}
 	})
 
-	t.Run("should read a cancelled launch from its stored pair", func(t *testing.T) {
+	t.Run("should read a cancelled launch once it has finished", func(t *testing.T) {
 		h := startLaunchHarness(t)
 		origin := startLaunchOrigin(t)
 		id, err := h.proxy.Launch(rawGet(origin.Server, "/slow"), h.launchpadID.String(), false)
@@ -1030,6 +1030,90 @@ func TestProxy_InterruptedLaunches(t *testing.T) {
 		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchCancelled}
 		if got := h.waitFinished(t); got != want {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+	})
+}
+
+// emptyProject returns an in-memory project the launch harness has never written to.
+func emptyProject(t *testing.T) *db.Repository {
+	t.Helper()
+	dbConnection, err := db.New(":memory:", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("creating another project's database: %v", err)
+	}
+	repository := db.NewProxyRepo(dbConnection)
+	t.Cleanup(func() { repository.Close() })
+	return repository
+}
+
+func TestProxy_LaunchReadableAfterProjectSwitch(t *testing.T) {
+	t.Run("should read and refuse to cancel a launch interrupted by a project switch from either project", func(t *testing.T) {
+		held := make(chan domain.CheckpointItem, 1)
+		h := startLaunchHarness(t,
+			WithInterceptHandler(func(item domain.CheckpointItem) error { held <- item; return nil }),
+		)
+		original := h.repository
+		t.Cleanup(func() { original.Close() })
+		origin := startLaunchOrigin(t)
+		h.proxy.SetIntercept(true)
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/held"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+		receiveCheckpointItem(t, held, "the launch to be held")
+		next := emptyProject(t)
+
+		h.proxy.SetProjectResources(ProjectResources{Repository: next, Extensions: h.proxy.Extensions, Scope: h.proxy.Scope})
+		h.waitFinished(t)
+
+		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchFailed, Reason: domain.LaunchReasonInterrupted}
+		if got, err := h.proxy.GetLaunch(id); err != nil || got != want {
+			t.Fatalf("\nwanted:\nGetLaunch in the new project %+v, nil\ngot:\n%+v, %v", want, got, err)
+		}
+		if got, err := h.proxy.CancelLaunch(id); !errors.Is(err, domain.ErrLaunchFinished) || got != want {
+			t.Fatalf("\nwanted:\nCancelLaunch in the new project %+v, %v\ngot:\n%+v, %v", want, domain.ErrLaunchFinished, got, err)
+		}
+
+		h.proxy.SetProjectResources(ProjectResources{Repository: original, Extensions: h.proxy.Extensions, Scope: h.proxy.Scope})
+
+		if got, err := h.proxy.GetLaunch(id); err != nil || got != want {
+			t.Fatalf("\nwanted:\nGetLaunch back in the original project %+v, nil\ngot:\n%+v, %v", want, got, err)
+		}
+	})
+
+	t.Run("should keep only the most recently finished launches in memory", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		original := h.repository
+		t.Cleanup(func() { original.Close() })
+		h.proxy.finishedLaunchLimit = 2
+		origin := startLaunchOrigin(t)
+		ids := make([]uuid.UUID, 0, 3)
+		for _, path := range []string{"/first", "/second", "/third"} {
+			id, err := h.proxy.Launch(rawGet(origin.Server, path), h.launchpadID.String(), false)
+			if err != nil {
+				t.Fatalf("Launch() returned unexpected error: %v", err)
+			}
+			h.waitFinished(t)
+			ids = append(ids, id)
+		}
+
+		h.proxy.SetProjectResources(ProjectResources{Repository: emptyProject(t), Extensions: h.proxy.Extensions, Scope: h.proxy.Scope})
+
+		if _, err := h.proxy.GetLaunch(ids[0]); !errors.Is(err, domain.ErrLaunchNotFound) {
+			t.Fatalf("\nwanted:\nGetLaunch oldest %v\ngot:\n%v", domain.ErrLaunchNotFound, err)
+		}
+		for _, id := range ids[1:] {
+			want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchCompleted}
+			if got, err := h.proxy.GetLaunch(id); err != nil || got != want {
+				t.Fatalf("\nwanted:\nGetLaunch %+v, nil\ngot:\n%+v, %v", want, got, err)
+			}
+		}
+
+		h.proxy.SetProjectResources(ProjectResources{Repository: original, Extensions: h.proxy.Extensions, Scope: h.proxy.Scope})
+
+		want := domain.Launch{ID: ids[0], LaunchpadID: h.launchpadID, Status: domain.LaunchCompleted}
+		if got, err := h.proxy.GetLaunch(ids[0]); err != nil || got != want {
+			t.Fatalf("\nwanted:\nGetLaunch oldest from its stored pair %+v, nil\ngot:\n%+v, %v", want, got, err)
 		}
 	})
 }
