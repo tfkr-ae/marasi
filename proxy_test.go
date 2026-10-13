@@ -618,6 +618,948 @@ func TestProxy_ClientDisconnectInterruptsRequestHook(t *testing.T) {
 	}
 }
 
+// checkpointAbandonHarness is a served proxy with Checkpoint and traffic callbacks
+// reported on channels.
+type checkpointAbandonHarness struct {
+	proxy     *Proxy
+	origin    *httptest.Server
+	hits      atomic.Int32
+	held      chan domain.CheckpointItem
+	abandoned chan domain.CheckpointItem
+	requests  chan domain.ProxyRequest
+	responses chan domain.ProxyResponse
+}
+
+func newCheckpointAbandonHarness(t *testing.T, onHeld func(*checkpointAbandonHarness, domain.CheckpointItem)) *checkpointAbandonHarness {
+	t.Helper()
+	harness := &checkpointAbandonHarness{
+		held:      make(chan domain.CheckpointItem, 4),
+		abandoned: make(chan domain.CheckpointItem, 4),
+		requests:  make(chan domain.ProxyRequest, 4),
+		responses: make(chan domain.ProxyResponse, 4),
+	}
+	harness.origin = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		harness.hits.Add(1)
+		io.WriteString(w, "origin")
+	}))
+	t.Cleanup(harness.origin.Close)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dbConnection, err := db.New(":memory:", logger)
+	if err != nil {
+		t.Fatalf("creating in-memory database: %v", err)
+	}
+	repository := db.NewProxyRepo(dbConnection)
+	defaultExtensions, err := repository.GetExtensions()
+	if err != nil {
+		repository.Close()
+		t.Fatalf("getting default extensions: %v", err)
+	}
+	proxy, err := New(
+		WithConfigDir(t.TempDir()),
+		WithDefaultRepositories(repository),
+		WithExtensions(defaultExtensions),
+		WithRequestHandler(func(req domain.ProxyRequest) error {
+			harness.requests <- req
+			return nil
+		}),
+		WithResponseHandler(func(res domain.ProxyResponse) error {
+			harness.responses <- res
+			return nil
+		}),
+		WithLogHandler(func(domain.Log) error { return nil }),
+		WithInterceptHandler(func(item domain.CheckpointItem) error {
+			if onHeld != nil {
+				onHeld(harness, item)
+			}
+			harness.held <- item
+			return nil
+		}),
+		WithCheckpointAbandonedHandler(func(item domain.CheckpointItem) error {
+			harness.abandoned <- item
+			return nil
+		}),
+		WithBasePipeline(),
+		WithDefaultModifierPipeline(),
+	)
+	if err != nil {
+		repository.Close()
+		t.Fatalf("creating proxy: %v", err)
+	}
+	harness.proxy = proxy
+
+	proxyListener, err := proxy.GetListener("127.0.0.1", "0")
+	if err != nil {
+		proxy.Close()
+		t.Fatalf("creating proxy listener: %v", err)
+	}
+	serveResult := make(chan error, 1)
+	go func() { serveResult <- proxy.Serve(proxyListener) }()
+	t.Cleanup(func() {
+		proxy.Close()
+		select {
+		case <-serveResult:
+		case <-time.After(5 * time.Second):
+		}
+	})
+	return harness
+}
+
+// send dials the proxy and writes one GET for the origin. The caller owns the connection.
+func (harness *checkpointAbandonHarness) send(t *testing.T) net.Conn {
+	t.Helper()
+	client, err := net.Dial("tcp", net.JoinHostPort(harness.proxy.Addr, harness.proxy.Port))
+	if err != nil {
+		t.Fatalf("dialing proxy: %v", err)
+	}
+	originHost := strings.TrimPrefix(harness.origin.URL, "http://")
+	if _, err := fmt.Fprintf(client, "GET %s/held HTTP/1.1\r\nHost: %s\r\n\r\n", harness.origin.URL, originHost); err != nil {
+		client.Close()
+		t.Fatalf("writing request: %v", err)
+	}
+	return client
+}
+
+func receiveCheckpointItem(t *testing.T, items <-chan domain.CheckpointItem, what string) domain.CheckpointItem {
+	t.Helper()
+	select {
+	case item := <-items:
+		return item
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		return domain.CheckpointItem{}
+	}
+}
+
+func TestProxy_CheckpointHoldEndsWhenClientLeaves(t *testing.T) {
+	t.Run("should abandon a held request and never reach the origin", func(t *testing.T) {
+		harness := newCheckpointAbandonHarness(t, nil)
+		harness.proxy.SetIntercept(true)
+
+		client := harness.send(t)
+		held := receiveCheckpointItem(t, harness.held, "the request hold")
+		client.Close()
+
+		abandoned := receiveCheckpointItem(t, harness.abandoned, "the abandoned request")
+		if abandoned.ID != held.ID || abandoned.Type != domain.CheckpointTypeRequest {
+			t.Fatalf("\nwanted:\n%s %s\ngot:\n%s %s", held.ID, domain.CheckpointTypeRequest, abandoned.ID, abandoned.Type)
+		}
+		if items := harness.proxy.CheckpointItems(); len(items) != 0 {
+			t.Fatalf("wanted no pending Checkpoint items\ngot: %v", items)
+		}
+		if err := harness.proxy.ForwardCheckpoint(held.ID, CheckpointForward{}); !errors.Is(err, ErrCheckpointNotFound) {
+			t.Fatalf("wanted: %v\ngot: %v", ErrCheckpointNotFound, err)
+		}
+		time.Sleep(200 * time.Millisecond)
+		if got := harness.hits.Load(); got != 0 {
+			t.Fatalf("origin received %d requests after its client left", got)
+		}
+		select {
+		case req := <-harness.requests:
+			t.Fatalf("an abandoned request was written: %s", req.ID)
+		default:
+		}
+	})
+
+	t.Run("should abandon a held response and drop it", func(t *testing.T) {
+		harness := newCheckpointAbandonHarness(t, nil)
+		checkpoint, ok := harness.proxy.GetExtension("checkpoint")
+		if !ok {
+			t.Fatal("getting checkpoint extension")
+		}
+		if err := checkpoint.ExecuteLua(`function interceptResponse(response) return true end`); err != nil {
+			t.Fatalf("updating checkpoint: %v", err)
+		}
+
+		client := harness.send(t)
+		defer client.Close()
+		held := receiveCheckpointItem(t, harness.held, "the response hold")
+		if held.Type != domain.CheckpointTypeResponse {
+			t.Fatalf("wanted: %s\ngot: %s", domain.CheckpointTypeResponse, held.Type)
+		}
+		client.Close()
+
+		abandoned := receiveCheckpointItem(t, harness.abandoned, "the abandoned response")
+		if abandoned.ID != held.ID || abandoned.Type != domain.CheckpointTypeResponse {
+			t.Fatalf("\nwanted:\n%s %s\ngot:\n%s %s", held.ID, domain.CheckpointTypeResponse, abandoned.ID, abandoned.Type)
+		}
+		if items := harness.proxy.CheckpointItems(); len(items) != 0 {
+			t.Fatalf("wanted no pending Checkpoint items\ngot: %v", items)
+		}
+		time.Sleep(200 * time.Millisecond)
+		select {
+		case res := <-harness.responses:
+			t.Fatalf("an abandoned response was written: %s", res.ID)
+		default:
+		}
+	})
+
+	t.Run("should let a forward that resolved the item first stand", func(t *testing.T) {
+		clients := make(chan net.Conn, 1)
+		// The forward and the client leaving both happen before the hold waits,
+		// so the hold sees its item resolved and its context cancelled at once.
+		harness := newCheckpointAbandonHarness(t, func(harness *checkpointAbandonHarness, item domain.CheckpointItem) {
+			// Only the request is held; its response passes through.
+			harness.proxy.SetIntercept(false)
+			if err := harness.proxy.ForwardCheckpoint(item.ID, CheckpointForward{}); err != nil {
+				t.Errorf("forwarding: %v", err)
+			}
+			(<-clients).Close()
+			time.Sleep(200 * time.Millisecond)
+		})
+		harness.proxy.SetIntercept(true)
+
+		client := harness.send(t)
+		defer client.Close()
+		clients <- client
+		held := receiveCheckpointItem(t, harness.held, "the request hold")
+
+		select {
+		case req := <-harness.requests:
+			if req.ID != held.ID {
+				t.Fatalf("wanted: %s\ngot: %s", held.ID, req.ID)
+			}
+			if dropped, _ := req.Metadata["dropped"].(bool); dropped {
+				t.Fatal("a forwarded request was marked dropped")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the forwarded request was not written")
+		}
+		select {
+		case item := <-harness.abandoned:
+			t.Fatalf("a forwarded item was abandoned: %s", item.ID)
+		case <-time.After(200 * time.Millisecond):
+		}
+	})
+}
+
+// webSocketCheckpointHarness is a served proxy in front of a WebSocket origin, with
+// Checkpoint WebSocket holds, abandons, origin connections, and origin frames reported on channels.
+type webSocketCheckpointHarness struct {
+	proxy        *Proxy
+	origin       *httptest.Server
+	originConns  chan net.Conn
+	originFrames chan marasiws.Frame
+	originCloses chan marasiws.Frame
+	held         chan domain.WebSocketMessage
+	abandoned    chan domain.CheckpointItem
+	messages     chan domain.WebSocketMessage
+}
+
+// newWebSocketCheckpointHarness serves a proxy whose origin sends serverPush, when set,
+// right after its handshake. onHeld runs inside the WebSocket intercept callback.
+func newWebSocketCheckpointHarness(
+	t *testing.T,
+	serverPush []byte,
+	onHeld func(*webSocketCheckpointHarness, domain.WebSocketMessage),
+) *webSocketCheckpointHarness {
+	t.Helper()
+	var frames []marasiws.Frame
+	if serverPush != nil {
+		frames = []marasiws.Frame{{Fin: true, Opcode: marasiws.OpText, Payload: serverPush}}
+	}
+	return newWebSocketCheckpointHarnessFrames(t, frames, onHeld)
+}
+
+// newWebSocketCheckpointHarnessFrames serves a proxy whose origin sends serverFrames
+// right after its handshake, then reads client frames until the connection closes.
+func newWebSocketCheckpointHarnessFrames(
+	t *testing.T,
+	serverFrames []marasiws.Frame,
+	onHeld func(*webSocketCheckpointHarness, domain.WebSocketMessage),
+) *webSocketCheckpointHarness {
+	t.Helper()
+	harness := &webSocketCheckpointHarness{
+		originConns:  make(chan net.Conn, 4),
+		originFrames: make(chan marasiws.Frame, 8),
+		originCloses: make(chan marasiws.Frame, 1),
+		held:         make(chan domain.WebSocketMessage, 4),
+		abandoned:    make(chan domain.CheckpointItem, 4),
+		messages:     make(chan domain.WebSocketMessage, 4),
+	}
+	harness.origin = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		connection, buffered, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+		harness.originConns <- connection
+		accept := sha1.Sum([]byte(req.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+		fmt.Fprintf(
+			buffered,
+			"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: %s\r\n\r\n",
+			base64.StdEncoding.EncodeToString(accept[:]),
+		)
+		for _, frame := range serverFrames {
+			_ = marasiws.WriteFrame(buffered, frame, false)
+		}
+		if err := buffered.Flush(); err != nil {
+			return
+		}
+		for {
+			frame, err := marasiws.ReadFrame(buffered)
+			if err != nil {
+				return
+			}
+			if frame.Opcode == marasiws.OpClose {
+				harness.originCloses <- frame
+				return
+			}
+			harness.originFrames <- frame
+		}
+	}))
+	t.Cleanup(harness.origin.Close)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dbConnection, err := db.New(":memory:", logger)
+	if err != nil {
+		t.Fatalf("creating in-memory database: %v", err)
+	}
+	repository := db.NewProxyRepo(dbConnection)
+	defaultExtensions, err := repository.GetExtensions()
+	if err != nil {
+		repository.Close()
+		t.Fatalf("getting default extensions: %v", err)
+	}
+	proxy, err := New(
+		WithConfigDir(t.TempDir()),
+		WithDefaultRepositories(repository),
+		WithExtensions(defaultExtensions),
+		WithRequestHandler(func(domain.ProxyRequest) error { return nil }),
+		WithResponseHandler(func(domain.ProxyResponse) error { return nil }),
+		WithLogHandler(func(domain.Log) error { return nil }),
+		WithWebSocketMessageHandler(func(message domain.WebSocketMessage) error {
+			harness.messages <- message
+			return nil
+		}),
+		WithWebSocketInterceptHandler(func(message domain.WebSocketMessage) error {
+			if onHeld != nil {
+				onHeld(harness, message)
+			}
+			harness.held <- message
+			return nil
+		}),
+		WithCheckpointAbandonedHandler(func(item domain.CheckpointItem) error {
+			harness.abandoned <- item
+			return nil
+		}),
+		WithBasePipeline(),
+		WithDefaultModifierPipeline(),
+	)
+	if err != nil {
+		repository.Close()
+		t.Fatalf("creating proxy: %v", err)
+	}
+	harness.proxy = proxy
+
+	proxyListener, err := proxy.GetListener("127.0.0.1", "0")
+	if err != nil {
+		proxy.Close()
+		t.Fatalf("creating proxy listener: %v", err)
+	}
+	serveResult := make(chan error, 1)
+	go func() { serveResult <- proxy.Serve(proxyListener) }()
+	t.Cleanup(func() {
+		proxy.Close()
+		select {
+		case <-serveResult:
+		case <-time.After(5 * time.Second):
+		}
+	})
+	return harness
+}
+
+// open upgrades a client connection through the proxy. The caller owns the connection.
+func (harness *webSocketCheckpointHarness) open(t *testing.T) (net.Conn, *bufio.ReadWriter) {
+	t.Helper()
+	client, err := net.Dial("tcp", net.JoinHostPort(harness.proxy.Addr, harness.proxy.Port))
+	if err != nil {
+		t.Fatalf("dialing proxy: %v", err)
+	}
+	if err := client.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		client.Close()
+		t.Fatalf("setting client deadline: %v", err)
+	}
+	buffered := bufio.NewReadWriter(bufio.NewReader(client), bufio.NewWriter(client))
+	fmt.Fprintf(
+		buffered,
+		"GET %s/socket HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+		harness.origin.URL,
+		strings.TrimPrefix(harness.origin.URL, "http://"),
+	)
+	if err := buffered.Flush(); err != nil {
+		client.Close()
+		t.Fatalf("writing upgrade request: %v", err)
+	}
+	response, err := http.ReadResponse(buffered.Reader, &http.Request{Method: http.MethodGet})
+	if err != nil {
+		client.Close()
+		t.Fatalf("reading upgrade response: %v", err)
+	}
+	if response.StatusCode != http.StatusSwitchingProtocols {
+		client.Close()
+		t.Fatalf("wanted: %d\ngot: %d", http.StatusSwitchingProtocols, response.StatusCode)
+	}
+	return client, buffered
+}
+
+func writeClientText(t *testing.T, buffered *bufio.ReadWriter, payload string) {
+	t.Helper()
+	if err := marasiws.WriteFrame(buffered, marasiws.Frame{Fin: true, Opcode: marasiws.OpText, Payload: []byte(payload)}, true); err != nil {
+		t.Fatalf("writing text frame: %v", err)
+	}
+	if err := buffered.Flush(); err != nil {
+		t.Fatalf("flushing text frame: %v", err)
+	}
+}
+
+func receiveHeldWebSocketMessage(t *testing.T, held <-chan domain.WebSocketMessage) domain.WebSocketMessage {
+	t.Helper()
+	select {
+	case message := <-held:
+		return message
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the WebSocket hold")
+		return domain.WebSocketMessage{}
+	}
+}
+
+// assertWebSocketAbandoned checks that held was abandoned through the callback,
+// left Checkpoint, and was recorded as dropped.
+func assertWebSocketAbandoned(t *testing.T, harness *webSocketCheckpointHarness, held domain.WebSocketMessage) {
+	t.Helper()
+	abandoned := receiveCheckpointItem(t, harness.abandoned, "the abandoned WebSocket message")
+	if abandoned.ID != held.ID || abandoned.Type != domain.CheckpointTypeWebSocket || abandoned.ConnectionID != held.ConnectionID {
+		t.Fatalf("\nwanted:\n%s %s %s\ngot:\n%s %s %s",
+			held.ID, domain.CheckpointTypeWebSocket, held.ConnectionID,
+			abandoned.ID, abandoned.Type, abandoned.ConnectionID)
+	}
+	if items := harness.proxy.CheckpointItems(); len(items) != 0 {
+		t.Fatalf("wanted no pending Checkpoint items\ngot: %v", items)
+	}
+	if err := harness.proxy.ForwardCheckpoint(held.ID, CheckpointForward{}); !errors.Is(err, ErrCheckpointNotFound) {
+		t.Fatalf("wanted: %v\ngot: %v", ErrCheckpointNotFound, err)
+	}
+	select {
+	case message := <-harness.messages:
+		if message.ID != held.ID || message.Metadata["dropped"] != true {
+			t.Fatalf("\nwanted:\n%s dropped\ngot:\n%s dropped=%v", held.ID, message.ID, message.Metadata["dropped"])
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the abandoned message record")
+	}
+}
+
+func TestProxy_CheckpointWebSocketHoldEndsWhenConnectionCloses(t *testing.T) {
+	t.Run("should abandon a held client message when its client closes", func(t *testing.T) {
+		harness := newWebSocketCheckpointHarness(t, nil, nil)
+		harness.proxy.SetWebSocketIntercept(true)
+		client, buffered := harness.open(t)
+		defer client.Close()
+
+		writeClientText(t, buffered, "held")
+		held := receiveHeldWebSocketMessage(t, harness.held)
+		client.Close()
+
+		assertWebSocketAbandoned(t, harness, held)
+		select {
+		case frame := <-harness.originFrames:
+			t.Fatalf("the origin received an abandoned message: %q", frame.Payload)
+		case <-time.After(200 * time.Millisecond):
+		}
+	})
+
+	t.Run("should abandon a held server message when its client closes", func(t *testing.T) {
+		harness := newWebSocketCheckpointHarness(t, []byte("held"), nil)
+		checkpoint, ok := harness.proxy.GetExtension("checkpoint")
+		if !ok {
+			t.Fatal("getting checkpoint extension")
+		}
+		if err := checkpoint.ExecuteLua(`function interceptWebSocketMessage(message) return true end`); err != nil {
+			t.Fatalf("updating checkpoint: %v", err)
+		}
+		client, _ := harness.open(t)
+		defer client.Close()
+
+		held := receiveHeldWebSocketMessage(t, harness.held)
+		if held.Direction != marasiws.DirectionFromServer {
+			t.Fatalf("wanted: %s\ngot: %s", marasiws.DirectionFromServer, held.Direction)
+		}
+		client.Close()
+
+		assertWebSocketAbandoned(t, harness, held)
+	})
+
+	t.Run("should keep a held close frame when its client closes after sending it", func(t *testing.T) {
+		// A client that fails the connection sends its close frame and then closes the
+		// TCP connection (RFC 6455 7.1.7), so that close must not drop the close frame.
+		harness := newWebSocketCheckpointHarness(t, nil, nil)
+		harness.proxy.SetWebSocketIntercept(true)
+		client, buffered := harness.open(t)
+		defer client.Close()
+
+		closePayload := []byte{0x03, 0xef}
+		if err := marasiws.WriteFrame(buffered, marasiws.Frame{Fin: true, Opcode: marasiws.OpClose, Payload: closePayload}, true); err != nil {
+			t.Fatalf("writing close frame: %v", err)
+		}
+		if err := buffered.Flush(); err != nil {
+			t.Fatalf("flushing close frame: %v", err)
+		}
+		held := receiveHeldWebSocketMessage(t, harness.held)
+		if held.Opcode != int(marasiws.OpClose) {
+			t.Fatalf("wanted held opcode: %d\ngot: %d", marasiws.OpClose, held.Opcode)
+		}
+		client.Close()
+		select {
+		case item := <-harness.abandoned:
+			t.Fatalf("a held close frame was abandoned when its client closed: %s", item.ID)
+		case <-time.After(200 * time.Millisecond):
+		}
+		if err := harness.proxy.ForwardCheckpoint(held.ID, CheckpointForward{}); err != nil {
+			t.Fatalf("forwarding: %v", err)
+		}
+
+		select {
+		case frame := <-harness.originCloses:
+			if !bytes.Equal(frame.Payload, closePayload) {
+				t.Fatalf("wanted: close %x\ngot: close %x", closePayload, frame.Payload)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the forwarded close frame did not reach the origin")
+		}
+	})
+
+	t.Run("should keep a held client message when its client closes after a close frame", func(t *testing.T) {
+		// A client failing the connection sends its close frame and then closes the TCP
+		// connection (RFC 6455 7.1.7). It started closing rather than vanished, so the
+		// message it sent before the close still reaches the origin, then the close.
+		harness := newWebSocketCheckpointHarness(t, nil, nil)
+		harness.proxy.SetWebSocketIntercept(true)
+		client, buffered := harness.open(t)
+		defer client.Close()
+
+		closePayload := []byte{0x03, 0xea}
+		for _, frame := range []marasiws.Frame{
+			{Fin: true, Opcode: marasiws.OpText, Payload: []byte("echo")},
+			{Fin: true, Opcode: marasiws.OpClose, Payload: closePayload},
+		} {
+			if err := marasiws.WriteFrame(buffered, frame, true); err != nil {
+				t.Fatalf("writing frame: %v", err)
+			}
+		}
+		if err := buffered.Flush(); err != nil {
+			t.Fatalf("flushing frames: %v", err)
+		}
+		held := receiveHeldWebSocketMessage(t, harness.held)
+		assertHeldPayload(t, held, "echo")
+		client.Close()
+		select {
+		case item := <-harness.abandoned:
+			t.Fatalf("a held message was abandoned when its client closed after a close frame: %s", item.ID)
+		case <-time.After(200 * time.Millisecond):
+		}
+		if err := harness.proxy.ForwardCheckpoint(held.ID, CheckpointForward{}); err != nil {
+			t.Fatalf("forwarding: %v", err)
+		}
+		heldClose := receiveHeldWebSocketMessage(t, harness.held)
+		if err := harness.proxy.ForwardCheckpoint(heldClose.ID, CheckpointForward{}); err != nil {
+			t.Fatalf("forwarding the close frame: %v", err)
+		}
+
+		select {
+		case frame := <-harness.originFrames:
+			if string(frame.Payload) != "echo" {
+				t.Fatalf("wanted: %q\ngot: %q", "echo", frame.Payload)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the forwarded message did not reach the origin")
+		}
+		select {
+		case frame := <-harness.originCloses:
+			if !bytes.Equal(frame.Payload, closePayload) {
+				t.Fatalf("wanted: close %x\ngot: close %x", closePayload, frame.Payload)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the forwarded close frame did not reach the origin")
+		}
+	})
+
+	t.Run("should let a forward that resolved the message first stand", func(t *testing.T) {
+		clients := make(chan net.Conn, 1)
+		// The forward lands before the client leaves, so the close finds nothing to abandon.
+		harness := newWebSocketCheckpointHarness(t, nil, func(harness *webSocketCheckpointHarness, message domain.WebSocketMessage) {
+			if err := harness.proxy.ForwardCheckpoint(message.ID, CheckpointForward{}); err != nil {
+				t.Errorf("forwarding: %v", err)
+			}
+			(<-clients).Close()
+		})
+		harness.proxy.SetWebSocketIntercept(true)
+		client, buffered := harness.open(t)
+		defer client.Close()
+		clients <- client
+
+		writeClientText(t, buffered, "forwarded")
+		held := receiveHeldWebSocketMessage(t, harness.held)
+
+		select {
+		case frame := <-harness.originFrames:
+			if string(frame.Payload) != "forwarded" {
+				t.Fatalf("wanted: %q\ngot: %q", "forwarded", frame.Payload)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the forwarded message did not reach the origin")
+		}
+		select {
+		case message := <-harness.messages:
+			if message.ID != held.ID || message.Metadata["dropped"] == true {
+				t.Fatalf("\nwanted:\n%s forwarded\ngot:\n%s dropped=%v", held.ID, message.ID, message.Metadata["dropped"])
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for the forwarded message record")
+		}
+		select {
+		case item := <-harness.abandoned:
+			t.Fatalf("a forwarded message was abandoned: %s", item.ID)
+		case <-time.After(200 * time.Millisecond):
+		}
+	})
+}
+
+// holdServerMessages makes Checkpoint hold every WebSocket message, server messages included.
+func holdServerMessages(t *testing.T, harness *webSocketCheckpointHarness) {
+	t.Helper()
+	checkpoint, ok := harness.proxy.GetExtension("checkpoint")
+	if !ok {
+		t.Fatal("getting checkpoint extension")
+	}
+	if err := checkpoint.ExecuteLua(`function interceptWebSocketMessage(message) return true end`); err != nil {
+		t.Fatalf("updating checkpoint: %v", err)
+	}
+}
+
+func receiveOriginConnection(t *testing.T, harness *webSocketCheckpointHarness) net.Conn {
+	t.Helper()
+	select {
+	case connection := <-harness.originConns:
+		return connection
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the origin connection")
+		return nil
+	}
+}
+
+// clientTextFrames reads the client until its connection ends and returns the text it received.
+func clientTextFrames(t *testing.T, client net.Conn, buffered *bufio.ReadWriter) []string {
+	t.Helper()
+	if err := client.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("setting client read deadline: %v", err)
+	}
+	var texts []string
+	for {
+		frame, err := marasiws.ReadFrame(buffered.Reader)
+		if err != nil {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				t.Fatal("the client connection stayed open after its origin closed")
+			}
+			return texts
+		}
+		if frame.Opcode == marasiws.OpText {
+			texts = append(texts, string(frame.Payload))
+		}
+		if frame.Opcode == marasiws.OpClose {
+			return texts
+		}
+	}
+}
+
+func TestProxy_CheckpointWebSocketHoldEndsWhenOriginCloses(t *testing.T) {
+	t.Run("should abandon a held server message when its origin closes", func(t *testing.T) {
+		harness := newWebSocketCheckpointHarness(t, []byte("held"), nil)
+		holdServerMessages(t, harness)
+		client, buffered := harness.open(t)
+		defer client.Close()
+		origin := receiveOriginConnection(t, harness)
+
+		held := receiveHeldWebSocketMessage(t, harness.held)
+		if held.Direction != marasiws.DirectionFromServer {
+			t.Fatalf("wanted: %s\ngot: %s", marasiws.DirectionFromServer, held.Direction)
+		}
+		origin.Close()
+
+		assertWebSocketAbandoned(t, harness, held)
+		if texts := clientTextFrames(t, client, buffered); len(texts) != 0 {
+			t.Fatalf("the client received an abandoned message: %q", texts)
+		}
+	})
+
+	t.Run("should abandon a held client message when its origin closes", func(t *testing.T) {
+		harness := newWebSocketCheckpointHarness(t, nil, nil)
+		harness.proxy.SetWebSocketIntercept(true)
+		client, buffered := harness.open(t)
+		defer client.Close()
+		origin := receiveOriginConnection(t, harness)
+
+		writeClientText(t, buffered, "held")
+		held := receiveHeldWebSocketMessage(t, harness.held)
+		origin.Close()
+
+		assertWebSocketAbandoned(t, harness, held)
+		select {
+		case frame := <-harness.originFrames:
+			t.Fatalf("the origin received an abandoned message: %q", frame.Payload)
+		case <-time.After(200 * time.Millisecond):
+		}
+	})
+
+	t.Run("should keep a held close frame when its origin closes after sending it", func(t *testing.T) {
+		// RFC 6455 has the server close the TCP connection right after its close frame,
+		// so that close ends the handshake rather than leaving the hold.
+		closeFrame := marasiws.Frame{Fin: true, Opcode: marasiws.OpClose, Payload: []byte{0x03, 0xe8}}
+		harness := newWebSocketCheckpointHarnessFrames(t, []marasiws.Frame{closeFrame}, nil)
+		holdServerMessages(t, harness)
+		client, buffered := harness.open(t)
+		defer client.Close()
+		origin := receiveOriginConnection(t, harness)
+
+		held := receiveHeldWebSocketMessage(t, harness.held)
+		if held.Opcode != int(marasiws.OpClose) {
+			t.Fatalf("wanted held opcode: %d\ngot: %d", marasiws.OpClose, held.Opcode)
+		}
+		origin.Close()
+		select {
+		case item := <-harness.abandoned:
+			t.Fatalf("a held close frame was abandoned when its origin closed: %s", item.ID)
+		case <-time.After(200 * time.Millisecond):
+		}
+		if err := harness.proxy.ForwardCheckpoint(held.ID, CheckpointForward{}); err != nil {
+			t.Fatalf("forwarding: %v", err)
+		}
+
+		if err := client.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatalf("setting client read deadline: %v", err)
+		}
+		frame, err := marasiws.ReadFrame(buffered.Reader)
+		if err != nil {
+			t.Fatalf("reading the close frame: %v", err)
+		}
+		if frame.Opcode != marasiws.OpClose || !bytes.Equal(frame.Payload, closeFrame.Payload) {
+			t.Fatalf("wanted: close %x\ngot: opcode %d %x", closeFrame.Payload, frame.Opcode, frame.Payload)
+		}
+	})
+
+	t.Run("should keep a held server message when its origin closes after a close frame", func(t *testing.T) {
+		// An origin failing the connection sends its close frame and then closes the TCP
+		// connection (RFC 6455 7.1.7). It started closing rather than vanished, so the
+		// message it sent before the close still reaches the client, then the close.
+		closeFrame := marasiws.Frame{Fin: true, Opcode: marasiws.OpClose, Payload: []byte{0x03, 0xea}}
+		harness := newWebSocketCheckpointHarnessFrames(t, []marasiws.Frame{
+			{Fin: true, Opcode: marasiws.OpText, Payload: []byte("echo")},
+			closeFrame,
+		}, nil)
+		holdServerMessages(t, harness)
+		client, buffered := harness.open(t)
+		defer client.Close()
+		origin := receiveOriginConnection(t, harness)
+
+		held := receiveHeldWebSocketMessage(t, harness.held)
+		assertHeldPayload(t, held, "echo")
+		origin.Close()
+		select {
+		case item := <-harness.abandoned:
+			t.Fatalf("a held message was abandoned when its origin closed after a close frame: %s", item.ID)
+		case <-time.After(200 * time.Millisecond):
+		}
+		if err := harness.proxy.ForwardCheckpoint(held.ID, CheckpointForward{}); err != nil {
+			t.Fatalf("forwarding: %v", err)
+		}
+		heldClose := receiveHeldWebSocketMessage(t, harness.held)
+		if err := harness.proxy.ForwardCheckpoint(heldClose.ID, CheckpointForward{}); err != nil {
+			t.Fatalf("forwarding the close frame: %v", err)
+		}
+
+		if err := client.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatalf("setting client read deadline: %v", err)
+		}
+		var got []string
+		for {
+			frame, err := marasiws.ReadFrame(buffered.Reader)
+			if err != nil {
+				t.Fatalf("reading after %q: %v", got, err)
+			}
+			got = append(got, fmt.Sprintf("%d %x", frame.Opcode, frame.Payload))
+			if frame.Opcode == marasiws.OpClose {
+				break
+			}
+		}
+		want := []string{fmt.Sprintf("%d %x", marasiws.OpText, "echo"), fmt.Sprintf("%d %x", marasiws.OpClose, closeFrame.Payload)}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("wanted: %q\ngot: %q", want, got)
+		}
+	})
+
+	t.Run("should let a forward that resolved the message first stand", func(t *testing.T) {
+		// The forward lands before the origin closes, so the close finds nothing to abandon.
+		harness := newWebSocketCheckpointHarness(t, []byte("forwarded"), func(harness *webSocketCheckpointHarness, message domain.WebSocketMessage) {
+			if err := harness.proxy.ForwardCheckpoint(message.ID, CheckpointForward{}); err != nil {
+				t.Errorf("forwarding: %v", err)
+			}
+			(<-harness.originConns).Close()
+		})
+		holdServerMessages(t, harness)
+		client, buffered := harness.open(t)
+		defer client.Close()
+
+		held := receiveHeldWebSocketMessage(t, harness.held)
+		if texts := clientTextFrames(t, client, buffered); len(texts) != 1 || texts[0] != "forwarded" {
+			t.Fatalf("wanted: %q\ngot: %q", []string{"forwarded"}, texts)
+		}
+		select {
+		case message := <-harness.messages:
+			if message.ID != held.ID || message.Metadata["dropped"] == true {
+				t.Fatalf("\nwanted:\n%s forwarded\ngot:\n%s dropped=%v", held.ID, message.ID, message.Metadata["dropped"])
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for the forwarded message record")
+		}
+		select {
+		case item := <-harness.abandoned:
+			t.Fatalf("a forwarded message was abandoned: %s", item.ID)
+		case <-time.After(200 * time.Millisecond):
+		}
+	})
+}
+
+// consecutiveMessageFrames returns two messages and then "after". Fragmented messages
+// are split into two frames each.
+func consecutiveMessageFrames(fragmented bool) []marasiws.Frame {
+	message := func(first, rest string) []marasiws.Frame {
+		if !fragmented {
+			return []marasiws.Frame{{Fin: true, Opcode: marasiws.OpText, Payload: []byte(first + rest)}}
+		}
+		return []marasiws.Frame{
+			{Fin: false, Opcode: marasiws.OpText, Payload: []byte(first)},
+			{Fin: true, Opcode: marasiws.OpContinuation, Payload: []byte(rest)},
+		}
+	}
+	frames := message("first ", "message")
+	frames = append(frames, message("second ", "message")...)
+	return append(frames, marasiws.Frame{Fin: true, Opcode: marasiws.OpText, Payload: []byte("after")})
+}
+
+// readTextMessages reassembles n text messages from frames, failing on a timeout.
+func readTextMessages(t *testing.T, n int, next func() (marasiws.Frame, error)) []string {
+	t.Helper()
+	var messages []string
+	var current []byte
+	for len(messages) < n {
+		frame, err := next()
+		if err != nil {
+			t.Fatalf("reading frame after %q: %v", messages, err)
+		}
+		if frame.Opcode != marasiws.OpText && frame.Opcode != marasiws.OpContinuation {
+			continue
+		}
+		current = append(current, frame.Payload...)
+		if frame.Fin {
+			messages = append(messages, string(current))
+			current = nil
+		}
+	}
+	return messages
+}
+
+func assertHeldPayload(t *testing.T, held domain.WebSocketMessage, want string) {
+	t.Helper()
+	if string(held.Payload) != want {
+		t.Fatalf("wanted held: %q\ngot: %q", want, held.Payload)
+	}
+}
+
+func TestProxy_CheckpointWebSocketConsecutiveHolds(t *testing.T) {
+	edited := []byte("edited")
+	for _, fragmented := range []bool{true, false} {
+		name := "single-frame"
+		if fragmented {
+			name = "fragmented"
+		}
+
+		t.Run("should hold the next server message after a forward when the origin sent both and idles ("+name+")", func(t *testing.T) {
+			harness := newWebSocketCheckpointHarnessFrames(t, consecutiveMessageFrames(fragmented), nil)
+			holdServerMessages(t, harness)
+			client, buffered := harness.open(t)
+			defer client.Close()
+
+			first := receiveHeldWebSocketMessage(t, harness.held)
+			assertHeldPayload(t, first, "first message")
+			if err := harness.proxy.ForwardCheckpoint(first.ID, CheckpointForward{Payload: &edited}); err != nil {
+				t.Fatalf("forwarding: %v", err)
+			}
+			second := receiveHeldWebSocketMessage(t, harness.held)
+			assertHeldPayload(t, second, "second message")
+			if err := harness.proxy.DropCheckpoint(second.ID); err != nil {
+				t.Fatalf("dropping: %v", err)
+			}
+			after := receiveHeldWebSocketMessage(t, harness.held)
+			assertHeldPayload(t, after, "after")
+			if err := harness.proxy.ForwardCheckpoint(after.ID, CheckpointForward{}); err != nil {
+				t.Fatalf("forwarding: %v", err)
+			}
+
+			if err := client.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				t.Fatalf("setting client read deadline: %v", err)
+			}
+			got := readTextMessages(t, 2, func() (marasiws.Frame, error) { return marasiws.ReadFrame(buffered.Reader) })
+			if got[0] != "edited" || got[1] != "after" {
+				t.Fatalf("wanted: %q\ngot: %q", []string{"edited", "after"}, got)
+			}
+		})
+
+		t.Run("should hold the next client message after a forward when the client sent both and idles ("+name+")", func(t *testing.T) {
+			harness := newWebSocketCheckpointHarness(t, nil, nil)
+			harness.proxy.SetWebSocketIntercept(true)
+			client, buffered := harness.open(t)
+			defer client.Close()
+			for _, frame := range consecutiveMessageFrames(fragmented) {
+				if err := marasiws.WriteFrame(buffered, frame, true); err != nil {
+					t.Fatalf("writing frame: %v", err)
+				}
+			}
+			if err := buffered.Flush(); err != nil {
+				t.Fatalf("flushing frames: %v", err)
+			}
+
+			first := receiveHeldWebSocketMessage(t, harness.held)
+			assertHeldPayload(t, first, "first message")
+			if err := harness.proxy.ForwardCheckpoint(first.ID, CheckpointForward{Payload: &edited}); err != nil {
+				t.Fatalf("forwarding: %v", err)
+			}
+			second := receiveHeldWebSocketMessage(t, harness.held)
+			assertHeldPayload(t, second, "second message")
+			if err := harness.proxy.DropCheckpoint(second.ID); err != nil {
+				t.Fatalf("dropping: %v", err)
+			}
+			after := receiveHeldWebSocketMessage(t, harness.held)
+			assertHeldPayload(t, after, "after")
+			if err := harness.proxy.ForwardCheckpoint(after.ID, CheckpointForward{}); err != nil {
+				t.Fatalf("forwarding: %v", err)
+			}
+
+			got := readTextMessages(t, 2, func() (marasiws.Frame, error) {
+				select {
+				case frame := <-harness.originFrames:
+					return frame, nil
+				case <-time.After(5 * time.Second):
+					return marasiws.Frame{}, errors.New("timed out waiting for an origin frame")
+				}
+			})
+			if got[0] != "edited" || got[1] != "after" {
+				t.Fatalf("wanted: %q\ngot: %q", []string{"edited", "after"}, got)
+			}
+		})
+	}
+}
+
 type websocketRepositoryStub struct {
 	connection *domain.WebSocketConnection
 	messages   []*domain.WebSocketMessage
@@ -2332,7 +3274,8 @@ func TestProxy_LaunchWebSocket(t *testing.T) {
 
 	launchResult := make(chan error, 1)
 	go func() {
-		launchResult <- proxy.Launch(raw, launchpadID.String(), false)
+		_, err := proxy.Launch(raw, launchpadID.String(), false)
+		launchResult <- err
 	}()
 
 	select {

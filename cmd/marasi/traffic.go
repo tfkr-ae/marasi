@@ -50,6 +50,11 @@ const trafficListLong = `List the newest page of traffic.
       : (contains), ignoring case, anywhere in the metadata, for example
       metadata:"workshop". The prettified-request and prettified-response
       keys are not searched.
+  launchpad
+      Launchpad membership. launchpad = "<launchpad id>" matches pairs
+      in that launchpad, launchpad != "<launchpad id>" matches pairs not
+      in it, including pairs in no launchpad, and launchpad:* matches
+      pairs in any launchpad. The id is a quoted launchpad UUID.
 
 Bare text, for example "hbGci", searches every text part. Text terms
 need at least 3 characters.
@@ -79,7 +84,8 @@ var trafficListCmd = &cobra.Command{
 	Long:  trafficListLong,
 	Example: `  marasi traffic list -q 'host = "*.example.com" AND status_code >= 500'
   marasi traffic list -q 'method = "POST" path = "/api/*"'
-  marasi traffic list -q 'metadata.extension = "workshop" AND NOT status_code = 404'`,
+  marasi traffic list -q 'metadata.extension = "workshop" AND NOT status_code = 404'
+  marasi traffic list -q 'launchpad:* AND response_body:"token"'`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)

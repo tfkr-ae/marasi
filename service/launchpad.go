@@ -19,8 +19,15 @@ type launchpadSummary struct {
 	Description string    `json:"description"`
 }
 
+// launchpadListItem is one launchpad in the GET /launchpad response body.
+type launchpadListItem struct {
+	launchpadSummary
+	EntryCount     int  `json:"entry_count"`      // number of linked request/response pairs
+	LastStatusCode *int `json:"last_status_code"` // newest entry's status code; null if empty or in flight
+}
+
 type launchpadList struct {
-	Items []launchpadSummary `json:"items"`
+	Items []launchpadListItem `json:"items"`
 }
 
 type launchpadDetail struct {
@@ -52,9 +59,13 @@ func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, e
 			writeLaunchpadError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		items := make([]launchpadSummary, 0, len(launchpads))
+		items := make([]launchpadListItem, 0, len(launchpads))
 		for _, launchpad := range launchpads {
-			items = append(items, launchpadSummaryFromDomain(launchpad))
+			items = append(items, launchpadListItem{
+				launchpadSummary: launchpadSummaryFromDomain(launchpad),
+				EntryCount:       launchpad.EntryCount,
+				LastStatusCode:   launchpad.LastStatusCode,
+			})
 		}
 		writeJSON(w, r, http.StatusOK, launchpadList{Items: items})
 	})
@@ -99,7 +110,12 @@ func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, e
 			writeLaunchpadRepositoryError(w, r, err)
 			return
 		}
-		members, err := repo.GetLaunchpadRequests(id)
+		members, err := repo.GetLaunchpadRequests(id, r.URL.Query().Get("q"))
+		var queryErr *domain.QueryError
+		if errors.As(err, &queryErr) {
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
+			return
+		}
 		if err != nil {
 			writeLaunchpadRepositoryError(w, r, err)
 			return
@@ -168,13 +184,12 @@ func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, e
 			writeLaunchpadRepositoryError(w, r, err)
 			return
 		}
-		if err := proxy.Launch(string(raw), id.String(), useHTTPS); err != nil {
+		launchID, err := proxy.Launch(string(raw), id.String(), useHTTPS)
+		if err != nil {
 			writeLaunchpadError(w, r, http.StatusBadRequest, "invalid_launchpad_request")
 			return
 		}
-		writeJSON(w, r, http.StatusOK, struct {
-			Status string `json:"status"`
-		}{Status: "launched"})
+		writeJSON(w, r, http.StatusOK, launchStarted{LaunchID: launchID, Status: string(domain.LaunchPending)})
 	})
 
 	mux.HandleFunc("POST /launchpad/{id}", func(w http.ResponseWriter, r *http.Request) {

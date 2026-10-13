@@ -272,7 +272,18 @@ func TestInterceptor_CancelConnection(t *testing.T) {
 	receiveInterceptedMessage(t, secondNotified)
 	receiveInterceptedMessage(t, otherNotified)
 
-	interceptor.CancelConnection(connectionID)
+	cancelled := interceptor.CancelConnection(connectionID)
+	if len(cancelled) != 2 {
+		t.Fatalf("wanted: %d cancelled messages\ngot: %d", 2, len(cancelled))
+	}
+	for _, message := range cancelled {
+		if message.ID != first.ID && message.ID != second.ID {
+			t.Fatalf("cancelled a message of another connection: %s", message.ID)
+		}
+	}
+	if again := interceptor.CancelConnection(connectionID); len(again) != 0 {
+		t.Fatalf("wanted no messages from a second cancel\ngot: %d", len(again))
+	}
 
 	if err := receiveInterceptionResult(t, firstResult); err != nil {
 		t.Fatalf("first Intercept() returned unexpected error: %v", err)

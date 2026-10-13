@@ -129,7 +129,7 @@ func (s *stubLaunchpadRepository) UpdateLaunchpad(id uuid.UUID, name, descriptio
 	return nil
 }
 
-func (s *stubLaunchpadRepository) GetLaunchpadRequests(id uuid.UUID) ([]*domain.RequestResponseSummary, error) {
+func (s *stubLaunchpadRepository) GetLaunchpadRequests(id uuid.UUID, _ string) ([]*domain.RequestResponseSummary, error) {
 	items := s.members[id]
 	if items == nil {
 		return []*domain.RequestResponseSummary{}, nil
@@ -705,7 +705,7 @@ func TestLaunchpadControlAPI(t *testing.T) {
 		}, order: []uuid.UUID{id, older}}
 		server := newTestServer(&marasi.Proxy{LaunchpadRepo: repo}, func() {})
 		response := requestLaunchpad(server, http.MethodGet, "/launchpad", "")
-		want := `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","name":"New","description":"newest"},{"id":"0193802f-f0e7-73d9-a764-06d21e367809","name":"Old","description":"oldest"}]}` + "\n"
+		want := `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","name":"New","description":"newest","entry_count":0,"last_status_code":null},{"id":"0193802f-f0e7-73d9-a764-06d21e367809","name":"Old","description":"oldest","entry_count":0,"last_status_code":null}]}` + "\n"
 		if response.Code != http.StatusOK || response.Body.String() != want {
 			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
 		}
@@ -791,7 +791,7 @@ func TestLaunchpadControlAPI(t *testing.T) {
 		assertLaunchpadError(t, requestLaunchpad(missingPair, http.MethodPost, "/launchpad/"+id.String()+"/link", `{"request_id":"`+requestID.String()+`"}`), http.StatusNotFound, "not_found")
 	})
 
-	t.Run("should launch a working copy without publishing a launch event", func(t *testing.T) {
+	t.Run("should launch a working copy and return its launch id", func(t *testing.T) {
 		received := make(chan *http.Request, 1)
 		origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			received <- r
@@ -802,22 +802,18 @@ func TestLaunchpadControlAPI(t *testing.T) {
 		raw := "POST /login HTTP/1.1\r\nHost: " + host + "\r\nContent-Length: 4\r\n\r\nbody"
 		repo := &stubLaunchpadRepository{items: map[uuid.UUID]*domain.Launchpad{id: {ID: id, Name: "Login"}}}
 		server := newTestServer(&marasi.Proxy{LaunchpadRepo: repo, Client: origin.Client()}, func() {})
-		subscriber := server.events.subscribe()
-		defer server.events.unsubscribe(subscriber)
 
 		body := `{"raw":"` + base64.StdEncoding.EncodeToString([]byte(raw)) + `","scheme":"https"}`
 		response := requestLaunchpad(server, http.MethodPost, "/launchpad/"+id.String()+"/launch", body)
-		if response.Code != http.StatusOK || response.Body.String() != "{\"status\":\"launched\"}\n" {
-			t.Fatalf("\nwanted:\n200 launched\ngot:\n%d %s", response.Code, response.Body.String())
+		var started struct {
+			LaunchID string `json:"launch_id"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &started); err != nil || response.Code != http.StatusOK || response.Body.String() != `{"launch_id":"`+started.LaunchID+`","status":"pending"}`+"\n" {
+			t.Fatalf("\nwanted:\n200 pending launch\ngot:\n%d %s", response.Code, response.Body.String())
 		}
 		request := <-received
-		if request.Method != http.MethodPost || request.URL.Path != "/login" || request.Header.Get("x-launchpad-id") != id.String() {
-			t.Fatalf("\nwanted:\nPOST /login with launchpad %s\ngot:\n%s %s with launchpad %s", id, request.Method, request.URL.Path, request.Header.Get("x-launchpad-id"))
-		}
-		select {
-		case event := <-subscriber.events:
-			t.Fatalf("\nwanted:\nno launch event\ngot:\n%s", event.name)
-		default:
+		if request.Method != http.MethodPost || request.URL.Path != "/login" || request.Header.Get("x-marasi-launch-id") != started.LaunchID {
+			t.Fatalf("\nwanted:\nPOST /login with launch %s\ngot:\n%s %s with launch %s", started.LaunchID, request.Method, request.URL.Path, request.Header.Get("x-marasi-launch-id"))
 		}
 	})
 
@@ -984,6 +980,35 @@ func TestTrafficGet(t *testing.T) {
 		want := "{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"note\":\"a note\",\"metadata\":{\"foo\":\"bar\"},\"request\":{\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"raw\":\"/wAB\",\"requested_at\":\"2026-01-02T03:04:05Z\"},\"response\":{\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"raw\":\"gIGC\",\"responded_at\":\"2026-01-02T03:04:06Z\"}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should report responded_at as null for a pair with no response", func(t *testing.T) {
+		id := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+		repo := &stubTrafficRepository{
+			row: &domain.RequestResponseRow{
+				Request: domain.ProxyRequest{
+					ID:          id,
+					Scheme:      "https",
+					Method:      "GET",
+					Host:        "example.com",
+					Path:        "/a",
+					Raw:         []byte("GET /a"),
+					RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+				},
+				Response: domain.ProxyResponse{ID: id, Status: "N/A", StatusCode: -1, Length: "0"},
+				Metadata: map[string]any{},
+			},
+		}
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		request := httptest.NewRequest(http.MethodGet, "/traffic/"+id.String(), nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		want := "{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"note\":\"\",\"metadata\":{},\"request\":{\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"raw\":\"R0VUIC9h\",\"requested_at\":\"2026-01-02T03:04:05Z\"},\"response\":{\"status\":\"N/A\",\"status_code\":-1,\"content_type\":\"\",\"length\":\"0\",\"raw\":null,\"responded_at\":null}}\n"
+		if got := response.Body.String(); response.Code != http.StatusOK || got != want {
+			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, got)
 		}
 	})
 

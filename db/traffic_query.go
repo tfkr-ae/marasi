@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
 	"go.einride.tech/aip/filtering"
 	expr "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
@@ -40,7 +41,18 @@ const (
 	// fieldIndexedText fields are text parts of a pair in the traffic index.
 	// They match a term with : (contains), ignoring case.
 	fieldIndexedText
+	// fieldLaunchpad matches a pair's launchpad membership: = and != against
+	// a launchpad id, and :* for membership in any launchpad.
+	fieldLaunchpad
 )
+
+// launchpadMember is true for a pair linked to the launchpad bound to its ?.
+// Every launchpad-scoped read uses it, so the launchpad query field and a
+// launchpad's entries agree on what membership means.
+const launchpadMember = "EXISTS (SELECT 1 FROM launchpad_request WHERE launchpad_request.request_id = request.id AND launchpad_request.launchpad_id = ?)"
+
+// anyLaunchpadMember is true for a pair linked to at least one launchpad.
+const anyLaunchpadMember = "EXISTS (SELECT 1 FROM launchpad_request WHERE launchpad_request.request_id = request.id)"
 
 // minTextTermLength is the shortest text term the trigram index can find.
 // Shorter terms would silently match nothing, so they are rejected.
@@ -65,6 +77,9 @@ var trafficFields = map[string]trafficField{
 	"requested_at": {kind: fieldTimestamp, column: sqlEpochSeconds("requested_at")},
 	"responded_at": {kind: fieldTimestamp, column: sqlEpochSeconds("responded_at")},
 	"metadata":     {kind: fieldMetadata, column: "metadata"},
+	// Membership is a row in launchpad_request, not the launchpad_id
+	// metadata, which pairs linked from captured traffic do not have.
+	"launchpad": {kind: fieldLaunchpad, column: "launchpad_request"},
 
 	"request_head":  {kind: fieldIndexedText, column: "request_head"},
 	"request_body":  {kind: fieldIndexedText, column: "request_body"},
@@ -303,6 +318,15 @@ func (t *queryTranslator) has(e, lhs, rhs *expr.Expr) (string, error) {
 		}
 		// metadata:"text" searches the whole indexed metadata.
 		return t.textMatch(rhs, field.column)
+	case fieldLaunchpad:
+		if len(path) > 0 {
+			return "", t.errorAt(lhs, "field %q has no member %q", name, path[0])
+		}
+		// The parser reads launchpad:* as the string "*".
+		if rhs.GetConstExpr().GetStringValue() != "*" {
+			return "", t.errorAt(e, "operator : on launchpad takes only *, as in launchpad:*; use launchpad = \"<launchpad id>\" for one launchpad")
+		}
+		return anyLaunchpadMember, nil
 	}
 	return "", t.errorAt(e, "operator : is not supported on %s; use = or another comparison", name)
 }
@@ -393,6 +417,17 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 			return "", err
 		}
 		return t.compare(field.column, op, float64(value.UnixNano())/1e9), nil
+
+	case fieldLaunchpad:
+		if op != "=" && op != "!=" {
+			return "", t.errorAt(e, "operator %s is not supported on launchpad; use =, !=, or launchpad:*", op)
+		}
+		id, err := t.launchpadID(rhs)
+		if err != nil {
+			return "", err
+		}
+		t.bind(id)
+		return negate(op, launchpadMember), nil
 
 	case fieldMetadata:
 		if len(path) == 0 {
@@ -517,6 +552,19 @@ func (t *queryTranslator) matchExactText(column, value string) string {
 		t.bind(core)
 		return column + " = ?"
 	}
+}
+
+// launchpadID returns the launchpad id a quoted string names.
+func (t *queryTranslator) launchpadID(e *expr.Expr) (uuid.UUID, error) {
+	value, ok := e.GetConstExpr().GetConstantKind().(*expr.Constant_StringValue)
+	if !ok {
+		return uuid.Nil, t.errorAt(e, "launchpad needs a quoted launchpad id, for example launchpad = \"01937f5d-351a-7e68-936d-61a7a25661a3\"")
+	}
+	id, err := uuid.Parse(value.StringValue)
+	if err != nil {
+		return uuid.Nil, t.errorAt(e, "%q is not a launchpad id; use a launchpad UUID", value.StringValue)
+	}
+	return id, nil
 }
 
 func (t *queryTranslator) timestamp(e *expr.Expr, name string) (time.Time, error) {
