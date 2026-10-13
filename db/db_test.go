@@ -116,7 +116,7 @@ func TestNewPragmas(t *testing.T) {
 
 		want := map[string]string{
 			"journal_mode": "wal",
-			"synchronous":  "1",
+			"synchronous":  "1", // NORMAL
 			"busy_timeout": "5000",
 			"foreign_keys": "1",
 		}

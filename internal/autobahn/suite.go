@@ -205,16 +205,15 @@ func (s Suite) runContainer(ctx context.Context, proxy string, command ...string
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	defer removeContainer(name)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
 		if err != nil {
 			s.logState(name)
-			removeContainer(name)
 			return fmt.Errorf("docker %v: %w", command, err)
 		}
-		removeContainer(name)
 		return nil
 	case <-ctx.Done():
 		removeContainer(name)
@@ -232,6 +231,8 @@ func (s Suite) startContainer(ctx context.Context, command ...string) (func(logs
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Stderr = s.Log
 	if err := cmd.Run(); err != nil {
+		// Docker may have created the container before the start failed.
+		removeContainer(name)
 		return nil, fmt.Errorf("starting %v: %w", command, err)
 	}
 	return func(logs bool) {

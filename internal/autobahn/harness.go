@@ -143,15 +143,18 @@ func (c Config) startInstance(ctx context.Context, run string) (*Instance, func(
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := os.MkdirAll(filepath.Join(c.OutDir, run), 0o755); err == nil {
-		instance.KeepLog = filepath.Join(c.OutDir, run, "marasi.log")
-	}
 	stops := []func(){instance.Stop}
 	stop := func() {
 		for i := len(stops) - 1; i >= 0; i-- {
 			stops[i]()
 		}
 	}
+	// The instance log goes into the reports, so a failed run keeps it.
+	if err := os.MkdirAll(filepath.Join(c.OutDir, run), 0o755); err != nil {
+		stop()
+		return nil, nil, err
+	}
+	instance.LogCopy = filepath.Join(c.OutDir, run, "marasi.log")
 	switch run {
 	case RunProxy:
 	case RunCheckpointForward, RunCheckpointEdit:
