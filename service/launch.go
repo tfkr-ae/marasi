@@ -27,7 +27,7 @@ type launchStarted struct {
 	Status   string    `json:"status"`
 }
 
-// addLaunchRoutes registers launch reads. The registry lives in memory on the
+// addLaunchRoutes registers launch reads and cancel. The registry lives in memory on the
 // proxy, so these routes need no project admission.
 func addLaunchRoutes(raw *http.ServeMux, proxy *marasi.Proxy) {
 	raw.HandleFunc("GET /launch", func(w http.ResponseWriter, r *http.Request) {
@@ -56,6 +56,34 @@ func addLaunchRoutes(raw *http.ServeMux, proxy *marasi.Proxy) {
 		}
 		writeJSON(w, r, http.StatusOK, launchRecordFromDomain(launch))
 	})
+
+	// Cancel stays off the project gate: a project switch may be waiting for
+	// the very launch this request would free.
+	raw.HandleFunc("POST /launch/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeLaunchpadError(w, r, http.StatusBadRequest, "bad_request")
+			return
+		}
+		launch, err := proxy.CancelLaunch(id)
+		switch {
+		case errors.Is(err, domain.ErrLaunchNotFound):
+			writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
+		case errors.Is(err, domain.ErrLaunchFinished):
+			writeJSON(w, r, http.StatusConflict, launchFinished{Error: "launch_finished", launchRecord: launchRecordFromDomain(launch)})
+		case err != nil:
+			writeLaunchpadError(w, r, http.StatusInternalServerError, "internal_server_error")
+		default:
+			writeJSON(w, r, http.StatusOK, launchRecordFromDomain(launch))
+		}
+	})
+}
+
+// launchFinished is the conflict response to cancelling a finished launch.
+// It carries the launch's final record next to the error code.
+type launchFinished struct {
+	Error string `json:"error"`
+	launchRecord
 }
 
 func launchRecordFromDomain(launch domain.Launch) launchRecord {

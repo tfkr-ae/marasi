@@ -43,7 +43,7 @@ func init() {
 	launchpadLaunchCmd.Flags().StringVar(&launchpadLaunchScheme, "scheme", "", "Request scheme: http or https. Required")
 	launchpadLaunchCmd.Flags().StringVar(&launchpadLaunchRawFile, "raw-file", "", "Read the raw HTTP request from a file. If omitted, read it from stdin")
 	launchpadLaunchCmd.MarkFlagRequired("scheme")
-	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadLaunchCmd)
+	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadLaunchCmd, launchpadCancelCmd)
 	rootCmd.AddCommand(launchpadCmd)
 }
 
@@ -170,6 +170,38 @@ var launchpadLaunchCmd = &cobra.Command{
 	},
 }
 
+var launchpadCancelCmd = &cobra.Command{
+	Use:   "cancel LAUNCH_ID",
+	Short: "Cancel a pending launch",
+	Long:  "Cancel a pending launch by its launch id, including a launch started by another client. The launch ends as cancelled and its traffic pair records launch.status cancelled. If the launch already finished, the command exits non-zero and reports the launch's final status.",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := serviceIDPath("/launch/", args[0], "/cancel")
+		if err != nil {
+			return err
+		}
+		return runLaunchpadCommand(cmd, http.MethodPost, path, "cancelling launch", "cancel", launchpadRequest{})
+	},
+}
+
+// launchCancelError reports a refused cancel. A launch_finished refusal names
+// the launch's final status so the caller sees what actually happened.
+func launchCancelError(operation string, response instanceResponse) error {
+	var finished struct {
+		Error    string `json:"error"`
+		LaunchID string `json:"launch_id"`
+		Status   string `json:"status"`
+		Reason   string `json:"reason"`
+	}
+	if json.Unmarshal(response.Body, &finished) != nil || finished.Error != "launch_finished" || finished.Status == "" {
+		return controlAPIError(operation, response.Status, response.Body)
+	}
+	if finished.Reason != "" {
+		return fmt.Errorf("%s: launch_finished: launch %s is %s (%s)", operation, finished.LaunchID, finished.Status, finished.Reason)
+	}
+	return fmt.Errorf("%s: launch_finished: launch %s is %s", operation, finished.LaunchID, finished.Status)
+}
+
 func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action string, body launchpadRequest) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -185,6 +217,9 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 	called, err := callInstance(ctx, method, path, "application/json", requestBody)
 	if err != nil {
 		return err
+	}
+	if action == "cancel" && called.StatusCode != http.StatusOK {
+		return launchCancelError(operation, called)
 	}
 	if err := rejectInstanceStatus(operation, called, jsonOutput); err != nil {
 		return err
@@ -225,6 +260,16 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 		}
 		if err := json.Unmarshal(response, &result); err != nil || result.LaunchID == "" || result.Status == "" {
 			return errors.New("decoding launchpad response")
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "launch %s %s\n", result.LaunchID, result.Status)
+		return err
+	case "cancel":
+		var result struct {
+			LaunchID string `json:"launch_id"`
+			Status   string `json:"status"`
+		}
+		if err := json.Unmarshal(response, &result); err != nil || result.LaunchID == "" || result.Status == "" {
+			return errors.New("decoding launch response")
 		}
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "launch %s %s\n", result.LaunchID, result.Status)
 		return err

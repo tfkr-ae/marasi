@@ -3,6 +3,7 @@ package marasi
 import (
 	"crypto/sha1"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -461,6 +462,84 @@ func TestProxy_LaunchIDHeader(t *testing.T) {
 		origin.unblock()
 		if got := h.waitFinished(t); got.ID != id || got.Status != domain.LaunchCompleted {
 			t.Fatalf("\nwanted:\nlaunch %s completed\ngot:\n%+v", id, got)
+		}
+	})
+}
+
+func TestProxy_CancelLaunch(t *testing.T) {
+	t.Run("should cancel a launch waiting on a slow upstream and abandon the round trip", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/slow"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+		upstream := origin.waitPath(t, "/slow")
+		h.waitRequest(t, "/slow")
+
+		cancelled, err := h.proxy.CancelLaunch(id)
+
+		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchCancelled}
+		if err != nil || cancelled != want {
+			t.Fatalf("\nwanted:\n%+v, nil\ngot:\n%+v, %v", want, cancelled, err)
+		}
+		select {
+		case <-upstream.Context().Done():
+		case <-time.After(5 * time.Second):
+			t.Fatal("wanted the upstream round trip to be abandoned")
+		}
+		if got := h.waitFinished(t); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		row, err := h.repository.GetRequestResponseRow(id)
+		if err != nil {
+			t.Fatalf("getting pair: %v", err)
+		}
+		if got, want := row.Metadata["launch"], map[string]any{"status": "cancelled"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("\nwanted:\nmetadata.launch %v\ngot:\n%v", want, got)
+		}
+		if row.Response.StatusCode > 0 {
+			t.Fatalf("\nwanted:\nno stored response\ngot:\n%d", row.Response.StatusCode)
+		}
+		if got := h.launchpadMembers(t); !reflect.DeepEqual(got, []uuid.UUID{id}) {
+			t.Fatalf("\nwanted:\nlaunchpad members [%s]\ngot:\n%v", id, got)
+		}
+	})
+
+	t.Run("should report the final state of a finished launch", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/done"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+		h.waitFinished(t)
+
+		got, err := h.proxy.CancelLaunch(id)
+
+		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchCompleted}
+		if !errors.Is(err, domain.ErrLaunchFinished) || got != want {
+			t.Fatalf("\nwanted:\n%+v, %v\ngot:\n%+v, %v", want, domain.ErrLaunchFinished, got, err)
+		}
+		metadata, err := h.repository.GetMetadata(id)
+		if err != nil {
+			t.Fatalf("getting pair metadata: %v", err)
+		}
+		if got, want := metadata["launch"], map[string]any{"status": "completed"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("\nwanted:\nmetadata.launch %v\ngot:\n%v", want, got)
+		}
+	})
+
+	t.Run("should not find an unknown id or ordinary traffic", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+		sendThrough(t, h.outsideClient(t), origin.URL+"/ordinary", "")
+		ordinary := h.waitRequest(t, "/ordinary")
+
+		for _, id := range []uuid.UUID{uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809"), ordinary.ID} {
+			if _, err := h.proxy.CancelLaunch(id); !errors.Is(err, domain.ErrLaunchNotFound) {
+				t.Fatalf("\nwanted:\n%v for %s\ngot:\n%v", domain.ErrLaunchNotFound, id, err)
+			}
 		}
 	})
 }

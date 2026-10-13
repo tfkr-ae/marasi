@@ -9,6 +9,9 @@ import (
 // ErrLaunchNotFound means no launch has the requested id.
 var ErrLaunchNotFound = errors.New("launch not found")
 
+// ErrLaunchFinished means the launch has already reached a terminal state.
+var ErrLaunchFinished = errors.New("launch finished")
+
 // LaunchStatus identifies the lifecycle state of a launch.
 type LaunchStatus string
 
