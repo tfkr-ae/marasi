@@ -17,13 +17,13 @@ import (
 
 type testExecutionRepository struct {
 	domain.ArmoryRepository
-	run             *domain.ArmoryRun
-	getErr          error
-	updateErr       error
-	finishFailures  int
-	finishFailed    chan struct{}
-	updates         chan domain.ArmoryRun
-	mu              sync.Mutex
+	run            *domain.ArmoryRun
+	getErr         error
+	updateErr      error
+	finishFailures int
+	finishFailed   chan struct{}
+	updates        chan domain.ArmoryRun
+	mu             sync.Mutex
 }
 
 type testSentRequest struct {
