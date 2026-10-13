@@ -110,7 +110,11 @@ type Proxy struct {
 	// OnWebSocketClose is called when a WebSocket connection closes.
 	OnWebSocketClose func(domain.WebSocketConnection) error
 	// OnWebSocketIntercept is called when a WebSocket message is paused for inspection.
-	OnWebSocketIntercept  func(domain.WebSocketMessage) error
+	OnWebSocketIntercept func(domain.WebSocketMessage) error
+	// OnLaunchStarted is called once a launch is accepted, before it is sent.
+	OnLaunchStarted func(domain.Launch)
+	// OnLaunchFinished is called once per launch when it reaches a terminal state.
+	OnLaunchFinished      func(domain.Launch)
 	Addr                  string                // IP Address of the proxy
 	Port                  string                // Port of the proxy
 	Client                *http.Client          // HTTP Client that is used by the repeater functionality (autoconfigured to use the proxy)
@@ -148,6 +152,9 @@ type Proxy struct {
 	dbWriterStarted      atomic.Bool
 	launchpadWSMu        sync.Mutex
 	launchpadWS          map[io.Closer]struct{}
+	launchMu             sync.Mutex
+	launches             map[uuid.UUID]*launchEntry
+	newLaunchID          func() (uuid.UUID, error)
 
 	TrafficRepo   domain.TrafficRepository   // Repository for traffic data.
 	LaunchpadRepo domain.LaunchpadRepository // Repository for launchpad data.
@@ -578,6 +585,12 @@ func (proxy *Proxy) WriteToDB() {
 			err := proxy.TrafficRepo.InsertRequest(castItem)
 			if err != nil {
 				log.Println(err)
+				if proxy.isClaimedLaunch(castItem.ID) {
+					if _, getErr := proxy.TrafficRepo.GetMetadata(castItem.ID); getErr == nil {
+						// The UUID is taken. A launch must not write over that pair.
+						proxy.recordLaunchFailure(castItem.ID, domain.LaunchReasonDuplicateID)
+					}
+				}
 				continue
 			}
 
@@ -602,6 +615,9 @@ func (proxy *Proxy) WriteToDB() {
 				}
 			}
 		case *domain.ProxyResponse:
+			if proxy.launchStoredElsewhere(castItem.ID) {
+				continue
+			}
 			err := proxy.TrafficRepo.InsertResponse(castItem)
 			if err != nil {
 				log.Println(err)
@@ -634,6 +650,8 @@ func (proxy *Proxy) WriteToDB() {
 			// this writer on its own full channel.
 			castItem.err = proxy.applyWebSocketRequestState(castItem.requestID, castItem.state)
 			close(castItem.done)
+		case *launchOutcomeWrite:
+			proxy.finishLaunch(castItem.id)
 		case *dbWriteBarrier:
 			close(castItem.done)
 		default:
@@ -745,7 +763,7 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 		return err
 	}
 	roundTripper := newMarasiTransport(proxy.Cert, proxy.dialTransport)
-	proxy.martianProxy.SetRoundTripper(roundTripper)
+	proxy.martianProxy.SetRoundTripper(&launchFailureRoundTripper{proxy: proxy, base: roundTripper})
 	proxy.listenerMu.Lock()
 	proxy.activeListener = activeListener
 	serveDone := make(chan struct{})

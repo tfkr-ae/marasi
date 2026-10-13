@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"text/tabwriter"
 
@@ -132,8 +131,8 @@ var launchpadLinkCmd = &cobra.Command{
 
 var launchpadLaunchCmd = &cobra.Command{
 	Use:   "launch UUID",
-	Short: "Send a raw HTTP working copy",
-	Long:  "Send a raw HTTP working copy for a launchpad. Pass --raw-file or piped stdin. Set --scheme to http or https.",
+	Short: "Start a launch of a raw HTTP working copy",
+	Long:  "Start a launch of a raw HTTP working copy for a launchpad. Pass --raw-file or piped stdin. Set --scheme to http or https. The command prints the launch id and its pending status, and returns without waiting for the launch to finish. The launch id is the UUID of the traffic pair the launch creates.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if launchpadLaunchScheme != "http" && launchpadLaunchScheme != "https" {
@@ -221,12 +220,13 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 		return err
 	case "launch":
 		var result struct {
-			Status string `json:"status"`
+			LaunchID string `json:"launch_id"`
+			Status   string `json:"status"`
 		}
-		if err := json.Unmarshal(response, &result); err != nil || result.Status != "launched" {
+		if err := json.Unmarshal(response, &result); err != nil || result.LaunchID == "" || result.Status == "" {
 			return errors.New("decoding launchpad response")
 		}
-		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "launchpad %s launched successfully\n", strings.TrimSuffix(strings.TrimPrefix(path, "/launchpad/"), "/launch"))
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "launch %s %s\n", result.LaunchID, result.Status)
 		return err
 	default:
 		return fmt.Errorf("unsupported launchpad action %q", action)

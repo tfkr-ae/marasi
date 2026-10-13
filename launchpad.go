@@ -3,29 +3,69 @@ package marasi
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"slices"
 
+	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/core"
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/rawhttp"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
-// Launch sends a raw HTTP request through the proxy client.
-// It is used for the launchpad functionality to replay and test requests.
+// launchIDHeader carries a launch id from the proxy client to the request pipeline.
+// The pipeline honors it only on internal requests and never forwards it.
+const launchIDHeader = "x-marasi-launch-id"
+
+// launchEntry is a launch held in the registry until it reaches a terminal state.
+type launchEntry struct {
+	launch     domain.Launch
+	claimed    bool               // the pipeline has used the id as a pair UUID
+	cancel     context.CancelFunc // cancels the proxy client's request context
+	done       chan struct{}      // closed once the launch is terminal
+	outcome    domain.Launch      // terminal state reported by the proxy client
+	failReason string             // failure the pipeline recorded; wins over outcome
+	duplicate  bool               // storing the pair hit an existing row
+}
+
+type launchClaim int
+
+const (
+	launchUnknown launchClaim = iota
+	launchClaimed
+	launchAlreadyClaimed
+)
+
+// launchOutcomeWrite finishes a launch from the database writer, so its
+// metadata update is queued after the pair's request and response writes.
+type launchOutcomeWrite struct {
+	id uuid.UUID
+}
+
+// Launch sends a raw HTTP request from a launchpad through the proxy client.
+// It returns the launch id once the launch is accepted. The launch id is the
+// UUID of the request/response pair the launch creates.
 //
-// For normal HTTP, the response body is drained and closed before return.
-// For WebSocket upgrades, Launch returns after the handshake and keeps the
-// client body open until the peer closes, CloseWebSocket is used, or the
-// proxy shuts down.
-func (proxy *Proxy) Launch(raw string, launchpadID string, useHttps bool) error {
+// Malformed raw requests and a missing Host fail at once and create no launch.
+// A normal HTTP launch completes once its response is drained. A WebSocket
+// launch completes at the handshake, and the client body stays open until the
+// peer closes, CloseWebSocket is used, or the proxy shuts down.
+func (proxy *Proxy) Launch(raw string, launchpadID string, useHttps bool) (uuid.UUID, error) {
+	launchpad, err := uuid.Parse(launchpadID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("parsing launchpad id : %w", err)
+	}
 	updated, err := rawhttp.RecalculateContentLength([]byte(raw))
 	if err != nil {
-		return fmt.Errorf("recalculating content length : %w", err)
+		return uuid.Nil, fmt.Errorf("recalculating content length : %w", err)
 	}
 	req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(updated)))
 	if err != nil {
-		return fmt.Errorf("reading http request : %w", err)
+		return uuid.Nil, fmt.Errorf("reading http request : %w", err)
 	}
 
 	scheme := "http"
@@ -37,11 +77,10 @@ func (proxy *Proxy) Launch(raw string, launchpadID string, useHttps bool) error 
 	}
 	host := req.Host
 	if host == "" {
-		return fmt.Errorf("host header not found or is empty")
+		return uuid.Nil, fmt.Errorf("host header not found or is empty")
 	}
 
 	req.RequestURI, req.URL.Scheme, req.URL.Host = "", scheme, host
-	req.Header.Add("x-launchpad-id", launchpadID)
 
 	if _, ok := req.Header["User-Agent"]; !ok {
 		req.Header.Set("User-Agent", "")
@@ -51,19 +90,250 @@ func (proxy *Proxy) Launch(raw string, launchpadID string, useHttps bool) error 
 		req.Header.Set("x-marasi-metadata", `{"websocket.held_by":"launchpad"}`)
 	}
 
-	res, err := proxy.Client.Do(req)
+	ctx, cancel := context.WithCancel(context.Background())
+	entry, err := proxy.registerLaunch(launchpad, cancel)
 	if err != nil {
-		return fmt.Errorf("client doing request : %w", err)
+		cancel()
+		return uuid.Nil, err
+	}
+	req.Header.Set(launchIDHeader, entry.launch.ID.String())
+	req = req.WithContext(ctx)
+
+	if proxy.OnLaunchStarted != nil {
+		proxy.OnLaunchStarted(entry.launch)
+	}
+	go proxy.runLaunch(entry.launch.ID, proxy.launchClient(), req)
+	return entry.launch.ID, nil
+}
+
+// Launches returns the pending launches, oldest first.
+func (proxy *Proxy) Launches() []domain.Launch {
+	proxy.launchMu.Lock()
+	defer proxy.launchMu.Unlock()
+	launches := make([]domain.Launch, 0, len(proxy.launches))
+	for _, entry := range proxy.launches {
+		launches = append(launches, entry.launch)
+	}
+	slices.SortFunc(launches, func(a, b domain.Launch) int {
+		return bytes.Compare(a.ID[:], b.ID[:])
+	})
+	return launches
+}
+
+// GetLaunch returns a pending launch. It returns domain.ErrLaunchNotFound when
+// the registry does not hold the id.
+func (proxy *Proxy) GetLaunch(id uuid.UUID) (domain.Launch, error) {
+	proxy.launchMu.Lock()
+	defer proxy.launchMu.Unlock()
+	entry, ok := proxy.launches[id]
+	if !ok {
+		return domain.Launch{}, domain.ErrLaunchNotFound
+	}
+	return entry.launch, nil
+}
+
+// registerLaunch adds a pending launch under an id the registry does not already hold.
+func (proxy *Proxy) registerLaunch(launchpadID uuid.UUID, cancel context.CancelFunc) (*launchEntry, error) {
+	newID := proxy.newLaunchID
+	if newID == nil {
+		newID = uuid.NewV7
+	}
+	proxy.launchMu.Lock()
+	defer proxy.launchMu.Unlock()
+	if proxy.launches == nil {
+		proxy.launches = make(map[uuid.UUID]*launchEntry)
+	}
+	for {
+		id, err := newID()
+		if err != nil {
+			return nil, fmt.Errorf("generating launch id : %w", err)
+		}
+		if _, held := proxy.launches[id]; held {
+			continue
+		}
+		entry := &launchEntry{
+			launch: domain.Launch{ID: id, LaunchpadID: launchpadID, Status: domain.LaunchPending},
+			cancel: cancel,
+			done:   make(chan struct{}),
+		}
+		proxy.launches[id] = entry
+		return entry, nil
+	}
+}
+
+// claimLaunch marks a pending launch as used by the request pipeline.
+// Only the first claim of an id succeeds.
+func (proxy *Proxy) claimLaunch(id uuid.UUID) (domain.Launch, launchClaim) {
+	proxy.launchMu.Lock()
+	defer proxy.launchMu.Unlock()
+	entry, ok := proxy.launches[id]
+	if !ok {
+		return domain.Launch{}, launchUnknown
+	}
+	if entry.claimed {
+		return entry.launch, launchAlreadyClaimed
+	}
+	entry.claimed = true
+	return entry.launch, launchClaimed
+}
+
+// recordLaunchFailure records why the pipeline failed a claimed launch.
+// It does nothing for ordinary traffic. The first recorded reason stands.
+func (proxy *Proxy) recordLaunchFailure(id uuid.UUID, reason string) {
+	proxy.launchMu.Lock()
+	defer proxy.launchMu.Unlock()
+	entry, ok := proxy.launches[id]
+	if !ok || !entry.claimed || entry.failReason != "" {
+		return
+	}
+	entry.failReason = reason
+	if reason == domain.LaunchReasonDuplicateID {
+		entry.duplicate = true
+	}
+}
+
+// isClaimedLaunch reports whether id is a pending launch the pipeline has claimed.
+func (proxy *Proxy) isClaimedLaunch(id uuid.UUID) bool {
+	proxy.launchMu.Lock()
+	defer proxy.launchMu.Unlock()
+	entry, ok := proxy.launches[id]
+	return ok && entry.claimed
+}
+
+// launchStoredElsewhere reports whether id belongs to a launch whose pair
+// collided with an existing row, so writes for it must not touch that row.
+func (proxy *Proxy) launchStoredElsewhere(id uuid.UUID) bool {
+	proxy.launchMu.Lock()
+	defer proxy.launchMu.Unlock()
+	entry, ok := proxy.launches[id]
+	return ok && entry.duplicate
+}
+
+// launchClient returns a client that opens one connection per launch and
+// never reuses it, so the transport cannot retry a launch on a reused connection.
+func (proxy *Proxy) launchClient() *http.Client {
+	base := proxy.Client
+	if base == nil {
+		base = &http.Client{}
+	}
+	client := *base
+	transport, ok := client.Transport.(*http.Transport)
+	if client.Transport == nil {
+		transport, ok = http.DefaultTransport.(*http.Transport)
+	}
+	if ok {
+		transport = transport.Clone()
+		transport.DisableKeepAlives = true
+		client.Transport = transport
+	}
+	return &client
+}
+
+// runLaunch sends a launch and reports how it ended.
+func (proxy *Proxy) runLaunch(id uuid.UUID, client *http.Client, req *http.Request) {
+	res, err := client.Do(req)
+	if err != nil {
+		log.Printf("launch %s : %v", id, err)
+		proxy.endLaunch(id, domain.LaunchFailed, domain.LaunchReasonNetworkError)
+		return
 	}
 
 	if marasiws.IsUpgradeResponse(res) {
 		proxy.holdLaunchpadWebSocket(res.Body)
-		return nil
+		proxy.endLaunch(id, domain.LaunchCompleted, "")
+		return
 	}
 
-	defer res.Body.Close()
 	_, _ = io.Copy(io.Discard, res.Body)
-	return nil
+	_ = res.Body.Close()
+	proxy.endLaunch(id, domain.LaunchCompleted, "")
+}
+
+// endLaunch records the proxy client's outcome and finishes the launch.
+// When the database writer runs, the launch finishes from the writer so its
+// metadata update follows the pair's own writes.
+func (proxy *Proxy) endLaunch(id uuid.UUID, status domain.LaunchStatus, reason string) {
+	proxy.launchMu.Lock()
+	entry, ok := proxy.launches[id]
+	if ok {
+		entry.outcome = domain.Launch{ID: id, LaunchpadID: entry.launch.LaunchpadID, Status: status, Reason: reason}
+	}
+	proxy.launchMu.Unlock()
+	if !ok {
+		return
+	}
+	if proxy.dbWriterStarted.Load() && proxy.DBWriteChannel != nil {
+		proxy.DBWriteChannel <- &launchOutcomeWrite{id: id}
+		return
+	}
+	proxy.finishLaunch(id)
+}
+
+// finishLaunch removes a launch from the registry, records its terminal state
+// in the pair's metadata, and reports it.
+func (proxy *Proxy) finishLaunch(id uuid.UUID) {
+	proxy.launchMu.Lock()
+	entry, ok := proxy.launches[id]
+	if ok {
+		delete(proxy.launches, id)
+	}
+	proxy.launchMu.Unlock()
+	if !ok {
+		return
+	}
+
+	final := entry.outcome
+	if entry.failReason != "" {
+		final.Status, final.Reason = domain.LaunchFailed, entry.failReason
+	}
+	if !entry.duplicate {
+		if err := proxy.applyLaunchOutcome(final); err != nil {
+			log.Printf("recording launch %s outcome : %v", id, err)
+		}
+	}
+	entry.cancel()
+	close(entry.done)
+	if proxy.OnLaunchFinished != nil {
+		proxy.OnLaunchFinished(final)
+	}
+}
+
+// applyLaunchOutcome merges the launch's terminal state into its pair's metadata.
+// A launch whose pair was never stored has nothing to update.
+func (proxy *Proxy) applyLaunchOutcome(launch domain.Launch) error {
+	if proxy.TrafficRepo == nil {
+		return nil
+	}
+	metadata, err := proxy.TrafficRepo.GetMetadata(launch.ID)
+	if err != nil {
+		return nil
+	}
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	outcome := map[string]any{"status": string(launch.Status)}
+	if launch.Reason != "" {
+		outcome["reason"] = launch.Reason
+	}
+	metadata["launch"] = outcome
+	return proxy.TrafficRepo.UpdateMetadata(metadata, launch.ID)
+}
+
+// launchFailureRoundTripper records upstream round-trip failures of claimed launches.
+type launchFailureRoundTripper struct {
+	proxy *Proxy
+	base  http.RoundTripper
+}
+
+// RoundTrip satisfies http.RoundTripper.
+func (rt *launchFailureRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	res, err := rt.base.RoundTrip(req)
+	if err != nil {
+		if id, ok := core.RequestIDFromContext(req.Context()); ok {
+			rt.proxy.recordLaunchFailure(id, domain.LaunchReasonUpstreamError)
+		}
+	}
+	return res, err
 }
 
 // holdLaunchpadWebSocket keeps a Launchpad WebSocket response body alive and drains it.

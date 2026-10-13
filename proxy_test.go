@@ -2821,7 +2821,8 @@ func TestProxy_LaunchWebSocket(t *testing.T) {
 
 	launchResult := make(chan error, 1)
 	go func() {
-		launchResult <- proxy.Launch(raw, launchpadID.String(), false)
+		_, err := proxy.Launch(raw, launchpadID.String(), false)
+		launchResult <- err
 	}()
 
 	select {

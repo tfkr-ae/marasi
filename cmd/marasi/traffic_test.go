@@ -716,12 +716,12 @@ func TestLaunchpadCommands(t *testing.T) {
 		if err := os.WriteFile(rawFile, raw, 0o600); err != nil {
 			t.Fatalf("writing raw request: %v", err)
 		}
-		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, "{\"status\":\"launched\"}\n")
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, "{\"launch_id\":\"01938034-298e-73dc-b640-eb321b621154\",\"status\":\"pending\"}\n")
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "launch", id, "--scheme", "http", "--raw-file", rawFile)
 		wantBody := `{"raw":"` + base64.StdEncoding.EncodeToString(raw) + `","scheme":"http"}`
 		got := sent.snapshot()
-		if err != nil || stdout != "" || stderr != "launchpad "+id+" launched successfully\n" || got.Method != http.MethodPost || got.Path != "/launchpad/"+id+"/launch" || got.Body != wantBody {
+		if err != nil || stdout != "" || stderr != "launch 01938034-298e-73dc-b640-eb321b621154 pending\n" || got.Method != http.MethodPost || got.Path != "/launchpad/"+id+"/launch" || got.Body != wantBody {
 			t.Fatalf("\nwanted:\nPOST launch body %q and success on stderr\ngot:\n%s %s body %q, stdout %q, stderr %q, error %v", wantBody, got.Method, got.Path, got.Body, stdout, stderr, err)
 		}
 	})
@@ -729,7 +729,7 @@ func TestLaunchpadCommands(t *testing.T) {
 	t.Run("should launch piped stdin with JSON passthrough", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		raw := []byte("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
-		body := "{\"status\":\"launched\"}\n"
+		body := "{\"launch_id\":\"01938034-298e-73dc-b640-eb321b621154\",\"status\":\"pending\"}\n"
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 		var stdout, stderr bytes.Buffer
 		command := exec.Command(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "launch", id, "--scheme", "https", "--json")
