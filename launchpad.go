@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/core"
@@ -24,13 +25,14 @@ const launchIDHeader = "x-marasi-launch-id"
 // launchEntry is a launch held in the registry until it reaches a terminal state.
 type launchEntry struct {
 	launch     domain.Launch
-	claimed    bool               // the pipeline has used the id as a pair UUID
-	cancel     context.CancelFunc // cancels the proxy client's request context
-	done       chan struct{}      // closed once the launch is terminal
-	outcome    domain.Launch      // terminal state reported by the proxy client
-	failReason string             // failure the pipeline recorded; wins over outcome
-	duplicate  bool               // storing the pair hit an existing row
-	cancelled  bool               // CancelLaunch was called while pending; wins over everything
+	claimed    bool                 // the pipeline has used the id as a pair UUID
+	cancel     context.CancelFunc   // cancels the proxy client's request context
+	done       chan struct{}        // closed once the launch is terminal
+	outcome    domain.Launch        // terminal state reported by the proxy client
+	failReason string               // failure the pipeline recorded; wins over outcome
+	duplicate  bool                 // storing the pair hit an existing row
+	cancelled  bool                 // CancelLaunch was called while pending; wins over everything
+	launched   *domain.ProxyRequest // the request as launched, stored if the pipeline never wrote it
 }
 
 type launchClaim int
@@ -87,15 +89,26 @@ func (proxy *Proxy) Launch(raw string, launchpadID string, useHttps bool) (uuid.
 		req.Header.Set("User-Agent", "")
 	}
 
-	if marasiws.IsUpgradeRequest(req) {
-		req.Header.Set("x-marasi-metadata", `{"websocket.held_by":"launchpad"}`)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	entry, err := proxy.registerLaunch(launchpad, cancel)
 	if err != nil {
 		cancel()
 		return uuid.Nil, err
+	}
+	launched, err := launchedRequest(req, entry.launch)
+	if err != nil {
+		proxy.launchMu.Lock()
+		delete(proxy.launches, entry.launch.ID)
+		proxy.launchMu.Unlock()
+		cancel()
+		return uuid.Nil, err
+	}
+	proxy.launchMu.Lock()
+	entry.launched = launched
+	proxy.launchMu.Unlock()
+
+	if marasiws.IsUpgradeRequest(req) {
+		req.Header.Set("x-marasi-metadata", `{"websocket.held_by":"launchpad"}`)
 	}
 	req.Header.Set(launchIDHeader, entry.launch.ID.String())
 	req = req.WithContext(ctx)
@@ -105,6 +118,20 @@ func (proxy *Proxy) Launch(raw string, launchpadID string, useHttps bool) (uuid.
 	}
 	go proxy.runLaunch(entry.launch.ID, proxy.launchClient(), req)
 	return entry.launch.ID, nil
+}
+
+// launchedRequest records a launch's request as the proxy client sends it,
+// before any internal header is added, under the launch id.
+func launchedRequest(req *http.Request, launch domain.Launch) (*domain.ProxyRequest, error) {
+	metadata := map[string]any{"launchpad": true, "launchpad_id": launch.LaunchpadID}
+	snapshot := core.ContextWithMetadata(core.ContextWithRequestTime(req, time.Now()), metadata)
+	launched, err := NewProxyRequest(snapshot, launch.ID)
+	if err != nil {
+		return nil, fmt.Errorf("recording launched request : %w", err)
+	}
+	// NewProxyRequest buffers the body on the snapshot; hand it back to the request.
+	req.Body = snapshot.Body
+	return launched, nil
 }
 
 // Launches returns the pending launches, oldest first.
@@ -249,6 +276,14 @@ func (proxy *Proxy) claimLaunch(id uuid.UUID) (domain.Launch, launchClaim) {
 	return entry.launch, launchClaimed
 }
 
+// launchAwaitingClaim reports whether id is a pending launch the pipeline has not claimed yet.
+func (proxy *Proxy) launchAwaitingClaim(id uuid.UUID) bool {
+	proxy.launchMu.Lock()
+	defer proxy.launchMu.Unlock()
+	entry, ok := proxy.launches[id]
+	return ok && !entry.claimed
+}
+
 // recordLaunchFailure records why the pipeline failed a claimed launch.
 // It does nothing for ordinary traffic. The first recorded reason stands.
 func (proxy *Proxy) recordLaunchFailure(id uuid.UUID, reason string) {
@@ -261,6 +296,15 @@ func (proxy *Proxy) recordLaunchFailure(id uuid.UUID, reason string) {
 	entry.failReason = reason
 	if reason == domain.LaunchReasonDuplicateID {
 		entry.duplicate = true
+	}
+}
+
+// recordLaunchDropped records that the pipeline dropped a claimed launch.
+// A request that never claimed a launch, such as a second claim, has no
+// request id in its context, so it cannot fail the launch it named.
+func (proxy *Proxy) recordLaunchDropped(req *http.Request) {
+	if id, ok := core.RequestIDFromContext(req.Context()); ok {
+		proxy.recordLaunchFailure(id, domain.LaunchReasonDropped)
 	}
 }
 
@@ -356,6 +400,7 @@ func (proxy *Proxy) finishLaunch(id uuid.UUID) {
 
 	final := entry.final()
 	if !entry.duplicate {
+		proxy.storeLaunchedRequest(entry)
 		if err := proxy.applyLaunchOutcome(final); err != nil {
 			log.Printf("recording launch %s outcome : %v", id, err)
 		}
@@ -365,6 +410,18 @@ func (proxy *Proxy) finishLaunch(id uuid.UUID) {
 	if proxy.OnLaunchFinished != nil {
 		proxy.OnLaunchFinished(final)
 	}
+}
+
+// storeLaunchedRequest stores the request as launched when the launch ended
+// before the pipeline wrote its pair, so every launch leaves its request in its launchpad.
+func (proxy *Proxy) storeLaunchedRequest(entry *launchEntry) {
+	if proxy.TrafficRepo == nil || entry.launched == nil {
+		return
+	}
+	if _, err := proxy.TrafficRepo.GetMetadata(entry.launch.ID); err == nil {
+		return
+	}
+	proxy.writeRequest(entry.launched)
 }
 
 // applyLaunchOutcome merges the launch's terminal state into its pair's metadata.

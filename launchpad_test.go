@@ -1,6 +1,7 @@
 package marasi
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/base64"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/extensions"
 )
 
 type launchHarness struct {
@@ -31,7 +33,8 @@ type launchHarness struct {
 }
 
 // startLaunchHarness serves a real proxy over an in-memory project with one launchpad.
-func startLaunchHarness(t *testing.T) *launchHarness {
+// Extra options are applied after the harness's own, before the pipelines.
+func startLaunchHarness(t *testing.T, extra ...func(*Proxy) error) *launchHarness {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dbConnection, err := db.New(":memory:", logger)
@@ -51,7 +54,7 @@ func startLaunchHarness(t *testing.T) *launchHarness {
 	}
 	finished := make(chan domain.Launch, 16)
 	requests := make(chan domain.ProxyRequest, 16)
-	proxy, err := New(
+	options := []func(*Proxy) error{
 		WithConfigDir(t.TempDir()),
 		WithDefaultRepositories(repository),
 		WithExtensions(defaultExtensions),
@@ -59,9 +62,10 @@ func startLaunchHarness(t *testing.T) *launchHarness {
 		WithResponseHandler(func(domain.ProxyResponse) error { return nil }),
 		WithLogHandler(func(domain.Log) error { return nil }),
 		WithLaunchFinishedHandler(func(launch domain.Launch) { finished <- launch }),
-		WithBasePipeline(),
-		WithDefaultModifierPipeline(),
-	)
+	}
+	options = append(options, extra...)
+	options = append(options, WithBasePipeline(), WithDefaultModifierPipeline())
+	proxy, err := New(options...)
 	if err != nil {
 		repository.Close()
 		t.Fatalf("creating proxy: %v", err)
@@ -542,4 +546,184 @@ func TestProxy_CancelLaunch(t *testing.T) {
 			}
 		}
 	})
+}
+
+// assertStoredAsLaunched checks that the launch's pair is stored under the
+// launch id with the given outcome, carries the launched request, and is
+// linked to the launchpad.
+func (h *launchHarness) assertStoredAsLaunched(t *testing.T, id uuid.UUID, path string, outcome map[string]any) {
+	t.Helper()
+	row, err := h.repository.GetRequestResponseRow(id)
+	if err != nil {
+		t.Fatalf("getting pair %s: %v", id, err)
+	}
+	if got := row.Metadata["launch"]; !reflect.DeepEqual(got, outcome) {
+		t.Fatalf("\nwanted:\nmetadata.launch %v\ngot:\n%v", outcome, got)
+	}
+	if row.Metadata["launchpad"] != true || row.Metadata["launchpad_id"] != h.launchpadID.String() {
+		t.Fatalf("\nwanted:\nlaunchpad metadata for %s\ngot:\n%v", h.launchpadID, row.Metadata)
+	}
+	if row.Request.Path != path || !strings.HasPrefix(string(row.Request.Raw), "GET ") || !strings.Contains(string(row.Request.Raw), path+" HTTP/1.1\r\n") {
+		t.Fatalf("\nwanted:\nlaunched request GET %s\ngot:\n%s %q", path, row.Request.Path, row.Request.Raw)
+	}
+	if strings.Contains(strings.ToLower(string(row.Request.Raw)), "x-marasi-") {
+		t.Fatalf("\nwanted:\nno internal headers in the stored request\ngot:\n%q", row.Request.Raw)
+	}
+	if got := h.launchpadMembers(t); !reflect.DeepEqual(got, []uuid.UUID{id}) {
+		t.Fatalf("\nwanted:\nlaunchpad members [%s]\ngot:\n%v", id, got)
+	}
+}
+
+func TestProxy_LaunchStoresItsRequest(t *testing.T) {
+	t.Run("should store a launch cancelled while held at Checkpoint as launched", func(t *testing.T) {
+		held := make(chan domain.CheckpointItem, 1)
+		abandoned := make(chan domain.CheckpointItem, 1)
+		h := startLaunchHarness(t,
+			WithInterceptHandler(func(item domain.CheckpointItem) error { held <- item; return nil }),
+			WithCheckpointAbandonedHandler(func(item domain.CheckpointItem) error { abandoned <- item; return nil }),
+		)
+		origin := startLaunchOrigin(t)
+		h.proxy.SetIntercept(true)
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/held"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+		item := receiveCheckpointItem(t, held, "the launch to be held")
+
+		if _, err := h.proxy.CancelLaunch(id); err != nil {
+			t.Fatalf("CancelLaunch() returned unexpected error: %v", err)
+		}
+
+		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchCancelled}
+		if got := h.waitFinished(t); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		if got := receiveCheckpointItem(t, abandoned, "the hold to be dropped"); got.ID != item.ID {
+			t.Fatalf("\nwanted:\ndropped item %s\ngot:\n%s", item.ID, got.ID)
+		}
+		if items := h.proxy.CheckpointItems(); len(items) != 0 {
+			t.Fatalf("\nwanted:\nno Checkpoint items\ngot:\n%v", items)
+		}
+		h.assertStoredAsLaunched(t, id, "/held", map[string]any{"status": "cancelled"})
+		select {
+		case seen := <-origin.seen:
+			t.Fatalf("\nwanted:\nno request at the origin\ngot:\n%s", seen.URL.Path)
+		default:
+		}
+	})
+	t.Run("should store a launch cancelled inside a request hook as launched", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+		workshop := h.blockingWorkshop(t, `function processRequest(request) print("entered") while true do end end`)
+		entered := make(chan struct{})
+		var once sync.Once
+		workshop.OnLog = func(extensions.ExtensionLog) error {
+			once.Do(func() { close(entered) })
+			return nil
+		}
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/hooked"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("processRequest did not enter Lua")
+		}
+
+		if _, err := h.proxy.CancelLaunch(id); err != nil {
+			t.Fatalf("CancelLaunch() returned unexpected error: %v", err)
+		}
+
+		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchCancelled}
+		if got := h.waitFinished(t); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		h.assertStoredAsLaunched(t, id, "/hooked", map[string]any{"status": "cancelled"})
+		// Running Lua again proves the hook has returned, so it can no longer send.
+		if err := workshop.ExecuteLua("probe = true"); err != nil {
+			t.Fatalf("running Lua after the hook: %v", err)
+		}
+		select {
+		case seen := <-origin.seen:
+			t.Fatalf("\nwanted:\nno request at the origin\ngot:\n%s", seen.URL.Path)
+		case <-time.After(100 * time.Millisecond):
+		}
+	})
+
+	t.Run("should fail a launch dropped by an extension with dropped and store it as launched", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+		h.blockingWorkshop(t, `function processRequest(request) request:drop() end`)
+
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/dropped"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+
+		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchFailed, Reason: domain.LaunchReasonDropped}
+		if got := h.waitFinished(t); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		h.assertStoredAsLaunched(t, id, "/dropped", map[string]any{"status": "failed", "reason": "dropped"})
+		select {
+		case seen := <-origin.seen:
+			t.Fatalf("\nwanted:\nno request at the origin\ngot:\n%s", seen.URL.Path)
+		default:
+		}
+	})
+
+	t.Run("should run, store, and link a launch out of scope for Compass", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+		compass, ok := h.proxy.GetExtension("compass")
+		if !ok {
+			t.Fatal("getting compass extension")
+		}
+		if err := compass.ExecuteLua(`function processRequest(request) request:skip() end
+function processResponse(response) response:skip() end`); err != nil {
+			t.Fatalf("updating compass: %v", err)
+		}
+		marker, ok := h.proxy.GetExtension("workshop")
+		if !ok {
+			t.Fatal("getting workshop extension")
+		}
+		if err := marker.ExecuteLua(`function processRequest(request) request:set_metadata({pipeline = "ran"}) end`); err != nil {
+			t.Fatalf("updating workshop: %v", err)
+		}
+
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/outside"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+
+		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchCompleted}
+		if got := h.waitFinished(t); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		h.assertStoredAsLaunched(t, id, "/outside", map[string]any{"status": "completed"})
+		row, err := h.repository.GetRequestResponseRow(id)
+		if err != nil {
+			t.Fatalf("getting pair: %v", err)
+		}
+		if got := row.Metadata["workshop"]; !reflect.DeepEqual(got, map[string]any{"pipeline": "ran"}) || row.Response.StatusCode != http.StatusOK {
+			t.Fatalf("\nwanted:\npipeline ran and response stored\ngot:\n%v %d", row.Metadata, row.Response.StatusCode)
+		}
+	})
+}
+
+// blockingWorkshop loads script into the workshop extension. Cleanup cancels
+// the runtime, so a hook that never returns cannot block proxy.Close.
+func (h *launchHarness) blockingWorkshop(t *testing.T, script string) *extensions.Runtime {
+	t.Helper()
+	workshop, ok := h.proxy.GetExtension("workshop")
+	if !ok {
+		t.Fatal("getting workshop extension")
+	}
+	if err := workshop.ExecuteLua(script); err != nil {
+		t.Fatalf("updating workshop: %v", err)
+	}
+	workshop.ExecutionContext, workshop.CancelExecution = context.WithCancel(context.Background())
+	t.Cleanup(workshop.CancelExecution)
+	return workshop
 }
