@@ -204,6 +204,18 @@ func WithLaunchFinishedHandler(handler func(domain.Launch)) func(*Proxy) error {
 	}
 }
 
+// WithCheckpointAbandonedHandler sets OnCheckpointAbandoned for HTTP Checkpoint items
+// dropped because their client left. Its return error is ignored.
+func WithCheckpointAbandonedHandler(handler func(item domain.CheckpointItem) error) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnCheckpointAbandoned != nil {
+			return errors.New("proxy already has a checkpoint abandoned handler defined")
+		}
+		proxy.OnCheckpointAbandoned = handler
+		return nil
+	}
+}
+
 // WithResponseHandler takes a handler function that will be executed on each response
 func WithResponseHandler(handler func(res domain.ProxyResponse) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {

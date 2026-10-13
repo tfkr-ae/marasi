@@ -618,6 +618,221 @@ func TestProxy_ClientDisconnectInterruptsRequestHook(t *testing.T) {
 	}
 }
 
+// checkpointAbandonHarness is a served proxy with Checkpoint and traffic callbacks
+// reported on channels.
+type checkpointAbandonHarness struct {
+	proxy     *Proxy
+	origin    *httptest.Server
+	hits      atomic.Int32
+	held      chan domain.CheckpointItem
+	abandoned chan domain.CheckpointItem
+	requests  chan domain.ProxyRequest
+	responses chan domain.ProxyResponse
+}
+
+func newCheckpointAbandonHarness(t *testing.T, onHeld func(*checkpointAbandonHarness, domain.CheckpointItem)) *checkpointAbandonHarness {
+	t.Helper()
+	harness := &checkpointAbandonHarness{
+		held:      make(chan domain.CheckpointItem, 4),
+		abandoned: make(chan domain.CheckpointItem, 4),
+		requests:  make(chan domain.ProxyRequest, 4),
+		responses: make(chan domain.ProxyResponse, 4),
+	}
+	harness.origin = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		harness.hits.Add(1)
+		io.WriteString(w, "origin")
+	}))
+	t.Cleanup(harness.origin.Close)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dbConnection, err := db.New(":memory:", logger)
+	if err != nil {
+		t.Fatalf("creating in-memory database: %v", err)
+	}
+	repository := db.NewProxyRepo(dbConnection)
+	defaultExtensions, err := repository.GetExtensions()
+	if err != nil {
+		repository.Close()
+		t.Fatalf("getting default extensions: %v", err)
+	}
+	proxy, err := New(
+		WithConfigDir(t.TempDir()),
+		WithDefaultRepositories(repository),
+		WithExtensions(defaultExtensions),
+		WithRequestHandler(func(req domain.ProxyRequest) error {
+			harness.requests <- req
+			return nil
+		}),
+		WithResponseHandler(func(res domain.ProxyResponse) error {
+			harness.responses <- res
+			return nil
+		}),
+		WithLogHandler(func(domain.Log) error { return nil }),
+		WithInterceptHandler(func(item domain.CheckpointItem) error {
+			if onHeld != nil {
+				onHeld(harness, item)
+			}
+			harness.held <- item
+			return nil
+		}),
+		WithCheckpointAbandonedHandler(func(item domain.CheckpointItem) error {
+			harness.abandoned <- item
+			return nil
+		}),
+		WithBasePipeline(),
+		WithDefaultModifierPipeline(),
+	)
+	if err != nil {
+		repository.Close()
+		t.Fatalf("creating proxy: %v", err)
+	}
+	harness.proxy = proxy
+
+	proxyListener, err := proxy.GetListener("127.0.0.1", "0")
+	if err != nil {
+		proxy.Close()
+		t.Fatalf("creating proxy listener: %v", err)
+	}
+	serveResult := make(chan error, 1)
+	go func() { serveResult <- proxy.Serve(proxyListener) }()
+	t.Cleanup(func() {
+		proxy.Close()
+		select {
+		case <-serveResult:
+		case <-time.After(5 * time.Second):
+		}
+	})
+	return harness
+}
+
+// send dials the proxy and writes one GET for the origin. The caller owns the connection.
+func (harness *checkpointAbandonHarness) send(t *testing.T) net.Conn {
+	t.Helper()
+	client, err := net.Dial("tcp", net.JoinHostPort(harness.proxy.Addr, harness.proxy.Port))
+	if err != nil {
+		t.Fatalf("dialing proxy: %v", err)
+	}
+	originHost := strings.TrimPrefix(harness.origin.URL, "http://")
+	if _, err := fmt.Fprintf(client, "GET %s/held HTTP/1.1\r\nHost: %s\r\n\r\n", harness.origin.URL, originHost); err != nil {
+		client.Close()
+		t.Fatalf("writing request: %v", err)
+	}
+	return client
+}
+
+func receiveCheckpointItem(t *testing.T, items <-chan domain.CheckpointItem, what string) domain.CheckpointItem {
+	t.Helper()
+	select {
+	case item := <-items:
+		return item
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		return domain.CheckpointItem{}
+	}
+}
+
+func TestProxy_CheckpointHoldEndsWhenClientLeaves(t *testing.T) {
+	t.Run("should abandon a held request and never reach the origin", func(t *testing.T) {
+		harness := newCheckpointAbandonHarness(t, nil)
+		harness.proxy.SetIntercept(true)
+
+		client := harness.send(t)
+		held := receiveCheckpointItem(t, harness.held, "the request hold")
+		client.Close()
+
+		abandoned := receiveCheckpointItem(t, harness.abandoned, "the abandoned request")
+		if abandoned.ID != held.ID || abandoned.Type != domain.CheckpointTypeRequest {
+			t.Fatalf("\nwanted:\n%s %s\ngot:\n%s %s", held.ID, domain.CheckpointTypeRequest, abandoned.ID, abandoned.Type)
+		}
+		if items := harness.proxy.CheckpointItems(); len(items) != 0 {
+			t.Fatalf("wanted no pending Checkpoint items\ngot: %v", items)
+		}
+		if err := harness.proxy.ForwardCheckpoint(held.ID, CheckpointForward{}); !errors.Is(err, ErrCheckpointNotFound) {
+			t.Fatalf("wanted: %v\ngot: %v", ErrCheckpointNotFound, err)
+		}
+		time.Sleep(200 * time.Millisecond)
+		if got := harness.hits.Load(); got != 0 {
+			t.Fatalf("origin received %d requests after its client left", got)
+		}
+		select {
+		case req := <-harness.requests:
+			t.Fatalf("an abandoned request was written: %s", req.ID)
+		default:
+		}
+	})
+
+	t.Run("should abandon a held response and drop it", func(t *testing.T) {
+		harness := newCheckpointAbandonHarness(t, nil)
+		checkpoint, ok := harness.proxy.GetExtension("checkpoint")
+		if !ok {
+			t.Fatal("getting checkpoint extension")
+		}
+		if err := checkpoint.ExecuteLua(`function interceptResponse(response) return true end`); err != nil {
+			t.Fatalf("updating checkpoint: %v", err)
+		}
+
+		client := harness.send(t)
+		defer client.Close()
+		held := receiveCheckpointItem(t, harness.held, "the response hold")
+		if held.Type != domain.CheckpointTypeResponse {
+			t.Fatalf("wanted: %s\ngot: %s", domain.CheckpointTypeResponse, held.Type)
+		}
+		client.Close()
+
+		abandoned := receiveCheckpointItem(t, harness.abandoned, "the abandoned response")
+		if abandoned.ID != held.ID || abandoned.Type != domain.CheckpointTypeResponse {
+			t.Fatalf("\nwanted:\n%s %s\ngot:\n%s %s", held.ID, domain.CheckpointTypeResponse, abandoned.ID, abandoned.Type)
+		}
+		if items := harness.proxy.CheckpointItems(); len(items) != 0 {
+			t.Fatalf("wanted no pending Checkpoint items\ngot: %v", items)
+		}
+		time.Sleep(200 * time.Millisecond)
+		select {
+		case res := <-harness.responses:
+			t.Fatalf("an abandoned response was written: %s", res.ID)
+		default:
+		}
+	})
+
+	t.Run("should let a forward that resolved the item first stand", func(t *testing.T) {
+		clients := make(chan net.Conn, 1)
+		// The forward and the client leaving both happen before the hold waits,
+		// so the hold sees its item resolved and its context cancelled at once.
+		harness := newCheckpointAbandonHarness(t, func(harness *checkpointAbandonHarness, item domain.CheckpointItem) {
+			// Only the request is held; its response passes through.
+			harness.proxy.SetIntercept(false)
+			if err := harness.proxy.ForwardCheckpoint(item.ID, CheckpointForward{}); err != nil {
+				t.Errorf("forwarding: %v", err)
+			}
+			(<-clients).Close()
+			time.Sleep(200 * time.Millisecond)
+		})
+		harness.proxy.SetIntercept(true)
+
+		client := harness.send(t)
+		defer client.Close()
+		clients <- client
+		held := receiveCheckpointItem(t, harness.held, "the request hold")
+
+		select {
+		case req := <-harness.requests:
+			if req.ID != held.ID {
+				t.Fatalf("wanted: %s\ngot: %s", held.ID, req.ID)
+			}
+			if dropped, _ := req.Metadata["dropped"].(bool); dropped {
+				t.Fatal("a forwarded request was marked dropped")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the forwarded request was not written")
+		}
+		select {
+		case item := <-harness.abandoned:
+			t.Fatalf("a forwarded item was abandoned: %s", item.ID)
+		case <-time.After(200 * time.Millisecond):
+		}
+	})
+}
+
 type websocketRepositoryStub struct {
 	connection *domain.WebSocketConnection
 	messages   []*domain.WebSocketMessage

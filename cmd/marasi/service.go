@@ -421,6 +421,7 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 		marasi.WithRequestHandler(serviceServer.HandleRequest),
 		marasi.WithResponseHandler(serviceServer.HandleResponse),
 		marasi.WithInterceptHandler(serviceServer.HandleIntercept),
+		marasi.WithCheckpointAbandonedHandler(serviceServer.HandleCheckpointAbandoned),
 		marasi.WithWebSocketOpenHandler(serviceServer.HandleWebSocketOpen),
 		marasi.WithWebSocketMessageHandler(serviceServer.HandleWebSocketMessage),
 		marasi.WithWebSocketProgressHandler(serviceServer.HandleWebSocketProgress),
