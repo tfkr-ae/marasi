@@ -841,3 +841,90 @@ func TestProxy_LaunchSync(t *testing.T) {
 		}
 	})
 }
+
+func TestProxy_InterruptedLaunches(t *testing.T) {
+	t.Run("should end a launch pending during a project switch as interrupted and store it in the original project", func(t *testing.T) {
+		held := make(chan domain.CheckpointItem, 1)
+		h := startLaunchHarness(t,
+			WithInterceptHandler(func(item domain.CheckpointItem) error { held <- item; return nil }),
+		)
+		original := h.repository
+		t.Cleanup(func() { original.Close() })
+		origin := startLaunchOrigin(t)
+		h.proxy.SetIntercept(true)
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/held"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+		receiveCheckpointItem(t, held, "the launch to be held")
+		dbConnection, err := db.New(":memory:", slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err != nil {
+			t.Fatalf("creating the next project's database: %v", err)
+		}
+		next := db.NewProxyRepo(dbConnection)
+
+		h.proxy.SetProjectResources(ProjectResources{Repository: next, Extensions: h.proxy.Extensions, Scope: h.proxy.Scope})
+
+		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchFailed, Reason: domain.LaunchReasonInterrupted}
+		if got := h.waitFinished(t); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		h.assertStoredAsLaunched(t, id, "/held", map[string]any{"status": "failed", "reason": "interrupted"})
+		if _, err := next.GetMetadata(id); err == nil {
+			t.Fatalf("\nwanted:\nno pair %s in the newly opened project\ngot:\none", id)
+		}
+		select {
+		case seen := <-origin.seen:
+			t.Fatalf("\nwanted:\nno request at the origin\ngot:\n%s", seen.URL.Path)
+		default:
+		}
+	})
+
+	t.Run("should end a launch pending when the service stops as interrupted", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/slow"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+		upstream := origin.waitPath(t, "/slow")
+		h.waitRequest(t, "/slow")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := h.proxy.CloseTransportContext(ctx); err != nil {
+			t.Fatalf("CloseTransportContext() returned unexpected error: %v", err)
+		}
+
+		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchFailed, Reason: domain.LaunchReasonInterrupted}
+		if got := h.waitFinished(t); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		select {
+		case <-upstream.Context().Done():
+		default:
+			t.Fatal("wanted the upstream round trip to be abandoned")
+		}
+		h.assertStoredAsLaunched(t, id, "/slow", map[string]any{"status": "failed", "reason": "interrupted"})
+	})
+
+	t.Run("should keep a launch a person cancelled as cancelled", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/slow"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+		origin.waitPath(t, "/slow")
+		if _, err := h.proxy.CancelLaunch(id); err != nil {
+			t.Fatalf("CancelLaunch() returned unexpected error: %v", err)
+		}
+
+		h.proxy.InterruptLaunches()
+
+		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchCancelled}
+		if got := h.waitFinished(t); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+	})
+}

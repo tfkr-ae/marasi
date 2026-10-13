@@ -37,6 +37,8 @@ const (
 	LaunchReasonNetworkError = "network_error"
 	// LaunchReasonDropped means an extension or a Checkpoint drop stopped the launch in the proxy.
 	LaunchReasonDropped = "dropped"
+	// LaunchReasonInterrupted means a project switch or service stop ended the launch.
+	LaunchReasonInterrupted = "interrupted"
 )
 
 // Launch is a raw request sent from a launchpad through the proxy.
