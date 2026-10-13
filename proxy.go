@@ -94,7 +94,11 @@ type Proxy struct {
 	// OnIntercept runs synchronously after an HTTP Checkpoint item becomes pending.
 	// Its return error is ignored. A blocking callback blocks the intercepted execution.
 	OnIntercept func(item domain.CheckpointItem) error
-	OnLog       func(log domain.Log) error // Function to be ran on each log event - used by the GUI application to handle new log entries
+	// OnCheckpointAbandoned runs after an HTTP Checkpoint item is dropped because its
+	// client left (ADR-0030). It is not called for a forward or drop that resolved the item first.
+	// Its return error is ignored.
+	OnCheckpointAbandoned func(item domain.CheckpointItem) error
+	OnLog                 func(log domain.Log) error // Function to be ran on each log event - used by the GUI application to handle new log entries
 	// OnWebSocketOpen is called when a WebSocket connection opens.
 	OnWebSocketOpen func(domain.WebSocketConnection) error
 	// OnWebSocketMessage is called for each processed WebSocket message.
