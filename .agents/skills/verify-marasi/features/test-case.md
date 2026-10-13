@@ -5,7 +5,7 @@ Users record named test cases in the open project, attach captured traffic, and 
 ## Sub-features
 
 - Create with `test-case create --title`.
-- List newest first with `test-case list`.
+- List newest first with `test-case list`. Order is by creation time to the second; test cases created in the same second keep creation order.
 - Read one case and its linked traffic with `test-case get`.
 - List linked traffic oldest-first with `test-case list-requests UUID`.
 - Change title, description, category, tags, or note with `test-case update`.
