@@ -983,6 +983,35 @@ func TestTrafficGet(t *testing.T) {
 		}
 	})
 
+	t.Run("should report responded_at as null for a pair with no response", func(t *testing.T) {
+		id := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809")
+		repo := &stubTrafficRepository{
+			row: &domain.RequestResponseRow{
+				Request: domain.ProxyRequest{
+					ID:          id,
+					Scheme:      "https",
+					Method:      "GET",
+					Host:        "example.com",
+					Path:        "/a",
+					Raw:         []byte("GET /a"),
+					RequestedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+				},
+				Response: domain.ProxyResponse{ID: id, Status: "N/A", StatusCode: -1, Length: "0"},
+				Metadata: map[string]any{},
+			},
+		}
+		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
+		request := httptest.NewRequest(http.MethodGet, "/traffic/"+id.String(), nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		want := "{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"note\":\"\",\"metadata\":{},\"request\":{\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"raw\":\"R0VUIC9h\",\"requested_at\":\"2026-01-02T03:04:05Z\"},\"response\":{\"status\":\"N/A\",\"status_code\":-1,\"content_type\":\"\",\"length\":\"0\",\"raw\":null,\"responded_at\":null}}\n"
+		if got := response.Body.String(); response.Code != http.StatusOK || got != want {
+			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, got)
+		}
+	})
+
 	t.Run("should not find a well-formed unknown id", func(t *testing.T) {
 		server := newTestServer(&marasi.Proxy{TrafficRepo: &stubTrafficRepository{}}, func() {})
 		request := httptest.NewRequest(http.MethodGet, "/traffic/01938032-1b17-7243-b035-e6a9f4645904", nil)
