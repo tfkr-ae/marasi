@@ -1,6 +1,7 @@
 package marasi
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/base64"
 	"errors"
@@ -540,6 +541,120 @@ func TestProxy_CancelLaunch(t *testing.T) {
 			if _, err := h.proxy.CancelLaunch(id); !errors.Is(err, domain.ErrLaunchNotFound) {
 				t.Fatalf("\nwanted:\n%v for %s\ngot:\n%v", domain.ErrLaunchNotFound, id, err)
 			}
+		}
+	})
+}
+
+func TestProxy_GetLaunchAfterItFinished(t *testing.T) {
+	t.Run("should read a completed launch from its stored pair", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/done"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+		h.waitFinished(t)
+
+		got, err := h.proxy.GetLaunch(id)
+
+		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchCompleted}
+		if err != nil || got != want {
+			t.Fatalf("\nwanted:\n%+v, nil\ngot:\n%+v, %v", want, got, err)
+		}
+	})
+
+	t.Run("should read a cancelled launch from its stored pair", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/slow"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+		origin.waitPath(t, "/slow")
+		h.waitRequest(t, "/slow")
+		if _, err := h.proxy.CancelLaunch(id); err != nil {
+			t.Fatalf("CancelLaunch() returned unexpected error: %v", err)
+		}
+		h.waitFinished(t)
+
+		got, err := h.proxy.GetLaunch(id)
+
+		want := domain.Launch{ID: id, LaunchpadID: h.launchpadID, Status: domain.LaunchCancelled}
+		if err != nil || got != want {
+			t.Fatalf("\nwanted:\n%+v, nil\ngot:\n%+v, %v", want, got, err)
+		}
+	})
+
+	t.Run("should not find an id that is neither live nor a launch's pair", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+		sendThrough(t, h.outsideClient(t), origin.URL+"/ordinary", "")
+		ordinary := h.waitRequest(t, "/ordinary")
+
+		for _, id := range []uuid.UUID{uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809"), ordinary.ID} {
+			if _, err := h.proxy.GetLaunch(id); !errors.Is(err, domain.ErrLaunchNotFound) {
+				t.Fatalf("\nwanted:\n%v for %s\ngot:\n%v", domain.ErrLaunchNotFound, id, err)
+			}
+		}
+	})
+}
+
+func TestProxy_LaunchSync(t *testing.T) {
+	t.Run("should wait for the launch to complete and return it", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+
+		got, err := h.proxy.LaunchSync(context.Background(), rawGet(origin.Server, "/done"), h.launchpadID.String(), false)
+
+		if err != nil {
+			t.Fatalf("LaunchSync() returned unexpected error: %v", err)
+		}
+		want := domain.Launch{ID: got.ID, LaunchpadID: h.launchpadID, Status: domain.LaunchCompleted}
+		if got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		if got := h.launchpadMembers(t); !reflect.DeepEqual(got, []uuid.UUID{want.ID}) {
+			t.Fatalf("\nwanted:\nlaunchpad members [%s]\ngot:\n%v", want.ID, got)
+		}
+		if got := h.waitFinished(t); got != want {
+			t.Fatalf("\nwanted:\nOnLaunchFinished %+v\ngot:\n%+v", want, got)
+		}
+	})
+
+	t.Run("should cancel the launch when its context is cancelled", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		// Cancel once the launch is held at the origin.
+		go func() {
+			<-origin.seen
+			cancel()
+		}()
+
+		got, err := h.proxy.LaunchSync(ctx, rawGet(origin.Server, "/slow"), h.launchpadID.String(), false)
+
+		if err != nil {
+			t.Fatalf("LaunchSync() returned unexpected error: %v", err)
+		}
+		want := domain.Launch{ID: got.ID, LaunchpadID: h.launchpadID, Status: domain.LaunchCancelled}
+		if got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		stored, err := h.proxy.GetLaunch(got.ID)
+		if err != nil || stored != want {
+			t.Fatalf("\nwanted:\nstored %+v, nil\ngot:\n%+v, %v", want, stored, err)
+		}
+	})
+
+	t.Run("should fail at once for a malformed request without creating a launch", func(t *testing.T) {
+		h := startLaunchHarness(t)
+
+		if _, err := h.proxy.LaunchSync(context.Background(), "not an HTTP request", h.launchpadID.String(), false); err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if len(h.proxy.Launches()) != 0 {
+			t.Fatalf("\nwanted:\nno launches\ngot:\n%v", h.proxy.Launches())
 		}
 	})
 }

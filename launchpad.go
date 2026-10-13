@@ -56,17 +56,47 @@ type launchOutcomeWrite struct {
 // launch completes at the handshake, and the client body stays open until the
 // peer closes, CloseWebSocket is used, or the proxy shuts down.
 func (proxy *Proxy) Launch(raw string, launchpadID string, useHttps bool) (uuid.UUID, error) {
+	entry, err := proxy.startLaunch(raw, launchpadID, useHttps)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return entry.launch.ID, nil
+}
+
+// LaunchSync starts a launch like Launch and waits for it to reach a terminal
+// state, then returns the final launch. When ctx is cancelled first, it
+// cancels the launch and returns it once it has ended.
+//
+// Errors from starting the launch are returned at once, as from Launch.
+func (proxy *Proxy) LaunchSync(ctx context.Context, raw string, launchpadID string, useHttps bool) (domain.Launch, error) {
+	entry, err := proxy.startLaunch(raw, launchpadID, useHttps)
+	if err != nil {
+		return domain.Launch{}, err
+	}
+	select {
+	case <-entry.done:
+	case <-ctx.Done():
+		// A launch that finished meanwhile keeps its own outcome.
+		_, _ = proxy.CancelLaunch(entry.launch.ID)
+		<-entry.done
+	}
+	return entry.final(), nil
+}
+
+// startLaunch accepts a launch, sends it in the background, and returns its
+// registry entry, which stays readable after the launch leaves the registry.
+func (proxy *Proxy) startLaunch(raw string, launchpadID string, useHttps bool) (*launchEntry, error) {
 	launchpad, err := uuid.Parse(launchpadID)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("parsing launchpad id : %w", err)
+		return nil, fmt.Errorf("parsing launchpad id : %w", err)
 	}
 	updated, err := rawhttp.RecalculateContentLength([]byte(raw))
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("recalculating content length : %w", err)
+		return nil, fmt.Errorf("recalculating content length : %w", err)
 	}
 	req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(updated)))
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("reading http request : %w", err)
+		return nil, fmt.Errorf("reading http request : %w", err)
 	}
 
 	scheme := "http"
@@ -78,7 +108,7 @@ func (proxy *Proxy) Launch(raw string, launchpadID string, useHttps bool) (uuid.
 	}
 	host := req.Host
 	if host == "" {
-		return uuid.Nil, fmt.Errorf("host header not found or is empty")
+		return nil, fmt.Errorf("host header not found or is empty")
 	}
 
 	req.RequestURI, req.URL.Scheme, req.URL.Host = "", scheme, host
@@ -95,7 +125,7 @@ func (proxy *Proxy) Launch(raw string, launchpadID string, useHttps bool) (uuid.
 	entry, err := proxy.registerLaunch(launchpad, cancel)
 	if err != nil {
 		cancel()
-		return uuid.Nil, err
+		return nil, err
 	}
 	req.Header.Set(launchIDHeader, entry.launch.ID.String())
 	req = req.WithContext(ctx)
@@ -104,7 +134,7 @@ func (proxy *Proxy) Launch(raw string, launchpadID string, useHttps bool) (uuid.
 		proxy.OnLaunchStarted(entry.launch)
 	}
 	go proxy.runLaunch(entry.launch.ID, proxy.launchClient(), req)
-	return entry.launch.ID, nil
+	return entry, nil
 }
 
 // Launches returns the pending launches, oldest first.
@@ -121,16 +151,20 @@ func (proxy *Proxy) Launches() []domain.Launch {
 	return launches
 }
 
-// GetLaunch returns a pending launch. It returns domain.ErrLaunchNotFound when
-// the registry does not hold the id.
+// GetLaunch returns a launch by id. A pending launch is read from the
+// registry. Once the launch has left the registry it is read from its stored
+// pair's metadata, so a launch id stays valid for good. It returns
+// domain.ErrLaunchNotFound when the id is neither live nor a launch's pair.
 func (proxy *Proxy) GetLaunch(id uuid.UUID) (domain.Launch, error) {
 	proxy.launchMu.Lock()
-	defer proxy.launchMu.Unlock()
 	entry, ok := proxy.launches[id]
-	if !ok {
-		return domain.Launch{}, domain.ErrLaunchNotFound
+	if ok {
+		launch := entry.launch
+		proxy.launchMu.Unlock()
+		return launch, nil
 	}
-	return entry.launch, nil
+	proxy.launchMu.Unlock()
+	return proxy.storedLaunch(id)
 }
 
 // CancelLaunch cancels a pending launch by cancelling the proxy client's
