@@ -268,6 +268,13 @@ func TestWordlistControlAPI(t *testing.T) {
 		missing := newTestServer(&marasi.Proxy{WordlistManager: &stubWordlistProvider{openErr: os.ErrNotExist}}, func() {})
 		assertControlAPIResponse(t, requestControlAPI(missing, http.MethodGet, "/wordlist/missing.txt", ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
 
+		manager, err := wordlist.NewManager(t.TempDir())
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		missingFromManager := newTestServer(&marasi.Proxy{WordlistManager: manager}, func() {})
+		assertControlAPIResponse(t, requestControlAPI(missingFromManager, http.MethodGet, "/wordlist/missing.txt", ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
+
 		withoutProvider := newTestServer(&marasi.Proxy{}, func() {})
 		assertControlAPIResponse(t, requestControlAPI(withoutProvider, http.MethodGet, "/wordlist", ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
 		assertControlAPIResponse(t, requestControlAPI(withoutProvider, http.MethodGet, "/wordlist/words.txt", ""), http.StatusNotFound, "{\"error\":\"not_found\"}\n")
