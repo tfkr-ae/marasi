@@ -155,6 +155,35 @@ func TestJobs(t *testing.T) {
 		}
 	})
 
+	t.Run("should report an incomplete index while the annotation index rebuilds", func(t *testing.T) {
+		path := canonicalProjectPath(t, filepath.Join(t.TempDir(), "annotations.marasi"))
+		seedUnindexedProject(t, path, 5)
+		server, lifecycle, subscriber := newIndexServer(t)
+		openProjectPath(t, lifecycle, path)
+		if got := eventNamed(subscriber, "traffic.index_complete", 30*time.Second); got == "" {
+			t.Fatal("the first build did not complete")
+		}
+		pacer := paceIndexBuild(lifecycle, path)
+
+		response := requestListener(t, server, http.MethodPost, "/jobs/annotation_index/rebuild", "")
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("\nwanted:\n202\ngot:\n%d %s", response.Code, response.Body.String())
+		}
+		pacer.waitBatch(t)
+		if listIndexComplete(t, server) {
+			t.Fatalf("\nwanted:\nindex.complete false while the annotation index rebuilds\ngot:\ntrue")
+		}
+		pacer.release()
+		got := eventsUntil(subscriber, "traffic.index_complete", 30*time.Second)
+		want := []string{`job.complete {"name":"annotation_index"}`, fmt.Sprintf("traffic.index_complete {\"project\":%q}", path)}
+		if strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", strings.Join(want, "\n"), strings.Join(got, "\n"))
+		}
+		if !listIndexComplete(t, server) {
+			t.Fatalf("\nwanted:\nindex.complete true after the rebuild\ngot:\nfalse")
+		}
+	})
+
 	t.Run("should rebuild the traffic index on request", func(t *testing.T) {
 		path := canonicalProjectPath(t, filepath.Join(t.TempDir(), "rebuild.marasi"))
 		seedUnindexedProject(t, path, 5)

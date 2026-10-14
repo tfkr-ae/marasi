@@ -17,7 +17,7 @@ const TrafficIndexJob = domain.JobTrafficIndex
 
 // AnnotationIndexJob is the background job that backfills the annotation
 // index with the notes and metadata of pairs indexed before it (ADR-0038).
-const AnnotationIndexJob = "annotation_index"
+const AnnotationIndexJob = domain.JobAnnotationIndex
 
 // SearchIndexJobs are the jobs that text search depends on. A traffic read's
 // index.complete is true when all of them are complete.
