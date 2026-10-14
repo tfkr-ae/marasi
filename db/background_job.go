@@ -8,11 +8,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // TrafficIndexJob is the background job that indexes pairs missing from the
 // traffic index (ADR-0026).
-const TrafficIndexJob = "traffic_index"
+const TrafficIndexJob = domain.JobTrafficIndex
 
 var (
 	// ErrUnknownJob means no background job has the requested name.
