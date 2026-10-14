@@ -64,6 +64,12 @@ type TrafficRepository interface {
 	// cursor, or one made under another sort, wraps ErrInvalidCursor.
 	ListTraffic(q TrafficQuery) (TrafficPage, error)
 
+	// CountTraffic counts the pairs that match q, exactly up to
+	// MaxTrafficCount and capped above it, with the completeness of each
+	// background job the answer depends on. An invalid query or exclusion
+	// returns a *QueryError.
+	CountTraffic(q TrafficCountQuery) (TrafficCount, error)
+
 	// GetMetadata returns the metadata map for a specific request ID.
 	GetMetadata(id uuid.UUID) (metadata map[string]any, err error)
 
