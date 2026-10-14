@@ -106,6 +106,16 @@ type TrafficRepository interface {
 	// in one transaction and returns the number of pairs that were linked.
 	// It returns the same errors as LinkTraffic.
 	UnlinkTraffic(sel Selection, target LinkTarget) (int, error)
+
+	// AppendNote gives every pair in sel with no note the note text, and
+	// adds a blank line and text to every note that exists, in one
+	// transaction. It returns the number of notes written. An empty text
+	// returns ErrEmptyNote; an invalid query selection returns a *QueryError.
+	AppendNote(sel Selection, text string) (int, error)
+
+	// ClearNotes deletes the note of every pair in sel in one transaction
+	// and returns the number of notes deleted.
+	ClearNotes(sel Selection) (int, error)
 }
 
 // ProxyRequest represents the data captured from an HTTP request.
