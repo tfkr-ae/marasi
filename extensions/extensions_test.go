@@ -252,6 +252,14 @@ func (m *mockTrafficRepo) CountContentTypes() ([]*domain.ContentTypeCount, error
 	return []*domain.ContentTypeCount{}, nil
 }
 
+func (m *mockTrafficRepo) LinkTraffic(domain.Selection, domain.LinkTarget) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) UnlinkTraffic(domain.Selection, domain.LinkTarget) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
 func setupTestExtension(t *testing.T, luaCode string, options ...func(*Runtime) error) (*Runtime, *mockProxyService) {
 	t.Helper()
 

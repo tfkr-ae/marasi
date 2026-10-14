@@ -94,6 +94,18 @@ type TrafficRepository interface {
 	// Pairs with no content type, including in-flight requests, are counted
 	// under ContentType "".
 	CountContentTypes() ([]*ContentTypeCount, error)
+
+	// LinkTraffic links every pair in sel to target in one transaction and
+	// returns the number of pairs it newly linked; pairs already linked are
+	// not counted. Unknown ids in an id selection are ignored. A missing
+	// target returns ErrLinkTargetNotFound; an invalid query selection
+	// returns a *QueryError.
+	LinkTraffic(sel Selection, target LinkTarget) (int, error)
+
+	// UnlinkTraffic removes the links between every pair in sel and target
+	// in one transaction and returns the number of pairs that were linked.
+	// It returns the same errors as LinkTraffic.
+	UnlinkTraffic(sel Selection, target LinkTarget) (int, error)
 }
 
 // ProxyRequest represents the data captured from an HTTP request.
