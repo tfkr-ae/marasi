@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -167,6 +168,21 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			Capped: count.Capped,
 			Index:  trafficIndex{Complete: count.Complete[domain.JobTrafficIndex]},
 		})
+	})
+	// GET /traffic/query checks q and exclude without running them, so it
+	// needs no open project. It returns 204, or the invalid_query body
+	// GET /traffic would return.
+	mux.HandleFunc("GET /traffic/query", func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		var queryErr *domain.QueryError
+		switch err := db.ValidateTrafficQuery(query.Get("q"), query["exclude"]); {
+		case errors.As(err, &queryErr):
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
+		case err != nil:
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
 	})
 	mux.HandleFunc("GET /traffic/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(r.PathValue("id"))
