@@ -343,13 +343,30 @@ func (t *queryTranslator) textMatch(e *expr.Expr, column string) (string, error)
 	}
 	// Quoting makes the term one literal phrase, so FTS5 syntax characters
 	// such as - and : in it are plain text.
-	match := `"` + strings.ReplaceAll(term, `"`, `""`) + `"`
-	if column != "" {
-		match = column + " : " + match
+	phrase := `"` + strings.ReplaceAll(term, `"`, `""`) + `"`
+	switch column {
+	case "":
+		t.bind(bodyColumns+" : "+phrase, phrase)
+		return "(" + bodyIndexMatch + " OR " + annotationIndexMatch + ")", nil
+	case "note", "metadata":
+		t.bind(column + " : " + phrase)
+		return annotationIndexMatch, nil
 	}
-	t.bind(match)
-	return "request.id IN (SELECT k.request_id FROM traffic_index JOIN traffic_index_key k ON k.id = traffic_index.rowid WHERE traffic_index MATCH ?)", nil
+	t.bind(column + " : " + phrase)
+	return bodyIndexMatch, nil
 }
+
+// bodyColumns is the column filter on every body index match. Body index rows
+// written before the annotation index still hold note and metadata text, which
+// must never match (ADR-0038).
+const bodyColumns = "{request_head request_body response_head response_body}"
+
+// bodyIndexMatch and annotationIndexMatch match pairs whose row in the body or
+// annotation index matches the FTS5 expression bound to their ?.
+const (
+	bodyIndexMatch       = "request.id IN (SELECT k.request_id FROM traffic_index JOIN traffic_index_key k ON k.id = traffic_index.rowid WHERE traffic_index MATCH ?)"
+	annotationIndexMatch = "request.id IN (SELECT k.request_id FROM traffic_annotation_index JOIN traffic_index_key k ON k.id = traffic_annotation_index.rowid WHERE traffic_annotation_index MATCH ?)"
+)
 
 // textTerm returns the text of a quoted string, an unquoted word, or a number
 // as written in the query.
