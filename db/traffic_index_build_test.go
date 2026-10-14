@@ -41,6 +41,24 @@ func openTestProjectFile(t *testing.T, path string) *Repository {
 	return NewProxyRepo(connection)
 }
 
+// reopenProject closes repo and opens its project file again, the way the
+// next open after an older binary wrote pairs does.
+func reopenProject(t *testing.T, repo *Repository) *Repository {
+	t.Helper()
+	var databases []struct {
+		Seq  int    `db:"seq"`
+		Name string `db:"name"`
+		File string `db:"file"`
+	}
+	if err := repo.dbConn.Select(&databases, `PRAGMA database_list`); err != nil || len(databases) == 0 {
+		t.Fatalf("finding the project file: %v", err)
+	}
+	repo.Close()
+	reopened := openTestProjectFile(t, databases[0].File)
+	t.Cleanup(func() { reopened.Close() })
+	return reopened
+}
+
 func legacyPairs(t *testing.T, repo *Repository, words ...string) map[string]uuid.UUID {
 	t.Helper()
 	ids := make(map[string]uuid.UUID, len(words))
@@ -93,6 +111,7 @@ func TestTrafficRepo_IndexMissingTraffic(t *testing.T) {
 		defer teardown()
 		// Each pair holds about 1,100 bytes, so 2,500 bytes fit two.
 		ids := sizedPairs(t, repo, 1000, "alpha", "bravo", "charlie", "delta", "echo")
+		repo = reopenProject(t, repo)
 
 		if got := listNames(t, repo, ids, `"body-"`); got != "" {
 			t.Fatalf("\nwanted:\nno legacy pair searchable before the build\ngot:\n%q", got)
@@ -147,6 +166,7 @@ func TestTrafficRepo_IndexMissingTraffic(t *testing.T) {
 		for name, id := range sizedPairs(t, repo, 1000, "small2") {
 			ids[name] = id
 		}
+		repo = reopenProject(t, repo)
 
 		for _, want := range []string{"small2", "small2,large", "small2,large,small1"} {
 			indexMissing(t, repo, 2500)
@@ -167,6 +187,7 @@ func TestTrafficRepo_IndexMissingTraffic(t *testing.T) {
 		if err != nil {
 			t.Fatalf("breaking metadata: %v", err)
 		}
+		repo = reopenProject(t, repo)
 
 		for attempt := 1; attempt < 3; attempt++ {
 			_, _, err := repo.IndexMissingTraffic(indexAll)
@@ -202,8 +223,8 @@ func TestTrafficRepo_IndexMissingTraffic(t *testing.T) {
 	t.Run("should not skip pairs while the database itself is failing", func(t *testing.T) {
 		path := t.TempDir() + "/project.marasi"
 		repo := openTestProjectFile(t, path)
-		defer repo.Close()
 		ids := legacyPairs(t, repo, "first", "second")
+		repo = reopenProject(t, repo)
 
 		// Another connection holds the write lock, so every batch fails on
 		// its first index write.
@@ -259,6 +280,7 @@ func TestTrafficRepo_IndexMissingTraffic(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 		ids := legacyPairs(t, repo, "old1")
+		repo = reopenProject(t, repo)
 		current := captureTextPairs(t, repo, []textPair{{name: "current", request: "GET /x HTTP/1.1\r\n\r\n", response: []byte("HTTP/1.1 200 OK\r\n\r\nbody-current")}})
 		ids["current"] = current["current"]
 		for _, word := range []string{"old2"} {
@@ -266,6 +288,7 @@ func TestTrafficRepo_IndexMissingTraffic(t *testing.T) {
 				ids[name] = id
 			}
 		}
+		repo = reopenProject(t, repo)
 
 		indexed, remaining := indexMissing(t, repo, indexAll)
 		if indexed != 2 || remaining {
@@ -280,6 +303,7 @@ func TestTrafficRepo_IndexMissingTraffic(t *testing.T) {
 		path := t.TempDir() + "/project.marasi"
 		repo := openTestProjectFile(t, path)
 		ids := legacyPairs(t, repo, "first")
+		repo = reopenProject(t, repo)
 		indexMissing(t, repo, indexAll)
 		if !indexComplete(t, repo) {
 			t.Fatalf("\nwanted:\ncomplete index\ngot:\nincomplete")
@@ -318,6 +342,7 @@ func TestTrafficRepo_IndexMissingTraffic(t *testing.T) {
 		if _, err := repo.dbConn.Exec(`INSERT INTO notes (request_id, note) VALUES (?, 'idor candidate')`, ids["tagged"]); err != nil {
 			t.Fatalf("writing legacy note: %v", err)
 		}
+		repo = reopenProject(t, repo)
 		indexMissing(t, repo, indexAll)
 
 		for query, want := range map[string]string{
