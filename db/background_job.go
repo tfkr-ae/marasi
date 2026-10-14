@@ -14,6 +14,10 @@ import (
 // traffic index (ADR-0026).
 const TrafficIndexJob = "traffic_index"
 
+// PrettifiedMoveJob is the background job that moves prettified copies out of
+// metadata (ADR-0036).
+const PrettifiedMoveJob = "prettified_move"
+
 var (
 	// ErrUnknownJob means no background job has the requested name.
 	ErrUnknownJob = errors.New("unknown background job")
@@ -67,6 +71,14 @@ var jobRegistry = []jobDefinition{
 		},
 		forget:      func(repo *Repository) { repo.index.reset() },
 		rebuildable: true,
+	},
+	{
+		name:    PrettifiedMoveJob,
+		version: 1,
+		batch: func(repo *Repository, maxBytes int) (int, bool, error) {
+			return repo.MovePrettified(maxBytes)
+		},
+		forget: func(repo *Repository) { repo.prettifiedMovedTo = nil },
 	},
 }
 
