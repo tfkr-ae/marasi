@@ -38,8 +38,9 @@ type dbRequestResponse struct {
 	RespondedAt sql.NullTime   `db:"responded_at"`
 
 	// Common
-	Metadata Metadata       `db:"metadata"`
+	Metadata pairMetadata   `db:"metadata"`
 	Note     sql.NullString `db:"note"`
+	dbPrettified
 }
 
 // dbRequestResponseSummary represents a summarized version of a request and response entry
@@ -62,7 +63,7 @@ type dbRequestResponseSummary struct {
 	RespondedAt sql.NullTime   `db:"responded_at"`
 
 	// Common
-	Metadata Metadata `db:"metadata"`
+	Metadata pairMetadata `db:"metadata"`
 }
 
 type dbNoteSummary struct {
@@ -80,7 +81,10 @@ func fromDomainProxyRequest(preq *domain.ProxyRequest) *dbRequestResponse {
 		Path:        preq.Path,
 		RequestRaw:  preq.Raw,
 		RequestedAt: preq.RequestedAt,
-		Metadata:    Metadata(preq.Metadata),
+		Metadata:    pairMetadata(preq.Metadata),
+		dbPrettified: dbPrettified{Request: sql.NullString{
+			String: prettifiedCopy(preq.Prettified, preq.Metadata, prettifiedRequestKey),
+		}},
 	}
 }
 
@@ -95,6 +99,7 @@ func toDomainProxyRequest(dbReqRes *dbRequestResponse) *domain.ProxyRequest {
 		Raw:         dbReqRes.RequestRaw,
 		RequestedAt: dbReqRes.RequestedAt,
 		Metadata:    map[string]any(dbReqRes.Metadata),
+		Prettified:  dbReqRes.dbPrettified.Request.String,
 	}
 }
 
@@ -124,7 +129,10 @@ func fromDomainProxyResponse(presp *domain.ProxyResponse) *dbRequestResponse {
 			Time:  presp.RespondedAt,
 			Valid: !presp.RespondedAt.IsZero(),
 		},
-		Metadata: Metadata(presp.Metadata),
+		Metadata: pairMetadata(presp.Metadata),
+		dbPrettified: dbPrettified{Response: sql.NullString{
+			String: prettifiedCopy(presp.Prettified, presp.Metadata, prettifiedResponseKey),
+		}},
 	}
 }
 
@@ -132,9 +140,10 @@ func fromDomainProxyResponse(presp *domain.ProxyResponse) *dbRequestResponse {
 // It safely extracts values from sql.Null* types.
 func toDomainProxyResponse(dbReqRes *dbRequestResponse) *domain.ProxyResponse {
 	resp := &domain.ProxyResponse{
-		ID:       dbReqRes.ID,
-		Raw:      dbReqRes.ResponseRaw,
-		Metadata: map[string]any(dbReqRes.Metadata),
+		ID:         dbReqRes.ID,
+		Raw:        dbReqRes.ResponseRaw,
+		Metadata:   map[string]any(dbReqRes.Metadata),
+		Prettified: dbReqRes.dbPrettified.Response.String,
 	}
 
 	if dbReqRes.Status.Valid {
@@ -169,6 +178,10 @@ func toDomainRequestResponseRow(dbReqRes *dbRequestResponse) *domain.RequestResp
 		Request:  *req,
 		Response: *resp,
 		Metadata: map[string]any(dbReqRes.Metadata),
+		Prettified: domain.Prettified{
+			Request:  req.Prettified,
+			Response: resp.Prettified,
+		},
 	}
 
 	if dbReqRes.Note.Valid {
@@ -226,6 +239,9 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 		if err := advanceHighWater(tx, req.ID); err != nil {
 			return err
 		}
+		if err := savePrettified(tx, req.ID, "request", dbRequest.dbPrettified.Request.String); err != nil {
+			return err
+		}
 		return indexPair(tx, req.ID)
 	})
 	if err != nil {
@@ -248,6 +264,11 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 				metadata = :metadata
 			  WHERE id = :id`
 	err := repo.inTx(func(tx *sqlx.Tx) error {
+		// The response replaces the metadata, so copies an older binary
+		// left there move out first.
+		if _, err := movePrettified(tx, resp.ID); err != nil {
+			return err
+		}
 		result, err := tx.NamedExec(query, dbResponse)
 		if err != nil {
 			return err
@@ -258,6 +279,9 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 		}
 		if rowsAffected == 0 {
 			return errors.New("no request found to update")
+		}
+		if err := savePrettified(tx, resp.ID, "response", dbResponse.dbPrettified.Response.String); err != nil {
+			return err
 		}
 		return indexPair(tx, resp.ID)
 	})
@@ -290,9 +314,10 @@ func (repo *Repository) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResp
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.request_raw, r.requested_at,
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
-			  r.metadata, n.note
+			  r.metadata, n.note, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
+			  LEFT JOIN pair_prettified p ON p.request_id = r.id
 			  WHERE r.id = ?`
 
 	err := repo.dbConn.Get(&dbRow, query, id)
@@ -313,9 +338,10 @@ func (repo *Repository) GetRequestResponseRows(ids []uuid.UUID) ([]*domain.Reque
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.request_raw, r.requested_at,
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
-			  r.metadata, n.note
+			  r.metadata, n.note, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
+			  LEFT JOIN pair_prettified p ON p.request_id = r.id
 			  WHERE r.id IN (?)`
 
 	query, args, err := sqlx.In(query, ids)
@@ -347,13 +373,13 @@ func (repo *Repository) GetRequestResponseRows(ids []uuid.UUID) ([]*domain.Reque
 }
 
 // GetRequestResponseSummary retrieves a list of summarized request-response entries.
-// It excludes raw request/response bodies and prettified metadata for efficiency.
+// It excludes raw request/response bodies and prettified copies for efficiency.
 func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSummary, error) {
 	var dbSummary []*dbRequestResponseSummary
 	query := `SELECT
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
-			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
+			  metadata
 			  FROM request
 			  ORDER BY id ASC`
 
@@ -381,7 +407,7 @@ func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, trafficQuery s
 	query := `SELECT
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
-			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
+			  metadata
 			  FROM request`
 	args := make([]any, 0, len(translated.args)+2)
 	var conditions []string
@@ -432,7 +458,7 @@ func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, trafficQuery s
 
 // GetMetadata retrieves the metadata map for a specific request ID.
 func (repo *Repository) GetMetadata(id uuid.UUID) (map[string]any, error) {
-	var dbMeta Metadata
+	var dbMeta pairMetadata
 	query := `SELECT metadata FROM request WHERE id = ?`
 
 	err := repo.dbConn.Get(&dbMeta, query, id)
@@ -446,10 +472,15 @@ func (repo *Repository) GetMetadata(id uuid.UUID) (map[string]any, error) {
 // UpdateMetadata updates the metadata for one or more requests identified by their IDs.
 // All requests and their index rows are updated in one transaction.
 func (repo *Repository) UpdateMetadata(metadata map[string]any, ids ...uuid.UUID) error {
-	dbMeta := Metadata(metadata)
+	dbMeta := pairMetadata(metadata)
 	query := `UPDATE request SET metadata = ? WHERE id = ?`
 
 	return repo.inTx(func(tx *sqlx.Tx) error {
+		// The new metadata replaces the old, so copies an older binary left
+		// there move out first.
+		if _, err := movePrettified(tx, ids...); err != nil {
+			return err
+		}
 		for _, id := range ids {
 			result, err := tx.Exec(query, dbMeta, id)
 			if err != nil {
@@ -549,7 +580,7 @@ func (repo *Repository) ListNotes(cursor *uuid.UUID, limit int) ([]*domain.Reque
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
-			  json_remove(r.metadata, '$.prettified-request', '$.prettified-response') AS metadata,
+			  r.metadata,
 			  n.note
 			  FROM request r
 			  INNER JOIN notes n ON r.id = n.request_id
@@ -594,7 +625,7 @@ func (repo *Repository) SearchByMetadata(path string, value any) ([]*domain.Requ
 	query := `SELECT
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
-			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
+			  metadata
 			  FROM request
 			  WHERE json_extract(metadata, ?) = ?
 			  ORDER BY id ASC`
