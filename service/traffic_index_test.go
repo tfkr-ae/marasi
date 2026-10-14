@@ -342,9 +342,12 @@ func TestTrafficIndexBuild(t *testing.T) {
 		if got := missingFromIndex(t, path); got != 1 {
 			t.Fatalf("\nwanted:\nonly the broken pair missing\ngot:\n%d", got)
 		}
+		// Its metadata is unreadable, so each search index job skips it
+		// once.
 		skips := strings.Count(logs.String(), "Skipped a pair the traffic index could not index")
-		if skips != 1 || !strings.Contains(logs.String(), "id="+broken.String()) {
-			t.Fatalf("\nwanted:\none skip logged for %s\ngot:\n%s", broken, logs.String())
+		if skips != 2 || strings.Count(logs.String(), "id="+broken.String()) != 2 ||
+			!strings.Contains(logs.String(), "job="+db.TrafficIndexJob) || !strings.Contains(logs.String(), "job="+db.AnnotationIndexJob) {
+			t.Fatalf("\nwanted:\none skip logged for %s by each search index job\ngot:\n%s", broken, logs.String())
 		}
 	})
 
