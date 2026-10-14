@@ -80,13 +80,13 @@ func (refusingRebuild) RebuildJob(name string) error {
 }
 
 func TestJobs(t *testing.T) {
-	t.Run("should list the traffic index job of a new project as complete", func(t *testing.T) {
+	t.Run("should list the search index jobs of a new project as complete", func(t *testing.T) {
 		path := canonicalProjectPath(t, filepath.Join(t.TempDir(), "fresh.marasi"))
 		server, lifecycle, _ := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
 
 		got := listJobs(t, server)
-		want := []listedJob{{Name: db.TrafficIndexJob, Complete: true}}
+		want := []listedJob{{Name: db.TrafficIndexJob, Complete: true}, {Name: db.AnnotationIndexJob, Complete: true}}
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
 		}
@@ -104,16 +104,23 @@ func TestJobs(t *testing.T) {
 		openProjectPath(t, lifecycle, path)
 
 		got := eventsUntil(subscriber, "traffic.index_complete", 30*time.Second)
+		// The traffic index build writes both indexes, so the annotation
+		// index backfill that follows it finds nothing left to do.
 		want := []string{
 			`job.progress {"name":"traffic_index","done":1,"total":20}`,
 			`job.complete {"name":"traffic_index"}`,
+			`job.complete {"name":"annotation_index"}`,
 			fmt.Sprintf("traffic.index_complete {\"project\":%q}", path),
 		}
 		if strings.Join(got, "\n") != strings.Join(want, "\n") {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", strings.Join(want, "\n"), strings.Join(got, "\n"))
 		}
 		jobs := listJobs(t, server)
-		if wantJobs := []listedJob{{Name: db.TrafficIndexJob, Complete: true, Done: 20, Total: 20}}; fmt.Sprint(jobs) != fmt.Sprint(wantJobs) {
+		wantJobs := []listedJob{
+			{Name: db.TrafficIndexJob, Complete: true, Done: 20, Total: 20},
+			{Name: db.AnnotationIndexJob, Complete: true, Done: 20, Total: 20},
+		}
+		if fmt.Sprint(jobs) != fmt.Sprint(wantJobs) {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", wantJobs, jobs)
 		}
 	})
@@ -153,7 +160,7 @@ func TestJobs(t *testing.T) {
 		seedUnindexedProject(t, path, 5)
 		server, lifecycle, subscriber := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
-		if got := eventNamed(subscriber, "job.complete", 30*time.Second); got == "" {
+		if got := eventNamed(subscriber, "traffic.index_complete", 30*time.Second); got == "" {
 			t.Fatal("the first build did not complete")
 		}
 		pacer := paceIndexBuild(lifecycle, path)

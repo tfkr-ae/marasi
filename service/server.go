@@ -81,13 +81,14 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 					Total int64  `json:"total"`
 				}{Name: job.Name, Done: job.Done, Total: job.Total})
 			},
-			complete: func(path, name string) {
+			complete: func(path, name string, searchIndexComplete bool) {
 				events.publish("job.complete", struct {
 					Name string `json:"name"`
 				}{Name: name})
 				// Announced for one more release, for clients that do not
-				// read job.complete yet (ADR-0039).
-				if name == db.TrafficIndexJob {
+				// read job.complete yet (ADR-0039), once traffic reads
+				// report index.complete true.
+				if searchIndexComplete {
 					events.publish("traffic.index_complete", struct {
 						Project string `json:"project"`
 					}{Project: path})

@@ -228,7 +228,7 @@ func (repo *Repository) buildIndex(build indexBuild, maxBytes int) (int, bool, e
 // saved job states. Traffic lists call it in the same transaction as their
 // page query, so the flag describes the snapshot the page was read from.
 func (repo *Repository) indexComplete(q sqlx.Queryer) (bool, error) {
-	for _, name := range []string{TrafficIndexJob, AnnotationIndexJob} {
+	for _, name := range SearchIndexJobs {
 		job, err := loadJob(q, name)
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
