@@ -69,6 +69,7 @@ var jobRegistry = []jobDefinition{
 		forget:      func(repo *Repository) { repo.index.reset() },
 		rebuildable: true,
 	},
+	sitemapJob,
 }
 
 func findJob(name string) (jobDefinition, bool) {

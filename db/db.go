@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/pressly/goose/v3"
 	_ "github.com/tfkr-ae/marasi/db/migrations"
@@ -32,6 +33,9 @@ type Repository struct {
 	// jobMu serialises background job batches with job resets, so a reset
 	// never lands between a batch reading its progress and committing it.
 	jobMu sync.Mutex
+	// sitemapFrom, when set, means every pair with an id at or above it is
+	// in the sitemap. jobMu guards it.
+	sitemapFrom *uuid.UUID
 }
 
 // NewProxyRepo initializes a new Repository with the given sqlx.DB database connection.

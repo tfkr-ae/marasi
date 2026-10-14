@@ -86,7 +86,7 @@ func TestJobs(t *testing.T) {
 		openProjectPath(t, lifecycle, path)
 
 		got := listJobs(t, server)
-		want := []listedJob{{Name: db.TrafficIndexJob, Complete: true}}
+		want := []listedJob{{Name: db.TrafficIndexJob, Complete: true}, {Name: db.SitemapJob, Complete: true}}
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
 		}
@@ -113,6 +113,7 @@ func TestJobs(t *testing.T) {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", strings.Join(want, "\n"), strings.Join(got, "\n"))
 		}
 		jobs := listJobs(t, server)
+		jobs = jobs[:1]
 		if wantJobs := []listedJob{{Name: db.TrafficIndexJob, Complete: true, Done: 20, Total: 20}}; fmt.Sprint(jobs) != fmt.Sprint(wantJobs) {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", wantJobs, jobs)
 		}

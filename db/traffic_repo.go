@@ -225,6 +225,9 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 		if err := advanceHighWater(tx, req.ID); err != nil {
 			return err
 		}
+		if err := linkPairToSitemap(tx, req.ID, req.Scheme, req.Host, req.Path, sitemapBucket{}); err != nil {
+			return err
+		}
 		return indexPair(tx, req.ID)
 	})
 	if err != nil {
@@ -247,6 +250,10 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 				metadata = :metadata
 			  WHERE id = :id`
 	err := repo.inTx(func(tx *sqlx.Tx) error {
+		node, before, err := sitemapState(tx, resp.ID)
+		if err != nil {
+			return err
+		}
 		result, err := tx.NamedExec(query, dbResponse)
 		if err != nil {
 			return err
@@ -257,6 +264,12 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 		}
 		if rowsAffected == 0 {
 			return errors.New("no request found to update")
+		}
+		if node.Valid {
+			after := bucketOf(dbResponse.ContentType, dbResponse.StatusCode)
+			if err := rebucketInSitemap(tx, node.Int64, before, after); err != nil {
+				return err
+			}
 		}
 		return indexPair(tx, resp.ID)
 	})
