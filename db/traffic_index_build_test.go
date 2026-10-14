@@ -98,7 +98,7 @@ func indexMissing(t *testing.T, repo *Repository, maxBytes int) (int, bool) {
 
 func indexComplete(t *testing.T, repo *Repository) bool {
 	t.Helper()
-	_, _, complete, err := repo.ListTraffic(nil, 1, "")
+	_, _, complete, err := listPage(repo, nil, 1, "")
 	if err != nil {
 		t.Fatalf("ListTraffic: %v", err)
 	}
