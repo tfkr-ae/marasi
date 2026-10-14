@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"strings"
 	"testing"
 
@@ -112,4 +113,120 @@ func TestTrafficRepo_ListTrafficSearchesBothIndexes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// annotationIndexJob returns the saved state of the annotation index backfill.
+func annotationIndexJob(t *testing.T, repo *Repository) JobState {
+	t.Helper()
+	jobs, err := repo.ListJobs()
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	for _, job := range jobs {
+		if job.Name == AnnotationIndexJob {
+			return job
+		}
+	}
+	t.Fatalf("\nwanted:\na %s job\ngot:\n%+v", AnnotationIndexJob, jobs)
+	return JobState{}
+}
+
+// forgetAnnotationIndex returns a project to its state just after the
+// annotation index migration: every pair is in the body index, with its note
+// there, and the annotation index is empty and its job unknown.
+func forgetAnnotationIndex(t *testing.T, repo *Repository) *Repository {
+	t.Helper()
+	var pairs []struct {
+		ID   uuid.UUID      `db:"id"`
+		Note sql.NullString `db:"note"`
+	}
+	if err := repo.dbConn.Select(&pairs, `SELECT r.id, n.note FROM request r LEFT JOIN notes n ON n.request_id = r.id`); err != nil {
+		t.Fatalf("reading pairs: %v", err)
+	}
+	for _, pair := range pairs {
+		writeOldBodyIndexRow(t, repo, pair.ID, pair.Note.String, "")
+	}
+	for _, statement := range []string{
+		`INSERT INTO traffic_annotation_index (traffic_annotation_index) VALUES ('delete-all')`,
+		`DELETE FROM background_job WHERE name = 'annotation_index'`,
+	} {
+		if _, err := repo.dbConn.Exec(statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	return reopenProject(t, repo)
+}
+
+func runJob(t *testing.T, repo *Repository, name string, maxBytes int) (int, bool) {
+	t.Helper()
+	processed, remaining, err := repo.RunJobBatch(name, maxBytes)
+	if err != nil {
+		t.Fatalf("RunJobBatch(%s, %d): %v", name, maxBytes, err)
+	}
+	return processed, remaining
+}
+
+// finishJob runs the named job until nothing remains, the way the service
+// runs each job after the one before it.
+func finishJob(t *testing.T, repo *Repository, name string) {
+	t.Helper()
+	for {
+		if _, remaining := runJob(t, repo, name, indexAll); !remaining {
+			return
+		}
+	}
+}
+
+func TestAnnotationIndexJob(t *testing.T) {
+	t.Run("should list the annotation index as complete on a new project", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		if got, want := annotationIndexJob(t, repo), (JobState{Name: AnnotationIndexJob, Complete: true}); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+	})
+
+	t.Run("should backfill the notes and metadata of pairs indexed before the split, in batches", func(t *testing.T) {
+		repo := openTestProjectFile(t, t.TempDir()+"/project.marasi")
+		ids := captureTextPairs(t, repo, []textPair{
+			{name: "first", request: "GET /first HTTP/1.1\r\n\r\n"},
+			{name: "second", request: "GET /second HTTP/1.1\r\n\r\n"},
+			{name: "third", request: "GET /third HTTP/1.1\r\n\r\n"},
+		})
+		if err := repo.UpdateNote(ids["first"], "backfilled-note"); err != nil {
+			t.Fatalf("inserting note: %v", err)
+		}
+		if err := repo.UpdateMetadata(map[string]any{"tag": "backfilled-meta"}, ids["third"]); err != nil {
+			t.Fatalf("updating metadata: %v", err)
+		}
+		repo = forgetAnnotationIndex(t, repo)
+
+		if got := annotationIndexJob(t, repo); got.Complete {
+			t.Fatalf("\nwanted:\nan incomplete job after the migration\ngot:\n%+v", got)
+		}
+		if indexComplete(t, repo) {
+			t.Fatalf("\nwanted:\nincomplete index while the backfill runs\ngot:\ncomplete")
+		}
+		assertListNames(t, repo, ids, "before backfill", `note:"backfilled-note"`, "")
+
+		if processed, remaining := runJob(t, repo, AnnotationIndexJob, 1); processed != 1 || !remaining {
+			t.Fatalf("\nwanted:\none pair and more remaining\ngot:\n%d, %v", processed, remaining)
+		}
+		for {
+			if _, remaining := runJob(t, repo, AnnotationIndexJob, 1); !remaining {
+				break
+			}
+		}
+
+		if got, want := annotationIndexJob(t, repo), (JobState{Name: AnnotationIndexJob, Complete: true, Done: 3, Total: 3}); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		if !indexComplete(t, repo) {
+			t.Fatalf("\nwanted:\ncomplete index\ngot:\nincomplete")
+		}
+		assertListNames(t, repo, ids, "after backfill", `note:"backfilled-note"`, "first")
+		assertListNames(t, repo, ids, "after backfill", `"backfilled"`, "third,first")
+		assertListNames(t, repo, ids, "after backfill", `metadata:"backfilled-meta"`, "third")
+	})
 }

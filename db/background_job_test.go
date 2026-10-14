@@ -53,6 +53,7 @@ func TestBackgroundJobs(t *testing.T) {
 		if got, want := trafficIndexJob(t, repo), (JobState{Name: TrafficIndexJob, Complete: true, Done: 2, Total: 2}); got != want {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
 		}
+		finishJob(t, repo, AnnotationIndexJob)
 		if !indexComplete(t, repo) {
 			t.Fatalf("\nwanted:\ncomplete index\ngot:\nincomplete")
 		}

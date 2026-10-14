@@ -140,6 +140,8 @@ func TestTrafficRepo_IndexMissingTraffic(t *testing.T) {
 		if indexed != 1 || remaining {
 			t.Fatalf("\nwanted:\n1 indexed, none remaining\ngot:\n%d indexed, remaining=%v", indexed, remaining)
 		}
+		// The older binary's pairs also reset the annotation index backfill.
+		finishJob(t, repo, AnnotationIndexJob)
 		if !indexComplete(t, repo) {
 			t.Fatalf("\nwanted:\ncomplete index\ngot:\nincomplete")
 		}
@@ -174,6 +176,7 @@ func TestTrafficRepo_IndexMissingTraffic(t *testing.T) {
 				t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, got)
 			}
 		}
+		finishJob(t, repo, AnnotationIndexJob)
 		if !indexComplete(t, repo) {
 			t.Fatalf("\nwanted:\ncomplete index\ngot:\nincomplete")
 		}
@@ -215,6 +218,7 @@ func TestTrafficRepo_IndexMissingTraffic(t *testing.T) {
 		if got := listNames(t, repo, ids, `"body-"`); got != "good2,good1" {
 			t.Fatalf("\nwanted:\n%q\ngot:\n%q", "good2,good1", got)
 		}
+		finishJob(t, repo, AnnotationIndexJob)
 		if !indexComplete(t, repo) {
 			t.Fatalf("\nwanted:\ncomplete index once only the skipped pair is missing\ngot:\nincomplete")
 		}
@@ -305,6 +309,7 @@ func TestTrafficRepo_IndexMissingTraffic(t *testing.T) {
 		ids := legacyPairs(t, repo, "first")
 		repo = reopenProject(t, repo)
 		indexMissing(t, repo, indexAll)
+		finishJob(t, repo, AnnotationIndexJob)
 		if !indexComplete(t, repo) {
 			t.Fatalf("\nwanted:\ncomplete index\ngot:\nincomplete")
 		}

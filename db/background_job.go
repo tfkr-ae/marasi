@@ -14,6 +14,10 @@ import (
 // traffic index (ADR-0026).
 const TrafficIndexJob = "traffic_index"
 
+// AnnotationIndexJob is the background job that backfills the annotation
+// index with the notes and metadata of pairs indexed before it (ADR-0038).
+const AnnotationIndexJob = "annotation_index"
+
 var (
 	// ErrUnknownJob means no background job has the requested name.
 	ErrUnknownJob = errors.New("unknown background job")
@@ -57,7 +61,7 @@ type jobDefinition struct {
 var jobRegistry = []jobDefinition{
 	{
 		name:    TrafficIndexJob,
-		version: 1,
+		version: bodyDecoderVersion,
 		batch: func(repo *Repository, maxBytes int) (int, bool, error) {
 			return repo.IndexMissingTraffic(maxBytes)
 		},
@@ -66,6 +70,19 @@ var jobRegistry = []jobDefinition{
 			return err
 		},
 		forget:      func(repo *Repository) { repo.index.reset() },
+		rebuildable: true,
+	},
+	{
+		name:    AnnotationIndexJob,
+		version: 1,
+		batch: func(repo *Repository, maxBytes int) (int, bool, error) {
+			return repo.IndexMissingAnnotations(maxBytes)
+		},
+		discard: func(tx *sqlx.Tx) error {
+			_, err := tx.Exec(`INSERT INTO traffic_annotation_index (traffic_annotation_index) VALUES ('delete-all')`)
+			return err
+		},
+		forget:      func(repo *Repository) { repo.annotationIndex.reset() },
 		rebuildable: true,
 	},
 }
