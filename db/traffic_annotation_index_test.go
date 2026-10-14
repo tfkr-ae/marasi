@@ -2,10 +2,12 @@ package db
 
 import (
 	"database/sql"
+	"maps"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // bodyIndexRowExists reports whether the pair with id has a row in the body
@@ -205,8 +207,12 @@ func TestAnnotationIndexJob(t *testing.T) {
 		if got := annotationIndexJob(t, repo); got.Complete {
 			t.Fatalf("\nwanted:\nan incomplete job after the migration\ngot:\n%+v", got)
 		}
-		if indexComplete(t, repo) {
-			t.Fatalf("\nwanted:\nincomplete index while the backfill runs\ngot:\ncomplete")
+		page, err := repo.ListTraffic(domain.TrafficQuery{Limit: 1})
+		if err != nil {
+			t.Fatalf("ListTraffic: %v", err)
+		}
+		if want := map[string]bool{domain.JobTrafficIndex: true, domain.JobAnnotationIndex: false}; !maps.Equal(page.Complete, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, page.Complete)
 		}
 		assertListNames(t, repo, ids, "before backfill", `note:"backfilled-note"`, "")
 

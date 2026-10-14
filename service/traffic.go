@@ -49,6 +49,17 @@ type trafficIndex struct {
 	Complete bool `json:"complete"`
 }
 
+// pageComplete reports whether every background job the page depends on had
+// finished, which is when its text conditions can miss no pair. A page that
+// reports no jobs is incomplete.
+func pageComplete(page domain.TrafficPage) bool {
+	complete := len(page.Complete) > 0
+	for _, done := range page.Complete {
+		complete = complete && done
+	}
+	return complete
+}
+
 // trafficSummary is one request/response pair in a traffic list page.
 type trafficSummary struct {
 	ID          uuid.UUID      `json:"id"`           // request UUID
@@ -130,7 +141,7 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			NextCursor: page.NextCursor,
 			PrevCursor: page.PrevCursor,
 			AsOf:       page.AsOf,
-			Index:      trafficIndex{Complete: page.Complete[domain.JobTrafficIndex]},
+			Index:      trafficIndex{Complete: pageComplete(page)},
 		})
 	})
 	mux.HandleFunc("GET /traffic/{id}", func(w http.ResponseWriter, r *http.Request) {
