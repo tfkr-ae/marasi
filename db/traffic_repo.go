@@ -222,6 +222,9 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 		if _, err := tx.NamedExec(query, dbRequest); err != nil {
 			return err
 		}
+		if err := advanceHighWater(tx, req.ID); err != nil {
+			return err
+		}
 		return indexPair(tx, req.ID)
 	})
 	if err != nil {

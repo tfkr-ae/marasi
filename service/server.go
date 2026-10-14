@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -72,10 +73,26 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		projects.armoryRunUpdated = func(run *domain.ArmoryRun) {
 			events.publish("armory.run.updated", armoryRunFromDomain(run))
 		}
-		projects.indexEvents.install(func(path string) {
-			events.publish("traffic.index_complete", struct {
-				Project string `json:"project"`
-			}{Project: path})
+		projects.jobEvents.install(jobPublisher{
+			progress: func(_ string, job db.JobState) {
+				events.publish("job.progress", struct {
+					Name  string `json:"name"`
+					Done  int64  `json:"done"`
+					Total int64  `json:"total"`
+				}{Name: job.Name, Done: job.Done, Total: job.Total})
+			},
+			complete: func(path, name string) {
+				events.publish("job.complete", struct {
+					Name string `json:"name"`
+				}{Name: name})
+				// Announced for one more release, for clients that do not
+				// read job.complete yet (ADR-0039).
+				if name == db.TrafficIndexJob {
+					events.publish("traffic.index_complete", struct {
+						Project string `json:"project"`
+					}{Project: path})
+				}
+			},
 		})
 	}
 	addRoutes(mux, projects, proxy, chrome, events, server.serveStatus, func() {
