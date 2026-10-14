@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -134,7 +135,7 @@ func addWordlistRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBro
 		}
 		iterator, err := provider.Open(name)
 		if err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, fs.ErrNotExist) {
 				writeWordlistError(w, r, http.StatusNotFound, "not_found")
 				return
 			}
