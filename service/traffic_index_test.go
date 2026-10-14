@@ -140,6 +140,10 @@ func paceIndexBuild(lifecycle *ProjectLifecycle, paced string) *indexPacer {
 }
 
 func (pacer *indexPacer) batch(ctx context.Context, path string, runner jobRunner, name string) (int, bool, error) {
+	if name != db.TrafficIndexJob {
+		// Only the traffic index build is paced and counted.
+		return runner.RunJobBatch(name, jobBatchBytes)
+	}
 	if path == pacer.paced && !pacer.released() {
 		pacer.calls <- indexCall{path: path, ctx: ctx}
 		select {
@@ -272,7 +276,7 @@ func TestTrafficIndexBuild(t *testing.T) {
 		if !listIndexComplete(t, server) {
 			t.Fatalf("\nwanted:\nindex.complete true after the build\ngot:\nfalse")
 		}
-		if got := nextEvent(subscriber, 200*time.Millisecond); got != "" {
+		if got := nextIndexEvent(subscriber, 200*time.Millisecond); got != "" {
 			t.Fatalf("\nwanted:\nno second event\ngot:\n%s", got)
 		}
 		response := requestListener(t, server, http.MethodGet, "/traffic?q=%22legacy+body+7.%22", "")
@@ -320,7 +324,7 @@ func TestTrafficIndexBuild(t *testing.T) {
 		if got := missingFromIndex(t, path); got != 0 {
 			t.Fatalf("\nwanted:\nno pairs missing\ngot:\n%d", got)
 		}
-		if got := nextEvent(subscriber, 200*time.Millisecond); got != "" {
+		if got := nextIndexEvent(subscriber, 200*time.Millisecond); got != "" {
 			t.Fatalf("\nwanted:\nno second event\ngot:\n%s", got)
 		}
 	})
