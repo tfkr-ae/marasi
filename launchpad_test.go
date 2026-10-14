@@ -101,7 +101,7 @@ func (h *launchHarness) waitFinished(t *testing.T) domain.Launch {
 
 func (h *launchHarness) launchpadMembers(t *testing.T) []uuid.UUID {
 	t.Helper()
-	members, err := h.repository.GetLaunchpadRequests(h.launchpadID, "")
+	members, err := h.repository.GetLaunchpadRequests(h.launchpadID, "", nil)
 	if err != nil {
 		t.Fatalf("getting launchpad members: %v", err)
 	}
@@ -148,7 +148,8 @@ func TestProxy_Launch(t *testing.T) {
 		if metadata["launchpad"] != true || metadata["launchpad_id"] != h.launchpadID.String() {
 			t.Fatalf("\nwanted:\nlaunchpad metadata for %s\ngot:\n%v", h.launchpadID, metadata)
 		}
-		found, _, _, err := h.repository.ListTraffic(nil, 10, `metadata.launch.status = "completed"`)
+		page, err := h.repository.ListTraffic(domain.TrafficQuery{Text: `metadata.launch.status = "completed"`, Limit: 10})
+		found := page.Items
 		if err != nil || len(found) != 1 || found[0].ID != id {
 			t.Fatalf("\nwanted:\nquery finds launch %s\ngot:\n%v, %v", id, found, err)
 		}
