@@ -106,6 +106,19 @@ type TrafficRepository interface {
 	// in one transaction and returns the number of pairs that were linked.
 	// It returns the same errors as LinkTraffic.
 	UnlinkTraffic(sel Selection, target LinkTarget) (int, error)
+
+	// SetMetadataKey sets the metadata key at path to the JSON value on every
+	// pair in sel, in one transaction, and returns the number of pairs whose
+	// metadata changed. path is dotted, as in a query: "a.b" is key b inside
+	// key a. Every other key is left as it was. An invalid or reserved path
+	// wraps ErrInvalidMetadataKey; an invalid query selection returns a
+	// *QueryError.
+	SetMetadataKey(sel Selection, path string, value json.RawMessage) (int, error)
+
+	// ClearMetadataKey removes the metadata key at path from every pair in
+	// sel, in one transaction, and returns the number of pairs that had it.
+	// It returns the same errors as SetMetadataKey.
+	ClearMetadataKey(sel Selection, path string) (int, error)
 }
 
 // ProxyRequest represents the data captured from an HTTP request.
