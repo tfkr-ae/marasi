@@ -106,6 +106,17 @@ type TrafficRepository interface {
 	// in one transaction and returns the number of pairs that were linked.
 	// It returns the same errors as LinkTraffic.
 	UnlinkTraffic(sel Selection, target LinkTarget) (int, error)
+
+	// SetHighlight gives every pair in sel the highlight h, from MinHighlight
+	// to MaxHighlight, in one transaction, and returns the number of pairs
+	// whose highlight changed. It never writes the request row or the search
+	// indexes. An h out of range wraps ErrInvalidHighlight; an invalid query
+	// selection returns a *QueryError.
+	SetHighlight(sel Selection, h int) (int, error)
+
+	// ClearHighlight removes the highlight of every pair in sel in one
+	// transaction and returns the number of pairs that had one.
+	ClearHighlight(sel Selection) (int, error)
 }
 
 // ProxyRequest represents the data captured from an HTTP request.
@@ -135,10 +146,11 @@ type ProxyResponse struct {
 // RequestResponseRow represents a complete request-response pair with associated metadata,
 // typically used when retrieving data from the database.
 type RequestResponseRow struct {
-	Request  ProxyRequest   // The HTTP request
-	Response ProxyResponse  // The corresponding HTTP response
-	Metadata map[string]any // Combined metadata from request and response
-	Note     string         // Note contents
+	Request   ProxyRequest   // The HTTP request
+	Response  ProxyResponse  // The corresponding HTTP response
+	Metadata  map[string]any // Combined metadata from request and response
+	Note      string         // Note contents
+	Highlight *int           // Highlight from 1 to 8, or nil when the pair has none
 }
 
 // RequestResponseSummary provides a summary of a request-response pair,
@@ -157,6 +169,7 @@ type RequestResponseSummary struct {
 	RequestedAt time.Time
 	RespondedAt time.Time
 	Note        string
+	Highlight   *int // highlight from 1 to 8, or nil when the pair has none
 }
 
 // ContentTypeCount is the number of request-response pairs with one response
