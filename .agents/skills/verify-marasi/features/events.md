@@ -27,6 +27,6 @@ Start `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANC
 - `traffic.response` has `id`, `status`, `status_code`, `content_type`, `length`, `metadata`, and `responded_at`. It has no `path`.
 - Checkpoint event names are `checkpoint.held`, `checkpoint.forwarded`, `checkpoint.dropped`, and `checkpoint.updated`.
 - Launch event names are `launch.started`, `launch.completed`, `launch.cancelled`, and `launch.failed`. Each carries the launch record: `launch_id`, `launchpad_id`, `status`, and `reason` when present.
-- WebSocket event names are `websocket.opened`, `websocket.message`, and `websocket.closed`.
+- WebSocket event names are `websocket.opened`, `websocket.message`, `websocket.closed`, and `websocket.progress`. `websocket.progress` is printed while a fragmented message's frames are still arriving and is never stored; see [WebSocket](websocket.md).
 - `traffic.index_complete` with `{"project":...}` is published once when a project's background traffic index build finishes. A project whose index is already complete on open publishes nothing. A switch cancels the build without an event; the next open resumes it.
 - Report template event names are `report.template.added`, `report.template.removed`, and `report.template.restored`. Export does not publish an event.
