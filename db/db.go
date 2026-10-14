@@ -29,6 +29,9 @@ var migrateMu sync.Mutex
 type Repository struct {
 	dbConn *sqlx.DB // dbConn is the active database connection pool.
 	index  indexBuildState
+	// annotationIndex is what the repository knows about the annotation
+	// index backfill.
+	annotationIndex indexBuildState
 	// jobMu serialises background job batches with job resets, so a reset
 	// never lands between a batch reading its progress and committing it.
 	jobMu sync.Mutex

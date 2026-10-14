@@ -59,9 +59,9 @@ func newTrafficIndexRow(pair storedPair) trafficIndexRow {
 	return trafficIndexRow{
 		rowID:        pair.IndexRowID,
 		requestHead:  indexableHead(requestHead),
-		requestBody:  indexableBody(requestBody),
+		requestBody:  indexableMessageBody(requestHead, requestBody),
 		responseHead: indexableHead(responseHead),
-		responseBody: indexableBody(responseBody),
+		responseBody: indexableMessageBody(responseHead, responseBody),
 	}
 }
 
