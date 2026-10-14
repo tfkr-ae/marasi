@@ -148,6 +148,10 @@ func (m *mockTrafficRepo) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage
 	return domain.TrafficPage{Items: []*domain.RequestResponseSummary{}, Complete: complete}, nil
 }
 
+func (m *mockTrafficRepo) CountTraffic(q domain.TrafficCountQuery) (domain.TrafficCount, error) {
+	return domain.TrafficCount{Count: len(m.summaryData), Complete: map[string]bool{domain.JobTrafficIndex: true}}, nil
+}
+
 func (m *mockTrafficRepo) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResponseRow, error) {
 	if m.forceError {
 		return nil, errors.New("forced repo error")
