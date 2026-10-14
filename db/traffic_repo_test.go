@@ -1467,3 +1467,103 @@ func insertTrafficResponse(t *testing.T, repo *Repository, id uuid.UUID, statusC
 		t.Fatalf("inserting response: %v", err)
 	}
 }
+
+func TestTrafficRepo_CountContentTypes(t *testing.T) {
+	insertWithContentType := func(t *testing.T, repo *Repository, contentType string) {
+		t.Helper()
+		id := testRequest(t, repo, nil)
+		err := repo.InsertResponse(&domain.ProxyResponse{
+			ID:          id,
+			Status:      "200 OK",
+			StatusCode:  200,
+			ContentType: contentType,
+			Length:      "0",
+			Raw:         []byte("HTTP/1.1 200 OK\r\n\r\n"),
+			Metadata:    make(map[string]any),
+			RespondedAt: time.Now(),
+		})
+		if err != nil {
+			t.Fatalf("inserting response: %v", err)
+		}
+	}
+
+	t.Run("should return an empty slice if database is empty", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		got, err := repo.CountContentTypes()
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("\nwanted:\n0\ngot:\n%d", len(got))
+		}
+	})
+
+	t.Run("should count each content type, ordered by count desc then content type asc", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		for range 3 {
+			insertWithContentType(t, repo, "text/html")
+		}
+		for range 2 {
+			insertWithContentType(t, repo, "image/png")
+		}
+		for range 2 {
+			insertWithContentType(t, repo, "application/json")
+		}
+		insertWithContentType(t, repo, "text/css")
+
+		got, err := repo.CountContentTypes()
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		want := []*domain.ContentTypeCount{
+			{ContentType: "text/html", Count: 3},
+			{ContentType: "application/json", Count: 2},
+			{ContentType: "image/png", Count: 2},
+			{ContentType: "text/css", Count: 1},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", contentTypeCounts(want), contentTypeCounts(got))
+		}
+	})
+
+	t.Run("should count in-flight, empty, and null content types as one empty entry", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		_ = testRequest(t, repo, nil)
+		_ = testRequest(t, repo, nil)
+		insertWithContentType(t, repo, "")
+		nullID := testRequest(t, repo, nil)
+		_, err := repo.dbConn.Exec("UPDATE request SET content_type = NULL WHERE id = ?", nullID)
+		if err != nil {
+			t.Fatalf("setting null content type: %v", err)
+		}
+		insertWithContentType(t, repo, "text/html")
+
+		got, err := repo.CountContentTypes()
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		want := []*domain.ContentTypeCount{
+			{ContentType: "", Count: 4},
+			{ContentType: "text/html", Count: 1},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", contentTypeCounts(want), contentTypeCounts(got))
+		}
+	})
+}
+
+func contentTypeCounts(counts []*domain.ContentTypeCount) []domain.ContentTypeCount {
+	values := make([]domain.ContentTypeCount, len(counts))
+	for i, count := range counts {
+		values[i] = *count
+	}
+	return values
+}
