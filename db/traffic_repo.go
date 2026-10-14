@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -364,67 +363,6 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 		reqResSummary[i] = toDomainRequestResponseSummary(row)
 	}
 	return reqResSummary, nil
-}
-
-// ListTraffic returns a newest-first page of summaries older than cursor that
-// match the query, and whether every pair is in the traffic index. An invalid
-// query returns a *domain.QueryError.
-func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, trafficQuery string) ([]*domain.RequestResponseSummary, *uuid.UUID, bool, error) {
-	translated, err := translateTrafficQuery(trafficQuery)
-	if err != nil {
-		return nil, nil, false, err
-	}
-
-	query := `SELECT
-			  id, scheme, method, host, path, requested_at,
-			  status, status_code, content_type, length, responded_at,
-			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
-			  FROM request`
-	args := make([]any, 0, len(translated.args)+2)
-	var conditions []string
-	if cursor != nil {
-		conditions = append(conditions, `id < ?`)
-		args = append(args, *cursor)
-	}
-	if translated.where != "" {
-		conditions = append(conditions, `(`+translated.where+`)`)
-		args = append(args, translated.args...)
-	}
-	if len(conditions) > 0 {
-		query += ` WHERE ` + strings.Join(conditions, ` AND `)
-	}
-	query += ` ORDER BY id DESC LIMIT ?`
-	args = append(args, limit+1)
-
-	var dbSummary []*dbRequestResponseSummary
-	var indexComplete bool
-	err = repo.inTx(func(tx *sqlx.Tx) error {
-		var err error
-		if indexComplete, err = repo.indexComplete(tx); err != nil {
-			return err
-		}
-		return tx.Select(&dbSummary, query, args...)
-	})
-	if err != nil {
-		return nil, nil, false, fmt.Errorf("listing traffic: %w", err)
-	}
-
-	hasMore := len(dbSummary) > limit
-	if hasMore {
-		dbSummary = dbSummary[:limit]
-	}
-
-	items := make([]*domain.RequestResponseSummary, len(dbSummary))
-	for i, row := range dbSummary {
-		items[i] = toDomainRequestResponseSummary(row)
-	}
-
-	var nextCursor *uuid.UUID
-	if hasMore {
-		id := items[len(items)-1].ID
-		nextCursor = &id
-	}
-	return items, nextCursor, indexComplete, nil
 }
 
 // GetMetadata retrieves the metadata map for a specific request ID.

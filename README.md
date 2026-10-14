@@ -168,6 +168,14 @@ query, `OR` binds tighter than `AND`, so `a AND b OR c` means `a AND (b OR c)`.
 An invalid query returns 400
 `{"error":"invalid_query","message":"...","position":N}`.
 
+`traffic list --exclude 'image/*'` (repeatable, `GET /traffic?exclude=`) hides
+pairs of a content type: an exact type, or a whole major type such as `image/*`.
+Pairs with no content type yet are never hidden. Each page reports
+`next_cursor`, `prev_cursor` and `as_of`. Cursors are opaque: pass one back with
+`--cursor`, adding `--backward` to walk toward newer pairs, and pass `as_of`
+back with `--as-of` so later pages leave out pairs captured since the first.
+A malformed cursor returns 400 `{"error":"invalid_cursor","message":"..."}`.
+
 `UUID` denotes an ID returned by `traffic list`. Raw request and response bytes
 are base64-encoded in JSON output. Events are live notifications with no replay.
 Traffic events can arrive before the matching row is persisted.
