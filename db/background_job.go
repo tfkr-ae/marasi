@@ -18,6 +18,10 @@ const TrafficIndexJob = "traffic_index"
 // index with the notes and metadata of pairs indexed before it (ADR-0038).
 const AnnotationIndexJob = "annotation_index"
 
+// SearchIndexJobs are the jobs that text search depends on. A traffic read's
+// index.complete is true when all of them are complete.
+var SearchIndexJobs = []string{TrafficIndexJob, AnnotationIndexJob}
+
 var (
 	// ErrUnknownJob means no background job has the requested name.
 	ErrUnknownJob = errors.New("unknown background job")
