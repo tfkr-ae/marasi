@@ -14,7 +14,8 @@ import (
 
 // Target is a benchmark case's pass mark.
 type Target struct {
-	// Max is the highest p95 that passes.
+	// Max is the highest p95 that passes. Zero means the case has no
+	// absolute target and is compared with its baseline instead.
 	Max time.Duration
 	// Pathological marks a (P) case: a query shape that cannot be
 	// index-driven, with a looser documented Max.
@@ -56,7 +57,17 @@ func Measure(b *testing.B, target Target, op func() error) {
 // the OS cache is warm.
 func MeasureCold(b *testing.B, target Target, op func() (cleanup func(), err error)) {
 	b.Helper()
+	MeasurePrepared(b, target, func() error { return nil }, op)
+}
+
+// MeasurePrepared is MeasureCold with an untimed prepare step before every
+// run, such as purging the OS cache for an OS-cold run.
+func MeasurePrepared(b *testing.B, target Target, prepare func() error, op func() (cleanup func(), err error)) {
+	b.Helper()
 	run := func() time.Duration {
+		if err := prepare(); err != nil {
+			b.Fatal(err)
+		}
 		started := time.Now()
 		cleanup, err := op()
 		elapsed := time.Since(started)
@@ -84,6 +95,11 @@ func report(b *testing.B, target Target, latencies Latencies) {
 	p95 := latencies.Percentile(95)
 	b.ReportMetric(ms(latencies.Percentile(50)), "p50-ms")
 	b.ReportMetric(ms(p95), "p95-ms")
+	if target.Max == 0 {
+		// No absolute target, such as write cost, which is compared with
+		// its recorded baseline.
+		return
+	}
 	b.ReportMetric(ms(target.Max), "target-ms")
 	pass := p95 <= target.Max
 	if pass {
