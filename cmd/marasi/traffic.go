@@ -42,7 +42,8 @@ const trafficListLong = `List the newest page of traffic.
       requested_at > "2024-01-02T15:04:05Z".
   metadata.<key>
       = and != against the JSON value at that key, for example
-      metadata.extension = "workshop".
+      metadata.extension = "workshop". metadata.<key>:* matches pairs
+      that have the key, with any value, including null.
   request_head, request_body, response_head, response_body
       : (contains), ignoring case, for example response_body:"password".
       A head is the request or status line plus headers. Binary bodies
