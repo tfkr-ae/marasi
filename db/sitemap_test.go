@@ -440,6 +440,58 @@ func TestSitemap_Job(t *testing.T) {
 	})
 }
 
+func TestSitemap_QueryField(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	ids := map[string]uuid.UUID{
+		"user42":  capturePair(t, repo, "https://api.x.com/users/42", "application/json", 200),
+		"orders":  capturePair(t, repo, "https://api.x.com/users/7/orders", "application/json", 200),
+		"usersx":  capturePair(t, repo, "https://api.x.com/usersx", "text/html", 200),
+		"health":  capturePair(t, repo, "https://api.x.com/health", "text/plain", 200),
+		"port":    capturePair(t, repo, "https://api.x.com:8443/users/1", "text/plain", 200),
+		"elsewhr": capturePair(t, repo, "https://other.com/users/1", "text/plain", 200),
+	}
+
+	tests := []struct {
+		query string
+		want  string
+	}{
+		{`sitemap = "https://api.x.com/users"`, "orders,user42"},
+		{`sitemap = "https://api.x.com/users/{int}/orders"`, "orders"},
+		{`sitemap = "https://api.x.com"`, "health,usersx,orders,user42"},
+		{`sitemap != "https://api.x.com/users"`, "elsewhr,port,health,usersx"},
+		{`sitemap = "https://nowhere.com"`, ""},
+		{`sitemap != "https://nowhere.com"`, "elsewhr,port,health,usersx,orders,user42"},
+		{`sitemap = "https://api.x.com/users" AND content_type = "application/json"`, "orders,user42"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			if got := listNames(t, repo, ids, tt.query); got != tt.want {
+				t.Fatalf("\nwanted:\n%q\ngot:\n%q", tt.want, got)
+			}
+		})
+	}
+
+	t.Run("should report the sitemap's completeness when a query uses it", func(t *testing.T) {
+		page, err := repo.ListTraffic(domain.TrafficQuery{Text: `sitemap = "https://api.x.com"`, Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := map[string]bool{domain.JobTrafficIndex: true, domain.JobSitemap: true}; !maps(page.Complete, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, page.Complete)
+		}
+	})
+
+	for _, query := range []string{`sitemap:"https://api.x.com"`, `sitemap > "a"`, `sitemap = 42`} {
+		t.Run("should reject "+query, func(t *testing.T) {
+			var queryErr *domain.QueryError
+			if _, err := repo.ListTraffic(domain.TrafficQuery{Text: query, Limit: 1}); !errors.As(err, &queryErr) {
+				t.Fatalf("\nwanted:\na *domain.QueryError\ngot:\n%v", err)
+			}
+		})
+	}
+}
+
 func TestSitemap_CapturedTree(t *testing.T) {
 	repo, teardown := setupTestDB(t)
 	defer teardown()

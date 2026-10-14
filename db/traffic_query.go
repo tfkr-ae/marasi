@@ -44,6 +44,9 @@ const (
 	// fieldLaunchpad matches a pair's launchpad membership: = and != against
 	// a launchpad id, and :* for membership in any launchpad.
 	fieldLaunchpad
+	// fieldSitemap matches a sitemap node's subtree with =, and its
+	// complement with !=, by node name (ADR-0040).
+	fieldSitemap
 )
 
 // launchpadMember is true for a pair linked to the launchpad bound to its ?.
@@ -53,6 +56,12 @@ const launchpadMember = "EXISTS (SELECT 1 FROM launchpad_request WHERE launchpad
 
 // anyLaunchpadMember is true for a pair linked to at least one launchpad.
 const anyLaunchpadMember = "EXISTS (SELECT 1 FROM launchpad_request WHERE launchpad_request.request_id = request.id)"
+
+// sitemapSubtree is true for a pair linked to the node named by the first ?
+// or to a node below it. Names below a node extend its name with /, so the
+// subtree is the name itself and the range [name/, name0), which the unique
+// index on name serves.
+const sitemapSubtree = "request.id IN (SELECT ps.request_id FROM pair_sitemap ps JOIN sitemap_node n ON n.id = ps.node_id WHERE n.name = ? OR (n.name >= ? AND n.name < ?))"
 
 // minTextTermLength is the shortest text term the trigram index can find.
 // Shorter terms would silently match nothing, so they are rejected.
@@ -80,6 +89,7 @@ var trafficFields = map[string]trafficField{
 	// Membership is a row in launchpad_request, not the launchpad_id
 	// metadata, which pairs linked from captured traffic do not have.
 	"launchpad": {kind: fieldLaunchpad, column: "launchpad_request"},
+	"sitemap":   {kind: fieldSitemap, column: "pair_sitemap"},
 
 	"request_head":  {kind: fieldIndexedText, column: "request_head"},
 	"request_body":  {kind: fieldIndexedText, column: "request_body"},
@@ -102,6 +112,9 @@ var comparisonOperators = map[string]string{
 type trafficQuery struct {
 	where string
 	args  []any
+	// sitemap means the query names the sitemap field, so its answer
+	// depends on the sitemap job.
+	sitemap bool
 }
 
 // translateTrafficQuery parses query as an AIP-160 filter, checks it against
@@ -135,7 +148,7 @@ func translateTrafficQuery(query string) (trafficQuery, error) {
 	if err != nil {
 		return trafficQuery{}, err
 	}
-	return trafficQuery{where: where, args: t.args}, nil
+	return trafficQuery{where: where, args: t.args, sitemap: t.sitemap}, nil
 }
 
 type queryTranslator struct {
@@ -144,6 +157,7 @@ type queryTranslator struct {
 	positions map[int64]int32
 	args      []any
 	depth     int
+	sitemap   bool
 }
 
 // position converts a byte offset in the trimmed query to a 1-based character
@@ -428,6 +442,18 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 		}
 		t.bind(id)
 		return negate(op, launchpadMember), nil
+
+	case fieldSitemap:
+		if op != "=" && op != "!=" {
+			return "", t.errorAt(e, "operator %s is not supported on sitemap; use = or !=", op)
+		}
+		node, ok := rhs.GetConstExpr().GetConstantKind().(*expr.Constant_StringValue)
+		if !ok {
+			return "", t.errorAt(rhs, "sitemap needs a quoted node name, for example sitemap = \"https://api.example.com/users\"")
+		}
+		t.sitemap = true
+		t.bind(node.StringValue, node.StringValue+"/", node.StringValue+"0")
+		return negate(op, sitemapSubtree), nil
 
 	case fieldMetadata:
 		if len(path) == 0 {
