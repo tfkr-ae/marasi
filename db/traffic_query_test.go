@@ -277,6 +277,8 @@ func invalidTrafficQueries() []invalidTrafficQuery {
 		{query: `requested_at > 5`, message: `requested_at needs an RFC 3339 timestamp`, position: 16},
 		{query: `metadata = "x"`, message: `compare a metadata key`, position: 1},
 		{query: `metadata.k > 5`, message: `operator > is not supported on metadata keys`, position: 1},
+		{query: `metadata.k:"x"`, message: `operator : on a metadata key takes only *, as in metadata.k:*`, position: 1},
+		{query: `metadata.k:x*`, message: `operator : on a metadata key takes only *`, position: 1},
 		{query: `foo(bar)`, message: `unknown function "foo"`, position: 1},
 		{query: `(host = "a"`, message: `expected ")"`, position: 12},
 		{query: `host = "a")`, message: `unexpected ")"`, position: 11},
@@ -338,4 +340,47 @@ func namesOf(ids map[string]uuid.UUID, got []uuid.UUID) string {
 		}
 	}
 	return b.String()
+}
+
+func TestTrafficRepo_ListTrafficQueryMetadataHasKey(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	at := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
+	ids := seedQueryPairs(t, repo, []queryPair{
+		{name: "s", scheme: "https", method: "GET", host: "a.example.com", path: "/", requestedAt: at, statusCode: 200,
+			metadata: map[string]any{"highlight": "#EF4444"}},
+		{name: "n", scheme: "https", method: "GET", host: "a.example.com", path: "/", requestedAt: at, statusCode: 200,
+			metadata: map[string]any{"highlight": 3}},
+		{name: "z", scheme: "https", method: "GET", host: "a.example.com", path: "/", requestedAt: at, statusCode: 200,
+			metadata: map[string]any{"highlight": nil}},
+		{name: "o", scheme: "https", method: "GET", host: "a.example.com", path: "/", requestedAt: at, statusCode: 200,
+			metadata: map[string]any{"other": "highlight", "nested": map[string]any{"highlight": "x"}}},
+		{name: "e", scheme: "https", method: "GET", host: "a.example.com", path: "/", requestedAt: at},
+	})
+
+	tests := []struct {
+		query string
+		want  string // names, newest first
+	}{
+		{query: `metadata.highlight:*`, want: "zns"},
+		{query: `NOT metadata.highlight:*`, want: "eo"},
+		{query: `-metadata.highlight:*`, want: "eo"},
+		{query: `metadata.nested.highlight:*`, want: "o"},
+		{query: `metadata."highlight":*`, want: "zns"},
+	}
+	for _, test := range tests {
+		t.Run(test.query, func(t *testing.T) {
+			items, _, _, err := listPage(repo, nil, 200, test.query)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			want := make([]uuid.UUID, 0, len(test.want))
+			for _, name := range test.want {
+				want = append(want, ids[string(name)])
+			}
+			if got := idsOf(items); !reflect.DeepEqual(got, want) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", namesOf(ids, want), namesOf(ids, got))
+			}
+		})
+	}
 }
