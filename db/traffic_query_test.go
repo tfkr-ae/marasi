@@ -183,7 +183,7 @@ func TestTrafficRepo_ListTrafficQuery(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.query, func(t *testing.T) {
-			items, nextCursor, _, err := repo.ListTraffic(nil, 200, test.query)
+			items, nextCursor, _, err := listPage(repo, nil, 200, test.query)
 			if err != nil {
 				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 			}
@@ -206,18 +206,18 @@ func TestTrafficRepo_ListTrafficQueryPaging(t *testing.T) {
 	defer teardown()
 	ids := seedQueryPairs(t, repo, queryTestPairs())
 
-	items, nextCursor, _, err := repo.ListTraffic(nil, 2, `method = "GET"`)
+	items, nextCursor, _, err := listPage(repo, nil, 2, `method = "GET"`)
 	if err != nil {
 		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 	}
 	if got, want := idsOf(items), []uuid.UUID{ids["e"], ids["c"]}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
 	}
-	if nextCursor == nil || *nextCursor != ids["c"] {
-		t.Fatalf("\nwanted:\n%v\ngot:\n%v", ids["c"], nextCursor)
+	if nextCursor == nil {
+		t.Fatal("\nwanted:\nnext cursor\ngot:\nnil")
 	}
 
-	older, olderNext, _, err := repo.ListTraffic(nextCursor, 2, `method = "GET"`)
+	older, olderNext, _, err := listPage(repo, nextCursor, 2, `method = "GET"`)
 	if err != nil {
 		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 	}
@@ -246,7 +246,7 @@ func TestTrafficRepo_ListTrafficQueryLimits(t *testing.T) {
 		"200 ORed comparisons": strings.Repeat(`metadata.k != "v" OR `, 199) + `status_code >= 200`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, _, _, err := repo.ListTraffic(nil, 10, query); err != nil {
+			if _, _, _, err := listPage(repo, nil, 10, query); err != nil {
 				t.Fatalf("\nwanted:\nthe query to run\ngot:\n%v", err)
 			}
 		})
@@ -299,7 +299,7 @@ func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.query, func(t *testing.T) {
-			items, nextCursor, _, err := repo.ListTraffic(nil, 200, test.query)
+			items, nextCursor, _, err := listPage(repo, nil, 200, test.query)
 			var queryErr *domain.QueryError
 			if !errors.As(err, &queryErr) {
 				t.Fatalf("\nwanted:\n*domain.QueryError\ngot:\n%T %v", err, err)

@@ -87,6 +87,20 @@ func TestTrafficListCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("should write prev_cursor and as_of to stderr after next_cursor", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":"bmV4dA","prev_cursor":"cHJldg","as_of":"01938032-1b17-7243-b035-e6a9f4645904","index":{"complete":true}}`)
+
+		_, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := "next_cursor=bmV4dA\nprev_cursor=cHJldg\nas_of=01938032-1b17-7243-b035-e6a9f4645904\n"
+		if stderr != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stderr)
+		}
+	})
+
 	t.Run("should print the control API list body with --json", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		body := `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","method":"GET","host":"example.com","path":"/a","status_code":200,"length":"12"}],"next_cursor":"0193802f-f0e7-73d9-a764-06d21e367809"}`
@@ -241,17 +255,46 @@ func TestTrafficListCommand(t *testing.T) {
 		})
 	}
 
-	t.Run("should send --cursor as the cursor query parameter", func(t *testing.T) {
+	t.Run("should send the opaque --cursor as the cursor query parameter", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
 
-		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--cursor", "0193802f-f0e7-73d9-a764-06d21e367809")
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--cursor", "eyJ2IjoxfQ")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 		got := sent.snapshot()
-		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "cursor=0193802f-f0e7-73d9-a764-06d21e367809&limit=200" {
-			t.Fatalf("\nwanted:\nGET /traffic?cursor=0193802f-f0e7-73d9-a764-06d21e367809&limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
+		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "cursor=eyJ2IjoxfQ&limit=200" {
+			t.Fatalf("\nwanted:\nGET /traffic?cursor=eyJ2IjoxfQ&limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
+		}
+	})
+
+	t.Run("should send --exclude, --as-of and --backward", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list",
+			"--exclude", "image/*", "--exclude", "text/html", "--as-of", "01938032-1b17-7243-b035-e6a9f4645904", "--backward", "--cursor", "abc")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		got := sent.snapshot()
+		want := "as_of=01938032-1b17-7243-b035-e6a9f4645904&cursor=abc&direction=backward&exclude=image%2F%2A&exclude=text%2Fhtml&limit=200"
+		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != want {
+			t.Fatalf("\nwanted:\nGET /traffic?%s\ngot:\n%s %s?%s", want, got.Method, got.Path, got.RawQuery)
+		}
+	})
+
+	t.Run("should reject a malformed --as-of without a request", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--as-of", "nope")
+		if err == nil || err.Error() != `invalid uuid "nope"` {
+			t.Fatalf("\nwanted:\ninvalid uuid \"nope\"\ngot:\n%v", err)
+		}
+		if sent.snapshot().Path != "" {
+			t.Fatalf("\nwanted:\nno request\ngot:\n%s", sent.snapshot().Path)
 		}
 	})
 
@@ -724,6 +767,20 @@ func TestLaunchpadCommands(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("should send get --exclude as exclude query parameters", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"id":"`+id+`","name":"Login","description":"","items":[]}`)
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "launchpad", "get", id, "-q", "status_code = 200", "--exclude", "image/*", "--exclude", "font/*")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		got := sent.snapshot()
+		want := "exclude=image%2F%2A&exclude=font%2F%2A&q=status_code+%3D+200"
+		if got.Method != http.MethodGet || got.Path != "/launchpad/"+id || got.RawQuery != want {
+			t.Fatalf("\nwanted:\nGET /launchpad/%s?%s\ngot:\n%s %s?%s", id, want, got.Method, got.Path, got.RawQuery)
+		}
+	})
 
 	t.Run("should send no q query parameter on get without --query", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
@@ -1305,7 +1362,8 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	t.Helper()
 	oldJSON := jsonOutput
 	oldQuery, oldLimit, oldCursor := trafficListQueryText, trafficListLimit, trafficListCursor
-	oldLaunchpadQuery := launchpadGetQuery
+	oldExclude, oldAsOf, oldBackward := trafficListExclude, trafficListAsOf, trafficListBackward
+	oldLaunchpadQuery, oldLaunchpadExclude := launchpadGetQuery, launchpadGetExclude
 	oldConfigDir, oldInstance, oldInstancePath := configDir, instance, instancePath
 	var outBuf, errBuf bytes.Buffer
 	rootCmd.SetArgs(args)
@@ -1314,7 +1372,8 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	t.Cleanup(func() {
 		jsonOutput = oldJSON
 		trafficListQueryText, trafficListLimit, trafficListCursor = oldQuery, oldLimit, oldCursor
-		launchpadGetQuery = oldLaunchpadQuery
+		trafficListExclude, trafficListAsOf, trafficListBackward = oldExclude, oldAsOf, oldBackward
+		launchpadGetQuery, launchpadGetExclude = oldLaunchpadQuery, oldLaunchpadExclude
 		configDir, instance, instancePath = oldConfigDir, oldInstance, oldInstancePath
 		rootCmd.SetArgs(nil)
 		rootCmd.SetOut(nil)
