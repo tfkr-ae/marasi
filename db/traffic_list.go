@@ -133,6 +133,15 @@ func newTrafficFilter(text string, exclusion []string) (trafficFilter, error) {
 	return filter, nil
 }
 
+// ValidateTrafficQuery checks a traffic query's text and exclusion without
+// running it. It never touches a database, and it reports the same
+// *domain.QueryError that ListTraffic returns for the same text and
+// exclusion.
+func ValidateTrafficQuery(text string, exclusion []string) error {
+	_, err := newTrafficFilter(text, exclusion)
+	return err
+}
+
 // add appends a condition, parenthesised, with its arguments.
 func (f *trafficFilter) add(condition string, args ...any) {
 	f.conditions = append(f.conditions, `(`+condition+`)`)
