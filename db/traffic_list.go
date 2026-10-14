@@ -17,8 +17,7 @@ import (
 // trafficSummaryColumns are the columns a traffic list reads into a
 // dbRequestResponseSummary.
 const trafficSummaryColumns = `id, scheme, method, host, path, requested_at,
-	status, status_code, content_type, length, responded_at,
-	json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata`
+	status, status_code, content_type, length, responded_at, metadata`
 
 // defaultTrafficOrder is the canonical name of the default sort. It is the
 // only sort until sortable ledger columns land (ADR-0041).
