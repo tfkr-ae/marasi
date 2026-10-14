@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -50,8 +51,9 @@ func (e *SkippedPairError) Error() string {
 func (e *SkippedPairError) Unwrap() error { return e.Err }
 
 // indexBuildState remembers what this repository already knows about the
-// traffic index, so the background build does not rescan pairs it has seen.
-// It is not stored: a fresh repository rediscovers the missing pairs, and
+// background traffic index build, so the build does not rescan pairs it has
+// seen. Whether the index is complete is saved in background_job (ADR-0039);
+// this state is not: a fresh repository rediscovers the missing pairs, and
 // retries the ones it skipped.
 //
 // mu guards only the fields, never a query, so reading the state does not
@@ -62,20 +64,28 @@ type indexBuildState struct {
 	// indexed or skipped. Pairs written through this repository are indexed
 	// as they are written, so the bound stays true.
 	indexedFrom *uuid.UUID
-	// complete means no pair is missing from the index except skipped ones.
-	complete bool
 	// failures counts the failed batches of each pair that failed to index.
 	failures map[uuid.UUID]int
 	// skipped holds the pairs the build gave up on.
 	skipped []uuid.UUID
 }
 
-// snapshot returns whether the index is known to be complete, the bound
-// already known to be indexed, and the skipped pairs.
-func (state *indexBuildState) snapshot() (bool, *uuid.UUID, []uuid.UUID) {
+// snapshot returns the bound already known to be indexed, and the skipped
+// pairs.
+func (state *indexBuildState) snapshot() (*uuid.UUID, []uuid.UUID) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	return state.complete, state.indexedFrom, state.skipped
+	return state.indexedFrom, state.skipped
+}
+
+// reset forgets everything the build has learned, after the index was
+// discarded.
+func (state *indexBuildState) reset() {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.indexedFrom = nil
+	state.failures = nil
+	state.skipped = nil
 }
 
 // failed records a failed batch for the pair with id, and reports whether the
@@ -106,32 +116,34 @@ func (state *indexBuildState) lowerBound(id uuid.UUID) {
 	}
 }
 
-func (state *indexBuildState) markComplete() {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	state.complete = true
-}
-
-// IndexMissingTraffic indexes pairs missing from the traffic index, newest
-// first, in one transaction, and reports whether any remain. A batch takes
-// pairs while their stored text fits in maxBytes, and always takes at least
-// one, so a pair larger than maxBytes is indexed in a batch of its own.
+// IndexMissingTraffic runs one batch of the traffic index build: it indexes
+// pairs missing from the traffic index, newest first, in one transaction, and
+// reports whether any remain. A batch takes pairs while their stored text fits
+// in maxBytes, and always takes at least one, so a pair larger than maxBytes is
+// indexed in a batch of its own. The batch records its progress in the saved
+// job state, and once nothing remains the job is complete and later batches
+// do nothing.
 //
 // A pair that fails to index rolls back the batch. After it has failed
 // indexPairAttempts batches, IndexMissingTraffic returns a *SkippedPairError
 // and later batches leave it out. A failure of the database itself is
 // returned without counting against the pair.
 func (repo *Repository) IndexMissingTraffic(maxBytes int) (int, bool, error) {
-	complete, indexedFrom, skipped := repo.index.snapshot()
-	if complete {
-		return 0, false, nil
-	}
+	repo.jobMu.Lock()
+	defer repo.jobMu.Unlock()
+	indexedFrom, skipped := repo.index.snapshot()
 
 	var ids []uuid.UUID
 	var remaining bool
 	var failed *uuid.UUID
 	err := repo.inTx(func(tx *sqlx.Tx) error {
-		var err error
+		job, err := loadJob(tx, TrafficIndexJob)
+		if err != nil {
+			return fmt.Errorf("reading the traffic index job: %w", err)
+		}
+		if job.Complete {
+			return nil
+		}
 		ids, remaining, err = missingFromIndex(tx, indexedFrom, skipped, maxBytes)
 		if err != nil {
 			return err
@@ -144,7 +156,7 @@ func (repo *Repository) IndexMissingTraffic(maxBytes int) (int, bool, error) {
 				return err
 			}
 		}
-		return nil
+		return advanceJob(tx, TrafficIndexJob, len(ids), remaining)
 	})
 	if err != nil {
 		if failed != nil && repo.index.failed(*failed) {
@@ -155,29 +167,22 @@ func (repo *Repository) IndexMissingTraffic(maxBytes int) (int, bool, error) {
 
 	if remaining {
 		repo.index.lowerBound(ids[len(ids)-1])
-	} else {
-		repo.index.markComplete()
 	}
 	return len(ids), remaining, nil
 }
 
-// indexComplete reports whether every pair is in the traffic index. Traffic
-// lists call it in the same transaction as their page query, so the flag
-// describes the snapshot the page was read from.
+// indexComplete reports whether every pair is in the traffic index, from the
+// saved job state. Traffic lists call it in the same transaction as their page
+// query, so the flag describes the snapshot the page was read from.
 func (repo *Repository) indexComplete(q sqlx.Queryer) (bool, error) {
-	complete, indexedFrom, skipped := repo.index.snapshot()
-	if complete {
-		return true, nil
+	job, err := loadJob(q, TrafficIndexJob)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
 	}
-	ids, _, err := missingFromIndex(q, indexedFrom, skipped, 0)
 	if err != nil {
 		return false, fmt.Errorf("checking the traffic index: %w", err)
 	}
-	if len(ids) > 0 {
-		return false, nil
-	}
-	repo.index.markComplete()
-	return true, nil
+	return job.Complete, nil
 }
 
 // missingFromIndex returns ids of pairs without an index row, newest first,
