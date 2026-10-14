@@ -66,6 +66,23 @@ func TestMeasure(t *testing.T) {
 		}
 	})
 
+	t.Run("should stop sampling a slow case once its time budget is spent", func(t *testing.T) {
+		t.Setenv(ledgerbench.BudgetEnv, "100ms")
+		iterations := 0
+		result := testing.Benchmark(func(b *testing.B) {
+			ledgerbench.Measure(b, ledgerbench.Target{Max: time.Second}, func() error {
+				time.Sleep(20 * time.Millisecond)
+				return nil
+			})
+			iterations = b.N
+		})
+
+		samples := int(result.Extra["samples"])
+		if samples < 5 || samples > 10 || samples >= iterations {
+			t.Fatalf("\nwanted:\n5 to 10 samples, fewer than %d iterations\ngot:\n%d", iterations, samples)
+		}
+	})
+
 	t.Run("should report no pass mark for a case without a target", func(t *testing.T) {
 		result := testing.Benchmark(func(b *testing.B) {
 			ledgerbench.Measure(b, ledgerbench.Target{}, func() error { return nil })
