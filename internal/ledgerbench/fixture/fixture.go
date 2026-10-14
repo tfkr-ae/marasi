@@ -167,6 +167,39 @@ func Build(path string, cfg Config) (*Manifest, error) {
 	return manifest, nil
 }
 
+// Pair is one request/response pair as the proxy hands it to the
+// repository. Response is nil for a pair that never got one.
+type Pair struct {
+	Request  *domain.ProxyRequest
+	Response *domain.ProxyResponse
+}
+
+// NewPairs returns n new pairs in the fixture's distribution, requested after
+// after, for cases that capture more traffic into a built project. When
+// bodyBytes is above zero, every response is a JSON body of that size.
+func NewPairs(seed uint64, n int, after time.Time, bodyBytes int) []Pair {
+	plans, hosts, layout := planPairs(seed, max(n, 100), End)
+	plans = plans[:n]
+	shift := after.Sub(plans[0].at) + time.Second
+	ids := newIDClock(rand.New(rand.NewPCG(seed, 0x9e3)))
+	for i := range plans {
+		plan := &plans[i]
+		plan.at = plan.at.Add(shift)
+		plan.id = ids.at(plan.at)
+		if bodyBytes > 0 && plan.status >= 0 {
+			plan.status, plan.respSize, plan.codings, plan.chunked, plan.websocket = 200, bodyBytes, nil, false, false
+			plan.ctype = contentTypeIndex("application/json")
+		}
+	}
+	b := &builder{seed: seed, plans: plans, hosts: hosts, layout: layout}
+	pairs := make([]Pair, n)
+	for i := range plans {
+		c := b.capturedPair(i)
+		pairs[i] = Pair{Request: c.request, Response: c.response}
+	}
+	return pairs
+}
+
 type builder struct {
 	repo     *db.Repository
 	seed     uint64
