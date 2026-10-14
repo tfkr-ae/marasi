@@ -57,14 +57,12 @@ type TrafficRepository interface {
 	//GetRequestResponseSummary will return the request-response data without the raw and prettified fields
 	GetRequestResponseSummary() ([]*RequestResponseSummary, error)
 
-	// ListTraffic returns a newest-first page of summaries older than cursor
-	// that match query. An empty query matches all traffic. A nil cursor
-	// starts at the newest row. nextCursor is the last returned item's id when
-	// another older page exists, otherwise nil. indexComplete reports whether
-	// every pair is in the traffic index, apart from pairs the index build
-	// skipped because they could not be indexed; text conditions can miss
-	// pairs while it is false. An invalid query returns a *QueryError.
-	ListTraffic(cursor *uuid.UUID, limit int, query string) (items []*RequestResponseSummary, nextCursor *uuid.UUID, indexComplete bool, err error)
+	// ListTraffic returns one page of the pairs that match q, in display
+	// order, with cursors for both directions, the as_of bound it used, and
+	// the completeness of each background job the answer depends on. An
+	// invalid query, exclusion or sort returns a *QueryError; a malformed
+	// cursor, or one made under another sort, wraps ErrInvalidCursor.
+	ListTraffic(q TrafficQuery) (TrafficPage, error)
 
 	// GetMetadata returns the metadata map for a specific request ID.
 	GetMetadata(id uuid.UUID) (metadata map[string]any, err error)
@@ -96,6 +94,18 @@ type TrafficRepository interface {
 	// Pairs with no content type, including in-flight requests, are counted
 	// under ContentType "".
 	CountContentTypes() ([]*ContentTypeCount, error)
+
+	// LinkTraffic links every pair in sel to target in one transaction and
+	// returns the number of pairs it newly linked; pairs already linked are
+	// not counted. Unknown ids in an id selection are ignored. A missing
+	// target returns ErrLinkTargetNotFound; an invalid query selection
+	// returns a *QueryError.
+	LinkTraffic(sel Selection, target LinkTarget) (int, error)
+
+	// UnlinkTraffic removes the links between every pair in sel and target
+	// in one transaction and returns the number of pairs that were linked.
+	// It returns the same errors as LinkTraffic.
+	UnlinkTraffic(sel Selection, target LinkTarget) (int, error)
 }
 
 // ProxyRequest represents the data captured from an HTTP request.
