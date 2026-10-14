@@ -253,16 +253,17 @@ func TestTrafficRepo_ListTrafficQueryLimits(t *testing.T) {
 	}
 }
 
-func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
-	repo, teardown := setupTestDB(t)
-	defer teardown()
-	seedQueryPairs(t, repo, queryTestPairs()[:1])
+// invalidTrafficQuery is one query the translator rejects, with the message
+// it must contain and the position it must report.
+type invalidTrafficQuery struct {
+	query    string
+	message  string
+	position int
+}
 
-	tests := []struct {
-		query    string
-		message  string
-		position int
-	}{
+// invalidTrafficQueries is every invalid query the translator tests cover.
+func invalidTrafficQueries() []invalidTrafficQuery {
+	return []invalidTrafficQuery{
 		{query: `stauts = 5`, message: `unknown field "stauts"`, position: 1},
 		{query: `   stauts = 5`, message: `unknown field "stauts"`, position: 4},
 		{query: `host = "a" AND stauts = 5`, message: `unknown field "stauts"`, position: 16},
@@ -297,7 +298,14 @@ func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
 		{query: strings.Repeat(`"abc" AND `, 200) + `"abc"`, message: `query nests more than 200 conditions`, position: 1},
 		{query: strings.Repeat(`NOT (`, 200) + `"abc"` + strings.Repeat(`)`, 200), message: `query nests more than 200 conditions`, position: 1001},
 	}
-	for _, test := range tests {
+}
+
+func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	seedQueryPairs(t, repo, queryTestPairs()[:1])
+
+	for _, test := range invalidTrafficQueries() {
 		t.Run(test.query, func(t *testing.T) {
 			items, nextCursor, _, err := listPage(repo, nil, 200, test.query)
 			var queryErr *domain.QueryError
