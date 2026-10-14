@@ -17,7 +17,9 @@
 //
 // Each case reports p50-ms and p95-ms; p95 is what passes or fails against
 // target-ms, and pass is 1 or 0. Set MARASI_BENCH_GATE=1 to make a miss fail
-// the run. The first benchmark prints the run environment.
+// the run. A case stops sampling after MARASI_BENCH_CASE_BUDGET (default 2m)
+// with at least 5 samples, so a slow case reports fewer samples than 30;
+// samples says how many. The first benchmark prints the run environment.
 //
 // OS-cold runs (case 28) purge the OS cache before every run with
 // `sudo -n purge`, so they need passwordless sudo for purge and are skipped

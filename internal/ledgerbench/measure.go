@@ -29,6 +29,23 @@ type Target struct {
 // benchmark. Without it a miss is only reported, as pass 0.
 const GateEnv = "MARASI_BENCH_GATE"
 
+// BudgetEnv sets how long one case may spend sampling, as a Go duration;
+// the default is DefaultBudget. A case that spends it stops early with at
+// least minSamples samples, so pathological cases do not take hours at 30x.
+const BudgetEnv = "MARASI_BENCH_CASE_BUDGET"
+
+// DefaultBudget is the sampling time of one case when BudgetEnv is unset.
+const DefaultBudget = 2 * time.Minute
+
+const minSamples = 5
+
+func budget() time.Duration {
+	if d, err := time.ParseDuration(os.Getenv(BudgetEnv)); err == nil && d > 0 {
+		return d
+	}
+	return DefaultBudget
+}
+
 // Latencies are the measured durations of one case.
 type Latencies []time.Duration
 
@@ -82,8 +99,13 @@ func MeasurePrepared(b *testing.B, target Target, prepare func() error, op func(
 	run()
 	b.ResetTimer()
 	latencies := make(Latencies, 0, b.N)
+	limit, spent := budget(), time.Duration(0)
 	for range b.N {
-		latencies = append(latencies, run())
+		elapsed := run()
+		latencies = append(latencies, elapsed)
+		if spent += elapsed; spent > limit && len(latencies) >= minSamples {
+			break
+		}
 	}
 	b.StopTimer()
 	report(b, target, latencies)
@@ -93,6 +115,7 @@ func report(b *testing.B, target Target, latencies Latencies) {
 	b.Helper()
 	ms := func(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 	p95 := latencies.Percentile(95)
+	b.ReportMetric(float64(len(latencies)), "samples")
 	b.ReportMetric(ms(latencies.Percentile(50)), "p50-ms")
 	b.ReportMetric(ms(p95), "p95-ms")
 	if target.Max == 0 {
