@@ -29,6 +29,9 @@ var migrateMu sync.Mutex
 type Repository struct {
 	dbConn *sqlx.DB // dbConn is the active database connection pool.
 	index  indexBuildState
+	// jobMu serialises background job batches with job resets, so a reset
+	// never lands between a batch reading its progress and committing it.
+	jobMu sync.Mutex
 }
 
 // NewProxyRepo initializes a new Repository with the given sqlx.DB database connection.
@@ -129,6 +132,11 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 		dbLogger.Info("Migrations completed", "count", len(res), "applied", names)
 	} else {
 		dbLogger.Info("Migrations up to date", "count", 0)
+	}
+	if err := reconcileJobs(db); err != nil {
+		db.Close()
+		dbLogger.Error("Failed to reconcile background jobs", "error", err)
+		return nil, fmt.Errorf("reconciling background jobs: %w", err)
 	}
 	return db, nil
 }
