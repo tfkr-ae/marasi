@@ -137,6 +137,33 @@ func TestTrafficRepo_InsertResponse(t *testing.T) {
 		}
 	})
 
+	t.Run("should keep a metadata key set while the pair was in flight", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		reqID := testRequest(t, repo, nil)
+		// The request-time context, as the proxy carries it to the response.
+		context := map[string]any{"extension": "workshop", "nested": map[string]any{"a": 1}}
+		if err := repo.UpdateMetadata(map[string]any{"extension": "workshop", "nested": map[string]any{"b": 2}, "tag": "set in flight"}, reqID); err != nil {
+			t.Fatalf("UpdateMetadata() error = %v", err)
+		}
+		if err := repo.InsertResponse(&domain.ProxyResponse{
+			ID: reqID, Status: "200 OK", StatusCode: 200, Raw: []byte("HTTP/1.1 200 OK\r\n\r\n"),
+			Metadata: context, RespondedAt: time.Now(),
+		}); err != nil {
+			t.Fatalf("InsertResponse() error = %v", err)
+		}
+
+		got, err := repo.GetMetadata(reqID)
+		if err != nil {
+			t.Fatalf("GetMetadata() error = %v", err)
+		}
+		want := map[string]any{"extension": "workshop", "nested": map[string]any{"a": float64(1), "b": float64(2)}, "tag": "set in flight"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
+		}
+	})
+
 	t.Run("should return an error if request ID doesn't exist", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
