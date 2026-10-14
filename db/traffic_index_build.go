@@ -228,19 +228,31 @@ func (repo *Repository) buildIndex(build indexBuild, maxBytes int) (int, bool, e
 // saved job states. Traffic lists call it in the same transaction as their
 // page query, so the flag describes the snapshot the page was read from.
 func (repo *Repository) indexComplete(q sqlx.Queryer) (bool, error) {
-	for _, name := range SearchIndexJobs {
-		job, err := loadJob(q, name)
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
-		}
-		if err != nil {
-			return false, fmt.Errorf("checking the %s job: %w", name, err)
-		}
-		if !job.Complete {
+	complete, err := searchIndexCompleteness(q)
+	if err != nil {
+		return false, err
+	}
+	for _, done := range complete {
+		if !done {
 			return false, nil
 		}
 	}
 	return true, nil
+}
+
+// searchIndexCompleteness reports, for each of SearchIndexJobs, whether it is
+// complete, from the saved job state. A job without saved state is
+// incomplete.
+func searchIndexCompleteness(q sqlx.Queryer) (map[string]bool, error) {
+	complete := make(map[string]bool, len(SearchIndexJobs))
+	for _, name := range SearchIndexJobs {
+		job, err := loadJob(q, name)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("checking the %s job: %w", name, err)
+		}
+		complete[name] = err == nil && job.Complete
+	}
+	return complete, nil
 }
 
 // missingFromIndex returns ids of pairs without a row in the build's index,
