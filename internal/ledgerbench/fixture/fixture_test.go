@@ -184,6 +184,46 @@ func TestManifest(t *testing.T) {
 	})
 }
 
+func TestNewPairs(t *testing.T) {
+	t.Run("should give new pairs after a time that the capture path accepts", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "grow.marasi")
+		manifest, err := fixture.Build(path, fixture.Config{Seed: 1, Pairs: 300})
+		if err != nil {
+			t.Fatalf("building: %v", err)
+		}
+		repo := openProject(t, path)
+
+		pairs := fixture.NewPairs(9, 120, manifest.Newest, 50_000)
+
+		if len(pairs) != 120 {
+			t.Fatalf("\nwanted:\n120 pairs\ngot:\n%d", len(pairs))
+		}
+		for i, pair := range pairs {
+			if !pair.Request.RequestedAt.After(manifest.Newest) {
+				t.Fatalf("\nwanted:\nrequested after %v\ngot:\n%v", manifest.Newest, pair.Request.RequestedAt)
+			}
+			if i > 0 && pair.Request.ID.String() <= pairs[i-1].Request.ID.String() {
+				t.Fatalf("\nwanted:\nids in order\ngot:\npair %d out of order", i)
+			}
+			if pair.Response != nil && len(pair.Response.Raw) < 50_000 {
+				t.Fatalf("\nwanted:\n50 KB bodies\ngot:\n%d bytes", len(pair.Response.Raw))
+			}
+			if err := repo.InsertRequest(pair.Request); err != nil {
+				t.Fatalf("inserting request: %v", err)
+			}
+			if pair.Response != nil {
+				if err := repo.InsertResponse(pair.Response); err != nil {
+					t.Fatalf("inserting response: %v", err)
+				}
+			}
+		}
+		count, _ := repo.CountRows()
+		if count != 420 {
+			t.Fatalf("\nwanted:\n420\ngot:\n%d", count)
+		}
+	})
+}
+
 // pairDigests returns one line per pair with everything stored about it.
 func pairDigests(t *testing.T, repo *db.Repository) []string {
 	t.Helper()
