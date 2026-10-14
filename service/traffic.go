@@ -35,6 +35,14 @@ type trafficPage struct {
 	Index      trafficIndex     `json:"index"`
 }
 
+// trafficCount is the GET /traffic/count response body. Count is exact up to
+// 100,000; above it, Count is 100,000 and Capped is true.
+type trafficCount struct {
+	Count  int          `json:"count"`
+	Capped bool         `json:"capped"`
+	Index  trafficIndex `json:"index"`
+}
+
 // trafficList is the body of a traffic list paged by UUID, such as an
 // Armory run's traffic.
 type trafficList struct {
@@ -142,6 +150,33 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			PrevCursor: page.PrevCursor,
 			AsOf:       page.AsOf,
 			Index:      trafficIndex{Complete: page.Complete[domain.JobTrafficIndex]},
+		})
+	})
+	mux.HandleFunc("GET /traffic/count", func(w http.ResponseWriter, r *http.Request) {
+		query, ok := parseTrafficCountQuery(r)
+		if !ok {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
+		repo, err := proxy.GetTrafficRepo()
+		if err != nil {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		count, err := repo.CountTraffic(query)
+		var queryErr *domain.QueryError
+		switch {
+		case errors.As(err, &queryErr):
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
+			return
+		case err != nil:
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+			return
+		}
+		writeJSON(w, r, http.StatusOK, trafficCount{
+			Count:  count.Count,
+			Capped: count.Capped,
+			Index:  trafficIndex{Complete: count.Complete[domain.JobTrafficIndex]},
 		})
 	})
 	// GET /traffic/query checks q and exclude without running them, so it
@@ -341,6 +376,25 @@ func parseTrafficQuery(r *http.Request) (domain.TrafficQuery, bool) {
 			return domain.TrafficQuery{}, false
 		}
 		q.AsOf = &asOf
+	}
+	return q, true
+}
+
+// parseTrafficCountQuery reads q, exclude, as_of and after from a
+// GET /traffic/count request. It reports false for a malformed id.
+func parseTrafficCountQuery(r *http.Request) (domain.TrafficCountQuery, bool) {
+	query := r.URL.Query()
+	q := domain.TrafficCountQuery{Text: query.Get("q"), Exclusion: query["exclude"]}
+	for name, bound := range map[string]**uuid.UUID{"as_of": &q.AsOf, "after": &q.After} {
+		raw := query.Get(name)
+		if raw == "" {
+			continue
+		}
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			return domain.TrafficCountQuery{}, false
+		}
+		*bound = &id
 	}
 	return q, true
 }
