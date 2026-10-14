@@ -607,3 +607,29 @@ func (repo *Repository) SearchByMetadata(path string, value any) ([]*domain.Requ
 	}
 	return reqResSummary, nil
 }
+
+// CountContentTypes returns every distinct response content type with its row
+// count. NULL and empty content types are grouped under "".
+func (repo *Repository) CountContentTypes() ([]*domain.ContentTypeCount, error) {
+	var rows []struct {
+		ContentType string `db:"content_type"`
+		Count       int    `db:"count"`
+	}
+	query := `SELECT
+			  COALESCE(content_type, '') AS content_type,
+			  COUNT(*) AS count
+			  FROM request
+			  GROUP BY COALESCE(content_type, '')
+			  ORDER BY count DESC, content_type ASC`
+
+	err := repo.dbConn.Select(&rows, query)
+	if err != nil {
+		return nil, fmt.Errorf("counting content types: %w", err)
+	}
+
+	counts := make([]*domain.ContentTypeCount, len(rows))
+	for i, row := range rows {
+		counts[i] = &domain.ContentTypeCount{ContentType: row.ContentType, Count: row.Count}
+	}
+	return counts, nil
+}

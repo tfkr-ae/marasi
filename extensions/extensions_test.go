@@ -244,6 +244,13 @@ func (m *mockTrafficRepo) SearchByMetadata(path string, value any) ([]*domain.Re
 	return []*domain.RequestResponseSummary{}, nil
 }
 
+func (m *mockTrafficRepo) CountContentTypes() ([]*domain.ContentTypeCount, error) {
+	if m.forceError {
+		return nil, errors.New("forced repo error")
+	}
+	return []*domain.ContentTypeCount{}, nil
+}
+
 func setupTestExtension(t *testing.T, luaCode string, options ...func(*Runtime) error) (*Runtime, *mockProxyService) {
 	t.Helper()
 

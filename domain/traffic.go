@@ -90,6 +90,12 @@ type TrafficRepository interface {
 
 	// SearchByMetadata retrieves requests where the value at the specified JSON path matches the provided value.
 	SearchByMetadata(path string, value any) ([]*RequestResponseSummary, error)
+
+	// CountContentTypes returns every distinct response content type with its
+	// row count, ordered by count descending and then content type ascending.
+	// Pairs with no content type, including in-flight requests, are counted
+	// under ContentType "".
+	CountContentTypes() ([]*ContentTypeCount, error)
 }
 
 // ProxyRequest represents the data captured from an HTTP request.
@@ -141,4 +147,11 @@ type RequestResponseSummary struct {
 	RequestedAt time.Time
 	RespondedAt time.Time
 	Note        string
+}
+
+// ContentTypeCount is the number of request-response pairs with one response
+// content type. An empty ContentType means the pair has no content type.
+type ContentTypeCount struct {
+	ContentType string // Response content type, or "" when absent
+	Count       int    // Number of pairs with this content type
 }
