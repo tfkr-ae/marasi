@@ -8,11 +8,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // TrafficIndexJob is the background job that indexes pairs missing from the
 // traffic index (ADR-0026).
-const TrafficIndexJob = "traffic_index"
+const TrafficIndexJob = domain.JobTrafficIndex
 
 // AnnotationIndexJob is the background job that backfills the annotation
 // index with the notes and metadata of pairs indexed before it (ADR-0038).
