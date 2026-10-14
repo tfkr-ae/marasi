@@ -235,6 +235,9 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 
 // InsertResponse updates an existing request entry with response details.
 // It expects a domain.ProxyResponse and uses its ID to locate and update the corresponding row.
+// The response metadata is merged into the stored metadata with json_patch
+// (RFC 7396), so a key set while the pair was in flight survives; a null
+// value in the response metadata deletes its key.
 func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 	dbResponse := fromDomainProxyResponse(resp)
 	query := `UPDATE request SET
@@ -244,7 +247,7 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 				content_type = :content_type,
 				length = :length,
 				responded_at = :responded_at,
-				metadata = :metadata
+				metadata = json_patch(coalesce(metadata, '{}'), :metadata)
 			  WHERE id = :id`
 	err := repo.inTx(func(tx *sqlx.Tx) error {
 		result, err := tx.NamedExec(query, dbResponse)

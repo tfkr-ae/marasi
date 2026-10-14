@@ -351,7 +351,9 @@ func TestTrafficRepo_ListTrafficQueryMetadataHasKey(t *testing.T) {
 			metadata: map[string]any{"highlight": "#EF4444"}},
 		{name: "n", scheme: "https", method: "GET", host: "a.example.com", path: "/", requestedAt: at, statusCode: 200,
 			metadata: map[string]any{"highlight": 3}},
-		{name: "z", scheme: "https", method: "GET", host: "a.example.com", path: "/", requestedAt: at, statusCode: 200,
+		// In flight: a null in the response metadata would delete the key
+		// (RFC 7396 merge).
+		{name: "z", scheme: "https", method: "GET", host: "a.example.com", path: "/", requestedAt: at,
 			metadata: map[string]any{"highlight": nil}},
 		{name: "o", scheme: "https", method: "GET", host: "a.example.com", path: "/", requestedAt: at, statusCode: 200,
 			metadata: map[string]any{"other": "highlight", "nested": map[string]any{"highlight": "x"}}},
