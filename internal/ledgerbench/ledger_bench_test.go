@@ -13,7 +13,11 @@
 // Then run every case, or narrow with -bench:
 //
 //	MARASI_BENCH_FIXTURE=~/fixtures/ledger-1m.marasi \
-//	  go test -tags bench1m -run '^$' -bench . -benchtime 30x -timeout 2h ./internal/ledgerbench/
+//	  go test -tags bench1m -run '^$' -bench . -benchtime 30x -timeout 3h ./internal/ledgerbench/
+//
+// The fixture is opened with db.New, so a fixture built by an older binary
+// is migrated in place on the first run. Rebuild it after a schema change
+// for a clean steady-state baseline.
 //
 // Each case reports p50-ms and p95-ms; p95 is what passes or fails against
 // target-ms, and pass is 1 or 0. Set MARASI_BENCH_GATE=1 to make a miss fail
@@ -44,10 +48,9 @@
 // A ticket that makes a case runnable adds it here, named with its number in
 // the ticket 01 list so -bench can pick it out:
 //
-//   - A query case is one more queryCase in queryCases: the query (built
-//     from the manifest's planted facts), an optional cursor, and its
-//     target. It runs warm through the Repository (repo) and GET /traffic
-//     (service).
+//   - A query case is one more queryCase in queryCases: a domain.TrafficQuery
+//     built from the manifest's planted facts, and its target. It runs warm
+//     through the Repository (repo) and GET /traffic (service).
 //   - Any other case is a sub-benchmark of the Benchmark function for its
 //     area, or a new Benchmark function: get the project with
 //     benchProject(b), open what it needs, and call Measure or MeasureCold
@@ -55,8 +58,8 @@
 //   - When the case needs a fact the fixture does not plant yet, add it to
 //     fixture.Manifest and plant it in the generator.
 //
-// When the ticket changes ListTraffic's signature, update listPage, the one
-// place the cases call it.
+// Every case lists traffic through listPage and trafficURL; a change to
+// ListTraffic or GET /traffic changes those two.
 //
 // Then record the case's baseline in the spec's benchmarks.md.
 package ledgerbench_test
@@ -73,14 +76,13 @@ import (
 	"os"
 	"os/exec"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/db"
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/internal/ledgerbench"
 	"github.com/tfkr-ae/marasi/internal/ledgerbench/fixture"
 	"github.com/tfkr-ae/marasi/service"
@@ -92,15 +94,17 @@ const (
 	pageSize   = 200
 )
 
-// project is the fixture a run measures.
+// project is the fixture a run measures, with facts read from it once.
 type project struct {
 	path     string
 	manifest *fixture.Manifest
-	// exclusion is the seeded content-type exclusion written as a query.
-	// Until ticket 04 puts the exclusion in SQL, cases express it this way.
-	exclusion string
-	// unindexed is a copy with its traffic index emptied, standing in for
-	// a project just upgraded whose background jobs have not run.
+	// deepCursor continues a list from the pair halfway back.
+	deepCursor string
+	// contentTypes is every content type the project has, for excluding
+	// every pair.
+	contentTypes []string
+	// unindexed is a copy whose traffic index job was rebuilt and has not
+	// run, standing in for a project just upgraded.
 	unindexed string
 }
 
@@ -136,19 +140,40 @@ func loadProject(path string) (*project, error) {
 	}
 	fmt.Printf("fixture: %s (%d pairs, seed %d)\n%s", path, manifest.Pairs, manifest.Seed, env)
 
-	var terms []string
-	for _, filter := range slices.Compact(slices.Sorted(slices.Values(fixture.SeedExclusion))) {
-		terms = append(terms, fmt.Sprintf("content_type != %q", filter))
+	conn, err := db.New(path, quiet())
+	if err != nil {
+		return nil, err
 	}
-	return &project{path: path, manifest: manifest, exclusion: strings.Join(terms, " AND ")}, nil
+	repo := db.NewProxyRepo(conn)
+	defer repo.Close()
+	p := &project{path: path, manifest: manifest}
+	middle := manifest.MiddleID
+	page, err := repo.ListTraffic(domain.TrafficQuery{AsOf: &middle, Limit: 1})
+	if err != nil {
+		return nil, err
+	}
+	if page.NextCursor == nil {
+		return nil, fmt.Errorf("no pairs older than the middle pair %s", middle)
+	}
+	p.deepCursor = *page.NextCursor
+	counts, err := repo.CountContentTypes()
+	if err != nil {
+		return nil, err
+	}
+	for _, count := range counts {
+		if count.ContentType != "" {
+			p.contentTypes = append(p.contentTypes, count.ContentType)
+		}
+	}
+	return p, nil
 }
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
-// unindexedProject returns a copy of the fixture whose traffic index is
-// empty, made once per run.
 var unindexedOnce sync.Once
 
+// unindexedProject returns a copy of the fixture whose traffic index job has
+// been rebuilt and not run again, made once per run.
 func unindexedProject(b *testing.B, p *project) string {
 	b.Helper()
 	unindexedOnce.Do(func() {
@@ -167,10 +192,10 @@ func unindexedProject(b *testing.B, p *project) string {
 			projectErr = err
 			return
 		}
-		defer conn.Close()
-		_, err = conn.Exec(`DELETE FROM traffic_index_key; INSERT INTO traffic_index(traffic_index) VALUES('delete-all')`)
-		if err != nil {
-			projectErr = fmt.Errorf("emptying the traffic index: %w", err)
+		repo := db.NewProxyRepo(conn)
+		defer repo.Close()
+		if err := repo.RebuildJob(domain.JobTrafficIndex); err != nil {
+			projectErr = fmt.Errorf("rebuilding the traffic index: %w", err)
 			return
 		}
 		p.unindexed = clone
@@ -184,8 +209,7 @@ func unindexedProject(b *testing.B, p *project) string {
 // cloneOf returns a throwaway copy of the project at path, removed when b ends.
 func cloneOf(b *testing.B, path string) string {
 	b.Helper()
-	dir := b.TempDir()
-	clone, err := ledgerbench.CloneProject(path, dir)
+	clone, err := ledgerbench.CloneProject(path, b.TempDir())
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -203,73 +227,130 @@ func openRepo(b *testing.B, path string) *db.Repository {
 	return repo
 }
 
-// listPage reads one page, the way every case lists traffic.
-func listPage(repo *db.Repository, cursor *uuid.UUID, query string) (complete bool, err error) {
-	_, _, complete, err = repo.ListTraffic(cursor, pageSize, query)
-	return complete, err
+// listPage reads one page of q, the way every case lists traffic, and
+// reports whether the traffic index was complete.
+func listPage(repo *db.Repository, q domain.TrafficQuery) (complete bool, err error) {
+	q.Limit = pageSize
+	page, err := repo.ListTraffic(q)
+	return page.Complete[domain.JobTrafficIndex], err
 }
 
-// queryCase is one warm query benchmark.
+// trafficURL is the GET /traffic request for q.
+func trafficURL(q domain.TrafficQuery) string {
+	values := url.Values{"limit": {fmt.Sprint(pageSize)}}
+	if q.Text != "" {
+		values.Set("q", q.Text)
+	}
+	for _, excluded := range q.Exclusion {
+		values.Add("exclude", excluded)
+	}
+	if q.Cursor != "" {
+		values.Set("cursor", q.Cursor)
+	}
+	if q.AsOf != nil {
+		values.Set("as_of", q.AsOf.String())
+	}
+	return "/traffic?" + values.Encode()
+}
+
+// queryCase is one warm list benchmark.
 type queryCase struct {
 	name   string
-	query  func(p *project) string
-	cursor func(p *project) *uuid.UUID
+	query  func(p *project) domain.TrafficQuery
 	target ledgerbench.Target
 }
 
-func fixed(query string) func(*project) string { return func(*project) string { return query } }
+func text(format string, facts ...func(m *fixture.Manifest) any) func(*project) domain.TrafficQuery {
+	return func(p *project) domain.TrafficQuery {
+		args := make([]any, len(facts))
+		for i, fact := range facts {
+			args[i] = fact(p.manifest)
+		}
+		return domain.TrafficQuery{Text: fmt.Sprintf(format, args...)}
+	}
+}
 
 func ms(n int) time.Duration { return time.Duration(n) * time.Millisecond }
 
-// queryCases are the query cases today's code can run. Numbers are the
-// ticket 01 list.
-var queryCases = []queryCase{
-	{name: "03-unfiltered", query: fixed(""), target: ledgerbench.Target{Max: ms(20)}},
-	{name: "03-deep-cursor", query: fixed(""), cursor: func(p *project) *uuid.UUID { return &p.manifest.MiddleID },
-		target: ledgerbench.Target{Max: ms(20)}},
-	{name: "04-seed-exclusion", query: func(p *project) string { return p.exclusion }, target: ledgerbench.Target{Max: ms(30)}},
-	{name: "07-sparse-host-spread", query: func(p *project) string { return fmt.Sprintf("host = %q", p.manifest.SpreadHost) },
-		target: ledgerbench.Target{Max: ms(150)}},
-	{name: "08-sparse-host-old", query: func(p *project) string { return fmt.Sprintf("host = %q", p.manifest.OldHost) },
-		target: ledgerbench.Target{Max: ms(150)}},
-	{name: "08-sparse-host-old-under-a-page", query: func(p *project) string { return fmt.Sprintf("host = %q", p.manifest.RareOldHost) },
-		target: ledgerbench.Target{Max: ms(150)}},
-	{name: "09-path-wildcard-dense", query: func(p *project) string { return fmt.Sprintf("path = %q", p.manifest.GraphQLPattern) },
-		target: ledgerbench.Target{Max: ms(150)}},
-	{name: "09-host-wildcard-dense", query: func(p *project) string { return fmt.Sprintf("host = %q", p.manifest.DenseHostPattern) },
-		target: ledgerbench.Target{Max: ms(150)}},
-	{name: "09-host-negation-dense", query: func(p *project) string { return fmt.Sprintf("host != %q", p.manifest.DominantHost) },
-		target: ledgerbench.Target{Max: ms(150)}},
-	{name: "09-host-wildcard-sparse", query: func(p *project) string { return fmt.Sprintf("host = %q", p.manifest.SparseHostPattern) },
-		target: ledgerbench.Target{Max: 3 * time.Second, Pathological: true}},
-	{name: "10-server-errors", query: fixed("status_code >= 500"), target: ledgerbench.Target{Max: ms(150)}},
-	{name: "12-launchpad-big", query: func(p *project) string { return fmt.Sprintf("launchpad = %q", p.manifest.BigLaunchpad) },
-		target: ledgerbench.Target{Max: ms(150)}},
-	{name: "12-launchpad-old", query: func(p *project) string { return fmt.Sprintf("launchpad = %q", p.manifest.OldLaunchpad) },
-		target: ledgerbench.Target{Max: ms(150)}},
-	{name: "12-launchpad-any", query: fixed("launchpad:*"), target: ledgerbench.Target{Max: ms(150)}},
-	{name: "13-metadata-extension", query: func(p *project) string { return fmt.Sprintf("metadata.extension = %q", p.manifest.RareExtension) },
-		target: ledgerbench.Target{Max: 3 * time.Second, Pathological: true}},
-	{name: "15-rare-text", query: func(p *project) string { return fmt.Sprintf("%q", p.manifest.RareTerm) },
-		target: ledgerbench.Target{Max: ms(50)}},
-	{name: "16-common-text-term", query: func(p *project) string { return p.manifest.CommonTerm },
-		target: ledgerbench.Target{Max: ms(500), Pathological: true}},
-	{name: "16-common-text-phrase", query: func(p *project) string { return fmt.Sprintf("response_head:%q", p.manifest.CommonPhrase) },
-		target: ledgerbench.Target{Max: ms(500), Pathological: true}},
-	{name: "17-text-and-sparse-host", query: func(p *project) string {
-		return fmt.Sprintf("%s AND host = %q", p.manifest.CommonTerm, p.manifest.OldHost)
-	}, target: ledgerbench.Target{Max: time.Second, Pathological: true}},
-	{name: "17-not-text", query: func(p *project) string { return "NOT " + p.manifest.CommonTerm },
-		target: ledgerbench.Target{Max: time.Second, Pathological: true}},
-	{name: "17-text-and-exclusion", query: func(p *project) string { return p.manifest.CommonTerm + " AND " + p.exclusion },
-		target: ledgerbench.Target{Max: time.Second, Pathological: true}},
-	// 3 s (P) until ticket 07 makes OR index-driven; then 150 ms.
-	{name: "18-host-or-note", query: func(p *project) string {
-		return fmt.Sprintf("host = %q OR note:%q", p.manifest.RareOldHost, p.manifest.RareNoteTerm)
-	}, target: ledgerbench.Target{Max: 3 * time.Second, Pathological: true}},
+// stretchTypes are the content types of the fixture's excluded stretches,
+// exact and in major/* form.
+var (
+	stretchTypes = []string{
+		"image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml",
+		"font/woff2", "font/woff", "text/css", "application/javascript", "application/octet-stream",
+	}
+	stretchMajorForms = []string{"image/*", "font/*", "text/css", "application/javascript", "application/octet-stream"}
+)
+
+// excludedStretch reads as of the newest pair of the excluded stretch with
+// the given number of pairs, so the newest pairs a page can see are all
+// excluded.
+func excludedStretch(fraction int, exclusion []string) func(*project) domain.TrafficQuery {
+	return func(p *project) domain.TrafficQuery {
+		stretch := p.manifest.ExcludedStretches[0]
+		for _, s := range p.manifest.ExcludedStretches {
+			if s.Pairs == p.manifest.Pairs/fraction {
+				stretch = s
+			}
+		}
+		newest := stretch.Newest
+		return domain.TrafficQuery{Exclusion: exclusion, AsOf: &newest}
+	}
 }
 
-// BenchmarkQuery runs every query case warm, through the Repository and
+// queryCases are the list cases the code can run. Numbers are the ticket 01
+// list.
+var queryCases = []queryCase{
+	{"03-unfiltered", text(""), ledgerbench.Target{Max: ms(20)}},
+	{"03-deep-cursor", func(p *project) domain.TrafficQuery { return domain.TrafficQuery{Cursor: p.deepCursor} },
+		ledgerbench.Target{Max: ms(20)}},
+	{"04-seed-exclusion", func(*project) domain.TrafficQuery { return domain.TrafficQuery{Exclusion: fixture.SeedExclusion} },
+		ledgerbench.Target{Max: ms(30)}},
+	// Case 5: the newest 1% (10k at 1M) and 10% (100k at 1M) all excluded.
+	{"05-newest-1pct-excluded-exact", excludedStretch(100, stretchTypes), ledgerbench.Target{Max: ms(150)}},
+	{"05-newest-1pct-excluded-major", excludedStretch(100, stretchMajorForms), ledgerbench.Target{Max: ms(150)}},
+	{"05-newest-10pct-excluded-exact", excludedStretch(10, stretchTypes), ledgerbench.Target{Max: ms(500), Pathological: true}},
+	{"05-newest-10pct-excluded-major", excludedStretch(10, stretchMajorForms), ledgerbench.Target{Max: ms(500), Pathological: true}},
+	// Case 6: pairs with no content type are never excluded, so
+	// status_code >= 0 leaves out the in-flight ones and the result is empty.
+	{"06-every-pair-excluded", func(p *project) domain.TrafficQuery {
+		return domain.TrafficQuery{Text: "status_code >= 0", Exclusion: p.contentTypes}
+	}, ledgerbench.Target{Max: 3 * time.Second, Pathological: true}},
+	{"07-sparse-host-spread", text("host = %q", func(m *fixture.Manifest) any { return m.SpreadHost }), ledgerbench.Target{Max: ms(150)}},
+	{"08-sparse-host-old", text("host = %q", func(m *fixture.Manifest) any { return m.OldHost }), ledgerbench.Target{Max: ms(150)}},
+	{"08-sparse-host-old-under-a-page", text("host = %q", func(m *fixture.Manifest) any { return m.RareOldHost }),
+		ledgerbench.Target{Max: ms(150)}},
+	{"09-path-wildcard-dense", text("path = %q", func(m *fixture.Manifest) any { return m.GraphQLPattern }), ledgerbench.Target{Max: ms(150)}},
+	{"09-host-wildcard-dense", text("host = %q", func(m *fixture.Manifest) any { return m.DenseHostPattern }), ledgerbench.Target{Max: ms(150)}},
+	{"09-host-negation-dense", text("host != %q", func(m *fixture.Manifest) any { return m.DominantHost }), ledgerbench.Target{Max: ms(150)}},
+	{"09-host-wildcard-sparse", text("host = %q", func(m *fixture.Manifest) any { return m.SparseHostPattern }),
+		ledgerbench.Target{Max: 3 * time.Second, Pathological: true}},
+	{"10-server-errors", text("status_code >= 500"), ledgerbench.Target{Max: ms(150)}},
+	{"12-launchpad-big", text("launchpad = %q", func(m *fixture.Manifest) any { return m.BigLaunchpad }), ledgerbench.Target{Max: ms(150)}},
+	{"12-launchpad-old", text("launchpad = %q", func(m *fixture.Manifest) any { return m.OldLaunchpad }), ledgerbench.Target{Max: ms(150)}},
+	{"12-launchpad-any", text("launchpad:*"), ledgerbench.Target{Max: ms(150)}},
+	{"13-metadata-extension", text("metadata.extension = %q", func(m *fixture.Manifest) any { return m.RareExtension }),
+		ledgerbench.Target{Max: 3 * time.Second, Pathological: true}},
+	{"15-rare-text", text("%q", func(m *fixture.Manifest) any { return m.RareTerm }), ledgerbench.Target{Max: ms(50)}},
+	{"16-common-text-term", text("%s", func(m *fixture.Manifest) any { return m.CommonTerm }),
+		ledgerbench.Target{Max: ms(500), Pathological: true}},
+	{"16-common-text-phrase", text("response_head:%q", func(m *fixture.Manifest) any { return m.CommonPhrase }),
+		ledgerbench.Target{Max: ms(500), Pathological: true}},
+	{"17-text-and-sparse-host", text("%s AND host = %q",
+		func(m *fixture.Manifest) any { return m.CommonTerm }, func(m *fixture.Manifest) any { return m.OldHost }),
+		ledgerbench.Target{Max: time.Second, Pathological: true}},
+	{"17-not-text", text("NOT %s", func(m *fixture.Manifest) any { return m.CommonTerm }),
+		ledgerbench.Target{Max: time.Second, Pathological: true}},
+	{"17-text-and-exclusion", func(p *project) domain.TrafficQuery {
+		return domain.TrafficQuery{Text: p.manifest.CommonTerm, Exclusion: fixture.SeedExclusion}
+	}, ledgerbench.Target{Max: time.Second, Pathological: true}},
+	// 3 s (P) until ticket 07 makes OR index-driven; then 150 ms.
+	{"18-host-or-note", text("host = %q OR note:%q",
+		func(m *fixture.Manifest) any { return m.RareOldHost }, func(m *fixture.Manifest) any { return m.RareNoteTerm }),
+		ledgerbench.Target{Max: 3 * time.Second, Pathological: true}},
+}
+
+// BenchmarkQuery runs every list case warm, through the Repository and
 // through GET /traffic.
 func BenchmarkQuery(b *testing.B) {
 	p := benchProject(b)
@@ -277,21 +358,14 @@ func BenchmarkQuery(b *testing.B) {
 	server := service.NewServer(&marasi.Proxy{TrafficRepo: repo}, nil, nil, func() {}, "bench", "bench", p.path)
 	for _, c := range queryCases {
 		query := c.query(p)
-		var cursor *uuid.UUID
-		if c.cursor != nil {
-			cursor = c.cursor(p)
-		}
 		b.Run(c.name+"/repo", func(b *testing.B) {
 			ledgerbench.Measure(b, c.target, func() error {
-				_, err := listPage(repo, cursor, query)
+				_, err := listPage(repo, query)
 				return err
 			})
 		})
 		b.Run(c.name+"/service", func(b *testing.B) {
-			target := "/traffic?limit=" + fmt.Sprint(pageSize) + "&q=" + url.QueryEscape(query)
-			if cursor != nil {
-				target += "&cursor=" + cursor.String()
-			}
+			target := trafficURL(query)
 			ledgerbench.Measure(b, c.target, func() error {
 				response := httptest.NewRecorder()
 				server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
@@ -304,35 +378,36 @@ func BenchmarkQuery(b *testing.B) {
 	}
 }
 
+// openAndList opens the project at path with a new sql.DB and Repository and
+// reads the first page of q: a connection-cold run.
+func openAndList(path string, q domain.TrafficQuery) func() (func(), error) {
+	return func() (func(), error) {
+		conn, err := db.New(path, quiet())
+		if err != nil {
+			return nil, err
+		}
+		repo := db.NewProxyRepo(conn)
+		_, err = listPage(repo, q)
+		return func() { repo.Close() }, err
+	}
+}
+
 // BenchmarkOpen measures opening a project and showing its first page,
 // connection-cold.
 func BenchmarkOpen(b *testing.B) {
 	p := benchProject(b)
-	openAndList := func(path, query string) func() (func(), error) {
-		return func() (func(), error) {
-			conn, err := db.New(path, quiet())
-			if err != nil {
-				return nil, err
-			}
-			repo := db.NewProxyRepo(conn)
-			_, err = listPage(repo, nil, query)
-			return func() { repo.Close() }, err
-		}
-	}
-	// Case 1. Fails today: a fresh Repository scans every pair to check the
-	// index is complete. Ticket 02 fixes it.
+	seed := domain.TrafficQuery{Exclusion: fixture.SeedExclusion}
 	b.Run("01-steady-state", func(b *testing.B) {
-		ledgerbench.MeasureCold(b, ledgerbench.Target{Max: ms(300)}, openAndList(p.path, p.exclusion))
+		ledgerbench.MeasureCold(b, ledgerbench.Target{Max: ms(300)}, openAndList(p.path, seed))
 	})
-	// Case 2. Migrations are already applied; the traffic index, today's
-	// only background job, is empty.
+	// Case 2: the traffic index job was reset, as an upgrade that changes a
+	// job's version resets it. Migrations are already applied.
 	b.Run("02-after-upgrade", func(b *testing.B) {
-		ledgerbench.MeasureCold(b, ledgerbench.Target{Max: ms(500), Pathological: true},
-			openAndList(unindexedProject(b, p), p.exclusion))
+		ledgerbench.MeasureCold(b, ledgerbench.Target{Max: ms(500), Pathological: true}, openAndList(unindexedProject(b, p), seed))
 	})
-	// Case 3 and 4, connection-cold: the first query of a session.
+	// Case 3, connection-cold: the first query of a session.
 	b.Run("03-unfiltered-cold", func(b *testing.B) {
-		ledgerbench.MeasureCold(b, ledgerbench.Target{Max: ms(300)}, openAndList(p.path, ""))
+		ledgerbench.MeasureCold(b, ledgerbench.Target{Max: ms(300)}, openAndList(p.path, domain.TrafficQuery{}))
 	})
 }
 
@@ -373,7 +448,7 @@ func BenchmarkWrite(b *testing.B) {
 
 // BenchmarkUnderLoad is case 26: the first page while capture runs at 100
 // pairs a second with 50 KB bodies and the index build runs, on a copy whose
-// index is empty. It also reports the longest capture stall.
+// index job was reset. It also reports the longest capture stall.
 // Ticket 09 adds the variant under a bulk highlight.
 func BenchmarkUnderLoad(b *testing.B) {
 	p := benchProject(b)
@@ -386,7 +461,7 @@ func BenchmarkUnderLoad(b *testing.B) {
 		wg.Go(func() { stall = capture(ctx, repo, p.manifest, 100, 50_000) })
 
 		ledgerbench.Measure(b, ledgerbench.Target{Max: ms(300)}, func() error {
-			_, err := listPage(repo, nil, p.exclusion)
+			_, err := listPage(repo, domain.TrafficQuery{Exclusion: fixture.SeedExclusion})
 			return err
 		})
 		stop()
@@ -405,7 +480,7 @@ func BenchmarkIncompleteIndex(b *testing.B) {
 		var batches ledgerbench.Latencies
 		for range 5 {
 			started := time.Now()
-			if _, _, err := repo.IndexMissingTraffic(1 << 20); err != nil {
+			if _, _, err := repo.RunJobBatch(domain.JobTrafficIndex, 1<<20); err != nil {
 				b.Fatal(err)
 			}
 			batches = append(batches, time.Since(started))
@@ -413,17 +488,17 @@ func BenchmarkIncompleteIndex(b *testing.B) {
 		ctx, stop := context.WithCancel(context.Background())
 		var wg sync.WaitGroup
 		wg.Go(func() { buildIndex(ctx, repo) })
-		query := fmt.Sprintf("%q", p.manifest.RareTerm)
+		query := domain.TrafficQuery{Text: fmt.Sprintf("%q", p.manifest.RareTerm)}
 		sawIncomplete := false
 		ledgerbench.Measure(b, ledgerbench.Target{Max: ms(150) + batches.Percentile(95)}, func() error {
-			complete, err := listPage(repo, nil, query)
+			complete, err := listPage(repo, query)
 			sawIncomplete = sawIncomplete || !complete
 			return err
 		})
 		stop()
 		wg.Wait()
 		if !sawIncomplete {
-			b.Error("index.complete was never false while the index build ran")
+			b.Error("the traffic index was never reported incomplete while its job ran")
 		}
 		b.ReportMetric(float64(batches.Percentile(95))/float64(time.Millisecond), "batch-p95-ms")
 	})
@@ -437,37 +512,30 @@ func BenchmarkOSCold(b *testing.B) {
 		b.Skipf("set %s=1, with passwordless sudo for purge, to run OS-cold cases", osColdEnv)
 	}
 	purge := func() error { return exec.Command("sudo", "-n", "purge").Run() }
-	queries := map[string]string{
-		"01-open-steady-state":  p.exclusion,
-		"04-seed-exclusion":     p.exclusion,
-		"07-sparse-host-spread": fmt.Sprintf("host = %q", p.manifest.SpreadHost),
-		"15-rare-text":          fmt.Sprintf("%q", p.manifest.RareTerm),
+	cases := map[string]struct {
+		query  domain.TrafficQuery
+		target time.Duration
+	}{
+		"01-open-steady-state":  {domain.TrafficQuery{Exclusion: fixture.SeedExclusion}, ms(300)},
+		"04-seed-exclusion":     {domain.TrafficQuery{Exclusion: fixture.SeedExclusion}, ms(30)},
+		"07-sparse-host-spread": {domain.TrafficQuery{Text: fmt.Sprintf("host = %q", p.manifest.SpreadHost)}, ms(150)},
+		"15-rare-text":          {domain.TrafficQuery{Text: fmt.Sprintf("%q", p.manifest.RareTerm)}, ms(50)},
 	}
-	targets := map[string]time.Duration{
-		"01-open-steady-state": ms(300), "04-seed-exclusion": ms(30), "07-sparse-host-spread": ms(150), "15-rare-text": ms(50),
-	}
-	for _, name := range slices.Sorted(maps.Keys(queries)) {
+	for _, name := range slices.Sorted(maps.Keys(cases)) {
+		c := cases[name]
 		b.Run("28-"+name, func(b *testing.B) {
 			// The OS-cold target is 3 to 5 times looser; report against 5.
-			target := ledgerbench.Target{Max: 5 * targets[name], ReportOnly: true}
-			ledgerbench.MeasurePrepared(b, target, purge, func() (func(), error) {
-				conn, err := db.New(p.path, quiet())
-				if err != nil {
-					return nil, err
-				}
-				repo := db.NewProxyRepo(conn)
-				_, err = listPage(repo, nil, queries[name])
-				return func() { repo.Close() }, err
-			})
+			target := ledgerbench.Target{Max: 5 * c.target, ReportOnly: true}
+			ledgerbench.MeasurePrepared(b, target, purge, openAndList(p.path, c.query))
 		})
 	}
 }
 
-// buildIndex runs the background index build until it finishes or ctx ends,
-// as the service does.
+// buildIndex runs the traffic index job until it finishes or ctx ends, as
+// the service's job runner does.
 func buildIndex(ctx context.Context, repo *db.Repository) {
 	for ctx.Err() == nil {
-		_, remaining, err := repo.IndexMissingTraffic(1 << 20)
+		_, remaining, err := repo.RunJobBatch(domain.JobTrafficIndex, 1<<20)
 		if err == nil && !remaining {
 			return
 		}
@@ -490,15 +558,11 @@ func capture(ctx context.Context, repo *db.Repository, manifest *fixture.Manifes
 				return longest
 			case <-tick.C:
 			}
-			for _, write := range []func() error{
-				func() error { return repo.InsertRequest(pair.Request) },
-				func() error {
-					if pair.Response == nil {
-						return nil
-					}
-					return repo.InsertResponse(pair.Response)
-				},
-			} {
+			writes := []func() error{func() error { return repo.InsertRequest(pair.Request) }}
+			if pair.Response != nil {
+				writes = append(writes, func() error { return repo.InsertResponse(pair.Response) })
+			}
+			for _, write := range writes {
 				started := time.Now()
 				if err := write(); err != nil {
 					return longest

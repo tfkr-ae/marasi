@@ -60,7 +60,8 @@ type Manifest struct {
 	Pairs  int       `json:"pairs"`
 	Oldest time.Time `json:"oldest"`
 	Newest time.Time `json:"newest"`
-	// MiddleID is the id of the pair halfway back, a deep cursor.
+	// MiddleID is the id of the pair halfway back, where a deep cursor
+	// points.
 	MiddleID uuid.UUID `json:"middle_id"`
 
 	// DominantHost carries about 25% of pairs.
@@ -104,14 +105,15 @@ type Manifest struct {
 
 	// ExcludedStretches are runs of pairs whose content types are all in the
 	// seeded exclusion: 1% and 10% of pairs (10k and 100k at the reference
-	// size). Listing from cursor Above starts at the stretch's newest pair.
+	// size). A read as of Newest sees the stretch as the newest pairs.
 	ExcludedStretches []ExcludedStretch `json:"excluded_stretches"`
 }
 
 // ExcludedStretch is a run of pairs of excluded content types.
 type ExcludedStretch struct {
-	Pairs int       `json:"pairs"`
-	Above uuid.UUID `json:"above"`
+	Pairs int `json:"pairs"`
+	// Newest is the id of the stretch's newest pair.
+	Newest uuid.UUID `json:"newest"`
 }
 
 // ManifestPath is where Build writes the manifest of the project at path.
@@ -530,21 +532,31 @@ func (b *builder) websocket(i int) error {
 	return nil
 }
 
-// indexBuild runs the real traffic index build until nothing is missing.
+// indexBuild runs every background job, including the traffic index build,
+// until nothing is left.
 func (b *builder) indexBuild() error {
-	for {
-		_, remaining, err := b.repo.IndexMissingTraffic(1 << 20)
-		var skipped *db.SkippedPairError
-		if errors.As(err, &skipped) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if !remaining {
-			return nil
+	jobs, err := b.repo.ListJobs()
+	if err != nil {
+		return err
+	}
+	// Every registered background job runs to completion, as the service's
+	// job runner does, so the project opens in its steady state.
+	for _, job := range jobs {
+		for {
+			_, remaining, err := b.repo.RunJobBatch(job.Name, 1<<20)
+			var skipped *db.SkippedPairError
+			if errors.As(err, &skipped) {
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("running background job %s: %w", job.Name, err)
+			}
+			if !remaining {
+				break
+			}
 		}
 	}
+	return nil
 }
 
 func (b *builder) manifest() *Manifest {
@@ -561,7 +573,7 @@ func (b *builder) manifest() *Manifest {
 		RareExtension: rareExtension,
 	}
 	for _, s := range b.layout.excluded {
-		m.ExcludedStretches = append(m.ExcludedStretches, ExcludedStretch{Pairs: s.length, Above: b.plans[s.start+s.length].id})
+		m.ExcludedStretches = append(m.ExcludedStretches, ExcludedStretch{Pairs: s.length, Newest: b.plans[s.start+s.length-1].id})
 	}
 	return m
 }

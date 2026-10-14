@@ -41,12 +41,21 @@ func TestBuild(t *testing.T) {
 		if count != 500 {
 			t.Fatalf("\nwanted:\n500\ngot:\n%d", count)
 		}
-		_, _, complete, err := repo.ListTraffic(nil, 200, "")
+		page, err := repo.ListTraffic(domain.TrafficQuery{Limit: 200})
 		if err != nil {
 			t.Fatalf("listing traffic: %v", err)
 		}
-		if !complete {
+		if !page.Complete[domain.JobTrafficIndex] {
 			t.Fatalf("\nwanted:\nindex complete\ngot:\nincomplete")
+		}
+		jobs, err := repo.ListJobs()
+		if err != nil {
+			t.Fatalf("listing jobs: %v", err)
+		}
+		for _, job := range jobs {
+			if !job.Complete {
+				t.Fatalf("\nwanted:\nevery background job complete\ngot:\n%+v", job)
+			}
 		}
 	})
 
@@ -90,22 +99,23 @@ func TestManifest(t *testing.T) {
 	}
 
 	// all lists every pair matching query, newest first.
-	all := func(query string, cursor *uuid.UUID) []*domain.RequestResponseSummary {
+	all := func(query string) []*domain.RequestResponseSummary {
 		t.Helper()
 		var out []*domain.RequestResponseSummary
+		q := domain.TrafficQuery{Text: query, Limit: 500}
 		for {
-			items, next, _, err := repo.ListTraffic(cursor, 500, query)
+			page, err := repo.ListTraffic(q)
 			if err != nil {
 				t.Fatalf("listing %q: %v", query, err)
 			}
-			out = append(out, items...)
-			if next == nil {
+			out = append(out, page.Items...)
+			if page.NextCursor == nil {
 				return out
 			}
-			cursor = next
+			q.Cursor, q.AsOf = *page.NextCursor, page.AsOf
 		}
 	}
-	everything := all("", nil)
+	everything := all("")
 	middle := everything[pairs/2].RequestedAt
 
 	cases := []struct {
@@ -124,7 +134,7 @@ func TestManifest(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run("should plant the "+c.name, func(t *testing.T) {
-			matches := all(c.query, nil)
+			matches := all(c.query)
 			if len(matches) != c.want {
 				t.Fatalf("\nwanted:\n%d matches\ngot:\n%d", c.want, len(matches))
 			}
@@ -137,25 +147,28 @@ func TestManifest(t *testing.T) {
 	}
 
 	t.Run("should put the spread host's 201st newest match about halfway back", func(t *testing.T) {
-		matches := all(fmt.Sprintf("host = %q", manifest.SpreadHost), nil)
+		matches := all(fmt.Sprintf("host = %q", manifest.SpreadHost))
 		back := slices.IndexFunc(everything, func(s *domain.RequestResponseSummary) bool { return s.ID == matches[200].ID })
 		if back < pairs*40/100 || back > pairs*60/100 {
 			t.Fatalf("\nwanted:\nabout halfway back\ngot:\n%d of %d pairs back", back, pairs)
 		}
 	})
 
-	t.Run("should list only excluded content types below each excluded stretch's cursor", func(t *testing.T) {
+	t.Run("should list only excluded content types as of each excluded stretch's newest pair", func(t *testing.T) {
 		filters := fixture.SeedExclusion
 		if len(manifest.ExcludedStretches) != 2 {
 			t.Fatalf("\nwanted:\n2 stretches\ngot:\n%d", len(manifest.ExcludedStretches))
 		}
 		for _, stretch := range manifest.ExcludedStretches {
-			above := stretch.Above
-			items, _, _, err := repo.ListTraffic(&above, stretch.Pairs, "")
+			newest := stretch.Newest
+			page, err := repo.ListTraffic(domain.TrafficQuery{AsOf: &newest, Limit: stretch.Pairs})
 			if err != nil {
 				t.Fatalf("listing the stretch: %v", err)
 			}
-			for _, item := range items {
+			if len(page.Items) != stretch.Pairs {
+				t.Fatalf("\nwanted:\n%d pairs\ngot:\n%d", stretch.Pairs, len(page.Items))
+			}
+			for _, item := range page.Items {
 				if !slices.Contains(filters, item.ContentType) {
 					t.Fatalf("\nwanted:\nonly excluded content types\ngot:\n%q", item.ContentType)
 				}
