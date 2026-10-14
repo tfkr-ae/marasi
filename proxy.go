@@ -502,6 +502,7 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyReque
 			Path:        path,
 			RequestedAt: requestTime,
 		}
+		proxyRequest.SitemapNode = domain.SitemapLeaf(proxyRequest.Scheme, proxyRequest.Host, proxyRequest.Path)
 
 		// TODO Check prettified error
 		rawReq, prettified, err := rawhttp.DumpRequest(req)

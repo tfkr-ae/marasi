@@ -154,8 +154,11 @@ func TestJobs(t *testing.T) {
 		seedUnindexedProject(t, path, 5)
 		server, lifecycle, subscriber := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
-		if got := eventNamed(subscriber, "job.complete", 30*time.Second); got == "" {
-			t.Fatal("the first build did not complete")
+		// The sitemap job runs last, so its completion ends the first open's jobs.
+		for got := ""; got != `{"name":"sitemap"}`; {
+			if got = eventNamed(subscriber, "job.complete", 30*time.Second); got == "" {
+				t.Fatal("the first build did not complete")
+			}
 		}
 		pacer := paceIndexBuild(lifecycle, path)
 
