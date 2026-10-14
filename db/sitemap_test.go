@@ -296,3 +296,175 @@ func TestSitemap_ListChildren(t *testing.T) {
 		}
 	})
 }
+
+// sitemapPairs are pairs that exercise the rules, as url, content type and
+// status, where status 0 is in flight.
+var sitemapPairs = []struct {
+	url         string
+	contentType string
+	status      int
+}{
+	{"https://api.x.com/users/42", "application/json", 200},
+	{"https://api.x.com/users/43", "application/json", 503},
+	{"https://api.x.com/users/0193a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5b/orders", "application/json", 200},
+	{"https://api.x.com/v1/getOrderHistory2024?x=1", "text/html", 200},
+	{"https://cdn.x.com/assets/d41d8cd98f00b204e9800998ecf8427e", "image/png", 200},
+	{"https://cdn.x.com/files/a%2Fb//raw/", "", 200},
+	{"http://local.x.com:8080/2024/{id}", "text/plain", 500},
+	{"http://local.x.com:8080/", "", 0},
+}
+
+// insertUnlinkedPair writes a pair the way a binary from before the sitemap
+// does: into the request table only.
+func insertUnlinkedPair(t *testing.T, repo *Repository, url, contentType string, status int) {
+	t.Helper()
+	scheme, rest, _ := strings.Cut(url, "://")
+	host, path, _ := strings.Cut(rest, "/")
+	id, err := uuid.NewV7()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var code, responseType any
+	if status != 0 {
+		code, responseType = status, contentType
+	}
+	_, err = repo.dbConn.Exec(`INSERT INTO request
+		(id, scheme, method, host, path, request_raw, status_code, content_type, metadata, requested_at)
+		VALUES (?, ?, 'GET', ?, ?, 'GET / HTTP/1.1', coalesce(?, -1), nullif(?, ''), '{}', ?)`,
+		id, scheme, host, "/"+path, code, responseType, time.Now())
+	if err != nil {
+		t.Fatalf("inserting an unlinked pair: %v", err)
+	}
+}
+
+func sitemapJobState(t *testing.T, repo *Repository) JobState {
+	t.Helper()
+	jobs, err := repo.ListJobs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range jobs {
+		if job.Name == SitemapJob {
+			return job
+		}
+	}
+	t.Fatalf("\nwanted:\na %s job\ngot:\n%+v", SitemapJob, jobs)
+	return JobState{}
+}
+
+// runSitemapJob runs the sitemap job until it has nothing left, maxPairs at a
+// time.
+func runSitemapJob(t *testing.T, repo *Repository, maxPairs int) {
+	t.Helper()
+	for range 1000 {
+		_, remaining, err := repo.AddMissingToSitemap(maxPairs)
+		if err != nil {
+			t.Fatalf("AddMissingToSitemap: %v", err)
+		}
+		if !remaining {
+			return
+		}
+	}
+	t.Fatal("the sitemap job did not finish")
+}
+
+func TestSitemap_Job(t *testing.T) {
+	captured, teardown := setupTestDB(t)
+	defer teardown()
+	for _, pair := range sitemapPairs {
+		capturePair(t, captured, pair.url, pair.contentType, pair.status)
+	}
+	want := sitemapTree(t, captured)
+
+	t.Run("should build the same tree from stored pairs as capture does", func(t *testing.T) {
+		path := t.TempDir() + "/project.marasi"
+		repo := openTestProjectFile(t, path)
+		for _, pair := range sitemapPairs {
+			insertUnlinkedPair(t, repo, pair.url, pair.contentType, pair.status)
+		}
+		repo = reopenProject(t, repo)
+		if got := sitemapJobState(t, repo); got.Complete {
+			t.Fatalf("\nwanted:\nan incomplete sitemap job after an older binary wrote pairs\ngot:\n%+v", got)
+		}
+		page, err := repo.ListSitemapChildren("", nil, "", 10)
+		if err != nil || page.Complete[SitemapJob] {
+			t.Fatalf("\nwanted:\nthe read to report the sitemap as incomplete\ngot:\n%v, %v", page.Complete, err)
+		}
+
+		runSitemapJob(t, repo, 3)
+
+		if got := sitemapTree(t, repo); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+		if got := sitemapJobState(t, repo); got != (JobState{Name: SitemapJob, Complete: true, Done: 8, Total: 8}) {
+			t.Fatalf("\nwanted:\na complete job that added 8 pairs\ngot:\n%+v", got)
+		}
+		if got, want := sitemapTree(t, repo, "application/json"), sitemapTree(t, captured, "application/json"); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should rebuild the tree on request", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+		for _, pair := range sitemapPairs {
+			capturePair(t, repo, pair.url, pair.contentType, pair.status)
+		}
+		if err := repo.RebuildJob(SitemapJob); err != nil {
+			t.Fatalf("RebuildJob: %v", err)
+		}
+		if got := sitemapTree(t, repo); got != "" {
+			t.Fatalf("\nwanted:\nan empty tree after the reset\ngot:\n%s", got)
+		}
+		runSitemapJob(t, repo, 100)
+		if got := sitemapTree(t, repo); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should keep pairs captured during a build in the tree", func(t *testing.T) {
+		path := t.TempDir() + "/project.marasi"
+		repo := openTestProjectFile(t, path)
+		for _, pair := range sitemapPairs[:4] {
+			insertUnlinkedPair(t, repo, pair.url, pair.contentType, pair.status)
+		}
+		repo = reopenProject(t, repo)
+		runSitemapJob(t, repo, 1)
+		for _, pair := range sitemapPairs[4:] {
+			capturePair(t, repo, pair.url, pair.contentType, pair.status)
+		}
+		runSitemapJob(t, repo, 1)
+		if got := sitemapTree(t, repo); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+}
+
+func TestSitemap_CapturedTree(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	for _, pair := range sitemapPairs {
+		capturePair(t, repo, pair.url, pair.contentType, pair.status)
+	}
+	want := strings.Join([]string{
+		"http://local.x.com:8080 2/1",
+		"http://local.x.com:8080/{int} 1/1",
+		"http://local.x.com:8080/{int}/%7Bid%7D 1/1",
+		"https://api.x.com 4/1",
+		"https://api.x.com/users 3/1",
+		"https://api.x.com/users/{int} 2/1",
+		"https://api.x.com/users/{uuid} 1/0",
+		"https://api.x.com/users/{uuid}/orders 1/0",
+		"https://api.x.com/v1 1/0",
+		"https://api.x.com/v1/getOrderHistory2024 1/0",
+		"https://cdn.x.com 2/0",
+		"https://cdn.x.com/assets 1/0",
+		"https://cdn.x.com/assets/{hash} 1/0",
+		"https://cdn.x.com/files 1/0",
+		"https://cdn.x.com/files/a%2Fb 1/0",
+		"https://cdn.x.com/files/a%2Fb/raw 1/0",
+	}, "\n")
+	if got := sitemapTree(t, repo); got != want {
+		t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+	}
+}
