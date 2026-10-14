@@ -57,14 +57,14 @@ func TestProbeEnvironment(t *testing.T) {
 	})
 
 	t.Run("should report the state of each background job", func(t *testing.T) {
-		if env.Jobs["traffic index"] != "complete" {
+		if env.Jobs[domain.JobTrafficIndex] != "complete" {
 			t.Fatalf("\nwanted:\ntraffic index complete\ngot:\n%v", env.Jobs)
 		}
 	})
 
 	t.Run("should print every field", func(t *testing.T) {
 		text := env.String()
-		for _, want := range []string{"go:", "modernc.org/sqlite:", "page_size:", "cache_size:", "mmap_size:", "wal_bytes:", "traffic index: complete"} {
+		for _, want := range []string{"go:", "modernc.org/sqlite:", "page_size:", "cache_size:", "mmap_size:", "wal_bytes:", "job traffic_index: complete"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("\nwanted:\n%q in\n%s", want, text)
 			}

@@ -30,7 +30,8 @@ type Environment struct {
 	MmapSize  int64
 	// WALBytes is the size of the project's WAL file before the run.
 	WALBytes int64
-	// Jobs is the state of each background job: complete or incomplete.
+	// Jobs is the saved state of each background job: complete or
+	// incomplete, with its progress once it has counted its work.
 	Jobs map[string]string
 }
 
@@ -93,11 +94,20 @@ func ProbeEnvironment(path string) (Environment, error) {
 			return env, fmt.Errorf("reading %s: %w", pragma, err)
 		}
 	}
-	_, _, indexComplete, err := repo.ListTraffic(nil, 1, "")
+	jobs, err := repo.ListJobs()
 	if err != nil {
 		return env, err
 	}
-	env.Jobs["traffic index"] = map[bool]string{true: "complete", false: "incomplete"}[indexComplete]
+	for _, job := range jobs {
+		state := "incomplete"
+		if job.Complete {
+			state = "complete"
+		}
+		if job.Total > 0 {
+			state += fmt.Sprintf(" (%d/%d)", job.Done, job.Total)
+		}
+		env.Jobs[job.Name] = state
+	}
 	return env, nil
 }
 
