@@ -1816,6 +1816,29 @@ func TestWriteRequestModifier(t *testing.T) {
 
 	})
 
+	t.Run("requests should carry their prettified copy outside metadata", func(t *testing.T) {
+		proxy := newTestProxy(t)
+		proxy.OnRequest = func(req domain.ProxyRequest) error { return nil }
+		req := httptest.NewRequest(http.MethodPost, "https://marasi.app/api", strings.NewReader(`{"b":2,"a":1}`))
+		req.Header.Set("Content-Type", "application/json")
+		*req = *core.ContextWithRequestID(req, uuid.New())
+		*req = *core.ContextWithRequestTime(req, time.Now())
+		metadata := map[string]any{"source": "test"}
+		*req = *core.ContextWithMetadata(req, metadata)
+
+		if err := WriteRequestModifier(proxy, req); err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+
+		got := (<-proxy.DBWriteChannel).(*domain.ProxyRequest)
+		if !strings.Contains(got.Prettified, "{\n  \"a\": 1,\n  \"b\": 2\n}") {
+			t.Fatalf("wanted: the prettified JSON body\ngot: %q", got.Prettified)
+		}
+		if want := map[string]any{"source": "test"}; !reflect.DeepEqual(got.Metadata, want) || !reflect.DeepEqual(metadata, want) {
+			t.Fatalf("wanted: %v in the request and the context\ngot: %v and %v", want, got.Metadata, metadata)
+		}
+	})
+
 	t.Run("requests coming from launchpad should include launchpad_id in metadata", func(t *testing.T) {
 		wantRequestID, err := uuid.NewV7()
 		if err != nil {
@@ -3862,6 +3885,33 @@ func TestWriteResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: 0\ngot: %d", len(proxy.DBWriteChannel))
 		}
 
+	})
+
+	t.Run("responses should carry their prettified copy outside metadata", func(t *testing.T) {
+		proxy := newTestProxy(t)
+		proxy.OnResponse = func(res domain.ProxyResponse) error { return nil }
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+		*req = *core.ContextWithRequestID(req, uuid.New())
+		*req = *core.ContextWithResponseTime(req, time.Now())
+		*req = *core.ContextWithMetadata(req, map[string]any{"source": "test"})
+		res := &http.Response{
+			Status: "200 OK", StatusCode: http.StatusOK, Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+			Header:  http.Header{"Content-Type": {"application/json"}},
+			Request: req,
+			Body:    io.NopCloser(strings.NewReader(`{"b":2,"a":1}`)),
+		}
+
+		if err := WriteResponseModifier(proxy, res); err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+
+		got := (<-proxy.DBWriteChannel).(*domain.ProxyResponse)
+		if !strings.Contains(got.Prettified, "{\n  \"a\": 1,\n  \"b\": 2\n}") {
+			t.Fatalf("wanted: the prettified JSON body\ngot: %q", got.Prettified)
+		}
+		if want := map[string]any{"source": "test"}; !reflect.DeepEqual(got.Metadata, want) {
+			t.Fatalf("wanted: %v\ngot: %v", want, got.Metadata)
+		}
 	})
 
 	t.Run("responses should still be written to the DB when onresponse is undefined", func(t *testing.T) {
