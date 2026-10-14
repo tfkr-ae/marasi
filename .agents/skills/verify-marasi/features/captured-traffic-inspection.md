@@ -10,6 +10,7 @@ Users list stored request/response pairs and open one pair to inspect its metada
 - Read one pair by UUID with `traffic get "$TRAFFIC_ID"`.
 - Read one pair's metadata with `traffic metadata get "$TRAFFIC_ID"`.
 - Replace one pair's metadata with `traffic metadata update "$TRAFFIC_ID" --file` or piped stdin.
+- Set or clear one metadata key on a selection with `POST /traffic/bulk/metadata` (no CLI): `{"selection":…,"key":"a.b","value":<any JSON>}` or `{"selection":…,"key":"a.b","clear":true}`. It returns `{"count":n}`, counting only pairs whose metadata changed, and leaves every other key as it was.
 - Choose human-readable or `--json` output for `traffic list`, `traffic get`, and `traffic metadata update`. `traffic metadata get` always returns JSON, without `prettified-request` or `prettified-response`.
 
 ## How to get to it (user POV)
@@ -31,3 +32,5 @@ Send two distinct proxied requests, for example `GET /proof.txt` returning 200 a
 - `traffic metadata update` requires `--file` or piped stdin with a non-empty JSON object body. A TTY stdin fails.
 - `--limit` must be 1 through 500. The default is 200.
 - Metadata update replaces client-owned keys. It drops a submitted `has_note`, `prettified-request`, or `prettified-response`, keeps any previous prettified bodies in storage, and sets `has_note` to JSON boolean `true` only when a note already exists. `notes set` is a different writer: it stores `has_note` as the JSON number `1`. `traffic metadata get` omits `prettified-request` and `prettified-response`. It does not add `has_note` when no note exists.
+- Bulk metadata keys are dotted like query keys (`a.b` is `b` inside `a`); a missing parent object is created, and a parent that is not an object is left alone and not counted. A key with an empty segment, `"` or `\`, or a top-level `prettified-request`, `prettified-response` or `has_note`, is a 400 `{"error":"invalid_metadata_key","message":…}` naming it. Missing `key`, or not exactly one of `value` and `"clear":true`, is 400 `invalid_bulk_request`. `"value":null` sets a JSON null.
+- A response merges its metadata into the stored metadata (RFC 7396 `json_patch`) instead of replacing it, so a key set while the pair was in flight survives the response. A key cleared while the pair was in flight comes back if the response-time context still has it.
