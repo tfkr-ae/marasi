@@ -192,3 +192,22 @@ func (repo *Repository) LinkRequestToLaunchpad(requestID uuid.UUID, launchpadID 
 
 	return nil
 }
+
+// UnlinkRequestFromLaunchpad removes the association between a request and a
+// launchpad. It returns domain.ErrLaunchpadNotLinked if there is none.
+func (repo *Repository) UnlinkRequestFromLaunchpad(requestID uuid.UUID, launchpadID uuid.UUID) error {
+	query := `DELETE FROM launchpad_request WHERE request_id = ? AND launchpad_id = ?`
+
+	result, err := repo.dbConn.Exec(query, requestID, launchpadID)
+	if err != nil {
+		return fmt.Errorf("unlinking request %s from launchpad %s: %w", requestID, launchpadID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("fetching unlinked rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return domain.ErrLaunchpadNotLinked
+	}
+	return nil
+}
