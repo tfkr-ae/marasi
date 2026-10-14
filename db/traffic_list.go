@@ -17,8 +17,7 @@ import (
 // trafficSummaryColumns are the columns a traffic list reads into a
 // dbRequestResponseSummary.
 const trafficSummaryColumns = `id, scheme, method, host, path, requested_at,
-	status, status_code, content_type, length, responded_at,
-	json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata`
+	status, status_code, content_type, length, responded_at, metadata`
 
 // defaultTrafficOrder is the canonical name of the default sort. It is the
 // only sort until sortable ledger columns land (ADR-0041).
@@ -131,6 +130,15 @@ func newTrafficFilter(text string, exclusion []string) (trafficFilter, error) {
 		filter.add(where, args...)
 	}
 	return filter, nil
+}
+
+// ValidateTrafficQuery checks a traffic query's text and exclusion without
+// running it. It never touches a database, and it reports the same
+// *domain.QueryError that ListTraffic returns for the same text and
+// exclusion.
+func ValidateTrafficQuery(text string, exclusion []string) error {
+	_, err := newTrafficFilter(text, exclusion)
+	return err
 }
 
 // add appends a condition, parenthesised, with its arguments.
