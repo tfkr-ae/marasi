@@ -783,7 +783,7 @@ func (repo *Repository) GetTestCaseRequests(id uuid.UUID) ([]*domain.RequestResp
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
-			  json_remove(r.metadata, '$.prettified-request', '$.prettified-response') AS metadata
+			  r.metadata
 		      FROM request r
 		      JOIN test_case_requests tcr ON r.id = tcr.request_id
 		      WHERE tcr.test_case_id = ?
@@ -842,7 +842,7 @@ func (repo *Repository) GetFindingRequests(id uuid.UUID) ([]*domain.RequestRespo
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
-			  json_remove(r.metadata, '$.prettified-request', '$.prettified-response') AS metadata
+			  r.metadata
 		      FROM request r
 		      JOIN finding_requests fr ON r.id = fr.request_id
 		      WHERE fr.finding_id = ?

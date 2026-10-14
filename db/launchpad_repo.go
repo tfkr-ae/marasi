@@ -157,7 +157,7 @@ func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string) 
 	query := `SELECT
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
-			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
+			  metadata
 		      FROM request
 		      WHERE ` + launchpadMember
 	args := append(make([]any, 0, len(translated.args)+1), id)
