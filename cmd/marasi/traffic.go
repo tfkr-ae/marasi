@@ -20,6 +20,9 @@ import (
 var trafficListQueryText string
 var trafficListLimit string
 var trafficListCursor string
+var trafficListExclude []string
+var trafficListAsOf string
+var trafficListBackward bool
 var trafficMetadataUpdateFile string
 
 const trafficPathDisplayLimit = 40
@@ -61,12 +64,25 @@ need at least 3 characters.
 
 Combine conditions with AND, OR, NOT, -, and parentheses. A space
 between conditions means AND. OR binds tighter than AND, so
-a AND b OR c means a AND (b OR c). Use parentheses to group otherwise.`
+a AND b OR c means a AND (b OR c). Use parentheses to group otherwise.
+
+--exclude hides pairs of a content type. Repeat it to hide several. Each
+value is an exact type such as text/html or a whole major type such as
+image/*; parameters such as charset are ignored. Pairs with no content
+type yet are never hidden.
+
+Paging: stderr shows next_cursor, prev_cursor and as_of. Pass a cursor
+back with --cursor, and --backward to walk toward newer pairs. Pass the
+as_of back with --as-of so every page belongs to the same set of results
+and leaves out pairs captured since.`
 
 func init() {
 	trafficListCmd.Flags().StringVarP(&trafficListQueryText, "query", "q", "", "AIP-160 query that narrows the list; see the fields above")
 	trafficListCmd.Flags().StringVar(&trafficListLimit, "limit", "200", "Maximum number of items to return, from 1 to 500")
-	trafficListCmd.Flags().StringVar(&trafficListCursor, "cursor", "", "UUID of the last item, used to fetch the next older page")
+	trafficListCmd.Flags().StringVar(&trafficListCursor, "cursor", "", "Cursor from an earlier page's next_cursor or prev_cursor")
+	trafficListCmd.Flags().StringArrayVar(&trafficListExclude, "exclude", nil, "Content type to hide, exact or major/*; repeat for more")
+	trafficListCmd.Flags().StringVar(&trafficListAsOf, "as-of", "", "as_of UUID from the first page, to keep later pages in the same results")
+	trafficListCmd.Flags().BoolVar(&trafficListBackward, "backward", false, "Walk from --cursor toward newer pairs")
 	trafficMetadataUpdateCmd.Flags().StringVar(&trafficMetadataUpdateFile, "file", "", "Read the metadata JSON from a file instead of stdin")
 	trafficMetadataCmd.AddCommand(trafficMetadataGetCmd, trafficMetadataUpdateCmd)
 	trafficCmd.AddCommand(trafficListCmd, trafficGetCmd, trafficMetadataCmd)
@@ -85,7 +101,8 @@ var trafficListCmd = &cobra.Command{
 	Example: `  marasi traffic list -q 'host = "*.example.com" AND status_code >= 500'
   marasi traffic list -q 'method = "POST" path = "/api/*"'
   marasi traffic list -q 'metadata.extension = "workshop" AND NOT status_code = 404'
-  marasi traffic list -q 'launchpad:* AND response_body:"token"'`,
+  marasi traffic list -q 'launchpad:* AND response_body:"token"'
+  marasi traffic list --exclude 'image/*' --exclude 'font/*'`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -172,8 +189,21 @@ func trafficListQuery() (string, error) {
 	if trafficListQueryText != "" {
 		query.Set("q", trafficListQueryText)
 	}
-	if err := setCursorQuery(query, trafficListCursor); err != nil {
-		return "", err
+	if trafficListCursor != "" {
+		query.Set("cursor", trafficListCursor)
+	}
+	for _, value := range trafficListExclude {
+		query.Add("exclude", value)
+	}
+	if trafficListAsOf != "" {
+		asOf, err := parseServiceID(trafficListAsOf)
+		if err != nil {
+			return "", err
+		}
+		query.Set("as_of", asOf)
+	}
+	if trafficListBackward {
+		query.Set("direction", "backward")
 	}
 	return query.Encode(), nil
 }
@@ -203,7 +233,9 @@ func listTraffic(ctx context.Context, instancePath, instanceName string, asJSON 
 	return nil
 }
 
-// writeTrafficListHuman writes a tab-separated traffic page and the next cursor, if any.
+// writeTrafficListHuman writes a tab-separated traffic page, then the next
+// cursor, the previous cursor and the as_of bound on stderr when the body has
+// them.
 // A page that reports an incomplete traffic index also gets a notice on stderr;
 // pages without an index field, such as Launchpad members, get none.
 func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
@@ -217,6 +249,8 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 			Length     string `json:"length"`
 		} `json:"items"`
 		NextCursor *string `json:"next_cursor"`
+		PrevCursor *string `json:"prev_cursor"`
+		AsOf       *string `json:"as_of"`
 		Index      *struct {
 			Complete bool `json:"complete"`
 		} `json:"index"`
@@ -239,6 +273,12 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 	}
 	if page.NextCursor != nil {
 		fmt.Fprintf(stderr, "next_cursor=%s\n", *page.NextCursor)
+	}
+	if page.PrevCursor != nil {
+		fmt.Fprintf(stderr, "prev_cursor=%s\n", *page.PrevCursor)
+	}
+	if page.AsOf != nil {
+		fmt.Fprintf(stderr, "as_of=%s\n", *page.AsOf)
 	}
 	if page.Index != nil && !page.Index.Complete {
 		fmt.Fprintln(stderr, "notice: the traffic index is still building; text results may be incomplete")

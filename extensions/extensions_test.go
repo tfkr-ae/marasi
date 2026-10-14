@@ -137,14 +137,15 @@ func (m *mockTrafficRepo) GetRequestResponseSummary() ([]*domain.RequestResponse
 	return []*domain.RequestResponseSummary{}, nil
 }
 
-func (m *mockTrafficRepo) ListTraffic(cursor *uuid.UUID, limit int, query string) ([]*domain.RequestResponseSummary, *uuid.UUID, bool, error) {
+func (m *mockTrafficRepo) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, error) {
 	if m.forceError {
-		return nil, nil, false, errors.New("forced repo error")
+		return domain.TrafficPage{}, errors.New("forced repo error")
 	}
+	complete := map[string]bool{domain.JobTrafficIndex: true}
 	if m.summaryData != nil {
-		return m.summaryData, nil, true, nil
+		return domain.TrafficPage{Items: m.summaryData, Complete: complete}, nil
 	}
-	return []*domain.RequestResponseSummary{}, nil, true, nil
+	return domain.TrafficPage{Items: []*domain.RequestResponseSummary{}, Complete: complete}, nil
 }
 
 func (m *mockTrafficRepo) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResponseRow, error) {
@@ -249,6 +250,14 @@ func (m *mockTrafficRepo) CountContentTypes() ([]*domain.ContentTypeCount, error
 		return nil, errors.New("forced repo error")
 	}
 	return []*domain.ContentTypeCount{}, nil
+}
+
+func (m *mockTrafficRepo) LinkTraffic(domain.Selection, domain.LinkTarget) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) UnlinkTraffic(domain.Selection, domain.LinkTarget) (int, error) {
+	return 0, errors.New("not implemented")
 }
 
 func setupTestExtension(t *testing.T, luaCode string, options ...func(*Runtime) error) (*Runtime, *mockProxyService) {

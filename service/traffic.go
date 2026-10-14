@@ -21,7 +21,21 @@ import (
 
 var errInvalidMetadataRequest = errors.New("invalid metadata request")
 
-// trafficList is the GET /traffic response body.
+// trafficPage is the GET /traffic response body. Items are oldest first
+// within the page. NextCursor continues toward older pairs and PrevCursor
+// toward newer ones; each is null at its end. AsOf is the newest pair id the
+// page could include; clients pass it back on every later page of the same
+// results.
+type trafficPage struct {
+	Items      []trafficSummary `json:"items"`
+	NextCursor *string          `json:"next_cursor"`
+	PrevCursor *string          `json:"prev_cursor"`
+	AsOf       *uuid.UUID       `json:"as_of"`
+	Index      trafficIndex     `json:"index"`
+}
+
+// trafficList is the body of a traffic list paged by UUID, such as an
+// Armory run's traffic.
 type trafficList struct {
 	Items      []trafficSummary `json:"items"`
 	NextCursor *uuid.UUID       `json:"next_cursor"` // oldest item id when an older page exists
@@ -97,7 +111,7 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: message})
 			return
 		}
-		limit, cursor, ok := parseTrafficListQuery(r)
+		query, ok := parseTrafficQuery(r)
 		if !ok {
 			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
 			return
@@ -107,20 +121,27 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		items, nextCursor, indexComplete, err := repo.ListTraffic(cursor, limit, r.URL.Query().Get("q"))
+		page, err := repo.ListTraffic(query)
 		var queryErr *domain.QueryError
-		if errors.As(err, &queryErr) {
+		switch {
+		case errors.As(err, &queryErr):
 			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
 			return
-		}
-		if err != nil {
+		case errors.Is(err, domain.ErrInvalidCursor):
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_cursor", Message: err.Error()})
+			return
+		case err != nil:
 			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
 			return
 		}
-		slices.Reverse(items)
-		list := trafficListFromSummaries(items, nextCursor)
-		list.Index = &trafficIndex{Complete: indexComplete}
-		writeJSON(w, r, http.StatusOK, list)
+		slices.Reverse(page.Items)
+		writeJSON(w, r, http.StatusOK, trafficPage{
+			Items:      trafficListFromSummaries(page.Items, nil).Items,
+			NextCursor: page.NextCursor,
+			PrevCursor: page.PrevCursor,
+			AsOf:       page.AsOf,
+			Index:      trafficIndex{Complete: page.Complete[domain.JobTrafficIndex]},
+		})
 	})
 	mux.HandleFunc("GET /traffic/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(r.PathValue("id"))
@@ -273,25 +294,39 @@ func quoteQueryString(value string) string {
 	return b.String()
 }
 
-// parseTrafficListQuery reads the limit and cursor query parameters.
-func parseTrafficListQuery(r *http.Request) (limit int, cursor *uuid.UUID, ok bool) {
+// parseTrafficQuery reads a GET /traffic request's q, exclude, limit,
+// cursor, direction and as_of parameters. The cursor and exclusion are
+// passed through for the repository to check.
+func parseTrafficQuery(r *http.Request) (domain.TrafficQuery, bool) {
 	query := r.URL.Query()
-	limit = 200
+	q := domain.TrafficQuery{
+		Text:      query.Get("q"),
+		Exclusion: query["exclude"],
+		Cursor:    query.Get("cursor"),
+		Limit:     200,
+	}
 	if raw := query.Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed < 1 || parsed > 500 {
-			return 0, nil, false
+			return domain.TrafficQuery{}, false
 		}
-		limit = parsed
+		q.Limit = parsed
 	}
-	if raw := query.Get("cursor"); raw != "" {
-		parsed, err := uuid.Parse(raw)
+	switch direction := query["direction"]; {
+	case len(direction) == 0 || (len(direction) == 1 && direction[0] == "forward"):
+	case len(direction) == 1 && direction[0] == "backward":
+		q.Direction = domain.Backward
+	default:
+		return domain.TrafficQuery{}, false
+	}
+	if raw := query.Get("as_of"); raw != "" {
+		asOf, err := uuid.Parse(raw)
 		if err != nil {
-			return 0, nil, false
+			return domain.TrafficQuery{}, false
 		}
-		cursor = &parsed
+		q.AsOf = &asOf
 	}
-	return limit, cursor, true
+	return q, true
 }
 
 // trafficListFromSummaries maps repository summaries to a list response.

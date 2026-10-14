@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 const prettifiedBenchPageSize = 200
@@ -65,28 +66,28 @@ func BenchmarkLedgerPrettified(b *testing.B) {
 			}
 			cold := NewProxyRepo(conn)
 			defer cold.Close()
-			if _, _, _, err := cold.ListTraffic(nil, prettifiedBenchPageSize, ""); err != nil {
+			if _, err := cold.ListTraffic(domain.TrafficQuery{Limit: prettifiedBenchPageSize}); err != nil {
 				b.Fatal(err)
 			}
 		})
 	})
 	b.Run("03_unfiltered_first_page", func(b *testing.B) {
 		measurePrettifiedCase(b, 20*time.Millisecond, func() {
-			if _, _, _, err := repo.ListTraffic(nil, prettifiedBenchPageSize, ""); err != nil {
+			if _, err := repo.ListTraffic(domain.TrafficQuery{Limit: prettifiedBenchPageSize}); err != nil {
 				b.Fatal(err)
 			}
 		})
 	})
 	b.Run("03_unfiltered_deep_cursor", func(b *testing.B) {
 		measurePrettifiedCase(b, 20*time.Millisecond, func() {
-			if _, _, _, err := repo.ListTraffic(&deep, prettifiedBenchPageSize, ""); err != nil {
+			if _, err := repo.ListTraffic(domain.TrafficQuery{Cursor: *cursorAt(defaultTrafficOrder, deep), Limit: prettifiedBenchPageSize}); err != nil {
 				b.Fatal(err)
 			}
 		})
 	})
 	b.Run("13_metadata_extension_P", func(b *testing.B) {
 		measurePrettifiedCase(b, 3*time.Second, func() {
-			if _, _, _, err := repo.ListTraffic(nil, prettifiedBenchPageSize, `metadata.extension = "x"`); err != nil {
+			if _, err := repo.ListTraffic(domain.TrafficQuery{Text: `metadata.extension = "x"`, Limit: prettifiedBenchPageSize}); err != nil {
 				b.Fatal(err)
 			}
 		})
