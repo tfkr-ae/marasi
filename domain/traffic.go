@@ -64,6 +64,12 @@ type TrafficRepository interface {
 	// cursor, or one made under another sort, wraps ErrInvalidCursor.
 	ListTraffic(q TrafficQuery) (TrafficPage, error)
 
+	// CountTraffic counts the pairs that match q, exactly up to
+	// MaxTrafficCount and capped above it, with the completeness of each
+	// background job the answer depends on. An invalid query or exclusion
+	// returns a *QueryError.
+	CountTraffic(q TrafficCountQuery) (TrafficCount, error)
+
 	// GetMetadata returns the metadata map for a specific request ID.
 	GetMetadata(id uuid.UUID) (metadata map[string]any, err error)
 
@@ -127,6 +133,7 @@ type ProxyRequest struct {
 	Path        string         // Request path including query parameters
 	Raw         RawField       // Complete raw HTTP request
 	Metadata    map[string]any // Additional metadata and extension data
+	Prettified  string         // Prettified copy of Raw, or "" when the body could not be prettified
 	RequestedAt time.Time      // Timestamp when request was made
 }
 
@@ -139,16 +146,26 @@ type ProxyResponse struct {
 	Length      string         // Content length
 	Raw         RawField       // Complete raw HTTP response
 	Metadata    map[string]any // Additional metadata and extension data
+	Prettified  string         // Prettified copy of Raw, or "" when the body could not be prettified
 	RespondedAt time.Time      // Timestamp when response was received
 }
 
 // RequestResponseRow represents a complete request-response pair with associated metadata,
 // typically used when retrieving data from the database.
 type RequestResponseRow struct {
-	Request  ProxyRequest   // The HTTP request
-	Response ProxyResponse  // The corresponding HTTP response
-	Metadata map[string]any // Combined metadata from request and response
-	Note     string         // Note contents
+	Request    ProxyRequest   // The HTTP request
+	Response   ProxyResponse  // The corresponding HTTP response
+	Metadata   map[string]any // Combined metadata from request and response
+	Note       string         // Note contents
+	Prettified Prettified     // Prettified copies of the request and response
+}
+
+// Prettified holds the prettified copies of a pair's request and response
+// that the proxy stores at capture (ADR-0036). A copy is "" when the proxy
+// could not prettify that body. Prettified copies are never part of metadata.
+type Prettified struct {
+	Request  string
+	Response string
 }
 
 // RequestResponseSummary provides a summary of a request-response pair,
