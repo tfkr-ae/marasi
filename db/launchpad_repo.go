@@ -145,27 +145,20 @@ func (repo *Repository) DeleteLaunchpad(launchpadID uuid.UUID) error {
 }
 
 // GetLaunchpadRequests retrieves the requests linked to a launchpad that
-// match trafficQuery, oldest first. The read is the launchpad's membership
-// plus the translated traffic query. An invalid query returns a
-// *domain.QueryError.
-func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string) ([]*domain.RequestResponseSummary, error) {
-	translated, err := translateTrafficQuery(trafficQuery)
+// match trafficQuery and are not hidden by exclusion, oldest first. The read
+// is the launchpad's membership plus the translated traffic query and the
+// exclusion. An invalid query or exclusion returns a *domain.QueryError.
+func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string, exclusion []string) ([]*domain.RequestResponseSummary, error) {
+	filter := trafficFilter{}
+	filter.add(launchpadMember, id)
+	matching, err := newTrafficFilter(trafficQuery, exclusion)
 	if err != nil {
 		return nil, err
 	}
-
-	query := `SELECT
-			  id, scheme, method, host, path, requested_at,
-			  status, status_code, content_type, length, responded_at,
-			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
-		      FROM request
-		      WHERE ` + launchpadMember
-	args := append(make([]any, 0, len(translated.args)+1), id)
-	if translated.where != "" {
-		query += ` AND (` + translated.where + `)`
-		args = append(args, translated.args...)
-	}
-	query += ` ORDER BY id ASC`
+	filter.conditions = append(filter.conditions, matching.conditions...)
+	filter.args = append(filter.args, matching.args...)
+	query := `SELECT ` + trafficSummaryColumns + ` FROM request` + filter.where() + ` ORDER BY id ASC`
+	args := filter.args
 
 	var dbRequests []*dbRequestResponseSummary
 	err = repo.dbConn.Select(&dbRequests, query, args...)
