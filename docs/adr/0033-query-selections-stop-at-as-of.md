@@ -1,0 +1,5 @@
+# Query selections stop at an as-of pair
+
+A bulk operation takes a selection: either listed pair ids, or a query with a content-type exclusion. A query selection also carries `as_of`, the id of the newest pair in the results the researcher saw, and it applies only to pairs with an id at or below it. Pair ids are UUIDv7, so the bound is a cut in capture order. Without it, "select all" followed by delete or highlight would also hit pairs that arrived after the researcher looked. A client shows those pairs as new matches, outside the selection, until the researcher refreshes the results and so moves `as_of`. The query-mode sitemap reads and every page of a list take the same bound, so the counts and the pages agree with the table under any sort (ADR-0041).
+
+**Consequences:** a pair captured before `as_of` that starts matching only later, for example because an extension edits its metadata, is inside the selection. Detecting that would need per-pair change times on every field the query can read, which we judged not worth the cost.
