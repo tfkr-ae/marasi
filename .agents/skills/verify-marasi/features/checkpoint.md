@@ -1,6 +1,6 @@
 # Checkpoint
 
-Users hold proxied HTTP messages (and optionally WebSocket frames) on a running instance, inspect the pending bytes, then forward or drop each item.
+Users hold proxied HTTP messages (and optionally WebSocket messages) on a running instance, inspect the pending bytes, then forward or drop each item.
 
 ## Sub-features
 
@@ -35,3 +35,5 @@ Run `checkpoint list --json` and require `items` `[]` with `intercept` and `webs
 - Pending items make `project open` of a different project fail. With `--json` the error is `opening project: project_busy`. Human output is `opening project: 409 Conflict` and does not include that code. Reopening the current project path succeeds. Clear the queue before switching projects.
 - A held item that belongs to a pending launch does not block the switch. `project open` interrupts the launch, drops its hold, and succeeds. The launch ends `failed` with reason `interrupted` in the original project. An ordinary held request still gives `project_busy`.
 - Held traffic publishes `checkpoint.held`. Forward and drop publish `checkpoint.forwarded` and `checkpoint.dropped`. Flag commands publish `checkpoint.updated` only when the value changes. Subscribe with `events` before the action; the stream has no replay.
+- A hold ends when its client leaves (ADR-0030). If the HTTP client disconnects while its request or response is held, or the connection of a held WebSocket message closes, the item leaves `checkpoint list` and `checkpoint.dropped` is published with its `id` and `type`, the same as a user drop. Keep the background curl running until you forward or drop; killing it removes the item.
+- With `checkpoint websocket-intercept on`, a fragmented WebSocket message is held as one `websocket` item once its final frame arrives, with the whole reassembled `payload`. Nothing of it reaches the receiver while it is held.
