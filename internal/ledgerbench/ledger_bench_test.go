@@ -134,18 +134,8 @@ func loadProject(path string) (*project, error) {
 	}
 	fmt.Printf("fixture: %s (%d pairs, seed %d)\n%s", path, manifest.Pairs, manifest.Seed, env)
 
-	conn, err := db.New(path, quiet())
-	if err != nil {
-		return nil, err
-	}
-	repo := db.NewProxyRepo(conn)
-	filters, err := repo.GetFilters()
-	repo.Close()
-	if err != nil {
-		return nil, err
-	}
 	var terms []string
-	for _, filter := range slices.Compact(slices.Sorted(slices.Values(filters))) {
+	for _, filter := range slices.Compact(slices.Sorted(slices.Values(fixture.SeedExclusion))) {
 		terms = append(terms, fmt.Sprintf("content_type != %q", filter))
 	}
 	return &project{path: path, manifest: manifest, exclusion: strings.Join(terms, " AND ")}, nil

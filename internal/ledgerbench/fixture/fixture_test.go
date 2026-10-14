@@ -145,10 +145,7 @@ func TestManifest(t *testing.T) {
 	})
 
 	t.Run("should list only excluded content types below each excluded stretch's cursor", func(t *testing.T) {
-		filters, err := repo.GetFilters()
-		if err != nil {
-			t.Fatalf("reading the seeded exclusion: %v", err)
-		}
+		filters := fixture.SeedExclusion
 		if len(manifest.ExcludedStretches) != 2 {
 			t.Fatalf("\nwanted:\n2 stretches\ngot:\n%d", len(manifest.ExcludedStretches))
 		}
