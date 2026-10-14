@@ -66,6 +66,40 @@ func TestMeasure(t *testing.T) {
 		}
 	})
 
+	t.Run("should report no pass mark for a case without a target", func(t *testing.T) {
+		result := testing.Benchmark(func(b *testing.B) {
+			ledgerbench.Measure(b, ledgerbench.Target{}, func() error { return nil })
+		})
+
+		_, hasTarget := result.Extra["target-ms"]
+		_, hasPass := result.Extra["pass"]
+		if hasTarget || hasPass || result.Extra["p95-ms"] < 0 {
+			t.Fatalf("\nwanted:\np50 and p95 only\ngot:\n%v", result.Extra)
+		}
+	})
+
+	t.Run("should prepare each run outside the measurement", func(t *testing.T) {
+		prepared, calls := 0, 0
+		result := testing.Benchmark(func(b *testing.B) {
+			prepared, calls = 0, 0
+			ledgerbench.MeasurePrepared(b, ledgerbench.Target{Max: time.Second}, func() error {
+				prepared++
+				time.Sleep(20 * time.Millisecond)
+				return nil
+			}, func() (func(), error) {
+				calls++
+				return nil, nil
+			})
+		})
+
+		if prepared != calls || calls < 2 {
+			t.Fatalf("\nwanted:\none preparation per run\ngot:\n%d preparations, %d runs", prepared, calls)
+		}
+		if result.Extra["p95-ms"] >= 20 {
+			t.Fatalf("\nwanted:\npreparation outside the measurement\ngot:\np95 %vms", result.Extra["p95-ms"])
+		}
+	})
+
 	t.Run("should run a cold operation's cleanup outside the measurement", func(t *testing.T) {
 		cleanups, calls, iterations := 0, 0, 0
 		result := testing.Benchmark(func(b *testing.B) {
