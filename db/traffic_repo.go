@@ -463,7 +463,7 @@ func (repo *Repository) UpdateMetadata(metadata map[string]any, ids ...uuid.UUID
 				// No such request: nothing changed, so there is nothing to index.
 				continue
 			}
-			if err := indexPair(tx, id); err != nil {
+			if err := indexAnnotations(tx, id); err != nil {
 				return fmt.Errorf("updating metadata %v for %v : %w", dbMeta, id, err)
 			}
 		}
@@ -487,7 +487,7 @@ func (repo *Repository) GetNote(requestID uuid.UUID) (string, error) {
 
 // UpdateNote creates or updates a user-created note for a specific request ID.
 // If a note already exists for the request, it will be updated; otherwise, a new note will be inserted.
-// The pair's index row is rebuilt in the same transaction.
+// The pair's annotation index row is rebuilt in the same transaction.
 func (repo *Repository) UpdateNote(requestID uuid.UUID, note string) error {
 	query := `INSERT INTO notes (request_id, note, created_at)
               VALUES (?, ?, CURRENT_TIMESTAMP)
@@ -500,7 +500,7 @@ func (repo *Repository) UpdateNote(requestID uuid.UUID, note string) error {
 		if _, err := tx.Exec(query, requestID, note); err != nil {
 			return err
 		}
-		return indexPair(tx, requestID)
+		return indexAnnotations(tx, requestID)
 	})
 	if err != nil {
 		return fmt.Errorf("updating note for request %s: %w", requestID, err)
@@ -509,7 +509,7 @@ func (repo *Repository) UpdateNote(requestID uuid.UUID, note string) error {
 }
 
 // DeleteNote removes the note row for a request ID and rebuilds the pair's
-// index row in the same transaction.
+// annotation index row in the same transaction.
 func (repo *Repository) DeleteNote(requestID uuid.UUID) error {
 	err := repo.inTx(func(tx *sqlx.Tx) error {
 		result, err := tx.Exec(`DELETE FROM notes WHERE request_id = ?`, requestID)
@@ -523,7 +523,7 @@ func (repo *Repository) DeleteNote(requestID uuid.UUID) error {
 		if rowsAffected == 0 {
 			return sql.ErrNoRows
 		}
-		return indexPair(tx, requestID)
+		return indexAnnotations(tx, requestID)
 	})
 	if err != nil {
 		return fmt.Errorf("deleting note for request %s: %w", requestID, err)
