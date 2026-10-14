@@ -29,6 +29,7 @@ var launchpadLaunchScheme string
 var launchpadLaunchRawFile string
 var launchpadLaunchDetach bool
 var launchpadGetQuery string
+var launchpadGetExclude []string
 
 type launchpadRequest struct {
 	Name        *string `json:"name,omitempty"`
@@ -43,6 +44,7 @@ func init() {
 	launchpadCreateCmd.Flags().StringVar(&launchpadCreateDescription, "description", "", "Launchpad description")
 	launchpadCreateCmd.MarkFlagRequired("name")
 	launchpadGetCmd.Flags().StringVarP(&launchpadGetQuery, "query", "q", "", "AIP-160 traffic query that narrows the entries; see marasi traffic list --help")
+	launchpadGetCmd.Flags().StringArrayVar(&launchpadGetExclude, "exclude", nil, "Content type to hide, exact or major/*; repeat for more")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateName, "name", "", "Launchpad name")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateDescription, "description", "", "Launchpad description")
 	launchpadLinkCmd.Flags().StringVar(&launchpadLinkRequest, "request", "", "UUID of the request/response pair")
@@ -100,8 +102,15 @@ only the entries that match it. See marasi traffic list --help for the fields.`,
 		if err != nil {
 			return err
 		}
+		query := url.Values{}
 		if launchpadGetQuery != "" {
-			path += "?" + url.Values{"q": {launchpadGetQuery}}.Encode()
+			query.Set("q", launchpadGetQuery)
+		}
+		if len(launchpadGetExclude) > 0 {
+			query["exclude"] = launchpadGetExclude
+		}
+		if len(query) > 0 {
+			path += "?" + query.Encode()
 		}
 		return runLaunchpadCommand(cmd, http.MethodGet, path, "getting launchpad", "get", launchpadRequest{})
 	},
