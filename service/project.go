@@ -37,11 +37,11 @@ type openProject struct {
 	path      string
 	resources marasi.ProjectResources
 	unlock    func() error
-	// cancelIndexBuild stops the project's background traffic index build,
-	// and indexBuildDone closes when the build has returned. They are set and
-	// used only with ProjectLifecycle.mu held.
-	cancelIndexBuild context.CancelFunc
-	indexBuildDone   <-chan struct{}
+	// cancelJobs stops the project's background jobs, and jobsDone closes
+	// when they have returned. They are set and used only with
+	// ProjectLifecycle.mu held.
+	cancelJobs context.CancelFunc
+	jobsDone   <-chan struct{}
 }
 
 // ProjectLifecycle owns the one open project of a service instance.
@@ -61,10 +61,13 @@ type ProjectLifecycle struct {
 	logAdded         func(*domain.Log)
 	armoryRunUpdated func(*domain.ArmoryRun)
 	extensionOptions []func(*extensions.Runtime) error
-	indexEvents      indexCompletion
-	indexBatch       func(context.Context, string, trafficIndexBuilder) (int, bool, error)
-	executionContext context.Context
-	cancelExecution  context.CancelFunc
+	jobEvents        jobEvents
+	jobBatch         func(ctx context.Context, path string, runner jobRunner, name string) (int, bool, error)
+	// jobProgressInterval is the shortest time between two progress
+	// reports for one job.
+	jobProgressInterval time.Duration
+	executionContext    context.Context
+	cancelExecution     context.CancelFunc
 }
 
 // NewProjectLifecycle creates a lifecycle with no open project. Open must
@@ -85,7 +88,8 @@ func NewProjectLifecycle(proxy *marasi.Proxy, configDir string, wordlists wordli
 		gate:             newProjectGate(),
 	}
 	lifecycle.prepare = lifecycle.prepareProject
-	lifecycle.indexBatch = indexMissingTraffic
+	lifecycle.jobBatch = runJobBatch
+	lifecycle.jobProgressInterval = jobProgressInterval
 	lifecycle.flushOpenProject = proxy.CloseWebSocketsAndFlush
 	_ = proxy.WithOptions(marasi.WithWorkAdmission(lifecycle.gate.admit))
 	return lifecycle
@@ -188,7 +192,7 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 	if repository, ok := resources.Repository.(*eventLogRepository); ok {
 		repository.startPublishing()
 	}
-	lifecycle.startIndexBuild(targetProject)
+	lifecycle.startJobs(targetProject)
 	if old == nil {
 		return nil
 	}
@@ -439,12 +443,7 @@ func cleanupPreparedProject(path string, existed bool, resources marasi.ProjectR
 }
 
 func closeProject(project *openProject) error {
-	if project.cancelIndexBuild != nil {
-		project.cancelIndexBuild()
-		// The batch in flight is still writing; closing the database under
-		// it would leave the project file locked.
-		<-project.indexBuildDone
-	}
+	stopJobs(project)
 	for _, runtime := range project.resources.Extensions {
 		if runtime.CancelExecution != nil {
 			runtime.CancelExecution()

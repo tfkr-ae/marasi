@@ -110,7 +110,7 @@ func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, e
 			writeLaunchpadRepositoryError(w, r, err)
 			return
 		}
-		members, err := repo.GetLaunchpadRequests(id, r.URL.Query().Get("q"))
+		members, err := repo.GetLaunchpadRequests(id, r.URL.Query().Get("q"), r.URL.Query()["exclude"])
 		var queryErr *domain.QueryError
 		if errors.As(err, &queryErr) {
 			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})

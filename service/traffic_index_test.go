@@ -129,17 +129,17 @@ type indexCall struct {
 func paceIndexBuild(lifecycle *ProjectLifecycle, paced string) *indexPacer {
 	pacer := &indexPacer{
 		paced:      paced,
-		batchBytes: indexBuildBatchBytes,
+		batchBytes: jobBatchBytes,
 		indexed:    map[string]int{},
 		calls:      make(chan indexCall, 100),
 		step:       make(chan struct{}),
 		free:       make(chan struct{}),
 	}
-	lifecycle.indexBatch = pacer.batch
+	lifecycle.jobBatch = pacer.batch
 	return pacer
 }
 
-func (pacer *indexPacer) batch(ctx context.Context, path string, builder trafficIndexBuilder) (int, bool, error) {
+func (pacer *indexPacer) batch(ctx context.Context, path string, runner jobRunner, name string) (int, bool, error) {
 	if path == pacer.paced && !pacer.released() {
 		pacer.calls <- indexCall{path: path, ctx: ctx}
 		select {
@@ -149,7 +149,7 @@ func (pacer *indexPacer) batch(ctx context.Context, path string, builder traffic
 			return 0, false, ctx.Err()
 		}
 	}
-	indexed, remaining, err := builder.IndexMissingTraffic(pacer.batchBytes)
+	indexed, remaining, err := runner.RunJobBatch(name, pacer.batchBytes)
 	pacer.mu.Lock()
 	pacer.indexed[path] += indexed
 	pacer.mu.Unlock()
@@ -221,6 +221,18 @@ func nextEvent(subscriber *eventSubscriber, wait time.Duration) string {
 	}
 }
 
+// nextIndexEvent returns the next event that is not a job event, or "" when
+// none arrives within wait.
+func nextIndexEvent(subscriber *eventSubscriber, wait time.Duration) string {
+	deadline := time.Now().Add(wait)
+	for {
+		event := nextEvent(subscriber, time.Until(deadline))
+		if !strings.HasPrefix(event, "job.") {
+			return event
+		}
+	}
+}
+
 // newIndexServer creates a service with no open project whose events are
 // already subscribed, so no index event can be missed.
 func newIndexServer(t *testing.T) (*Server, *ProjectLifecycle, *eventSubscriber) {
@@ -254,7 +266,7 @@ func TestTrafficIndexBuild(t *testing.T) {
 		}
 		pacer.release()
 		want := fmt.Sprintf("traffic.index_complete {\"project\":%q}", path)
-		if got := nextEvent(subscriber, 30*time.Second); got != want {
+		if got := nextIndexEvent(subscriber, 30*time.Second); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, got)
 		}
 		if !listIndexComplete(t, server) {
@@ -288,18 +300,18 @@ func TestTrafficIndexBuild(t *testing.T) {
 		seedUnindexedProject(t, path, 150)
 		server, lifecycle, subscriber := newIndexServer(t)
 		failures := 2
-		lifecycle.indexBatch = func(ctx context.Context, path string, builder trafficIndexBuilder) (int, bool, error) {
+		lifecycle.jobBatch = func(ctx context.Context, path string, runner jobRunner, name string) (int, bool, error) {
 			if failures > 0 {
 				failures--
 				return 0, false, errors.New("database is locked")
 			}
-			return builder.IndexMissingTraffic(indexBuildBatchBytes)
+			return runner.RunJobBatch(name, jobBatchBytes)
 		}
 
 		openProjectPath(t, lifecycle, path)
 
 		want := fmt.Sprintf("traffic.index_complete {\"project\":%q}", path)
-		if got := nextEvent(subscriber, 30*time.Second); got != want {
+		if got := nextIndexEvent(subscriber, 30*time.Second); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, got)
 		}
 		if !listIndexComplete(t, server) {
@@ -324,7 +336,7 @@ func TestTrafficIndexBuild(t *testing.T) {
 		openProjectPath(t, lifecycle, path)
 
 		want := fmt.Sprintf("traffic.index_complete {\"project\":%q}", path)
-		if got := nextEvent(subscriber, 30*time.Second); got != want {
+		if got := nextIndexEvent(subscriber, 30*time.Second); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, got)
 		}
 		if got := missingFromIndex(t, path); got != 1 {
@@ -345,7 +357,7 @@ func TestTrafficIndexBuild(t *testing.T) {
 		openProjectPath(t, lifecycle, path)
 
 		want := fmt.Sprintf("traffic.index_complete {\"project\":%q}", path)
-		if got := nextEvent(subscriber, 30*time.Second); got != want {
+		if got := nextIndexEvent(subscriber, 30*time.Second); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, got)
 		}
 	})
@@ -358,7 +370,7 @@ func TestTrafficIndexBuild(t *testing.T) {
 		_, lifecycle, _ := newIndexServer(t)
 		started := make(chan struct{})
 		var finished atomic.Bool
-		lifecycle.indexBatch = func(ctx context.Context, batchPath string, builder trafficIndexBuilder) (int, bool, error) {
+		lifecycle.jobBatch = func(ctx context.Context, batchPath string, runner jobRunner, name string) (int, bool, error) {
 			if batchPath != path {
 				return 0, false, nil
 			}
@@ -409,20 +421,20 @@ func TestTrafficIndexBuild(t *testing.T) {
 		if got := missingFromIndex(t, path); got != 249 {
 			t.Fatalf("\nwanted:\n249 pairs left after one batch\ngot:\n%d", got)
 		}
-		if got := nextEvent(subscriber, 0); got != fmt.Sprintf("project.opened {\"project\":%q}", other) {
+		if got := nextIndexEvent(subscriber, 0); got != fmt.Sprintf("project.opened {\"project\":%q}", other) {
 			t.Fatalf("\nwanted:\nproject.opened only\ngot:\n%q", got)
 		}
-		if got := nextEvent(subscriber, 0); got != "" {
+		if got := nextIndexEvent(subscriber, 0); got != "" {
 			t.Fatalf("\nwanted:\nno event for the cancelled build\ngot:\n%s", got)
 		}
 
 		pacer.release()
 		openProjectPath(t, lifecycle, path)
-		if got := nextEvent(subscriber, 0); got != fmt.Sprintf("project.opened {\"project\":%q}", path) {
+		if got := nextIndexEvent(subscriber, 0); got != fmt.Sprintf("project.opened {\"project\":%q}", path) {
 			t.Fatalf("\nwanted:\nproject.opened\ngot:\n%q", got)
 		}
 		want := fmt.Sprintf("traffic.index_complete {\"project\":%q}", path)
-		if got := nextEvent(subscriber, 30*time.Second); got != want {
+		if got := nextIndexEvent(subscriber, 30*time.Second); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, got)
 		}
 		if !listIndexComplete(t, server) {

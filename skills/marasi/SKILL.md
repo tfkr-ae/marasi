@@ -59,7 +59,7 @@ curl --noproxy '' --proxy "http://$PROXY_LISTENER" --cacert "$CA_FILE" "$TARGET_
 
 Set `CA_FILE` to a session-owned file. Prefer client-specific trust over changing the system trust store.
 
-`traffic list` returns the newest page of traffic, oldest first within the page, so the newest pair is the last row. Follow `next_cursor` with `--cursor` for older pages, keeping the same query. In JSON, `request.raw` and `response.raw` are base64. Decode them before inspection or editing.
+`traffic list` returns the newest page of traffic, oldest first within the page, so the newest pair is the last row. Follow `next_cursor` with `--cursor` for older pages, keeping the same query and passing the first page's `as_of` with `--as-of`. Cursors are opaque tokens; `--backward` with `prev_cursor` walks back toward newer pairs. `--exclude 'image/*'` (repeatable) hides content types; pairs with no content type yet always stay. In JSON, `request.raw` and `response.raw` are base64. Decode them before inspection or editing.
 
 A capture is complete when `traffic get` returns the matching request and response. A client response alone does not prove that Marasi captured the exchange.
 
