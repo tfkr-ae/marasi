@@ -142,6 +142,31 @@ type trafficMatch struct {
 	args       []any
 	// sitemap means the match depends on the sitemap job.
 	sitemap bool
+	// text means the match has a text term, so it depends on the search
+	// index jobs.
+	text bool
+}
+
+// jobs returns the background jobs whose progress changes which pairs m
+// matches: the search index jobs when it has a text term, and the sitemap
+// job when it names the sitemap field.
+func (m trafficMatch) jobs() []string {
+	var jobs []string
+	if m.text {
+		jobs = append(jobs, SearchIndexJobs...)
+	}
+	if m.sitemap {
+		jobs = append(jobs, SitemapJob)
+	}
+	return jobs
+}
+
+// listCompleteness reports the completeness of the jobs a traffic list or
+// count of the pairs m matches depends on. Lists and counts always report
+// the search index jobs, which clients show as index.complete, even when m
+// has no text term.
+func listCompleteness(q sqlx.Queryer, m trafficMatch) (map[string]bool, error) {
+	return jobCompleteness(q, append(slices.Clone(SearchIndexJobs), m.jobs()...)...)
 }
 
 // newTrafficMatch translates text and normalises exclusion. An invalid query
@@ -161,7 +186,7 @@ func newTrafficMatchAfter(text string, exclusion []string, after *uuid.UUID) (tr
 	if err != nil {
 		return trafficMatch{}, err
 	}
-	match := trafficMatch{sitemap: translated.sitemap}
+	match := trafficMatch{sitemap: translated.sitemap, text: translated.text}
 	if translated.where != "" {
 		match.add(translated.where, translated.args...)
 	}
@@ -244,18 +269,11 @@ func (repo *Repository) ListTrafficContext(ctx context.Context, q domain.Traffic
 	var page domain.TrafficPage
 	var rows []sortedRow
 	err = repo.inTxContext(ctx, func(tx *sqlx.Tx) error {
-		complete, err := searchIndexCompleteness(tx)
+		complete, err := listCompleteness(tx, match)
 		if err != nil {
 			return err
 		}
 		page.Complete = complete
-		if match.sitemap {
-			job, err := loadJob(tx, SitemapJob)
-			if err != nil {
-				return fmt.Errorf("reading the sitemap job: %w", err)
-			}
-			page.Complete[SitemapJob] = job.Complete
-		}
 
 		page.AsOf = q.AsOf
 		if page.AsOf == nil {
