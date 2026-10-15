@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
@@ -48,8 +47,7 @@ var settingsListCmd = &cobra.Command{
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		var list struct {
 			Items []clientSetting `json:"items"`
@@ -57,7 +55,7 @@ var settingsListCmd = &cobra.Command{
 		if err := json.Unmarshal(body, &list); err != nil {
 			return fmt.Errorf("decoding client settings: %w", err)
 		}
-		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+		writer := newTableWriter(cmd.OutOrStdout())
 		for _, setting := range list.Items {
 			fmt.Fprintf(writer, "%s\t%s\n", setting.Key, truncateDisplay(compactJSON(setting.Value), settingsValueDisplayLimit))
 		}
@@ -75,8 +73,7 @@ var settingsGetCmd = &cobra.Command{
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		var setting clientSetting
 		if err := json.Unmarshal(body, &setting); err != nil {
@@ -91,12 +88,14 @@ var settingsSetCmd = &cobra.Command{
 	Use:   "set CLIENT KEY [JSON]",
 	Short: "Set one client setting to a JSON value",
 	Long: `Set one client setting to a JSON value, replacing any value it had. Pass
-exactly one of JSON or --file. Quote strings as JSON, for example '"dark"'.`,
+exactly one of JSON, --file, or piped stdin. Quote strings as JSON, for
+example '"dark"'.`,
 	Example: `  marasi settings set my-client theme '"dark"'
-  marasi settings set my-client ledger/view --file view.json`,
+  marasi settings set my-client ledger/view --file view.json
+  jq -c . view.json | marasi settings set my-client ledger/view`,
 	Args: cobra.RangeArgs(2, 3),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		value, err := readTextOrFile(cmd, args[2:], settingsSetFile, "value")
+		value, err := textInput{what: "value", file: settingsSetFile}.read(cmd, args[2:])
 		if err != nil {
 			return err
 		}
@@ -114,8 +113,7 @@ exactly one of JSON or --file. Quote strings as JSON, for example '"dark"'.`,
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "setting %s %s set\n", args[0], args[1])
 		return err
@@ -132,8 +130,7 @@ var settingsDeleteCmd = &cobra.Command{
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "setting %s %s deleted\n", args[0], args[1])
 		return err

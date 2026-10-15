@@ -8,28 +8,26 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
 
 const (
+	// contentTypeDisplayLimit is the widest content type traffic types prints.
+	contentTypeDisplayLimit = 80
+
 	sitemapBuildingNotice = "notice: the sitemap is still building; counts may be incomplete"
 	indexBuildingNotice   = "notice: the traffic index is still building; text results may be incomplete"
 )
 
 var (
-	trafficSitemapNode    string
-	trafficSitemapQuery   string
-	trafficSitemapExclude []string
-	trafficSitemapAsOf    string
-	trafficSitemapLimit   string
-	trafficSitemapCursor  string
+	trafficSitemapNode   string
+	trafficSitemapFilter *trafficQueryFlags
+	trafficSitemapLimit  string
+	trafficSitemapCursor string
 
-	trafficCountQuery   string
-	trafficCountExclude []string
-	trafficCountAsOf    string
-	trafficCountAfter   string
+	trafficCountFilter *trafficQueryFlags
+	trafficCountAfter  string
 
 	trafficValidateQuery   string
 	trafficValidateExclude []string
@@ -39,17 +37,13 @@ var (
 func init() {
 	flags := trafficSitemapCmd.Flags()
 	flags.StringVar(&trafficSitemapNode, "node", "", "Name of the node whose children to list; omit for the origins")
-	flags.StringVarP(&trafficSitemapQuery, "query", "q", "", "AIP-160 query; counts only matching pairs and needs --as-of")
-	flags.StringArrayVar(&trafficSitemapExclude, "exclude", nil, "Content type to leave out, exact or major/*; repeat for more")
-	flags.StringVar(&trafficSitemapAsOf, "as-of", "", "Newest pair UUID a --query counts, from a traffic list page's as_of")
 	flags.StringVar(&trafficSitemapLimit, "limit", "100", "Maximum number of children to return, from 1 to 500")
 	flags.StringVar(&trafficSitemapCursor, "cursor", "", "next_cursor from an earlier page")
 
-	flags = trafficCountCmd.Flags()
-	flags.StringVarP(&trafficCountQuery, "query", "q", "", "AIP-160 query that narrows the count; see traffic list --help")
-	flags.StringArrayVar(&trafficCountExclude, "exclude", nil, "Content type to hide, exact or major/*; repeat for more")
-	flags.StringVar(&trafficCountAsOf, "as-of", "", "Count only pairs with an id at or below this UUID")
-	flags.StringVar(&trafficCountAfter, "after", "", "Count only pairs with an id above this UUID, such as a page's as_of")
+	trafficSitemapFilter = addTrafficQueryFlags(trafficSitemapCmd, true)
+
+	trafficCountFilter = addTrafficQueryFlags(trafficCountCmd, false)
+	trafficCountCmd.Flags().StringVar(&trafficCountAfter, "after", "", "Count only pairs with an id above this UUID, such as a page's as_of")
 
 	flags = trafficValidateCmd.Flags()
 	flags.StringVarP(&trafficValidateQuery, "query", "q", "", "AIP-160 query to check; see traffic list --help")
@@ -91,29 +85,15 @@ Paging: stderr shows next_cursor; pass it back with --cursor.`,
 		if trafficSitemapCursor != "" {
 			query.Set("cursor", trafficSitemapCursor)
 		}
-		for _, value := range trafficSitemapExclude {
-			query.Add("exclude", value)
-		}
-		switch hasQuery, hasAsOf := cmd.Flags().Changed("query"), cmd.Flags().Changed("as-of"); {
-		case hasQuery && !hasAsOf:
-			return errors.New("--query needs --as-of")
-		case hasAsOf && !hasQuery:
-			return errors.New("--as-of goes with --query")
-		case hasQuery:
-			asOf, err := parseServiceID(trafficSitemapAsOf)
-			if err != nil {
-				return err
-			}
-			query.Set("q", trafficSitemapQuery)
-			query.Set("as_of", asOf)
+		if err := trafficSitemapFilter.addTo(cmd, query); err != nil {
+			return err
 		}
 		body, err := runControlRequest(cmd, http.MethodGet, "/traffic/sitemap?"+query.Encode(), "listing sitemap", nil)
 		if err != nil {
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		return writeSitemapHuman(body, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
@@ -133,29 +113,25 @@ matches captured since that page.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		query := url.Values{}
-		if trafficCountQuery != "" {
-			query.Set("q", trafficCountQuery)
+		if err := trafficCountFilter.addTo(cmd, query); err != nil {
+			return err
 		}
-		for _, value := range trafficCountExclude {
-			query.Add("exclude", value)
-		}
-		for name, raw := range map[string]string{"as_of": trafficCountAsOf, "after": trafficCountAfter} {
-			if raw == "" {
-				continue
+		if cmd.Flags().Changed("after") {
+			if trafficCountAfter == "" {
+				return errors.New("--after is empty; pass a pair UUID")
 			}
-			id, err := parseServiceID(raw)
+			after, err := parseServiceID(trafficCountAfter)
 			if err != nil {
 				return err
 			}
-			query.Set(name, id)
+			query.Set("after", after)
 		}
 		body, err := runControlRequest(cmd, http.MethodGet, "/traffic/count?"+query.Encode(), "counting traffic", nil)
 		if err != nil {
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		var count struct {
 			Count  int  `json:"count"`
@@ -199,8 +175,7 @@ no content type yet counts under -. Use a type with traffic list --exclude.`,
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		var counts struct {
 			Items []struct {
@@ -214,13 +189,13 @@ no content type yet counts under -. Use a type with traffic list --exclude.`,
 		if err := json.Unmarshal(body, &counts); err != nil {
 			return fmt.Errorf("decoding content types: %w", err)
 		}
-		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+		writer := newTableWriter(cmd.OutOrStdout())
 		for _, item := range counts.Items {
 			contentType := item.ContentType
 			if contentType == "" {
 				contentType = "-"
 			}
-			fmt.Fprintf(writer, "%s\t%d\n", truncateDisplay(contentType, 80), item.Count)
+			fmt.Fprintf(writer, "%s\t%d\n", truncateDisplay(contentType, contentTypeDisplayLimit), item.Count)
 		}
 		if err := writer.Flush(); err != nil {
 			return err
@@ -283,7 +258,7 @@ func writeSitemapHuman(body []byte, stdout, stderr io.Writer) error {
 	if err := json.Unmarshal(body, &page); err != nil {
 		return fmt.Errorf("decoding sitemap: %w", err)
 	}
-	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	writer := newTableWriter(stdout)
 	for _, item := range page.Items {
 		children := ""
 		if item.HasChildren {

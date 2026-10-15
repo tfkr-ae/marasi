@@ -1,16 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi/wordlist"
@@ -121,32 +117,6 @@ var wordlistRemoveCmd = &cobra.Command{
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "wordlist %s removed\n", args[0])
 		return err
 	},
-}
-
-func runControlRequest(cmd *cobra.Command, method, path, operation string, body []byte) ([]byte, error) {
-	return runControlRequestStatus(cmd, method, path, operation, body, http.StatusOK)
-}
-
-// runControlRequestStatus is runControlRequest for a route whose success
-// status is ok rather than 200.
-func runControlRequestStatus(cmd *cobra.Command, method, path, operation string, body []byte, ok int) ([]byte, error) {
-	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-	var requestBody io.Reader
-	if body != nil {
-		requestBody = bytes.NewReader(body)
-	}
-	response, err := callInstance(ctx, method, path, "application/json", requestBody)
-	if err != nil {
-		return nil, err
-	}
-	if response.StatusCode == ok {
-		return response.Body, nil
-	}
-	if response.StatusCode == http.StatusOK {
-		return nil, fmt.Errorf("%s: unexpected status %s", operation, response.Status)
-	}
-	return nil, rejectInstanceStatus(operation, response, true)
 }
 
 func writeSizedList(body []byte, stdout io.Writer) error {
