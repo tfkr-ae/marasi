@@ -110,8 +110,8 @@ func TestJobs(t *testing.T) {
 		server, lifecycle, _ := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
 
-		got := listJob(t, server, db.TrafficIndexJob)
-		want := []listedJob{{Name: db.TrafficIndexJob, Complete: true}}
+		got := append(listJob(t, server, db.TrafficIndexJob), listJob(t, server, db.SitemapJob)...)
+		want := []listedJob{{Name: db.TrafficIndexJob, Complete: true}, {Name: db.SitemapJob, Complete: true}}
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
 		}
@@ -178,7 +178,8 @@ func TestJobs(t *testing.T) {
 		seedUnindexedProject(t, path, 5)
 		server, lifecycle, subscriber := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
-		if !jobCompleted(subscriber, db.TrafficIndexJob, 30*time.Second) {
+		// The sitemap job runs last, so its completion ends the first open's jobs.
+		if !jobCompleted(subscriber, db.SitemapJob, 30*time.Second) {
 			t.Fatal("the first build did not complete")
 		}
 		pacer := paceIndexBuild(lifecycle, path)
