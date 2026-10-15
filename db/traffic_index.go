@@ -87,8 +87,8 @@ func keyPair(tx sqlx.Execer, id uuid.UUID) error {
 }
 
 // indexPair writes both index rows for the pair with id, replacing any rows
-// it already has. Call it in the transaction that captured the pair's request
-// or response.
+// it already has. The index queue calls it for captured pairs, and the
+// background build for pairs missing from the index.
 func indexPair(tx sqlx.Ext, id uuid.UUID) error {
 	if err := indexBodies(tx, id); err != nil {
 		return err

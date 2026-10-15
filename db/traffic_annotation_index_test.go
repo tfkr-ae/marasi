@@ -79,6 +79,7 @@ func TestTrafficRepo_AnnotationWritesSkipBodyIndex(t *testing.T) {
 				request:  "GET /large HTTP/1.1\r\n\r\n",
 				response: []byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n" + body),
 			}})
+			indexCapturedTraffic(t, repo)
 			if !bodyIndexRowExists(t, repo, ids["large"]) {
 				t.Fatalf("\nwanted:\na body index row after capture\ngot:\nnone")
 			}
@@ -120,6 +121,7 @@ func TestTrafficRepo_ListTrafficSearchesBothIndexes(t *testing.T) {
 	if err := repo.UpdateNote(ids["noted"], "needle-in-note"); err != nil {
 		t.Fatalf("inserting note: %v", err)
 	}
+	indexCapturedTraffic(t, repo)
 	writeOldBodyIndexRow(t, repo, ids["stale"], "needle-in-note stale", `{"tag":"needle-in-meta"}`)
 
 	for query, want := range map[string]string{
@@ -225,6 +227,7 @@ func TestAnnotationIndexJob(t *testing.T) {
 		if err := repo.UpdateMetadata(map[string]any{"tag": "backfilled-meta"}, ids["third"]); err != nil {
 			t.Fatalf("updating metadata: %v", err)
 		}
+		indexCapturedTraffic(t, repo)
 		repo = forgetAnnotationIndex(t, repo)
 
 		if got := annotationIndexJob(t, repo); got.Complete {

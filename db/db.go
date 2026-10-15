@@ -47,6 +47,8 @@ type Repository struct {
 	// captured counts the pairs captured in this session, for the periodic
 	// statistics refresh.
 	captured atomic.Int64
+	// indexQueue indexes captured pairs in batches (ADR-0026).
+	indexQueue indexQueue
 }
 
 // optimizeEveryPairs is how many captured pairs pass between refreshes of
@@ -55,12 +57,15 @@ const optimizeEveryPairs = 1000
 
 // NewProxyRepo initializes a new Repository with the given sqlx.DB database connection.
 func NewProxyRepo(db *sqlx.DB) *Repository {
-	return &Repository{dbConn: db}
+	repo := &Repository{dbConn: db}
+	repo.resumeIndexQueue()
+	return repo
 }
 
 // Close terminates the database connection.
 // It is critical to call this to free up database resources.
 func (repo *Repository) Close() error {
+	repo.closeIndexQueue()
 	// Refresh the statistics the planner uses to choose an index
 	// (ADR-0041). A failure here must not keep the project open.
 	_, _ = repo.dbConn.Exec(`PRAGMA optimize`)

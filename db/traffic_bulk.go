@@ -45,6 +45,13 @@ func (repo *Repository) bulkInTx(sel domain.Selection, apply func(tx *sqlx.Tx, s
 	if err != nil {
 		return 0, err
 	}
+	// A query selection may have a text term, which must see every pair
+	// captured before it.
+	if sel.Query != nil {
+		if err := repo.flushIndexQueue(); err != nil {
+			return 0, err
+		}
+	}
 	var count int
 	err = repo.inTx(func(tx *sqlx.Tx) error {
 		changed, err := apply(tx, selected, args)
