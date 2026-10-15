@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -213,6 +214,11 @@ type sortedRow struct {
 // *domain.QueryError; a malformed cursor, or one made under another sort,
 // wraps domain.ErrInvalidCursor.
 func (repo *Repository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, error) {
+	return repo.ListTrafficContext(context.Background(), q)
+}
+
+// ListTrafficContext is ListTraffic for a read that stops when ctx ends.
+func (repo *Repository) ListTrafficContext(ctx context.Context, q domain.TrafficQuery) (domain.TrafficPage, error) {
 	if q.Limit < 1 {
 		return domain.TrafficPage{}, fmt.Errorf("listing traffic: limit %d is not positive", q.Limit)
 	}
@@ -237,11 +243,12 @@ func (repo *Repository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, 
 
 	var page domain.TrafficPage
 	var rows []sortedRow
-	err = repo.inTx(func(tx *sqlx.Tx) error {
-		page.Complete, err = searchIndexCompleteness(tx)
+	err = repo.inTxContext(ctx, func(tx *sqlx.Tx) error {
+		complete, err := searchIndexCompleteness(tx)
 		if err != nil {
 			return err
 		}
+		page.Complete = complete
 		if filter.sitemap {
 			job, err := loadJob(tx, SitemapJob)
 			if err != nil {
@@ -253,7 +260,7 @@ func (repo *Repository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, 
 		page.AsOf = q.AsOf
 		if page.AsOf == nil {
 			var newest uuid.UUID
-			err := tx.Get(&newest, `SELECT id FROM request ORDER BY id DESC LIMIT 1`)
+			err := tx.GetContext(ctx, &newest, `SELECT id FROM request ORDER BY id DESC LIMIT 1`)
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil
 			}
@@ -274,7 +281,7 @@ func (repo *Repository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, 
 			query := `SELECT ` + trafficSummaryColumns + `, ` + sort.column() + ` AS sort_key` + trafficSummarySource +
 				segmentFilter.where() + ` ORDER BY ` + segment.order + ` LIMIT ?`
 			var segmentRows []sortedRow
-			if err := tx.Select(&segmentRows, query, append(segmentFilter.args, q.Limit+1-len(rows))...); err != nil {
+			if err := tx.SelectContext(ctx, &segmentRows, query, append(segmentFilter.args, q.Limit+1-len(rows))...); err != nil {
 				return err
 			}
 			for i := range segmentRows {
