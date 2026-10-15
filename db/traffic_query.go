@@ -409,7 +409,7 @@ func (t *queryTranslator) allIndexDriven(branches []*expr.Expr) bool {
 }
 
 // indexDriven reports whether an index can find the pairs that match e
-// without checking every pair: a text term, a link or note, a requested_at
+// without checking every pair: a text term, a link, note or highlight, a requested_at
 // lower bound, an equality on an indexed field, or an AND with one of these.
 // An invalid e reports false; translating it reports the error.
 func (t *queryTranslator) indexDriven(e *expr.Expr) bool {
@@ -429,7 +429,7 @@ func (t *queryTranslator) indexDriven(e *expr.Expr) bool {
 			return false
 		}
 		kind := trafficFields[name].kind
-		return kind == fieldIndexedText || kind == fieldMetadata || kind == fieldLink
+		return kind == fieldIndexedText || kind == fieldMetadata || kind == fieldLink || kind == fieldHighlight
 	default:
 		op, ok := comparisonOperators[function]
 		if !ok || len(args) != 2 {
@@ -441,7 +441,7 @@ func (t *queryTranslator) indexDriven(e *expr.Expr) bool {
 		}
 		field := trafficFields[name]
 		switch {
-		case field.kind == fieldLink, field.kind == fieldSitemap:
+		case field.kind == fieldLink, field.kind == fieldSitemap, field.kind == fieldHighlight:
 			return op == "="
 		case name == "requested_at":
 			return op == "=" || op == ">" || op == ">="
