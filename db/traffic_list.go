@@ -141,7 +141,13 @@ type trafficFilter struct {
 // newTrafficFilter translates text and normalises exclusion. An invalid query
 // or exclusion returns a *domain.QueryError.
 func newTrafficFilter(text string, exclusion []string) (trafficFilter, error) {
-	translated, err := translateTrafficQuery(text)
+	return newTrafficFilterAfter(text, exclusion, nil)
+}
+
+// newTrafficFilterAfter is newTrafficFilter for a read of only the pairs
+// with an id above after, which it adds as a condition when set.
+func newTrafficFilterAfter(text string, exclusion []string, after *uuid.UUID) (trafficFilter, error) {
+	translated, err := translateTrafficQuery(text, after)
 	if err != nil {
 		return trafficFilter{}, err
 	}
@@ -155,6 +161,9 @@ func newTrafficFilter(text string, exclusion []string) (trafficFilter, error) {
 	}
 	if where, args := exclusionCondition(normalized); where != "" {
 		filter.add(where, args...)
+	}
+	if after != nil {
+		filter.add(`id > ?`, *after)
 	}
 	return filter, nil
 }

@@ -61,12 +61,13 @@ type linkTable struct {
 	table       string // link table name
 	column      string // column holding the target id
 	targetTable string // table the target id must exist in
+	noun        string // the target in query messages, as in "a finding id"
 }
 
 var linkTables = map[domain.LinkKind]linkTable{
-	domain.LinkLaunchpad: {table: "launchpad_request", column: "launchpad_id", targetTable: "launchpad"},
-	domain.LinkFinding:   {table: "finding_requests", column: "finding_id", targetTable: "findings"},
-	domain.LinkTestCase:  {table: "test_case_requests", column: "test_case_id", targetTable: "test_cases"},
+	domain.LinkLaunchpad: {table: "launchpad_request", column: "launchpad_id", targetTable: "launchpad", noun: "launchpad"},
+	domain.LinkFinding:   {table: "finding_requests", column: "finding_id", targetTable: "findings", noun: "finding"},
+	domain.LinkTestCase:  {table: "test_case_requests", column: "test_case_id", targetTable: "test_cases", noun: "test case"},
 }
 
 // linkTableFor returns the link table for target after checking, in tx, that
