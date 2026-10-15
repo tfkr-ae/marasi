@@ -83,15 +83,16 @@ func (repo *Repository) ClearMetadataKey(sel domain.Selection, path string) (int
 	})
 }
 
-// updateAndIndex runs an UPDATE ... RETURNING id in tx, re-indexes every
-// pair it returns, and returns how many there were.
+// updateAndIndex runs an UPDATE ... RETURNING id in tx, re-indexes the
+// metadata of every pair it returns in the annotation index, and returns how
+// many there were.
 func updateAndIndex(tx *sqlx.Tx, what, query string, args ...any) (int, error) {
 	var ids []uuid.UUID
 	if err := tx.Select(&ids, query, args...); err != nil {
 		return 0, fmt.Errorf("%s: %w", what, err)
 	}
 	for _, id := range ids {
-		if err := indexPair(tx, id); err != nil {
+		if err := indexAnnotations(tx, id); err != nil {
 			return 0, fmt.Errorf("%s: %w", what, err)
 		}
 	}
