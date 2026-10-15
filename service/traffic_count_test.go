@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -21,7 +22,7 @@ type countingTrafficRepository struct {
 	err    error
 }
 
-func (s *countingTrafficRepository) CountTraffic(q domain.TrafficCountQuery) (domain.TrafficCount, error) {
+func (s *countingTrafficRepository) CountTrafficContext(_ context.Context, q domain.TrafficCountQuery) (domain.TrafficCount, error) {
 	s.query = &q
 	return s.result, s.err
 }

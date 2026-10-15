@@ -224,7 +224,7 @@ func (s *stubTrafficRepository) ListNotes(cursor *uuid.UUID, limit int) ([]*doma
 	return matched, s.nextCursor, nil
 }
 
-func (s *stubTrafficRepository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, error) {
+func (s *stubTrafficRepository) ListTrafficContext(_ context.Context, q domain.TrafficQuery) (domain.TrafficPage, error) {
 	s.listed = true
 	s.listQuery = q
 	if s.listErr != nil {

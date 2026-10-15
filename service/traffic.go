@@ -175,9 +175,11 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		page, err := repo.ListTraffic(query)
+		page, err := repo.ListTrafficContext(r.Context(), query)
 		var queryErr *domain.QueryError
 		switch {
+		case r.Context().Err() != nil:
+			return // the client went away; nobody reads the answer
 		case errors.As(err, &queryErr):
 			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
 			return
@@ -242,7 +244,10 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		counts, err := repo.CountContentTypes()
+		counts, err := repo.CountContentTypesContext(r.Context())
+		if r.Context().Err() != nil {
+			return // the client went away; nobody reads the answer
+		}
 		if err != nil {
 			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
 			return
@@ -264,9 +269,11 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		count, err := repo.CountTraffic(query)
+		count, err := repo.CountTrafficContext(r.Context(), query)
 		var queryErr *domain.QueryError
 		switch {
+		case r.Context().Err() != nil:
+			return // the client went away; nobody reads the answer
 		case errors.As(err, &queryErr):
 			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
 			return
