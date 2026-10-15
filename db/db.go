@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -43,7 +44,14 @@ type Repository struct {
 	// prettifiedMovedTo is the oldest pair the prettified move has passed in
 	// this session, so its next batch starts below it. It is guarded by jobMu.
 	prettifiedMovedTo *uuid.UUID
+	// captured counts the pairs captured in this session, for the periodic
+	// statistics refresh.
+	captured atomic.Int64
 }
+
+// optimizeEveryPairs is how many captured pairs pass between refreshes of
+// the planner statistics while a project is open (ADR-0041).
+const optimizeEveryPairs = 1000
 
 // NewProxyRepo initializes a new Repository with the given sqlx.DB database connection.
 func NewProxyRepo(db *sqlx.DB) *Repository {
@@ -152,20 +160,41 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 		dbLogger.Error("Failed to reconcile background jobs", "error", err)
 		return nil, fmt.Errorf("reconciling background jobs: %w", err)
 	}
-	// The planner chooses between a sort index and a filter's index from
-	// statistics (ADR-0041). analysis_limit keeps the first analysis of a
-	// large project to a sample.
-	if _, err := db.Exec(`PRAGMA analysis_limit = 400; PRAGMA optimize = 0x10002`); err != nil {
+	// 0x10000 checks every table, not only those this connection has used.
+	if err := optimize(db, `PRAGMA optimize = 0x10002`); err != nil {
 		db.Close()
 		dbLogger.Error("Failed to optimize the database", "error", err)
 		return nil, fmt.Errorf("optimizing the database: %w", err)
 	}
-	if err := pinSearchIndexStatistics(db); err != nil {
-		db.Close()
-		dbLogger.Error("Failed to pin search index statistics", "error", err)
-		return nil, fmt.Errorf("pinning search index statistics: %w", err)
-	}
 	return db, nil
+}
+
+// optimize refreshes the statistics the planner uses to choose between a
+// sort index and a filter's index (ADR-0041) with the PRAGMA optimize
+// statement pragma, which analyses only the tables whose size has changed
+// a lot since their last analysis. analysis_limit keeps each analysis of a
+// large project to a sample; it is set every time because the pool may have
+// replaced the connection. The FTS5 shadow tables are then pinned again,
+// since optimize may have measured them.
+func optimize(db *sqlx.DB, pragma string) error {
+	if _, err := db.Exec(`PRAGMA analysis_limit = 400; ` + pragma); err != nil {
+		return err
+	}
+	if err := pinSearchIndexStatistics(db); err != nil {
+		return fmt.Errorf("pinning search index statistics: %w", err)
+	}
+	return nil
+}
+
+// pairCaptured counts a captured pair and, every optimizeEveryPairs pairs,
+// refreshes the planner statistics between writes. Statistics taken when a
+// project was opened small would otherwise steer list reads for the rest of
+// a long session. A failed refresh leaves the old statistics and must not
+// fail the capture.
+func (repo *Repository) pairCaptured() {
+	if repo.captured.Add(1)%optimizeEveryPairs == 0 {
+		_ = optimize(repo.dbConn, `PRAGMA optimize`)
+	}
 }
 
 // pinSearchIndexStatistics gives every FTS5 shadow table the statistics
