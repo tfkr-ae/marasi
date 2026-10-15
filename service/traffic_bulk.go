@@ -61,15 +61,7 @@ type bulkBody interface {
 // returns errInvalidBulkRequest; an invalid selection wraps
 // domain.ErrInvalidSelection.
 func decodeBulkBody(r *http.Request, body bulkBody) (domain.Selection, error) {
-	if r.Body == nil {
-		return domain.Selection{}, errInvalidBulkRequest
-	}
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(body); err != nil {
-		return domain.Selection{}, errInvalidBulkRequest
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+	if r.Body == nil || !decodeStrictJSON(r.Body, body) {
 		return domain.Selection{}, errInvalidBulkRequest
 	}
 	raw := body.rawSelection().Selection
@@ -81,6 +73,18 @@ func decodeBulkBody(r *http.Request, body bulkBody) (domain.Selection, error) {
 		return domain.Selection{}, err
 	}
 	return sel, nil
+}
+
+// decodeStrictJSON decodes exactly one JSON value from body into v. It
+// reports false for malformed JSON, an unknown struct field, or anything
+// after the value.
+func decodeStrictJSON(body io.Reader, v any) bool {
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(v); err != nil {
+		return false
+	}
+	return errors.Is(decoder.Decode(&struct{}{}), io.EOF)
 }
 
 // serveBulk runs one bulk operation: it decodes r into body, calls apply with
