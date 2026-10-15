@@ -1,6 +1,7 @@
 package extensions
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -265,6 +266,14 @@ func (m *mockTrafficRepo) LinkTraffic(domain.Selection, domain.LinkTarget) (int,
 }
 
 func (m *mockTrafficRepo) UnlinkTraffic(domain.Selection, domain.LinkTarget) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) SetMetadataKey(domain.Selection, string, json.RawMessage) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) ClearMetadataKey(domain.Selection, string) (int, error) {
 	return 0, errors.New("not implemented")
 }
 

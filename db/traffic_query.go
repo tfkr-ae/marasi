@@ -468,7 +468,18 @@ func (t *queryTranslator) has(e, lhs, rhs *expr.Expr) (string, error) {
 		return "", t.errorAt(e, "operator : is not supported on %s; use = or !=, with * at the start or end", name)
 	case fieldMetadata:
 		if len(path) > 0 {
-			return "", t.errorAt(e, "operator : is not supported on metadata keys; use = or !=")
+			// The parser reads metadata.<key>:* as the string "*".
+			if rhs.GetConstExpr().GetStringValue() != "*" {
+				return "", t.errorAt(e, "operator : on a metadata key takes only *, as in metadata.%s:*; use = or != to compare its value", strings.Join(path, "."))
+			}
+			jsonPath, err := t.metadataPath(lhs, path)
+			if err != nil {
+				return "", err
+			}
+			// json_type is NULL only when the key is absent; a JSON null
+			// value has the type 'null'.
+			t.bind(jsonPath)
+			return "json_type(" + field.column + ", ?) IS NOT NULL", nil
 		}
 		// metadata:"text" searches the whole indexed metadata.
 		return t.textMatch(rhs, field.column)
