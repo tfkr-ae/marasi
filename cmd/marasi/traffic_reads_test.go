@@ -106,6 +106,9 @@ func TestTrafficReadUsage(t *testing.T) {
 		{"traffic", "sitemap", "extra"},
 		{"traffic", "count", "--as-of", "junk"},
 		{"traffic", "count", "--after", "junk"},
+		{"traffic", "count", "--as-of", ""},
+		{"traffic", "count", "--after", ""},
+		{"traffic", "sitemap", "-q", "a", "--as-of", ""},
 		{"traffic", "types", "extra"},
 		{"traffic", "validate", "extra"},
 	} {
@@ -116,5 +119,15 @@ func TestTrafficReadUsage(t *testing.T) {
 		if got := sent.snapshot(); got.Method != "" {
 			t.Fatalf("\nwanted:\nno request for %v\ngot:\n%s %s", args, got.Method, got.Path)
 		}
+	}
+}
+
+func TestTrafficCountChecksAsOfBeforeAfter(t *testing.T) {
+	binary := buildMarasi(t)
+	for range 5 {
+		assertUsageErrorsBeforeRequest(t, binary, []usageCase{
+			{args: []string{"traffic", "count", "--after", "junk-b", "--as-of", "junk-a"}, want: `invalid uuid "junk-a"`},
+			{args: []string{"traffic", "count", "--as-of", ""}, want: "--as-of is empty"},
+		})
 	}
 }

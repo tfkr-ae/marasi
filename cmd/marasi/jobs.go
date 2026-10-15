@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
@@ -34,8 +33,7 @@ var jobsListCmd = &cobra.Command{
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		var list struct {
 			Items []backgroundJob `json:"items"`
@@ -43,7 +41,7 @@ var jobsListCmd = &cobra.Command{
 		if err := json.Unmarshal(body, &list); err != nil {
 			return fmt.Errorf("decoding jobs: %w", err)
 		}
-		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+		writer := newTableWriter(cmd.OutOrStdout())
 		for _, job := range list.Items {
 			state := "running"
 			if job.Complete {
@@ -70,8 +68,7 @@ jobs list. A job that cannot be rebuilt fails with not_rebuildable.`,
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		var job backgroundJob
 		if err := json.Unmarshal(body, &job); err != nil {

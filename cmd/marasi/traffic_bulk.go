@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -31,9 +30,7 @@ traffic list --help lists the query fields.`
 type trafficSelectionFlags struct {
 	ids     []string
 	idsFile string
-	query   string
-	exclude []string
-	asOf    string
+	filter  *trafficQueryFlags
 }
 
 // addTrafficSelectionFlags registers the selection flags on cmd.
@@ -41,9 +38,7 @@ func addTrafficSelectionFlags(cmd *cobra.Command) *trafficSelectionFlags {
 	flags := &trafficSelectionFlags{}
 	cmd.Flags().StringArrayVar(&flags.ids, "id", nil, "UUID of a pair to select; repeat for more")
 	cmd.Flags().StringVar(&flags.idsFile, "ids-file", "", "File of pair UUIDs, one per line, or - for stdin")
-	cmd.Flags().StringVarP(&flags.query, "query", "q", "", "AIP-160 query that selects pairs; needs --as-of")
-	cmd.Flags().StringArrayVar(&flags.exclude, "exclude", nil, "Content type the query hides, exact or major/*; repeat for more")
-	cmd.Flags().StringVar(&flags.asOf, "as-of", "", "Newest pair UUID the query selects, from a traffic list page's as_of")
+	flags.filter = addTrafficQueryFlags(cmd, true)
 	return flags
 }
 
@@ -69,10 +64,7 @@ func (flags *trafficSelectionFlags) selection(cmd *cobra.Command) (json.RawMessa
 			IDs []string `json:"ids"`
 		}{IDs: ids})
 	case byQuery:
-		if !changed("as-of") {
-			return nil, errors.New("--query needs --as-of")
-		}
-		asOf, err := parseServiceID(flags.asOf)
+		asOf, err := flags.filter.asOfID(cmd)
 		if err != nil {
 			return nil, err
 		}
@@ -80,7 +72,7 @@ func (flags *trafficSelectionFlags) selection(cmd *cobra.Command) (json.RawMessa
 			Query     string   `json:"query"`
 			Exclusion []string `json:"exclusion,omitempty"`
 			AsOf      string   `json:"as_of"`
-		}{Query: flags.query, Exclusion: flags.exclude, AsOf: asOf})
+		}{Query: flags.filter.query, Exclusion: flags.filter.exclude, AsOf: asOf})
 	default:
 		return nil, errors.New("select pairs with --id, --ids-file, or --query with --as-of")
 	}
@@ -141,11 +133,10 @@ var trafficBulkHighlightCmd = &cobra.Command{
 		highlight := json.RawMessage("null")
 		verb := "unhighlighted"
 		if args[0] != "none" {
-			value, err := strconv.Atoi(args[0])
-			if err != nil || value < 1 || value > 8 {
+			if len(args[0]) != 1 || args[0][0] < '1' || args[0][0] > '8' {
 				return fmt.Errorf("invalid highlight %q: want 1 to 8 or none", args[0])
 			}
-			highlight = json.RawMessage(strconv.Itoa(value))
+			highlight = json.RawMessage(args[0])
 			verb = "highlighted"
 		}
 		return runTrafficBulk(cmd, trafficBulkHighlightSelection, "highlight", "highlighting traffic", verb, trafficBulkRequest{Highlight: highlight})
@@ -165,31 +156,33 @@ func addTrafficBulkLinkFlags(cmd *cobra.Command) *trafficBulkLinkFlags {
 	return flags
 }
 
-// request returns a bulk request naming the one target the flags set.
+// request returns a bulk request naming the one target the flags set. It
+// checks that exactly one target is set before it parses the UUID.
 func (flags *trafficBulkLinkFlags) request(cmd *cobra.Command) (trafficBulkRequest, error) {
 	var request trafficBulkRequest
-	set := 0
-	for name, target := range map[string]struct {
+	targets := []struct {
+		name  string
 		raw   string
 		field *string
 	}{
-		"launchpad": {flags.launchpad, &request.LaunchpadID},
-		"finding":   {flags.finding, &request.FindingID},
-		"test-case": {flags.testCase, &request.TestCaseID},
-	} {
-		if !cmd.Flags().Changed(name) {
-			continue
+		{"launchpad", flags.launchpad, &request.LaunchpadID},
+		{"finding", flags.finding, &request.FindingID},
+		{"test-case", flags.testCase, &request.TestCaseID},
+	}
+	set, chosen := 0, 0
+	for i, target := range targets {
+		if cmd.Flags().Changed(target.name) {
+			set, chosen = set+1, i
 		}
-		set++
-		id, err := parseServiceID(target.raw)
-		if err != nil {
-			return trafficBulkRequest{}, err
-		}
-		*target.field = id
 	}
 	if set != 1 {
 		return trafficBulkRequest{}, errors.New("name exactly one of --launchpad, --finding, or --test-case")
 	}
+	id, err := parseServiceID(targets[chosen].raw)
+	if err != nil {
+		return trafficBulkRequest{}, err
+	}
+	*targets[chosen].field = id
 	return request, nil
 }
 
@@ -268,13 +261,17 @@ var trafficBulkNoteAppendCmd = &cobra.Command{
 	Short: "Append text to the notes of the selected pairs",
 	Long: `Append text to the notes of the selected pairs. A pair with no note gets
 the text as its note; a pair with a note gets a blank line and then the
-text. Pass exactly one of TEXT or --file. Stdin is not read, so it stays
-free for --ids-file -.
+text. Pass exactly one of TEXT, --file, or piped stdin. With --ids-file -
+stdin holds the ids, so pass TEXT or --file.
 
 ` + trafficSelectionHelp,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		text, err := readTextOrFile(cmd, args, trafficBulkNoteAppendFile, "note")
+		input := textInput{what: "note", file: trafficBulkNoteAppendFile}
+		if trafficBulkNoteAppendSelection.idsFile == "-" {
+			input.stdinTaken = "--ids-file is -"
+		}
+		text, err := input.read(cmd, args)
 		if err != nil {
 			return err
 		}
@@ -332,29 +329,6 @@ func init() {
 	trafficCmd.AddCommand(trafficBulkCmd)
 }
 
-// readTextOrFile returns the one positional TEXT argument or the contents of
-// --file, whichever was given. It rejects both, neither, and empty text.
-func readTextOrFile(cmd *cobra.Command, args []string, file, what string) (string, error) {
-	fileSet := cmd.Flags().Changed("file")
-	if fileSet == (len(args) == 1) {
-		return "", fmt.Errorf("pass the %s as text or with --file, not both or neither", what)
-	}
-	text := ""
-	if fileSet {
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			return "", fmt.Errorf("reading %s file: %w", what, err)
-		}
-		text = string(raw)
-	} else {
-		text = args[0]
-	}
-	if text == "" {
-		return "", fmt.Errorf("the %s is empty", what)
-	}
-	return text, nil
-}
-
 // trafficBulkRequest is a bulk route body: the selection and the fields of
 // one operation.
 type trafficBulkRequest struct {
@@ -386,8 +360,7 @@ func runTrafficBulk(cmd *cobra.Command, flags *trafficSelectionFlags, route, ope
 		return err
 	}
 	if jsonOutput {
-		_, err = cmd.OutOrStdout().Write(body)
-		return err
+		return writeJSONBody(cmd, body)
 	}
 	var result struct {
 		Count int `json:"count"`
