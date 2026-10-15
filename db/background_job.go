@@ -102,6 +102,7 @@ var jobRegistry = []jobDefinition{
 		},
 		forget: func(repo *Repository) { repo.prettifiedMovedTo = nil },
 	},
+	sitemapJob,
 }
 
 func findJob(name string) (jobDefinition, bool) {

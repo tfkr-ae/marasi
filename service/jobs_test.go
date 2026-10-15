@@ -120,8 +120,12 @@ func TestJobs(t *testing.T) {
 		server, lifecycle, _ := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
 
-		got := listSearchJobs(t, server)
-		want := []listedJob{{Name: db.TrafficIndexJob, Complete: true}, {Name: db.AnnotationIndexJob, Complete: true}}
+		got := append(listSearchJobs(t, server), listJob(t, server, db.SitemapJob)...)
+		want := []listedJob{
+			{Name: db.TrafficIndexJob, Complete: true},
+			{Name: db.AnnotationIndexJob, Complete: true},
+			{Name: db.SitemapJob, Complete: true},
+		}
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
 		}
@@ -195,7 +199,8 @@ func TestJobs(t *testing.T) {
 		seedUnindexedProject(t, path, 5)
 		server, lifecycle, subscriber := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
-		if got := eventNamed(subscriber, "traffic.index_complete", 30*time.Second); got == "" {
+		// The sitemap job runs last, so its completion ends the first open's jobs.
+		if !jobCompleted(subscriber, db.SitemapJob, 30*time.Second) {
 			t.Fatal("the first build did not complete")
 		}
 		pacer := paceIndexBuild(lifecycle, path)
@@ -224,7 +229,8 @@ func TestJobs(t *testing.T) {
 		seedUnindexedProject(t, path, 5)
 		server, lifecycle, subscriber := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
-		if got := eventNamed(subscriber, "traffic.index_complete", 30*time.Second); got == "" {
+		// The sitemap job runs last, so its completion ends the first open's jobs.
+		if !jobCompleted(subscriber, db.SitemapJob, 30*time.Second) {
 			t.Fatal("the first build did not complete")
 		}
 		pacer := paceIndexBuild(lifecycle, path)
