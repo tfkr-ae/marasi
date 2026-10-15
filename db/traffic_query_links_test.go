@@ -199,6 +199,41 @@ func TestTrafficRepo_ListTrafficLinkQueryPaging(t *testing.T) {
 	}
 }
 
+func TestTrafficRepo_CountTrafficTextAfter(t *testing.T) {
+	f := setupLinkQueryFixture(t)
+	// A note rewrites a's index entry after the others were written.
+	if err := f.repo.UpdateNote(f.ids["a"], "late note"); err != nil {
+		t.Fatalf("noting a: %v", err)
+	}
+
+	tests := []struct {
+		query string
+		after string
+		want  int
+	}{
+		{query: `"body of"`, after: "a", want: 4},
+		{query: `"body of"`, after: "c", want: 2},
+		{query: `"body of"`, after: "e", want: 0},
+		{query: `"body of a"`, after: "a", want: 0},
+		{query: `NOT "body of b"`, after: "a", want: 3},
+		{query: `note:"note"`, after: "a", want: 0},
+		{query: `"body of" AND NOT note:*`, after: "b", want: 2},
+		{query: `host = "a.example.com" OR "body of d"`, after: "a", want: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.query+" after "+test.after, func(t *testing.T) {
+			after := f.ids[test.after]
+			got, err := f.repo.CountTraffic(domain.TrafficCountQuery{Text: test.query, After: &after})
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			if got.Count != test.want {
+				t.Fatalf("\nwanted:\n%d\ngot:\n%d", test.want, got.Count)
+			}
+		})
+	}
+}
+
 func TestTrafficRepo_ListTrafficLinkQueryErrors(t *testing.T) {
 	f := setupLinkQueryFixture(t)
 

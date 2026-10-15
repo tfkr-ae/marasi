@@ -430,6 +430,39 @@ func BenchmarkCountContentTypes(b *testing.B) {
 	})
 }
 
+// BenchmarkNewMatches is case 33: counting the matches newer than a
+// snapshot with 1,000 pairs after it, as a client does while traffic is in
+// flight.
+func BenchmarkNewMatches(b *testing.B) {
+	p := benchProject(b)
+	repo := openRepo(b, p.path)
+	page, err := repo.ListTraffic(domain.TrafficQuery{Limit: 1001})
+	if err != nil {
+		b.Fatal(err)
+	}
+	snapshot := page.Items[len(page.Items)-1].ID
+	cases := []struct {
+		name  string
+		query domain.TrafficCountQuery
+	}{
+		{"33-new-matches", domain.TrafficCountQuery{}},
+		{"33-new-matches-seed-exclusion", domain.TrafficCountQuery{Exclusion: fixture.SeedExclusion}},
+		{"33-new-matches-dense-host", domain.TrafficCountQuery{
+			Text: fmt.Sprintf("host = %q", p.manifest.DominantHost), Exclusion: fixture.SeedExclusion}},
+		{"33-new-matches-common-text", domain.TrafficCountQuery{Text: p.manifest.CommonTerm, Exclusion: fixture.SeedExclusion}},
+	}
+	for _, c := range cases {
+		query := c.query
+		query.After = &snapshot
+		b.Run(c.name, func(b *testing.B) {
+			ledgerbench.Measure(b, ledgerbench.Target{Max: ms(50)}, func() error {
+				_, err := repo.CountTraffic(query)
+				return err
+			})
+		})
+	}
+}
+
 // BenchmarkWrite is case 22: the cost of capturing one pair, InsertRequest
 // then InsertResponse, into a copy of the fixture. It has no absolute
 // target: tickets 03, 14 and 20 may add at most 25% to the baseline.
