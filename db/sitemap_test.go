@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -52,7 +53,7 @@ func respond(t *testing.T, repo *Repository, id uuid.UUID, contentType string, s
 // "segment pairs/errors", with a + when it has children.
 func children(t *testing.T, repo *Repository, node string, exclusion ...string) string {
 	t.Helper()
-	page, err := repo.ListSitemapChildren(node, exclusion, "", domain.MaxSitemapPage)
+	page, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Node: node, Exclusion: exclusion, Limit: domain.MaxSitemapPage})
 	if err != nil {
 		t.Fatalf("ListSitemapChildren(%q): %v", node, err)
 	}
@@ -79,7 +80,7 @@ func sitemapTree(t *testing.T, repo *Repository, exclusion ...string) string {
 	walk = func(node string) {
 		cursor := ""
 		for {
-			page, err := repo.ListSitemapChildren(node, exclusion, cursor, 2)
+			page, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Node: node, Exclusion: exclusion, Cursor: cursor, Limit: 2})
 			if err != nil {
 				t.Fatalf("ListSitemapChildren(%q): %v", node, err)
 			}
@@ -175,7 +176,7 @@ func TestSitemap_Exclusion(t *testing.T) {
 	everyType := []string{"text/html", "application/json", "image/png", "image/gif"}
 	type counts struct{ pairs, errors int64 }
 	read := func(exclusion []string) map[string]counts {
-		page, err := repo.ListSitemapChildren("https://x.com", exclusion, "", domain.MaxSitemapPage)
+		page, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Node: "https://x.com", Exclusion: exclusion, Limit: domain.MaxSitemapPage})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -223,7 +224,7 @@ func TestSitemap_ListChildren(t *testing.T) {
 		var got []string
 		cursor := ""
 		for {
-			page, err := repo.ListSitemapChildren("https://x.com", nil, cursor, 2)
+			page, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Node: "https://x.com", Cursor: cursor, Limit: 2})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -242,7 +243,7 @@ func TestSitemap_ListChildren(t *testing.T) {
 	t.Run("should report a node it does not know", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
-		_, err := repo.ListSitemapChildren("https://nowhere.com", nil, "", 10)
+		_, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Node: "https://nowhere.com", Limit: 10})
 		if !errors.Is(err, domain.ErrSitemapNodeNotFound) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", domain.ErrSitemapNodeNotFound, err)
 		}
@@ -251,14 +252,14 @@ func TestSitemap_ListChildren(t *testing.T) {
 	t.Run("should reject a bad cursor, limit or exclusion", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
-		if _, err := repo.ListSitemapChildren("", nil, "not-a-cursor", 10); !errors.Is(err, domain.ErrInvalidCursor) {
+		if _, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Cursor: "not-a-cursor", Limit: 10}); !errors.Is(err, domain.ErrInvalidCursor) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", domain.ErrInvalidCursor, err)
 		}
-		if _, err := repo.ListSitemapChildren("", nil, "", 0); err == nil {
+		if _, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Limit: 0}); err == nil {
 			t.Fatalf("\nwanted:\nan error for limit 0\ngot:\nnil")
 		}
 		var queryErr *domain.QueryError
-		if _, err := repo.ListSitemapChildren("", []string{"im*ge/png"}, "", 10); !errors.As(err, &queryErr) {
+		if _, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Exclusion: []string{"im*ge/png"}, Limit: 10}); !errors.As(err, &queryErr) {
 			t.Fatalf("\nwanted:\na *domain.QueryError\ngot:\n%v", err)
 		}
 	})
@@ -267,7 +268,7 @@ func TestSitemap_ListChildren(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 		capturePair(t, repo, "https://x.com/a", "text/html", 200)
-		page, err := repo.ListSitemapChildren("", nil, "", domain.MaxSitemapPage+1)
+		page, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Limit: domain.MaxSitemapPage + 1})
 		if err != nil || len(page.Children) != 1 {
 			t.Fatalf("\nwanted:\none child\ngot:\n%+v, %v", page, err)
 		}
@@ -276,7 +277,7 @@ func TestSitemap_ListChildren(t *testing.T) {
 	t.Run("should report the sitemap as complete on a new project", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
-		page, err := repo.ListSitemapChildren("", nil, "", 10)
+		page, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Limit: 10})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -375,7 +376,7 @@ func TestSitemap_Job(t *testing.T) {
 		if got := sitemapJobState(t, repo); got.Complete {
 			t.Fatalf("\nwanted:\nan incomplete sitemap job after an older binary wrote pairs\ngot:\n%+v", got)
 		}
-		page, err := repo.ListSitemapChildren("", nil, "", 10)
+		page, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Limit: 10})
 		if err != nil || page.Complete[SitemapJob] {
 			t.Fatalf("\nwanted:\nthe read to report the sitemap as incomplete\ngot:\n%v, %v", page.Complete, err)
 		}

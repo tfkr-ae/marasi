@@ -114,6 +114,10 @@ func TestTrafficSitemap(t *testing.T) {
 		{"an invalid cursor", "?cursor=nope", http.StatusBadRequest, "invalid_cursor"},
 		{"a limit over 500", "?limit=501", http.StatusBadRequest, "bad_request"},
 		{"a limit of 0", "?limit=0", http.StatusBadRequest, "bad_request"},
+		{"a query without as_of", "?q=" + url.QueryEscape(`host = "api.x.com"`), http.StatusBadRequest, "bad_request"},
+		{"as_of without a query", "?as_of=" + uuid.Nil.String(), http.StatusBadRequest, "bad_request"},
+		{"a malformed as_of", "?q=&as_of=nope", http.StatusBadRequest, "bad_request"},
+		{"an invalid query", "?q=" + url.QueryEscape(`host = `) + "&as_of=" + uuid.Nil.String(), http.StatusBadRequest, "invalid_query"},
 	} {
 		t.Run("should reject "+tt.name, func(t *testing.T) {
 			response, _ := p.sitemap(t, tt.query)
@@ -131,6 +135,20 @@ func TestTrafficSitemap(t *testing.T) {
 		response, body := p.get(t, "/traffic?q="+url.QueryEscape(`sitemap = "https://api.x.com/users"`))
 		if response.Code != http.StatusOK || len(body.Items) != 2 {
 			t.Fatalf("\nwanted:\nthe two user pairs\ngot:\n%d %s", response.Code, response.Body)
+		}
+	})
+
+	t.Run("should count only the pairs that match q up to as_of", func(t *testing.T) {
+		_, list := p.get(t, "/traffic")
+		p.capture(t, "api.x.com", "/users/44", "application/json", 200)
+		query := "?node=" + url.QueryEscape("https://api.x.com") +
+			"&q=" + url.QueryEscape(`status_code < 500`) + "&exclude=image/*&as_of=" + list.AsOf.String()
+		response, body := p.sitemap(t, query)
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n200\ngot:\n%d %s", response.Code, response.Body)
+		}
+		if got, want := formatSitemapItems(body.Items), "https://api.x.com/users users + children"; got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
 	})
 }
