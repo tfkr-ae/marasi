@@ -66,3 +66,33 @@ type TrafficPage struct {
 	// index or the annotation index is incomplete.
 	Complete map[string]bool
 }
+
+// MaxTrafficCount is the largest count CountTraffic reports exactly. Above
+// it, the count is MaxTrafficCount and reported as capped.
+const MaxTrafficCount = 100_000
+
+// TrafficCountQuery describes the pairs a traffic count counts.
+type TrafficCountQuery struct {
+	// Text is an AIP-160 traffic query. Empty matches every pair.
+	Text string
+	// Exclusion hides pairs with these content types (see NormalizeExclusion).
+	// Pairs with no content type are never hidden.
+	Exclusion []string
+	// AsOf, when set, bounds the count to pairs with an id at or below it.
+	AsOf *uuid.UUID
+	// After, when set, bounds the count to pairs with an id above it. Set to
+	// a snapshot's as_of, it counts the matches newer than the snapshot,
+	// whatever the list's sort (ADR-0041).
+	After *uuid.UUID
+}
+
+// TrafficCount is the result of a traffic count.
+type TrafficCount struct {
+	// Count is the number of matching pairs, at most MaxTrafficCount.
+	Count int
+	// Capped is true when more than MaxTrafficCount pairs match.
+	Capped bool
+	// Complete reports, for each background job the answer depends on,
+	// whether the job had finished. See TrafficPage.Complete.
+	Complete map[string]bool
+}
