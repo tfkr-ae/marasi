@@ -463,7 +463,7 @@ func BenchmarkSitemap(b *testing.B) {
 	cursorAfter := func(node string, pages int) string {
 		cursor := ""
 		for range pages {
-			page, err := repo.ListSitemapChildren(node, nil, cursor, domain.MaxSitemapPage)
+			page, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Node: node, Cursor: cursor, Limit: domain.MaxSitemapPage})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -489,7 +489,7 @@ func BenchmarkSitemap(b *testing.B) {
 	for _, c := range cases {
 		b.Run(c.name, func(b *testing.B) {
 			ledgerbench.Measure(b, ledgerbench.Target{Max: ms(50)}, func() error {
-				page, err := repo.ListSitemapChildren(c.node, c.exclusion, c.cursor, domain.MaxSitemapPage)
+				page, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Node: c.node, Exclusion: c.exclusion, Cursor: c.cursor, Limit: domain.MaxSitemapPage})
 				if err == nil && len(page.Children) == 0 {
 					err = fmt.Errorf("%q has no children", c.node)
 				}
