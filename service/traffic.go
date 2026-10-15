@@ -243,7 +243,7 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 	mux.HandleFunc("GET /traffic/query", func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
 		var queryErr *domain.QueryError
-		switch err := db.ValidateTrafficQuery(query.Get("q"), query["exclude"]); {
+		switch err := db.ValidateTrafficQuery(query.Get("q"), query["exclude"], query.Get("order_by")); {
 		case errors.As(err, &queryErr):
 			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
 		case err != nil:
