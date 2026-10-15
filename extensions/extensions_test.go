@@ -148,6 +148,10 @@ func (m *mockTrafficRepo) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage
 	return domain.TrafficPage{Items: []*domain.RequestResponseSummary{}, Complete: complete}, nil
 }
 
+func (m *mockTrafficRepo) CountTraffic(q domain.TrafficCountQuery) (domain.TrafficCount, error) {
+	return domain.TrafficCount{Count: len(m.summaryData), Complete: map[string]bool{domain.JobTrafficIndex: true}}, nil
+}
+
 func (m *mockTrafficRepo) ListSitemapChildren(string, []string, string, int) (domain.SitemapPage, error) {
 	return domain.SitemapPage{}, errors.New("not implemented")
 }
@@ -254,6 +258,22 @@ func (m *mockTrafficRepo) CountContentTypes() ([]*domain.ContentTypeCount, error
 		return nil, errors.New("forced repo error")
 	}
 	return []*domain.ContentTypeCount{}, nil
+}
+
+func (m *mockTrafficRepo) LinkTraffic(domain.Selection, domain.LinkTarget) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) UnlinkTraffic(domain.Selection, domain.LinkTarget) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) AppendNote(domain.Selection, string) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) ClearNotes(domain.Selection) (int, error) {
+	return 0, errors.New("not implemented")
 }
 
 func setupTestExtension(t *testing.T, luaCode string, options ...func(*Runtime) error) (*Runtime, *mockProxyService) {
