@@ -152,3 +152,21 @@ func TestClientSettingControlAPI(t *testing.T) {
 		}
 	})
 }
+
+func TestClientSettingsWithoutProject(t *testing.T) {
+	server := newTestServer(&marasi.Proxy{}, func() {})
+	requests := []struct{ method, path, body string }{
+		{http.MethodGet, "/client-settings/app", ""},
+		{http.MethodGet, "/client-settings/app/k", ""},
+		{http.MethodPut, "/client-settings/app/k", `{"value":1}`},
+		{http.MethodDelete, "/client-settings/app/k", ""},
+	}
+	for _, request := range requests {
+		t.Run("should return 404 not_found for "+request.method+" "+request.path+" when no project is open", func(t *testing.T) {
+			response := requestControlAPI(server, request.method, request.path, request.body)
+			if want := "{\"error\":\"not_found\"}\n"; response.Code != http.StatusNotFound || response.Body.String() != want {
+				t.Fatalf("\nwanted:\n404 %s\ngot:\n%d %s", want, response.Code, response.Body)
+			}
+		})
+	}
+}

@@ -141,11 +141,11 @@ func prettifiedMoveJob(t *testing.T, repo *Repository) JobState {
 		t.Fatalf("ListJobs: %v", err)
 	}
 	for _, job := range jobs {
-		if job.Name == PrettifiedMoveJob {
+		if job.Name == domain.JobPrettifiedMove {
 			return job
 		}
 	}
-	t.Fatalf("\nwanted:\na %s job\ngot:\n%+v", PrettifiedMoveJob, jobs)
+	t.Fatalf("\nwanted:\na %s job\ngot:\n%+v", domain.JobPrettifiedMove, jobs)
 	return JobState{}
 }
 
@@ -168,7 +168,7 @@ func TestPrettifiedMoveJob(t *testing.T) {
 	t.Run("should be complete on a new project", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
-		if got, want := prettifiedMoveJob(t, repo), (JobState{Name: PrettifiedMoveJob, Complete: true}); got != want {
+		if got, want := prettifiedMoveJob(t, repo), (JobState{Name: domain.JobPrettifiedMove, Complete: true}); got != want {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
 		}
 	})
@@ -189,7 +189,7 @@ func TestPrettifiedMoveJob(t *testing.T) {
 		if got := prettifiedMoveJob(t, repo); got.Complete {
 			t.Fatalf("\nwanted:\nan incomplete job after an older binary wrote pairs\ngot:\n%+v", got)
 		}
-		moved, remaining, err := repo.RunJobBatch(PrettifiedMoveJob, 1500)
+		moved, remaining, err := repo.RunJobBatch(domain.JobPrettifiedMove, 1500)
 		if err != nil {
 			t.Fatalf("RunJobBatch: %v", err)
 		}
@@ -204,7 +204,7 @@ func TestPrettifiedMoveJob(t *testing.T) {
 		}
 
 		for remaining {
-			if _, remaining, err = repo.RunJobBatch(PrettifiedMoveJob, 1500); err != nil {
+			if _, remaining, err = repo.RunJobBatch(domain.JobPrettifiedMove, 1500); err != nil {
 				t.Fatalf("RunJobBatch: %v", err)
 			}
 		}

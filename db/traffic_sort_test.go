@@ -221,7 +221,7 @@ func TestLaunchpadRepo_GetLaunchpadRequests_OrderBy(t *testing.T) {
 			"length desc":      {hundred, twenty, inFlight},
 			"status_code desc": {twenty, hundred, inFlight},
 		} {
-			items, err := repo.GetLaunchpadRequests(launchpadID, "", nil, orderBy)
+			items, _, err := repo.GetLaunchpadRequests(launchpadID, "", nil, orderBy)
 			if err != nil {
 				t.Fatalf("%q: %v", orderBy, err)
 			}
@@ -229,7 +229,7 @@ func TestLaunchpadRepo_GetLaunchpadRequests_OrderBy(t *testing.T) {
 				t.Fatalf("%q\nwanted:\n%v\ngot:\n%v", orderBy, want, got)
 			}
 		}
-		_, err = repo.GetLaunchpadRequests(launchpadID, "", nil, "size")
+		_, _, err = repo.GetLaunchpadRequests(launchpadID, "", nil, "size")
 		var queryErr *domain.QueryError
 		if !errors.As(err, &queryErr) {
 			t.Fatalf("\nwanted:\n*domain.QueryError\ngot:\n%v", err)

@@ -3,7 +3,6 @@ package service
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 
 	"github.com/tfkr-ae/marasi"
@@ -79,10 +78,12 @@ func addClientSettingRoutes(mux routeMux, proxy *marasi.Proxy) {
 	})
 }
 
+// clientSettingRepo returns the open project's store, or writes 404
+// not_found when no project is open.
 func clientSettingRepo(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy) (domain.ConfigRepository, bool) {
 	repo, err := proxy.GetConfigRepo()
 	if err != nil {
-		writeClientSettingError(w, r, err)
+		writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 		return nil, false
 	}
 	return repo, true
@@ -95,12 +96,8 @@ func decodeClientSettingBody(w http.ResponseWriter, r *http.Request) (json.RawMe
 	}
 	// Leave room for the envelope; the store enforces the exact value limit.
 	body := http.MaxBytesReader(w, r.Body, domain.MaxClientSettingValueBytes+1024)
-	decoder := json.NewDecoder(body)
 	var fields map[string]json.RawMessage
-	if err := decoder.Decode(&fields); err != nil {
-		return nil, errInvalidClientSettingBody
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+	if !decodeStrictJSON(body, &fields) {
 		return nil, errInvalidClientSettingBody
 	}
 	value, present := fields["value"]

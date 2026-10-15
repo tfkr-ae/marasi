@@ -33,6 +33,9 @@ type launchpadList struct {
 type launchpadDetail struct {
 	launchpadSummary
 	Items []trafficSummary `json:"items"`
+	Index trafficIndex     `json:"index"`
+	// Sitemap is set when the query has a sitemap condition.
+	Sitemap *jobCompleteness `json:"sitemap,omitempty"`
 }
 
 type launchpadMutation struct {
@@ -110,7 +113,7 @@ func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, e
 			writeLaunchpadRepositoryError(w, r, err)
 			return
 		}
-		members, err := repo.GetLaunchpadRequests(id, r.URL.Query().Get("q"), r.URL.Query()["exclude"], r.URL.Query().Get("order_by"))
+		members, complete, err := repo.GetLaunchpadRequests(id, r.URL.Query().Get("q"), r.URL.Query()["exclude"], r.URL.Query().Get("order_by"))
 		var queryErr *domain.QueryError
 		if errors.As(err, &queryErr) {
 			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
@@ -123,6 +126,8 @@ func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, e
 		writeJSON(w, r, http.StatusOK, launchpadDetail{
 			launchpadSummary: launchpadSummaryFromDomain(launchpad),
 			Items:            trafficListFromSummaries(members, nil).Items,
+			Index:            trafficIndex{Complete: searchComplete(complete)},
+			Sitemap:          sitemapCompleteness(complete),
 		})
 	})
 

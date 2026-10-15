@@ -1818,7 +1818,7 @@ func TestWriteRequestModifier(t *testing.T) {
 
 	})
 
-	t.Run("requests should carry their prettified copy outside metadata", func(t *testing.T) {
+	t.Run("should carry a request's prettified copy outside metadata", func(t *testing.T) {
 		proxy := newTestProxy(t)
 		proxy.OnRequest = func(req domain.ProxyRequest) error { return nil }
 		req := httptest.NewRequest(http.MethodPost, "https://marasi.app/api", strings.NewReader(`{"b":2,"a":1}`))
@@ -3890,7 +3890,7 @@ func TestWriteResponseModifier(t *testing.T) {
 
 	})
 
-	t.Run("responses should carry their prettified copy outside metadata", func(t *testing.T) {
+	t.Run("should carry a response's prettified copy outside metadata", func(t *testing.T) {
 		proxy := newTestProxy(t)
 		proxy.OnResponse = func(res domain.ProxyResponse) error { return nil }
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)

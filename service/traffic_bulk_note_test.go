@@ -58,13 +58,14 @@ func TestTrafficBulkNoteAPI(t *testing.T) {
 
 		for _, fields := range []string{
 			``,
-			`,"append":""`,
 			`,"clear":false`,
 			`,"append":"x","clear":true`,
 		} {
 			response := requestControlAPI(p.server, http.MethodPost, "/traffic/bulk/note", `{"selection":`+selection+fields+`}`)
 			assertControlAPIResponse(t, response, http.StatusBadRequest, `{"error":"invalid_bulk_request"}`+"\n")
 		}
+		response := requestControlAPI(p.server, http.MethodPost, "/traffic/bulk/note", `{"selection":`+selection+`,"append":""}`)
+		assertControlAPIResponse(t, response, http.StatusBadRequest, `{"error":"invalid_bulk_request","message":"note text is empty"}`+"\n")
 		if events := drainEvents(subscriber); len(events) != 0 {
 			t.Fatalf("\nwanted:\nno events\ngot:\n%v", eventSummary(events))
 		}
