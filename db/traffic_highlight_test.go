@@ -3,6 +3,7 @@ package db
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -319,5 +320,99 @@ func TestTrafficRepo_SetHighlight_Rejects(t *testing.T) {
 	}
 	if got := listedHighlights(t, repo)[a]; got != 0 {
 		t.Errorf("highlight after rejected calls = %d, want 0", got)
+	}
+}
+
+// highlightQueryFixture is a project with pairs named by their highlight:
+// none, one3, two3, h1 and h8, oldest first.
+func highlightQueryFixture(t *testing.T) (*Repository, map[string]uuid.UUID) {
+	t.Helper()
+	repo, teardown := setupTestDB(t)
+	t.Cleanup(teardown)
+	ids := map[string]uuid.UUID{}
+	for _, pair := range []struct {
+		name string
+		h    int
+	}{{"none", 0}, {"one3", 3}, {"two3", 3}, {"h1", 1}, {"h8", 8}} {
+		ids[pair.name] = insertTraffic(t, repo, "GET", "a.example.com", "/"+pair.name)
+		if pair.h != 0 {
+			if _, err := repo.SetHighlight(idSelection(ids[pair.name]), pair.h); err != nil {
+				t.Fatalf("SetHighlight() error = %v", err)
+			}
+		}
+	}
+	return repo, ids
+}
+
+func TestTrafficRepo_ListTrafficHighlightQuery(t *testing.T) {
+	repo, ids := highlightQueryFixture(t)
+	names := func(items []*domain.RequestResponseSummary) string {
+		var out []string
+		for _, item := range items {
+			for name, id := range ids {
+				if id == item.ID {
+					out = append(out, name)
+				}
+			}
+		}
+		return strings.Join(out, ",")
+	}
+
+	tests := []struct {
+		query string
+		want  string // names newest first
+	}{
+		{query: `highlight = 3`, want: "two3,one3"},
+		{query: `highlight = 8`, want: "h8"},
+		{query: `highlight = 5`, want: ""},
+		{query: `highlight != 3`, want: "h8,h1,none"},
+		{query: `highlight != 5`, want: "h8,h1,two3,one3,none"},
+		{query: `highlight:*`, want: "h8,h1,two3,one3"},
+		{query: `NOT highlight:*`, want: "none"},
+		{query: `-highlight:*`, want: "none"},
+		{query: `NOT highlight = 3`, want: "h8,h1,none"},
+		{query: `highlight = 1 OR highlight = 8`, want: "h8,h1"},
+		{query: `highlight:* AND path = "/one3"`, want: "one3"},
+	}
+	for _, test := range tests {
+		t.Run(test.query, func(t *testing.T) {
+			items, _, _, err := listPage(repo, nil, 200, test.query)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			if got := names(items); got != test.want {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", test.want, got)
+			}
+		})
+	}
+}
+
+func TestTrafficRepo_ListTrafficHighlightQueryErrors(t *testing.T) {
+	repo, _ := highlightQueryFixture(t)
+
+	tests := []struct {
+		query    string
+		message  string
+		position int
+	}{
+		{query: `highlight = 0`, message: `highlight needs a whole number from 1 to 8`, position: 13},
+		{query: `highlight = 9`, message: `highlight needs a whole number from 1 to 8`, position: 13},
+		{query: `highlight != -1`, message: `highlight needs a whole number from 1 to 8`, position: 14},
+		{query: `highlight = "3"`, message: `highlight needs a whole number from 1 to 8`, position: 13},
+		{query: `highlight = 2.5`, message: `highlight needs a whole number from 1 to 8`, position: 13},
+		{query: `host = "a" AND highlight = red`, message: `highlight needs a whole number from 1 to 8`, position: 28},
+		{query: `highlight > 3`, message: `operator > is not supported on highlight; use =, !=, or highlight:*`, position: 1},
+		{query: `highlight <= 3`, message: `operator <= is not supported on highlight`, position: 1},
+		{query: `highlight:3`, message: `operator : on highlight takes only *`, position: 1},
+		{query: `highlight:"red"`, message: `operator : on highlight takes only *`, position: 1},
+		{query: `highlight.colour = 3`, message: `field "highlight" has no member "colour"`, position: 1},
+		{query: `highlight.colour:*`, message: `field "highlight" has no member "colour"`, position: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.query, func(t *testing.T) {
+			_, _, _, err := listPage(repo, nil, 200, test.query)
+			assertQueryError(t, err, test.message, test.position)
+			assertQueryError(t, ValidateTrafficQuery(test.query, nil), test.message, test.position)
+		})
 	}
 }
