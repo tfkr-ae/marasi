@@ -49,6 +49,8 @@ const trafficListLong = `List the newest page of traffic.
       are not searched.
   note
       : (contains), ignoring case, for example note:"idor candidate".
+      note:* matches pairs that have a note, and NOT note:* pairs that
+      have none.
   metadata
       : (contains), ignoring case, anywhere in the metadata, for example
       metadata:"workshop". Prettified copies of bodies are not metadata
@@ -58,6 +60,10 @@ const trafficListLong = `List the newest page of traffic.
       in that launchpad, launchpad != "<launchpad id>" matches pairs not
       in it, including pairs in no launchpad, and launchpad:* matches
       pairs in any launchpad. The id is a quoted launchpad UUID.
+  finding, test_case
+      Links to findings and test cases, the same way as launchpad, for
+      example finding = "<finding id>", finding != "<finding id>" and
+      test_case:*. The id is a quoted UUID.
 
 Bare text, for example "hbGci", searches every text part. Text terms
 need at least 3 characters.
