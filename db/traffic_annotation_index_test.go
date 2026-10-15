@@ -236,3 +236,38 @@ func TestAnnotationIndexJob(t *testing.T) {
 		assertListNames(t, repo, ids, "after backfill", `metadata:"backfilled-meta"`, "third")
 	})
 }
+
+func TestTrafficRepo_CountTrafficAfterSearchesBothIndexes(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	ids := captureTextPairs(t, repo, []textPair{
+		{name: "old-note", request: "GET /a HTTP/1.1\r\n\r\n", response: []byte("HTTP/1.1 200 OK\r\n\r\nplain")},
+		{name: "old-body", request: "GET /b HTTP/1.1\r\n\r\n", response: []byte("HTTP/1.1 200 OK\r\n\r\nneedle-in-body")},
+		{name: "bound", request: "GET /c HTTP/1.1\r\n\r\n", response: []byte("HTTP/1.1 200 OK\r\n\r\nplain")},
+		{name: "new-note", request: "GET /d HTTP/1.1\r\n\r\n", response: []byte("HTTP/1.1 200 OK\r\n\r\nplain")},
+		{name: "new-body", request: "GET /e HTTP/1.1\r\n\r\n", response: []byte("HTTP/1.1 200 OK\r\n\r\nneedle-in-body")},
+	})
+	for _, name := range []string{"old-note", "new-note"} {
+		if err := repo.UpdateNote(ids[name], "needle-in-note"); err != nil {
+			t.Fatalf("inserting note: %v", err)
+		}
+	}
+	after := ids["bound"]
+
+	for query, want := range map[string]int{
+		`"needle-in"`:                    2,
+		`note:"needle-in-note"`:          1,
+		`response_body:"needle-in-body"`: 1,
+		`note:"needle-in-note" OR response_body:"needle-in-body"`: 2,
+	} {
+		t.Run(query, func(t *testing.T) {
+			got, err := repo.CountTraffic(domain.TrafficCountQuery{Text: query, After: &after})
+			if err != nil {
+				t.Fatalf("CountTraffic: %v", err)
+			}
+			if got.Count != want {
+				t.Fatalf("\nwanted:\n%d new matches\ngot:\n%d", want, got.Count)
+			}
+		})
+	}
+}

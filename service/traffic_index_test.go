@@ -193,6 +193,24 @@ func (pacer *indexPacer) indexedPairs(path string) int {
 	return pacer.indexed[path]
 }
 
+// countIndexComplete returns index.complete from GET /traffic/count.
+func countIndexComplete(t *testing.T, server *Server) bool {
+	t.Helper()
+	response := requestListener(t, server, http.MethodGet, "/traffic/count", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("counting traffic: %d %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Index *struct {
+			Complete bool `json:"complete"`
+		} `json:"index"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body.Index == nil {
+		t.Fatalf("decoding traffic count %s: %v", response.Body.String(), err)
+	}
+	return body.Index.Complete
+}
+
 func listIndexComplete(t *testing.T, server *Server) bool {
 	t.Helper()
 	response := requestListener(t, server, http.MethodGet, "/traffic?limit=1", "")
