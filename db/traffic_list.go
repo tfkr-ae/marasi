@@ -361,6 +361,13 @@ func sortSegments(sort trafficSort, backward bool, cursor *trafficCursor, cursor
 			unvalued.conditions = append(unvalued.conditions, sqlCondition{`id ` + op + ` ?`, []any{cursor.ID}})
 		case sort.key.expr == "":
 			valued.conditions = append(valued.conditions, sqlCondition{`id ` + op + ` ?`, []any{cursor.ID}})
+		case sort.key.expression:
+			// SQLite cannot seek an expression index with a row value, so
+			// the key bounds the range and the id breaks ties within it.
+			valued.conditions = append(valued.conditions, sqlCondition{
+				sort.key.expr + ` ` + op + `= ? AND (` + sort.key.expr + ` ` + op + ` ? OR id ` + op + ` ?)`,
+				[]any{cursorKey, cursorKey, cursor.ID},
+			})
 		default:
 			valued.conditions = append(valued.conditions,
 				sqlCondition{`(` + sort.key.expr + `, id) ` + op + ` (?, ?)`, []any{cursorKey, cursor.ID}})
