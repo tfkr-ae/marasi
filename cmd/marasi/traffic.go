@@ -58,6 +58,11 @@ const trafficListLong = `List the newest page of traffic.
       in that launchpad, launchpad != "<launchpad id>" matches pairs not
       in it, including pairs in no launchpad, and launchpad:* matches
       pairs in any launchpad. The id is a quoted launchpad UUID.
+  highlight
+      A pair's highlight, a whole number from 1 to 8. highlight = 3
+      matches pairs with highlight 3, highlight != 3 matches every other
+      pair, including pairs with no highlight, highlight:* matches pairs
+      with any highlight, and NOT highlight:* matches pairs with none.
 
 Bare text, for example "hbGci", searches every text part. Text terms
 need at least 3 characters.
