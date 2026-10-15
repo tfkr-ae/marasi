@@ -1173,7 +1173,7 @@ func RegisterRequestType(extension *Runtime) {
 			return 0
 		}
 
-		metadata[extension.Data.Name] = extensionMetadata
+		metadata[extension.Data.Name] = dropNilMembers(extensionMetadata)
 		*req = *core.ContextWithMetadata(req, metadata)
 		return 0
 	}
@@ -1606,7 +1606,7 @@ func RegisterResponseType(extension *Runtime) {
 			return 0
 		}
 
-		metadata[extension.Data.Name] = extensionMetadata
+		metadata[extension.Data.Name] = dropNilMembers(extensionMetadata)
 		*res.Request = *core.ContextWithMetadata(res.Request, metadata)
 		return 0
 	}
