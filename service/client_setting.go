@@ -79,10 +79,12 @@ func addClientSettingRoutes(mux routeMux, proxy *marasi.Proxy) {
 	})
 }
 
+// clientSettingRepo returns the open project's store, or writes 404
+// not_found when no project is open.
 func clientSettingRepo(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy) (domain.ConfigRepository, bool) {
 	repo, err := proxy.GetConfigRepo()
 	if err != nil {
-		writeClientSettingError(w, r, err)
+		writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 		return nil, false
 	}
 	return repo, true
