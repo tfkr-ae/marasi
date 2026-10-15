@@ -100,6 +100,10 @@ host includes its port and path its ?query. Equal values list oldest
 first ascending and newest first with desc. Pairs with no response yet
 have no status_code, content_type or length, and sort last either way.
 
+The same query and exclusion work in traffic count, traffic sitemap and
+the traffic bulk commands. traffic validate checks a query, exclusion
+and sort without running them and prints an error's position.
+
 Paging: stderr shows next_cursor, prev_cursor and as_of. Pass a cursor
 back with --cursor, and --backward to walk back toward the start of the
 list (newer pairs, by default). Pass the same --order-by on every page.
