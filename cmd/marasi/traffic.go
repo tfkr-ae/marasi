@@ -52,8 +52,8 @@ const trafficListLong = `List the newest page of traffic.
       : (contains), ignoring case, for example note:"idor candidate".
   metadata
       : (contains), ignoring case, anywhere in the metadata, for example
-      metadata:"workshop". The prettified-request and prettified-response
-      keys are not searched.
+      metadata:"workshop". Prettified copies of bodies are not metadata
+      and are not searched.
   launchpad
       Launchpad membership. launchpad = "<launchpad id>" matches pairs
       in that launchpad, launchpad != "<launchpad id>" matches pairs not
