@@ -134,3 +134,13 @@ func TestTrafficBulkNoteAppendInputUsage(t *testing.T) {
 		{args: []string{"traffic", "bulk", "note", "append", "--ids-file", "-"}, stdin: bulkIDA + "\n", want: "traffic bulk note append requires exactly one of text or --file when --ids-file is -"},
 	})
 }
+
+func TestTrafficBulkLinkTargetUsageIsDeterministic(t *testing.T) {
+	binary := buildMarasi(t)
+	for range 5 {
+		assertUsageErrorsBeforeRequest(t, binary, []usageCase{
+			{args: []string{"traffic", "bulk", "link", "--launchpad", "junk-a", "--finding", "junk-b", "--test-case", "junk-c", "--id", bulkIDA}, want: "name exactly one of --launchpad, --finding, or --test-case"},
+			{args: []string{"traffic", "bulk", "unlink", "--finding", "junk-b", "--id", bulkIDA}, want: `invalid uuid "junk-b"`},
+		})
+	}
+}

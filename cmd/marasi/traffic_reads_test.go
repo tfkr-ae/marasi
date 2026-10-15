@@ -121,3 +121,13 @@ func TestTrafficReadUsage(t *testing.T) {
 		}
 	}
 }
+
+func TestTrafficCountChecksAsOfBeforeAfter(t *testing.T) {
+	binary := buildMarasi(t)
+	for range 5 {
+		assertUsageErrorsBeforeRequest(t, binary, []usageCase{
+			{args: []string{"traffic", "count", "--after", "junk-b", "--as-of", "junk-a"}, want: `invalid uuid "junk-a"`},
+			{args: []string{"traffic", "count", "--as-of", ""}, want: "--as-of is empty"},
+		})
+	}
+}
