@@ -18,7 +18,7 @@ import (
 // dbRequestResponseSummary, from trafficSummarySource.
 const trafficSummaryColumns = `id, scheme, method, host, path, requested_at,
 	status, status_code, content_type, length, responded_at,
-	json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata,
+	metadata,
 	pair_highlight.highlight`
 
 // trafficSummarySource is the FROM clause trafficSummaryColumns read.

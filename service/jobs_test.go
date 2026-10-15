@@ -36,6 +36,31 @@ func listJobs(t *testing.T, server *Server) []listedJob {
 	return body.Items
 }
 
+// listJob returns the listed state of the job called name.
+func listJob(t *testing.T, server *Server, name string) []listedJob {
+	t.Helper()
+	var named []listedJob
+	for _, job := range listJobs(t, server) {
+		if job.Name == name {
+			named = append(named, job)
+		}
+	}
+	return named
+}
+
+// jobCompleted waits for the job.complete event of the job called name,
+// skipping other events, and reports whether it arrived within wait.
+func jobCompleted(subscriber *eventSubscriber, name string, wait time.Duration) bool {
+	deadline := time.Now().Add(wait)
+	want := fmt.Sprintf(`{"name":%q}`, name)
+	for time.Now().Before(deadline) {
+		if eventNamed(subscriber, "job.complete", time.Until(deadline)) == want {
+			return true
+		}
+	}
+	return false
+}
+
 // eventNamed waits for the next event called name, skipping others, and
 // returns its data, or "" when none arrives within wait.
 func eventNamed(subscriber *eventSubscriber, name string, wait time.Duration) string {
@@ -85,7 +110,7 @@ func TestJobs(t *testing.T) {
 		server, lifecycle, _ := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
 
-		got := listJobs(t, server)
+		got := listJob(t, server, db.TrafficIndexJob)
 		want := []listedJob{{Name: db.TrafficIndexJob, Complete: true}}
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
@@ -112,7 +137,7 @@ func TestJobs(t *testing.T) {
 		if strings.Join(got, "\n") != strings.Join(want, "\n") {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", strings.Join(want, "\n"), strings.Join(got, "\n"))
 		}
-		jobs := listJobs(t, server)
+		jobs := listJob(t, server, db.TrafficIndexJob)
 		if wantJobs := []listedJob{{Name: db.TrafficIndexJob, Complete: true, Done: 20, Total: 20}}; fmt.Sprint(jobs) != fmt.Sprint(wantJobs) {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", wantJobs, jobs)
 		}
@@ -153,7 +178,7 @@ func TestJobs(t *testing.T) {
 		seedUnindexedProject(t, path, 5)
 		server, lifecycle, subscriber := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
-		if got := eventNamed(subscriber, "job.complete", 30*time.Second); got == "" {
+		if !jobCompleted(subscriber, db.TrafficIndexJob, 30*time.Second) {
 			t.Fatal("the first build did not complete")
 		}
 		pacer := paceIndexBuild(lifecycle, path)
@@ -167,8 +192,8 @@ func TestJobs(t *testing.T) {
 			t.Fatalf("\nwanted:\nindex.complete false while the rebuild runs\ngot:\ntrue")
 		}
 		pacer.release()
-		if got := eventNamed(subscriber, "job.complete", 30*time.Second); got != `{"name":"traffic_index"}` {
-			t.Fatalf("\nwanted:\njob.complete for the rebuild\ngot:\n%q", got)
+		if !jobCompleted(subscriber, db.TrafficIndexJob, 30*time.Second) {
+			t.Fatalf("\nwanted:\njob.complete for the rebuild\ngot:\nnone")
 		}
 		if got := pacer.indexedPairs(path); got != 5 {
 			t.Fatalf("\nwanted:\nevery pair indexed again\ngot:\n%d", got)

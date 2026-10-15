@@ -21,6 +21,9 @@ const (
 	MaxHighlight = 8
 )
 
+// ErrEmptyNote means a bulk note append was given no text.
+var ErrEmptyNote = errors.New("note text is empty")
+
 // LinkKind names the kind of record a bulk link or unlink targets.
 type LinkKind int
 
