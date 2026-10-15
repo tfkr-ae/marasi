@@ -55,7 +55,7 @@ func TestTrafficRepo_InsertRequest(t *testing.T) {
 		if got.Host != "marasi.app" {
 			t.Fatalf("\nwanted:\nmarasi.app\ngot:\n%s", got.Host)
 		}
-		if !reflect.DeepEqual(got.Metadata, Metadata(wantMeta)) {
+		if !reflect.DeepEqual(got.Metadata, pairMetadata(wantMeta)) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", wantMeta, got.Metadata)
 		}
 		if !got.RequestedAt.Equal(wantTime) {
@@ -132,7 +132,7 @@ func TestTrafficRepo_InsertResponse(t *testing.T) {
 		if !got.RespondedAt.Time.Equal(want.RespondedAt) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want.RespondedAt, got.RespondedAt.Time)
 		}
-		if !reflect.DeepEqual(got.Metadata, Metadata(want.Metadata)) {
+		if !reflect.DeepEqual(got.Metadata, pairMetadata(want.Metadata)) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want.Metadata, got.Metadata)
 		}
 	})
