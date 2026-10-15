@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -32,6 +33,14 @@ type trafficPage struct {
 	PrevCursor *string          `json:"prev_cursor"`
 	AsOf       *uuid.UUID       `json:"as_of"`
 	Index      trafficIndex     `json:"index"`
+}
+
+// trafficCount is the GET /traffic/count response body. Count is exact up to
+// 100,000; above it, Count is 100,000 and Capped is true.
+type trafficCount struct {
+	Count  int          `json:"count"`
+	Capped bool         `json:"capped"`
+	Index  trafficIndex `json:"index"`
 }
 
 // trafficList is the body of a traffic list paged by UUID, such as an
@@ -83,6 +92,16 @@ type trafficDetail struct {
 	Metadata map[string]any  `json:"metadata"` // combined metadata without prettified bodies
 	Request  trafficRequest  `json:"request"`  // captured request
 	Response trafficResponse `json:"response"` // captured response; StatusCode is -1 if none yet
+	// Prettified holds the prettified copies the proxy stored at capture
+	// (ADR-0036). They are never part of metadata.
+	Prettified trafficPrettified `json:"prettified"`
+}
+
+// trafficPrettified is the prettified copies of a traffic detail. A copy is
+// null when the proxy could not prettify that body.
+type trafficPrettified struct {
+	Request  *string `json:"request"`  // prettified request, or null
+	Response *string `json:"response"` // prettified response, or null
 }
 
 // trafficRequest is the request half of a traffic detail.
@@ -144,6 +163,48 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			Index:      trafficIndex{Complete: pageComplete(page)},
 		})
 	})
+	mux.HandleFunc("GET /traffic/count", func(w http.ResponseWriter, r *http.Request) {
+		query, ok := parseTrafficCountQuery(r)
+		if !ok {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
+		repo, err := proxy.GetTrafficRepo()
+		if err != nil {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		count, err := repo.CountTraffic(query)
+		var queryErr *domain.QueryError
+		switch {
+		case errors.As(err, &queryErr):
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
+			return
+		case err != nil:
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+			return
+		}
+		writeJSON(w, r, http.StatusOK, trafficCount{
+			Count:  count.Count,
+			Capped: count.Capped,
+			Index:  trafficIndex{Complete: count.Complete[domain.JobTrafficIndex]},
+		})
+	})
+	// GET /traffic/query checks q and exclude without running them, so it
+	// needs no open project. It returns 204, or the invalid_query body
+	// GET /traffic would return.
+	mux.HandleFunc("GET /traffic/query", func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		var queryErr *domain.QueryError
+		switch err := db.ValidateTrafficQuery(query.Get("q"), query["exclude"]); {
+		case errors.As(err, &queryErr):
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
+		case err != nil:
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
 	mux.HandleFunc("GET /traffic/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
@@ -196,23 +257,21 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		previous, err := repo.GetMetadata(id)
-		if err != nil {
+		if _, err := repo.GetMetadata(id); err != nil {
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
 		_, noteErr := repo.GetNote(id)
-		stored := overlayMetadata(body, previous, noteErr == nil)
+		stored := overlayMetadata(body, noteErr == nil)
 		if err := repo.UpdateMetadata(stored, id); err != nil {
 			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
 			return
 		}
-		stripped := metadataWithoutPrettified(stored)
 		events.publish("metadata.updated", struct {
 			ID       uuid.UUID      `json:"id"`
 			Metadata map[string]any `json:"metadata"`
-		}{ID: id, Metadata: stripped})
-		writeJSON(w, r, http.StatusOK, stripped)
+		}{ID: id, Metadata: stored})
+		writeJSON(w, r, http.StatusOK, stored)
 	})
 }
 
@@ -332,6 +391,25 @@ func parseTrafficQuery(r *http.Request) (domain.TrafficQuery, bool) {
 	return q, true
 }
 
+// parseTrafficCountQuery reads q, exclude, as_of and after from a
+// GET /traffic/count request. It reports false for a malformed id.
+func parseTrafficCountQuery(r *http.Request) (domain.TrafficCountQuery, bool) {
+	query := r.URL.Query()
+	q := domain.TrafficCountQuery{Text: query.Get("q"), Exclusion: query["exclude"]}
+	for name, bound := range map[string]**uuid.UUID{"as_of": &q.AsOf, "after": &q.After} {
+		raw := query.Get(name)
+		if raw == "" {
+			continue
+		}
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			return domain.TrafficCountQuery{}, false
+		}
+		*bound = &id
+	}
+	return q, true
+}
+
 // trafficListFromSummaries maps repository summaries to a list response.
 func trafficListFromSummaries(items []*domain.RequestResponseSummary, nextCursor *uuid.UUID) trafficList {
 	summaries := make([]trafficSummary, 0, len(items))
@@ -391,24 +469,31 @@ func trafficDetailFromRow(row *domain.RequestResponseRow) trafficDetail {
 			Raw:         row.Response.Raw,
 			RespondedAt: respondedAt(row.Response.RespondedAt),
 		},
+		Prettified: trafficPrettified{
+			Request:  prettifiedCopy(row.Prettified.Request),
+			Response: prettifiedCopy(row.Prettified.Response),
+		},
 	}
 }
 
-// overlayMetadata replaces client-owned keys, copies proxy-owned prettified
-// bodies from the previous document, and sets has_note from the notes table.
-func overlayMetadata(client, previous map[string]any, hasNote bool) map[string]any {
-	stored := make(map[string]any, len(client)+3)
+// prettifiedCopy returns copy, or nil when the pair has no such copy.
+func prettifiedCopy(copy string) *string {
+	if copy == "" {
+		return nil
+	}
+	return &copy
+}
+
+// overlayMetadata replaces client-owned keys and sets has_note from the notes
+// table (ADR-0017). Prettified copies are not metadata (ADR-0036), so keys of
+// that name from the client are dropped.
+func overlayMetadata(client map[string]any, hasNote bool) map[string]any {
+	stored := make(map[string]any, len(client)+1)
 	for key, value := range client {
 		if key == "prettified-request" || key == "prettified-response" || key == "has_note" {
 			continue
 		}
 		stored[key] = value
-	}
-	if value, ok := previous["prettified-request"]; ok {
-		stored["prettified-request"] = value
-	}
-	if value, ok := previous["prettified-response"]; ok {
-		stored["prettified-response"] = value
 	}
 	if hasNote {
 		stored["has_note"] = true
