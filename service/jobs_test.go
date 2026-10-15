@@ -63,9 +63,12 @@ func listSearchJobs(t *testing.T, server *Server) []listedJob {
 // skipping other events, and reports whether it arrived within wait.
 func jobCompleted(subscriber *eventSubscriber, name domain.JobName, wait time.Duration) bool {
 	deadline := time.Now().Add(wait)
-	want := fmt.Sprintf(`{"name":%q}`, name)
 	for time.Now().Before(deadline) {
-		if eventNamed(subscriber, "job.complete", time.Until(deadline)) == want {
+		var completed struct {
+			Name domain.JobName `json:"name"`
+		}
+		data := eventNamed(subscriber, "job.complete", time.Until(deadline))
+		if json.Unmarshal([]byte(data), &completed) == nil && completed.Name == name {
 			return true
 		}
 	}
@@ -147,9 +150,9 @@ func TestJobs(t *testing.T) {
 		// The traffic index build writes both indexes, so the annotation
 		// index backfill that follows it finds nothing left to do.
 		want := []string{
-			`job.progress {"name":"traffic_index","done":1,"total":20}`,
-			`job.complete {"name":"traffic_index"}`,
-			`job.complete {"name":"annotation_index"}`,
+			fmt.Sprintf(`job.progress {"name":"traffic_index","project":%q,"done":1,"total":20}`, path),
+			fmt.Sprintf(`job.complete {"name":"traffic_index","project":%q}`, path),
+			fmt.Sprintf(`job.complete {"name":"annotation_index","project":%q}`, path),
 			fmt.Sprintf("traffic.index_complete {\"project\":%q}", path),
 		}
 		if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -190,7 +193,7 @@ func TestJobs(t *testing.T) {
 			eventNamed(subscriber, "project.opened", time.Second)
 		}
 		got := eventNamed(subscriber, "job.progress", 30*time.Second)
-		if want := `{"name":"traffic_index","done":3,"total":30}`; got != want {
+		if want := fmt.Sprintf(`{"name":"traffic_index","project":%q,"done":3,"total":30}`, path); got != want {
 			t.Fatalf("\nwanted:\nprogress resumed from the saved state %s\ngot:\n%s", want, got)
 		}
 	})
@@ -219,7 +222,7 @@ func TestJobs(t *testing.T) {
 		}
 		pacer.release()
 		got := eventsUntil(subscriber, "traffic.index_complete", 30*time.Second)
-		want := []string{`job.complete {"name":"annotation_index"}`, fmt.Sprintf("traffic.index_complete {\"project\":%q}", path)}
+		want := []string{fmt.Sprintf(`job.complete {"name":"annotation_index","project":%q}`, path), fmt.Sprintf("traffic.index_complete {\"project\":%q}", path)}
 		if strings.Join(got, "\n") != strings.Join(want, "\n") {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", strings.Join(want, "\n"), strings.Join(got, "\n"))
 		}
