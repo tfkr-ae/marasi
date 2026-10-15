@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"maps"
 	"strings"
 	"testing"
@@ -40,6 +41,28 @@ func TestTrafficRepo_AnnotationWritesSkipBodyIndex(t *testing.T) {
 		"note": func(repo *Repository, id uuid.UUID) error { return repo.UpdateNote(id, "annotated note") },
 		"metadata": func(repo *Repository, id uuid.UUID) error {
 			return repo.UpdateMetadata(map[string]any{"tag": "annotated"}, id)
+		},
+		"bulk note append": func(repo *Repository, id uuid.UUID) error {
+			_, err := repo.AppendNote(domain.Selection{IDs: []uuid.UUID{id}}, "annotated note")
+			return err
+		},
+		"bulk note clear": func(repo *Repository, id uuid.UUID) error {
+			if err := repo.UpdateNote(id, "annotated note"); err != nil {
+				return err
+			}
+			_, err := repo.ClearNotes(domain.Selection{IDs: []uuid.UUID{id}})
+			return err
+		},
+		"bulk metadata set": func(repo *Repository, id uuid.UUID) error {
+			_, err := repo.SetMetadataKey(domain.Selection{IDs: []uuid.UUID{id}}, "tag", json.RawMessage(`"annotated"`))
+			return err
+		},
+		"bulk metadata clear": func(repo *Repository, id uuid.UUID) error {
+			if err := repo.UpdateMetadata(map[string]any{"tag": "annotated"}, id); err != nil {
+				return err
+			}
+			_, err := repo.ClearMetadataKey(domain.Selection{IDs: []uuid.UUID{id}}, "tag")
+			return err
 		},
 		"delete note": func(repo *Repository, id uuid.UUID) error {
 			if err := repo.UpdateNote(id, "annotated note"); err != nil {
