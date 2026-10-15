@@ -22,9 +22,10 @@ import (
 
 var errInvalidMetadataRequest = errors.New("invalid metadata request")
 
-// trafficPage is the GET /traffic response body. Items are oldest first
-// within the page. NextCursor continues toward older pairs and PrevCursor
-// toward newer ones; each is null at its end. AsOf is the newest pair id the
+// trafficPage is the GET /traffic response body. Items are the page in
+// reverse display order, so oldest first under the default requested_at
+// desc sort. NextCursor continues along the display order (toward older
+// pairs by default) and PrevCursor back against it; each is null at its end. AsOf is the newest pair id the
 // page could include; clients pass it back on every later page of the same
 // results.
 type trafficPage struct {
@@ -275,7 +276,7 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 	mux.HandleFunc("GET /traffic/query", func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
 		var queryErr *domain.QueryError
-		switch err := db.ValidateTrafficQuery(query.Get("q"), query["exclude"]); {
+		switch err := db.ValidateTrafficQuery(query.Get("q"), query["exclude"], query.Get("order_by")); {
 		case errors.As(err, &queryErr):
 			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
 		case err != nil:
@@ -443,6 +444,7 @@ func parseTrafficQuery(r *http.Request) (domain.TrafficQuery, bool) {
 	q := domain.TrafficQuery{
 		Text:      query.Get("q"),
 		Exclusion: query["exclude"],
+		OrderBy:   query.Get("order_by"),
 		Cursor:    query.Get("cursor"),
 		Limit:     200,
 	}
