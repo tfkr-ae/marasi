@@ -59,7 +59,7 @@ curl --noproxy '' --proxy "http://$PROXY_LISTENER" --cacert "$CA_FILE" "$TARGET_
 
 Set `CA_FILE` to a session-owned file. Prefer client-specific trust over changing the system trust store.
 
-`traffic list` returns the newest page of traffic, oldest first within the page, so the newest pair is the last row. Follow `next_cursor` with `--cursor` for older pages, keeping the same query and passing the first page's `as_of` with `--as-of`. Cursors are opaque tokens; `--backward` with `prev_cursor` walks back toward newer pairs. `--exclude 'image/*'` (repeatable) hides content types; pairs with no content type yet always stay. In JSON, `request.raw` and `response.raw` are base64. Decode them before inspection or editing.
+`traffic list` returns the newest page of traffic, oldest first within the page, so the newest pair is the last row. Follow `next_cursor` with `--cursor` for older pages, keeping the same query and passing the first page's `as_of` with `--as-of`. Cursors are opaque tokens; `--backward` with `prev_cursor` walks back toward newer pairs. `--exclude 'image/*'` (repeatable) hides content types; pairs with no content type yet always stay. `--order-by` sorts by one of `requested_at`, `method`, `host`, `path`, `status_code`, `content_type` or `length`, with optional `desc`, for example `--order-by 'length desc'`; pairs with no response sort last, and every page needs the same `--order-by`. `launchpad get --order-by` sorts entries the same way. In JSON, `request.raw` and `response.raw` are base64. Decode them before inspection or editing.
 
 A capture is complete when `traffic get` returns the matching request and response. A client response alone does not prove that Marasi captured the exchange.
 
@@ -69,7 +69,7 @@ A capture is complete when `traffic get` returns the matching request and respon
 
 - Header and body text, notes and metadata use `:` (contains, ignoring case). Text terms need at least 3 characters. Bare text searches all of them.
 - `host`, `method`, `scheme`, `path` and `content_type` use `=` or `!=` with exact case. A `*` at the start or end of the value matches anything there.
-- `status_code` and the timestamps take comparisons. Timestamps are quoted RFC 3339.
+- `status_code`, `length` (the response's Content-Length) and the timestamps take comparisons. Timestamps are quoted RFC 3339.
 - `metadata.<key>` compares the JSON value at that key and is type-strict. Quote strings, but leave booleans and numbers bare.
 - `launchpad` is launchpad membership. `launchpad = "<launchpad id>"` matches pairs in that launchpad, `launchpad != "<launchpad id>"` matches pairs not in it, including pairs in no launchpad, and `launchpad:*` matches pairs in any launchpad. It finds linked captured traffic as well as launched pairs, which `metadata.launchpad_id` does not.
 

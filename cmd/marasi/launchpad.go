@@ -30,6 +30,7 @@ var launchpadLaunchRawFile string
 var launchpadLaunchDetach bool
 var launchpadGetQuery string
 var launchpadGetExclude []string
+var launchpadGetOrderBy string
 
 type launchpadRequest struct {
 	Name        *string `json:"name,omitempty"`
@@ -45,6 +46,7 @@ func init() {
 	launchpadCreateCmd.MarkFlagRequired("name")
 	launchpadGetCmd.Flags().StringVarP(&launchpadGetQuery, "query", "q", "", "AIP-160 traffic query that narrows the entries; see marasi traffic list --help")
 	launchpadGetCmd.Flags().StringArrayVar(&launchpadGetExclude, "exclude", nil, "Content type to hide, exact or major/*; repeat for more")
+	launchpadGetCmd.Flags().StringVar(&launchpadGetOrderBy, "order-by", "", "Sort the entries: one field, then optional desc, as in marasi traffic list --help; default oldest first")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateName, "name", "", "Launchpad name")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateDescription, "description", "", "Launchpad description")
 	launchpadLinkCmd.Flags().StringVar(&launchpadLinkRequest, "request", "", "UUID of the request/response pair")
@@ -108,6 +110,9 @@ only the entries that match it. See marasi traffic list --help for the fields.`,
 		}
 		if len(launchpadGetExclude) > 0 {
 			query["exclude"] = launchpadGetExclude
+		}
+		if launchpadGetOrderBy != "" {
+			query.Set("order_by", launchpadGetOrderBy)
 		}
 		if len(query) > 0 {
 			path += "?" + query.Encode()

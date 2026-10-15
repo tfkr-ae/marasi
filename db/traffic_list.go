@@ -24,17 +24,14 @@ const trafficSummaryColumns = `id, scheme, method, host, path, requested_at,
 // trafficSummarySource is the FROM clause trafficSummaryColumns read.
 const trafficSummarySource = ` FROM request` + highlightJoin
 
-// defaultTrafficOrder is the canonical name of the default sort. It is the
-// only sort until sortable ledger columns land (ADR-0041).
-const defaultTrafficOrder = "requested_at desc"
-
 // trafficCursorVersion is the version of the cursor token format.
 const trafficCursorVersion = 1
 
 // trafficCursor is the decoded form of an opaque list cursor (ADR-0041). It
 // names the sort it was made under, the row's sort key and id, and the phase
 // of the walk: 0 while walking pairs with a sort value, 1 once the walk has
-// reached the pairs with none. Key is null for requested_at, whose key is id.
+// reached the pairs with none. Key is null for requested_at, whose key is id,
+// and in phase 1. A text key is its bytes, so any stored value survives JSON.
 type trafficCursor struct {
 	Version int             `json:"v"`
 	Sort    string          `json:"s"`
@@ -50,36 +47,64 @@ func (c trafficCursor) encode() string {
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
-// decodeTrafficCursor parses token and checks that it was made under sort.
-// Any failure wraps domain.ErrInvalidCursor.
-func decodeTrafficCursor(token, sort string) (trafficCursor, error) {
+// decodeTrafficCursor parses token, checks that it was made under sort, and
+// returns it with its key as a value to bind. Any failure wraps
+// domain.ErrInvalidCursor.
+func decodeTrafficCursor(token string, sort trafficSort) (trafficCursor, any, error) {
+	invalid := fmt.Errorf("%w: not a cursor token", domain.ErrInvalidCursor)
 	raw, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil {
-		return trafficCursor{}, fmt.Errorf("%w: not a cursor token", domain.ErrInvalidCursor)
+		return trafficCursor{}, nil, invalid
 	}
 	var cursor trafficCursor
 	if err := json.Unmarshal(raw, &cursor); err != nil {
-		return trafficCursor{}, fmt.Errorf("%w: not a cursor token", domain.ErrInvalidCursor)
+		return trafficCursor{}, nil, invalid
 	}
 	switch {
 	case cursor.Version != trafficCursorVersion:
-		return trafficCursor{}, fmt.Errorf("%w: unsupported cursor version %d", domain.ErrInvalidCursor, cursor.Version)
-	case cursor.Sort != sort:
-		return trafficCursor{}, fmt.Errorf("%w: the cursor was made under order_by %q, not %q", domain.ErrInvalidCursor, cursor.Sort, sort)
-	case cursor.ID == uuid.Nil || cursor.Phase != 0:
-		return trafficCursor{}, fmt.Errorf("%w: not a cursor token", domain.ErrInvalidCursor)
+		return trafficCursor{}, nil, fmt.Errorf("%w: unsupported cursor version %d", domain.ErrInvalidCursor, cursor.Version)
+	case cursor.Sort != sort.name:
+		return trafficCursor{}, nil, fmt.Errorf("%w: the cursor was made under order_by %q, not %q", domain.ErrInvalidCursor, cursor.Sort, sort.name)
+	case cursor.ID == uuid.Nil || cursor.Phase < 0 || cursor.Phase > 1 || (cursor.Phase == 1 && !sort.phased()):
+		return trafficCursor{}, nil, invalid
 	}
-	return cursor, nil
+	hasKey := len(cursor.Key) > 0 && string(cursor.Key) != "null"
+	if wantKey := sort.key.expr != "" && cursor.Phase == 0; hasKey != wantKey {
+		return trafficCursor{}, nil, invalid
+	}
+	if !hasKey {
+		return cursor, nil, nil
+	}
+	if sort.key.integer {
+		var key int64
+		if err := json.Unmarshal(cursor.Key, &key); err != nil {
+			return trafficCursor{}, nil, invalid
+		}
+		return cursor, key, nil
+	}
+	var key []byte
+	if err := json.Unmarshal(cursor.Key, &key); err != nil {
+		return trafficCursor{}, nil, invalid
+	}
+	// Bound as text: SQLite orders every BLOB after every TEXT.
+	return cursor, string(key), nil
 }
 
-// parseTrafficOrderBy returns the canonical name of orderBy. Until sortable
-// columns land, only the empty string and "requested_at desc" are accepted.
-func parseTrafficOrderBy(orderBy string) (string, error) {
-	canonical := strings.Join(strings.Fields(orderBy), " ")
-	if canonical == "" || canonical == defaultTrafficOrder {
-		return defaultTrafficOrder, nil
+// cursorAt returns the token for a row under sort.
+func cursorAt(sort trafficSort, row sortedRow) *string {
+	cursor := trafficCursor{Version: trafficCursorVersion, Sort: sort.name, ID: row.ID, Phase: row.phase}
+	if sort.key.expr != "" && row.phase == 0 {
+		var key any
+		switch value := row.SortKey.(type) {
+		case string:
+			key = []byte(value)
+		default:
+			key = value
+		}
+		cursor.Key, _ = json.Marshal(key)
 	}
-	return "", &domain.QueryError{Message: fmt.Sprintf("unsupported order_by %q: only %q is supported", orderBy, defaultTrafficOrder), Position: 1}
+	token := cursor.encode()
+	return &token
 }
 
 // exclusionCondition returns a SQL condition that hides pairs whose content
@@ -148,11 +173,14 @@ func newTrafficFilterAfter(text string, exclusion []string, after *uuid.UUID) (t
 	return filter, nil
 }
 
-// ValidateTrafficQuery checks a traffic query's text and exclusion without
-// running it. It never touches a database, and it reports the same
-// *domain.QueryError that ListTraffic returns for the same text and
-// exclusion.
-func ValidateTrafficQuery(text string, exclusion []string) error {
+// ValidateTrafficQuery checks a traffic query's text, exclusion and
+// order_by without running it. It never touches a database, and it reports
+// the same *domain.QueryError that ListTraffic returns for the same text,
+// exclusion and order_by.
+func ValidateTrafficQuery(text string, exclusion []string, orderBy string) error {
+	if _, err := parseTrafficOrderBy(orderBy); err != nil {
+		return err
+	}
 	_, err := newTrafficFilter(text, exclusion)
 	return err
 }
@@ -171,11 +199,19 @@ func (f trafficFilter) where() string {
 	return ` WHERE ` + strings.Join(f.conditions, ` AND `)
 }
 
-// ListTraffic returns one page of the pairs that match q, in display order.
-// The page is bounded by q.AsOf, or by the newest pair id at read time when
-// it is nil. An invalid query, exclusion or sort returns a *domain.QueryError;
-// a malformed cursor, or one made under another sort, wraps
-// domain.ErrInvalidCursor.
+// sortedRow is a listed pair with its sort key and the phase of the walk it
+// was read in.
+type sortedRow struct {
+	dbRequestResponseSummary
+	SortKey any `db:"sort_key"`
+	phase   int
+}
+
+// ListTraffic returns one page of the pairs that match q, in display order
+// under q.OrderBy. The page is bounded by q.AsOf, or by the newest pair id at
+// read time when it is nil. An invalid query, exclusion or sort returns a
+// *domain.QueryError; a malformed cursor, or one made under another sort,
+// wraps domain.ErrInvalidCursor.
 func (repo *Repository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, error) {
 	if q.Limit < 1 {
 		return domain.TrafficPage{}, fmt.Errorf("listing traffic: limit %d is not positive", q.Limit)
@@ -189,17 +225,18 @@ func (repo *Repository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, 
 		return domain.TrafficPage{}, err
 	}
 	var cursor *trafficCursor
+	var cursorKey any
 	if q.Cursor != "" {
-		decoded, err := decodeTrafficCursor(q.Cursor, sort)
+		decoded, key, err := decodeTrafficCursor(q.Cursor, sort)
 		if err != nil {
 			return domain.TrafficPage{}, err
 		}
-		cursor = &decoded
+		cursor, cursorKey = &decoded, key
 	}
 	backward := q.Direction == domain.Backward
 
 	var page domain.TrafficPage
-	var dbSummary []*dbRequestResponseSummary
+	var rows []sortedRow
 	err = repo.inTx(func(tx *sqlx.Tx) error {
 		page.Complete, err = searchIndexCompleteness(tx)
 		if err != nil {
@@ -225,46 +262,54 @@ func (repo *Repository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, 
 			}
 			page.AsOf = &newest
 		}
-
 		filter.add(`id <= ?`, *page.AsOf)
-		order := `DESC`
-		if backward {
-			order = `ASC`
-		}
-		if cursor != nil {
-			if backward {
-				filter.add(`id > ?`, cursor.ID)
-			} else {
-				filter.add(`id < ?`, cursor.ID)
+		for _, segment := range sortSegments(sort, backward, cursor, cursorKey) {
+			segmentFilter := trafficFilter{
+				conditions: slices.Clone(filter.conditions),
+				args:       slices.Clone(filter.args),
+			}
+			for _, condition := range segment.conditions {
+				segmentFilter.add(condition.sql, condition.args...)
+			}
+			query := `SELECT ` + trafficSummaryColumns + `, ` + sort.column() + ` AS sort_key` + trafficSummarySource +
+				segmentFilter.where() + ` ORDER BY ` + segment.order + ` LIMIT ?`
+			var segmentRows []sortedRow
+			if err := tx.Select(&segmentRows, query, append(segmentFilter.args, q.Limit+1-len(rows))...); err != nil {
+				return err
+			}
+			for i := range segmentRows {
+				segmentRows[i].phase = segment.phase
+			}
+			rows = append(rows, segmentRows...)
+			if len(rows) > q.Limit {
+				break
 			}
 		}
-		query := `SELECT ` + trafficSummaryColumns + trafficSummarySource + filter.where() +
-			` ORDER BY id ` + order + ` LIMIT ?`
-		return tx.Select(&dbSummary, query, append(filter.args, q.Limit+1)...)
+		return nil
 	})
 	if err != nil {
 		return domain.TrafficPage{}, fmt.Errorf("listing traffic: %w", err)
 	}
 
-	hasMore := len(dbSummary) > q.Limit
+	hasMore := len(rows) > q.Limit
 	if hasMore {
-		dbSummary = dbSummary[:q.Limit]
+		rows = rows[:q.Limit]
 	}
 	if backward {
-		slices.Reverse(dbSummary)
+		slices.Reverse(rows)
 	}
-	page.Items = make([]*domain.RequestResponseSummary, len(dbSummary))
-	for i, row := range dbSummary {
-		page.Items[i] = toDomainRequestResponseSummary(row)
+	page.Items = make([]*domain.RequestResponseSummary, len(rows))
+	for i := range rows {
+		page.Items[i] = toDomainRequestResponseSummary(&rows[i].dbRequestResponseSummary)
 	}
 
 	// Cursors point at the edge rows. The side the read came from has rows
 	// exactly when a cursor was given; the side it walked toward has rows
 	// exactly when the read found more than a page.
 	var first, last *string
-	if len(page.Items) > 0 {
-		first = cursorAt(sort, page.Items[0].ID)
-		last = cursorAt(sort, page.Items[len(page.Items)-1].ID)
+	if len(rows) > 0 {
+		first = cursorAt(sort, rows[0])
+		last = cursorAt(sort, rows[len(rows)-1])
 	} else if cursor != nil {
 		first, last = &q.Cursor, &q.Cursor
 	}
@@ -279,10 +324,78 @@ func (repo *Repository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, 
 	return page, nil
 }
 
-// cursorAt returns the token for the row with id under sort.
-func cursorAt(sort string, id uuid.UUID) *string {
-	token := trafficCursor{Version: trafficCursorVersion, Sort: sort, ID: id}.encode()
-	return &token
+// sqlCondition is one SQL condition with its arguments.
+type sqlCondition struct {
+	sql  string
+	args []any
+}
+
+// sortSegment is one index range of a sorted walk: the pairs of one phase,
+// past the cursor when it is in that phase, in walk order.
+type sortSegment struct {
+	phase      int
+	conditions []sqlCondition
+	order      string
+}
+
+// sortSegments returns the reads that walk sort from cursor, in walk order.
+// Display order is the pairs with a value by (key, id) in the sort's
+// direction, then the pairs with none by id in the same direction. A
+// backward walk reads the inverse order. Keyset conditions use row values so
+// SQLite walks the (key, id) index.
+func sortSegments(sort trafficSort, backward bool, cursor *trafficCursor, cursorKey any) []sortSegment {
+	walkDesc := sort.desc != backward
+	op, dir := ">", "ASC"
+	if walkDesc {
+		op, dir = "<", "DESC"
+	}
+	valued := sortSegment{phase: 0, order: `id ` + dir}
+	if sort.key.expr != "" {
+		valued.order = sort.key.expr + ` ` + dir + `, id ` + dir
+	}
+	if sort.key.hasValue != "" {
+		valued.conditions = append(valued.conditions, sqlCondition{sql: sort.key.hasValue})
+	}
+	unvalued := sortSegment{phase: 1, order: `id ` + dir,
+		conditions: []sqlCondition{{sql: sort.key.noValue}}}
+
+	if cursor != nil {
+		switch {
+		case cursor.Phase == 1:
+			unvalued.conditions = append(unvalued.conditions, sqlCondition{`id ` + op + ` ?`, []any{cursor.ID}})
+		case sort.key.expr == "":
+			valued.conditions = append(valued.conditions, sqlCondition{`id ` + op + ` ?`, []any{cursor.ID}})
+		case sort.key.expression:
+			// SQLite cannot seek an expression index with a row value, so
+			// the key bounds the range and the id breaks ties within it.
+			valued.conditions = append(valued.conditions, sqlCondition{
+				sort.key.expr + ` ` + op + `= ? AND (` + sort.key.expr + ` ` + op + ` ? OR id ` + op + ` ?)`,
+				[]any{cursorKey, cursorKey, cursor.ID},
+			})
+		default:
+			valued.conditions = append(valued.conditions,
+				sqlCondition{`(` + sort.key.expr + `, id) ` + op + ` (?, ?)`, []any{cursorKey, cursor.ID}})
+		}
+	}
+
+	var segments []sortSegment
+	phase := -1
+	if cursor != nil {
+		phase = cursor.Phase
+	}
+	switch {
+	case !sort.phased():
+		segments = []sortSegment{valued}
+	case backward && phase == 0:
+		segments = []sortSegment{valued}
+	case backward:
+		segments = []sortSegment{unvalued, valued}
+	case phase == 1:
+		segments = []sortSegment{unvalued}
+	default:
+		segments = []sortSegment{valued, unvalued}
+	}
+	return segments
 }
 
 // ifSet returns token when ok, otherwise nil.
