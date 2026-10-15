@@ -62,8 +62,8 @@ func (e *SkippedPairError) Unwrap() error { return e.Err }
 type indexBuildState struct {
 	mu sync.Mutex
 	// indexedFrom, when set, means every pair with an id at or above it is
-	// indexed or skipped. Pairs written through this repository are indexed
-	// as they are written, so the bound stays true.
+	// indexed, skipped, or queued for the index. Pairs written through this
+	// repository are queued as they are written, so the bound stays true.
 	indexedFrom *uuid.UUID
 	// failures counts the failed batches of each pair that failed to index.
 	failures map[uuid.UUID]int

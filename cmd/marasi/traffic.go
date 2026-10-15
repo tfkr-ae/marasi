@@ -254,7 +254,7 @@ func listTraffic(ctx context.Context, instancePath, instanceName string, asJSON 
 	}
 	body := response.Body
 	if response.StatusCode != http.StatusOK {
-		if asJSON || isInvalidQuery(body) {
+		if asJSON || isInvalidRequest(response.StatusCode, body) {
 			return controlAPIError("listing traffic", response.Status, body)
 		}
 		return fmt.Errorf("listing traffic: %s", response.Status)
@@ -375,13 +375,17 @@ func controlAPIError(operation, status string, body []byte) error {
 	return fmt.Errorf("%s: %s", operation, status)
 }
 
-// isInvalidQuery reports whether a control API error body is an invalid_query
-// error, whose message the user needs to fix the query.
-func isInvalidQuery(body []byte) bool {
+// isInvalidRequest reports whether a control API response explains why it
+// rejected the request: a 400 whose body has an error code and a message,
+// such as invalid_query or invalid_cursor. The message is what the user needs
+// to fix the command, so it is shown in human mode too.
+func isInvalidRequest(statusCode int, body []byte) bool {
 	var payload struct {
-		Error string `json:"error"`
+		Error   string `json:"error"`
+		Message string `json:"message"`
 	}
-	return json.Unmarshal(body, &payload) == nil && payload.Error == "invalid_query"
+	return statusCode == http.StatusBadRequest && json.Unmarshal(body, &payload) == nil &&
+		payload.Error != "" && payload.Message != ""
 }
 
 // writeTrafficGetHuman writes one traffic pair as labeled fields and raw HTTP messages.

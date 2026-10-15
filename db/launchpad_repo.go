@@ -166,6 +166,9 @@ func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string, 
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := repo.indexReadyFor(matching); err != nil {
+		return nil, nil, err
+	}
 	match := trafficMatch{sitemap: matching.sitemap, text: matching.text}
 	match.add(launchpadMember, id)
 	match.conditions = append(match.conditions, matching.conditions...)

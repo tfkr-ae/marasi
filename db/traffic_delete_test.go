@@ -153,6 +153,7 @@ func TestTrafficRepo_DeleteTraffic(t *testing.T) {
 		owners := newPairOwners(t, repo)
 		gone := captureOwnedPair(t, repo, owners, "gone")
 		kept := captureOwnedPair(t, repo, owners, "kept")
+		indexCapturedTraffic(t, repo)
 
 		count, err := repo.DeleteTraffic(domain.Selection{IDs: []uuid.UUID{gone, uuid.New()}})
 		if err != nil {
