@@ -176,8 +176,8 @@ func TestTrafficRepo_InsertResponse(t *testing.T) {
 			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
 		}
 
-		if !strings.Contains(err.Error(), "no request found") {
-			t.Fatalf("\nwanted:\nerror containing 'no request found'\ngot:\n%v", err)
+		if !errors.Is(err, domain.ErrPairNotFound) {
+			t.Fatalf("\nwanted:\nan error wrapping domain.ErrPairNotFound\ngot:\n%v", err)
 		}
 	})
 }
