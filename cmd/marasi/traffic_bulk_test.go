@@ -30,29 +30,32 @@ func TestTrafficBulkCommands(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		args   []string
+		stdin  string
 		path   string
 		body   string
 		stderr string
 	}{
-		{"highlight ids", []string{"traffic", "bulk", "highlight", "3", "--id", bulkIDA, "--id", bulkIDB}, "/traffic/bulk/highlight", `{"selection":` + idsSelection + `,"highlight":3}`, "2 pairs highlighted\n"},
-		{"highlight none from ids file", []string{"traffic", "bulk", "highlight", "none", "--ids-file", idsFile}, "/traffic/bulk/highlight", `{"selection":` + idsSelection + `,"highlight":null}`, "2 pairs unhighlighted\n"},
-		{"highlight query", []string{"traffic", "bulk", "highlight", "8", "-q", `host = "a.test"`, "--exclude", "image/*", "--as-of", bulkAsOf}, "/traffic/bulk/highlight", `{"selection":` + querySelection + `,"highlight":8}`, "2 pairs highlighted\n"},
-		{"link launchpad", []string{"traffic", "bulk", "link", "--launchpad", bulkAsOf, "--id", bulkIDA, "--id", bulkIDB}, "/traffic/bulk/link", `{"selection":` + idsSelection + `,"launchpad_id":"` + bulkAsOf + `"}`, "2 pairs linked\n"},
-		{"link finding", []string{"traffic", "bulk", "link", "--finding", bulkAsOf, "--ids-file", idsFile}, "/traffic/bulk/link", `{"selection":` + idsSelection + `,"finding_id":"` + bulkAsOf + `"}`, "2 pairs linked\n"},
-		{"unlink test case", []string{"traffic", "bulk", "unlink", "--test-case", bulkAsOf, "--ids-file", idsFile}, "/traffic/bulk/unlink", `{"selection":` + idsSelection + `,"test_case_id":"` + bulkAsOf + `"}`, "2 pairs unlinked\n"},
-		{"metadata set", []string{"traffic", "bulk", "metadata", "set", "triage.state", `{"seen": true}`, "--ids-file", idsFile}, "/traffic/bulk/metadata", `{"selection":` + idsSelection + `,"key":"triage.state","value":{"seen":true}}`, "2 pairs updated\n"},
-		{"metadata set null", []string{"traffic", "bulk", "metadata", "set", "triage", "null", "--ids-file", idsFile}, "/traffic/bulk/metadata", `{"selection":` + idsSelection + `,"key":"triage","value":null}`, "2 pairs updated\n"},
-		{"metadata clear", []string{"traffic", "bulk", "metadata", "clear", "triage", "--ids-file", idsFile}, "/traffic/bulk/metadata", `{"selection":` + idsSelection + `,"key":"triage","clear":true}`, "2 pairs updated\n"},
-		{"note append", []string{"traffic", "bulk", "note", "append", "seen twice", "--ids-file", idsFile}, "/traffic/bulk/note", `{"selection":` + idsSelection + `,"append":"seen twice"}`, "2 pairs noted\n"},
-		{"note append from file", []string{"traffic", "bulk", "note", "append", "--file", noteFile, "--ids-file", idsFile}, "/traffic/bulk/note", `{"selection":` + idsSelection + `,"append":"line one\nline two\n"}`, "2 pairs noted\n"},
-		{"note clear", []string{"traffic", "bulk", "note", "clear", "--ids-file", idsFile}, "/traffic/bulk/note", `{"selection":` + idsSelection + `,"clear":true}`, "2 pairs cleared\n"},
-		{"delete", []string{"traffic", "bulk", "delete", "-q", "", "--as-of", bulkAsOf}, "/traffic/bulk/delete", `{"selection":{"query":"","as_of":"` + bulkAsOf + `"}}`, "2 pairs deleted\n"},
+		{"highlight ids", []string{"traffic", "bulk", "highlight", "3", "--id", bulkIDA, "--id", bulkIDB}, "", "/traffic/bulk/highlight", `{"selection":` + idsSelection + `,"highlight":3}`, "2 pairs highlighted\n"},
+		{"highlight none from ids file", []string{"traffic", "bulk", "highlight", "none", "--ids-file", idsFile}, "", "/traffic/bulk/highlight", `{"selection":` + idsSelection + `,"highlight":null}`, "2 pairs unhighlighted\n"},
+		{"highlight query", []string{"traffic", "bulk", "highlight", "8", "-q", `host = "a.test"`, "--exclude", "image/*", "--as-of", bulkAsOf}, "", "/traffic/bulk/highlight", `{"selection":` + querySelection + `,"highlight":8}`, "2 pairs highlighted\n"},
+		{"link launchpad", []string{"traffic", "bulk", "link", "--launchpad", bulkAsOf, "--id", bulkIDA, "--id", bulkIDB}, "", "/traffic/bulk/link", `{"selection":` + idsSelection + `,"launchpad_id":"` + bulkAsOf + `"}`, "2 pairs linked\n"},
+		{"link finding", []string{"traffic", "bulk", "link", "--finding", bulkAsOf, "--ids-file", idsFile}, "", "/traffic/bulk/link", `{"selection":` + idsSelection + `,"finding_id":"` + bulkAsOf + `"}`, "2 pairs linked\n"},
+		{"unlink test case", []string{"traffic", "bulk", "unlink", "--test-case", bulkAsOf, "--ids-file", idsFile}, "", "/traffic/bulk/unlink", `{"selection":` + idsSelection + `,"test_case_id":"` + bulkAsOf + `"}`, "2 pairs unlinked\n"},
+		{"metadata set", []string{"traffic", "bulk", "metadata", "set", "triage.state", `{"seen": true}`, "--ids-file", idsFile}, "", "/traffic/bulk/metadata", `{"selection":` + idsSelection + `,"key":"triage.state","value":{"seen":true}}`, "2 pairs updated\n"},
+		{"metadata set null", []string{"traffic", "bulk", "metadata", "set", "triage", "null", "--ids-file", idsFile}, "", "/traffic/bulk/metadata", `{"selection":` + idsSelection + `,"key":"triage","value":null}`, "2 pairs updated\n"},
+		{"metadata clear", []string{"traffic", "bulk", "metadata", "clear", "triage", "--ids-file", idsFile}, "", "/traffic/bulk/metadata", `{"selection":` + idsSelection + `,"key":"triage","clear":true}`, "2 pairs updated\n"},
+		{"note append", []string{"traffic", "bulk", "note", "append", "seen twice", "--ids-file", idsFile}, "", "/traffic/bulk/note", `{"selection":` + idsSelection + `,"append":"seen twice"}`, "2 pairs noted\n"},
+		{"note append from file", []string{"traffic", "bulk", "note", "append", "--file", noteFile, "--ids-file", idsFile}, "", "/traffic/bulk/note", `{"selection":` + idsSelection + `,"append":"line one\nline two\n"}`, "2 pairs noted\n"},
+		{name: "note append from stdin", args: []string{"traffic", "bulk", "note", "append", "--id", bulkIDA, "--id", bulkIDB}, stdin: "piped note\n", path: "/traffic/bulk/note", body: `{"selection":` + idsSelection + `,"append":"piped note\n"}`, stderr: "2 pairs noted\n"},
+		{name: "note append with ids from stdin", args: []string{"traffic", "bulk", "note", "append", "seen", "--ids-file", "-"}, stdin: bulkIDA + "\n" + bulkIDB + "\n", path: "/traffic/bulk/note", body: `{"selection":` + idsSelection + `,"append":"seen"}`, stderr: "2 pairs noted\n"},
+		{"note clear", []string{"traffic", "bulk", "note", "clear", "--ids-file", idsFile}, "", "/traffic/bulk/note", `{"selection":` + idsSelection + `,"clear":true}`, "2 pairs cleared\n"},
+		{"delete", []string{"traffic", "bulk", "delete", "-q", "", "--as-of", bulkAsOf}, "", "/traffic/bulk/delete", `{"selection":{"query":"","as_of":"` + bulkAsOf + `"}}`, "2 pairs deleted\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			configDir := serviceConfigDir(t)
 			sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"count":2}`+"\n")
 			args := append([]string{"--config-dir", configDir, "--instance", "work"}, test.args...)
-			stdout, stderr, err := runMarasi(binary, args...)
+			stdout, stderr, err := runMarasiWithStdin(binary, test.stdin, args...)
 			got := sent.snapshot()
 			if err != nil || stdout != "" || stderr != test.stderr {
 				t.Fatalf("\nwanted:\nstderr %q\ngot:\nstdout %q, stderr %q, error %v", test.stderr, stdout, stderr, err)
@@ -64,7 +67,7 @@ func TestTrafficBulkCommands(t *testing.T) {
 			jsonDir := serviceConfigDir(t)
 			startCannedControlAPI(t, jsonDir, "work", http.StatusOK, " {\"count\": 2} ")
 			jsonArgs := append([]string{"--config-dir", jsonDir, "--instance", "work", "--json"}, test.args...)
-			stdout, stderr, err = runMarasi(binary, jsonArgs...)
+			stdout, stderr, err = runMarasiWithStdin(binary, test.stdin, jsonArgs...)
 			if err != nil || stdout != " {\"count\": 2} " || stderr != "" {
 				t.Fatalf("\nwanted:\nbody passed through\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
 			}
@@ -115,4 +118,14 @@ func TestTrafficBulkSelectionUsage(t *testing.T) {
 			t.Fatalf("\nwanted:\nJSON usage error for %v\ngot:\nstdout %q, stderr %q, error %v", args, stdout, stderr, err)
 		}
 	}
+}
+
+func TestTrafficBulkNoteAppendInputUsage(t *testing.T) {
+	const want = "traffic bulk note append requires exactly one of text, --file, or piped stdin"
+	assertUsageErrorsBeforeRequest(t, buildMarasi(t), []usageCase{
+		{args: []string{"traffic", "bulk", "note", "append", "--id", bulkIDA}, want: want},
+		{args: []string{"traffic", "bulk", "note", "append", "text", "--id", bulkIDA}, stdin: "piped", want: want},
+		{args: []string{"traffic", "bulk", "note", "append", "--file", "/dev/null", "--id", bulkIDA}, stdin: "piped", want: want},
+		{args: []string{"traffic", "bulk", "note", "append", "--ids-file", "-"}, stdin: bulkIDA + "\n", want: "traffic bulk note append requires exactly one of text or --file when --ids-file is -"},
+	})
 }
