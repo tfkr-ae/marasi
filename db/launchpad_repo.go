@@ -157,7 +157,7 @@ func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string, 
 	}
 	filter.conditions = append(filter.conditions, matching.conditions...)
 	filter.args = append(filter.args, matching.args...)
-	query := `SELECT ` + trafficSummaryColumns + ` FROM request` + filter.where() + ` ORDER BY id ASC`
+	query := `SELECT ` + trafficSummaryColumns + trafficSummarySource + filter.where() + ` ORDER BY id ASC`
 	args := filter.args
 
 	var dbRequests []*dbRequestResponseSummary

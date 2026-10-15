@@ -114,15 +114,17 @@ type trafficSummary struct {
 	Metadata    map[string]any `json:"metadata"`     // request metadata without prettified bodies
 	RequestedAt time.Time      `json:"requested_at"` // when the request was made
 	RespondedAt *time.Time     `json:"responded_at"` // when the response arrived; nil if none
+	Highlight   *int           `json:"highlight"`    // highlight from 1 to 8; nil if none
 }
 
 // trafficDetail is the GET /traffic/{id} response body.
 type trafficDetail struct {
-	ID       uuid.UUID       `json:"id"`       // request UUID
-	Note     string          `json:"note"`     // user note, empty if none
-	Metadata map[string]any  `json:"metadata"` // combined metadata without prettified bodies
-	Request  trafficRequest  `json:"request"`  // captured request
-	Response trafficResponse `json:"response"` // captured response; StatusCode is -1 if none yet
+	ID        uuid.UUID       `json:"id"`        // request UUID
+	Note      string          `json:"note"`      // user note, empty if none
+	Metadata  map[string]any  `json:"metadata"`  // combined metadata without prettified bodies
+	Highlight *int            `json:"highlight"` // highlight from 1 to 8; nil if none
+	Request   trafficRequest  `json:"request"`   // captured request
+	Response  trafficResponse `json:"response"`  // captured response; StatusCode is -1 if none yet
 	// Prettified holds the prettified copies the proxy stored at capture
 	// (ADR-0036). They are never part of metadata.
 	Prettified trafficPrettified `json:"prettified"`
@@ -524,6 +526,7 @@ func trafficSummaryFromDomain(item *domain.RequestResponseSummary) trafficSummar
 		Metadata:    metadataWithoutPrettified(item.Metadata),
 		RequestedAt: item.RequestedAt,
 		RespondedAt: respondedAt(item.RespondedAt),
+		Highlight:   item.Highlight,
 	}
 	return summary
 }
@@ -540,9 +543,10 @@ func respondedAt(at time.Time) *time.Time {
 func trafficDetailFromRow(row *domain.RequestResponseRow) trafficDetail {
 	metadata := metadataWithoutPrettified(row.Metadata)
 	return trafficDetail{
-		ID:       row.Request.ID,
-		Note:     row.Note,
-		Metadata: metadata,
+		ID:        row.Request.ID,
+		Note:      row.Note,
+		Metadata:  metadata,
+		Highlight: row.Highlight,
 		Request: trafficRequest{
 			Scheme:      row.Request.Scheme,
 			Method:      row.Request.Method,
