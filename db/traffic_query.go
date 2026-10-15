@@ -48,6 +48,9 @@ const (
 	// fieldSitemap matches a sitemap node's subtree with =, and its
 	// complement with !=, by node name (ADR-0040).
 	fieldSitemap
+	// fieldHighlight matches a pair's highlight (ADR-0035): = and != against
+	// a number from 1 to 8, and :* for any highlight.
+	fieldHighlight
 )
 
 // member is true for a pair linked to the target bound to its ?. It is an
@@ -81,6 +84,14 @@ const noteExists = "request.id IN (SELECT request_id FROM notes)"
 // subtree is the name itself and the range [name/, name0), which the unique
 // index on name serves.
 const sitemapSubtree = "request.id IN (SELECT ps.request_id FROM pair_sitemap ps JOIN sitemap_node n ON n.id = ps.node_id WHERE n.name = ? OR (n.name >= ? AND n.name < ?))"
+
+// highlightIs is true for a pair whose highlight is the number bound to its
+// ?. It is a set of ids rather than a correlated EXISTS, so the
+// (highlight, request_id) index can drive a sparse highlight's plan.
+const highlightIs = "request.id IN (SELECT request_id FROM pair_highlight WHERE highlight = ?)"
+
+// anyHighlight is true for a pair with a highlight.
+const anyHighlight = "request.id IN (SELECT request_id FROM pair_highlight)"
 
 // minTextTermLength is the shortest text term the trigram index can find.
 // Shorter terms would silently match nothing, so they are rejected.
@@ -117,6 +128,7 @@ var trafficFields = map[string]trafficField{
 	"finding":   {kind: fieldLink, links: findingLinks},
 	"test_case": {kind: fieldLink, links: testCaseLinks},
 	"sitemap":   {kind: fieldSitemap, column: "pair_sitemap"},
+	"highlight": {kind: fieldHighlight, column: "pair_highlight"},
 
 	"request_head":  {kind: fieldIndexedText, column: "request_head"},
 	"request_body":  {kind: fieldIndexedText, column: "request_body"},
@@ -397,7 +409,7 @@ func (t *queryTranslator) allIndexDriven(branches []*expr.Expr) bool {
 }
 
 // indexDriven reports whether an index can find the pairs that match e
-// without checking every pair: a text term, a link or note, a requested_at
+// without checking every pair: a text term, a link, note or highlight, a requested_at
 // lower bound, an equality on an indexed field, or an AND with one of these.
 // An invalid e reports false; translating it reports the error.
 func (t *queryTranslator) indexDriven(e *expr.Expr) bool {
@@ -417,7 +429,7 @@ func (t *queryTranslator) indexDriven(e *expr.Expr) bool {
 			return false
 		}
 		kind := trafficFields[name].kind
-		return kind == fieldIndexedText || kind == fieldMetadata || kind == fieldLink
+		return kind == fieldIndexedText || kind == fieldMetadata || kind == fieldLink || kind == fieldHighlight
 	default:
 		op, ok := comparisonOperators[function]
 		if !ok || len(args) != 2 {
@@ -429,7 +441,7 @@ func (t *queryTranslator) indexDriven(e *expr.Expr) bool {
 		}
 		field := trafficFields[name]
 		switch {
-		case field.kind == fieldLink, field.kind == fieldSitemap:
+		case field.kind == fieldLink, field.kind == fieldSitemap, field.kind == fieldHighlight:
 			return op == "="
 		case name == "requested_at":
 			return op == "=" || op == ">" || op == ">="
@@ -490,6 +502,14 @@ func (t *queryTranslator) has(e, lhs, rhs *expr.Expr) (string, error) {
 			return "", t.errorAt(e, "operator : on %s takes only *, as in %s:*; use %s = \"<%s id>\" for one %s", name, name, name, noun, noun)
 		}
 		return field.links.anyMember(), nil
+	case fieldHighlight:
+		if len(path) > 0 {
+			return "", t.errorAt(lhs, "field %q has no member %q", name, path[0])
+		}
+		if rhs.GetConstExpr().GetStringValue() != "*" {
+			return "", t.errorAt(e, "operator : on highlight takes only *, as in highlight:*; use highlight = 3 for one highlight")
+		}
+		return anyHighlight, nil
 	}
 	return "", t.errorAt(e, "operator : is not supported on %s; use = or another comparison", name)
 }
@@ -640,6 +660,17 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 		t.sitemap = true
 		t.bind(node.StringValue, node.StringValue+"/", node.StringValue+"0")
 		return negate(op, sitemapSubtree), nil
+
+	case fieldHighlight:
+		if op != "=" && op != "!=" {
+			return "", t.errorAt(e, "operator %s is not supported on highlight; use =, !=, or highlight:*", op)
+		}
+		value, ok := rhs.GetConstExpr().GetConstantKind().(*expr.Constant_Int64Value)
+		if !ok || value.Int64Value < domain.MinHighlight || value.Int64Value > domain.MaxHighlight {
+			return "", t.errorAt(rhs, "highlight needs a whole number from %d to %d", domain.MinHighlight, domain.MaxHighlight)
+		}
+		t.bind(value.Int64Value)
+		return negate(op, highlightIs), nil
 
 	case fieldMetadata:
 		if len(path) == 0 {

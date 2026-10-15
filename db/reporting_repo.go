@@ -783,9 +783,11 @@ func (repo *Repository) GetTestCaseRequests(id uuid.UUID) ([]*domain.RequestResp
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
-			  r.metadata
+			  r.metadata,
+			  h.highlight
 		      FROM request r
 		      JOIN test_case_requests tcr ON r.id = tcr.request_id
+		      LEFT JOIN pair_highlight h ON h.request_id = r.id
 		      WHERE tcr.test_case_id = ?
 		      ORDER BY r.requested_at ASC, r.id ASC`
 	if err := repo.dbConn.Select(&rows, query, id); err != nil {
@@ -842,9 +844,11 @@ func (repo *Repository) GetFindingRequests(id uuid.UUID) ([]*domain.RequestRespo
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
-			  r.metadata
+			  r.metadata,
+			  h.highlight
 		      FROM request r
 		      JOIN finding_requests fr ON r.id = fr.request_id
+		      LEFT JOIN pair_highlight h ON h.request_id = r.id
 		      WHERE fr.finding_id = ?
 		      ORDER BY r.requested_at ASC, r.id ASC`
 	if err := repo.dbConn.Select(&rows, query, id); err != nil {
