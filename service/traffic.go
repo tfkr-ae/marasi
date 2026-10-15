@@ -74,6 +74,19 @@ type sitemapPage struct {
 	Sitemap    jobCompleteness       `json:"sitemap"`
 }
 
+// contentTypeCounts is the body of GET /traffic/content-types.
+type contentTypeCounts struct {
+	Items   []contentTypeCount `json:"items"`
+	Sitemap jobCompleteness    `json:"sitemap"`
+}
+
+// contentTypeCount is the number of pairs with one response content type;
+// "" when the pair has none.
+type contentTypeCount struct {
+	ContentType string `json:"content_type"`
+	Count       int    `json:"count"`
+}
+
 // trafficSummary is one request/response pair in a traffic list page.
 type trafficSummary struct {
 	ID          uuid.UUID      `json:"id"`           // request UUID
@@ -209,6 +222,23 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			NextCursor: page.NextCursor,
 			Sitemap:    jobCompleteness{Complete: page.Complete[domain.JobSitemap]},
 		})
+	})
+	mux.HandleFunc("GET /traffic/content-types", func(w http.ResponseWriter, r *http.Request) {
+		repo, err := proxy.GetTrafficRepo()
+		if err != nil {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		counts, err := repo.CountContentTypes()
+		if err != nil {
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+			return
+		}
+		body := contentTypeCounts{Items: make([]contentTypeCount, len(counts.Counts)), Sitemap: jobCompleteness{Complete: counts.Complete[domain.JobSitemap]}}
+		for i, count := range counts.Counts {
+			body.Items[i] = contentTypeCount{ContentType: count.ContentType, Count: count.Count}
+		}
+		writeJSON(w, r, http.StatusOK, body)
 	})
 	mux.HandleFunc("GET /traffic/count", func(w http.ResponseWriter, r *http.Request) {
 		query, ok := parseTrafficCountQuery(r)

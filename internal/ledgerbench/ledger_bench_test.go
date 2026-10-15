@@ -160,7 +160,7 @@ func loadProject(path string) (*project, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, count := range counts {
+	for _, count := range counts.Counts {
 		if count.ContentType != "" {
 			p.contentTypes = append(p.contentTypes, count.ContentType)
 		}
@@ -411,14 +411,54 @@ func BenchmarkOpen(b *testing.B) {
 	})
 }
 
-// BenchmarkCountContentTypes is case 20. Ticket 16 moves it to the sitemap.
+// BenchmarkCountContentTypes is case 20: the project's content-type counts,
+// read from the sitemap's buckets, through the Repository and through
+// GET /traffic/content-types. It first checks that the counts equal a
+// GROUP BY over the pairs, and that the sitemap was complete.
 func BenchmarkCountContentTypes(b *testing.B) {
 	p := benchProject(b)
-	repo := openRepo(b, p.path)
-	b.Run("20-count-content-types", func(b *testing.B) {
+	conn, err := db.New(p.path, quiet())
+	if err != nil {
+		b.Fatal(err)
+	}
+	repo := db.NewProxyRepo(conn)
+	b.Cleanup(func() { repo.Close() })
+	counts, err := repo.CountContentTypes()
+	if err != nil {
+		b.Fatal(err)
+	}
+	if !counts.Complete[domain.JobSitemap] {
+		b.Fatal("the fixture's sitemap job is incomplete, so case 20 would not read the sitemap")
+	}
+	var grouped []domain.ContentTypeCount
+	err = conn.Select(&grouped, `SELECT coalesce(content_type, '') AS contenttype, count(*) AS count
+		FROM request GROUP BY coalesce(content_type, '') ORDER BY count DESC, contenttype ASC`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	got := make([]domain.ContentTypeCount, len(counts.Counts))
+	for i, count := range counts.Counts {
+		got[i] = *count
+	}
+	if !slices.Equal(got, grouped) {
+		b.Fatalf("\nwanted the GROUP BY counts:\n%v\ngot:\n%v", grouped, got)
+	}
+
+	server := service.NewServer(&marasi.Proxy{TrafficRepo: repo}, nil, nil, func() {}, "bench", "bench", p.path)
+	b.Run("20-count-content-types/repo", func(b *testing.B) {
 		ledgerbench.Measure(b, ledgerbench.Target{Max: ms(150)}, func() error {
 			_, err := repo.CountContentTypes()
 			return err
+		})
+	})
+	b.Run("20-count-content-types/service", func(b *testing.B) {
+		ledgerbench.Measure(b, ledgerbench.Target{Max: ms(150)}, func() error {
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/traffic/content-types", nil))
+			if response.Code != http.StatusOK {
+				return fmt.Errorf("GET /traffic/content-types: %d %s", response.Code, response.Body)
+			}
+			return nil
 		})
 	})
 }
