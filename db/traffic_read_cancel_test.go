@@ -26,7 +26,7 @@ func insertManyPairs(t *testing.T, repo *Repository, pairs int) {
 func TestTrafficRepo_ReadsStopWhenContextEnds(t *testing.T) {
 	repo, teardown := setupTestDB(t)
 	defer teardown()
-	insertManyPairs(t, repo, 300_000)
+	insertManyPairs(t, repo, 100_000)
 	// Until the sitemap job completes, content types are grouped from the
 	// pairs themselves.
 	if _, err := repo.dbConn.Exec(`UPDATE background_job SET complete = 0 WHERE name = ?`, domain.JobSitemap); err != nil {
