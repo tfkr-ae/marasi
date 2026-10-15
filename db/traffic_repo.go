@@ -1,6 +1,7 @@
 package db
 
 import (
+	"cmp"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -120,9 +121,11 @@ func fromDomainProxyResponse(presp *domain.ProxyResponse) *dbRequestResponse {
 			String: presp.ContentType,
 			Valid:  presp.ContentType != "",
 		},
+		// A response with no Content-Length stores 0, so it sorts as 0
+		// (ADR-0041). Only a pair with no response has a NULL length.
 		Length: sql.NullString{
-			String: presp.Length,
-			Valid:  presp.Length != "",
+			String: cmp.Or(presp.Length, "0"),
+			Valid:  true,
 		},
 		RespondedAt: sql.NullTime{
 			Time:  presp.RespondedAt,
@@ -157,9 +160,9 @@ func toDomainProxyResponse(dbReqRes *dbRequestResponse) *domain.ProxyResponse {
 		resp.ContentType = dbReqRes.ContentType.String
 	}
 
-	if dbReqRes.Length.Valid {
-		resp.Length = dbReqRes.Length.String
-	}
+	// A pair with no response stores a NULL length (ADR-0041) and reads
+	// as "0", as it did when the column defaulted to '0'.
+	resp.Length = cmp.Or(dbReqRes.Length.String, "0")
 
 	if dbReqRes.RespondedAt.Valid {
 		resp.RespondedAt = dbReqRes.RespondedAt.Time
@@ -215,9 +218,9 @@ func toDomainRequestResponseSummary(dbSummary *dbRequestResponseSummary) *domain
 		reqResSummary.ContentType = dbSummary.ContentType.String
 	}
 
-	if dbSummary.Length.Valid {
-		reqResSummary.Length = dbSummary.Length.String
-	}
+	// A pair with no response stores a NULL length (ADR-0041) and reads
+	// as "0", as it did when the column defaulted to '0'.
+	reqResSummary.Length = cmp.Or(dbSummary.Length.String, "0")
 
 	if dbSummary.RespondedAt.Valid {
 		reqResSummary.RespondedAt = dbSummary.RespondedAt.Time
@@ -229,8 +232,10 @@ func toDomainRequestResponseSummary(dbSummary *dbRequestResponseSummary) *domain
 // InsertRequest inserts a new domain.ProxyRequest into the database.
 func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 	dbRequest := fromDomainProxyRequest(req)
-	query := `INSERT INTO request(id, scheme, method, host, path, request_raw, requested_at, metadata)
-			  VALUES(:id, :scheme, :method, :host, :path, :request_raw, :requested_at, :metadata)`
+	// length is NULL until the response arrives (ADR-0041); the column's
+	// '0' default predates the length sort.
+	query := `INSERT INTO request(id, scheme, method, host, path, request_raw, requested_at, metadata, length)
+			  VALUES(:id, :scheme, :method, :host, :path, :request_raw, :requested_at, :metadata, NULL)`
 	err := repo.inTx(func(tx *sqlx.Tx) error {
 		if _, err := tx.NamedExec(query, dbRequest); err != nil {
 			return err
