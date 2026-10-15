@@ -10,6 +10,9 @@ import (
 // bulk link or unlink names.
 var ErrLinkTargetNotFound = errors.New("link target not found")
 
+// ErrEmptyNote means a bulk note append was given no text.
+var ErrEmptyNote = errors.New("note text is empty")
+
 // LinkKind names the kind of record a bulk link or unlink targets.
 type LinkKind int
 
