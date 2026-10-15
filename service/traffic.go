@@ -188,7 +188,9 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		page, err := repo.ListSitemapChildren(query.Get("node"), query["exclude"], query.Get("cursor"), limit)
+		page, err := repo.ListSitemapChildren(r.Context(), domain.SitemapQuery{
+			Node: query.Get("node"), Exclusion: query["exclude"], Cursor: query.Get("cursor"), Limit: limit,
+		})
 		var queryErr *domain.QueryError
 		switch {
 		case errors.Is(err, domain.ErrSitemapNodeNotFound):

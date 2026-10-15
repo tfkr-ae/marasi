@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -228,13 +229,14 @@ func decodeSitemapCursor(token string) (sitemapCursor, error) {
 }
 
 // ListSitemapChildren returns one page of the children of the sitemap node
-// named node, or of the origins when node is empty, by pair count, highest
-// first. Counts leave out the pairs whose content type is in exclusion, and a
-// child with no pairs left is not listed. limit is capped at
+// named q.Node, or of the origins when it is empty, by pair count, highest
+// first. Counts leave out the pairs whose content type is in q.Exclusion, and a
+// child with no pairs left is not listed. q.Limit is capped at
 // domain.MaxSitemapPage. An unknown node returns domain.ErrSitemapNodeNotFound,
 // an invalid exclusion a *domain.QueryError, and a malformed cursor wraps
 // domain.ErrInvalidCursor.
-func (repo *Repository) ListSitemapChildren(node string, exclusion []string, cursor string, limit int) (domain.SitemapPage, error) {
+func (repo *Repository) ListSitemapChildren(ctx context.Context, q domain.SitemapQuery) (domain.SitemapPage, error) {
+	node, exclusion, cursor, limit := q.Node, q.Exclusion, q.Cursor, q.Limit
 	if limit < 1 {
 		return domain.SitemapPage{}, fmt.Errorf("listing sitemap children: limit %d is not positive", limit)
 	}
