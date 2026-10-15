@@ -156,31 +156,33 @@ func addTrafficBulkLinkFlags(cmd *cobra.Command) *trafficBulkLinkFlags {
 	return flags
 }
 
-// request returns a bulk request naming the one target the flags set.
+// request returns a bulk request naming the one target the flags set. It
+// checks that exactly one target is set before it parses the UUID.
 func (flags *trafficBulkLinkFlags) request(cmd *cobra.Command) (trafficBulkRequest, error) {
 	var request trafficBulkRequest
-	set := 0
-	for name, target := range map[string]struct {
+	targets := []struct {
+		name  string
 		raw   string
 		field *string
 	}{
-		"launchpad": {flags.launchpad, &request.LaunchpadID},
-		"finding":   {flags.finding, &request.FindingID},
-		"test-case": {flags.testCase, &request.TestCaseID},
-	} {
-		if !cmd.Flags().Changed(name) {
-			continue
+		{"launchpad", flags.launchpad, &request.LaunchpadID},
+		{"finding", flags.finding, &request.FindingID},
+		{"test-case", flags.testCase, &request.TestCaseID},
+	}
+	set, chosen := 0, 0
+	for i, target := range targets {
+		if cmd.Flags().Changed(target.name) {
+			set, chosen = set+1, i
 		}
-		set++
-		id, err := parseServiceID(target.raw)
-		if err != nil {
-			return trafficBulkRequest{}, err
-		}
-		*target.field = id
 	}
 	if set != 1 {
 		return trafficBulkRequest{}, errors.New("name exactly one of --launchpad, --finding, or --test-case")
 	}
+	id, err := parseServiceID(targets[chosen].raw)
+	if err != nil {
+		return trafficBulkRequest{}, err
+	}
+	*targets[chosen].field = id
 	return request, nil
 }
 
