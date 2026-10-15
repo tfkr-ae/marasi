@@ -38,11 +38,27 @@ var sitemapJob = jobDefinition{
 	rebuildable: true,
 }
 
-// ancestry is a recursive CTE over a node and its ancestors, from the node
-// bound to its ?, with each one's parent: 0 for an origin.
-const ancestry = `WITH RECURSIVE up(id, parent) AS (
-	SELECT id, coalesce(parent_id, 0) FROM sitemap_node WHERE id = ? UNION ALL
-	SELECT n.id, coalesce(n.parent_id, 0) FROM sitemap_node n JOIN up ON n.id = up.parent)`
+// sitemapEdge is a node and its parent: 0 for an origin.
+type sitemapEdge struct {
+	parent, node int64
+}
+
+// sitemapAncestry returns node and each of its ancestors, leaf first, with
+// their parents. It walks the tree in Go, one primary-key read per level: a
+// recursive CTE builds an ephemeral table for its queue, and allocating that
+// table's page cache on every capture cost more than the counts it updated.
+func sitemapAncestry(tx *sqlx.Tx, node int64) ([]sitemapEdge, error) {
+	var chain []sitemapEdge
+	for node != 0 {
+		var parent int64
+		if err := tx.Get(&parent, `SELECT coalesce(parent_id, 0) FROM sitemap_node WHERE id = ?`, node); err != nil {
+			return nil, fmt.Errorf("reading sitemap node %d: %w", node, err)
+		}
+		chain = append(chain, sitemapEdge{parent: parent, node: node})
+		node = parent
+	}
+	return chain, nil
+}
 
 // sitemapBucket is where a pair is counted: its content type, "" when it has
 // none, and whether its response is a server error.
@@ -60,57 +76,75 @@ func bucketOf(contentType sql.NullString, statusCode sql.NullInt64) sitemapBucke
 // leaf, and counts it in bucket at the leaf and every ancestor. Capture and
 // the sitemap job both use it, so they build the same tree.
 func linkPairToSitemap(tx *sqlx.Tx, id uuid.UUID, scheme, host, path string, bucket sitemapBucket) error {
-	leaf, err := sitemapNodeID(tx, domain.SitemapPath(scheme, host, path))
+	chain, err := sitemapNodes(tx, domain.SitemapPath(scheme, host, path))
 	if err != nil {
 		return fmt.Errorf("adding pair %s to the sitemap: %w", id, err)
 	}
-	if _, err := tx.Exec(`INSERT INTO pair_sitemap (request_id, node_id) VALUES (?, ?)`, id, leaf); err != nil {
+	if _, err := tx.Exec(`INSERT INTO pair_sitemap (request_id, node_id) VALUES (?, ?)`, id, chain[0].node); err != nil {
 		return fmt.Errorf("linking pair %s to the sitemap: %w", id, err)
 	}
-	return countInSitemap(tx, leaf, bucket, 1)
+	return countInSitemap(tx, chain, bucket, 1)
 }
 
-// sitemapNodeID returns the id of the last node in nodes, creating any of
-// them that do not exist. A leaf that exists has all of its ancestors.
-func sitemapNodeID(tx *sqlx.Tx, nodes []domain.SitemapNode) (int64, error) {
-	var id int64
-	err := tx.Get(&id, `SELECT id FROM sitemap_node WHERE name = ?`, nodes[len(nodes)-1].Name)
-	if err == nil || !errors.Is(err, sql.ErrNoRows) {
-		return id, err
-	}
-	var parent sql.NullInt64
-	for depth, node := range nodes {
-		err := tx.Get(&id, `INSERT INTO sitemap_node (parent_id, name, depth) VALUES (?, ?, ?)
-			ON CONFLICT (name) DO UPDATE SET name = excluded.name RETURNING id`, parent, node.Name, depth)
-		if err != nil {
-			return 0, err
+// sitemapNodes returns the last node in nodes and its ancestors, leaf first,
+// as sitemapAncestry does, creating any of them that do not exist. A node
+// that exists has all of its ancestors, so only the nodes below the deepest
+// existing one are written.
+func sitemapNodes(tx *sqlx.Tx, nodes []domain.SitemapNode) ([]sitemapEdge, error) {
+	var existing int64
+	missing := len(nodes)
+	for missing > 0 {
+		err := tx.Get(&existing, `SELECT id FROM sitemap_node WHERE name = ?`, nodes[missing-1].Name)
+		if err == nil {
+			break
 		}
-		parent = sql.NullInt64{Int64: id, Valid: true}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		missing--
 	}
-	return id, nil
+	chain, err := sitemapAncestry(tx, existing)
+	if err != nil {
+		return nil, err
+	}
+	parent := existing
+	for depth := missing; depth < len(nodes); depth++ {
+		var id int64
+		err := tx.Get(&id, `INSERT INTO sitemap_node (parent_id, name, depth) VALUES (nullif(?, 0), ?, ?) RETURNING id`,
+			parent, nodes[depth].Name, depth)
+		if err != nil {
+			return nil, err
+		}
+		chain = append([]sitemapEdge{{parent: parent, node: id}}, chain...)
+		parent = id
+	}
+	return chain, nil
 }
 
-// countInSitemap adds delta pairs to bucket at node and every ancestor, and
-// removes buckets that reach zero.
-func countInSitemap(tx *sqlx.Tx, node int64, bucket sitemapBucket, delta int) error {
+// countInSitemap adds delta pairs to bucket at each node of chain, from
+// sitemapAncestry, and removes buckets that reach zero.
+func countInSitemap(tx *sqlx.Tx, chain []sitemapEdge, bucket sitemapBucket, delta int) error {
 	errorDelta := 0
 	if bucket.isError {
 		errorDelta = delta
 	}
-	_, err := tx.Exec(ancestry+`
-		INSERT INTO sitemap_count (parent_id, node_id, content_type, pairs, errors)
-		SELECT parent, id, ?, ?, ? FROM up WHERE true
-		ON CONFLICT (parent_id, node_id, content_type) DO UPDATE SET
-			pairs = pairs + excluded.pairs, errors = errors + excluded.errors`,
-		node, bucket.contentType, delta, errorDelta)
-	if err == nil && delta < 0 {
-		_, err = tx.Exec(ancestry+`
-			DELETE FROM sitemap_count WHERE content_type = ? AND pairs <= 0
-				AND (parent_id, node_id) IN (SELECT parent, id FROM up)`,
-			node, bucket.contentType)
-	}
-	if err != nil {
-		return fmt.Errorf("counting in the sitemap: %w", err)
+	// One single-row statement per node: a statement that can change more
+	// than one row opens a statement journal, whose allocation cost more
+	// per capture than the rows it changed.
+	for _, edge := range chain {
+		_, err := tx.Exec(`INSERT INTO sitemap_count (parent_id, node_id, content_type, pairs, errors)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (parent_id, node_id, content_type) DO UPDATE SET
+				pairs = pairs + excluded.pairs, errors = errors + excluded.errors`,
+			edge.parent, edge.node, bucket.contentType, delta, errorDelta)
+		if err == nil && delta < 0 {
+			_, err = tx.Exec(`DELETE FROM sitemap_count
+				WHERE parent_id = ? AND node_id = ? AND content_type = ? AND pairs <= 0`,
+				edge.parent, edge.node, bucket.contentType)
+		}
+		if err != nil {
+			return fmt.Errorf("counting in the sitemap: %w", err)
+		}
 	}
 	return nil
 }
@@ -136,10 +170,14 @@ func rebucketInSitemap(tx *sqlx.Tx, node int64, from, to sitemapBucket) error {
 	if from == to {
 		return nil
 	}
-	if err := countInSitemap(tx, node, to, 1); err != nil {
+	chain, err := sitemapAncestry(tx, node)
+	if err != nil {
 		return err
 	}
-	return countInSitemap(tx, node, from, -1)
+	if err := countInSitemap(tx, chain, to, 1); err != nil {
+		return err
+	}
+	return countInSitemap(tx, chain, from, -1)
 }
 
 // AddMissingToSitemap runs one batch of the sitemap job: it adds up to
@@ -278,6 +316,9 @@ func (repo *Repository) ListSitemapChildren(ctx context.Context, q domain.Sitema
 		}
 		match, err := newTrafficMatch(q.Query.Text, q.Query.Exclusion)
 		if err != nil {
+			return domain.SitemapPage{}, err
+		}
+		if err := repo.indexReadyFor(match); err != nil {
 			return domain.SitemapPage{}, err
 		}
 		match.add(`id <= ?`, q.Query.AsOf)

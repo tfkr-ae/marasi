@@ -104,6 +104,7 @@ func TestTrafficRepo_RebuildDecodesPairsIndexedBeforeDecoding(t *testing.T) {
 		t.Fatalf("inserting note: %v", err)
 	}
 	// A row an earlier binary wrote, without the decoded body text.
+	indexCapturedTraffic(t, repo)
 	writeOldBodyIndexRow(t, repo, ids["old"], "kept-note", "")
 	assertListNames(t, repo, ids, "before rebuild", `"rebuilt-text"`, "")
 
