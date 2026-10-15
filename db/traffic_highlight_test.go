@@ -246,7 +246,7 @@ func TestTrafficRepo_ReadsReturnHighlight(t *testing.T) {
 		t.Fatalf("ListTraffic() error = %v", err)
 	}
 	check("ListTraffic", page.Items)
-	launchpadItems, err := repo.GetLaunchpadRequests(launchpadID, "", nil)
+	launchpadItems, err := repo.GetLaunchpadRequests(launchpadID, "", nil, "")
 	if err != nil {
 		t.Fatalf("GetLaunchpadRequests() error = %v", err)
 	}
@@ -412,7 +412,7 @@ func TestTrafficRepo_ListTrafficHighlightQueryErrors(t *testing.T) {
 		t.Run(test.query, func(t *testing.T) {
 			_, _, _, err := listPage(repo, nil, 200, test.query)
 			assertQueryError(t, err, test.message, test.position)
-			assertQueryError(t, ValidateTrafficQuery(test.query, nil), test.message, test.position)
+			assertQueryError(t, ValidateTrafficQuery(test.query, nil, ""), test.message, test.position)
 		})
 	}
 }

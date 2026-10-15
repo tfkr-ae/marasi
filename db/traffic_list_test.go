@@ -301,20 +301,6 @@ func TestTrafficRepo_ListTraffic_Cursor(t *testing.T) {
 		})
 	}
 
-	t.Run("should accept requested_at desc and reject any other sort for now", func(t *testing.T) {
-		repo, teardown := setupTestDB(t)
-		defer teardown()
-
-		if _, err := repo.ListTraffic(domain.TrafficQuery{OrderBy: "requested_at desc", Limit: 200}); err != nil {
-			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
-		}
-		_, err := repo.ListTraffic(domain.TrafficQuery{OrderBy: "host", Limit: 200})
-		var queryErr *domain.QueryError
-		if !errors.As(err, &queryErr) {
-			t.Fatalf("\nwanted:\n*domain.QueryError\ngot:\n%v", err)
-		}
-	})
-
 	t.Run("should report the traffic index completeness", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -417,7 +403,7 @@ func TestLaunchpadRepo_GetLaunchpadRequests_Exclusion(t *testing.T) {
 			}
 		}
 
-		items, err := repo.GetLaunchpadRequests(launchpadID, "", []string{"image/*"})
+		items, err := repo.GetLaunchpadRequests(launchpadID, "", []string{"image/*"}, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -425,7 +411,7 @@ func TestLaunchpadRepo_GetLaunchpadRequests_Exclusion(t *testing.T) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, idsOf(items))
 		}
 
-		_, err = repo.GetLaunchpadRequests(launchpadID, "", []string{"ima*"})
+		_, err = repo.GetLaunchpadRequests(launchpadID, "", []string{"ima*"}, "")
 		var queryErr *domain.QueryError
 		if !errors.As(err, &queryErr) {
 			t.Fatalf("\nwanted:\n*domain.QueryError\ngot:\n%v", err)

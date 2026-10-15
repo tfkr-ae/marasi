@@ -117,7 +117,10 @@ var trafficFields = map[string]trafficField{
 	"path":         {kind: fieldExactText, column: "path"},
 	"content_type": {kind: fieldExactText, column: "content_type", indexed: true},
 	// In-flight pairs store -1. Treat that as no status code.
-	"status_code":  {kind: fieldInteger, column: "nullif(status_code, -1)"},
+	"status_code": {kind: fieldInteger, column: "nullif(status_code, -1)"},
+	// The size sort's expression, so the length index serves it. A pair
+	// with no response has a NULL length.
+	"length":       {kind: fieldInteger, column: lengthKey},
 	"requested_at": {kind: fieldTimestamp, column: sqlEpochSeconds("requested_at")},
 	"responded_at": {kind: fieldTimestamp, column: sqlEpochSeconds("responded_at")},
 	"metadata":     {kind: fieldMetadata, column: "metadata"},
