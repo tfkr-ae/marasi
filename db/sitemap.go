@@ -269,6 +269,7 @@ func (repo *Repository) ListSitemapChildren(ctx context.Context, q domain.Sitema
 		after = &decoded
 	}
 	var children func(parent int64) sitemapChildren
+	jobs := []string{SitemapJob}
 	if q.Query == nil {
 		normalized, err := domain.NormalizeExclusion(q.Exclusion)
 		if err != nil {
@@ -285,16 +286,17 @@ func (repo *Repository) ListSitemapChildren(ctx context.Context, q domain.Sitema
 		}
 		match.add(`id <= ?`, q.Query.AsOf)
 		children = queriedChildren(q.Node, match)
+		jobs = append(jobs, match.jobs()...)
 	}
 
 	var rows []sitemapRow
 	page := domain.SitemapPage{Children: []domain.SitemapChild{}}
 	err := repo.inTxContext(ctx, func(tx *sqlx.Tx) error {
-		job, err := loadJob(tx, SitemapJob)
+		complete, err := jobCompleteness(tx, jobs...)
 		if err != nil {
-			return fmt.Errorf("reading the sitemap job: %w", err)
+			return err
 		}
-		page.Complete = map[string]bool{SitemapJob: job.Complete}
+		page.Complete = complete
 
 		var parent int64 // origins have parent 0 in sitemap_count
 		if q.Node != "" {
@@ -374,7 +376,7 @@ func storedChildren(exclusion []string) func(int64) sitemapChildren {
 	}
 }
 
-// queriedChildren returns a query that counts the pairs that match matches
+// queriedChildren returns a query that counts the pairs match selects
 // under each child of the node named node. It counts the matching pairs per sitemap leaf, keeps the
 // leaves in the node's subtree, and names each leaf's child of the node by
 // cutting the leaf's name after the next segment: names are canonical paths,

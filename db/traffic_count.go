@@ -28,7 +28,7 @@ func (repo *Repository) CountTrafficContext(ctx context.Context, q domain.Traffi
 
 	var result domain.TrafficCount
 	err = repo.inTxContext(ctx, func(tx *sqlx.Tx) error {
-		complete, err := searchIndexCompleteness(tx)
+		complete, err := listCompleteness(tx, match)
 		if err != nil {
 			return err
 		}
