@@ -12,6 +12,9 @@ var ErrLaunchpadNotFound = errors.New("launchpad not found")
 // ErrLaunchpadAlreadyLinked means the request is already a member of the launchpad.
 var ErrLaunchpadAlreadyLinked = errors.New("request already linked to launchpad")
 
+// ErrLaunchpadNotLinked means the request is not a member of the launchpad.
+var ErrLaunchpadNotLinked = errors.New("request not linked to launchpad")
+
 // LaunchpadRepository defines the interface for managing Launchpads, which are collections of saved requests.
 // It provides methods for creating, retrieving, updating, and deleting launchpads,
 // as well as managing the requests associated with them.
@@ -47,6 +50,10 @@ type LaunchpadRepository interface {
 	// This allows for organizing requests into collections.
 	// It returns an error if either the request or the launchpad does not exist.
 	LinkRequestToLaunchpad(requestID uuid.UUID, launchpadID uuid.UUID) error
+
+	// UnlinkRequestFromLaunchpad removes a request from a launchpad. It
+	// returns ErrLaunchpadNotLinked if the request is not linked to it.
+	UnlinkRequestFromLaunchpad(requestID uuid.UUID, launchpadID uuid.UUID) error
 }
 
 // Launchpad represents a collection of saved requests, allowing users to group and organize them.
