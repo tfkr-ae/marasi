@@ -13,6 +13,9 @@ import (
 )
 
 const (
+	// contentTypeDisplayLimit is the widest content type traffic types prints.
+	contentTypeDisplayLimit = 80
+
 	sitemapBuildingNotice = "notice: the sitemap is still building; counts may be incomplete"
 	indexBuildingNotice   = "notice: the traffic index is still building; text results may be incomplete"
 )
@@ -192,7 +195,7 @@ no content type yet counts under -. Use a type with traffic list --exclude.`,
 			if contentType == "" {
 				contentType = "-"
 			}
-			fmt.Fprintf(writer, "%s\t%d\n", truncateDisplay(contentType, 80), item.Count)
+			fmt.Fprintf(writer, "%s\t%d\n", truncateDisplay(contentType, contentTypeDisplayLimit), item.Count)
 		}
 		if err := writer.Flush(); err != nil {
 			return err
