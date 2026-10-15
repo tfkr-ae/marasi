@@ -97,6 +97,11 @@ type Manifest struct {
 	// BigLaunchpad has 1% of pairs; OldLaunchpad has 100 pairs, all old.
 	BigLaunchpad uuid.UUID `json:"big_launchpad"`
 	OldLaunchpad uuid.UUID `json:"old_launchpad"`
+	// Highlights are on 0.5% of pairs, some clustered, some old.
+	// OldHighlight is on OldHighlightPairs pairs only, in a few clusters in
+	// the oldest 40%; no other pair has it.
+	OldHighlight      int `json:"old_highlight"`
+	OldHighlightPairs int `json:"old_highlight_pairs"`
 	// SmallFinding has 50 pairs; LargeTestCase has the most pairs of any
 	// test case (1,000 at the reference size).
 	SmallFinding       uuid.UUID `json:"small_finding"`
