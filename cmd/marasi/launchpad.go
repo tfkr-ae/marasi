@@ -55,7 +55,7 @@ func init() {
 	launchpadLaunchCmd.Flags().StringVar(&launchpadLaunchRawFile, "raw-file", "", "Read the raw HTTP request from a file. If omitted, read it from stdin")
 	launchpadLaunchCmd.Flags().BoolVar(&launchpadLaunchDetach, "detach", false, "Print the launch id and pending status, and return without waiting for the launch to finish")
 	launchpadLaunchCmd.MarkFlagRequired("scheme")
-	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadLaunchCmd, launchpadPendingCmd, launchpadStatusCmd, launchpadCancelCmd)
+	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadUnlinkCmd, launchpadLaunchCmd, launchpadPendingCmd, launchpadStatusCmd, launchpadCancelCmd)
 	rootCmd.AddCommand(launchpadCmd)
 }
 
@@ -157,6 +157,24 @@ var launchpadLinkCmd = &cobra.Command{
 			return err
 		}
 		return runLaunchpadCommand(cmd, http.MethodPost, path, "linking launchpad request", "link", launchpadRequest{RequestID: &launchpadLinkRequest})
+	},
+}
+
+var launchpadUnlinkCmd = &cobra.Command{
+	Use:   "unlink UUID REQUEST_UUID",
+	Short: "Unlink a traffic pair from a launchpad",
+	Long:  "Unlink a traffic pair from a launchpad. The pair stays in the traffic list.",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := serviceIDPath("/launchpad/", args[0], "/link/")
+		if err != nil {
+			return err
+		}
+		requestID, err := parseServiceID(args[1])
+		if err != nil {
+			return err
+		}
+		return runLaunchpadCommand(cmd, http.MethodDelete, path+requestID, "unlinking launchpad request", "unlink", launchpadRequest{})
 	},
 }
 
@@ -442,7 +460,7 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 		}
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "launchpad %s %sd successfully\n", result.ID, action)
 		return err
-	case "link":
+	case "link", "unlink":
 		var result struct {
 			LaunchpadID string `json:"launchpad_id"`
 			RequestID   string `json:"request_id"`
@@ -450,7 +468,11 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 		if err := json.Unmarshal(response, &result); err != nil || result.LaunchpadID == "" || result.RequestID == "" {
 			return errors.New("decoding launchpad response")
 		}
-		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "request %s linked to launchpad %s successfully\n", result.RequestID, result.LaunchpadID)
+		preposition := "to"
+		if action == "unlink" {
+			preposition = "from"
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "request %s %sed %s launchpad %s successfully\n", result.RequestID, action, preposition, result.LaunchpadID)
 		return err
 	default:
 		return fmt.Errorf("unsupported launchpad action %q", action)
