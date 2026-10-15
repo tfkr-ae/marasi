@@ -31,6 +31,6 @@ func (b *bulkNoteBody) apply(repo domain.TrafficRepository, sel domain.Selection
 func addTrafficBulkNoteRoute(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	mux.HandleFunc("POST /traffic/bulk/note", func(w http.ResponseWriter, r *http.Request) {
 		var body bulkNoteBody
-		serveBulk(w, r, proxy, events, "note", &body, body.apply)
+		serveBulk(w, r, proxy, events, changeNote, &body, body.apply)
 	})
 }

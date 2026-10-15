@@ -15,12 +15,25 @@ import (
 // unknown or missing field, or names the wrong number of targets.
 var errInvalidBulkRequest = errors.New("invalid bulk request")
 
+// bulkChange is the kind of change a bulk route makes, as named in its
+// traffic.changed event.
+type bulkChange string
+
+const (
+	changeHighlight bulkChange = "highlight"
+	changeMetadata  bulkChange = "metadata"
+	changeNote      bulkChange = "note"
+	changeLink      bulkChange = "link"
+	changeUnlink    bulkChange = "unlink"
+	changeDelete    bulkChange = "delete"
+)
+
 // trafficChanged is the JSON body of a traffic.changed SSE event, which every
 // bulk route publishes once. Selection is the selection as received;
 // encoding/json compacts its whitespace.
 type trafficChanged struct {
-	Change    string          `json:"change"` // highlight, metadata, note, link, unlink or delete
-	Count     int             `json:"count"`  // number of pairs changed
+	Change    bulkChange      `json:"change"`
+	Count     int             `json:"count"` // number of pairs changed
 	Selection json.RawMessage `json:"selection"`
 }
 
@@ -76,7 +89,7 @@ func decodeBulkBody(r *http.Request, body bulkBody) (domain.Selection, error) {
 // errInvalidBulkRequest for operation fields it rejects. Failures are written as
 // JSON errors and publish nothing: a bad body or selection or query is 400,
 // a missing target is 404. It reports whether the operation ran.
-func serveBulk(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, events *eventBroadcaster, change string, body bulkBody, apply func(repo domain.TrafficRepository, sel domain.Selection) (int, error)) bool {
+func serveBulk(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, events *eventBroadcaster, change bulkChange, body bulkBody, apply func(repo domain.TrafficRepository, sel domain.Selection) (int, error)) bool {
 	sel, err := decodeBulkBody(r, body)
 	if err != nil {
 		writeBulkError(w, r, err)
@@ -192,25 +205,25 @@ func (b *bulkMetadataBody) apply(repo domain.TrafficRepository, sel domain.Selec
 func addTrafficBulkRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	mux.HandleFunc("POST /traffic/bulk/metadata", func(w http.ResponseWriter, r *http.Request) {
 		var body bulkMetadataBody
-		serveBulk(w, r, proxy, events, "metadata", &body, body.apply)
+		serveBulk(w, r, proxy, events, changeMetadata, &body, body.apply)
 	})
 	addTrafficBulkNoteRoute(mux, proxy, events)
 	mux.HandleFunc("POST /traffic/bulk/highlight", func(w http.ResponseWriter, r *http.Request) {
 		var body bulkHighlightBody
-		serveBulk(w, r, proxy, events, "highlight", &body, body.apply)
+		serveBulk(w, r, proxy, events, changeHighlight, &body, body.apply)
 	})
 	mux.HandleFunc("POST /traffic/bulk/delete", func(w http.ResponseWriter, r *http.Request) {
 		// Deleted pairs leave the sitemap counts, so clients re-read the
 		// nodes they have expanded.
-		if serveBulk(w, r, proxy, events, "delete", &bulkSelection{}, domain.TrafficRepository.DeleteTraffic) {
+		if serveBulk(w, r, proxy, events, changeDelete, &bulkSelection{}, domain.TrafficRepository.DeleteTraffic) {
 			events.publishSitemapChanged("delete")
 		}
 	})
-	for change, run := range map[string]func(domain.TrafficRepository, domain.Selection, domain.LinkTarget) (int, error){
-		"link":   domain.TrafficRepository.LinkTraffic,
-		"unlink": domain.TrafficRepository.UnlinkTraffic,
+	for change, run := range map[bulkChange]func(domain.TrafficRepository, domain.Selection, domain.LinkTarget) (int, error){
+		changeLink:   domain.TrafficRepository.LinkTraffic,
+		changeUnlink: domain.TrafficRepository.UnlinkTraffic,
 	} {
-		mux.HandleFunc("POST /traffic/bulk/"+change, func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("POST /traffic/bulk/"+string(change), func(w http.ResponseWriter, r *http.Request) {
 			var body bulkLinkBody
 			serveBulk(w, r, proxy, events, change, &body, func(repo domain.TrafficRepository, sel domain.Selection) (int, error) {
 				target, err := body.target()
