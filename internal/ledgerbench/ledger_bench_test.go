@@ -444,8 +444,7 @@ func BenchmarkSort(b *testing.B) {
 		}
 	}
 
-	// Case 30: a sort with a filter. highlight:* lands with ticket 09;
-	// until then launchpad:* stands in as the sparse link-table filter.
+	// Case 30: a sort with a filter.
 	denseType := ""
 	if counts, err := repo.CountContentTypes(); err == nil {
 		top := 0
@@ -458,7 +457,7 @@ func BenchmarkSort(b *testing.B) {
 	cases = append(cases,
 		sortCase{"30-status-asc-sparse-host", domain.TrafficQuery{OrderBy: "status_code", Text: fmt.Sprintf("host = %q", p.manifest.SpreadHost)}, within},
 		sortCase{"30-length-desc-dense-type", domain.TrafficQuery{OrderBy: "length desc", Text: fmt.Sprintf("content_type = %q", denseType)}, within},
-		sortCase{"30-host-asc-launchpad-any", domain.TrafficQuery{OrderBy: "host", Text: "launchpad:*"}, within},
+		sortCase{"30-host-asc-highlight-any", domain.TrafficQuery{OrderBy: "host", Text: "highlight:*"}, within},
 		sortCase{"30-length-desc-common-text", domain.TrafficQuery{OrderBy: "length desc", Text: p.manifest.CommonTerm},
 			ledgerbench.Target{Max: ms(500), Pathological: true}},
 	)
