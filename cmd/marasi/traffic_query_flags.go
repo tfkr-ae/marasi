@@ -27,7 +27,7 @@ func addTrafficQueryFlags(cmd *cobra.Command, asOfPairsQuery bool) *trafficQuery
 		queryUsage += "; needs --as-of"
 	}
 	cmd.Flags().StringVarP(&flags.query, "query", "q", "", queryUsage)
-	cmd.Flags().StringArrayVar(&flags.exclude, "exclude", nil, "Content type to leave out, exact or major/*; repeat for more")
+	cmd.Flags().StringArrayVar(&flags.exclude, "exclude", nil, "Content type to hide, exact or major/*; repeat for more")
 	cmd.Flags().StringVar(&flags.asOf, "as-of", "", "Only pairs with an id at or below this UUID, such as a traffic list page's as_of")
 	return flags
 }

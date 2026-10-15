@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
@@ -91,8 +90,7 @@ Paging: stderr shows next_cursor; pass it back with --cursor.`,
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		return writeSitemapHuman(body, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
@@ -130,8 +128,7 @@ matches captured since that page.`,
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		var count struct {
 			Count  int  `json:"count"`
@@ -175,8 +172,7 @@ no content type yet counts under -. Use a type with traffic list --exclude.`,
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		var counts struct {
 			Items []struct {
@@ -190,7 +186,7 @@ no content type yet counts under -. Use a type with traffic list --exclude.`,
 		if err := json.Unmarshal(body, &counts); err != nil {
 			return fmt.Errorf("decoding content types: %w", err)
 		}
-		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+		writer := newTableWriter(cmd.OutOrStdout())
 		for _, item := range counts.Items {
 			contentType := item.ContentType
 			if contentType == "" {
@@ -259,7 +255,7 @@ func writeSitemapHuman(body []byte, stdout, stderr io.Writer) error {
 	if err := json.Unmarshal(body, &page); err != nil {
 		return fmt.Errorf("decoding sitemap: %w", err)
 	}
-	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	writer := newTableWriter(stdout)
 	for _, item := range page.Items {
 		children := ""
 		if item.HasChildren {
