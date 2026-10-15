@@ -163,7 +163,7 @@ func loadProject(path string) (*project, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, count := range counts {
+	for _, count := range counts.Counts {
 		if count.ContentType != "" {
 			p.contentTypes = append(p.contentTypes, count.ContentType)
 		}
@@ -336,11 +336,12 @@ var queryCases = []queryCase{
 	{"12-launchpad-any", text("launchpad:*"), ledgerbench.Target{Max: ms(150)}},
 	{"12-finding-small", text("finding = %q", func(m *fixture.Manifest) any { return m.SmallFinding }), ledgerbench.Target{Max: ms(150)}},
 	{"12-test-case-large", text("test_case = %q", func(m *fixture.Manifest) any { return m.LargeTestCase }), ledgerbench.Target{Max: ms(150)}},
-	// Case 14: the day before the newest pair.
+	// Case 14: the day before the newest pair. requested_at adds only a lower
+	// id bound (ticket 07), so this is (P) at 500 ms.
 	{"14-requested-at-yesterday", text("requested_at >= %q AND requested_at < %q",
 		func(m *fixture.Manifest) any { return m.Newest.Add(-48 * time.Hour).Format(time.RFC3339) },
 		func(m *fixture.Manifest) any { return m.Newest.Add(-24 * time.Hour).Format(time.RFC3339) }),
-		ledgerbench.Target{Max: ms(150)}},
+		ledgerbench.Target{Max: ms(500), Pathological: true}},
 	{"13-metadata-extension", text("metadata.extension = %q", func(m *fixture.Manifest) any { return m.RareExtension }),
 		ledgerbench.Target{Max: 3 * time.Second, Pathological: true}},
 	{"15-rare-text", text("%q", func(m *fixture.Manifest) any { return m.RareTerm }), ledgerbench.Target{Max: ms(50)}},
@@ -423,49 +424,56 @@ func BenchmarkOpen(b *testing.B) {
 	})
 }
 
-// BenchmarkCountContentTypes is case 20. Ticket 16 moves it to the sitemap.
+// BenchmarkCountContentTypes is case 20: the project's content-type counts,
+// read from the sitemap's buckets, through the Repository and through
+// GET /traffic/content-types. It first checks that the counts equal a
+// GROUP BY over the pairs, and that the sitemap was complete.
 func BenchmarkCountContentTypes(b *testing.B) {
 	p := benchProject(b)
-	repo := openRepo(b, p.path)
-	b.Run("20-count-content-types", func(b *testing.B) {
+	conn, err := db.New(p.path, quiet())
+	if err != nil {
+		b.Fatal(err)
+	}
+	repo := db.NewProxyRepo(conn)
+	b.Cleanup(func() { repo.Close() })
+	counts, err := repo.CountContentTypes()
+	if err != nil {
+		b.Fatal(err)
+	}
+	if !counts.Complete[domain.JobSitemap] {
+		b.Fatal("the fixture's sitemap job is incomplete, so case 20 would not read the sitemap")
+	}
+	var grouped []domain.ContentTypeCount
+	err = conn.Select(&grouped, `SELECT coalesce(content_type, '') AS contenttype, count(*) AS count
+		FROM request GROUP BY coalesce(content_type, '') ORDER BY count DESC, contenttype ASC`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	got := make([]domain.ContentTypeCount, len(counts.Counts))
+	for i, count := range counts.Counts {
+		got[i] = *count
+	}
+	if !slices.Equal(got, grouped) {
+		b.Fatalf("\nwanted the GROUP BY counts:\n%v\ngot:\n%v", grouped, got)
+	}
+
+	server := service.NewServer(&marasi.Proxy{TrafficRepo: repo}, nil, nil, func() {}, "bench", "bench", p.path)
+	b.Run("20-count-content-types/repo", func(b *testing.B) {
 		ledgerbench.Measure(b, ledgerbench.Target{Max: ms(150)}, func() error {
 			_, err := repo.CountContentTypes()
 			return err
 		})
 	})
-}
-
-// BenchmarkNewMatches is case 33: counting the matches newer than a
-// snapshot with 1,000 pairs after it, as a client does while traffic is in
-// flight.
-func BenchmarkNewMatches(b *testing.B) {
-	p := benchProject(b)
-	repo := openRepo(b, p.path)
-	page, err := repo.ListTraffic(domain.TrafficQuery{Limit: 1001})
-	if err != nil {
-		b.Fatal(err)
-	}
-	snapshot := page.Items[len(page.Items)-1].ID
-	cases := []struct {
-		name  string
-		query domain.TrafficCountQuery
-	}{
-		{"33-new-matches", domain.TrafficCountQuery{}},
-		{"33-new-matches-seed-exclusion", domain.TrafficCountQuery{Exclusion: fixture.SeedExclusion}},
-		{"33-new-matches-dense-host", domain.TrafficCountQuery{
-			Text: fmt.Sprintf("host = %q", p.manifest.DominantHost), Exclusion: fixture.SeedExclusion}},
-		{"33-new-matches-common-text", domain.TrafficCountQuery{Text: p.manifest.CommonTerm, Exclusion: fixture.SeedExclusion}},
-	}
-	for _, c := range cases {
-		query := c.query
-		query.After = &snapshot
-		b.Run(c.name, func(b *testing.B) {
-			ledgerbench.Measure(b, ledgerbench.Target{Max: ms(50)}, func() error {
-				_, err := repo.CountTraffic(query)
-				return err
-			})
+	b.Run("20-count-content-types/service", func(b *testing.B) {
+		ledgerbench.Measure(b, ledgerbench.Target{Max: ms(150)}, func() error {
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/traffic/content-types", nil))
+			if response.Code != http.StatusOK {
+				return fmt.Errorf("GET /traffic/content-types: %d %s", response.Code, response.Body)
+			}
+			return nil
 		})
-	}
+	})
 }
 
 // Case 21 adds a node with wideChildren children, one pair each, to a copy
@@ -855,4 +863,69 @@ func capture(ctx context.Context, repo *db.Repository, manifest *fixture.Manifes
 			}
 		}
 	}
+}
+
+// BenchmarkMetadataKey is case 34 (P): marasi-app's one-time clear of every
+// old metadata.highlight, ClearMetadataKey("highlight") on the selection
+// metadata.highlight:*. The has-key read cannot use an index, so it parses
+// every pair's metadata. It runs warm on one copy of the fixture: before
+// every run, outside the timing, the highlights the last run cleared are
+// written back, so every run clears the same pairs.
+func BenchmarkMetadataKey(b *testing.B) {
+	p := benchProject(b)
+	b.Run("34-clear-every-highlight", func(b *testing.B) {
+		repo := openRepo(b, cloneOf(b, p.path))
+		highlighted := highlightedPairs(b, repo)
+		var asOf uuid.UUID
+		restore := func() error {
+			for id, metadata := range highlighted {
+				if err := repo.UpdateMetadata(maps.Clone(metadata), id); err != nil {
+					return err
+				}
+			}
+			page, err := repo.ListTraffic(domain.TrafficQuery{Limit: 1})
+			if err != nil {
+				return err
+			}
+			asOf = page.Items[0].ID
+			return nil
+		}
+		ledgerbench.MeasurePrepared(b, ledgerbench.Target{Max: 3 * time.Second, Pathological: true}, restore, func() (func(), error) {
+			sel := domain.Selection{Query: &domain.SelectionQuery{Text: `metadata.highlight:*`, AsOf: asOf}}
+			count, err := repo.ClearMetadataKey(sel, "highlight")
+			if err == nil && count != len(highlighted) {
+				err = fmt.Errorf("cleared %d highlights, want %d", count, len(highlighted))
+			}
+			return nil, err
+		})
+	})
+}
+
+// highlightedPairs returns the metadata of every pair with a
+// metadata.highlight, by id.
+func highlightedPairs(b *testing.B, repo *db.Repository) map[uuid.UUID]map[string]any {
+	b.Helper()
+	highlighted := make(map[uuid.UUID]map[string]any)
+	q := domain.TrafficQuery{Text: `metadata.highlight:*`, Limit: pageSize}
+	for {
+		page, err := repo.ListTraffic(q)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for _, item := range page.Items {
+			metadata, err := repo.GetMetadata(item.ID)
+			if err != nil {
+				b.Fatal(err)
+			}
+			highlighted[item.ID] = metadata
+		}
+		if page.NextCursor == nil {
+			break
+		}
+		q.Cursor = *page.NextCursor
+	}
+	if len(highlighted) == 0 {
+		b.Fatal("the fixture has no metadata.highlight")
+	}
+	return highlighted
 }

@@ -107,6 +107,8 @@ func writeBulkError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_selection", Message: err.Error()})
 	case errors.As(err, &queryErr):
 		writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
+	case errors.Is(err, domain.ErrInvalidMetadataKey):
+		writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_metadata_key", Message: err.Error()})
 	case errors.Is(err, domain.ErrLinkTargetNotFound):
 		writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 	default:
@@ -164,7 +166,33 @@ func (b *bulkHighlightBody) apply(repo domain.TrafficRepository, sel domain.Sele
 	return repo.SetHighlight(sel, h)
 }
 
+// bulkMetadataBody is the body of POST /traffic/bulk/metadata: a selection,
+// a dotted key, and either a JSON value to set or clear: true.
+type bulkMetadataBody struct {
+	bulkSelection
+	Key   *string         `json:"key"`
+	Value json.RawMessage `json:"value"` // a JSON null arrives as "null", not nil
+	Clear bool            `json:"clear"`
+}
+
+// apply sets or clears the body's key on sel. A missing key, both or neither
+// of value and clear, or clear: false without a value returns
+// errInvalidBulkRequest.
+func (b *bulkMetadataBody) apply(repo domain.TrafficRepository, sel domain.Selection) (int, error) {
+	if b.Key == nil || b.Clear == (b.Value != nil) {
+		return 0, errInvalidBulkRequest
+	}
+	if b.Clear {
+		return repo.ClearMetadataKey(sel, *b.Key)
+	}
+	return repo.SetMetadataKey(sel, *b.Key, b.Value)
+}
+
 func addTrafficBulkRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
+	mux.HandleFunc("POST /traffic/bulk/metadata", func(w http.ResponseWriter, r *http.Request) {
+		var body bulkMetadataBody
+		serveBulk(w, r, proxy, events, "metadata", &body, body.apply)
+	})
 	addTrafficBulkNoteRoute(mux, proxy, events)
 	mux.HandleFunc("POST /traffic/bulk/highlight", func(w http.ResponseWriter, r *http.Request) {
 		var body bulkHighlightBody
