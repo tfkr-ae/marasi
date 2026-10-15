@@ -12,15 +12,12 @@ import (
 // larger result costs no more than the cap. An invalid query or exclusion
 // returns a *domain.QueryError.
 func (repo *Repository) CountTraffic(q domain.TrafficCountQuery) (domain.TrafficCount, error) {
-	filter, err := newTrafficFilter(q.Text, q.Exclusion)
+	filter, err := newTrafficFilterAfter(q.Text, q.Exclusion, q.After)
 	if err != nil {
 		return domain.TrafficCount{}, err
 	}
 	if q.AsOf != nil {
 		filter.add(`id <= ?`, *q.AsOf)
-	}
-	if q.After != nil {
-		filter.add(`id > ?`, *q.After)
 	}
 
 	var result domain.TrafficCount

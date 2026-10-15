@@ -310,7 +310,7 @@ func TestTrafficRepo_ListTrafficTextSearchErrors(t *testing.T) {
 		{query: `request_body > "token"`, message: `operator > is not supported on request_body; use :`, position: 1},
 		{query: `host:"api"`, message: `operator : is not supported on host; use =`, position: 1},
 		{query: `status_code:"500"`, message: `operator : is not supported on status_code`, position: 1},
-		{query: `metadata.extension:"workshop"`, message: `operator : is not supported on metadata keys; use = or !=`, position: 1},
+		{query: `metadata.extension:"workshop"`, message: `operator : on a metadata key takes only *, as in metadata.extension:*; use = or !=`, position: 1},
 		{query: `stauts:"abc"`, message: `unknown field "stauts"`, position: 1},
 		{query: `response_body.x:"abc"`, message: `field "response_body" has no member "x"`, position: 1},
 	}

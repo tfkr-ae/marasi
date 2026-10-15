@@ -609,6 +609,32 @@ func GoValue(l *lua.State, index int) any {
 	}
 }
 
+// dropNilMembers removes, at every depth, the object members whose value
+// has no Go form (a Lua function, for one). Pair metadata reaches the
+// response as an RFC 7396 merge patch, where a null member deletes the
+// stored key, so set_metadata must not write one.
+func dropNilMembers(value map[string]any) map[string]any {
+	for key, member := range value {
+		if member == nil {
+			delete(value, key)
+			continue
+		}
+		dropNilMembersIn(member)
+	}
+	return value
+}
+
+func dropNilMembersIn(value any) {
+	switch value := value.(type) {
+	case map[string]any:
+		dropNilMembers(value)
+	case []any:
+		for _, element := range value {
+			dropNilMembersIn(element)
+		}
+	}
+}
+
 // ParseTable converts a Lua table at the given index into a Go slice or map.
 // If the table is a sequence (integer keys 1..N), it returns []any.
 // Otherwise, it returns map[string]any, converting all keys to strings.
