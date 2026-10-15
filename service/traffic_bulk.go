@@ -118,9 +118,10 @@ func serveBulk(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, even
 func writeBulkError(w http.ResponseWriter, r *http.Request, err error) {
 	var queryErr *domain.QueryError
 	switch {
-	case errors.Is(err, errInvalidBulkRequest), errors.Is(err, domain.ErrEmptyNote),
-		errors.Is(err, domain.ErrInvalidHighlight):
+	case errors.Is(err, errInvalidBulkRequest):
 		writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_bulk_request"})
+	case errors.Is(err, domain.ErrEmptyNote), errors.Is(err, domain.ErrInvalidHighlight):
+		writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_bulk_request", Message: err.Error()})
 	case errors.Is(err, domain.ErrInvalidSelection):
 		writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_selection", Message: err.Error()})
 	case errors.As(err, &queryErr):
@@ -169,7 +170,9 @@ type bulkHighlightBody struct {
 	Highlight json.RawMessage `json:"highlight"`
 }
 
-// apply sets or clears the body's highlight on sel.
+// apply sets or clears the body's highlight on sel. The repository checks
+// the highlight's range, so an out-of-range one returns
+// domain.ErrInvalidHighlight with a message.
 func (b *bulkHighlightBody) apply(repo domain.TrafficRepository, sel domain.Selection) (int, error) {
 	if b.Highlight == nil {
 		return 0, errInvalidBulkRequest
@@ -178,7 +181,7 @@ func (b *bulkHighlightBody) apply(repo domain.TrafficRepository, sel domain.Sele
 		return repo.ClearHighlight(sel)
 	}
 	var h int
-	if err := json.Unmarshal(b.Highlight, &h); err != nil || h < domain.MinHighlight || h > domain.MaxHighlight {
+	if err := json.Unmarshal(b.Highlight, &h); err != nil {
 		return 0, errInvalidBulkRequest
 	}
 	return repo.SetHighlight(sel, h)
