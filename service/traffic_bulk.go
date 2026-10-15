@@ -100,7 +100,8 @@ func serveBulk(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, even
 func writeBulkError(w http.ResponseWriter, r *http.Request, err error) {
 	var queryErr *domain.QueryError
 	switch {
-	case errors.Is(err, errInvalidBulkRequest), errors.Is(err, domain.ErrEmptyNote):
+	case errors.Is(err, errInvalidBulkRequest), errors.Is(err, domain.ErrEmptyNote),
+		errors.Is(err, domain.ErrInvalidHighlight):
 		writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_bulk_request"})
 	case errors.Is(err, domain.ErrInvalidSelection):
 		writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_selection", Message: err.Error()})
@@ -142,6 +143,29 @@ func (b *bulkLinkBody) target() (domain.LinkTarget, error) {
 	return targets[0], nil
 }
 
+// bulkHighlightBody is the body of POST /traffic/bulk/highlight: a selection
+// and a highlight from 1 to 8, or null to clear it. The highlight key is
+// required, so it is kept raw to tell null from absent.
+type bulkHighlightBody struct {
+	bulkSelection
+	Highlight json.RawMessage `json:"highlight"`
+}
+
+// apply sets or clears the body's highlight on sel.
+func (b *bulkHighlightBody) apply(repo domain.TrafficRepository, sel domain.Selection) (int, error) {
+	if b.Highlight == nil {
+		return 0, errInvalidBulkRequest
+	}
+	if string(b.Highlight) == "null" {
+		return repo.ClearHighlight(sel)
+	}
+	var h int
+	if err := json.Unmarshal(b.Highlight, &h); err != nil || h < domain.MinHighlight || h > domain.MaxHighlight {
+		return 0, errInvalidBulkRequest
+	}
+	return repo.SetHighlight(sel, h)
+}
+
 // bulkMetadataBody is the body of POST /traffic/bulk/metadata: a selection,
 // a dotted key, and either a JSON value to set or clear: true.
 type bulkMetadataBody struct {
@@ -170,6 +194,10 @@ func addTrafficBulkRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadc
 		serveBulk(w, r, proxy, events, "metadata", &body, body.apply)
 	})
 	addTrafficBulkNoteRoute(mux, proxy, events)
+	mux.HandleFunc("POST /traffic/bulk/highlight", func(w http.ResponseWriter, r *http.Request) {
+		var body bulkHighlightBody
+		serveBulk(w, r, proxy, events, "highlight", &body, body.apply)
+	})
 	for change, run := range map[string]func(domain.TrafficRepository, domain.Selection, domain.LinkTarget) (int, error){
 		"link":   domain.TrafficRepository.LinkTraffic,
 		"unlink": domain.TrafficRepository.UnlinkTraffic,

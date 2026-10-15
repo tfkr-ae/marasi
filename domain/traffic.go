@@ -122,6 +122,17 @@ type TrafficRepository interface {
 	// It returns the same errors as LinkTraffic.
 	UnlinkTraffic(sel Selection, target LinkTarget) (int, error)
 
+	// SetHighlight gives every pair in sel the highlight h, from MinHighlight
+	// to MaxHighlight, in one transaction, and returns the number of pairs
+	// whose highlight changed. It never writes the request row or the search
+	// indexes. An h out of range wraps ErrInvalidHighlight; an invalid query
+	// selection returns a *QueryError.
+	SetHighlight(sel Selection, h int) (int, error)
+
+	// ClearHighlight removes the highlight of every pair in sel in one
+	// transaction and returns the number of pairs that had one.
+	ClearHighlight(sel Selection) (int, error)
+
 	// SetMetadataKey sets the metadata key at path to the JSON value on every
 	// pair in sel, in one transaction, and returns the number of pairs whose
 	// metadata changed. path is dotted, as in a query: "a.b" is key b inside
@@ -183,6 +194,7 @@ type RequestResponseRow struct {
 	Response   ProxyResponse  // The corresponding HTTP response
 	Metadata   map[string]any // Combined metadata from request and response
 	Note       string         // Note contents
+	Highlight  *int           // Highlight from 1 to 8, or nil when the pair has none
 	Prettified Prettified     // Prettified copies of the request and response
 }
 
@@ -210,6 +222,7 @@ type RequestResponseSummary struct {
 	RequestedAt time.Time
 	RespondedAt time.Time
 	Note        string
+	Highlight   *int // highlight from 1 to 8, or nil when the pair has none
 }
 
 // ContentTypeCount is the number of request-response pairs with one response

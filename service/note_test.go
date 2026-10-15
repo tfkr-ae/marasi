@@ -205,7 +205,7 @@ func TestNotesList(t *testing.T) {
 			},
 		}
 		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		want := "{\"items\":[{\"id\":\"01938032-1b17-7243-b035-e6a9f4645904\",\"scheme\":\"https\",\"method\":\"POST\",\"host\":\"example.com\",\"path\":\"/login\",\"status\":\"401 Unauthorized\",\"status_code\":401,\"content_type\":\"text/plain\",\"length\":\"45\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:06Z\",\"responded_at\":\"2026-01-02T03:04:07Z\",\"note\":\"newer note\"},{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\",\"note\":\"older note\"}],\"next_cursor\":null}\n"
+		want := "{\"items\":[{\"id\":\"01938032-1b17-7243-b035-e6a9f4645904\",\"scheme\":\"https\",\"method\":\"POST\",\"host\":\"example.com\",\"path\":\"/login\",\"status\":\"401 Unauthorized\",\"status_code\":401,\"content_type\":\"text/plain\",\"length\":\"45\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:06Z\",\"responded_at\":\"2026-01-02T03:04:07Z\",\"highlight\":null,\"note\":\"newer note\"},{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\",\"highlight\":null,\"note\":\"older note\"}],\"next_cursor\":null}\n"
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/notes", ""), http.StatusOK, want)
 	})
 
@@ -231,7 +231,7 @@ func TestNotesList(t *testing.T) {
 			},
 		}
 		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"N/A\",\"status_code\":-1,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null,\"note\":\"needs review\"}],\"next_cursor\":null}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"N/A\",\"status_code\":-1,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null,\"highlight\":null,\"note\":\"needs review\"}],\"next_cursor\":null}\n"
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/notes", ""), http.StatusOK, want)
 	})
 
@@ -245,7 +245,7 @@ func TestNotesList(t *testing.T) {
 			},
 		}
 		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		want := "{\"items\":[{\"id\":\"01938032-1b17-7243-b035-e6a9f4645904\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:06Z\",\"responded_at\":null,\"note\":\"newer\"}],\"next_cursor\":\"01938032-1b17-7243-b035-e6a9f4645904\"}\n"
+		want := "{\"items\":[{\"id\":\"01938032-1b17-7243-b035-e6a9f4645904\",\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:06Z\",\"responded_at\":null,\"highlight\":null,\"note\":\"newer\"}],\"next_cursor\":\"01938032-1b17-7243-b035-e6a9f4645904\"}\n"
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/notes?limit=1", ""), http.StatusOK, want)
 	})
 
@@ -295,7 +295,7 @@ func TestNotesList(t *testing.T) {
 			},
 		}
 		server := newTestServer(&marasi.Proxy{TrafficRepo: repo}, func() {})
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"GET\",\"host\":\"other.com\",\"path\":\"/a\",\"status\":\"\",\"status_code\":200,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null,\"note\":\"keep\"}],\"next_cursor\":null}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"\",\"method\":\"GET\",\"host\":\"other.com\",\"path\":\"/a\",\"status\":\"\",\"status_code\":200,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null,\"highlight\":null,\"note\":\"keep\"}],\"next_cursor\":null}\n"
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/notes?host=example.com&method=POST&status_code=abc&path=/nope", ""), http.StatusOK, want)
 	})
 
