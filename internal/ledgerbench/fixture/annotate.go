@@ -15,7 +15,7 @@ var appColours = []string{"#EF4444", "#EAB308", "#22C55E", "#3B82F6", "#A855F7"}
 
 // annotate adds what a tester adds after capture, through the same
 // repository calls the service makes: notes, old-style metadata highlights,
-// launchpads, findings and test cases.
+// highlights, launchpads, findings and test cases.
 func (b *builder) annotate(m *Manifest) error {
 	rng := rand.New(rand.NewPCG(b.seed, 0xa110))
 	n := len(b.plans)
@@ -72,6 +72,10 @@ func (b *builder) annotate(m *Manifest) error {
 			return err
 		}
 		b.progress("highlights", k+1, len(highlighted))
+	}
+
+	if err := b.highlight(rng, m); err != nil {
+		return err
 	}
 
 	// Launchpads: one with 1% of pairs, one with 100 old pairs, and 20 small ones.
@@ -144,5 +148,54 @@ func (b *builder) annotate(m *Manifest) error {
 		}
 	}
 	b.progress("reporting", 1, 1)
+	return nil
+}
+
+// oldHighlight is the highlight only the old clusters have.
+const oldHighlight = 3
+
+// highlight gives 0.5% of pairs a highlight through SetHighlight. The old
+// highlight goes on clusters of up to 50 pairs in the oldest 40%; every other
+// highlight goes on clusters anywhere and on pairs scattered over the oldest
+// half.
+func (b *builder) highlight(rng *rand.Rand, m *Manifest) error {
+	n := len(b.plans)
+	total := n / 200
+	chosen := map[int]bool{}
+	byValue := map[int][]uuid.UUID{}
+	// cluster highlights up to size pairs from a random start in [from, to),
+	// stopping when upTo pairs are highlighted.
+	cluster := func(from, to, size, value, upTo int) {
+		start := from + rng.IntN(max(1, to-from-size))
+		for i := start; i < min(start+size, to) && len(chosen) < upTo; i++ {
+			if !chosen[i] {
+				chosen[i] = true
+				byValue[value] = append(byValue[value], b.plans[i].id)
+			}
+		}
+	}
+	others := []int{1, 2, 4, 5, 6, 7, 8}
+	other := func() int { return others[rng.IntN(len(others))] }
+	for old := max(1, total/10); len(chosen) < min(old, total); {
+		cluster(0, n*4/10, 10+rng.IntN(41), oldHighlight, old)
+	}
+	m.OldHighlight, m.OldHighlightPairs = oldHighlight, len(chosen)
+	for len(chosen) < total*6/10 {
+		cluster(0, n, 10+rng.IntN(41), other(), total*6/10)
+	}
+	for len(chosen) < total {
+		cluster(0, n/2, 1, other(), total)
+	}
+	for value := domain.MinHighlight; value <= domain.MaxHighlight; value++ {
+		pairs := byValue[value]
+		for len(pairs) > 0 {
+			batch := pairs[:min(len(pairs), domain.MaxSelectionIDs)]
+			pairs = pairs[len(batch):]
+			if _, err := b.repo.SetHighlight(domain.Selection{IDs: batch}, value); err != nil {
+				return err
+			}
+		}
+		b.progress("highlights", value, domain.MaxHighlight)
+	}
 	return nil
 }
