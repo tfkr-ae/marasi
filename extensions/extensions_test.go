@@ -269,6 +269,14 @@ func (m *mockTrafficRepo) UnlinkTraffic(domain.Selection, domain.LinkTarget) (in
 	return 0, errors.New("not implemented")
 }
 
+func (m *mockTrafficRepo) SetHighlight(domain.Selection, int) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) ClearHighlight(domain.Selection) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
 func (m *mockTrafficRepo) SetMetadataKey(domain.Selection, string, json.RawMessage) (int, error) {
 	return 0, errors.New("not implemented")
 }

@@ -15,9 +15,14 @@ import (
 )
 
 // trafficSummaryColumns are the columns a traffic list reads into a
-// dbRequestResponseSummary.
+// dbRequestResponseSummary, from trafficSummarySource.
 const trafficSummaryColumns = `id, scheme, method, host, path, requested_at,
-	status, status_code, content_type, length, responded_at, metadata`
+	status, status_code, content_type, length, responded_at,
+	metadata,
+	pair_highlight.highlight`
+
+// trafficSummarySource is the FROM clause trafficSummaryColumns read.
+const trafficSummarySource = ` FROM request` + highlightJoin
 
 // defaultTrafficOrder is the canonical name of the default sort. It is the
 // only sort until sortable ledger columns land (ADR-0041).
@@ -233,7 +238,7 @@ func (repo *Repository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, 
 				filter.add(`id < ?`, cursor.ID)
 			}
 		}
-		query := `SELECT ` + trafficSummaryColumns + ` FROM request` + filter.where() +
+		query := `SELECT ` + trafficSummaryColumns + trafficSummarySource + filter.where() +
 			` ORDER BY id ` + order + ` LIMIT ?`
 		return tx.Select(&dbSummary, query, append(filter.args, q.Limit+1)...)
 	})
