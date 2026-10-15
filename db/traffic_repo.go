@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -515,7 +516,13 @@ func (repo *Repository) DeleteNote(requestID uuid.UUID) error {
 
 // inTx runs fn in a transaction and commits when fn succeeds.
 func (repo *Repository) inTx(fn func(tx *sqlx.Tx) error) error {
-	tx, err := repo.dbConn.Beginx()
+	return repo.inTxContext(context.Background(), fn)
+}
+
+// inTxContext runs fn in a transaction bound to ctx: when ctx ends, the
+// statements fn runs with ctx are interrupted and the transaction rolls back.
+func (repo *Repository) inTxContext(ctx context.Context, fn func(tx *sqlx.Tx) error) error {
+	tx, err := repo.dbConn.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}
