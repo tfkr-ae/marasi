@@ -603,10 +603,7 @@ func (proxy *Proxy) WriteToDB() {
 			if proxy.launchIs(castItem.ID, func(entry *launchEntry) bool { return entry.duplicate }) {
 				continue
 			}
-			err := proxy.TrafficRepo.InsertResponse(castItem)
-			if err != nil {
-				log.Println(err)
-			}
+			proxy.writeResponse(castItem)
 		case *domain.WebSocketConnection:
 			err := proxy.WebSocketRepo.InsertConnection(castItem)
 			if err != nil {
@@ -642,6 +639,21 @@ func (proxy *Proxy) WriteToDB() {
 		default:
 			log.Print(castItem)
 		}
+	}
+}
+
+// writeResponse stores a response. The response of a pair deleted while in
+// flight, or while Checkpoint held it, is dropped (ADR-0034): that is not an
+// error, so it is logged at debug only.
+func (proxy *Proxy) writeResponse(response *domain.ProxyResponse) {
+	err := proxy.TrafficRepo.InsertResponse(response)
+	switch {
+	case errors.Is(err, domain.ErrPairNotFound):
+		if proxy.Logger != nil {
+			proxy.Logger.Debug("dropping the response of a deleted pair", "id", response.ID)
+		}
+	case err != nil:
+		log.Println(err)
 	}
 }
 
