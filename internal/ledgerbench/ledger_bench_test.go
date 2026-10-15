@@ -76,6 +76,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -250,6 +251,12 @@ func trafficURL(q domain.TrafficQuery) string {
 	if q.AsOf != nil {
 		values.Set("as_of", q.AsOf.String())
 	}
+	if q.OrderBy != "" {
+		values.Set("order_by", q.OrderBy)
+	}
+	if q.Direction == domain.Backward {
+		values.Set("direction", "backward")
+	}
 	return "/traffic?" + values.Encode()
 }
 
@@ -374,6 +381,118 @@ func BenchmarkQuery(b *testing.B) {
 		})
 		b.Run(c.name+"/service", func(b *testing.B) {
 			target := trafficURL(query)
+			ledgerbench.Measure(b, c.target, func() error {
+				response := httptest.NewRecorder()
+				server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
+				if response.Code != http.StatusOK {
+					return fmt.Errorf("GET %s: %d %s", target, response.Code, response.Body)
+				}
+				return nil
+			})
+		})
+	}
+}
+
+// BenchmarkSort is cases 29 to 32: sorted traffic lists (ticket 20). Each
+// case runs warm through the Repository and through GET /traffic.
+func BenchmarkSort(b *testing.B) {
+	p := benchProject(b)
+	repo := openRepo(b, p.path)
+	server := service.NewServer(&marasi.Proxy{TrafficRepo: repo, LaunchpadRepo: repo}, nil, nil, func() {}, "bench", "bench", p.path)
+	// cursorAfter is the cursor after the first n pairs of q.
+	cursorAfter := func(q domain.TrafficQuery, n int) string {
+		q.Limit = n
+		page, err := repo.ListTraffic(q)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if page.NextCursor == nil {
+			b.Fatalf("%+v has no more than %d pairs", q, n)
+		}
+		return *page.NextCursor
+	}
+	type sortCase struct {
+		name   string
+		query  domain.TrafficQuery
+		target ledgerbench.Target
+	}
+	within := ledgerbench.Target{Max: ms(150)}
+	var cases []sortCase
+
+	// Case 29: the first page and a page from halfway, for every sort key
+	// in both directions, with and without the seed exclusion.
+	middle := p.manifest.MiddleID
+	for _, key := range []string{"method", "host", "path", "status_code", "content_type", "length"} {
+		for _, orderBy := range []string{key, key + " desc"} {
+			for _, exclusion := range []struct {
+				name   string
+				values []string
+			}{{"", nil}, {"-seed-exclusion", fixture.SeedExclusion}} {
+				q := domain.TrafficQuery{OrderBy: orderBy, Exclusion: exclusion.values}
+				name := "29-" + strings.ReplaceAll(orderBy, " ", "-") + exclusion.name
+				cases = append(cases, sortCase{name + "-first", q, within})
+				deep := q
+				deep.AsOf = &middle
+				deep.Cursor = cursorAfter(deep, p.manifest.Pairs/4)
+				cases = append(cases, sortCase{name + "-deep", deep, within})
+			}
+		}
+	}
+
+	// Case 30: a sort with a filter. highlight:* lands with ticket 09;
+	// until then launchpad:* stands in as the sparse link-table filter.
+	denseType := ""
+	if counts, err := repo.CountContentTypes(); err == nil {
+		top := 0
+		for _, count := range counts.Counts {
+			if count.ContentType != "" && count.Count > top {
+				denseType, top = count.ContentType, count.Count
+			}
+		}
+	}
+	cases = append(cases,
+		sortCase{"30-status-asc-sparse-host", domain.TrafficQuery{OrderBy: "status_code", Text: fmt.Sprintf("host = %q", p.manifest.SpreadHost)}, within},
+		sortCase{"30-length-desc-dense-type", domain.TrafficQuery{OrderBy: "length desc", Text: fmt.Sprintf("content_type = %q", denseType)}, within},
+		sortCase{"30-host-asc-launchpad-any", domain.TrafficQuery{OrderBy: "host", Text: "launchpad:*"}, within},
+		sortCase{"30-length-desc-common-text", domain.TrafficQuery{OrderBy: "length desc", Text: p.manifest.CommonTerm},
+			ledgerbench.Target{Max: ms(500), Pathological: true}},
+	)
+
+	// Case 31: a backward page from an anchor halfway through a sorted
+	// result made under an older as_of, read under a new one.
+	for _, orderBy := range []string{"host", "length desc"} {
+		anchor := cursorAfter(domain.TrafficQuery{OrderBy: orderBy, AsOf: &middle}, p.manifest.Pairs/4)
+		cases = append(cases, sortCase{"31-backward-from-anchor-" + strings.ReplaceAll(orderBy, " ", "-"),
+			domain.TrafficQuery{OrderBy: orderBy, Cursor: anchor, Direction: domain.Backward}, within})
+	}
+
+	// Case 32: status_code asc reaching the pairs with no response, the
+	// second phase of the walk: a page that crosses into it and the last
+	// page.
+	var unvalued int
+	if count, err := repo.CountTraffic(domain.TrafficCountQuery{Text: "NOT status_code >= 0"}); err != nil {
+		b.Fatal(err)
+	} else {
+		unvalued = count.Count
+	}
+	statusAsc := domain.TrafficQuery{OrderBy: "status_code"}
+	crossing := statusAsc
+	crossing.Cursor = cursorAfter(statusAsc, p.manifest.Pairs-unvalued-pageSize/2)
+	last := statusAsc
+	last.Cursor = cursorAfter(statusAsc, p.manifest.Pairs-pageSize/2)
+	cases = append(cases,
+		sortCase{"32-status-asc-into-no-response", crossing, within},
+		sortCase{"32-status-asc-last-page", last, within})
+
+	for _, c := range cases {
+		b.Run(c.name+"/repo", func(b *testing.B) {
+			ledgerbench.Measure(b, c.target, func() error {
+				_, err := listPage(repo, c.query)
+				return err
+			})
+		})
+		b.Run(c.name+"/service", func(b *testing.B) {
+			target := trafficURL(c.query)
 			ledgerbench.Measure(b, c.target, func() error {
 				response := httptest.NewRecorder()
 				server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))

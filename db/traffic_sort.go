@@ -63,6 +63,24 @@ func (s trafficSort) column() string {
 	return s.key.expr
 }
 
+// order is the sort's whole display order as one ORDER BY, for reads that
+// do not page: pairs with a value by (key, id), then pairs with none by id,
+// both in the sort's direction.
+func (s trafficSort) order() string {
+	dir := "ASC"
+	if s.desc {
+		dir = "DESC"
+	}
+	if s.key.expr == "" {
+		return "id " + dir
+	}
+	if !s.phased() {
+		return s.key.expr + " " + dir + ", id " + dir
+	}
+	return "coalesce(" + s.key.noValue + ", 1) ASC, CASE WHEN " + s.key.hasValue + " THEN " + s.key.expr +
+		" END " + dir + ", id " + dir
+}
+
 // parseTrafficOrderBy parses an AIP-132 order_by: one field and an optional
 // desc. Empty is requested_at desc. An invalid sort returns a
 // *domain.QueryError at the position of the part at fault.
