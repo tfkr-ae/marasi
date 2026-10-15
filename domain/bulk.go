@@ -10,6 +10,17 @@ import (
 // bulk link or unlink names.
 var ErrLinkTargetNotFound = errors.New("link target not found")
 
+// ErrInvalidHighlight means a highlight is not a whole number from
+// MinHighlight to MaxHighlight.
+var ErrInvalidHighlight = errors.New("invalid highlight")
+
+// The range of a highlight. Marasi gives each number no meaning; the client
+// decides what it looks like and stands for.
+const (
+	MinHighlight = 1
+	MaxHighlight = 8
+)
+
 // ErrInvalidMetadataKey means a bulk metadata key path is empty, has an empty
 // segment or a segment with a quote or backslash, or names a key that only
 // Marasi writes: prettified-request, prettified-response or has_note.

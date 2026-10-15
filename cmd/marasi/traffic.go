@@ -69,6 +69,11 @@ const trafficListLong = `List the newest page of traffic.
       A sitemap node and everything below it, by node name, for example
       sitemap = "https://api.example.com/users/{int}". != matches every
       other pair. A name no node has matches nothing.
+  highlight
+      A pair's highlight, a whole number from 1 to 8. highlight = 3
+      matches pairs with highlight 3, highlight != 3 matches every other
+      pair, including pairs with no highlight, highlight:* matches pairs
+      with any highlight, and NOT highlight:* matches pairs with none.
 
 Bare text, for example "hbGci", searches every text part. Text terms
 need at least 3 characters.

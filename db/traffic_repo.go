@@ -37,8 +37,9 @@ type dbRequestResponse struct {
 	RespondedAt sql.NullTime   `db:"responded_at"`
 
 	// Common
-	Metadata pairMetadata   `db:"metadata"`
-	Note     sql.NullString `db:"note"`
+	Metadata  pairMetadata   `db:"metadata"`
+	Note      sql.NullString `db:"note"`
+	Highlight sql.NullInt64  `db:"highlight"`
 	dbPrettified
 }
 
@@ -62,7 +63,8 @@ type dbRequestResponseSummary struct {
 	RespondedAt sql.NullTime   `db:"responded_at"`
 
 	// Common
-	Metadata pairMetadata `db:"metadata"`
+	Metadata  pairMetadata  `db:"metadata"`
+	Highlight sql.NullInt64 `db:"highlight"`
 }
 
 type dbNoteSummary struct {
@@ -186,6 +188,7 @@ func toDomainRequestResponseRow(dbReqRes *dbRequestResponse) *domain.RequestResp
 	if dbReqRes.Note.Valid {
 		row.Note = dbReqRes.Note.String
 	}
+	row.Highlight = highlightOf(dbReqRes.Highlight)
 
 	return row
 }
@@ -222,8 +225,18 @@ func toDomainRequestResponseSummary(dbSummary *dbRequestResponseSummary) *domain
 	if dbSummary.RespondedAt.Valid {
 		reqResSummary.RespondedAt = dbSummary.RespondedAt.Time
 	}
+	reqResSummary.Highlight = highlightOf(dbSummary.Highlight)
 
 	return reqResSummary
+}
+
+// highlightOf returns a read highlight, or nil when the pair has none.
+func highlightOf(h sql.NullInt64) *int {
+	if !h.Valid {
+		return nil
+	}
+	value := int(h.Int64)
+	return &value
 }
 
 // InsertRequest inserts a new domain.ProxyRequest into the database.
@@ -329,9 +342,10 @@ func (repo *Repository) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResp
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.request_raw, r.requested_at,
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
-			  r.metadata, n.note, ` + prettifiedColumns + `
+			  r.metadata, n.note, h.highlight, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
+			  LEFT JOIN pair_highlight h ON h.request_id = r.id
 			  LEFT JOIN pair_prettified p ON p.request_id = r.id
 			  WHERE r.id = ?`
 
@@ -353,9 +367,10 @@ func (repo *Repository) GetRequestResponseRows(ids []uuid.UUID) ([]*domain.Reque
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.request_raw, r.requested_at,
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
-			  r.metadata, n.note, ` + prettifiedColumns + `
+			  r.metadata, n.note, h.highlight, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
+			  LEFT JOIN pair_highlight h ON h.request_id = r.id
 			  LEFT JOIN pair_prettified p ON p.request_id = r.id
 			  WHERE r.id IN (?)`
 
@@ -394,8 +409,9 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 	query := `SELECT
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
-			  metadata
-			  FROM request
+			  metadata,
+			  pair_highlight.highlight
+			  FROM request` + highlightJoin + `
 			  ORDER BY id ASC`
 
 	err := repo.dbConn.Select(&dbSummary, query)
@@ -535,9 +551,10 @@ func (repo *Repository) ListNotes(cursor *uuid.UUID, limit int) ([]*domain.Reque
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
 			  r.metadata,
-			  n.note
+			  n.note, h.highlight
 			  FROM request r
 			  INNER JOIN notes n ON r.id = n.request_id
+			  LEFT JOIN pair_highlight h ON h.request_id = r.id
 			  WHERE n.note IS NOT NULL AND n.note != ''`
 	args := make([]any, 0, 2)
 	if cursor != nil {
@@ -579,8 +596,9 @@ func (repo *Repository) SearchByMetadata(path string, value any) ([]*domain.Requ
 	query := `SELECT
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
-			  metadata
-			  FROM request
+			  metadata,
+			  pair_highlight.highlight
+			  FROM request` + highlightJoin + `
 			  WHERE json_extract(metadata, ?) = ?
 			  ORDER BY id ASC`
 
