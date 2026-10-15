@@ -134,14 +134,19 @@ type trafficQuery struct {
 // translateTrafficQuery parses query as an AIP-160 filter, checks it against
 // the declared traffic fields, and translates it to SQL. Invalid queries
 // return a *domain.QueryError.
-func translateTrafficQuery(query string) (trafficQuery, error) {
+//
+// after, when set, promises that the caller reads only pairs with an id
+// above it. Text terms then search only the traffic index rows that such
+// pairs can have, so a common term does not gather every older match first.
+func translateTrafficQuery(query string, after *uuid.UUID) (trafficQuery, error) {
 	trimmed := strings.TrimSpace(query)
 	if trimmed == "" {
 		return trafficQuery{}, nil
 	}
 	t := &queryTranslator{
-		raw:  query,
-		lead: len(query) - len(strings.TrimLeft(query, " \t\r\n\v\f")),
+		raw:   query,
+		lead:  len(query) - len(strings.TrimLeft(query, " \t\r\n\v\f")),
+		after: after,
 	}
 	if len(query) > maxQueryLength {
 		return trafficQuery{}, &domain.QueryError{
@@ -175,6 +180,8 @@ type queryTranslator struct {
 	// topLevel is set while translating the root, or a condition the root
 	// ANDs with others.
 	topLevel bool
+	// after is the id every pair the caller reads is above, if any.
+	after *uuid.UUID
 }
 
 // position converts a byte offset in the trimmed query to a 1-based character
@@ -479,7 +486,16 @@ func (t *queryTranslator) textMatch(e *expr.Expr, column string) (string, error)
 		match = column + " : " + match
 	}
 	t.bind(match)
-	return "request.id IN (SELECT k.request_id FROM traffic_index JOIN traffic_index_key k ON k.id = traffic_index.rowid WHERE traffic_index MATCH ?)", nil
+	const search = "request.id IN (SELECT k.request_id FROM traffic_index JOIN traffic_index_key k ON k.id = traffic_index.rowid WHERE traffic_index MATCH ?"
+	if t.after == nil {
+		return search + ")", nil
+	}
+	// Every pair above after has an index key at or above the smallest key
+	// of those pairs, so the search can start there. When none of them is
+	// indexed yet, the bound is NULL and the term matches none of them,
+	// as it would without the bound.
+	t.bind(*t.after)
+	return search + " AND traffic_index.rowid >= (SELECT min(id) FROM traffic_index_key WHERE request_id > ?))", nil
 }
 
 // textTerm returns the text of a quoted string, an unquoted word, or a number
