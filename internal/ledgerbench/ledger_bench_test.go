@@ -80,6 +80,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
@@ -576,38 +577,64 @@ func capture(ctx context.Context, repo *db.Repository, manifest *fixture.Manifes
 // BenchmarkMetadataKey is case 34 (P): marasi-app's one-time clear of every
 // old metadata.highlight, ClearMetadataKey("highlight") on the selection
 // metadata.highlight:*. The has-key read cannot use an index, so it parses
-// every pair's metadata. Every run clears a fresh copy of the fixture; the
-// copy is made and opened outside the timing.
+// every pair's metadata. It runs warm on one copy of the fixture: before
+// every run, outside the timing, the highlights the last run cleared are
+// written back, so every run clears the same pairs.
 func BenchmarkMetadataKey(b *testing.B) {
 	p := benchProject(b)
 	b.Run("34-clear-every-highlight", func(b *testing.B) {
-		var (
-			repo *db.Repository
-			sel  domain.Selection
-		)
-		prepare := func() error {
-			conn, err := db.New(cloneOf(b, p.path), quiet())
-			if err != nil {
-				return err
+		repo := openRepo(b, cloneOf(b, p.path))
+		highlighted := highlightedPairs(b, repo)
+		var asOf uuid.UUID
+		restore := func() error {
+			for id, metadata := range highlighted {
+				if err := repo.UpdateMetadata(maps.Clone(metadata), id); err != nil {
+					return err
+				}
 			}
-			repo = db.NewProxyRepo(conn)
 			page, err := repo.ListTraffic(domain.TrafficQuery{Limit: 1})
 			if err != nil {
 				return err
 			}
-			if len(page.Items) == 0 {
-				return fmt.Errorf("the fixture has no pairs")
-			}
-			sel = domain.Selection{Query: &domain.SelectionQuery{Text: `metadata.highlight:*`, AsOf: page.Items[0].ID}}
+			asOf = page.Items[0].ID
 			return nil
 		}
-		ledgerbench.MeasurePrepared(b, ledgerbench.Target{Max: 3 * time.Second, Pathological: true}, prepare, func() (func(), error) {
+		ledgerbench.MeasurePrepared(b, ledgerbench.Target{Max: 3 * time.Second, Pathological: true}, restore, func() (func(), error) {
+			sel := domain.Selection{Query: &domain.SelectionQuery{Text: `metadata.highlight:*`, AsOf: asOf}}
 			count, err := repo.ClearMetadataKey(sel, "highlight")
-			cleanup := func() { repo.Close() }
-			if err == nil && count == 0 {
-				err = fmt.Errorf("cleared no highlights")
+			if err == nil && count != len(highlighted) {
+				err = fmt.Errorf("cleared %d highlights, want %d", count, len(highlighted))
 			}
-			return cleanup, err
+			return nil, err
 		})
 	})
+}
+
+// highlightedPairs returns the metadata of every pair with a
+// metadata.highlight, by id.
+func highlightedPairs(b *testing.B, repo *db.Repository) map[uuid.UUID]map[string]any {
+	b.Helper()
+	highlighted := make(map[uuid.UUID]map[string]any)
+	q := domain.TrafficQuery{Text: `metadata.highlight:*`, Limit: pageSize}
+	for {
+		page, err := repo.ListTraffic(q)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for _, item := range page.Items {
+			metadata, err := repo.GetMetadata(item.ID)
+			if err != nil {
+				b.Fatal(err)
+			}
+			highlighted[item.ID] = metadata
+		}
+		if page.NextCursor == nil {
+			break
+		}
+		q.Cursor = *page.NextCursor
+	}
+	if len(highlighted) == 0 {
+		b.Fatal("the fixture has no metadata.highlight")
+	}
+	return highlighted
 }
