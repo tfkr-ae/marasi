@@ -148,11 +148,11 @@ func annotationIndexJob(t *testing.T, repo *Repository) JobState {
 		t.Fatalf("ListJobs: %v", err)
 	}
 	for _, job := range jobs {
-		if job.Name == AnnotationIndexJob {
+		if job.Name == domain.JobAnnotationIndex {
 			return job
 		}
 	}
-	t.Fatalf("\nwanted:\na %s job\ngot:\n%+v", AnnotationIndexJob, jobs)
+	t.Fatalf("\nwanted:\na %s job\ngot:\n%+v", domain.JobAnnotationIndex, jobs)
 	return JobState{}
 }
 
@@ -182,7 +182,7 @@ func forgetAnnotationIndex(t *testing.T, repo *Repository) *Repository {
 	return reopenProject(t, repo)
 }
 
-func runJob(t *testing.T, repo *Repository, name string, maxBytes int) (int, bool) {
+func runJob(t *testing.T, repo *Repository, name domain.JobName, maxBytes int) (int, bool) {
 	t.Helper()
 	processed, remaining, err := repo.RunJobBatch(name, maxBytes)
 	if err != nil {
@@ -193,7 +193,7 @@ func runJob(t *testing.T, repo *Repository, name string, maxBytes int) (int, boo
 
 // finishJob runs the named job until nothing remains, the way the service
 // runs each job after the one before it.
-func finishJob(t *testing.T, repo *Repository, name string) {
+func finishJob(t *testing.T, repo *Repository, name domain.JobName) {
 	t.Helper()
 	for {
 		if _, remaining := runJob(t, repo, name, indexAll); !remaining {
@@ -207,7 +207,7 @@ func TestAnnotationIndexJob(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 
-		if got, want := annotationIndexJob(t, repo), (JobState{Name: AnnotationIndexJob, Complete: true}); got != want {
+		if got, want := annotationIndexJob(t, repo), (JobState{Name: domain.JobAnnotationIndex, Complete: true}); got != want {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
 		}
 	})
@@ -234,21 +234,21 @@ func TestAnnotationIndexJob(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ListTraffic: %v", err)
 		}
-		if want := map[string]bool{domain.JobTrafficIndex: true, domain.JobAnnotationIndex: false}; !maps.Equal(page.Complete, want) {
+		if want := map[domain.JobName]bool{domain.JobTrafficIndex: true, domain.JobAnnotationIndex: false}; !maps.Equal(page.Complete, want) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, page.Complete)
 		}
 		assertListNames(t, repo, ids, "before backfill", `note:"backfilled-note"`, "")
 
-		if processed, remaining := runJob(t, repo, AnnotationIndexJob, 1); processed != 1 || !remaining {
+		if processed, remaining := runJob(t, repo, domain.JobAnnotationIndex, 1); processed != 1 || !remaining {
 			t.Fatalf("\nwanted:\none pair and more remaining\ngot:\n%d, %v", processed, remaining)
 		}
 		for {
-			if _, remaining := runJob(t, repo, AnnotationIndexJob, 1); !remaining {
+			if _, remaining := runJob(t, repo, domain.JobAnnotationIndex, 1); !remaining {
 				break
 			}
 		}
 
-		if got, want := annotationIndexJob(t, repo), (JobState{Name: AnnotationIndexJob, Complete: true, Done: 3, Total: 3}); got != want {
+		if got, want := annotationIndexJob(t, repo), (JobState{Name: domain.JobAnnotationIndex, Complete: true, Done: 3, Total: 3}); got != want {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
 		}
 		if !indexComplete(t, repo) {

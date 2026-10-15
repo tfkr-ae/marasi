@@ -11,6 +11,7 @@ import (
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // encode applies each content coding to body in order, the way a server
@@ -106,11 +107,11 @@ func TestTrafficRepo_RebuildDecodesPairsIndexedBeforeDecoding(t *testing.T) {
 	writeOldBodyIndexRow(t, repo, ids["old"], "kept-note", "")
 	assertListNames(t, repo, ids, "before rebuild", `"rebuilt-text"`, "")
 
-	if err := repo.RebuildJob(TrafficIndexJob); err != nil {
+	if err := repo.RebuildJob(domain.JobTrafficIndex); err != nil {
 		t.Fatalf("RebuildJob: %v", err)
 	}
 	assertListNames(t, repo, ids, "during rebuild", `note:"kept-note"`, "old")
-	finishJob(t, repo, TrafficIndexJob)
+	finishJob(t, repo, domain.JobTrafficIndex)
 
 	assertListNames(t, repo, ids, "after rebuild", `"rebuilt-text"`, "old")
 	assertListNames(t, repo, ids, "after rebuild", `note:"kept-note"`, "old")

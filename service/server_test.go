@@ -129,8 +129,8 @@ func (s *stubLaunchpadRepository) UpdateLaunchpad(id uuid.UUID, name, descriptio
 	return nil
 }
 
-func (s *stubLaunchpadRepository) GetLaunchpadRequests(id uuid.UUID, _ string, _ []string, _ string) ([]*domain.RequestResponseSummary, map[string]bool, error) {
-	complete := map[string]bool{domain.JobTrafficIndex: true}
+func (s *stubLaunchpadRepository) GetLaunchpadRequests(id uuid.UUID, _ string, _ []string, _ string) ([]*domain.RequestResponseSummary, map[domain.JobName]bool, error) {
+	complete := map[domain.JobName]bool{domain.JobTrafficIndex: true}
 	items := s.members[id]
 	if items == nil {
 		return []*domain.RequestResponseSummary{}, complete, nil
@@ -241,7 +241,7 @@ func (s *stubTrafficRepository) ListTrafficContext(_ context.Context, q domain.T
 	return domain.TrafficPage{
 		Items:      items,
 		NextCursor: s.pageCursor,
-		Complete:   map[string]bool{domain.JobTrafficIndex: !s.indexIncomplete},
+		Complete:   map[domain.JobName]bool{domain.JobTrafficIndex: !s.indexIncomplete},
 	}, nil
 }
 

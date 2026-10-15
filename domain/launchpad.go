@@ -48,7 +48,7 @@ type LaunchpadRepository interface {
 	// background job the answer depends on, whether it had finished, as
 	// TrafficPage.Complete does. An invalid query, exclusion or orderBy
 	// returns a *QueryError.
-	GetLaunchpadRequests(id uuid.UUID, query string, exclusion []string, orderBy string) (items []*RequestResponseSummary, complete map[string]bool, err error)
+	GetLaunchpadRequests(id uuid.UUID, query string, exclusion []string, orderBy string) (items []*RequestResponseSummary, complete map[JobName]bool, err error)
 
 	// LinkRequestToLaunchpad associates a request with a launchpad using their respective UUIDs.
 	// This allows for organizing requests into collections.

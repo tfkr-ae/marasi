@@ -268,5 +268,5 @@ type ContentTypeCounts struct {
 	Counts []*ContentTypeCount
 	// Complete reports whether the sitemap job had finished, keyed by
 	// JobSitemap. The counts are exact either way.
-	Complete map[string]bool
+	Complete map[JobName]bool
 }

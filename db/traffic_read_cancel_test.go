@@ -29,7 +29,7 @@ func TestTrafficRepo_ReadsStopWhenContextEnds(t *testing.T) {
 	insertManyPairs(t, repo, 300_000)
 	// Until the sitemap job completes, content types are grouped from the
 	// pairs themselves.
-	if _, err := repo.dbConn.Exec(`UPDATE background_job SET complete = 0 WHERE name = ?`, SitemapJob); err != nil {
+	if _, err := repo.dbConn.Exec(`UPDATE background_job SET complete = 0 WHERE name = ?`, domain.JobSitemap); err != nil {
 		t.Fatal(err)
 	}
 	asOf := newestID(t, repo)

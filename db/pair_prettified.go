@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // The metadata keys where older binaries stored a pair's prettified copies
@@ -118,7 +119,7 @@ func (repo *Repository) MovePrettified(maxBytes int) (int, bool, error) {
 	var ids []uuid.UUID
 	var remaining bool
 	err := repo.inTx(func(tx *sqlx.Tx) error {
-		job, err := loadJob(tx, PrettifiedMoveJob)
+		job, err := loadJob(tx, domain.JobPrettifiedMove)
 		if err != nil {
 			return fmt.Errorf("reading the prettified move job: %w", err)
 		}
@@ -132,7 +133,7 @@ func (repo *Repository) MovePrettified(maxBytes int) (int, bool, error) {
 		if _, err := movePrettified(tx, ids...); err != nil {
 			return err
 		}
-		return advanceJob(tx, PrettifiedMoveJob, len(ids), remaining)
+		return advanceJob(tx, domain.JobPrettifiedMove, len(ids), remaining)
 	})
 	if err != nil {
 		return 0, false, fmt.Errorf("moving prettified copies: %w", err)

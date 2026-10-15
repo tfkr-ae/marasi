@@ -9,10 +9,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tfkr-ae/marasi/db"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // Environment is what a benchmark run records about where it ran, so
@@ -32,7 +33,7 @@ type Environment struct {
 	WALBytes int64
 	// Jobs is the saved state of each background job: complete or
 	// incomplete, with its progress once it has counted its work.
-	Jobs map[string]string
+	Jobs map[domain.JobName]string
 }
 
 // ProbeEnvironment records the environment of a run against the project at
@@ -43,7 +44,7 @@ func ProbeEnvironment(path string) (Environment, error) {
 		OS:        runtime.GOOS + "/" + runtime.GOARCH,
 		GoVersion: runtime.Version(),
 		Hardware:  runtime.GOARCH,
-		Jobs:      map[string]string{},
+		Jobs:      map[domain.JobName]string{},
 	}
 	if info, err := os.Stat(path + "-wal"); err == nil {
 		env.WALBytes = info.Size()
@@ -120,11 +121,11 @@ func (env Environment) String() string {
 	fmt.Fprintf(&b, "modernc.org/sqlite: %s\n", env.ModerncSQLite)
 	fmt.Fprintf(&b, "page_size: %d\ncache_size: %d\nmmap_size: %d\n", env.PageSize, env.CacheSize, env.MmapSize)
 	fmt.Fprintf(&b, "wal_bytes: %d\n", env.WALBytes)
-	jobs := make([]string, 0, len(env.Jobs))
+	jobs := make([]domain.JobName, 0, len(env.Jobs))
 	for job := range env.Jobs {
 		jobs = append(jobs, job)
 	}
-	sort.Strings(jobs)
+	slices.Sort(jobs)
 	for _, job := range jobs {
 		fmt.Fprintf(&b, "job %s: %s\n", job, env.Jobs[job])
 	}
