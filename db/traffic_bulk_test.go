@@ -12,7 +12,7 @@ import (
 // launchpadMembers returns the ids linked to a launchpad, oldest first.
 func launchpadMembers(t *testing.T, repo *Repository, launchpadID uuid.UUID) []uuid.UUID {
 	t.Helper()
-	items, err := repo.GetLaunchpadRequests(launchpadID, "", nil)
+	items, err := repo.GetLaunchpadRequests(launchpadID, "", nil, "")
 	if err != nil {
 		t.Fatalf("GetLaunchpadRequests() error = %v", err)
 	}

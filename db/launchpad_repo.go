@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
@@ -145,10 +146,20 @@ func (repo *Repository) DeleteLaunchpad(launchpadID uuid.UUID) error {
 }
 
 // GetLaunchpadRequests retrieves the requests linked to a launchpad that
-// match trafficQuery and are not hidden by exclusion, oldest first. The read
-// is the launchpad's membership plus the translated traffic query and the
-// exclusion. An invalid query or exclusion returns a *domain.QueryError.
-func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string, exclusion []string) ([]*domain.RequestResponseSummary, error) {
+// match trafficQuery and are not hidden by exclusion, in the orderBy order
+// that ListTraffic uses, or oldest first when orderBy is empty. The read is
+// the launchpad's membership plus the translated traffic query and the
+// exclusion. An invalid query, exclusion or orderBy returns a
+// *domain.QueryError.
+func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string, exclusion []string, orderBy string) ([]*domain.RequestResponseSummary, error) {
+	order := `id ASC`
+	if strings.TrimSpace(orderBy) != "" {
+		sort, err := parseTrafficOrderBy(orderBy)
+		if err != nil {
+			return nil, err
+		}
+		order = sort.order()
+	}
 	filter := trafficFilter{}
 	filter.add(launchpadMember, id)
 	matching, err := newTrafficFilter(trafficQuery, exclusion)
@@ -157,7 +168,7 @@ func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string, 
 	}
 	filter.conditions = append(filter.conditions, matching.conditions...)
 	filter.args = append(filter.args, matching.args...)
-	query := `SELECT ` + trafficSummaryColumns + trafficSummarySource + filter.where() + ` ORDER BY id ASC`
+	query := `SELECT ` + trafficSummaryColumns + trafficSummarySource + filter.where() + ` ORDER BY ` + order
 	args := filter.args
 
 	var dbRequests []*dbRequestResponseSummary

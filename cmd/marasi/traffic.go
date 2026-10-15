@@ -23,6 +23,7 @@ var trafficListCursor string
 var trafficListExclude []string
 var trafficListAsOf string
 var trafficListBackward bool
+var trafficListOrderBy string
 var trafficMetadataUpdateFile string
 
 const trafficPathDisplayLimit = 40
@@ -37,6 +38,10 @@ const trafficListLong = `List the newest page of traffic.
       path = "/api/*".
   status_code
       = != < <= > >=, for example status_code >= 500.
+  length
+      = != < <= > >= against the response's Content-Length as a number,
+      for example length > 100000. A response without the header has
+      length 0. A pair with no response yet has no length.
   requested_at, responded_at
       = != < <= > >= against an RFC 3339 timestamp, for example
       requested_at > "2024-01-02T15:04:05Z".
@@ -87,10 +92,19 @@ value is an exact type such as text/html or a whole major type such as
 image/*; parameters such as charset are ignored. Pairs with no content
 type yet are never hidden.
 
+Sorting: --order-by takes one field and an optional desc, for example
+--order-by 'length desc'. The fields are requested_at, method, host,
+path, status_code, content_type and length. The default is
+'requested_at desc', newest first. Text sorts in byte order, as stored:
+host includes its port and path its ?query. Equal values list oldest
+first ascending and newest first with desc. Pairs with no response yet
+have no status_code, content_type or length, and sort last either way.
+
 Paging: stderr shows next_cursor, prev_cursor and as_of. Pass a cursor
-back with --cursor, and --backward to walk toward newer pairs. Pass the
-as_of back with --as-of so every page belongs to the same set of results
-and leaves out pairs captured since.`
+back with --cursor, and --backward to walk back toward the start of the
+list (newer pairs, by default). Pass the same --order-by on every page.
+Pass the as_of back with --as-of so every page belongs to the same set of
+results and leaves out pairs captured since.`
 
 func init() {
 	trafficListCmd.Flags().StringVarP(&trafficListQueryText, "query", "q", "", "AIP-160 query that narrows the list; see the fields above")
@@ -98,7 +112,8 @@ func init() {
 	trafficListCmd.Flags().StringVar(&trafficListCursor, "cursor", "", "Cursor from an earlier page's next_cursor or prev_cursor")
 	trafficListCmd.Flags().StringArrayVar(&trafficListExclude, "exclude", nil, "Content type to hide, exact or major/*; repeat for more")
 	trafficListCmd.Flags().StringVar(&trafficListAsOf, "as-of", "", "as_of UUID from the first page, to keep later pages in the same results")
-	trafficListCmd.Flags().BoolVar(&trafficListBackward, "backward", false, "Walk from --cursor toward newer pairs")
+	trafficListCmd.Flags().BoolVar(&trafficListBackward, "backward", false, "Walk from --cursor back toward the start of the list")
+	trafficListCmd.Flags().StringVar(&trafficListOrderBy, "order-by", "", "Sort: one field, then optional desc; see Sorting above")
 	trafficMetadataUpdateCmd.Flags().StringVar(&trafficMetadataUpdateFile, "file", "", "Read the metadata JSON from a file instead of stdin")
 	trafficMetadataCmd.AddCommand(trafficMetadataGetCmd, trafficMetadataUpdateCmd)
 	trafficCmd.AddCommand(trafficListCmd, trafficGetCmd, trafficMetadataCmd)
@@ -207,6 +222,9 @@ func trafficListQuery() (string, error) {
 	}
 	if trafficListCursor != "" {
 		query.Set("cursor", trafficListCursor)
+	}
+	if trafficListOrderBy != "" {
+		query.Set("order_by", trafficListOrderBy)
 	}
 	for _, value := range trafficListExclude {
 		query.Add("exclude", value)

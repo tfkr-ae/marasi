@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,6 +158,43 @@ func TestTrafficListQuery(t *testing.T) {
 		}
 		if back.PrevCursor != nil {
 			t.Fatalf("\nwanted:\nnull prev_cursor at the start\ngot:\n%v", *back.PrevCursor)
+		}
+	})
+
+	t.Run("should sort the list and launchpad entries by order_by", func(t *testing.T) {
+		p := setupTrafficListProject(t, "b/b", "a/a", "c/c")
+		launchpadID, err := p.repo.CreateLaunchpad("lp", "")
+		if err != nil {
+			t.Fatalf("creating launchpad: %v", err)
+		}
+		for _, id := range p.ids {
+			if err := p.repo.LinkRequestToLaunchpad(id, launchpadID); err != nil {
+				t.Fatalf("linking: %v", err)
+			}
+		}
+
+		// The display order is a, b, c; a page's items come last row first.
+		response, body := p.get(t, "/traffic?order_by=content_type")
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d %s", http.StatusOK, response.Code, response.Body)
+		}
+		if want := []uuid.UUID{p.ids[2], p.ids[0], p.ids[1]}; !reflect.DeepEqual(body.ids(), want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, body.ids())
+		}
+
+		response, body = p.get(t, "/launchpad/"+launchpadID.String()+"?order_by="+url.QueryEscape("content_type desc"))
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d %s", http.StatusOK, response.Code, response.Body)
+		}
+		if want := []uuid.UUID{p.ids[2], p.ids[0], p.ids[1]}; !reflect.DeepEqual(body.ids(), want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, body.ids())
+		}
+
+		for _, path := range []string{"/traffic?order_by=size", "/launchpad/" + launchpadID.String() + "?order_by=size", "/traffic/query?order_by=size"} {
+			response, _ = p.get(t, path)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"invalid_query"`) || !strings.Contains(response.Body.String(), `"position":1`) {
+				t.Fatalf("%s\nwanted:\n400 invalid_query at position 1\ngot:\n%d %s", path, response.Code, response.Body)
+			}
 		}
 	})
 

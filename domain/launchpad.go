@@ -40,11 +40,13 @@ type LaunchpadRepository interface {
 	// It returns an error if the launchpad does not exist.
 	DeleteLaunchpad(launchpadID uuid.UUID) error
 
-	// GetLaunchpadRequests retrieves oldest-first traffic summaries for
-	// requests linked to a launchpad that match a traffic query and are not
-	// hidden by a content-type exclusion. An empty query matches every
-	// linked request. An invalid query or exclusion returns a *QueryError.
-	GetLaunchpadRequests(id uuid.UUID, query string, exclusion []string) ([]*RequestResponseSummary, error)
+	// GetLaunchpadRequests retrieves traffic summaries for requests linked
+	// to a launchpad that match a traffic query and are not hidden by a
+	// content-type exclusion, in the AIP-132 orderBy order (see
+	// TrafficQuery.OrderBy). An empty orderBy lists them oldest first. An
+	// empty query matches every linked request. An invalid query, exclusion
+	// or orderBy returns a *QueryError.
+	GetLaunchpadRequests(id uuid.UUID, query string, exclusion []string, orderBy string) ([]*RequestResponseSummary, error)
 
 	// LinkRequestToLaunchpad associates a request with a launchpad using their respective UUIDs.
 	// This allows for organizing requests into collections.

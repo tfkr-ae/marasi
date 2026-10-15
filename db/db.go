@@ -49,6 +49,9 @@ func NewProxyRepo(db *sqlx.DB) *Repository {
 // Close terminates the database connection.
 // It is critical to call this to free up database resources.
 func (repo *Repository) Close() error {
+	// Refresh the statistics the planner uses to choose an index
+	// (ADR-0041). A failure here must not keep the project open.
+	_, _ = repo.dbConn.Exec(`PRAGMA optimize`)
 	err := repo.dbConn.Close()
 	if err != nil {
 		return fmt.Errorf("closing repo : %w", err)
@@ -144,6 +147,14 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 		db.Close()
 		dbLogger.Error("Failed to reconcile background jobs", "error", err)
 		return nil, fmt.Errorf("reconciling background jobs: %w", err)
+	}
+	// The planner chooses between a sort index and a filter's index from
+	// statistics (ADR-0041). analysis_limit keeps the first analysis of a
+	// large project to a sample.
+	if _, err := db.Exec(`PRAGMA analysis_limit = 400; PRAGMA optimize = 0x10002`); err != nil {
+		db.Close()
+		dbLogger.Error("Failed to optimize the database", "error", err)
+		return nil, fmt.Errorf("optimizing the database: %w", err)
 	}
 	return db, nil
 }
