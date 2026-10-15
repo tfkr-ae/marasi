@@ -91,12 +91,14 @@ var settingsSetCmd = &cobra.Command{
 	Use:   "set CLIENT KEY [JSON]",
 	Short: "Set one client setting to a JSON value",
 	Long: `Set one client setting to a JSON value, replacing any value it had. Pass
-exactly one of JSON or --file. Quote strings as JSON, for example '"dark"'.`,
+exactly one of JSON, --file, or piped stdin. Quote strings as JSON, for
+example '"dark"'.`,
 	Example: `  marasi settings set my-client theme '"dark"'
-  marasi settings set my-client ledger/view --file view.json`,
+  marasi settings set my-client ledger/view --file view.json
+  jq -c . view.json | marasi settings set my-client ledger/view`,
 	Args: cobra.RangeArgs(2, 3),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		value, err := readTextOrFile(cmd, args[2:], settingsSetFile, "value")
+		value, err := textInput{what: "value", file: settingsSetFile}.read(cmd, args[2:])
 		if err != nil {
 			return err
 		}

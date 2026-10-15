@@ -2,12 +2,10 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"text/tabwriter"
 
@@ -69,7 +67,7 @@ var notesSetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		note, err := readNoteSetText(cmd, args)
+		note, err := textInput{what: "note", file: notesSetFile}.read(cmd, args[1:])
 		if err != nil {
 			return err
 		}
@@ -140,65 +138,6 @@ var notesClearCmd = &cobra.Command{
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "note %s cleared\n", args[0])
 		return err
 	},
-}
-
-func readNoteSetText(cmd *cobra.Command, args []string) (string, error) {
-	fileSet := cmd.Flags().Changed("file")
-	hasText := len(args) == 2
-	stdinPresent, err := noteStdinPresent(cmd)
-	if err != nil {
-		return "", err
-	}
-	sources := 0
-	if hasText {
-		sources++
-	}
-	if fileSet {
-		sources++
-	}
-	if stdinPresent {
-		sources++
-	}
-	if sources != 1 {
-		if sources == 0 {
-			return "", errors.New("notes set requires text, --file, or piped stdin")
-		}
-		return "", errors.New("notes set requires exactly one of text, --file, or piped stdin")
-	}
-	var note string
-	switch {
-	case hasText:
-		note = args[1]
-	case fileSet:
-		raw, err := os.ReadFile(notesSetFile)
-		if err != nil {
-			return "", fmt.Errorf("reading note file: %w", err)
-		}
-		note = string(raw)
-	default:
-		raw, err := io.ReadAll(cmd.InOrStdin())
-		if err != nil {
-			return "", fmt.Errorf("reading note from stdin: %w", err)
-		}
-		note = string(raw)
-	}
-	if note == "" {
-		return "", errors.New("notes set requires a non-empty note")
-	}
-	return note, nil
-}
-
-func noteStdinPresent(cmd *cobra.Command) (bool, error) {
-	stdin := cmd.InOrStdin()
-	file, ok := stdin.(*os.File)
-	if !ok {
-		return true, nil
-	}
-	info, err := file.Stat()
-	if err != nil {
-		return false, fmt.Errorf("checking stdin: %w", err)
-	}
-	return info.Mode()&os.ModeCharDevice == 0, nil
 }
 
 func writeNotesListHuman(body []byte, stdout, stderr io.Writer) error {
