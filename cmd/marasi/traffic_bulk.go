@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -134,11 +133,10 @@ var trafficBulkHighlightCmd = &cobra.Command{
 		highlight := json.RawMessage("null")
 		verb := "unhighlighted"
 		if args[0] != "none" {
-			value, err := strconv.Atoi(args[0])
-			if err != nil || value < 1 || value > 8 {
+			if len(args[0]) != 1 || args[0][0] < '1' || args[0][0] > '8' {
 				return fmt.Errorf("invalid highlight %q: want 1 to 8 or none", args[0])
 			}
-			highlight = json.RawMessage(strconv.Itoa(value))
+			highlight = json.RawMessage(args[0])
 			verb = "highlighted"
 		}
 		return runTrafficBulk(cmd, trafficBulkHighlightSelection, "highlight", "highlighting traffic", verb, trafficBulkRequest{Highlight: highlight})
