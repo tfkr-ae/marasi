@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -159,5 +160,53 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 		dbLogger.Error("Failed to optimize the database", "error", err)
 		return nil, fmt.Errorf("optimizing the database: %w", err)
 	}
+	if err := pinSearchIndexStatistics(db); err != nil {
+		db.Close()
+		dbLogger.Error("Failed to pin search index statistics", "error", err)
+		return nil, fmt.Errorf("pinning search index statistics: %w", err)
+	}
 	return db, nil
+}
+
+// pinSearchIndexStatistics gives every FTS5 shadow table the statistics
+// SQLite assumes for a table it has never analysed, a million rows, in place
+// of whatever ANALYZE measured. FTS5 reads and writes its shadow tables only
+// by key, so measured statistics can only make that worse: taken while a
+// project is new, they record a two-row traffic_index_data, and the planner
+// runs the rowid-range DELETE that every FTS5 segment merge issues as a full
+// scan of the index. Each capture then costs more the larger the index has
+// grown, until the project is reopened and analysed again. Deleting the rows
+// is not enough: reloading statistics keeps a table's last measured size.
+func pinSearchIndexStatistics(db *sqlx.DB) error {
+	var statTables []string
+	if err := db.Select(&statTables, `SELECT name FROM sqlite_schema
+		WHERE type = 'table' AND name IN ('sqlite_stat1', 'sqlite_stat4')`); err != nil {
+		return err
+	}
+	if !slices.Contains(statTables, "sqlite_stat1") {
+		return nil
+	}
+	shadows := `SELECT s.name FROM sqlite_schema s
+		JOIN sqlite_schema v ON v.type = 'table' AND v.sql LIKE 'CREATE VIRTUAL TABLE%USING fts5%'
+		WHERE s.type = 'table' AND s.name IN (v.name || '_data', v.name || '_idx',
+			v.name || '_content', v.name || '_docsize', v.name || '_config')`
+	tx, err := db.Beginx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, stat := range statTables {
+		if _, err := tx.Exec(`DELETE FROM ` + stat + ` WHERE tbl IN (` + shadows + `)`); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO sqlite_stat1 (tbl, idx, stat)
+		SELECT name, NULL, '1000000' FROM (` + shadows + `)`); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ANALYZE sqlite_schema`)
+	return err
 }
