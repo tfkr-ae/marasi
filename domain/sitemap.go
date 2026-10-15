@@ -44,6 +44,21 @@ type SitemapChild struct {
 	HasChildren bool  `json:"has_children"`
 }
 
+// SitemapQuery reads one page of a sitemap node's children (ADR-0040).
+//
+// Without Query it reads the stored all-traffic sitemap, leaving out the
+// content types in Exclusion. With Query it is in query mode: it counts
+// exactly the pairs that match Query.Text, are not hidden by
+// Query.Exclusion, and have an id at or below Query.AsOf (ADR-0033). In
+// query mode Exclusion must be empty.
+type SitemapQuery struct {
+	Node      string          // the node's name; "" for the origins
+	Exclusion []string        // all-traffic mode only
+	Query     *SelectionQuery // query mode when set
+	Cursor    string          // continues a previous page; "" for the first
+	Limit     int             // capped at MaxSitemapPage
+}
+
 // SitemapPage is one page of a sitemap node's children, by pair count,
 // highest first.
 type SitemapPage struct {
