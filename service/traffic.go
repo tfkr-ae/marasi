@@ -61,6 +61,19 @@ type trafficIndex struct {
 	Complete bool `json:"complete"`
 }
 
+// searchComplete reports whether every search index job in complete had
+// finished, which is when text conditions can miss no pair. Completeness
+// that names no search index job is incomplete.
+func searchComplete(complete map[string]bool) bool {
+	_, found := complete[domain.JobTrafficIndex]
+	for _, name := range []string{domain.JobTrafficIndex, domain.JobAnnotationIndex} {
+		if done, ok := complete[name]; ok && !done {
+			return false
+		}
+	}
+	return found
+}
+
 // jobCompleteness reports whether a background job a read depends on had
 // finished. While the sitemap job runs, pairs it has not reached are missing
 // from the sitemap's counts and from sitemap query conditions.
@@ -181,7 +194,7 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			NextCursor: page.NextCursor,
 			PrevCursor: page.PrevCursor,
 			AsOf:       page.AsOf,
-			Index:      trafficIndex{Complete: page.Complete[domain.JobTrafficIndex]},
+			Index:      trafficIndex{Complete: searchComplete(page.Complete)},
 		}
 		if complete, ok := page.Complete[domain.JobSitemap]; ok {
 			body.Sitemap = &jobCompleteness{Complete: complete}
@@ -264,7 +277,7 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 		writeJSON(w, r, http.StatusOK, trafficCount{
 			Count:  count.Count,
 			Capped: count.Capped,
-			Index:  trafficIndex{Complete: count.Complete[domain.JobTrafficIndex]},
+			Index:  trafficIndex{Complete: searchComplete(count.Complete)},
 		})
 	})
 	// GET /traffic/query checks q and exclude without running them, so it

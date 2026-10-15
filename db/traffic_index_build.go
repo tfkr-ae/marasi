@@ -116,6 +116,46 @@ func (state *indexBuildState) lowerBound(id uuid.UUID) {
 	}
 }
 
+// indexBuild describes one background job that fills a search index with the
+// pairs missing from it.
+type indexBuild struct {
+	// job is the background job's name.
+	job string
+	// docsize is the index's FTS5 docsize table, which holds one row per
+	// indexed key.
+	docsize string
+	// size is the SQL size, in bytes, of the stored text the job indexes for
+	// the pair r.
+	size string
+	// index writes the pair's rows in the index.
+	index func(tx sqlx.Ext, id uuid.UUID) error
+	// state is what the repository remembers about the build.
+	state func(repo *Repository) *indexBuildState
+}
+
+// trafficIndexBuild indexes pairs missing from the body index. It writes both
+// indexes for each pair, as capture does.
+var trafficIndexBuild = indexBuild{
+	job:     TrafficIndexJob,
+	docsize: "traffic_index_docsize",
+	size: `coalesce(octet_length(r.request_raw), 0) + coalesce(octet_length(r.response_raw), 0) +
+		coalesce(octet_length(r.metadata), 0) +
+		coalesce((SELECT octet_length(n.note) FROM notes n WHERE n.request_id = r.id), 0)`,
+	index: indexPair,
+	state: func(repo *Repository) *indexBuildState { return &repo.index },
+}
+
+// annotationIndexBuild backfills the annotation index for pairs indexed
+// before it existed (ADR-0038).
+var annotationIndexBuild = indexBuild{
+	job:     AnnotationIndexJob,
+	docsize: "traffic_annotation_index_docsize",
+	size: `coalesce(octet_length(r.metadata), 0) +
+		coalesce((SELECT octet_length(n.note) FROM notes n WHERE n.request_id = r.id), 0)`,
+	index: indexAnnotations,
+	state: func(repo *Repository) *indexBuildState { return &repo.annotationIndex },
+}
+
 // IndexMissingTraffic runs one batch of the traffic index build: it indexes
 // pairs missing from the traffic index, newest first, in one transaction, and
 // reports whether any remain. A batch takes pairs while their stored text fits
@@ -129,76 +169,102 @@ func (state *indexBuildState) lowerBound(id uuid.UUID) {
 // and later batches leave it out. A failure of the database itself is
 // returned without counting against the pair.
 func (repo *Repository) IndexMissingTraffic(maxBytes int) (int, bool, error) {
+	return repo.buildIndex(trafficIndexBuild, maxBytes)
+}
+
+// IndexMissingAnnotations runs one batch of the annotation index backfill, the
+// way IndexMissingTraffic runs one of the traffic index build. A batch is
+// capped by the size of the notes and metadata it indexes.
+func (repo *Repository) IndexMissingAnnotations(maxBytes int) (int, bool, error) {
+	return repo.buildIndex(annotationIndexBuild, maxBytes)
+}
+
+func (repo *Repository) buildIndex(build indexBuild, maxBytes int) (int, bool, error) {
 	repo.jobMu.Lock()
 	defer repo.jobMu.Unlock()
-	indexedFrom, skipped := repo.index.snapshot()
+	state := build.state(repo)
+	indexedFrom, skipped := state.snapshot()
 
 	var ids []uuid.UUID
 	var remaining bool
 	var failed *uuid.UUID
 	err := repo.inTx(func(tx *sqlx.Tx) error {
-		job, err := loadJob(tx, TrafficIndexJob)
+		job, err := loadJob(tx, build.job)
 		if err != nil {
-			return fmt.Errorf("reading the traffic index job: %w", err)
+			return fmt.Errorf("reading the %s job: %w", build.job, err)
 		}
 		if job.Complete {
 			return nil
 		}
-		ids, remaining, err = missingFromIndex(tx, indexedFrom, skipped, maxBytes)
+		ids, remaining, err = missingFromIndex(tx, build, indexedFrom, skipped, maxBytes)
 		if err != nil {
 			return err
 		}
 		for _, id := range ids {
-			if err := indexPair(tx, id); err != nil {
+			if err := build.index(tx, id); err != nil {
 				if !databaseFailure(err) {
 					failed = &id
 				}
 				return err
 			}
 		}
-		return advanceJob(tx, TrafficIndexJob, len(ids), remaining)
+		return advanceJob(tx, build.job, len(ids), remaining)
 	})
 	if err != nil {
-		if failed != nil && repo.index.failed(*failed) {
+		if failed != nil && state.failed(*failed) {
 			return 0, false, &SkippedPairError{ID: *failed, Err: err}
 		}
-		return 0, false, fmt.Errorf("indexing missing traffic: %w", err)
+		return 0, false, fmt.Errorf("running the %s job: %w", build.job, err)
 	}
 
 	if remaining {
-		repo.index.lowerBound(ids[len(ids)-1])
+		state.lowerBound(ids[len(ids)-1])
 	}
 	return len(ids), remaining, nil
 }
 
-// indexComplete reports whether every pair is in the traffic index, from the
-// saved job state. Traffic lists call it in the same transaction as their page
-// query, so the flag describes the snapshot the page was read from.
+// indexComplete reports whether every pair is in both search indexes, from the
+// saved job states. Traffic lists call it in the same transaction as their
+// page query, so the flag describes the snapshot the page was read from.
 func (repo *Repository) indexComplete(q sqlx.Queryer) (bool, error) {
-	job, err := loadJob(q, TrafficIndexJob)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
+	complete, err := searchIndexCompleteness(q)
 	if err != nil {
-		return false, fmt.Errorf("checking the traffic index: %w", err)
+		return false, err
 	}
-	return job.Complete, nil
+	for _, done := range complete {
+		if !done {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
-// missingFromIndex returns ids of pairs without an index row, newest first,
-// below indexedFrom when it is set and leaving out skipped, while their stored
-// text fits in maxBytes. It returns at least one id when any pair is missing,
-// and reports whether more pairs are missing than it returned. A pair is
-// missing when it has no key yet, or its key has no index row; the FTS5
-// docsize table holds one row per indexed key.
-func missingFromIndex(q sqlx.Queryer, indexedFrom *uuid.UUID, skipped []uuid.UUID, maxBytes int) ([]uuid.UUID, bool, error) {
-	query := `SELECT r.id,
-		coalesce(octet_length(r.request_raw), 0) + coalesce(octet_length(r.response_raw), 0) +
-		coalesce(octet_length(r.metadata), 0) +
-		coalesce((SELECT octet_length(n.note) FROM notes n WHERE n.request_id = r.id), 0) AS size
+// searchIndexCompleteness reports, for each of SearchIndexJobs, whether it is
+// complete, from the saved job state. A job without saved state is
+// incomplete.
+func searchIndexCompleteness(q sqlx.Queryer) (map[string]bool, error) {
+	complete := make(map[string]bool, len(SearchIndexJobs))
+	for _, name := range SearchIndexJobs {
+		job, err := loadJob(q, name)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("checking the %s job: %w", name, err)
+		}
+		complete[name] = err == nil && job.Complete
+	}
+	return complete, nil
+}
+
+// missingFromIndex returns ids of pairs without a row in the build's index,
+// newest first, below indexedFrom when it is set and leaving out skipped,
+// while the text the build indexes fits in maxBytes. It returns at least one
+// id when any pair is missing, and reports whether more pairs are missing than
+// it returned. A pair is missing when it has no key yet, or its key has no
+// row in the index's docsize table.
+func missingFromIndex(q sqlx.Queryer, build indexBuild, indexedFrom *uuid.UUID, skipped []uuid.UUID, maxBytes int) ([]uuid.UUID, bool, error) {
+	query := `SELECT r.id, ` + build.size + ` AS size
 		FROM request r
 		LEFT JOIN traffic_index_key k ON k.request_id = r.id
-		WHERE (k.id IS NULL OR NOT EXISTS (SELECT 1 FROM traffic_index_docsize d WHERE d.id = k.id))`
+		WHERE (k.id IS NULL OR NOT EXISTS (SELECT 1 FROM ` + build.docsize + ` d WHERE d.id = k.id))`
 	args := []any{}
 	if indexedFrom != nil {
 		query += ` AND r.id < ?`
@@ -214,7 +280,7 @@ func missingFromIndex(q sqlx.Queryer, indexedFrom *uuid.UUID, skipped []uuid.UUI
 
 	rows, err := q.Queryx(query, args...)
 	if err != nil {
-		return nil, false, fmt.Errorf("finding traffic missing from the index: %w", err)
+		return nil, false, fmt.Errorf("finding traffic missing from %s: %w", build.job, err)
 	}
 	defer rows.Close()
 	var ids []uuid.UUID
@@ -225,7 +291,7 @@ func missingFromIndex(q sqlx.Queryer, indexedFrom *uuid.UUID, skipped []uuid.UUI
 			Size int       `db:"size"`
 		}
 		if err := rows.StructScan(&pair); err != nil {
-			return nil, false, fmt.Errorf("finding traffic missing from the index: %w", err)
+			return nil, false, fmt.Errorf("finding traffic missing from %s: %w", build.job, err)
 		}
 		if len(ids) > 0 && total+pair.Size > maxBytes {
 			return ids, true, nil
@@ -234,7 +300,7 @@ func missingFromIndex(q sqlx.Queryer, indexedFrom *uuid.UUID, skipped []uuid.UUI
 		total += pair.Size
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, fmt.Errorf("finding traffic missing from the index: %w", err)
+		return nil, false, fmt.Errorf("finding traffic missing from %s: %w", build.job, err)
 	}
 	return ids, false, nil
 }
