@@ -18,7 +18,7 @@ import (
 
 // sortMigrationVersion is the migration that adds the sort indexes and
 // clears the length of pairs with no response.
-const sortMigrationVersion = 18
+const sortMigrationVersion = 17
 
 func TestSortMigration(t *testing.T) {
 	t.Run("should sort pairs stored before it by length, with no response last", func(t *testing.T) {
