@@ -358,8 +358,7 @@ func runTrafficBulk(cmd *cobra.Command, flags *trafficSelectionFlags, route, ope
 		return err
 	}
 	if jsonOutput {
-		_, err = cmd.OutOrStdout().Write(body)
-		return err
+		return writeJSONBody(cmd, body)
 	}
 	var result struct {
 		Count int `json:"count"`

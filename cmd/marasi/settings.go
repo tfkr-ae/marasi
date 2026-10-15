@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
@@ -48,8 +47,7 @@ var settingsListCmd = &cobra.Command{
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		var list struct {
 			Items []clientSetting `json:"items"`
@@ -57,7 +55,7 @@ var settingsListCmd = &cobra.Command{
 		if err := json.Unmarshal(body, &list); err != nil {
 			return fmt.Errorf("decoding client settings: %w", err)
 		}
-		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+		writer := newTableWriter(cmd.OutOrStdout())
 		for _, setting := range list.Items {
 			fmt.Fprintf(writer, "%s\t%s\n", setting.Key, truncateDisplay(compactJSON(setting.Value), settingsValueDisplayLimit))
 		}
@@ -75,8 +73,7 @@ var settingsGetCmd = &cobra.Command{
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		var setting clientSetting
 		if err := json.Unmarshal(body, &setting); err != nil {
@@ -116,8 +113,7 @@ example '"dark"'.`,
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "setting %s %s set\n", args[0], args[1])
 		return err
@@ -134,8 +130,7 @@ var settingsDeleteCmd = &cobra.Command{
 			return err
 		}
 		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
+			return writeJSONBody(cmd, body)
 		}
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "setting %s %s deleted\n", args[0], args[1])
 		return err
