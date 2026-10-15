@@ -31,9 +31,7 @@ traffic list --help lists the query fields.`
 type trafficSelectionFlags struct {
 	ids     []string
 	idsFile string
-	query   string
-	exclude []string
-	asOf    string
+	filter  *trafficQueryFlags
 }
 
 // addTrafficSelectionFlags registers the selection flags on cmd.
@@ -41,9 +39,7 @@ func addTrafficSelectionFlags(cmd *cobra.Command) *trafficSelectionFlags {
 	flags := &trafficSelectionFlags{}
 	cmd.Flags().StringArrayVar(&flags.ids, "id", nil, "UUID of a pair to select; repeat for more")
 	cmd.Flags().StringVar(&flags.idsFile, "ids-file", "", "File of pair UUIDs, one per line, or - for stdin")
-	cmd.Flags().StringVarP(&flags.query, "query", "q", "", "AIP-160 query that selects pairs; needs --as-of")
-	cmd.Flags().StringArrayVar(&flags.exclude, "exclude", nil, "Content type the query hides, exact or major/*; repeat for more")
-	cmd.Flags().StringVar(&flags.asOf, "as-of", "", "Newest pair UUID the query selects, from a traffic list page's as_of")
+	flags.filter = addTrafficQueryFlags(cmd, true)
 	return flags
 }
 
@@ -69,10 +65,7 @@ func (flags *trafficSelectionFlags) selection(cmd *cobra.Command) (json.RawMessa
 			IDs []string `json:"ids"`
 		}{IDs: ids})
 	case byQuery:
-		if !changed("as-of") {
-			return nil, errors.New("--query needs --as-of")
-		}
-		asOf, err := parseServiceID(flags.asOf)
+		asOf, err := flags.filter.asOfID(cmd)
 		if err != nil {
 			return nil, err
 		}
@@ -80,7 +73,7 @@ func (flags *trafficSelectionFlags) selection(cmd *cobra.Command) (json.RawMessa
 			Query     string   `json:"query"`
 			Exclusion []string `json:"exclusion,omitempty"`
 			AsOf      string   `json:"as_of"`
-		}{Query: flags.query, Exclusion: flags.exclude, AsOf: asOf})
+		}{Query: flags.filter.query, Exclusion: flags.filter.exclude, AsOf: asOf})
 	default:
 		return nil, errors.New("select pairs with --id, --ids-file, or --query with --as-of")
 	}
