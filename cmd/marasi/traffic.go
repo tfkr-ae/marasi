@@ -58,6 +58,10 @@ const trafficListLong = `List the newest page of traffic.
       in that launchpad, launchpad != "<launchpad id>" matches pairs not
       in it, including pairs in no launchpad, and launchpad:* matches
       pairs in any launchpad. The id is a quoted launchpad UUID.
+  sitemap
+      A sitemap node and everything below it, by node name, for example
+      sitemap = "https://api.example.com/users/{int}". != matches every
+      other pair. A name no node has matches nothing.
 
 Bare text, for example "hbGci", searches every text part. Text terms
 need at least 3 characters.

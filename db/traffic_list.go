@@ -109,6 +109,8 @@ func exclusionCondition(exclusion []string) (string, []any) {
 type trafficFilter struct {
 	conditions []string
 	args       []any
+	// sitemap means the filter depends on the sitemap job.
+	sitemap bool
 }
 
 // newTrafficFilter translates text and normalises exclusion. An invalid query
@@ -122,7 +124,7 @@ func newTrafficFilter(text string, exclusion []string) (trafficFilter, error) {
 	if err != nil {
 		return trafficFilter{}, err
 	}
-	var filter trafficFilter
+	filter := trafficFilter{sitemap: translated.sitemap}
 	if translated.where != "" {
 		filter.add(translated.where, translated.args...)
 	}
@@ -190,6 +192,13 @@ func (repo *Repository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, 
 			return err
 		}
 		page.Complete = map[string]bool{domain.JobTrafficIndex: indexComplete}
+		if filter.sitemap {
+			job, err := loadJob(tx, SitemapJob)
+			if err != nil {
+				return fmt.Errorf("reading the sitemap job: %w", err)
+			}
+			page.Complete[SitemapJob] = job.Complete
+		}
 
 		page.AsOf = q.AsOf
 		if page.AsOf == nil {
