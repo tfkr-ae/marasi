@@ -262,11 +262,12 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 		if err := linkPairToSitemap(tx, req.ID, req.Scheme, req.Host, req.Path, sitemapBucket{}); err != nil {
 			return err
 		}
-		return indexPair(tx, req.ID)
+		return queueIndex(tx, req.ID)
 	})
 	if err != nil {
 		return fmt.Errorf("inserting request %s : %w", req.ID, err)
 	}
+	repo.indexQueued()
 	repo.pairCaptured()
 	return nil
 }
@@ -319,11 +320,12 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 				return err
 			}
 		}
-		return indexPair(tx, resp.ID)
+		return queueIndex(tx, resp.ID)
 	})
 	if err != nil {
 		return fmt.Errorf("inserting response %s : %w", resp.ID, err)
 	}
+	repo.indexQueued()
 	return nil
 }
 
