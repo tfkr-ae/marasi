@@ -131,6 +131,8 @@ func TestManifest(t *testing.T) {
 		{"rare note term", fmt.Sprintf("note:%q", manifest.RareNoteTerm), 1, true},
 		{"big launchpad", fmt.Sprintf("launchpad = %q", manifest.BigLaunchpad), pairs / 100, false},
 		{"old launchpad", fmt.Sprintf("launchpad = %q", manifest.OldLaunchpad), 100, true},
+		{"old highlight", fmt.Sprintf("highlight = %d", manifest.OldHighlight), manifest.OldHighlightPairs, true},
+		{"highlights", "highlight:*", pairs / 200, false},
 	}
 	for _, c := range cases {
 		t.Run("should plant the "+c.name, func(t *testing.T) {
