@@ -264,6 +264,14 @@ func (m *mockTrafficRepo) UnlinkTraffic(domain.Selection, domain.LinkTarget) (in
 	return 0, errors.New("not implemented")
 }
 
+func (m *mockTrafficRepo) AppendNote(domain.Selection, string) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) ClearNotes(domain.Selection) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
 func setupTestExtension(t *testing.T, luaCode string, options ...func(*Runtime) error) (*Runtime, *mockProxyService) {
 	t.Helper()
 
