@@ -11,22 +11,6 @@ import (
 	"github.com/tfkr-ae/marasi/domain"
 )
 
-// TrafficIndexJob is the background job that indexes pairs missing from the
-// traffic index (ADR-0026).
-const TrafficIndexJob = domain.JobTrafficIndex
-
-// AnnotationIndexJob is the background job that backfills the annotation
-// index with the notes and metadata of pairs indexed before it (ADR-0038).
-const AnnotationIndexJob = domain.JobAnnotationIndex
-
-// SearchIndexJobs are the jobs that text search depends on. A traffic read's
-// index.complete is true when all of them are complete.
-var SearchIndexJobs = []string{TrafficIndexJob, AnnotationIndexJob}
-
-// PrettifiedMoveJob is the background job that moves prettified copies out of
-// metadata (ADR-0036).
-const PrettifiedMoveJob = "prettified_move"
-
 var (
 	// ErrUnknownJob means no background job has the requested name.
 	ErrUnknownJob = errors.New("unknown background job")
@@ -37,7 +21,7 @@ var (
 // JobState is the saved state of one background job. Total is 0 until the
 // job has counted its work.
 type JobState struct {
-	Name     string
+	Name     domain.JobName
 	Complete bool
 	Done     int64
 	Total    int64
@@ -46,7 +30,7 @@ type JobState struct {
 // jobDefinition registers a background job with this binary. Every job works
 // through the project's pairs, so a project without pairs has nothing to do.
 type jobDefinition struct {
-	name string
+	name domain.JobName
 	// version is the job's rule or decoder version. A project whose saved
 	// version differs resets the job when it opens.
 	version int
@@ -69,7 +53,7 @@ type jobDefinition struct {
 // run.
 var jobRegistry = []jobDefinition{
 	{
-		name:    TrafficIndexJob,
+		name:    domain.JobTrafficIndex,
 		version: bodyDecoderVersion,
 		batch: func(repo *Repository, maxBytes int) (int, bool, error) {
 			return repo.IndexMissingTraffic(maxBytes)
@@ -82,7 +66,7 @@ var jobRegistry = []jobDefinition{
 		rebuildable: true,
 	},
 	{
-		name:    AnnotationIndexJob,
+		name:    domain.JobAnnotationIndex,
 		version: 1,
 		batch: func(repo *Repository, maxBytes int) (int, bool, error) {
 			return repo.IndexMissingAnnotations(maxBytes)
@@ -95,7 +79,7 @@ var jobRegistry = []jobDefinition{
 		rebuildable: true,
 	},
 	{
-		name:    PrettifiedMoveJob,
+		name:    domain.JobPrettifiedMove,
 		version: 1,
 		batch: func(repo *Repository, maxBytes int) (int, bool, error) {
 			return repo.MovePrettified(maxBytes)
@@ -105,7 +89,7 @@ var jobRegistry = []jobDefinition{
 	sitemapJob,
 }
 
-func findJob(name string) (jobDefinition, bool) {
+func findJob(name domain.JobName) (jobDefinition, bool) {
 	for _, job := range jobRegistry {
 		if job.name == name {
 			return job, true
@@ -116,7 +100,7 @@ func findJob(name string) (jobDefinition, bool) {
 
 // jobRow is a background_job row.
 type jobRow struct {
-	Name      string         `db:"name"`
+	Name      domain.JobName `db:"name"`
 	Version   int            `db:"version"`
 	Complete  bool           `db:"complete"`
 	Done      int64          `db:"done"`
@@ -124,7 +108,7 @@ type jobRow struct {
 	HighWater sql.NullString `db:"high_water"`
 }
 
-func loadJob(q sqlx.Queryer, name string) (jobRow, error) {
+func loadJob(q sqlx.Queryer, name domain.JobName) (jobRow, error) {
 	var row jobRow
 	err := sqlx.Get(q, &row, `SELECT name, version, complete, done, total, high_water FROM background_job WHERE name = ?`, name)
 	return row, err
@@ -208,7 +192,7 @@ func reopenJob(tx *sqlx.Tx, row jobRow, newest sql.NullString) error {
 // advanceJob records a batch of the job that processed pairs, in the batch's
 // transaction. A job counts its work on its first batch. When no work
 // remains, the job is complete and done equals total.
-func advanceJob(tx *sqlx.Tx, name string, processed int, remaining bool) error {
+func advanceJob(tx *sqlx.Tx, name domain.JobName, processed int, remaining bool) error {
 	_, err := tx.Exec(`UPDATE background_job SET
 		total = coalesce(total, (SELECT count(*) FROM request)),
 		done = done + ?,
@@ -246,7 +230,7 @@ func (repo *Repository) ListJobs() ([]JobState, error) {
 	if err := repo.dbConn.Select(&rows, `SELECT name, version, complete, done, total, high_water FROM background_job`); err != nil {
 		return nil, fmt.Errorf("listing background jobs: %w", err)
 	}
-	saved := make(map[string]jobRow, len(rows))
+	saved := make(map[domain.JobName]jobRow, len(rows))
 	for _, row := range rows {
 		saved[row.Name] = row
 	}
@@ -264,7 +248,7 @@ func (repo *Repository) ListJobs() ([]JobState, error) {
 // RunJobBatch runs one batch of the named background job, newest pairs first,
 // with stored text capped at maxBytes. It returns how many pairs the batch
 // processed and whether work remains. A complete job does nothing.
-func (repo *Repository) RunJobBatch(name string, maxBytes int) (int, bool, error) {
+func (repo *Repository) RunJobBatch(name domain.JobName, maxBytes int) (int, bool, error) {
 	job, ok := findJob(name)
 	if !ok {
 		return 0, false, fmt.Errorf("%w: %s", ErrUnknownJob, name)
@@ -275,7 +259,7 @@ func (repo *Repository) RunJobBatch(name string, maxBytes int) (int, bool, error
 // RebuildJob resets the named background job so that it redoes all of its
 // work. It waits for the job's batch in flight. The job's output is incomplete
 // until the job runs again.
-func (repo *Repository) RebuildJob(name string) error {
+func (repo *Repository) RebuildJob(name domain.JobName) error {
 	job, ok := findJob(name)
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrUnknownJob, name)

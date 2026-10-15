@@ -15,12 +15,25 @@ import (
 // unknown or missing field, or names the wrong number of targets.
 var errInvalidBulkRequest = errors.New("invalid bulk request")
 
+// bulkChange is the kind of change a bulk route makes, as named in its
+// traffic.changed event.
+type bulkChange string
+
+const (
+	changeHighlight bulkChange = "highlight"
+	changeMetadata  bulkChange = "metadata"
+	changeNote      bulkChange = "note"
+	changeLink      bulkChange = "link"
+	changeUnlink    bulkChange = "unlink"
+	changeDelete    bulkChange = "delete"
+)
+
 // trafficChanged is the JSON body of a traffic.changed SSE event, which every
 // bulk route publishes once. Selection is the selection as received;
 // encoding/json compacts its whitespace.
 type trafficChanged struct {
-	Change    string          `json:"change"` // highlight, metadata, note, link, unlink or delete
-	Count     int             `json:"count"`  // number of pairs changed
+	Change    bulkChange      `json:"change"`
+	Count     int             `json:"count"` // number of pairs changed
 	Selection json.RawMessage `json:"selection"`
 }
 
@@ -48,15 +61,7 @@ type bulkBody interface {
 // returns errInvalidBulkRequest; an invalid selection wraps
 // domain.ErrInvalidSelection.
 func decodeBulkBody(r *http.Request, body bulkBody) (domain.Selection, error) {
-	if r.Body == nil {
-		return domain.Selection{}, errInvalidBulkRequest
-	}
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(body); err != nil {
-		return domain.Selection{}, errInvalidBulkRequest
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+	if r.Body == nil || !decodeStrictJSON(r.Body, body) {
 		return domain.Selection{}, errInvalidBulkRequest
 	}
 	raw := body.rawSelection().Selection
@@ -70,13 +75,25 @@ func decodeBulkBody(r *http.Request, body bulkBody) (domain.Selection, error) {
 	return sel, nil
 }
 
+// decodeStrictJSON decodes exactly one JSON value from body into v. It
+// reports false for malformed JSON, an unknown struct field, or anything
+// after the value.
+func decodeStrictJSON(body io.Reader, v any) bool {
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(v); err != nil {
+		return false
+	}
+	return errors.Is(decoder.Decode(&struct{}{}), io.EOF)
+}
+
 // serveBulk runs one bulk operation: it decodes r into body, calls apply with
 // the traffic repository and the selection, writes {"count": n}, and
 // publishes one traffic.changed event with change. apply may return
 // errInvalidBulkRequest for operation fields it rejects. Failures are written as
 // JSON errors and publish nothing: a bad body or selection or query is 400,
 // a missing target is 404. It reports whether the operation ran.
-func serveBulk(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, events *eventBroadcaster, change string, body bulkBody, apply func(repo domain.TrafficRepository, sel domain.Selection) (int, error)) bool {
+func serveBulk(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, events *eventBroadcaster, change bulkChange, body bulkBody, apply func(repo domain.TrafficRepository, sel domain.Selection) (int, error)) bool {
 	sel, err := decodeBulkBody(r, body)
 	if err != nil {
 		writeBulkError(w, r, err)
@@ -101,9 +118,10 @@ func serveBulk(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, even
 func writeBulkError(w http.ResponseWriter, r *http.Request, err error) {
 	var queryErr *domain.QueryError
 	switch {
-	case errors.Is(err, errInvalidBulkRequest), errors.Is(err, domain.ErrEmptyNote),
-		errors.Is(err, domain.ErrInvalidHighlight):
+	case errors.Is(err, errInvalidBulkRequest):
 		writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_bulk_request"})
+	case errors.Is(err, domain.ErrEmptyNote), errors.Is(err, domain.ErrInvalidHighlight):
+		writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_bulk_request", Message: err.Error()})
 	case errors.Is(err, domain.ErrInvalidSelection):
 		writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_selection", Message: err.Error()})
 	case errors.As(err, &queryErr):
@@ -152,7 +170,9 @@ type bulkHighlightBody struct {
 	Highlight json.RawMessage `json:"highlight"`
 }
 
-// apply sets or clears the body's highlight on sel.
+// apply sets or clears the body's highlight on sel. The repository checks
+// the highlight's range, so an out-of-range one returns
+// domain.ErrInvalidHighlight with a message.
 func (b *bulkHighlightBody) apply(repo domain.TrafficRepository, sel domain.Selection) (int, error) {
 	if b.Highlight == nil {
 		return 0, errInvalidBulkRequest
@@ -161,7 +181,7 @@ func (b *bulkHighlightBody) apply(repo domain.TrafficRepository, sel domain.Sele
 		return repo.ClearHighlight(sel)
 	}
 	var h int
-	if err := json.Unmarshal(b.Highlight, &h); err != nil || h < domain.MinHighlight || h > domain.MaxHighlight {
+	if err := json.Unmarshal(b.Highlight, &h); err != nil {
 		return 0, errInvalidBulkRequest
 	}
 	return repo.SetHighlight(sel, h)
@@ -192,25 +212,25 @@ func (b *bulkMetadataBody) apply(repo domain.TrafficRepository, sel domain.Selec
 func addTrafficBulkRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
 	mux.HandleFunc("POST /traffic/bulk/metadata", func(w http.ResponseWriter, r *http.Request) {
 		var body bulkMetadataBody
-		serveBulk(w, r, proxy, events, "metadata", &body, body.apply)
+		serveBulk(w, r, proxy, events, changeMetadata, &body, body.apply)
 	})
 	addTrafficBulkNoteRoute(mux, proxy, events)
 	mux.HandleFunc("POST /traffic/bulk/highlight", func(w http.ResponseWriter, r *http.Request) {
 		var body bulkHighlightBody
-		serveBulk(w, r, proxy, events, "highlight", &body, body.apply)
+		serveBulk(w, r, proxy, events, changeHighlight, &body, body.apply)
 	})
 	mux.HandleFunc("POST /traffic/bulk/delete", func(w http.ResponseWriter, r *http.Request) {
 		// Deleted pairs leave the sitemap counts, so clients re-read the
 		// nodes they have expanded.
-		if serveBulk(w, r, proxy, events, "delete", &bulkSelection{}, domain.TrafficRepository.DeleteTraffic) {
+		if serveBulk(w, r, proxy, events, changeDelete, &bulkSelection{}, domain.TrafficRepository.DeleteTraffic) {
 			events.publishSitemapChanged("delete")
 		}
 	})
-	for change, run := range map[string]func(domain.TrafficRepository, domain.Selection, domain.LinkTarget) (int, error){
-		"link":   domain.TrafficRepository.LinkTraffic,
-		"unlink": domain.TrafficRepository.UnlinkTraffic,
+	for change, run := range map[bulkChange]func(domain.TrafficRepository, domain.Selection, domain.LinkTarget) (int, error){
+		changeLink:   domain.TrafficRepository.LinkTraffic,
+		changeUnlink: domain.TrafficRepository.UnlinkTraffic,
 	} {
-		mux.HandleFunc("POST /traffic/bulk/"+change, func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("POST /traffic/bulk/"+string(change), func(w http.ResponseWriter, r *http.Request) {
 			var body bulkLinkBody
 			serveBulk(w, r, proxy, events, change, &body, func(repo domain.TrafficRepository, sel domain.Selection) (int, error) {
 				target, err := body.target()

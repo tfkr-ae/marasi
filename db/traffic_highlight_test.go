@@ -246,7 +246,7 @@ func TestTrafficRepo_ReadsReturnHighlight(t *testing.T) {
 		t.Fatalf("ListTraffic() error = %v", err)
 	}
 	check("ListTraffic", page.Items)
-	launchpadItems, err := repo.GetLaunchpadRequests(launchpadID, "", nil, "")
+	launchpadItems, _, err := repo.GetLaunchpadRequests(launchpadID, "", nil, "")
 	if err != nil {
 		t.Fatalf("GetLaunchpadRequests() error = %v", err)
 	}

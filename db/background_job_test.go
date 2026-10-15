@@ -3,6 +3,8 @@ package db
 import (
 	"errors"
 	"testing"
+
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // trafficIndexJob returns the saved state of the traffic index build.
@@ -13,11 +15,11 @@ func trafficIndexJob(t *testing.T, repo *Repository) JobState {
 		t.Fatalf("ListJobs: %v", err)
 	}
 	for _, job := range jobs {
-		if job.Name == TrafficIndexJob {
+		if job.Name == domain.JobTrafficIndex {
 			return job
 		}
 	}
-	t.Fatalf("\nwanted:\na %s job\ngot:\n%+v", TrafficIndexJob, jobs)
+	t.Fatalf("\nwanted:\na %s job\ngot:\n%+v", domain.JobTrafficIndex, jobs)
 	return JobState{}
 }
 
@@ -27,7 +29,7 @@ func TestBackgroundJobs(t *testing.T) {
 		defer teardown()
 
 		got := trafficIndexJob(t, repo)
-		want := JobState{Name: TrafficIndexJob, Complete: true}
+		want := JobState{Name: domain.JobTrafficIndex, Complete: true}
 		if got != want {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
 		}
@@ -50,10 +52,10 @@ func TestBackgroundJobs(t *testing.T) {
 
 		indexMissing(t, repo, indexAll)
 
-		if got, want := trafficIndexJob(t, repo), (JobState{Name: TrafficIndexJob, Complete: true, Done: 2, Total: 2}); got != want {
+		if got, want := trafficIndexJob(t, repo), (JobState{Name: domain.JobTrafficIndex, Complete: true, Done: 2, Total: 2}); got != want {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
 		}
-		finishJob(t, repo, AnnotationIndexJob)
+		finishJob(t, repo, domain.JobAnnotationIndex)
 		if !indexComplete(t, repo) {
 			t.Fatalf("\nwanted:\ncomplete index\ngot:\nincomplete")
 		}
@@ -70,7 +72,7 @@ func TestBackgroundJobs(t *testing.T) {
 
 		indexMissing(t, repo, 2500)
 		before := trafficIndexJob(t, repo)
-		if want := (JobState{Name: TrafficIndexJob, Done: 2, Total: 5}); before != want {
+		if want := (JobState{Name: domain.JobTrafficIndex, Done: 2, Total: 5}); before != want {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, before)
 		}
 
@@ -97,7 +99,7 @@ func TestBackgroundJobs(t *testing.T) {
 		defer teardown()
 		ids := captureTextPairs(t, repo, textSearchPairs())
 
-		if err := repo.RebuildJob(TrafficIndexJob); err != nil {
+		if err := repo.RebuildJob(domain.JobTrafficIndex); err != nil {
 			t.Fatalf("RebuildJob: %v", err)
 		}
 		if got := trafficIndexJob(t, repo); got.Complete || got.Done != 0 {
@@ -109,7 +111,7 @@ func TestBackgroundJobs(t *testing.T) {
 
 		indexMissing(t, repo, indexAll)
 
-		want := JobState{Name: TrafficIndexJob, Complete: true, Done: int64(len(ids)), Total: int64(len(ids))}
+		want := JobState{Name: domain.JobTrafficIndex, Complete: true, Done: int64(len(ids)), Total: int64(len(ids))}
 		if got := trafficIndexJob(t, repo); got != want {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
 		}
@@ -131,7 +133,7 @@ func TestBackgroundJobs(t *testing.T) {
 		repo := openTestProjectFile(t, path)
 		ids := captureTextPairs(t, repo, textSearchPairs())
 		// Another binary ran the job under a different rule version.
-		if _, err := repo.dbConn.Exec(`UPDATE background_job SET version = version + 1 WHERE name = ?`, TrafficIndexJob); err != nil {
+		if _, err := repo.dbConn.Exec(`UPDATE background_job SET version = version + 1 WHERE name = ?`, domain.JobTrafficIndex); err != nil {
 			t.Fatalf("changing the saved version: %v", err)
 		}
 

@@ -44,6 +44,8 @@ type trafficCount struct {
 	Count  int          `json:"count"`
 	Capped bool         `json:"capped"`
 	Index  trafficIndex `json:"index"`
+	// Sitemap is set when the query has a sitemap condition.
+	Sitemap *jobCompleteness `json:"sitemap,omitempty"`
 }
 
 // trafficList is the body of a traffic list paged by UUID, such as an
@@ -64,14 +66,25 @@ type trafficIndex struct {
 // searchComplete reports whether every search index job in complete had
 // finished, which is when text conditions can miss no pair. Completeness
 // that names no search index job is incomplete.
-func searchComplete(complete map[string]bool) bool {
+func searchComplete(complete map[domain.JobName]bool) bool {
 	_, found := complete[domain.JobTrafficIndex]
-	for _, name := range []string{domain.JobTrafficIndex, domain.JobAnnotationIndex} {
+	for _, name := range domain.SearchIndexJobs {
 		if done, ok := complete[name]; ok && !done {
 			return false
 		}
 	}
 	return found
+}
+
+// sitemapCompleteness returns the sitemap job's completeness when complete
+// names it, which a traffic read does when its query has a sitemap
+// condition, and nil otherwise.
+func sitemapCompleteness(complete map[domain.JobName]bool) *jobCompleteness {
+	done, ok := complete[domain.JobSitemap]
+	if !ok {
+		return nil
+	}
+	return &jobCompleteness{Complete: done}
 }
 
 // jobCompleteness reports whether a background job a read depends on had
@@ -86,6 +99,8 @@ type sitemapPage struct {
 	Items      []domain.SitemapChild `json:"items"`
 	NextCursor *string               `json:"next_cursor"`
 	Sitemap    jobCompleteness       `json:"sitemap"`
+	// Index is set in query mode when the query has a text term.
+	Index *trafficIndex `json:"index,omitempty"`
 }
 
 // contentTypeCounts is the body of GET /traffic/content-types.
@@ -175,9 +190,11 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		page, err := repo.ListTraffic(query)
+		page, err := repo.ListTrafficContext(r.Context(), query)
 		var queryErr *domain.QueryError
 		switch {
+		case r.Context().Err() != nil:
+			return // the client went away; nobody reads the answer
 		case errors.As(err, &queryErr):
 			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
 			return
@@ -195,9 +212,7 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			PrevCursor: page.PrevCursor,
 			AsOf:       page.AsOf,
 			Index:      trafficIndex{Complete: searchComplete(page.Complete)},
-		}
-		if complete, ok := page.Complete[domain.JobSitemap]; ok {
-			body.Sitemap = &jobCompleteness{Complete: complete}
+			Sitemap:    sitemapCompleteness(page.Complete),
 		}
 		writeJSON(w, r, http.StatusOK, body)
 	})
@@ -230,11 +245,15 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
 			return
 		}
-		writeJSON(w, r, http.StatusOK, sitemapPage{
+		body := sitemapPage{
 			Items:      page.Children,
 			NextCursor: page.NextCursor,
 			Sitemap:    jobCompleteness{Complete: page.Complete[domain.JobSitemap]},
-		})
+		}
+		if _, ok := page.Complete[domain.JobTrafficIndex]; ok {
+			body.Index = &trafficIndex{Complete: searchComplete(page.Complete)}
+		}
+		writeJSON(w, r, http.StatusOK, body)
 	})
 	mux.HandleFunc("GET /traffic/content-types", func(w http.ResponseWriter, r *http.Request) {
 		repo, err := proxy.GetTrafficRepo()
@@ -242,7 +261,10 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		counts, err := repo.CountContentTypes()
+		counts, err := repo.CountContentTypesContext(r.Context())
+		if r.Context().Err() != nil {
+			return // the client went away; nobody reads the answer
+		}
 		if err != nil {
 			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
 			return
@@ -264,9 +286,11 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		count, err := repo.CountTraffic(query)
+		count, err := repo.CountTrafficContext(r.Context(), query)
 		var queryErr *domain.QueryError
 		switch {
+		case r.Context().Err() != nil:
+			return // the client went away; nobody reads the answer
 		case errors.As(err, &queryErr):
 			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
 			return
@@ -275,9 +299,10 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			return
 		}
 		writeJSON(w, r, http.StatusOK, trafficCount{
-			Count:  count.Count,
-			Capped: count.Capped,
-			Index:  trafficIndex{Complete: searchComplete(count.Complete)},
+			Count:   count.Count,
+			Capped:  count.Capped,
+			Index:   trafficIndex{Complete: searchComplete(count.Complete)},
+			Sitemap: sitemapCompleteness(count.Complete),
 		})
 	})
 	// GET /traffic/query checks q and exclude without running them, so it

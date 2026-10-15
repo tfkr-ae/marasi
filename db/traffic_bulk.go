@@ -13,25 +13,25 @@ import (
 // selectionSubquery returns a subquery selecting the id of every pair in sel
 // (ADR-0033), with its arguments. Ids are bound as one JSON array read with
 // json_each, so a selection of any size uses a single parameter; ids with no
-// pair are dropped by the join. A query selection is the translated query,
+// pair are dropped by the join and a repeated id is selected once. A query selection is the translated query,
 // plus the exclusion, plus id <= as_of. An invalid query selection returns a
 // *domain.QueryError; a selection with neither or both forms wraps
 // domain.ErrInvalidSelection.
 func selectionSubquery(sel domain.Selection) (string, []any, error) {
 	switch {
 	case sel.Query != nil && sel.IDs == nil:
-		filter, err := newTrafficFilter(sel.Query.Text, sel.Query.Exclusion)
+		match, err := newTrafficMatch(sel.Query.Text, sel.Query.Exclusion)
 		if err != nil {
 			return "", nil, err
 		}
-		filter.add(`request.id <= ?`, sel.Query.AsOf)
-		return `SELECT request.id FROM request` + filter.where(), filter.args, nil
+		match.add(`request.id <= ?`, sel.Query.AsOf)
+		return `SELECT request.id FROM request` + match.where(), match.args, nil
 	case sel.Query == nil && len(sel.IDs) > 0:
 		ids, err := json.Marshal(sel.IDs)
 		if err != nil {
 			return "", nil, fmt.Errorf("encoding selection ids: %w", err)
 		}
-		return `SELECT request.id FROM json_each(?) AS selected JOIN request ON request.id = selected.value`, []any{string(ids)}, nil
+		return `SELECT DISTINCT request.id FROM json_each(?) AS selected JOIN request ON request.id = selected.value`, []any{string(ids)}, nil
 	default:
 		return "", nil, fmt.Errorf("%w: expected either ids or a query", domain.ErrInvalidSelection)
 	}
@@ -47,7 +47,8 @@ func (repo *Repository) bulkInTx(sel domain.Selection, apply func(tx *sqlx.Tx, s
 	}
 	var count int
 	err = repo.inTx(func(tx *sqlx.Tx) error {
-		count, err = apply(tx, selected, args)
+		changed, err := apply(tx, selected, args)
+		count = changed
 		return err
 	})
 	if err != nil {

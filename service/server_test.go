@@ -129,12 +129,13 @@ func (s *stubLaunchpadRepository) UpdateLaunchpad(id uuid.UUID, name, descriptio
 	return nil
 }
 
-func (s *stubLaunchpadRepository) GetLaunchpadRequests(id uuid.UUID, _ string, _ []string, _ string) ([]*domain.RequestResponseSummary, error) {
+func (s *stubLaunchpadRepository) GetLaunchpadRequests(id uuid.UUID, _ string, _ []string, _ string) ([]*domain.RequestResponseSummary, map[domain.JobName]bool, error) {
+	complete := map[domain.JobName]bool{domain.JobTrafficIndex: true}
 	items := s.members[id]
 	if items == nil {
-		return []*domain.RequestResponseSummary{}, nil
+		return []*domain.RequestResponseSummary{}, complete, nil
 	}
-	return items, nil
+	return items, complete, nil
 }
 
 func (s *stubLaunchpadRepository) LinkRequestToLaunchpad(requestID, launchpadID uuid.UUID) error {
@@ -224,7 +225,7 @@ func (s *stubTrafficRepository) ListNotes(cursor *uuid.UUID, limit int) ([]*doma
 	return matched, s.nextCursor, nil
 }
 
-func (s *stubTrafficRepository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, error) {
+func (s *stubTrafficRepository) ListTrafficContext(_ context.Context, q domain.TrafficQuery) (domain.TrafficPage, error) {
 	s.listed = true
 	s.listQuery = q
 	if s.listErr != nil {
@@ -240,7 +241,7 @@ func (s *stubTrafficRepository) ListTraffic(q domain.TrafficQuery) (domain.Traff
 	return domain.TrafficPage{
 		Items:      items,
 		NextCursor: s.pageCursor,
-		Complete:   map[string]bool{domain.JobTrafficIndex: !s.indexIncomplete},
+		Complete:   map[domain.JobName]bool{domain.JobTrafficIndex: !s.indexIncomplete},
 	}, nil
 }
 
@@ -713,7 +714,7 @@ func TestLaunchpadControlAPI(t *testing.T) {
 		repo := &stubLaunchpadRepository{items: map[uuid.UUID]*domain.Launchpad{id: {ID: id, Name: "Login", Description: ""}}}
 		server := newTestServer(&marasi.Proxy{LaunchpadRepo: repo}, func() {})
 		response := requestLaunchpad(server, http.MethodGet, "/launchpad/"+id.String(), "")
-		want := `{"id":"01938032-1b17-7243-b035-e6a9f4645904","name":"Login","description":"","items":[]}` + "\n"
+		want := `{"id":"01938032-1b17-7243-b035-e6a9f4645904","name":"Login","description":"","items":[],"index":{"complete":true}}` + "\n"
 		if response.Code != http.StatusOK || response.Body.String() != want {
 			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
 		}
@@ -757,7 +758,7 @@ func TestLaunchpadControlAPI(t *testing.T) {
 		}
 		server := newTestServer(&marasi.Proxy{LaunchpadRepo: repo}, func() {})
 		response := requestLaunchpad(server, http.MethodGet, "/launchpad/"+id.String(), "")
-		want := `{"id":"` + id.String() + `","name":"Login","description":"Try variants","items":[{"id":"` + older.String() + `","scheme":"https","method":"GET","host":"example.com","path":"/seed","status":"N/A","status_code":-1,"content_type":"","length":"0","metadata":{"source":"seed"},"requested_at":"2026-01-02T03:04:05Z","responded_at":null,"highlight":null},{"id":"` + newer.String() + `","scheme":"https","method":"POST","host":"example.com","path":"/login","status":"200 OK","status_code":200,"content_type":"text/plain","length":"2","metadata":{},"requested_at":"2026-01-02T03:04:05Z","responded_at":"2026-01-02T03:04:06Z","highlight":null}]}` + "\n"
+		want := `{"id":"` + id.String() + `","name":"Login","description":"Try variants","items":[{"id":"` + older.String() + `","scheme":"https","method":"GET","host":"example.com","path":"/seed","status":"N/A","status_code":-1,"content_type":"","length":"0","metadata":{"source":"seed"},"requested_at":"2026-01-02T03:04:05Z","responded_at":null,"highlight":null},{"id":"` + newer.String() + `","scheme":"https","method":"POST","host":"example.com","path":"/login","status":"200 OK","status_code":200,"content_type":"text/plain","length":"2","metadata":{},"requested_at":"2026-01-02T03:04:05Z","responded_at":"2026-01-02T03:04:06Z","highlight":null}],"index":{"complete":true}}` + "\n"
 		if response.Code != http.StatusOK || response.Body.String() != want {
 			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
 		}

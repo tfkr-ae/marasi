@@ -44,9 +44,11 @@ type LaunchpadRepository interface {
 	// to a launchpad that match a traffic query and are not hidden by a
 	// content-type exclusion, in the AIP-132 orderBy order (see
 	// TrafficQuery.OrderBy). An empty orderBy lists them oldest first. An
-	// empty query matches every linked request. An invalid query, exclusion
-	// or orderBy returns a *QueryError.
-	GetLaunchpadRequests(id uuid.UUID, query string, exclusion []string, orderBy string) ([]*RequestResponseSummary, error)
+	// empty query matches every linked request. complete reports, for each
+	// background job the answer depends on, whether it had finished, as
+	// TrafficPage.Complete does. An invalid query, exclusion or orderBy
+	// returns a *QueryError.
+	GetLaunchpadRequests(id uuid.UUID, query string, exclusion []string, orderBy string) (items []*RequestResponseSummary, complete map[JobName]bool, err error)
 
 	// LinkRequestToLaunchpad associates a request with a launchpad using their respective UUIDs.
 	// This allows for organizing requests into collections.

@@ -72,11 +72,19 @@ type TrafficRepository interface {
 	// cursor, or one made under another sort, wraps ErrInvalidCursor.
 	ListTraffic(q TrafficQuery) (TrafficPage, error)
 
+	// ListTrafficContext is ListTraffic for a read that stops when ctx
+	// ends.
+	ListTrafficContext(ctx context.Context, q TrafficQuery) (TrafficPage, error)
+
 	// CountTraffic counts the pairs that match q, exactly up to
 	// MaxTrafficCount and capped above it, with the completeness of each
 	// background job the answer depends on. An invalid query or exclusion
 	// returns a *QueryError.
 	CountTraffic(q TrafficCountQuery) (TrafficCount, error)
+
+	// CountTrafficContext is CountTraffic for a count that stops when ctx
+	// ends.
+	CountTrafficContext(ctx context.Context, q TrafficCountQuery) (TrafficCount, error)
 
 	// ListSitemapChildren returns one page of the children of the sitemap
 	// node q.Node, or of the origins when it is empty, by pair count,
@@ -118,6 +126,10 @@ type TrafficRepository interface {
 	// buckets, or from the pairs themselves while the sitemap job is
 	// incomplete (ADR-0040).
 	CountContentTypes() (ContentTypeCounts, error)
+
+	// CountContentTypesContext is CountContentTypes for a read that stops
+	// when ctx ends.
+	CountContentTypesContext(ctx context.Context) (ContentTypeCounts, error)
 
 	// LinkTraffic links every pair in sel to target in one transaction and
 	// returns the number of pairs it newly linked; pairs already linked are
@@ -256,5 +268,5 @@ type ContentTypeCounts struct {
 	Counts []*ContentTypeCount
 	// Complete reports whether the sitemap job had finished, keyed by
 	// JobSitemap. The counts are exact either way.
-	Complete map[string]bool
+	Complete map[JobName]bool
 }

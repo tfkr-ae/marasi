@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -134,43 +135,68 @@ func exclusionCondition(exclusion []string) (string, []any) {
 	return `content_type IS NULL OR content_type = '' OR (` + strings.Join(parts, ` AND `) + `)`, args
 }
 
-// trafficFilter is a translated traffic query and exclusion, ready to be
+// trafficMatch is a translated traffic query and exclusion, ready to be
 // combined with other conditions in a WHERE clause.
-type trafficFilter struct {
+type trafficMatch struct {
 	conditions []string
 	args       []any
-	// sitemap means the filter depends on the sitemap job.
+	// sitemap means the match depends on the sitemap job.
 	sitemap bool
+	// text means the match has a text term, so it depends on the search
+	// index jobs.
+	text bool
 }
 
-// newTrafficFilter translates text and normalises exclusion. An invalid query
+// jobs returns the background jobs whose progress changes which pairs m
+// matches: the search index jobs when it has a text term, and the sitemap
+// job when it names the sitemap field.
+func (m trafficMatch) jobs() []domain.JobName {
+	var jobs []domain.JobName
+	if m.text {
+		jobs = append(jobs, domain.SearchIndexJobs...)
+	}
+	if m.sitemap {
+		jobs = append(jobs, domain.JobSitemap)
+	}
+	return jobs
+}
+
+// listCompleteness reports the completeness of the jobs a traffic list or
+// count of the pairs m matches depends on. Lists and counts always report
+// the search index jobs, which clients show as index.complete, even when m
+// has no text term.
+func listCompleteness(q sqlx.Queryer, m trafficMatch) (map[domain.JobName]bool, error) {
+	return jobCompleteness(q, append(slices.Clone(domain.SearchIndexJobs), m.jobs()...)...)
+}
+
+// newTrafficMatch translates text and normalises exclusion. An invalid query
 // or exclusion returns a *domain.QueryError.
-func newTrafficFilter(text string, exclusion []string) (trafficFilter, error) {
-	return newTrafficFilterAfter(text, exclusion, nil)
+func newTrafficMatch(text string, exclusion []string) (trafficMatch, error) {
+	return newTrafficMatchAfter(text, exclusion, nil)
 }
 
-// newTrafficFilterAfter is newTrafficFilter for a read of only the pairs
+// newTrafficMatchAfter is newTrafficMatch for a read of only the pairs
 // with an id above after, which it adds as a condition when set.
-func newTrafficFilterAfter(text string, exclusion []string, after *uuid.UUID) (trafficFilter, error) {
+func newTrafficMatchAfter(text string, exclusion []string, after *uuid.UUID) (trafficMatch, error) {
 	translated, err := translateTrafficQuery(text, after)
 	if err != nil {
-		return trafficFilter{}, err
+		return trafficMatch{}, err
 	}
 	normalized, err := domain.NormalizeExclusion(exclusion)
 	if err != nil {
-		return trafficFilter{}, err
+		return trafficMatch{}, err
 	}
-	filter := trafficFilter{sitemap: translated.sitemap}
+	match := trafficMatch{sitemap: translated.sitemap, text: translated.text}
 	if translated.where != "" {
-		filter.add(translated.where, translated.args...)
+		match.add(translated.where, translated.args...)
 	}
 	if where, args := exclusionCondition(normalized); where != "" {
-		filter.add(where, args...)
+		match.add(where, args...)
 	}
 	if after != nil {
-		filter.add(`id > ?`, *after)
+		match.add(`id > ?`, *after)
 	}
-	return filter, nil
+	return match, nil
 }
 
 // ValidateTrafficQuery checks a traffic query's text, exclusion and
@@ -181,18 +207,18 @@ func ValidateTrafficQuery(text string, exclusion []string, orderBy string) error
 	if _, err := parseTrafficOrderBy(orderBy); err != nil {
 		return err
 	}
-	_, err := newTrafficFilter(text, exclusion)
+	_, err := newTrafficMatch(text, exclusion)
 	return err
 }
 
 // add appends a condition, parenthesised, with its arguments.
-func (f *trafficFilter) add(condition string, args ...any) {
+func (f *trafficMatch) add(condition string, args ...any) {
 	f.conditions = append(f.conditions, `(`+condition+`)`)
 	f.args = append(f.args, args...)
 }
 
-// where returns " WHERE ..." for the filter's conditions, or "" if it has none.
-func (f trafficFilter) where() string {
+// where returns " WHERE ..." for the match's conditions, or "" if it has none.
+func (f trafficMatch) where() string {
 	if len(f.conditions) == 0 {
 		return ""
 	}
@@ -213,6 +239,11 @@ type sortedRow struct {
 // *domain.QueryError; a malformed cursor, or one made under another sort,
 // wraps domain.ErrInvalidCursor.
 func (repo *Repository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, error) {
+	return repo.ListTrafficContext(context.Background(), q)
+}
+
+// ListTrafficContext is ListTraffic for a read that stops when ctx ends.
+func (repo *Repository) ListTrafficContext(ctx context.Context, q domain.TrafficQuery) (domain.TrafficPage, error) {
 	if q.Limit < 1 {
 		return domain.TrafficPage{}, fmt.Errorf("listing traffic: limit %d is not positive", q.Limit)
 	}
@@ -220,7 +251,7 @@ func (repo *Repository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, 
 	if err != nil {
 		return domain.TrafficPage{}, err
 	}
-	filter, err := newTrafficFilter(q.Text, q.Exclusion)
+	match, err := newTrafficMatch(q.Text, q.Exclusion)
 	if err != nil {
 		return domain.TrafficPage{}, err
 	}
@@ -237,23 +268,17 @@ func (repo *Repository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, 
 
 	var page domain.TrafficPage
 	var rows []sortedRow
-	err = repo.inTx(func(tx *sqlx.Tx) error {
-		page.Complete, err = searchIndexCompleteness(tx)
+	err = repo.inTxContext(ctx, func(tx *sqlx.Tx) error {
+		complete, err := listCompleteness(tx, match)
 		if err != nil {
 			return err
 		}
-		if filter.sitemap {
-			job, err := loadJob(tx, SitemapJob)
-			if err != nil {
-				return fmt.Errorf("reading the sitemap job: %w", err)
-			}
-			page.Complete[SitemapJob] = job.Complete
-		}
+		page.Complete = complete
 
 		page.AsOf = q.AsOf
 		if page.AsOf == nil {
 			var newest uuid.UUID
-			err := tx.Get(&newest, `SELECT id FROM request ORDER BY id DESC LIMIT 1`)
+			err := tx.GetContext(ctx, &newest, `SELECT id FROM request ORDER BY id DESC LIMIT 1`)
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil
 			}
@@ -262,19 +287,19 @@ func (repo *Repository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, 
 			}
 			page.AsOf = &newest
 		}
-		filter.add(`id <= ?`, *page.AsOf)
+		match.add(`id <= ?`, *page.AsOf)
 		for _, segment := range sortSegments(sort, backward, cursor, cursorKey) {
-			segmentFilter := trafficFilter{
-				conditions: slices.Clone(filter.conditions),
-				args:       slices.Clone(filter.args),
+			segmentMatch := trafficMatch{
+				conditions: slices.Clone(match.conditions),
+				args:       slices.Clone(match.args),
 			}
 			for _, condition := range segment.conditions {
-				segmentFilter.add(condition.sql, condition.args...)
+				segmentMatch.add(condition.sql, condition.args...)
 			}
 			query := `SELECT ` + trafficSummaryColumns + `, ` + sort.column() + ` AS sort_key` + trafficSummarySource +
-				segmentFilter.where() + ` ORDER BY ` + segment.order + ` LIMIT ?`
+				segmentMatch.where() + ` ORDER BY ` + segment.order + ` LIMIT ?`
 			var segmentRows []sortedRow
-			if err := tx.Select(&segmentRows, query, append(segmentFilter.args, q.Limit+1-len(rows))...); err != nil {
+			if err := tx.SelectContext(ctx, &segmentRows, query, append(segmentMatch.args, q.Limit+1-len(rows))...); err != nil {
 				return err
 			}
 			for i := range segmentRows {
