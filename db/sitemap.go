@@ -40,12 +40,12 @@ var sitemapJob = jobDefinition{
 }
 
 // ancestry is a recursive CTE over a node and its ancestors, from the node
-// bound to its ?.
-const ancestry = `WITH RECURSIVE up(id) AS (
-	SELECT ? UNION ALL
-	SELECT n.parent_id FROM sitemap_node n JOIN up ON n.id = up.id WHERE n.parent_id IS NOT NULL)`
+// bound to its ?, with each one's parent: 0 for an origin.
+const ancestry = `WITH RECURSIVE up(id, parent) AS (
+	SELECT id, coalesce(parent_id, 0) FROM sitemap_node WHERE id = ? UNION ALL
+	SELECT n.id, coalesce(n.parent_id, 0) FROM sitemap_node n JOIN up ON n.id = up.parent)`
 
-// sitemapBucket is where a pair is counted: its content type, '' when it has
+// sitemapBucket is where a pair is counted: its content type, "" when it has
 // none, and whether its response is a server error.
 type sitemapBucket struct {
 	contentType string
@@ -99,14 +99,15 @@ func countInSitemap(tx *sqlx.Tx, node int64, bucket sitemapBucket, delta int) er
 		errorDelta = delta
 	}
 	_, err := tx.Exec(ancestry+`
-		INSERT INTO sitemap_count (node_id, content_type, pairs, errors)
-		SELECT id, ?, ?, ? FROM up WHERE true
-		ON CONFLICT (node_id, content_type) DO UPDATE SET
+		INSERT INTO sitemap_count (parent_id, node_id, content_type, pairs, errors)
+		SELECT parent, id, ?, ?, ? FROM up WHERE true
+		ON CONFLICT (parent_id, node_id, content_type) DO UPDATE SET
 			pairs = pairs + excluded.pairs, errors = errors + excluded.errors`,
 		node, bucket.contentType, delta, errorDelta)
 	if err == nil && delta < 0 {
 		_, err = tx.Exec(ancestry+`
-			DELETE FROM sitemap_count WHERE content_type = ? AND pairs <= 0 AND node_id IN (SELECT id FROM up)`,
+			DELETE FROM sitemap_count WHERE content_type = ? AND pairs <= 0
+				AND (parent_id, node_id) IN (SELECT parent, id FROM up)`,
 			node, bucket.contentType)
 	}
 	if err != nil {
@@ -270,7 +271,7 @@ func (repo *Repository) ListSitemapChildren(node string, exclusion []string, cur
 		}
 		page.Complete = map[string]bool{SitemapJob: job.Complete}
 
-		var parent sql.NullInt64
+		var parent int64 // origins have parent 0 in sitemap_count
 		if node != "" {
 			err := tx.Get(&parent, `SELECT id FROM sitemap_node WHERE name = ?`, node)
 			if errors.Is(err, sql.ErrNoRows) {
@@ -280,6 +281,8 @@ func (repo *Repository) ListSitemapChildren(node string, exclusion []string, cur
 				return err
 			}
 		}
+		// sitemap_count is clustered by parent, so the children's buckets
+		// are one range read. Names are read for the page only.
 		args := append([]any{}, keptArgs...)
 		args = append(args, parent)
 		args = append(args, keptArgs...)
@@ -289,17 +292,18 @@ func (repo *Repository) ListSitemapChildren(node string, exclusion []string, cur
 			args = append(args, after.Pairs, after.Pairs, after.ID)
 		}
 		args = append(args, limit+1)
-		query := `SELECT p.id, p.name, p.pairs, p.errors,
-			EXISTS (SELECT 1 FROM sitemap_node k JOIN sitemap_count c ON c.node_id = k.id
-				WHERE k.parent_id = p.id AND c.pairs > 0 AND (` + kept + `)) AS has_children
+		query := `SELECT p.id, n.name, p.pairs, p.errors,
+			EXISTS (SELECT 1 FROM sitemap_count c
+				WHERE c.parent_id = p.id AND c.pairs > 0 AND (` + kept + `)) AS has_children
 			FROM (
-				SELECT id, name, pairs, errors FROM (
-					SELECT n.id, n.name, sum(c.pairs) AS pairs, sum(c.errors) AS errors
-					FROM sitemap_node n JOIN sitemap_count c ON c.node_id = n.id
-					WHERE n.parent_id IS ? AND (` + kept + `)
-					GROUP BY n.id)
+				SELECT id, pairs, errors FROM (
+					SELECT node_id AS id, sum(pairs) AS pairs, sum(errors) AS errors
+					FROM sitemap_count
+					WHERE parent_id = ? AND (` + kept + `)
+					GROUP BY node_id)
 				WHERE ` + bound + `
 				ORDER BY pairs DESC, id LIMIT ?) p
+			JOIN sitemap_node n ON n.id = p.id
 			ORDER BY p.pairs DESC, p.id`
 		return tx.Select(&rows, query, args...)
 	})
