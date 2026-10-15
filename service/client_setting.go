@@ -3,7 +3,6 @@ package service
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 
 	"github.com/tfkr-ae/marasi"
@@ -97,12 +96,8 @@ func decodeClientSettingBody(w http.ResponseWriter, r *http.Request) (json.RawMe
 	}
 	// Leave room for the envelope; the store enforces the exact value limit.
 	body := http.MaxBytesReader(w, r.Body, domain.MaxClientSettingValueBytes+1024)
-	decoder := json.NewDecoder(body)
 	var fields map[string]json.RawMessage
-	if err := decoder.Decode(&fields); err != nil {
-		return nil, errInvalidClientSettingBody
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+	if !decodeStrictJSON(body, &fields) {
 		return nil, errInvalidClientSettingBody
 	}
 	value, present := fields["value"]
