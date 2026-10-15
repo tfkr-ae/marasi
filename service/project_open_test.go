@@ -231,6 +231,7 @@ func TestProjectOpen(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		waitPrepared := awaitTargetPrepared(t, lifecycle)
 		openResult := make(chan *httptest.ResponseRecorder, 1)
 		go func() {
 			request := httptest.NewRequest(http.MethodPost, "/project/open", strings.NewReader(projectOpenBody(target))).WithContext(ctx)
@@ -238,6 +239,7 @@ func TestProjectOpen(t *testing.T) {
 			server.ServeHTTP(response, request)
 			openResult <- response
 		}()
+		waitPrepared()
 		deadline := time.Now().Add(time.Second)
 		for {
 			admitCtx, admitCancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
@@ -395,10 +397,12 @@ func TestProjectOpen(t *testing.T) {
 		if err != nil {
 			t.Fatalf("admitting work: %v", err)
 		}
+		waitPrepared := awaitTargetPrepared(t, lifecycle)
 		openResult := make(chan *httptest.ResponseRecorder, 1)
 		go func() {
 			openResult <- requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(target))
 		}()
+		waitPrepared()
 		deadline := time.Now().Add(time.Second)
 		for {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
