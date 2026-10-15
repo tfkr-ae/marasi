@@ -116,7 +116,6 @@ func (state *indexBuildState) lowerBound(id uuid.UUID) {
 	}
 }
 
-
 // indexBuild describes one background job that fills a search index with the
 // pairs missing from it.
 type indexBuild struct {
