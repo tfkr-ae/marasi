@@ -642,8 +642,9 @@ func requestedAtBack(b *testing.B, path string, back int) time.Time {
 
 // BenchmarkBulkHighlight is cases 23 and 24: bulk highlights on a copy of
 // the fixture, through the Repository and POST /traffic/bulk/highlight.
-// Sizes are those of the reference project, scaled to the fixture: 10k is
-// 1% of pairs and 50k is 5%.
+// The id and dense query sizes are the ticket's 10k and 50k pairs at any
+// fixture size from 100k up; the sparse query is the big launchpad, 1% of
+// pairs, which is 10k at the reference size.
 func BenchmarkBulkHighlight(b *testing.B) {
 	p := benchProject(b)
 	path := cloneOf(b, p.path)
@@ -656,18 +657,18 @@ func BenchmarkBulkHighlight(b *testing.B) {
 		return func(repo *db.Repository, sel domain.Selection) error { _, err := repo.SetHighlight(sel, h); return err }
 	}
 
-	// Case 24's dense query matches the newest 1% of pairs, a contiguous
-	// run; its sparse query matches the big launchpad, 1% of pairs spread
-	// over the whole project.
+	// Case 24's dense query matches the newest 10k pairs, a contiguous run;
+	// its sparse query matches the big launchpad, spread over the whole
+	// project.
 	page, err := repo.ListTraffic(domain.TrafficQuery{Limit: 1})
 	if err != nil {
 		b.Fatal(err)
 	}
 	asOf := *page.AsOf
-	denseFrom := requestedAtBack(b, path, n/100)
+	denseFrom := requestedAtBack(b, path, min(10_000, n/2))
 
-	ids10k := spreadIDs(b, path, n/100)
-	ids50k := spreadIDs(b, path, n/20)
+	ids10k := spreadIDs(b, path, min(10_000, n/2))
+	ids50k := spreadIDs(b, path, min(50_000, n/2))
 	byIDs := func(ids []uuid.UUID) domain.Selection { return domain.Selection{IDs: ids} }
 	byQuery := func(text string) domain.Selection {
 		return domain.Selection{Query: &domain.SelectionQuery{Text: text, AsOf: asOf}}
@@ -729,7 +730,7 @@ func BenchmarkUnderLoad(b *testing.B) {
 	b.Run("26-bulk-highlight", func(b *testing.B) {
 		path := cloneOf(b, p.path)
 		repo := openRepo(b, path)
-		sel := domain.Selection{IDs: spreadIDs(b, path, p.manifest.Pairs/100)}
+		sel := domain.Selection{IDs: spreadIDs(b, path, min(10_000, p.manifest.Pairs/2))}
 		ctx, stop := context.WithCancel(context.Background())
 		var wg sync.WaitGroup
 		var bulkErr error
