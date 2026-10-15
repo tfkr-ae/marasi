@@ -157,6 +157,9 @@ type trafficQuery struct {
 	// sitemap means the query names the sitemap field, so its answer
 	// depends on the sitemap job.
 	sitemap bool
+	// text means the query has a text term, so its answer depends on the
+	// search index jobs.
+	text bool
 }
 
 // translateTrafficQuery parses query as an AIP-160 filter, checks it against
@@ -196,7 +199,7 @@ func translateTrafficQuery(query string, after *uuid.UUID) (trafficQuery, error)
 	if err != nil {
 		return trafficQuery{}, err
 	}
-	return trafficQuery{where: where, args: t.args, sitemap: t.sitemap}, nil
+	return trafficQuery{where: where, args: t.args, sitemap: t.sitemap, text: t.text}, nil
 }
 
 type queryTranslator struct {
@@ -206,6 +209,7 @@ type queryTranslator struct {
 	args      []any
 	depth     int
 	sitemap   bool
+	text      bool
 	// topLevel is set while translating the root, or a condition the root
 	// ANDs with others.
 	topLevel bool
@@ -554,6 +558,7 @@ const bodyColumns = "{request_head request_body response_head response_body}"
 // index traffic_index or the annotation index traffic_annotation_index,
 // matches the FTS5 expression match. Both are keyed on traffic_index_key.
 func (t *queryTranslator) indexSearch(table, match string) string {
+	t.text = true
 	t.bind(match)
 	search := "SELECT k.request_id FROM " + table + " JOIN traffic_index_key k ON k.id = " + table + ".rowid WHERE " + table + " MATCH ?"
 	if t.after == nil {

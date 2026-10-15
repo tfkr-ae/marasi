@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/jmoiron/sqlx"
@@ -12,23 +13,29 @@ import (
 // larger result costs no more than the cap. An invalid query or exclusion
 // returns a *domain.QueryError.
 func (repo *Repository) CountTraffic(q domain.TrafficCountQuery) (domain.TrafficCount, error) {
-	filter, err := newTrafficFilterAfter(q.Text, q.Exclusion, q.After)
+	return repo.CountTrafficContext(context.Background(), q)
+}
+
+// CountTrafficContext is CountTraffic for a count that stops when ctx ends.
+func (repo *Repository) CountTrafficContext(ctx context.Context, q domain.TrafficCountQuery) (domain.TrafficCount, error) {
+	match, err := newTrafficMatchAfter(q.Text, q.Exclusion, q.After)
 	if err != nil {
 		return domain.TrafficCount{}, err
 	}
 	if q.AsOf != nil {
-		filter.add(`id <= ?`, *q.AsOf)
+		match.add(`id <= ?`, *q.AsOf)
 	}
 
 	var result domain.TrafficCount
-	err = repo.inTx(func(tx *sqlx.Tx) error {
-		result.Complete, err = searchIndexCompleteness(tx)
+	err = repo.inTxContext(ctx, func(tx *sqlx.Tx) error {
+		complete, err := listCompleteness(tx, match)
 		if err != nil {
 			return err
 		}
+		result.Complete = complete
 
-		query := `SELECT count(*) FROM (SELECT 1 FROM request` + filter.where() + ` LIMIT ?)`
-		return tx.Get(&result.Count, query, append(filter.args, domain.MaxTrafficCount+1)...)
+		query := `SELECT count(*) FROM (SELECT 1 FROM request` + match.where() + ` LIMIT ?)`
+		return tx.GetContext(ctx, &result.Count, query, append(match.args, domain.MaxTrafficCount+1)...)
 	})
 	if err != nil {
 		return domain.TrafficCount{}, fmt.Errorf("counting traffic: %w", err)

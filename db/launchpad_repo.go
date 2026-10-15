@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -147,42 +148,49 @@ func (repo *Repository) DeleteLaunchpad(launchpadID uuid.UUID) error {
 
 // GetLaunchpadRequests retrieves the requests linked to a launchpad that
 // match trafficQuery and are not hidden by exclusion, in the orderBy order
-// that ListTraffic uses, or oldest first when orderBy is empty. The read is
-// the launchpad's membership plus the translated traffic query and the
-// exclusion. An invalid query, exclusion or orderBy returns a
-// *domain.QueryError.
-func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string, exclusion []string, orderBy string) ([]*domain.RequestResponseSummary, error) {
+// that ListTraffic uses, or oldest first when orderBy is empty, with the
+// completeness of each background job the answer depends on, as ListTraffic
+// reports it. The read is the launchpad's membership plus the translated
+// traffic query and the exclusion. An invalid query, exclusion or orderBy
+// returns a *domain.QueryError.
+func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string, exclusion []string, orderBy string) ([]*domain.RequestResponseSummary, map[domain.JobName]bool, error) {
 	order := `id ASC`
 	if strings.TrimSpace(orderBy) != "" {
 		sort, err := parseTrafficOrderBy(orderBy)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		order = sort.order()
 	}
-	filter := trafficFilter{}
-	filter.add(launchpadMember, id)
-	matching, err := newTrafficFilter(trafficQuery, exclusion)
+	matching, err := newTrafficMatch(trafficQuery, exclusion)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	filter.conditions = append(filter.conditions, matching.conditions...)
-	filter.args = append(filter.args, matching.args...)
-	query := `SELECT ` + trafficSummaryColumns + trafficSummarySource + filter.where() + ` ORDER BY ` + order
-	args := filter.args
+	match := trafficMatch{sitemap: matching.sitemap, text: matching.text}
+	match.add(launchpadMember, id)
+	match.conditions = append(match.conditions, matching.conditions...)
+	match.args = append(match.args, matching.args...)
+	query := `SELECT ` + trafficSummaryColumns + trafficSummarySource + match.where() + ` ORDER BY ` + order
 
 	var dbRequests []*dbRequestResponseSummary
-	err = repo.dbConn.Select(&dbRequests, query, args...)
+	var jobs map[domain.JobName]bool
+	err = repo.inTx(func(tx *sqlx.Tx) error {
+		read, err := listCompleteness(tx, match)
+		if err != nil {
+			return err
+		}
+		jobs = read
+		return tx.Select(&dbRequests, query, match.args...)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("getting launchpad requests: %w", err)
+		return nil, nil, fmt.Errorf("getting launchpad requests: %w", err)
 	}
 
 	domainRequests := make([]*domain.RequestResponseSummary, len(dbRequests))
 	for i, dbReq := range dbRequests {
 		domainRequests[i] = toDomainRequestResponseSummary(dbReq)
 	}
-
-	return domainRequests, nil
+	return domainRequests, jobs, nil
 }
 
 // LinkRequestToLaunchpad creates an association between a request and a launchpad.

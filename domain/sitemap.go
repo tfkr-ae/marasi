@@ -8,9 +8,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// JobSitemap names the background job that adds pairs to the stored sitemap.
-const JobSitemap = "sitemap"
-
 // SitemapRulesVersion is the version of the rules SitemapPath follows. A
 // project whose sitemap was built under another version rebuilds it as the
 // sitemap background job (ADR-0040).
@@ -67,7 +64,7 @@ type SitemapPage struct {
 	NextCursor *string
 	// Complete reports whether the sitemap job had finished. Keyed by
 	// JobSitemap. Pairs the job has not reached are not counted.
-	Complete map[string]bool
+	Complete map[JobName]bool
 }
 
 // SitemapPath returns the sitemap nodes from a pair's origin down to its leaf,

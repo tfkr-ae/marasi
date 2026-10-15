@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/tfkr-ae/marasi/domain"
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
@@ -120,7 +121,7 @@ func (state *indexBuildState) lowerBound(id uuid.UUID) {
 // pairs missing from it.
 type indexBuild struct {
 	// job is the background job's name.
-	job string
+	job domain.JobName
 	// docsize is the index's FTS5 docsize table, which holds one row per
 	// indexed key.
 	docsize string
@@ -136,7 +137,7 @@ type indexBuild struct {
 // trafficIndexBuild indexes pairs missing from the body index. It writes both
 // indexes for each pair, as capture does.
 var trafficIndexBuild = indexBuild{
-	job:     TrafficIndexJob,
+	job:     domain.JobTrafficIndex,
 	docsize: "traffic_index_docsize",
 	size: `coalesce(octet_length(r.request_raw), 0) + coalesce(octet_length(r.response_raw), 0) +
 		coalesce(octet_length(r.metadata), 0) +
@@ -148,7 +149,7 @@ var trafficIndexBuild = indexBuild{
 // annotationIndexBuild backfills the annotation index for pairs indexed
 // before it existed (ADR-0038).
 var annotationIndexBuild = indexBuild{
-	job:     AnnotationIndexJob,
+	job:     domain.JobAnnotationIndex,
 	docsize: "traffic_annotation_index_docsize",
 	size: `coalesce(octet_length(r.metadata), 0) +
 		coalesce((SELECT octet_length(n.note) FROM notes n WHERE n.request_id = r.id), 0)`,
@@ -227,7 +228,7 @@ func (repo *Repository) buildIndex(build indexBuild, maxBytes int) (int, bool, e
 // saved job states. Traffic lists call it in the same transaction as their
 // page query, so the flag describes the snapshot the page was read from.
 func (repo *Repository) indexComplete(q sqlx.Queryer) (bool, error) {
-	complete, err := searchIndexCompleteness(q)
+	complete, err := jobCompleteness(q, domain.SearchIndexJobs...)
 	if err != nil {
 		return false, err
 	}
@@ -239,12 +240,11 @@ func (repo *Repository) indexComplete(q sqlx.Queryer) (bool, error) {
 	return true, nil
 }
 
-// searchIndexCompleteness reports, for each of SearchIndexJobs, whether it is
-// complete, from the saved job state. A job without saved state is
-// incomplete.
-func searchIndexCompleteness(q sqlx.Queryer) (map[string]bool, error) {
-	complete := make(map[string]bool, len(SearchIndexJobs))
-	for _, name := range SearchIndexJobs {
+// jobCompleteness reports, for each of jobs, whether it is complete, from
+// the saved job state. A job without saved state is incomplete.
+func jobCompleteness(q sqlx.Queryer, jobs ...domain.JobName) (map[domain.JobName]bool, error) {
+	complete := make(map[domain.JobName]bool, len(jobs))
+	for _, name := range jobs {
 		job, err := loadJob(q, name)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("checking the %s job: %w", name, err)

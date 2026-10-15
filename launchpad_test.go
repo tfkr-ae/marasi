@@ -101,7 +101,7 @@ func (h *launchHarness) waitFinished(t *testing.T) domain.Launch {
 
 func (h *launchHarness) launchpadMembers(t *testing.T) []uuid.UUID {
 	t.Helper()
-	members, err := h.repository.GetLaunchpadRequests(h.launchpadID, "", nil, "")
+	members, _, err := h.repository.GetLaunchpadRequests(h.launchpadID, "", nil, "")
 	if err != nil {
 		t.Fatalf("getting launchpad members: %v", err)
 	}
@@ -983,6 +983,25 @@ func TestProxy_InterruptedLaunches(t *testing.T) {
 		case seen := <-origin.seen:
 			t.Fatalf("\nwanted:\nno request at the origin\ngot:\n%s", seen.URL.Path)
 		default:
+		}
+	})
+
+	t.Run("should end a launch's Checkpoint hold before InterruptLaunches returns", func(t *testing.T) {
+		held := make(chan domain.CheckpointItem, 1)
+		h := startLaunchHarness(t,
+			WithInterceptHandler(func(item domain.CheckpointItem) error { held <- item; return nil }),
+		)
+		origin := startLaunchOrigin(t)
+		h.proxy.SetIntercept(true)
+		if _, err := h.proxy.Launch(rawGet(origin.Server, "/held"), h.launchpadID.String(), false); err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+		receiveCheckpointItem(t, held, "the launch to be held")
+
+		h.proxy.InterruptLaunches()
+
+		if h.proxy.HasPendingCheckpoint() {
+			t.Fatalf("\nwanted:\nno pending Checkpoint item\ngot:\n%v", h.proxy.CheckpointItems())
 		}
 	})
 

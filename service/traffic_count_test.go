@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -21,7 +22,7 @@ type countingTrafficRepository struct {
 	err    error
 }
 
-func (s *countingTrafficRepository) CountTraffic(q domain.TrafficCountQuery) (domain.TrafficCount, error) {
+func (s *countingTrafficRepository) CountTrafficContext(_ context.Context, q domain.TrafficCountQuery) (domain.TrafficCount, error) {
 	s.query = &q
 	return s.result, s.err
 }
@@ -38,7 +39,7 @@ func TestTrafficCount(t *testing.T) {
 		asOf := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
 		after := uuid.MustParse("01938032-0000-7243-b035-e6a9f4645904")
 		repo := &countingTrafficRepository{result: domain.TrafficCount{
-			Count: 100_000, Capped: true, Complete: map[string]bool{domain.JobTrafficIndex: false},
+			Count: 100_000, Capped: true, Complete: map[domain.JobName]bool{domain.JobTrafficIndex: false},
 		}}
 
 		response := serve(repo, "/traffic/count?q="+url.QueryEscape(`method = "GET"`)+

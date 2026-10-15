@@ -74,17 +74,19 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 			events.publish("armory.run.updated", armoryRunFromDomain(run))
 		}
 		projects.jobEvents.install(jobPublisher{
-			progress: func(_ string, job db.JobState) {
+			progress: func(path string, job db.JobState) {
 				events.publish("job.progress", struct {
-					Name  string `json:"name"`
-					Done  int64  `json:"done"`
-					Total int64  `json:"total"`
-				}{Name: job.Name, Done: job.Done, Total: job.Total})
+					Name    domain.JobName `json:"name"`
+					Project string         `json:"project"`
+					Done    int64          `json:"done"`
+					Total   int64          `json:"total"`
+				}{Name: job.Name, Project: path, Done: job.Done, Total: job.Total})
 			},
-			complete: func(path, name string, searchIndexComplete bool) {
+			complete: func(path string, name domain.JobName, searchIndexComplete bool) {
 				events.publish("job.complete", struct {
-					Name string `json:"name"`
-				}{Name: name})
+					Name    domain.JobName `json:"name"`
+					Project string         `json:"project"`
+				}{Name: name, Project: path})
 				// Announced for one more release, for clients that do not
 				// read job.complete yet (ADR-0039), once traffic reads
 				// report index.complete true.
