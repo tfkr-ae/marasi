@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
@@ -71,11 +72,12 @@ type TrafficRepository interface {
 	CountTraffic(q TrafficCountQuery) (TrafficCount, error)
 
 	// ListSitemapChildren returns one page of the children of the sitemap
-	// node named node, or of the origins when node is empty, by pair count,
-	// highest first, with the exclusion's content types left out of the
-	// counts. An unknown node returns ErrSitemapNodeNotFound, an invalid
-	// exclusion a *QueryError, and a malformed cursor wraps ErrInvalidCursor.
-	ListSitemapChildren(node string, exclusion []string, cursor string, limit int) (SitemapPage, error)
+	// node q.Node, or of the origins when it is empty, by pair count,
+	// highest first, over all traffic or, in query mode, over q.Query. The
+	// read stops when ctx ends. An unknown node returns
+	// ErrSitemapNodeNotFound, an invalid query or exclusion a *QueryError,
+	// and a malformed cursor wraps ErrInvalidCursor.
+	ListSitemapChildren(ctx context.Context, q SitemapQuery) (SitemapPage, error)
 
 	// GetMetadata returns the metadata map for a specific request ID.
 	GetMetadata(id uuid.UUID) (metadata map[string]any, err error)
