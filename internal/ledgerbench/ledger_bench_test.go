@@ -65,7 +65,9 @@
 package ledgerbench_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -80,6 +82,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
@@ -326,6 +329,8 @@ var queryCases = []queryCase{
 	{"09-host-wildcard-sparse", text("host = %q", func(m *fixture.Manifest) any { return m.SparseHostPattern }),
 		ledgerbench.Target{Max: 3 * time.Second, Pathological: true}},
 	{"10-server-errors", text("status_code >= 500"), ledgerbench.Target{Max: ms(150)}},
+	{"11-highlight-old-cluster", text("highlight = %d", func(m *fixture.Manifest) any { return m.OldHighlight }),
+		ledgerbench.Target{Max: ms(50)}},
 	{"12-launchpad-big", text("launchpad = %q", func(m *fixture.Manifest) any { return m.BigLaunchpad }), ledgerbench.Target{Max: ms(150)}},
 	{"12-launchpad-old", text("launchpad = %q", func(m *fixture.Manifest) any { return m.OldLaunchpad }), ledgerbench.Target{Max: ms(150)}},
 	{"12-launchpad-any", text("launchpad:*"), ledgerbench.Target{Max: ms(150)}},
@@ -446,10 +451,147 @@ func BenchmarkWrite(b *testing.B) {
 	})
 }
 
+// bulkCase is one bulk highlight benchmark: before every run, prepare puts
+// sel back in a known state, untimed; then the run sets highlight h on sel,
+// or clears it when h is nil.
+type bulkCase struct {
+	name    string
+	sel     domain.Selection
+	prepare func(repo *db.Repository, sel domain.Selection) error
+	h       *int
+	target  ledgerbench.Target
+}
+
+func highlightOf(h int) *int { return &h }
+
+// bulkHighlight runs c through the Repository.
+func bulkHighlight(repo *db.Repository, c bulkCase) (int, error) {
+	if c.h == nil {
+		return repo.ClearHighlight(c.sel)
+	}
+	return repo.SetHighlight(c.sel, *c.h)
+}
+
+// bulkHighlightRequest is c's POST /traffic/bulk/highlight body.
+func bulkHighlightRequest(b *testing.B, c bulkCase) []byte {
+	b.Helper()
+	selection := map[string]any{"ids": c.sel.IDs}
+	if c.sel.Query != nil {
+		selection = map[string]any{"query": c.sel.Query.Text, "as_of": c.sel.Query.AsOf}
+	}
+	body, err := json.Marshal(map[string]any{"selection": selection, "highlight": c.h})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return body
+}
+
+// spreadIDs returns count ids of pairs with no highlight, spread evenly over
+// the project, oldest first.
+func spreadIDs(b *testing.B, path string, count int) []uuid.UUID {
+	b.Helper()
+	conn, err := db.New(path, quiet())
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer conn.Close()
+	var ids []uuid.UUID
+	if err := conn.Select(&ids, `SELECT id FROM request
+		WHERE id NOT IN (SELECT request_id FROM pair_highlight) ORDER BY id`); err != nil {
+		b.Fatal(err)
+	}
+	step := max(1, len(ids)/count)
+	out := make([]uuid.UUID, 0, count)
+	for i := 0; i < len(ids) && len(out) < count; i += step {
+		out = append(out, ids[i])
+	}
+	return out
+}
+
+// requestedAtBack returns when the pair back pairs from the newest was
+// requested.
+func requestedAtBack(b *testing.B, path string, back int) time.Time {
+	b.Helper()
+	conn, err := db.New(path, quiet())
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer conn.Close()
+	var at time.Time
+	if err := conn.Get(&at, `SELECT requested_at FROM request ORDER BY id DESC LIMIT 1 OFFSET ?`, back-1); err != nil {
+		b.Fatal(err)
+	}
+	return at.UTC()
+}
+
+// BenchmarkBulkHighlight is cases 23 and 24: bulk highlights on a copy of
+// the fixture, through the Repository and POST /traffic/bulk/highlight.
+// Sizes are those of the reference project, scaled to the fixture: 10k is
+// 1% of pairs and 50k is 5%.
+func BenchmarkBulkHighlight(b *testing.B) {
+	p := benchProject(b)
+	path := cloneOf(b, p.path)
+	repo := openRepo(b, path)
+	server := service.NewServer(&marasi.Proxy{TrafficRepo: repo}, nil, nil, func() {}, "bench", "bench", path)
+	n := p.manifest.Pairs
+
+	clear := func(repo *db.Repository, sel domain.Selection) error { _, err := repo.ClearHighlight(sel); return err }
+	setTo := func(h int) func(*db.Repository, domain.Selection) error {
+		return func(repo *db.Repository, sel domain.Selection) error { _, err := repo.SetHighlight(sel, h); return err }
+	}
+
+	// Case 24's dense query matches the newest 1% of pairs, a contiguous
+	// run; its sparse query matches the big launchpad, 1% of pairs spread
+	// over the whole project.
+	page, err := repo.ListTraffic(domain.TrafficQuery{Limit: 1})
+	if err != nil {
+		b.Fatal(err)
+	}
+	asOf := *page.AsOf
+	denseFrom := requestedAtBack(b, path, n/100)
+
+	ids10k := spreadIDs(b, path, n/100)
+	ids50k := spreadIDs(b, path, n/20)
+	byIDs := func(ids []uuid.UUID) domain.Selection { return domain.Selection{IDs: ids} }
+	byQuery := func(text string) domain.Selection {
+		return domain.Selection{Query: &domain.SelectionQuery{Text: text, AsOf: asOf}}
+	}
+	cases := []bulkCase{
+		{"23-ids-first-time", byIDs(ids10k), clear, highlightOf(5), ledgerbench.Target{Max: ms(500)}},
+		{"23-ids-rehighlight", byIDs(ids10k), setTo(5), highlightOf(6), ledgerbench.Target{Max: ms(500)}},
+		{"23-ids-clear", byIDs(ids10k), setTo(5), nil, ledgerbench.Target{Max: ms(500)}},
+		{"24-query-dense", byQuery(fmt.Sprintf("requested_at >= %q", denseFrom.Format(time.RFC3339Nano))), clear, highlightOf(5),
+			ledgerbench.Target{Max: ms(500)}},
+		{"24-query-sparse", byQuery(fmt.Sprintf("launchpad = %q", p.manifest.BigLaunchpad)), clear, highlightOf(5),
+			ledgerbench.Target{Max: 3 * time.Second, Pathological: true}},
+		{"24-ids-50k", byIDs(ids50k), clear, highlightOf(5), ledgerbench.Target{Max: ms(500)}},
+	}
+	for _, c := range cases {
+		prepare := func() error { return c.prepare(repo, c.sel) }
+		b.Run(c.name+"/repo", func(b *testing.B) {
+			ledgerbench.MeasurePrepared(b, c.target, prepare, func() (func(), error) {
+				_, err := bulkHighlight(repo, c)
+				return nil, err
+			})
+		})
+		b.Run(c.name+"/service", func(b *testing.B) {
+			body := bulkHighlightRequest(b, c)
+			ledgerbench.MeasurePrepared(b, c.target, prepare, func() (func(), error) {
+				response := httptest.NewRecorder()
+				server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/traffic/bulk/highlight", bytes.NewReader(body)))
+				if response.Code != http.StatusOK {
+					return nil, fmt.Errorf("POST /traffic/bulk/highlight: %d %s", response.Code, response.Body)
+				}
+				return nil, nil
+			})
+		})
+	}
+}
+
 // BenchmarkUnderLoad is case 26: the first page while capture runs at 100
 // pairs a second with 50 KB bodies and the index build runs, on a copy whose
-// index job was reset. It also reports the longest capture stall.
-// Ticket 09 adds the variant under a bulk highlight.
+// index job was reset. It also reports the longest capture stall. The
+// second variant is the first page while case 23 runs over and over.
 func BenchmarkUnderLoad(b *testing.B) {
 	p := benchProject(b)
 	b.Run("26-capture-and-index-build", func(b *testing.B) {
@@ -467,6 +609,31 @@ func BenchmarkUnderLoad(b *testing.B) {
 		stop()
 		wg.Wait()
 		b.ReportMetric(float64(stall)/float64(time.Millisecond), "capture-stall-ms")
+	})
+	b.Run("26-bulk-highlight", func(b *testing.B) {
+		path := cloneOf(b, p.path)
+		repo := openRepo(b, path)
+		sel := domain.Selection{IDs: spreadIDs(b, path, p.manifest.Pairs/100)}
+		ctx, stop := context.WithCancel(context.Background())
+		var wg sync.WaitGroup
+		var bulkErr error
+		wg.Go(func() {
+			for h := 1; ctx.Err() == nil; h = h%domain.MaxHighlight + 1 {
+				if _, bulkErr = repo.SetHighlight(sel, h); bulkErr != nil {
+					return
+				}
+			}
+		})
+
+		ledgerbench.Measure(b, ledgerbench.Target{Max: ms(300)}, func() error {
+			_, err := listPage(repo, domain.TrafficQuery{Exclusion: fixture.SeedExclusion})
+			return err
+		})
+		stop()
+		wg.Wait()
+		if bulkErr != nil {
+			b.Fatal(bulkErr)
+		}
 	})
 }
 
