@@ -189,24 +189,21 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 		writeJSON(w, r, http.StatusOK, body)
 	})
 	mux.HandleFunc("GET /traffic/sitemap", func(w http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query()
-		limit := 100
-		if raw := query.Get("limit"); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil || parsed < 1 || parsed > domain.MaxSitemapPage {
-				writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
-				return
-			}
-			limit = parsed
+		sitemapQuery, ok := parseSitemapQuery(r)
+		if !ok {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
 		}
 		repo, err := proxy.GetTrafficRepo()
 		if err != nil {
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		page, err := repo.ListSitemapChildren(query.Get("node"), query["exclude"], query.Get("cursor"), limit)
+		page, err := repo.ListSitemapChildren(r.Context(), sitemapQuery)
 		var queryErr *domain.QueryError
 		switch {
+		case r.Context().Err() != nil:
+			return // the client went away; nobody reads the answer
 		case errors.Is(err, domain.ErrSitemapNodeNotFound):
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
@@ -469,6 +466,32 @@ func parseTrafficQuery(r *http.Request) (domain.TrafficQuery, bool) {
 		}
 		q.AsOf = &asOf
 	}
+	return q, true
+}
+
+// parseSitemapQuery reads a GET /traffic/sitemap request's node, q, exclude,
+// as_of, cursor and limit parameters. A q parameter, even an empty one,
+// selects query mode, which needs as_of; as_of without q, a malformed id or
+// an out-of-range limit reports false.
+func parseSitemapQuery(r *http.Request) (domain.SitemapQuery, bool) {
+	query := r.URL.Query()
+	q := domain.SitemapQuery{Node: query.Get("node"), Cursor: query.Get("cursor"), Limit: 100}
+	if raw := query.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > domain.MaxSitemapPage {
+			return domain.SitemapQuery{}, false
+		}
+		q.Limit = parsed
+	}
+	if !query.Has("q") {
+		q.Exclusion = query["exclude"]
+		return q, !query.Has("as_of")
+	}
+	asOf, err := uuid.Parse(query.Get("as_of"))
+	if err != nil {
+		return domain.SitemapQuery{}, false
+	}
+	q.Query = &domain.SelectionQuery{Text: query.Get("q"), Exclusion: query["exclude"], AsOf: asOf}
 	return q, true
 }
 

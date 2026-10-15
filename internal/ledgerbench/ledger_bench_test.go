@@ -68,6 +68,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -634,7 +635,7 @@ func BenchmarkSitemap(b *testing.B) {
 	cursorAfter := func(node string, pages int) string {
 		cursor := ""
 		for range pages {
-			page, err := repo.ListSitemapChildren(node, nil, cursor, domain.MaxSitemapPage)
+			page, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Node: node, Cursor: cursor, Limit: domain.MaxSitemapPage})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -660,7 +661,7 @@ func BenchmarkSitemap(b *testing.B) {
 	for _, c := range cases {
 		b.Run(c.name, func(b *testing.B) {
 			ledgerbench.Measure(b, ledgerbench.Target{Max: ms(50)}, func() error {
-				page, err := repo.ListSitemapChildren(c.node, c.exclusion, c.cursor, domain.MaxSitemapPage)
+				page, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Node: c.node, Exclusion: c.exclusion, Cursor: c.cursor, Limit: domain.MaxSitemapPage})
 				if err == nil && len(page.Children) == 0 {
 					err = fmt.Errorf("%q has no children", c.node)
 				}
@@ -668,6 +669,50 @@ func BenchmarkSitemap(b *testing.B) {
 			})
 		})
 	}
+
+	// Query mode (ticket 15) counts the matches as of the newest pair.
+	newest, err := repo.ListTraffic(domain.TrafficQuery{Limit: 1})
+	if err != nil {
+		b.Fatal(err)
+	}
+	spread := p.manifest.SpreadHost
+	queryCases := []struct {
+		name   string
+		node   string
+		text   string
+		target ledgerbench.Target
+	}{
+		{"21-query-sparse-host-root", "", fmt.Sprintf("host = %q", spread), ledgerbench.Target{Max: ms(500), Pathological: true}},
+		{"21-query-sparse-host-origin", domain.SitemapLeaf("https", spread, "/"), fmt.Sprintf("host = %q", spread),
+			ledgerbench.Target{Max: ms(500), Pathological: true}},
+		{"21-query-common-text-root", "", p.manifest.CommonTerm, ledgerbench.Target{Max: 3 * time.Second, Pathological: true}},
+	}
+	for _, c := range queryCases {
+		b.Run(c.name, func(b *testing.B) {
+			query := domain.SelectionQuery{Text: c.text, AsOf: *newest.AsOf}
+			ledgerbench.Measure(b, c.target, func() error {
+				page, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Node: c.node, Query: &query, Limit: domain.MaxSitemapPage})
+				if err == nil && len(page.Children) == 0 {
+					err = fmt.Errorf("%q has no children matching %s", c.node, c.text)
+				}
+				return err
+			})
+		})
+	}
+	// The common-text read, cancelled 50 ms in: the time to return is the
+	// time the read keeps going after the client leaves, plus 50 ms.
+	b.Run("21-query-common-text-cancelled", func(b *testing.B) {
+		query := domain.SelectionQuery{Text: p.manifest.CommonTerm, AsOf: *newest.AsOf}
+		ledgerbench.Measure(b, ledgerbench.Target{Max: ms(100), Pathological: true}, func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), ms(50))
+			defer cancel()
+			_, err := repo.ListSitemapChildren(ctx, domain.SitemapQuery{Query: &query, Limit: domain.MaxSitemapPage})
+			if !errors.Is(err, context.DeadlineExceeded) {
+				return fmt.Errorf("wanted the read cancelled, got %v", err)
+			}
+			return nil
+		})
+	})
 }
 
 // BenchmarkWrite is case 22: the cost of capturing one pair, InsertRequest
