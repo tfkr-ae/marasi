@@ -47,7 +47,8 @@ func (repo *Repository) bulkInTx(sel domain.Selection, apply func(tx *sqlx.Tx, s
 	}
 	var count int
 	err = repo.inTx(func(tx *sqlx.Tx) error {
-		count, err = apply(tx, selected, args)
+		changed, err := apply(tx, selected, args)
+		count = changed
 		return err
 	})
 	if err != nil {
