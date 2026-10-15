@@ -22,42 +22,42 @@ func TestTrafficReads_ReportTheJobsTheirAnswerDependsOn(t *testing.T) {
 	if err := repo.LinkRequestToLaunchpad(id, launchpadID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.dbConn.Exec(`UPDATE background_job SET complete = 0 WHERE name = ?`, TrafficIndexJob); err != nil {
+	if _, err := repo.dbConn.Exec(`UPDATE background_job SET complete = 0 WHERE name = ?`, domain.JobTrafficIndex); err != nil {
 		t.Fatal(err)
 	}
-	search := map[string]bool{domain.JobTrafficIndex: false, domain.JobAnnotationIndex: true}
-	searchAndSitemap := map[string]bool{domain.JobTrafficIndex: false, domain.JobAnnotationIndex: true, domain.JobSitemap: true}
-	sitemap := map[string]bool{domain.JobSitemap: true}
+	search := map[domain.JobName]bool{domain.JobTrafficIndex: false, domain.JobAnnotationIndex: true}
+	searchAndSitemap := map[domain.JobName]bool{domain.JobTrafficIndex: false, domain.JobAnnotationIndex: true, domain.JobSitemap: true}
+	sitemap := map[domain.JobName]bool{domain.JobSitemap: true}
 	asOf := newestID(t, repo)
 
 	tests := []struct {
 		name string
-		read func() (map[string]bool, error)
-		want map[string]bool
+		read func() (map[domain.JobName]bool, error)
+		want map[domain.JobName]bool
 	}{
-		{"count without the sitemap field", func() (map[string]bool, error) {
+		{"count without the sitemap field", func() (map[domain.JobName]bool, error) {
 			count, err := repo.CountTraffic(domain.TrafficCountQuery{Text: `method = "GET"`})
 			return count.Complete, err
 		}, search},
-		{"count with the sitemap field", func() (map[string]bool, error) {
+		{"count with the sitemap field", func() (map[domain.JobName]bool, error) {
 			count, err := repo.CountTraffic(domain.TrafficCountQuery{Text: `sitemap = "https://api.x.com"`})
 			return count.Complete, err
 		}, searchAndSitemap},
-		{"query-mode sitemap without text terms", func() (map[string]bool, error) {
+		{"query-mode sitemap without text terms", func() (map[domain.JobName]bool, error) {
 			page, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{
 				Query: &domain.SelectionQuery{Text: `method = "GET"`, AsOf: asOf}, Limit: 10})
 			return page.Complete, err
 		}, sitemap},
-		{"query-mode sitemap with a text term", func() (map[string]bool, error) {
+		{"query-mode sitemap with a text term", func() (map[domain.JobName]bool, error) {
 			page, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{
 				Query: &domain.SelectionQuery{Text: `"users"`, AsOf: asOf}, Limit: 10})
 			return page.Complete, err
 		}, searchAndSitemap},
-		{"launchpad entries without the sitemap field", func() (map[string]bool, error) {
+		{"launchpad entries without the sitemap field", func() (map[domain.JobName]bool, error) {
 			_, complete, err := repo.GetLaunchpadRequests(launchpadID, "", nil, "")
 			return complete, err
 		}, search},
-		{"launchpad entries with the sitemap field", func() (map[string]bool, error) {
+		{"launchpad entries with the sitemap field", func() (map[domain.JobName]bool, error) {
 			_, complete, err := repo.GetLaunchpadRequests(launchpadID, `sitemap = "https://api.x.com"`, nil, "")
 			return complete, err
 		}, searchAndSitemap},

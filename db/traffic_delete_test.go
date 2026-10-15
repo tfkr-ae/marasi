@@ -244,7 +244,7 @@ func TestTrafficRepo_DeleteTrafficSitemap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := repo.RebuildJob(SitemapJob); err != nil {
+	if err := repo.RebuildJob(domain.JobSitemap); err != nil {
 		t.Fatalf("RebuildJob: %v", err)
 	}
 	runSitemapJob(t, repo, 100)

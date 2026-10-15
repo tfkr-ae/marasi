@@ -150,13 +150,13 @@ type trafficMatch struct {
 // jobs returns the background jobs whose progress changes which pairs m
 // matches: the search index jobs when it has a text term, and the sitemap
 // job when it names the sitemap field.
-func (m trafficMatch) jobs() []string {
-	var jobs []string
+func (m trafficMatch) jobs() []domain.JobName {
+	var jobs []domain.JobName
 	if m.text {
-		jobs = append(jobs, SearchIndexJobs...)
+		jobs = append(jobs, domain.SearchIndexJobs...)
 	}
 	if m.sitemap {
-		jobs = append(jobs, SitemapJob)
+		jobs = append(jobs, domain.JobSitemap)
 	}
 	return jobs
 }
@@ -165,8 +165,8 @@ func (m trafficMatch) jobs() []string {
 // count of the pairs m matches depends on. Lists and counts always report
 // the search index jobs, which clients show as index.complete, even when m
 // has no text term.
-func listCompleteness(q sqlx.Queryer, m trafficMatch) (map[string]bool, error) {
-	return jobCompleteness(q, append(slices.Clone(SearchIndexJobs), m.jobs()...)...)
+func listCompleteness(q sqlx.Queryer, m trafficMatch) (map[domain.JobName]bool, error) {
+	return jobCompleteness(q, append(slices.Clone(domain.SearchIndexJobs), m.jobs()...)...)
 }
 
 // newTrafficMatch translates text and normalises exclusion. An invalid query

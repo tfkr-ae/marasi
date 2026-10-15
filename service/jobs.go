@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tfkr-ae/marasi/db"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // ErrNoOpenProject means the service instance has no open project.
@@ -33,12 +34,12 @@ const jobProgressInterval = time.Second
 // (ADR-0039).
 type jobRunner interface {
 	ListJobs() ([]db.JobState, error)
-	RunJobBatch(name string, maxBytes int) (processed int, remaining bool, err error)
-	RebuildJob(name string) error
+	RunJobBatch(name domain.JobName, maxBytes int) (processed int, remaining bool, err error)
+	RebuildJob(name domain.JobName) error
 }
 
 // runJobBatch runs one batch of the named job for the project at path.
-func runJobBatch(_ context.Context, _ string, runner jobRunner, name string) (int, bool, error) {
+func runJobBatch(_ context.Context, _ string, runner jobRunner, name domain.JobName) (int, bool, error) {
 	return runner.RunJobBatch(name, jobBatchBytes)
 }
 
@@ -46,14 +47,15 @@ func runJobBatch(_ context.Context, _ string, runner jobRunner, name string) (in
 type jobPublisher struct {
 	progress func(path string, job db.JobState)
 	// complete reports that the named job finished. searchIndexComplete is
-	// true when the job is one of db.SearchIndexJobs and all of them are now
+	// true when the job is one of domain.SearchIndexJobs and all of them are now
 	// complete.
-	complete func(path, name string, searchIndexComplete bool)
+	complete func(path string, name domain.JobName, searchIndexComplete bool)
 }
 
 // completedJob is a job completion held until the publisher is installed.
 type completedJob struct {
-	path, name          string
+	path                string
+	name                domain.JobName
 	searchIndexComplete bool
 }
 
@@ -90,7 +92,7 @@ func (events *jobEvents) progress(ctx context.Context, path string, job db.JobSt
 
 // complete reports that the named job finished, unless ctx was cancelled
 // first.
-func (events *jobEvents) complete(ctx context.Context, path, name string, searchIndexComplete bool) {
+func (events *jobEvents) complete(ctx context.Context, path string, name domain.JobName, searchIndexComplete bool) {
 	events.mu.Lock()
 	defer events.mu.Unlock()
 	if ctx.Err() != nil {
@@ -130,7 +132,7 @@ func (lifecycle *ProjectLifecycle) startJobs(project *openProject) {
 	go func() {
 		defer close(done)
 		defer cancel()
-		finished := map[string]bool{}
+		finished := map[domain.JobName]bool{}
 		for ctx.Err() == nil {
 			jobs, err := runner.ListJobs()
 			if err != nil {
@@ -140,7 +142,7 @@ func (lifecycle *ProjectLifecycle) startJobs(project *openProject) {
 				}
 				continue
 			}
-			next := ""
+			var next domain.JobName
 			for _, job := range jobs {
 				if !job.Complete && !finished[job.Name] {
 					next = job.Name
@@ -170,7 +172,7 @@ func stopJobs(project *openProject) {
 
 // runJob runs the named job until it completes or ctx is cancelled, reporting
 // progress at most once per jobProgressInterval.
-func (lifecycle *ProjectLifecycle) runJob(ctx context.Context, path string, runner jobRunner, name string) {
+func (lifecycle *ProjectLifecycle) runJob(ctx context.Context, path string, runner jobRunner, name domain.JobName) {
 	batch := lifecycle.jobBatch
 	var reported time.Time
 	for ctx.Err() == nil {
@@ -210,13 +212,13 @@ func (lifecycle *ProjectLifecycle) runJob(ctx context.Context, path string, runn
 }
 
 // completesSearchIndex reports whether the named job, which just finished, is
-// one of db.SearchIndexJobs and all of them are now complete, so that traffic
+// one of domain.SearchIndexJobs and all of them are now complete, so that traffic
 // reads report index.complete true.
-func completesSearchIndex(runner jobRunner, name string) bool {
-	if !slices.Contains(db.SearchIndexJobs, name) {
+func completesSearchIndex(runner jobRunner, name domain.JobName) bool {
+	if !slices.Contains(domain.SearchIndexJobs, name) {
 		return false
 	}
-	for _, other := range db.SearchIndexJobs {
+	for _, other := range domain.SearchIndexJobs {
 		if job, ok := findJobState(runner, other); !ok || !job.Complete {
 			return false
 		}
@@ -224,7 +226,7 @@ func completesSearchIndex(runner jobRunner, name string) bool {
 	return true
 }
 
-func findJobState(runner jobRunner, name string) (db.JobState, bool) {
+func findJobState(runner jobRunner, name domain.JobName) (db.JobState, bool) {
 	jobs, err := runner.ListJobs()
 	if err != nil {
 		return db.JobState{}, false
@@ -270,7 +272,7 @@ func (lifecycle *ProjectLifecycle) ListJobs() ([]db.JobState, error) {
 // RebuildJob resets the named background job of the open project and starts
 // it again. It returns db.ErrUnknownJob for a name no job has, and
 // db.ErrJobNotRebuildable for a job that cannot be rebuilt.
-func (lifecycle *ProjectLifecycle) RebuildJob(name string) error {
+func (lifecycle *ProjectLifecycle) RebuildJob(name domain.JobName) error {
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
 	project := lifecycle.openProject()
@@ -290,10 +292,10 @@ func (lifecycle *ProjectLifecycle) RebuildJob(name string) error {
 
 // job is a background job in the service API.
 type job struct {
-	Name     string `json:"name"`
-	Complete bool   `json:"complete"`
-	Done     int64  `json:"done"`
-	Total    int64  `json:"total"`
+	Name     domain.JobName `json:"name"`
+	Complete bool           `json:"complete"`
+	Done     int64          `json:"done"`
+	Total    int64          `json:"total"`
 }
 
 func jobFromState(state db.JobState) job {
@@ -326,7 +328,7 @@ func addJobRoutes(projectRoutes routeMux, mux *http.ServeMux, projects *ProjectL
 		}{Items: items})
 	})
 	mux.HandleFunc("POST /jobs/{name}/rebuild", func(w http.ResponseWriter, r *http.Request) {
-		name := r.PathValue("name")
+		name := domain.JobName(r.PathValue("name"))
 		err := projects.RebuildJob(name)
 		switch {
 		case errors.Is(err, ErrNoOpenProject), errors.Is(err, db.ErrUnknownJob):
@@ -339,7 +341,7 @@ func addJobRoutes(projectRoutes routeMux, mux *http.ServeMux, projects *ProjectL
 			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
 			return
 		}
-		if name == db.SitemapJob {
+		if name == domain.JobSitemap {
 			// The tree is empty until the job refills it, so clients
 			// re-read the nodes they have expanded.
 			events.publishSitemapChanged("rebuild")

@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/tfkr-ae/marasi/db"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // seedUnindexedProject creates a project file holding count pairs written the
@@ -140,8 +141,8 @@ func paceIndexBuild(lifecycle *ProjectLifecycle, paced string) *indexPacer {
 	return pacer
 }
 
-func (pacer *indexPacer) batch(ctx context.Context, path string, runner jobRunner, name string) (int, bool, error) {
-	if !slices.Contains(db.SearchIndexJobs, name) {
+func (pacer *indexPacer) batch(ctx context.Context, path string, runner jobRunner, name domain.JobName) (int, bool, error) {
+	if !slices.Contains(domain.SearchIndexJobs, name) {
 		// Only the search index builds are paced and counted.
 		return runner.RunJobBatch(name, jobBatchBytes)
 	}
@@ -323,7 +324,7 @@ func TestTrafficIndexBuild(t *testing.T) {
 		seedUnindexedProject(t, path, 150)
 		server, lifecycle, subscriber := newIndexServer(t)
 		failures := 2
-		lifecycle.jobBatch = func(ctx context.Context, path string, runner jobRunner, name string) (int, bool, error) {
+		lifecycle.jobBatch = func(ctx context.Context, path string, runner jobRunner, name domain.JobName) (int, bool, error) {
 			if failures > 0 {
 				failures--
 				return 0, false, errors.New("database is locked")
@@ -369,7 +370,7 @@ func TestTrafficIndexBuild(t *testing.T) {
 		// once.
 		skips := strings.Count(logs.String(), "Skipped a pair the traffic index could not index")
 		if skips != 2 || strings.Count(logs.String(), "id="+broken.String()) != 2 ||
-			!strings.Contains(logs.String(), "job="+db.TrafficIndexJob) || !strings.Contains(logs.String(), "job="+db.AnnotationIndexJob) {
+			!strings.Contains(logs.String(), "job="+string(domain.JobTrafficIndex)) || !strings.Contains(logs.String(), "job="+string(domain.JobAnnotationIndex)) {
 			t.Fatalf("\nwanted:\none skip logged for %s by each search index job\ngot:\n%s", broken, logs.String())
 		}
 	})
@@ -396,7 +397,7 @@ func TestTrafficIndexBuild(t *testing.T) {
 		_, lifecycle, _ := newIndexServer(t)
 		started := make(chan struct{})
 		var finished atomic.Bool
-		lifecycle.jobBatch = func(ctx context.Context, batchPath string, runner jobRunner, name string) (int, bool, error) {
+		lifecycle.jobBatch = func(ctx context.Context, batchPath string, runner jobRunner, name domain.JobName) (int, bool, error) {
 			if batchPath != path {
 				return 0, false, nil
 			}

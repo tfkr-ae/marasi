@@ -39,7 +39,7 @@ func TestTrafficCount(t *testing.T) {
 		asOf := uuid.MustParse("01938032-1b17-7243-b035-e6a9f4645904")
 		after := uuid.MustParse("01938032-0000-7243-b035-e6a9f4645904")
 		repo := &countingTrafficRepository{result: domain.TrafficCount{
-			Count: 100_000, Capped: true, Complete: map[string]bool{domain.JobTrafficIndex: false},
+			Count: 100_000, Capped: true, Complete: map[domain.JobName]bool{domain.JobTrafficIndex: false},
 		}}
 
 		response := serve(repo, "/traffic/count?q="+url.QueryEscape(`method = "GET"`)+
