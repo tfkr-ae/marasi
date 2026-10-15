@@ -197,9 +197,7 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 		return nil
 	}
 	if err := closeProject(old); err != nil {
-		if lifecycle.logger != nil {
-			lifecycle.logger.Error("Failed to clean up previous project", "path", old.path, "error", err)
-		}
+		lifecycle.logError("Failed to clean up previous project", old.path, err)
 		return errors.Join(ErrProjectCleanup, err)
 	}
 	return nil

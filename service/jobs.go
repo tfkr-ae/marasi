@@ -38,7 +38,9 @@ type jobRunner interface {
 	RebuildJob(name domain.JobName) error
 }
 
-// runJobBatch runs one batch of the named job for the project at path.
+// runJobBatch runs one batch of the named job. It is the default
+// ProjectLifecycle.jobBatch; the context and project path it ignores are
+// there for the test doubles that replace it to pace or fail batches.
 func runJobBatch(_ context.Context, _ string, runner jobRunner, name domain.JobName) (int, bool, error) {
 	return runner.RunJobBatch(name, jobBatchBytes)
 }
@@ -181,9 +183,7 @@ func (lifecycle *ProjectLifecycle) runJob(ctx context.Context, path string, runn
 		if errors.As(err, &skipped) {
 			// The job left the pair out after retrying it; carry on
 			// with the rest.
-			if lifecycle.logger != nil {
-				lifecycle.logger.Warn("Skipped a pair the traffic index could not index", "path", path, "job", name, "id", skipped.ID, "error", skipped.Err)
-			}
+			lifecycle.logWarn("Skipped a pair the traffic index could not index", path, skipped.Err, "job", name, "id", skipped.ID)
 			continue
 		}
 		if err != nil {
@@ -239,9 +239,18 @@ func findJobState(runner jobRunner, name domain.JobName) (db.JobState, bool) {
 	return db.JobState{}, false
 }
 
+// logError logs message at error level with the project path, err and
+// args, when the lifecycle has a logger.
 func (lifecycle *ProjectLifecycle) logError(message, path string, err error, args ...any) {
 	if lifecycle.logger != nil {
 		lifecycle.logger.Error(message, append([]any{"path", path, "error", err}, args...)...)
+	}
+}
+
+// logWarn is logError at warning level.
+func (lifecycle *ProjectLifecycle) logWarn(message, path string, err error, args ...any) {
+	if lifecycle.logger != nil {
+		lifecycle.logger.Warn(message, append([]any{"path", path, "error", err}, args...)...)
 	}
 }
 
