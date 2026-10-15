@@ -44,6 +44,9 @@ const (
 	// fieldLaunchpad matches a pair's launchpad membership: = and != against
 	// a launchpad id, and :* for membership in any launchpad.
 	fieldLaunchpad
+	// fieldHighlight matches a pair's highlight (ADR-0035): = and != against
+	// a number from 1 to 8, and :* for any highlight.
+	fieldHighlight
 )
 
 // launchpadMember is true for a pair linked to the launchpad bound to its ?.
@@ -53,6 +56,14 @@ const launchpadMember = "EXISTS (SELECT 1 FROM launchpad_request WHERE launchpad
 
 // anyLaunchpadMember is true for a pair linked to at least one launchpad.
 const anyLaunchpadMember = "EXISTS (SELECT 1 FROM launchpad_request WHERE launchpad_request.request_id = request.id)"
+
+// highlightIs is true for a pair whose highlight is the number bound to its
+// ?. It is a set of ids rather than a correlated EXISTS, so the
+// (highlight, request_id) index can drive a sparse highlight's plan.
+const highlightIs = "request.id IN (SELECT request_id FROM pair_highlight WHERE highlight = ?)"
+
+// anyHighlight is true for a pair with a highlight.
+const anyHighlight = "request.id IN (SELECT request_id FROM pair_highlight)"
 
 // minTextTermLength is the shortest text term the trigram index can find.
 // Shorter terms would silently match nothing, so they are rejected.
@@ -80,6 +91,7 @@ var trafficFields = map[string]trafficField{
 	// Membership is a row in launchpad_request, not the launchpad_id
 	// metadata, which pairs linked from captured traffic do not have.
 	"launchpad": {kind: fieldLaunchpad, column: "launchpad_request"},
+	"highlight": {kind: fieldHighlight, column: "pair_highlight"},
 
 	"request_head":  {kind: fieldIndexedText, column: "request_head"},
 	"request_body":  {kind: fieldIndexedText, column: "request_body"},
@@ -327,6 +339,14 @@ func (t *queryTranslator) has(e, lhs, rhs *expr.Expr) (string, error) {
 			return "", t.errorAt(e, "operator : on launchpad takes only *, as in launchpad:*; use launchpad = \"<launchpad id>\" for one launchpad")
 		}
 		return anyLaunchpadMember, nil
+	case fieldHighlight:
+		if len(path) > 0 {
+			return "", t.errorAt(lhs, "field %q has no member %q", name, path[0])
+		}
+		if rhs.GetConstExpr().GetStringValue() != "*" {
+			return "", t.errorAt(e, "operator : on highlight takes only *, as in highlight:*; use highlight = 3 for one highlight")
+		}
+		return anyHighlight, nil
 	}
 	return "", t.errorAt(e, "operator : is not supported on %s; use = or another comparison", name)
 }
@@ -428,6 +448,17 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 		}
 		t.bind(id)
 		return negate(op, launchpadMember), nil
+
+	case fieldHighlight:
+		if op != "=" && op != "!=" {
+			return "", t.errorAt(e, "operator %s is not supported on highlight; use =, !=, or highlight:*", op)
+		}
+		value, ok := rhs.GetConstExpr().GetConstantKind().(*expr.Constant_Int64Value)
+		if !ok || value.Int64Value < domain.MinHighlight || value.Int64Value > domain.MaxHighlight {
+			return "", t.errorAt(rhs, "highlight needs a whole number from %d to %d", domain.MinHighlight, domain.MaxHighlight)
+		}
+		t.bind(value.Int64Value)
+		return negate(op, highlightIs), nil
 
 	case fieldMetadata:
 		if len(path) == 0 {
