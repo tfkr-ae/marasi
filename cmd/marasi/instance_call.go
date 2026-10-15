@@ -53,9 +53,7 @@ func rejectInstanceStatus(operation string, response instanceResponse, asJSON bo
 	if response.StatusCode == http.StatusOK {
 		return nil
 	}
-	// An invalid query's message and position are what the user needs to
-	// fix it, so they are shown in human mode too.
-	if asJSON || isInvalidQuery(response.Body) {
+	if asJSON || isInvalidRequest(response.StatusCode, response.Body) {
 		return controlAPIError(operation, response.Status, response.Body)
 	}
 	return fmt.Errorf("%s: %s", operation, response.Status)
