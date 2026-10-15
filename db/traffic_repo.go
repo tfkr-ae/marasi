@@ -267,6 +267,7 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 	if err != nil {
 		return fmt.Errorf("inserting request %s : %w", req.ID, err)
 	}
+	repo.pairCaptured()
 	return nil
 }
 
