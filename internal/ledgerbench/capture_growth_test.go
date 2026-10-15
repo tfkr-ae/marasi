@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tfkr-ae/marasi/db"
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/internal/ledgerbench/fixture"
 )
 
@@ -44,8 +45,19 @@ func TestCaptureCostDoesNotGrowWithProjectSize(t *testing.T) {
 			}
 		}
 	}
+	// Capture leaves its pairs queued for the search index (ADR-0026). A text
+	// search indexes everything queued first, so each window ends with one
+	// and pays for indexing its own pairs.
+	indexed := func() {
+		if _, err := repo.ListTraffic(domain.TrafficQuery{Text: `"no-such-text"`, Limit: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The first window starts after a warm-up window: indexing into an
+	// empty index merges nothing, so the very first pairs cost about half
+	// of what every later window does, at any project size.
 	var first, last time.Duration
-	started := time.Now()
+	var started time.Time
 	for i, pair := range captured {
 		if err := repo.InsertRequest(pair.Request); err != nil {
 			t.Fatal(err)
@@ -56,11 +68,17 @@ func TestCaptureCostDoesNotGrowWithProjectSize(t *testing.T) {
 		}
 		switch i + 1 {
 		case window:
+			indexed()
+			started = time.Now()
+		case 2 * window:
+			indexed()
 			first = time.Since(started)
 		case pairs - window:
+			indexed()
 			started = time.Now()
 		}
 	}
+	indexed()
 	last = time.Since(started)
 	for len(waiting) > 0 {
 		respond()

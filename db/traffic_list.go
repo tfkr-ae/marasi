@@ -255,6 +255,9 @@ func (repo *Repository) ListTrafficContext(ctx context.Context, q domain.Traffic
 	if err != nil {
 		return domain.TrafficPage{}, err
 	}
+	if err := repo.indexReadyFor(match); err != nil {
+		return domain.TrafficPage{}, err
+	}
 	var cursor *trafficCursor
 	var cursorKey any
 	if q.Cursor != "" {
