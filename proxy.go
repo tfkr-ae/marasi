@@ -515,10 +515,7 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyReque
 		}
 
 		proxyRequest.Raw = domain.RawField(rawReq)
-		if prettified != "" {
-			// Kept on the request's own metadata too, so the response write keeps it.
-			metadata["prettified-request"] = prettified
-		}
+		proxyRequest.Prettified = prettified
 		// The response pipeline goes on changing the request's metadata while
 		// the database writer stores this request, so the request gets its own copy.
 		proxyRequest.Metadata = maps.Clone(metadata)
@@ -588,11 +585,8 @@ func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
 		Length:      res.Header.Get("Content-Length"),
 		Raw:         domain.RawField(rawRes),
 		Metadata:    metadata,
+		Prettified:  prettified,
 		RespondedAt: responseTime,
-	}
-
-	if prettified != "" {
-		proxyResponse.Metadata["prettified-response"] = prettified
 	}
 	return proxyResponse, nil
 }

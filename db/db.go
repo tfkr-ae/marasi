@@ -36,6 +36,9 @@ type Repository struct {
 	// sitemapFrom, when set, means every pair with an id at or above it is
 	// in the sitemap. jobMu guards it.
 	sitemapFrom *uuid.UUID
+	// prettifiedMovedTo is the oldest pair the prettified move has passed in
+	// this session, so its next batch starts below it. It is guarded by jobMu.
+	prettifiedMovedTo *uuid.UUID
 }
 
 // NewProxyRepo initializes a new Repository with the given sqlx.DB database connection.

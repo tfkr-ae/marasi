@@ -3,6 +3,7 @@ package db
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -202,24 +203,12 @@ func TestSitemap_Exclusion(t *testing.T) {
 			}
 		}
 	}
-	if !maps(sum, total) {
+	if !maps.Equal(sum, total) {
 		t.Fatalf("\nwanted:\nthe buckets to add up to %+v\ngot:\n%+v", total, sum)
 	}
 	if want := (counts{15, 2}); total["https://x.com/s0"] != want {
 		t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, total["https://x.com/s0"])
 	}
-}
-
-func maps[K comparable, V comparable](a, b map[K]V) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if w, ok := b[k]; !ok || w != v {
-			return false
-		}
-	}
-	return true
 }
 
 func TestSitemap_ListChildren(t *testing.T) {
@@ -291,7 +280,7 @@ func TestSitemap_ListChildren(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := map[string]bool{domain.JobSitemap: true}; !maps(page.Complete, want) {
+		if want := map[string]bool{domain.JobSitemap: true}; !maps.Equal(page.Complete, want) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, page.Complete)
 		}
 	})
@@ -477,7 +466,7 @@ func TestSitemap_QueryField(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := map[string]bool{domain.JobTrafficIndex: true, domain.JobSitemap: true}; !maps(page.Complete, want) {
+		if want := map[string]bool{domain.JobTrafficIndex: true, domain.JobSitemap: true}; !maps.Equal(page.Complete, want) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, page.Complete)
 		}
 	})
