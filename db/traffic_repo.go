@@ -594,27 +594,45 @@ func (repo *Repository) SearchByMetadata(path string, value any) ([]*domain.Requ
 }
 
 // CountContentTypes returns every distinct response content type with its row
-// count. NULL and empty content types are grouped under "".
-func (repo *Repository) CountContentTypes() ([]*domain.ContentTypeCount, error) {
+// count. NULL and empty content types are grouped under "". Once the sitemap
+// job is complete the counts are the sums of the origins' sitemap buckets, one
+// range read; until then they are grouped from the pairs themselves.
+func (repo *Repository) CountContentTypes() (domain.ContentTypeCounts, error) {
 	var rows []struct {
 		ContentType string `db:"content_type"`
 		Count       int    `db:"count"`
 	}
-	query := `SELECT
+	result := domain.ContentTypeCounts{Counts: []*domain.ContentTypeCount{}}
+	err := repo.inTx(func(tx *sqlx.Tx) error {
+		job, err := loadJob(tx, SitemapJob)
+		if err != nil {
+			return fmt.Errorf("reading the sitemap job: %w", err)
+		}
+		result.Complete = map[string]bool{SitemapJob: job.Complete}
+		// Origins have parent 0 in sitemap_count, and their buckets hold
+		// every linked pair.
+		query := `SELECT content_type, sum(pairs) AS count
+			  FROM sitemap_count
+			  WHERE parent_id = 0
+			  GROUP BY content_type
+			  HAVING count > 0
+			  ORDER BY count DESC, content_type ASC`
+		if !job.Complete {
+			query = `SELECT
 			  COALESCE(content_type, '') AS content_type,
 			  COUNT(*) AS count
 			  FROM request
 			  GROUP BY COALESCE(content_type, '')
 			  ORDER BY count DESC, content_type ASC`
-
-	err := repo.dbConn.Select(&rows, query)
+		}
+		return tx.Select(&rows, query)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("counting content types: %w", err)
+		return domain.ContentTypeCounts{}, fmt.Errorf("counting content types: %w", err)
 	}
 
-	counts := make([]*domain.ContentTypeCount, len(rows))
-	for i, row := range rows {
-		counts[i] = &domain.ContentTypeCount{ContentType: row.ContentType, Count: row.Count}
+	for _, row := range rows {
+		result.Counts = append(result.Counts, &domain.ContentTypeCount{ContentType: row.ContentType, Count: row.Count})
 	}
-	return counts, nil
+	return result, nil
 }
