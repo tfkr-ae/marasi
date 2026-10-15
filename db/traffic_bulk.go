@@ -20,12 +20,12 @@ import (
 func selectionSubquery(sel domain.Selection) (string, []any, error) {
 	switch {
 	case sel.Query != nil && sel.IDs == nil:
-		filter, err := newTrafficFilter(sel.Query.Text, sel.Query.Exclusion)
+		match, err := newTrafficMatch(sel.Query.Text, sel.Query.Exclusion)
 		if err != nil {
 			return "", nil, err
 		}
-		filter.add(`request.id <= ?`, sel.Query.AsOf)
-		return `SELECT request.id FROM request` + filter.where(), filter.args, nil
+		match.add(`request.id <= ?`, sel.Query.AsOf)
+		return `SELECT request.id FROM request` + match.where(), match.args, nil
 	case sel.Query == nil && len(sel.IDs) > 0:
 		ids, err := json.Marshal(sel.IDs)
 		if err != nil {
