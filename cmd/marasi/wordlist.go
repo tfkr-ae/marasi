@@ -124,6 +124,12 @@ var wordlistRemoveCmd = &cobra.Command{
 }
 
 func runControlRequest(cmd *cobra.Command, method, path, operation string, body []byte) ([]byte, error) {
+	return runControlRequestStatus(cmd, method, path, operation, body, http.StatusOK)
+}
+
+// runControlRequestStatus is runControlRequest for a route whose success
+// status is ok rather than 200.
+func runControlRequestStatus(cmd *cobra.Command, method, path, operation string, body []byte, ok int) ([]byte, error) {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	var requestBody io.Reader
@@ -134,10 +140,13 @@ func runControlRequest(cmd *cobra.Command, method, path, operation string, body 
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectInstanceStatus(operation, response, true); err != nil {
-		return nil, err
+	if response.StatusCode == ok {
+		return response.Body, nil
 	}
-	return response.Body, nil
+	if response.StatusCode == http.StatusOK {
+		return nil, fmt.Errorf("%s: unexpected status %s", operation, response.Status)
+	}
+	return nil, rejectInstanceStatus(operation, response, true)
 }
 
 func writeSizedList(body []byte, stdout io.Writer) error {
