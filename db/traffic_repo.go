@@ -644,11 +644,11 @@ func (repo *Repository) CountContentTypesContext(ctx context.Context) (domain.Co
 	}
 	result := domain.ContentTypeCounts{Counts: []*domain.ContentTypeCount{}}
 	err := repo.inTxContext(ctx, func(tx *sqlx.Tx) error {
-		job, err := loadJob(tx, SitemapJob)
+		job, err := loadJob(tx, domain.JobSitemap)
 		if err != nil {
 			return fmt.Errorf("reading the sitemap job: %w", err)
 		}
-		result.Complete = map[string]bool{SitemapJob: job.Complete}
+		result.Complete = map[domain.JobName]bool{domain.JobSitemap: job.Complete}
 		// Origins have parent 0 in sitemap_count, and their buckets hold
 		// every linked pair.
 		query := `SELECT content_type, sum(pairs) AS count

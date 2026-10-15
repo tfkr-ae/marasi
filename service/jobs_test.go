@@ -12,13 +12,14 @@ import (
 
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/db"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 type listedJob struct {
-	Name     string `json:"name"`
-	Complete bool   `json:"complete"`
-	Done     int64  `json:"done"`
-	Total    int64  `json:"total"`
+	Name     domain.JobName `json:"name"`
+	Complete bool           `json:"complete"`
+	Done     int64          `json:"done"`
+	Total    int64          `json:"total"`
 }
 
 func listJobs(t *testing.T, server *Server) []listedJob {
@@ -37,7 +38,7 @@ func listJobs(t *testing.T, server *Server) []listedJob {
 }
 
 // listJob returns the listed state of the job called name.
-func listJob(t *testing.T, server *Server, name string) []listedJob {
+func listJob(t *testing.T, server *Server, name domain.JobName) []listedJob {
 	t.Helper()
 	var named []listedJob
 	for _, job := range listJobs(t, server) {
@@ -52,7 +53,7 @@ func listJob(t *testing.T, server *Server, name string) []listedJob {
 func listSearchJobs(t *testing.T, server *Server) []listedJob {
 	t.Helper()
 	var named []listedJob
-	for _, name := range db.SearchIndexJobs {
+	for _, name := range domain.SearchIndexJobs {
 		named = append(named, listJob(t, server, name)...)
 	}
 	return named
@@ -60,7 +61,7 @@ func listSearchJobs(t *testing.T, server *Server) []listedJob {
 
 // jobCompleted waits for the job.complete event of the job called name,
 // skipping other events, and reports whether it arrived within wait.
-func jobCompleted(subscriber *eventSubscriber, name string, wait time.Duration) bool {
+func jobCompleted(subscriber *eventSubscriber, name domain.JobName, wait time.Duration) bool {
 	deadline := time.Now().Add(wait)
 	want := fmt.Sprintf(`{"name":%q}`, name)
 	for time.Now().Before(deadline) {
@@ -110,7 +111,7 @@ type refusingRebuild struct {
 	*db.Repository
 }
 
-func (refusingRebuild) RebuildJob(name string) error {
+func (refusingRebuild) RebuildJob(name domain.JobName) error {
 	return fmt.Errorf("%w: %s", db.ErrJobNotRebuildable, name)
 }
 
@@ -120,11 +121,11 @@ func TestJobs(t *testing.T) {
 		server, lifecycle, _ := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
 
-		got := append(listSearchJobs(t, server), listJob(t, server, db.SitemapJob)...)
+		got := append(listSearchJobs(t, server), listJob(t, server, domain.JobSitemap)...)
 		want := []listedJob{
-			{Name: db.TrafficIndexJob, Complete: true},
-			{Name: db.AnnotationIndexJob, Complete: true},
-			{Name: db.SitemapJob, Complete: true},
+			{Name: domain.JobTrafficIndex, Complete: true},
+			{Name: domain.JobAnnotationIndex, Complete: true},
+			{Name: domain.JobSitemap, Complete: true},
 		}
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
@@ -156,8 +157,8 @@ func TestJobs(t *testing.T) {
 		}
 		jobs := listSearchJobs(t, server)
 		wantJobs := []listedJob{
-			{Name: db.TrafficIndexJob, Complete: true, Done: 20, Total: 20},
-			{Name: db.AnnotationIndexJob, Complete: true, Done: 20, Total: 20},
+			{Name: domain.JobTrafficIndex, Complete: true, Done: 20, Total: 20},
+			{Name: domain.JobAnnotationIndex, Complete: true, Done: 20, Total: 20},
 		}
 		if fmt.Sprint(jobs) != fmt.Sprint(wantJobs) {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", wantJobs, jobs)
@@ -200,7 +201,7 @@ func TestJobs(t *testing.T) {
 		server, lifecycle, subscriber := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
 		// The sitemap job runs last, so its completion ends the first open's jobs.
-		if !jobCompleted(subscriber, db.SitemapJob, 30*time.Second) {
+		if !jobCompleted(subscriber, domain.JobSitemap, 30*time.Second) {
 			t.Fatal("the first build did not complete")
 		}
 		pacer := paceIndexBuild(lifecycle, path)
@@ -233,7 +234,7 @@ func TestJobs(t *testing.T) {
 		server, lifecycle, subscriber := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
 		// The sitemap job runs last, so its completion ends the first open's jobs.
-		if !jobCompleted(subscriber, db.SitemapJob, 30*time.Second) {
+		if !jobCompleted(subscriber, domain.JobSitemap, 30*time.Second) {
 			t.Fatal("the first build did not complete")
 		}
 		pacer := paceIndexBuild(lifecycle, path)
@@ -247,7 +248,7 @@ func TestJobs(t *testing.T) {
 			t.Fatalf("\nwanted:\nindex.complete false while the rebuild runs\ngot:\ntrue")
 		}
 		pacer.release()
-		if !jobCompleted(subscriber, db.TrafficIndexJob, 30*time.Second) {
+		if !jobCompleted(subscriber, domain.JobTrafficIndex, 30*time.Second) {
 			t.Fatalf("\nwanted:\njob.complete for the rebuild\ngot:\nnone")
 		}
 		if got := pacer.indexedPairs(path); got != 5 {

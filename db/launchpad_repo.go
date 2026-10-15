@@ -153,7 +153,7 @@ func (repo *Repository) DeleteLaunchpad(launchpadID uuid.UUID) error {
 // reports it. The read is the launchpad's membership plus the translated
 // traffic query and the exclusion. An invalid query, exclusion or orderBy
 // returns a *domain.QueryError.
-func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string, exclusion []string, orderBy string) ([]*domain.RequestResponseSummary, map[string]bool, error) {
+func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string, exclusion []string, orderBy string) ([]*domain.RequestResponseSummary, map[domain.JobName]bool, error) {
 	order := `id ASC`
 	if strings.TrimSpace(orderBy) != "" {
 		sort, err := parseTrafficOrderBy(orderBy)
@@ -173,7 +173,7 @@ func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string, 
 	query := `SELECT ` + trafficSummaryColumns + trafficSummarySource + match.where() + ` ORDER BY ` + order
 
 	var dbRequests []*dbRequestResponseSummary
-	var jobs map[string]bool
+	var jobs map[domain.JobName]bool
 	err = repo.inTx(func(tx *sqlx.Tx) error {
 		read, err := listCompleteness(tx, match)
 		if err != nil {

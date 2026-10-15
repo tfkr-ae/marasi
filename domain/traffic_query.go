@@ -10,13 +10,6 @@ import (
 // was made under a different sort than the read that received it.
 var ErrInvalidCursor = errors.New("invalid cursor")
 
-// JobTrafficIndex names the background job that builds the traffic index.
-const JobTrafficIndex = "traffic_index"
-
-// JobAnnotationIndex names the background job that backfills the annotation
-// index, which holds notes and metadata (ADR-0038).
-const JobAnnotationIndex = "annotation_index"
-
 // Direction is the way a traffic list read walks from its cursor.
 type Direction int
 
@@ -64,7 +57,7 @@ type TrafficPage struct {
 	// whether the job had finished. Keys are job names such as
 	// JobTrafficIndex. Text conditions can miss pairs while the traffic
 	// index or the annotation index is incomplete.
-	Complete map[string]bool
+	Complete map[JobName]bool
 }
 
 // MaxTrafficCount is the largest count CountTraffic reports exactly. Above
@@ -94,5 +87,5 @@ type TrafficCount struct {
 	Capped bool
 	// Complete reports, for each background job the answer depends on,
 	// whether the job had finished. See TrafficPage.Complete.
-	Complete map[string]bool
+	Complete map[JobName]bool
 }

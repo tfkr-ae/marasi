@@ -66,9 +66,9 @@ type trafficIndex struct {
 // searchComplete reports whether every search index job in complete had
 // finished, which is when text conditions can miss no pair. Completeness
 // that names no search index job is incomplete.
-func searchComplete(complete map[string]bool) bool {
+func searchComplete(complete map[domain.JobName]bool) bool {
 	_, found := complete[domain.JobTrafficIndex]
-	for _, name := range []string{domain.JobTrafficIndex, domain.JobAnnotationIndex} {
+	for _, name := range domain.SearchIndexJobs {
 		if done, ok := complete[name]; ok && !done {
 			return false
 		}
@@ -79,7 +79,7 @@ func searchComplete(complete map[string]bool) bool {
 // sitemapCompleteness returns the sitemap job's completeness when complete
 // names it, which a traffic read does when its query has a sitemap
 // condition, and nil otherwise.
-func sitemapCompleteness(complete map[string]bool) *jobCompleteness {
+func sitemapCompleteness(complete map[domain.JobName]bool) *jobCompleteness {
 	done, ok := complete[domain.JobSitemap]
 	if !ok {
 		return nil

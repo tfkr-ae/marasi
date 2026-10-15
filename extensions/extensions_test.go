@@ -143,7 +143,7 @@ func (m *mockTrafficRepo) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage
 	if m.forceError {
 		return domain.TrafficPage{}, errors.New("forced repo error")
 	}
-	complete := map[string]bool{domain.JobTrafficIndex: true}
+	complete := map[domain.JobName]bool{domain.JobTrafficIndex: true}
 	if m.summaryData != nil {
 		return domain.TrafficPage{Items: m.summaryData, Complete: complete}, nil
 	}
@@ -163,7 +163,7 @@ func (m *mockTrafficRepo) CountContentTypesContext(context.Context) (domain.Cont
 }
 
 func (m *mockTrafficRepo) CountTraffic(q domain.TrafficCountQuery) (domain.TrafficCount, error) {
-	return domain.TrafficCount{Count: len(m.summaryData), Complete: map[string]bool{domain.JobTrafficIndex: true}}, nil
+	return domain.TrafficCount{Count: len(m.summaryData), Complete: map[domain.JobName]bool{domain.JobTrafficIndex: true}}, nil
 }
 
 func (m *mockTrafficRepo) ListSitemapChildren(context.Context, domain.SitemapQuery) (domain.SitemapPage, error) {

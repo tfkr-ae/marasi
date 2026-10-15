@@ -281,7 +281,7 @@ func TestSitemap_ListChildren(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := map[string]bool{domain.JobSitemap: true}; !maps.Equal(page.Complete, want) {
+		if want := map[domain.JobName]bool{domain.JobSitemap: true}; !maps.Equal(page.Complete, want) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, page.Complete)
 		}
 	})
@@ -334,11 +334,11 @@ func sitemapJobState(t *testing.T, repo *Repository) JobState {
 		t.Fatal(err)
 	}
 	for _, job := range jobs {
-		if job.Name == SitemapJob {
+		if job.Name == domain.JobSitemap {
 			return job
 		}
 	}
-	t.Fatalf("\nwanted:\na %s job\ngot:\n%+v", SitemapJob, jobs)
+	t.Fatalf("\nwanted:\na %s job\ngot:\n%+v", domain.JobSitemap, jobs)
 	return JobState{}
 }
 
@@ -377,7 +377,7 @@ func TestSitemap_Job(t *testing.T) {
 			t.Fatalf("\nwanted:\nan incomplete sitemap job after an older binary wrote pairs\ngot:\n%+v", got)
 		}
 		page, err := repo.ListSitemapChildren(context.Background(), domain.SitemapQuery{Limit: 10})
-		if err != nil || page.Complete[SitemapJob] {
+		if err != nil || page.Complete[domain.JobSitemap] {
 			t.Fatalf("\nwanted:\nthe read to report the sitemap as incomplete\ngot:\n%v, %v", page.Complete, err)
 		}
 
@@ -386,7 +386,7 @@ func TestSitemap_Job(t *testing.T) {
 		if got := sitemapTree(t, repo); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
-		if got := sitemapJobState(t, repo); got != (JobState{Name: SitemapJob, Complete: true, Done: 8, Total: 8}) {
+		if got := sitemapJobState(t, repo); got != (JobState{Name: domain.JobSitemap, Complete: true, Done: 8, Total: 8}) {
 			t.Fatalf("\nwanted:\na complete job that added 8 pairs\ngot:\n%+v", got)
 		}
 		if got, want := sitemapTree(t, repo, "application/json"), sitemapTree(t, captured, "application/json"); got != want {
@@ -400,7 +400,7 @@ func TestSitemap_Job(t *testing.T) {
 		for _, pair := range sitemapPairs {
 			capturePair(t, repo, pair.url, pair.contentType, pair.status)
 		}
-		if err := repo.RebuildJob(SitemapJob); err != nil {
+		if err := repo.RebuildJob(domain.JobSitemap); err != nil {
 			t.Fatalf("RebuildJob: %v", err)
 		}
 		if got := sitemapTree(t, repo); got != "" {
@@ -467,7 +467,7 @@ func TestSitemap_QueryField(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := map[string]bool{domain.JobTrafficIndex: true, domain.JobAnnotationIndex: true, domain.JobSitemap: true}; !maps.Equal(page.Complete, want) {
+		if want := map[domain.JobName]bool{domain.JobTrafficIndex: true, domain.JobAnnotationIndex: true, domain.JobSitemap: true}; !maps.Equal(page.Complete, want) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, page.Complete)
 		}
 	})

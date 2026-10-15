@@ -15,17 +15,13 @@ import (
 	"github.com/tfkr-ae/marasi/domain"
 )
 
-// SitemapJob is the background job that adds pairs without a sitemap link to
-// the stored sitemap (ADR-0040).
-const SitemapJob = domain.JobSitemap
-
 // sitemapBatchPairs is how many pairs one batch of the sitemap job adds.
 const sitemapBatchPairs = 2000
 
 // sitemapJob registers the sitemap with the background job runner. Its
 // version is the version of the rules, so new rules rebuild the tree.
 var sitemapJob = jobDefinition{
-	name:    SitemapJob,
+	name:    domain.JobSitemap,
 	version: domain.SitemapRulesVersion,
 	batch: func(repo *Repository, _ int) (int, bool, error) {
 		return repo.AddMissingToSitemap(sitemapBatchPairs)
@@ -165,7 +161,7 @@ func (repo *Repository) AddMissingToSitemap(maxPairs int) (int, bool, error) {
 	}
 	var remaining bool
 	err := repo.inTx(func(tx *sqlx.Tx) error {
-		job, err := loadJob(tx, SitemapJob)
+		job, err := loadJob(tx, domain.JobSitemap)
 		if err != nil {
 			return fmt.Errorf("reading the sitemap job: %w", err)
 		}
@@ -194,7 +190,7 @@ func (repo *Repository) AddMissingToSitemap(maxPairs int) (int, bool, error) {
 				return err
 			}
 		}
-		return advanceJob(tx, SitemapJob, len(pairs), remaining)
+		return advanceJob(tx, domain.JobSitemap, len(pairs), remaining)
 	})
 	if err != nil {
 		return 0, false, fmt.Errorf("adding missing traffic to the sitemap: %w", err)
@@ -269,7 +265,7 @@ func (repo *Repository) ListSitemapChildren(ctx context.Context, q domain.Sitema
 		after = &decoded
 	}
 	var children func(parent int64) sitemapChildren
-	jobs := []string{SitemapJob}
+	jobs := []domain.JobName{domain.JobSitemap}
 	if q.Query == nil {
 		normalized, err := domain.NormalizeExclusion(q.Exclusion)
 		if err != nil {
