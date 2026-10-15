@@ -467,7 +467,7 @@ func TestSitemap_QueryField(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := map[string]bool{domain.JobTrafficIndex: true, domain.JobSitemap: true}; !maps.Equal(page.Complete, want) {
+		if want := map[string]bool{domain.JobTrafficIndex: true, domain.JobAnnotationIndex: true, domain.JobSitemap: true}; !maps.Equal(page.Complete, want) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, page.Complete)
 		}
 	})

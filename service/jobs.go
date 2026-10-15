@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -44,7 +45,16 @@ func runJobBatch(_ context.Context, _ string, runner jobRunner, name string) (in
 // jobPublisher turns background job reports into service events.
 type jobPublisher struct {
 	progress func(path string, job db.JobState)
-	complete func(path, name string)
+	// complete reports that the named job finished. searchIndexComplete is
+	// true when the job is one of db.SearchIndexJobs and all of them are now
+	// complete.
+	complete func(path, name string, searchIndexComplete bool)
+}
+
+// completedJob is a job completion held until the publisher is installed.
+type completedJob struct {
+	path, name          string
+	searchIndexComplete bool
 }
 
 // jobEvents is the internal hook through which ProjectLifecycle reports
@@ -55,7 +65,7 @@ type jobPublisher struct {
 type jobEvents struct {
 	mu        sync.Mutex
 	publisher *jobPublisher
-	pending   [][2]string
+	pending   []completedJob
 }
 
 func (events *jobEvents) install(publisher jobPublisher) {
@@ -63,7 +73,7 @@ func (events *jobEvents) install(publisher jobPublisher) {
 	defer events.mu.Unlock()
 	events.publisher = &publisher
 	for _, completed := range events.pending {
-		publisher.complete(completed[0], completed[1])
+		publisher.complete(completed.path, completed.name, completed.searchIndexComplete)
 	}
 	events.pending = nil
 }
@@ -80,17 +90,17 @@ func (events *jobEvents) progress(ctx context.Context, path string, job db.JobSt
 
 // complete reports that the named job finished, unless ctx was cancelled
 // first.
-func (events *jobEvents) complete(ctx context.Context, path, name string) {
+func (events *jobEvents) complete(ctx context.Context, path, name string, searchIndexComplete bool) {
 	events.mu.Lock()
 	defer events.mu.Unlock()
 	if ctx.Err() != nil {
 		return
 	}
 	if events.publisher == nil {
-		events.pending = append(events.pending, [2]string{path, name})
+		events.pending = append(events.pending, completedJob{path: path, name: name, searchIndexComplete: searchIndexComplete})
 		return
 	}
-	events.publisher.complete(path, name)
+	events.publisher.complete(path, name, searchIndexComplete)
 }
 
 func projectJobRunner(project *openProject) (jobRunner, bool) {
@@ -187,7 +197,7 @@ func (lifecycle *ProjectLifecycle) runJob(ctx context.Context, path string, runn
 			continue
 		}
 		if !remaining {
-			lifecycle.jobEvents.complete(ctx, path, name)
+			lifecycle.jobEvents.complete(ctx, path, name, completesSearchIndex(runner, name))
 			return
 		}
 		if processed > 0 && time.Since(reported) >= lifecycle.jobProgressInterval {
@@ -197,6 +207,21 @@ func (lifecycle *ProjectLifecycle) runJob(ctx context.Context, path string, runn
 			}
 		}
 	}
+}
+
+// completesSearchIndex reports whether the named job, which just finished, is
+// one of db.SearchIndexJobs and all of them are now complete, so that traffic
+// reads report index.complete true.
+func completesSearchIndex(runner jobRunner, name string) bool {
+	if !slices.Contains(db.SearchIndexJobs, name) {
+		return false
+	}
+	for _, other := range db.SearchIndexJobs {
+		if job, ok := findJobState(runner, other); !ok || !job.Complete {
+			return false
+		}
+	}
+	return true
 }
 
 func findJobState(runner jobRunner, name string) (db.JobState, bool) {

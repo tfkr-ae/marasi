@@ -238,11 +238,10 @@ func (repo *Repository) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, 
 	var page domain.TrafficPage
 	var rows []sortedRow
 	err = repo.inTx(func(tx *sqlx.Tx) error {
-		indexComplete, err := repo.indexComplete(tx)
+		page.Complete, err = searchIndexCompleteness(tx)
 		if err != nil {
 			return err
 		}
-		page.Complete = map[string]bool{domain.JobTrafficIndex: indexComplete}
 		if filter.sitemap {
 			job, err := loadJob(tx, SitemapJob)
 			if err != nil {

@@ -15,6 +15,14 @@ import (
 // traffic index (ADR-0026).
 const TrafficIndexJob = domain.JobTrafficIndex
 
+// AnnotationIndexJob is the background job that backfills the annotation
+// index with the notes and metadata of pairs indexed before it (ADR-0038).
+const AnnotationIndexJob = domain.JobAnnotationIndex
+
+// SearchIndexJobs are the jobs that text search depends on. A traffic read's
+// index.complete is true when all of them are complete.
+var SearchIndexJobs = []string{TrafficIndexJob, AnnotationIndexJob}
+
 // PrettifiedMoveJob is the background job that moves prettified copies out of
 // metadata (ADR-0036).
 const PrettifiedMoveJob = "prettified_move"
@@ -62,7 +70,7 @@ type jobDefinition struct {
 var jobRegistry = []jobDefinition{
 	{
 		name:    TrafficIndexJob,
-		version: 1,
+		version: bodyDecoderVersion,
 		batch: func(repo *Repository, maxBytes int) (int, bool, error) {
 			return repo.IndexMissingTraffic(maxBytes)
 		},
@@ -71,6 +79,19 @@ var jobRegistry = []jobDefinition{
 			return err
 		},
 		forget:      func(repo *Repository) { repo.index.reset() },
+		rebuildable: true,
+	},
+	{
+		name:    AnnotationIndexJob,
+		version: 1,
+		batch: func(repo *Repository, maxBytes int) (int, bool, error) {
+			return repo.IndexMissingAnnotations(maxBytes)
+		},
+		discard: func(tx *sqlx.Tx) error {
+			_, err := tx.Exec(`INSERT INTO traffic_annotation_index (traffic_annotation_index) VALUES ('delete-all')`)
+			return err
+		},
+		forget:      func(repo *Repository) { repo.annotationIndex.reset() },
 		rebuildable: true,
 	},
 	{
