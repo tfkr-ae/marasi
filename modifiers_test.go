@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -4074,4 +4075,37 @@ func TestWriteResponseModifier(t *testing.T) {
 			t.Fatalf("expected onResponse to be called")
 		}
 	})
+}
+
+// A null in the response-time metadata deletes the stored key (RFC 7396
+// merge in InsertResponse), so set_metadata never puts one there.
+func TestExtensionsResponseModifierPutsNoNullInMetadata(t *testing.T) {
+	proxy := newTestProxy(t, testExtensions["workshop"])
+	updateExtension(t, proxy, "workshop", `
+		function processResponse(response)
+			response:set_metadata({kept = "x", fn = function() end, nested = {fn = function() end, n = 1}, list = {1, 2}})
+		end
+	`)
+	req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+	*req = *core.ContextWithExtensionID(req, "")
+	*req = *core.ContextWithMetadata(req, map[string]any{})
+	_, remove, err := martian.TestContext(req, nil, nil)
+	if err != nil {
+		t.Fatalf("applying martian context : %v", err)
+	}
+	defer remove()
+	res := &http.Response{Header: make(http.Header), Request: req}
+
+	if err := ExtensionsResponseModifier(proxy, res); err != nil {
+		t.Fatalf("wanted: nil\ngot: %v", err)
+	}
+	metadata, _ := core.MetadataFromContext(res.Request.Context())
+	got, err := json.Marshal(metadata["workshop"])
+	if err != nil {
+		t.Fatalf("marshalling metadata: %v", err)
+	}
+	want := `{"kept":"x","list":[1,2],"nested":{"n":1}}`
+	if string(got) != want {
+		t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+	}
 }
