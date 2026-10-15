@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,13 +26,19 @@ func (r RawField) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(r))
 }
 
+// ErrPairNotFound means no request/response pair has the id a write names,
+// as when a response arrives for a pair that was deleted while in flight.
+var ErrPairNotFound = errors.New("request/response pair not found")
+
 // TrafficRepository is the interface that holds all the traffic related repository methods in Marasi
 type TrafficRepository interface {
 	// InsertRequest will insert the ProxyRequest in the DB
 	InsertRequest(req *ProxyRequest) error
 
 	// InsertResponse will update the row with the response data
-	// It will use res.ID to find the row ID, it will return an error if the request ID was not found
+	// It will use res.ID to find the row ID. When no pair has that ID, as
+	// when the pair was deleted in flight, it writes nothing and returns an
+	// error wrapping ErrPairNotFound.
 	InsertResponse(res *ProxyResponse) error
 
 	// GetResponse will return the response data from a row from the request ID
@@ -157,6 +164,15 @@ type TrafficRepository interface {
 	// ClearNotes deletes the note of every pair in sel in one transaction
 	// and returns the number of notes deleted.
 	ClearNotes(sel Selection) (int, error)
+
+	// DeleteTraffic deletes every pair in sel in one transaction, with
+	// everything each one owns: its note, its launchpad, finding, test case
+	// and Armory links, its WebSocket connection and messages, its proxy
+	// logs, its search index rows, its highlight, its prettified bodies and
+	// its sitemap counts (ADR-0034). It returns the number of pairs deleted.
+	// Unknown ids in an id selection are ignored; an invalid query selection
+	// returns a *QueryError.
+	DeleteTraffic(sel Selection) (int, error)
 }
 
 // ProxyRequest represents the data captured from an HTTP request.

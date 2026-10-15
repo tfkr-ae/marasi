@@ -294,6 +294,10 @@ func (m *mockTrafficRepo) ClearNotes(domain.Selection) (int, error) {
 	return 0, errors.New("not implemented")
 }
 
+func (m *mockTrafficRepo) DeleteTraffic(domain.Selection) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
 func setupTestExtension(t *testing.T, luaCode string, options ...func(*Runtime) error) (*Runtime, *mockProxyService) {
 	t.Helper()
 
