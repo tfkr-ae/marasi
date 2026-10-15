@@ -134,6 +134,13 @@ func TestTrafficRepo_ListTrafficLinkQuery(t *testing.T) {
 		{query: `finding = "<f1>" AND test_case = "<tc1>"`, want: "a"},
 		{query: `finding:* AND status_code >= 500`, want: "b"},
 		{query: `finding = "<f2>" OR test_case = "<tc2>"`, want: "cb"},
+
+		{query: `note:*`, want: "db"},
+		{query: `NOT note:*`, want: "eca"},
+		{query: `-note:*`, want: "eca"},
+		{query: `note:* AND status_code = 404`, want: "d"},
+		{query: `note:"token"`, want: "d"},
+		{query: `note:"retest" OR finding = "<f1>"`, want: "ba"},
 	}
 	for _, test := range tests {
 		t.Run(test.query, func(t *testing.T) {
@@ -166,6 +173,9 @@ func TestTrafficRepo_ListTrafficLinkQueryErrors(t *testing.T) {
 		{query: `test_case = x`, message: `test_case needs a quoted test case id`, position: 13},
 		{query: `test_case >= "<tc1>"`, message: `operator >= is not supported on test_case; use =, !=, or test_case:*`, position: 1},
 		{query: `test_case:token`, message: `operator : on test_case takes only *`, position: 1},
+		// Only an unquoted * means "has a note"; anything else is text.
+		{query: `note:"*"`, message: `text term "*" is shorter than 3 characters`, position: 6},
+		{query: `note:ab`, message: `text term "ab" is shorter than 3 characters`, position: 6},
 	}
 	for _, test := range tests {
 		t.Run(test.query, func(t *testing.T) {

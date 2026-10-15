@@ -69,6 +69,9 @@ var (
 // launchpad's entries agree on what membership means.
 var launchpadMember = launchpadLinks.member()
 
+// noteExists is true for a pair that has a note.
+const noteExists = "request.id IN (SELECT request_id FROM notes)"
+
 // minTextTermLength is the shortest text term the trigram index can find.
 // Shorter terms would silently match nothing, so they are rejected.
 const minTextTermLength = 3
@@ -328,6 +331,11 @@ func (t *queryTranslator) has(e, lhs, rhs *expr.Expr) (string, error) {
 	case fieldIndexedText:
 		if len(path) > 0 {
 			return "", t.errorAt(lhs, "field %q has no member %q", name, path[0])
+		}
+		// An unquoted note:* means the pair has a note. Any other value,
+		// including a quoted "*", stays a text search.
+		if name == "note" && t.sourceToken(rhs) == "*" {
+			return noteExists, nil
 		}
 		return t.textMatch(rhs, field.column)
 	case fieldExactText:
