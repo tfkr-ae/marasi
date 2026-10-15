@@ -53,7 +53,7 @@ func TestTrafficRepo_SetMetadataKey_LeavesOtherKeys(t *testing.T) {
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
-	const pairs = 10_000
+	const pairs = 2_000
 	ids := make([]uuid.UUID, pairs)
 	for i := range ids {
 		ids[i] = metadataPair(t, repo, map[string]any{

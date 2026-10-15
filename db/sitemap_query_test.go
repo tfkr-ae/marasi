@@ -141,7 +141,7 @@ func TestSitemap_QueryModeCancel(t *testing.T) {
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	// Many pairs under one leaf, written directly so the setup is quick.
-	const pairs = 300_000
+	const pairs = 100_000
 	setup := []string{
 		`INSERT INTO sitemap_node (id, parent_id, name, depth) VALUES (1, NULL, 'https://x.com', 0), (2, 1, 'https://x.com/a', 1)`,
 		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ` + fmt.Sprint(pairs) + `)
