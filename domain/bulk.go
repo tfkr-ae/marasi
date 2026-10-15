@@ -15,6 +15,9 @@ var ErrLinkTargetNotFound = errors.New("link target not found")
 // Marasi writes: prettified-request, prettified-response or has_note.
 var ErrInvalidMetadataKey = errors.New("invalid metadata key")
 
+// ErrEmptyNote means a bulk note append was given no text.
+var ErrEmptyNote = errors.New("note text is empty")
+
 // LinkKind names the kind of record a bulk link or unlink targets.
 type LinkKind int
 

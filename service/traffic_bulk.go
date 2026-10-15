@@ -100,7 +100,7 @@ func serveBulk(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, even
 func writeBulkError(w http.ResponseWriter, r *http.Request, err error) {
 	var queryErr *domain.QueryError
 	switch {
-	case errors.Is(err, errInvalidBulkRequest):
+	case errors.Is(err, errInvalidBulkRequest), errors.Is(err, domain.ErrEmptyNote):
 		writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_bulk_request"})
 	case errors.Is(err, domain.ErrInvalidSelection):
 		writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_selection", Message: err.Error()})
@@ -169,6 +169,7 @@ func addTrafficBulkRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadc
 		var body bulkMetadataBody
 		serveBulk(w, r, proxy, events, "metadata", &body, body.apply)
 	})
+	addTrafficBulkNoteRoute(mux, proxy, events)
 	for change, run := range map[string]func(domain.TrafficRepository, domain.Selection, domain.LinkTarget) (int, error){
 		"link":   domain.TrafficRepository.LinkTraffic,
 		"unlink": domain.TrafficRepository.UnlinkTraffic,

@@ -116,6 +116,28 @@ func TestRepoLibrary(t *testing.T) {
 			},
 		},
 		{
+			name:    "repo:get_details should return prettified copies outside metadata",
+			luaCode: `return marasi.repo:get_details("` + testUUID.String() + `").prettified`,
+			setupRepo: func() *mockTrafficRepo {
+				return &mockTrafficRepo{
+					rowData: map[uuid.UUID]*domain.RequestResponseRow{
+						testUUID: {
+							Request:    domain.ProxyRequest{ID: testUUID},
+							Response:   domain.ProxyResponse{ID: testUUID},
+							Metadata:   map[string]any{},
+							Prettified: domain.Prettified{Request: "pretty req", Response: "pretty res"},
+						},
+					},
+				}
+			},
+			validatorFunc: func(t *testing.T, repo *mockTrafficRepo, got any) {
+				want := map[string]any{"request": "pretty req", "response": "pretty res"}
+				if m := asMap(got); !reflect.DeepEqual(m, want) {
+					t.Errorf("\nwanted:\n%v\ngot:\n%v", want, got)
+				}
+			},
+		},
+		{
 			name: "repo:get_details should error on invalid UUID",
 			luaCode: `
 				local ok, res = pcall(marasi.repo.get_details, marasi.repo, "invalid-uuid")
