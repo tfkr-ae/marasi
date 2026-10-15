@@ -42,13 +42,16 @@ const trafficListLong = `List the newest page of traffic.
       requested_at > "2024-01-02T15:04:05Z".
   metadata.<key>
       = and != against the JSON value at that key, for example
-      metadata.extension = "workshop".
+      metadata.extension = "workshop". metadata.<key>:* matches pairs
+      that have the key, with any value, including null.
   request_head, request_body, response_head, response_body
       : (contains), ignoring case, for example response_body:"password".
       A head is the request or status line plus headers. Binary bodies
       are not searched.
   note
       : (contains), ignoring case, for example note:"idor candidate".
+      note:* matches pairs that have a note, and NOT note:* pairs that
+      have none.
   metadata
       : (contains), ignoring case, anywhere in the metadata, for example
       metadata:"workshop". Prettified copies of bodies are not metadata
@@ -58,6 +61,10 @@ const trafficListLong = `List the newest page of traffic.
       in that launchpad, launchpad != "<launchpad id>" matches pairs not
       in it, including pairs in no launchpad, and launchpad:* matches
       pairs in any launchpad. The id is a quoted launchpad UUID.
+  finding, test_case
+      Links to findings and test cases, the same way as launchpad, for
+      example finding = "<finding id>", finding != "<finding id>" and
+      test_case:*. The id is a quoted UUID.
   sitemap
       A sitemap node and everything below it, by node name, for example
       sitemap = "https://api.example.com/users/{int}". != matches every

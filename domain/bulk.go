@@ -10,6 +10,11 @@ import (
 // bulk link or unlink names.
 var ErrLinkTargetNotFound = errors.New("link target not found")
 
+// ErrInvalidMetadataKey means a bulk metadata key path is empty, has an empty
+// segment or a segment with a quote or backslash, or names a key that only
+// Marasi writes: prettified-request, prettified-response or has_note.
+var ErrInvalidMetadataKey = errors.New("invalid metadata key")
+
 // ErrEmptyNote means a bulk note append was given no text.
 var ErrEmptyNote = errors.New("note text is empty")
 
