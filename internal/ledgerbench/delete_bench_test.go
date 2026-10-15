@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -39,6 +40,17 @@ func evenlySpread(b *testing.B, path string, count int) []uuid.UUID {
 		out = append(out, ids[i])
 	}
 	return out
+}
+
+// readAll reads the file at path to the end, discarding it.
+func readAll(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(io.Discard, f)
+	return err
 }
 
 // BenchmarkDelete is case 25: deleting 200 and 10k pairs spread over the
@@ -90,6 +102,12 @@ func BenchmarkDelete(b *testing.B) {
 				prepare := func() error {
 					var err error
 					if clone, err = ledgerbench.CloneProject(p.path, dir); err != nil {
+						return err
+					}
+					// A clone shares the fixture's blocks but not its
+					// cached pages; read it once so the run is OS-warm,
+					// as every other case is.
+					if err := readAll(clone); err != nil {
 						return err
 					}
 					conn, err := db.New(clone, quiet())
