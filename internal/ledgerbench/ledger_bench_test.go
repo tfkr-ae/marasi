@@ -423,6 +423,82 @@ func BenchmarkCountContentTypes(b *testing.B) {
 	})
 }
 
+// Case 21 adds a node with wideChildren children, one pair each, to a copy
+// of the fixture, under wideHost.
+const (
+	wideHost     = "wide.example.com"
+	wideNode     = "https://" + wideHost + "/items"
+	wideChildren = 50_000
+)
+
+// BenchmarkSitemap is case 21: expanding a node of the stored sitemap over
+// all traffic, a page of domain.MaxSitemapPage children at a time, with and
+// without the seed exclusion. It expands the origins of the fixture and a
+// node of 50,000 children added to a copy of it.
+func BenchmarkSitemap(b *testing.B) {
+	p := benchProject(b)
+	repo := openRepo(b, cloneOf(b, p.path))
+	for {
+		_, remaining, err := repo.RunJobBatch(domain.JobSitemap, 1<<20)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !remaining {
+			break
+		}
+	}
+	for i, pair := range fixture.NewPairs(p.manifest.Seed+21, wideChildren, p.manifest.Newest, 0) {
+		pair.Request.Host = wideHost
+		pair.Request.Path = fmt.Sprintf("/items/item-%d-x", i)
+		if err := repo.InsertRequest(pair.Request); err != nil {
+			b.Fatal(err)
+		}
+		if pair.Response != nil {
+			if err := repo.InsertResponse(pair.Response); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+	// cursorAfter is the cursor of node's page after pages full pages.
+	cursorAfter := func(node string, pages int) string {
+		cursor := ""
+		for range pages {
+			page, err := repo.ListSitemapChildren(node, nil, cursor, domain.MaxSitemapPage)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if page.NextCursor == nil {
+				b.Fatalf("%s has fewer than %d pages", node, pages+1)
+			}
+			cursor = *page.NextCursor
+		}
+		return cursor
+	}
+	cases := []struct {
+		name      string
+		node      string
+		exclusion []string
+		cursor    string
+	}{
+		{"21-root", "", nil, ""},
+		{"21-root-seed-exclusion", "", fixture.SeedExclusion, ""},
+		{"21-50k-children", wideNode, nil, ""},
+		{"21-50k-children-seed-exclusion", wideNode, fixture.SeedExclusion, ""},
+		{"21-50k-children-page-50", wideNode, nil, cursorAfter(wideNode, 49)},
+	}
+	for _, c := range cases {
+		b.Run(c.name, func(b *testing.B) {
+			ledgerbench.Measure(b, ledgerbench.Target{Max: ms(50)}, func() error {
+				page, err := repo.ListSitemapChildren(c.node, c.exclusion, c.cursor, domain.MaxSitemapPage)
+				if err == nil && len(page.Children) == 0 {
+					err = fmt.Errorf("%q has no children", c.node)
+				}
+				return err
+			})
+		})
+	}
+}
+
 // BenchmarkWrite is case 22: the cost of capturing one pair, InsertRequest
 // then InsertResponse, into a copy of the fixture. It has no absolute
 // target: tickets 03, 14 and 20 may add at most 25% to the baseline.
