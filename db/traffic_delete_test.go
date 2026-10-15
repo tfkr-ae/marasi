@@ -194,6 +194,21 @@ func TestTrafficRepo_DeleteTraffic(t *testing.T) {
 	})
 }
 
+// Ledger case 25: with FTS5's default deletemerge of 10%, a delete of a
+// tenth of the pairs rewrote every segment of the body index inside the
+// delete's transaction. Both indexes must leave tombstones to the automerge.
+func TestTrafficRepo_DeleteTrafficLeavesIndexMergesToAutomerge(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	for _, index := range []string{"traffic_index", "traffic_annotation_index"} {
+		var deletemerge string
+		err := repo.dbConn.Get(&deletemerge, `SELECT v FROM `+index+`_config WHERE k = 'deletemerge'`)
+		if err != nil || deletemerge != "0" {
+			t.Errorf("\nwanted:\n%s deletemerge 0\ngot:\n%q, %v", index, deletemerge, err)
+		}
+	}
+}
+
 func formatTypeCounts(counts domain.ContentTypeCounts) string {
 	var s string
 	for _, count := range counts.Counts {
