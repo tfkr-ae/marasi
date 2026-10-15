@@ -12,24 +12,20 @@ import (
 // larger result costs no more than the cap. An invalid query or exclusion
 // returns a *domain.QueryError.
 func (repo *Repository) CountTraffic(q domain.TrafficCountQuery) (domain.TrafficCount, error) {
-	filter, err := newTrafficFilter(q.Text, q.Exclusion)
+	filter, err := newTrafficFilterAfter(q.Text, q.Exclusion, q.After)
 	if err != nil {
 		return domain.TrafficCount{}, err
 	}
 	if q.AsOf != nil {
 		filter.add(`id <= ?`, *q.AsOf)
 	}
-	if q.After != nil {
-		filter.add(`id > ?`, *q.After)
-	}
 
 	var result domain.TrafficCount
 	err = repo.inTx(func(tx *sqlx.Tx) error {
-		indexComplete, err := repo.indexComplete(tx)
+		result.Complete, err = searchIndexCompleteness(tx)
 		if err != nil {
 			return err
 		}
-		result.Complete = map[string]bool{domain.JobTrafficIndex: indexComplete}
 
 		query := `SELECT count(*) FROM (SELECT 1 FROM request` + filter.where() + ` LIMIT ?)`
 		return tx.Get(&result.Count, query, append(filter.args, domain.MaxTrafficCount+1)...)

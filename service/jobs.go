@@ -303,7 +303,7 @@ func jobFromState(state db.JobState) job {
 // addJobRoutes registers the background job routes. Listing is project-bound
 // work. A rebuild is not: it takes the lifecycle lock, which a project switch
 // holds while it waits for admitted work.
-func addJobRoutes(projectRoutes routeMux, mux *http.ServeMux, projects *ProjectLifecycle) {
+func addJobRoutes(projectRoutes routeMux, mux *http.ServeMux, projects *ProjectLifecycle, events *eventBroadcaster) {
 	if projects == nil {
 		return
 	}
@@ -338,6 +338,11 @@ func addJobRoutes(projectRoutes routeMux, mux *http.ServeMux, projects *ProjectL
 		case err != nil:
 			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
 			return
+		}
+		if name == db.SitemapJob {
+			// The tree is empty until the job refills it, so clients
+			// re-read the nodes they have expanded.
+			events.publishSitemapChanged("rebuild")
 		}
 		states, err := projects.ListJobs()
 		if err != nil {
