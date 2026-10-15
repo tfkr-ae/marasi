@@ -105,8 +105,10 @@ type TrafficRepository interface {
 	// CountContentTypes returns every distinct response content type with its
 	// row count, ordered by count descending and then content type ascending.
 	// Pairs with no content type, including in-flight requests, are counted
-	// under ContentType "".
-	CountContentTypes() ([]*ContentTypeCount, error)
+	// under ContentType "". The counts come from the stored sitemap's
+	// buckets, or from the pairs themselves while the sitemap job is
+	// incomplete (ADR-0040).
+	CountContentTypes() (ContentTypeCounts, error)
 
 	// LinkTraffic links every pair in sel to target in one transaction and
 	// returns the number of pairs it newly linked; pairs already linked are
@@ -130,6 +132,19 @@ type TrafficRepository interface {
 	// ClearHighlight removes the highlight of every pair in sel in one
 	// transaction and returns the number of pairs that had one.
 	ClearHighlight(sel Selection) (int, error)
+
+	// SetMetadataKey sets the metadata key at path to the JSON value on every
+	// pair in sel, in one transaction, and returns the number of pairs whose
+	// metadata changed. path is dotted, as in a query: "a.b" is key b inside
+	// key a. Every other key is left as it was. An invalid or reserved path
+	// wraps ErrInvalidMetadataKey; an invalid query selection returns a
+	// *QueryError.
+	SetMetadataKey(sel Selection, path string, value json.RawMessage) (int, error)
+
+	// ClearMetadataKey removes the metadata key at path from every pair in
+	// sel, in one transaction, and returns the number of pairs that had it.
+	// It returns the same errors as SetMetadataKey.
+	ClearMetadataKey(sel Selection, path string) (int, error)
 
 	// AppendNote gives every pair in sel with no note the note text, and
 	// adds a blank line and text to every note that exists, in one
@@ -215,4 +230,13 @@ type RequestResponseSummary struct {
 type ContentTypeCount struct {
 	ContentType string // Response content type, or "" when absent
 	Count       int    // Number of pairs with this content type
+}
+
+// ContentTypeCounts is the count of pairs per content type across the
+// project.
+type ContentTypeCounts struct {
+	Counts []*ContentTypeCount
+	// Complete reports whether the sitemap job had finished, keyed by
+	// JobSitemap. The counts are exact either way.
+	Complete map[string]bool
 }
