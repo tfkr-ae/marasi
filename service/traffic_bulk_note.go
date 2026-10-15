@@ -16,10 +16,11 @@ type bulkNoteBody struct {
 }
 
 // apply appends to or clears the notes of sel, or returns
-// errInvalidBulkRequest when the body does not name exactly one of them.
+// errInvalidBulkRequest when the body does not name exactly one of them. An
+// empty append text returns domain.ErrEmptyNote from the repository.
 func (b *bulkNoteBody) apply(repo domain.TrafficRepository, sel domain.Selection) (int, error) {
 	switch {
-	case b.Append != nil && *b.Append != "" && !b.Clear:
+	case b.Append != nil && !b.Clear:
 		return repo.AppendNote(sel, *b.Append)
 	case b.Append == nil && b.Clear:
 		return repo.ClearNotes(sel)
