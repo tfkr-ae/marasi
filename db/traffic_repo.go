@@ -632,12 +632,18 @@ func (repo *Repository) SearchByMetadata(path string, value any) ([]*domain.Requ
 // job is complete the counts are the sums of the origins' sitemap buckets, one
 // range read; until then they are grouped from the pairs themselves.
 func (repo *Repository) CountContentTypes() (domain.ContentTypeCounts, error) {
+	return repo.CountContentTypesContext(context.Background())
+}
+
+// CountContentTypesContext is CountContentTypes for a read that stops when
+// ctx ends.
+func (repo *Repository) CountContentTypesContext(ctx context.Context) (domain.ContentTypeCounts, error) {
 	var rows []struct {
 		ContentType string `db:"content_type"`
 		Count       int    `db:"count"`
 	}
 	result := domain.ContentTypeCounts{Counts: []*domain.ContentTypeCount{}}
-	err := repo.inTx(func(tx *sqlx.Tx) error {
+	err := repo.inTxContext(ctx, func(tx *sqlx.Tx) error {
 		job, err := loadJob(tx, SitemapJob)
 		if err != nil {
 			return fmt.Errorf("reading the sitemap job: %w", err)
@@ -659,7 +665,7 @@ func (repo *Repository) CountContentTypes() (domain.ContentTypeCounts, error) {
 			  GROUP BY COALESCE(content_type, '')
 			  ORDER BY count DESC, content_type ASC`
 		}
-		return tx.Select(&rows, query)
+		return tx.SelectContext(ctx, &rows, query)
 	})
 	if err != nil {
 		return domain.ContentTypeCounts{}, fmt.Errorf("counting content types: %w", err)
