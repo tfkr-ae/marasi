@@ -1784,6 +1784,7 @@ func TestWriteRequestModifier(t *testing.T) {
 			Path:        "/blog",
 			Metadata:    make(map[string]any),
 			RequestedAt: wantTime,
+			SitemapNode: "https://marasi.app/blog",
 		}
 		proxy := newTestProxy(t)
 		proxy.OnRequest = func(req domain.ProxyRequest) error {
@@ -1901,6 +1902,7 @@ func TestWriteRequestModifier(t *testing.T) {
 			Path:        "/blog",
 			Metadata:    make(map[string]any),
 			RequestedAt: wantTime,
+			SitemapNode: "https://marasi.app/blog",
 		}
 		proxy := newTestProxy(t)
 		proxy.OnRequest = func(req domain.ProxyRequest) error {

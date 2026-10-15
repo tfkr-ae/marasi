@@ -84,7 +84,7 @@ func addRoutes(mux *http.ServeMux, projects *ProjectLifecycle, proxy *marasi.Pro
 	addClientSettingRoutes(projectRoutes, proxy)
 	addChromeRoutes(mux, chrome)
 	addExtensionRoutes(projectRoutes, mux, projects, proxy, events)
-	addJobRoutes(projectRoutes, mux, projects)
+	addJobRoutes(projectRoutes, mux, projects, events)
 }
 
 // addServiceRoutes registers the service status and stop routes.
