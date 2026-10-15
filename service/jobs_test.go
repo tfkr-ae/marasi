@@ -213,6 +213,9 @@ func TestJobs(t *testing.T) {
 		if listIndexComplete(t, server) {
 			t.Fatalf("\nwanted:\nindex.complete false while the annotation index rebuilds\ngot:\ntrue")
 		}
+		if countIndexComplete(t, server) {
+			t.Fatalf("\nwanted:\na count's index.complete false while the annotation index rebuilds\ngot:\ntrue")
+		}
 		pacer.release()
 		got := eventsUntil(subscriber, "traffic.index_complete", 30*time.Second)
 		want := []string{`job.complete {"name":"annotation_index"}`, fmt.Sprintf("traffic.index_complete {\"project\":%q}", path)}
