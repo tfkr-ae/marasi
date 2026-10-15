@@ -41,18 +41,33 @@ const (
 	// fieldIndexedText fields are text parts of a pair in the traffic index.
 	// They match a term with : (contains), ignoring case.
 	fieldIndexedText
-	// fieldLaunchpad matches a pair's launchpad membership: = and != against
-	// a launchpad id, and :* for membership in any launchpad.
-	fieldLaunchpad
+	// fieldLink matches a pair's links to a launchpad, finding or test case:
+	// = and != against the target's id, and :* for a link to any target.
+	fieldLink
+)
+
+// member is true for a pair linked to the target bound to its ?. It is an
+// uncorrelated IN rather than a correlated EXISTS, so a sparse link can
+// drive the plan instead of being checked on every row.
+func (l linkTable) member() string {
+	return "request.id IN (SELECT request_id FROM " + l.table + " WHERE " + l.column + " = ?)"
+}
+
+// anyMember is true for a pair linked to at least one target.
+func (l linkTable) anyMember() string {
+	return "request.id IN (SELECT request_id FROM " + l.table + ")"
+}
+
+var (
+	launchpadLinks = linkTables[domain.LinkLaunchpad]
+	findingLinks   = linkTables[domain.LinkFinding]
+	testCaseLinks  = linkTables[domain.LinkTestCase]
 )
 
 // launchpadMember is true for a pair linked to the launchpad bound to its ?.
 // Every launchpad-scoped read uses it, so the launchpad query field and a
 // launchpad's entries agree on what membership means.
-const launchpadMember = "EXISTS (SELECT 1 FROM launchpad_request WHERE launchpad_request.request_id = request.id AND launchpad_request.launchpad_id = ?)"
-
-// anyLaunchpadMember is true for a pair linked to at least one launchpad.
-const anyLaunchpadMember = "EXISTS (SELECT 1 FROM launchpad_request WHERE launchpad_request.request_id = request.id)"
+var launchpadMember = launchpadLinks.member()
 
 // minTextTermLength is the shortest text term the trigram index can find.
 // Shorter terms would silently match nothing, so they are rejected.
@@ -63,6 +78,8 @@ type trafficField struct {
 	// column is the SQL expression for the field's value, or the index column
 	// for fieldIndexedText.
 	column string
+	// links is the link table of a fieldLink.
+	links linkTable
 }
 
 // trafficFields declares the fields a traffic query can name.
@@ -79,7 +96,10 @@ var trafficFields = map[string]trafficField{
 	"metadata":     {kind: fieldMetadata, column: "metadata"},
 	// Membership is a row in launchpad_request, not the launchpad_id
 	// metadata, which pairs linked from captured traffic do not have.
-	"launchpad": {kind: fieldLaunchpad, column: "launchpad_request"},
+	// finding and test_case read their link tables the same way.
+	"launchpad": {kind: fieldLink, links: launchpadLinks},
+	"finding":   {kind: fieldLink, links: findingLinks},
+	"test_case": {kind: fieldLink, links: testCaseLinks},
 
 	"request_head":  {kind: fieldIndexedText, column: "request_head"},
 	"request_body":  {kind: fieldIndexedText, column: "request_body"},
@@ -318,15 +338,16 @@ func (t *queryTranslator) has(e, lhs, rhs *expr.Expr) (string, error) {
 		}
 		// metadata:"text" searches the whole indexed metadata.
 		return t.textMatch(rhs, field.column)
-	case fieldLaunchpad:
+	case fieldLink:
 		if len(path) > 0 {
 			return "", t.errorAt(lhs, "field %q has no member %q", name, path[0])
 		}
 		// The parser reads launchpad:* as the string "*".
 		if rhs.GetConstExpr().GetStringValue() != "*" {
-			return "", t.errorAt(e, "operator : on launchpad takes only *, as in launchpad:*; use launchpad = \"<launchpad id>\" for one launchpad")
+			noun := field.links.noun
+			return "", t.errorAt(e, "operator : on %s takes only *, as in %s:*; use %s = \"<%s id>\" for one %s", name, name, name, noun, noun)
 		}
-		return anyLaunchpadMember, nil
+		return field.links.anyMember(), nil
 	}
 	return "", t.errorAt(e, "operator : is not supported on %s; use = or another comparison", name)
 }
@@ -418,16 +439,16 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 		}
 		return t.compare(field.column, op, float64(value.UnixNano())/1e9), nil
 
-	case fieldLaunchpad:
+	case fieldLink:
 		if op != "=" && op != "!=" {
-			return "", t.errorAt(e, "operator %s is not supported on launchpad; use =, !=, or launchpad:*", op)
+			return "", t.errorAt(e, "operator %s is not supported on %s; use =, !=, or %s:*", op, name, name)
 		}
-		id, err := t.launchpadID(rhs)
+		id, err := t.linkTargetID(rhs, name, field.links.noun)
 		if err != nil {
 			return "", err
 		}
 		t.bind(id)
-		return negate(op, launchpadMember), nil
+		return negate(op, field.links.member()), nil
 
 	case fieldMetadata:
 		if len(path) == 0 {
@@ -554,15 +575,16 @@ func (t *queryTranslator) matchExactText(column, value string) string {
 	}
 }
 
-// launchpadID returns the launchpad id a quoted string names.
-func (t *queryTranslator) launchpadID(e *expr.Expr) (uuid.UUID, error) {
+// linkTargetID returns the id of the launchpad, finding or test case (noun)
+// that a quoted string names for the field name.
+func (t *queryTranslator) linkTargetID(e *expr.Expr, name, noun string) (uuid.UUID, error) {
 	value, ok := e.GetConstExpr().GetConstantKind().(*expr.Constant_StringValue)
 	if !ok {
-		return uuid.Nil, t.errorAt(e, "launchpad needs a quoted launchpad id, for example launchpad = \"01937f5d-351a-7e68-936d-61a7a25661a3\"")
+		return uuid.Nil, t.errorAt(e, "%s needs a quoted %s id, for example %s = \"01937f5d-351a-7e68-936d-61a7a25661a3\"", name, noun, name)
 	}
 	id, err := uuid.Parse(value.StringValue)
 	if err != nil {
-		return uuid.Nil, t.errorAt(e, "%q is not a launchpad id; use a launchpad UUID", value.StringValue)
+		return uuid.Nil, t.errorAt(e, "%q is not a %s id; use a %s UUID", value.StringValue, noun, noun)
 	}
 	return id, nil
 }
