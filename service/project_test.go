@@ -57,6 +57,30 @@ func newTestProjectLifecycle(t *testing.T, extensionOptions ...func(*extensions.
 	return lifecycle, proxy, configDir
 }
 
+// awaitTargetPrepared returns a wait that blocks until the next Open has
+// prepared its target. Open prepares the target (creating and migrating its
+// database) while project work still runs, and pauses that work only
+// afterwards, so a test that times the pause must start its clock here: how
+// long preparation takes depends on the machine and the migration count.
+func awaitTargetPrepared(t *testing.T, lifecycle *ProjectLifecycle) func() {
+	t.Helper()
+	prepared := make(chan struct{})
+	var once sync.Once
+	prepare := lifecycle.prepare
+	lifecycle.prepare = func(ctx context.Context, path string) (marasi.ProjectResources, error) {
+		defer once.Do(func() { close(prepared) })
+		return prepare(ctx, path)
+	}
+	return func() {
+		t.Helper()
+		select {
+		case <-prepared:
+		case <-time.After(30 * time.Second):
+			t.Fatal("open did not prepare the target")
+		}
+	}
+}
+
 func holdPendingWebSocket(t *testing.T, proxy *marasi.Proxy) func() {
 	t.Helper()
 	id, err := uuid.NewV7()
@@ -620,8 +644,10 @@ end`, holdURL)
 			t.Fatalf("admitting extension execution: %v", err)
 		}
 		endExecution := lifecycle.gate.trackExtension()
+		waitPrepared := awaitTargetPrepared(t, lifecycle)
 		result := make(chan error, 1)
 		go func() { result <- lifecycle.Open(context.Background(), target) }()
+		waitPrepared()
 		deadline := time.Now().Add(time.Second)
 		for {
 			lifecycle.gate.mu.Lock()
