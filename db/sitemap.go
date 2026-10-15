@@ -279,12 +279,12 @@ func (repo *Repository) ListSitemapChildren(ctx context.Context, q domain.Sitema
 		if len(q.Exclusion) > 0 {
 			return domain.SitemapPage{}, fmt.Errorf("%w: in query mode the exclusion belongs to the query", domain.ErrInvalidSelection)
 		}
-		filter, err := newTrafficFilter(q.Query.Text, q.Query.Exclusion)
+		match, err := newTrafficMatch(q.Query.Text, q.Query.Exclusion)
 		if err != nil {
 			return domain.SitemapPage{}, err
 		}
-		filter.add(`id <= ?`, q.Query.AsOf)
-		children = queriedChildren(q.Node, filter)
+		match.add(`id <= ?`, q.Query.AsOf)
+		children = queriedChildren(q.Node, match)
 	}
 
 	var rows []sitemapRow
@@ -374,14 +374,14 @@ func storedChildren(exclusion []string) func(int64) sitemapChildren {
 	}
 }
 
-// queriedChildren returns a query that counts the pairs matching filter
+// queriedChildren returns a query that counts the pairs that match matches
 // under each child of the node named node. It counts the matching pairs per sitemap leaf, keeps the
 // leaves in the node's subtree, and names each leaf's child of the node by
 // cutting the leaf's name after the next segment: names are canonical paths,
 // and a segment never holds a literal slash.
-func queriedChildren(node string, filter trafficFilter) func(int64) sitemapChildren {
+func queriedChildren(node string, match trafficMatch) func(int64) sitemapChildren {
 	return func(int64) sitemapChildren {
-		args := append([]any{}, filter.args...)
+		args := append([]any{}, match.args...)
 		// prefix is the length, in characters, of the part of a leaf's name
 		// before its child's segment: up to "://" for an origin.
 		prefix := `(instr(ln.name, '://') + 2)`
@@ -396,7 +396,7 @@ func queriedChildren(node string, filter trafficFilter) func(int64) sitemapChild
 		query := `SELECT c.id, sum(l.pairs) AS pairs, sum(l.errors) AS errors, max(l.leaf <> c.id) AS has_children
 			FROM (
 				SELECT ps.node_id AS leaf, count(*) AS pairs, sum(coalesce(m.status_code, 0) >= 500) AS errors
-				FROM (SELECT id, status_code FROM request` + filter.where() + `) m
+				FROM (SELECT id, status_code FROM request` + match.where() + `) m
 				JOIN pair_sitemap ps ON ps.request_id = m.id
 				GROUP BY ps.node_id) l
 			JOIN sitemap_node ln ON ln.id = l.leaf

@@ -18,12 +18,12 @@ func (repo *Repository) CountTraffic(q domain.TrafficCountQuery) (domain.Traffic
 
 // CountTrafficContext is CountTraffic for a count that stops when ctx ends.
 func (repo *Repository) CountTrafficContext(ctx context.Context, q domain.TrafficCountQuery) (domain.TrafficCount, error) {
-	filter, err := newTrafficFilterAfter(q.Text, q.Exclusion, q.After)
+	match, err := newTrafficMatchAfter(q.Text, q.Exclusion, q.After)
 	if err != nil {
 		return domain.TrafficCount{}, err
 	}
 	if q.AsOf != nil {
-		filter.add(`id <= ?`, *q.AsOf)
+		match.add(`id <= ?`, *q.AsOf)
 	}
 
 	var result domain.TrafficCount
@@ -34,8 +34,8 @@ func (repo *Repository) CountTrafficContext(ctx context.Context, q domain.Traffi
 		}
 		result.Complete = complete
 
-		query := `SELECT count(*) FROM (SELECT 1 FROM request` + filter.where() + ` LIMIT ?)`
-		return tx.GetContext(ctx, &result.Count, query, append(filter.args, domain.MaxTrafficCount+1)...)
+		query := `SELECT count(*) FROM (SELECT 1 FROM request` + match.where() + ` LIMIT ?)`
+		return tx.GetContext(ctx, &result.Count, query, append(match.args, domain.MaxTrafficCount+1)...)
 	})
 	if err != nil {
 		return domain.TrafficCount{}, fmt.Errorf("counting traffic: %w", err)
