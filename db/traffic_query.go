@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -83,15 +84,18 @@ type trafficField struct {
 	column string
 	// links is the link table of a fieldLink.
 	links linkTable
+	// indexed fields have an index on (column, id), so an equality or range
+	// on them can drive a read.
+	indexed bool
 }
 
 // trafficFields declares the fields a traffic query can name.
 var trafficFields = map[string]trafficField{
-	"host":         {kind: fieldExactText, column: "host"},
+	"host":         {kind: fieldExactText, column: "host", indexed: true},
 	"method":       {kind: fieldExactText, column: "method"},
 	"scheme":       {kind: fieldExactText, column: "scheme"},
 	"path":         {kind: fieldExactText, column: "path"},
-	"content_type": {kind: fieldExactText, column: "content_type"},
+	"content_type": {kind: fieldExactText, column: "content_type", indexed: true},
 	// In-flight pairs store -1. Treat that as no status code.
 	"status_code":  {kind: fieldInteger, column: "nullif(status_code, -1)"},
 	"requested_at": {kind: fieldTimestamp, column: sqlEpochSeconds("requested_at")},
@@ -154,6 +158,7 @@ func translateTrafficQuery(query string) (trafficQuery, error) {
 	}
 	t.positions = parsed.GetSourceInfo().GetPositions()
 
+	t.topLevel = true
 	where, err := t.condition(parsed.GetExpr())
 	if err != nil {
 		return trafficQuery{}, err
@@ -167,6 +172,9 @@ type queryTranslator struct {
 	positions map[int64]int32
 	args      []any
 	depth     int
+	// topLevel is set while translating the root, or a condition the root
+	// ANDs with others.
+	topLevel bool
 }
 
 // position converts a byte offset in the trimmed query to a 1-based character
@@ -282,6 +290,9 @@ func (t *queryTranslator) condition(e *expr.Expr) (string, error) {
 	if t.depth > maxQueryDepth {
 		return "", t.errorAt(e, "query nests more than %d conditions; use fewer conditions or less nesting", maxQueryDepth)
 	}
+	// Only the root and the conditions it ANDs together are top level.
+	topLevel := t.topLevel
+	t.topLevel = false
 	call := e.GetCallExpr()
 	if call == nil {
 		// Bare text searches every indexed text part.
@@ -290,9 +301,12 @@ func (t *queryTranslator) condition(e *expr.Expr) (string, error) {
 	args := call.GetArgs()
 	switch call.GetFunction() {
 	case filtering.FunctionAnd, filtering.FunctionFuzzyAnd:
-		return t.junction("AND", args)
+		return t.junction("AND", args, topLevel)
 	case filtering.FunctionOr:
-		return t.junction("OR", args)
+		if branches := orBranches(e); topLevel && t.allIndexDriven(branches) {
+			return t.union(branches)
+		}
+		return t.junction("OR", args, false)
 	case filtering.FunctionNot:
 		inner, err := t.condition(args[0])
 		if err != nil {
@@ -309,9 +323,12 @@ func (t *queryTranslator) condition(e *expr.Expr) (string, error) {
 	return "", t.errorAt(e, "unknown function %q", call.GetFunction())
 }
 
-func (t *queryTranslator) junction(op string, args []*expr.Expr) (string, error) {
+// junction joins args with op. The args of a top-level AND are top level
+// too.
+func (t *queryTranslator) junction(op string, args []*expr.Expr, topLevel bool) (string, error) {
 	parts := make([]string, len(args))
 	for i, arg := range args {
+		t.topLevel = topLevel
 		part, err := t.condition(arg)
 		if err != nil {
 			return "", err
@@ -319,6 +336,91 @@ func (t *queryTranslator) junction(op string, args []*expr.Expr) (string, error)
 		parts[i] = "(" + part + ")"
 	}
 	return strings.Join(parts, " "+op+" "), nil
+}
+
+// union translates a top-level OR whose branches can each be read through
+// an index as a UNION of the branches, so each branch drives its own read
+// instead of every pair being checked against the whole OR.
+func (t *queryTranslator) union(branches []*expr.Expr) (string, error) {
+	parts := make([]string, len(branches))
+	for i, branch := range branches {
+		part, err := t.condition(branch)
+		if err != nil {
+			return "", err
+		}
+		parts[i] = "SELECT request.id FROM request WHERE " + part
+	}
+	return "request.id IN (" + strings.Join(parts, " UNION ") + ")", nil
+}
+
+// orBranches returns the branches of an OR, with nested ORs flattened.
+func orBranches(e *expr.Expr) []*expr.Expr {
+	call := e.GetCallExpr()
+	if call.GetFunction() != filtering.FunctionOr {
+		return []*expr.Expr{e}
+	}
+	var branches []*expr.Expr
+	for _, arg := range call.GetArgs() {
+		branches = append(branches, orBranches(arg)...)
+	}
+	return branches
+}
+
+func (t *queryTranslator) allIndexDriven(branches []*expr.Expr) bool {
+	for _, branch := range branches {
+		if !t.indexDriven(branch) {
+			return false
+		}
+	}
+	return true
+}
+
+// indexDriven reports whether an index can find the pairs that match e
+// without checking every pair: a text term, a link or note, a requested_at
+// lower bound, an equality on an indexed field, or an AND with one of these.
+// An invalid e reports false; translating it reports the error.
+func (t *queryTranslator) indexDriven(e *expr.Expr) bool {
+	call := e.GetCallExpr()
+	if call == nil {
+		return true // bare text
+	}
+	args := call.GetArgs()
+	switch function := call.GetFunction(); function {
+	case filtering.FunctionAnd, filtering.FunctionFuzzyAnd:
+		return slices.ContainsFunc(args, t.indexDriven)
+	case filtering.FunctionOr:
+		return t.allIndexDriven(orBranches(e))
+	case filtering.FunctionHas:
+		name, _, err := t.fieldName(args[0])
+		if err != nil {
+			return false
+		}
+		kind := trafficFields[name].kind
+		return kind == fieldIndexedText || kind == fieldMetadata || kind == fieldLink
+	default:
+		op, ok := comparisonOperators[function]
+		if !ok || len(args) != 2 {
+			return false
+		}
+		name, _, err := t.fieldName(args[0])
+		if err != nil {
+			return false
+		}
+		field := trafficFields[name]
+		switch {
+		case field.kind == fieldLink:
+			return op == "="
+		case name == "requested_at":
+			return op == "=" || op == ">" || op == ">="
+		case !field.indexed:
+			return false
+		case field.kind == fieldExactText:
+			value, ok := literalText(args[1])
+			return ok && op == "=" && !strings.Contains(value, "*")
+		default:
+			return op != "!="
+		}
+	}
 }
 
 // has translates field:value, which searches one indexed text part.

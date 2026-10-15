@@ -141,6 +141,19 @@ func TestTrafficRepo_ListTrafficLinkQuery(t *testing.T) {
 		{query: `note:* AND status_code = 404`, want: "d"},
 		{query: `note:"token"`, want: "d"},
 		{query: `note:"retest" OR finding = "<f1>"`, want: "ba"},
+
+		// ORs whose branches can each be read through an index.
+		{query: `host = "d.example.com" OR note:"retest"`, want: "db"},
+		{query: `host = "a.example.com" OR status_code >= 500 OR note:*`, want: "dcba"},
+		{query: `(host = "a.example.com" OR note:"token") AND status_code = 200`, want: "ca"},
+		{query: `status_code = 200 AND (finding = "<f1>" OR test_case:*)`, want: "ca"},
+		{query: `host = "e.example.com" OR (finding:* AND status_code = 500)`, want: "eb"},
+		{query: `host = "e.example.com" OR "body of c" OR test_case = "<tc2>"`, want: "ec"},
+		{query: `NOT (host = "a.example.com" OR note:*)`, want: "e"},
+		// ORs with a branch no index can read keep their form.
+		{query: `host = "e.example.com" OR NOT note:*`, want: "eca"},
+		{query: `host != "a.example.com" OR finding = "<f1>"`, want: "edba"},
+		{query: `host = "*.example.com" OR note:*`, want: "edcba"},
 	}
 	for _, test := range tests {
 		t.Run(test.query, func(t *testing.T) {
@@ -152,6 +165,37 @@ func TestTrafficRepo_ListTrafficLinkQuery(t *testing.T) {
 				t.Fatalf("\nwanted:\n%s\ngot:\n%s", test.want, got)
 			}
 		})
+	}
+}
+
+func TestTrafficRepo_ListTrafficLinkQueryPaging(t *testing.T) {
+	f := setupLinkQueryFixture(t)
+	query := f.expand(`host = "a.example.com" OR note:* OR finding = "<f2>"`)
+
+	var got string
+	var cursor *string
+	for range 10 {
+		items, next, _, err := listPage(f.repo, cursor, 1, query)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		got += f.names(items) + "|"
+		if next == nil {
+			break
+		}
+		cursor = next
+	}
+	if want := "d|c|b|a|"; got != want {
+		t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+	}
+
+	after := f.ids["b"]
+	count, err := f.repo.CountTraffic(domain.TrafficCountQuery{Text: query, After: &after})
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	if count.Count != 2 {
+		t.Fatalf("\nwanted:\n2 matches after b\ngot:\n%d", count.Count)
 	}
 }
 
