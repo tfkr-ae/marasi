@@ -23,6 +23,10 @@ const AnnotationIndexJob = domain.JobAnnotationIndex
 // index.complete is true when all of them are complete.
 var SearchIndexJobs = []string{TrafficIndexJob, AnnotationIndexJob}
 
+// PrettifiedMoveJob is the background job that moves prettified copies out of
+// metadata (ADR-0036).
+const PrettifiedMoveJob = "prettified_move"
+
 var (
 	// ErrUnknownJob means no background job has the requested name.
 	ErrUnknownJob = errors.New("unknown background job")
@@ -89,6 +93,14 @@ var jobRegistry = []jobDefinition{
 		},
 		forget:      func(repo *Repository) { repo.annotationIndex.reset() },
 		rebuildable: true,
+	},
+	{
+		name:    PrettifiedMoveJob,
+		version: 1,
+		batch: func(repo *Repository, maxBytes int) (int, bool, error) {
+			return repo.MovePrettified(maxBytes)
+		},
+		forget: func(repo *Repository) { repo.prettifiedMovedTo = nil },
 	},
 }
 
