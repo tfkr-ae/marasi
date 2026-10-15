@@ -109,6 +109,12 @@ func trafficLibrary(proxy ProxyService) []lua.RegistryFunction {
 				},
 				"metadata": row.Metadata,
 				"note":     row.Note,
+				// Prettified copies are not metadata (ADR-0036). A copy is
+				// "" when the proxy could not prettify that body.
+				"prettified": map[string]any{
+					"request":  row.Prettified.Request,
+					"response": row.Prettified.Response,
+				},
 			}
 			util.DeepPush(l, result)
 			return 1
