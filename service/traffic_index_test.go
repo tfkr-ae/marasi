@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -140,6 +141,10 @@ func paceIndexBuild(lifecycle *ProjectLifecycle, paced string) *indexPacer {
 }
 
 func (pacer *indexPacer) batch(ctx context.Context, path string, runner jobRunner, name string) (int, bool, error) {
+	if !slices.Contains(db.SearchIndexJobs, name) {
+		// Only the search index builds are paced and counted.
+		return runner.RunJobBatch(name, jobBatchBytes)
+	}
 	if path == pacer.paced && !pacer.released() {
 		pacer.calls <- indexCall{path: path, ctx: ctx}
 		select {
