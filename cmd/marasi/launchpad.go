@@ -451,32 +451,44 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 		return writeLaunchpadGetHuman(response, cmd.OutOrStdout())
 	case "pending":
 		return writeLaunchListHuman(response, cmd.OutOrStdout())
-	case "create", "update":
-		var result struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal(response, &result); err != nil || result.ID == "" {
-			return errors.New("decoding launchpad response")
-		}
-		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "launchpad %s %sd successfully\n", result.ID, action)
-		return err
-	case "link", "unlink":
-		var result struct {
-			LaunchpadID string `json:"launchpad_id"`
-			RequestID   string `json:"request_id"`
-		}
-		if err := json.Unmarshal(response, &result); err != nil || result.LaunchpadID == "" || result.RequestID == "" {
-			return errors.New("decoding launchpad response")
-		}
-		preposition := "to"
-		if action == "unlink" {
-			preposition = "from"
-		}
-		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "request %s %sed %s launchpad %s successfully\n", result.RequestID, action, preposition, result.LaunchpadID)
-		return err
+	case "create":
+		return writeLaunchpadChanged(cmd, response, "created")
+	case "update":
+		return writeLaunchpadChanged(cmd, response, "updated")
+	case "link":
+		return writeLaunchpadLinkChanged(cmd, response, "linked to")
+	case "unlink":
+		return writeLaunchpadLinkChanged(cmd, response, "unlinked from")
 	default:
 		return fmt.Errorf("unsupported launchpad action %q", action)
 	}
+}
+
+// writeLaunchpadChanged reports a created or updated launchpad on stderr.
+// done is the past tense of the action, such as "created".
+func writeLaunchpadChanged(cmd *cobra.Command, response []byte, done string) error {
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(response, &result); err != nil || result.ID == "" {
+		return errors.New("decoding launchpad response")
+	}
+	_, err := fmt.Fprintf(cmd.ErrOrStderr(), "launchpad %s %s successfully\n", result.ID, done)
+	return err
+}
+
+// writeLaunchpadLinkChanged reports a linked or unlinked request on stderr.
+// done is the past tense with its preposition, such as "linked to".
+func writeLaunchpadLinkChanged(cmd *cobra.Command, response []byte, done string) error {
+	var result struct {
+		LaunchpadID string `json:"launchpad_id"`
+		RequestID   string `json:"request_id"`
+	}
+	if err := json.Unmarshal(response, &result); err != nil || result.LaunchpadID == "" || result.RequestID == "" {
+		return errors.New("decoding launchpad response")
+	}
+	_, err := fmt.Fprintf(cmd.ErrOrStderr(), "request %s %s launchpad %s successfully\n", result.RequestID, done, result.LaunchpadID)
+	return err
 }
 
 func writeLaunchpadListHuman(body []byte, stdout io.Writer) error {
