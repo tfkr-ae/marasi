@@ -40,6 +40,12 @@ func TestSettingsCommands(t *testing.T) {
 			stderr: "setting marasi-app ledger/view set\n",
 		},
 		{
+			name: "settings set from stdin", args: []string{"settings", "set", "marasi-app", "ledger/view"}, stdin: "{\"columns\": [\"host\"]}\n",
+			status: http.StatusOK, response: testClientSetting,
+			method: http.MethodPut, path: "/client-settings/marasi-app/ledger/view", body: `{"value":{"columns":["host"]}}`,
+			stderr: "setting marasi-app ledger/view set\n",
+		},
+		{
 			name: "settings delete", args: []string{"settings", "delete", "marasi-app", "ledger/view"},
 			status: http.StatusOK, response: `{"client":"marasi-app","key":"ledger/view"}`,
 			method: http.MethodDelete, path: "/client-settings/marasi-app/ledger/view",
@@ -57,4 +63,13 @@ func TestSettingsUsage(t *testing.T) {
 		[]string{"settings", "set", "marasi-app", "k", "1", "--file", "/dev/null"},
 		[]string{"settings", "delete", "marasi-app"},
 	))
+}
+
+func TestSettingsSetInputUsage(t *testing.T) {
+	const want = "settings set requires exactly one of text, --file, or piped stdin"
+	assertUsageErrorsBeforeRequest(t, buildMarasi(t), []usageCase{
+		{args: []string{"settings", "set", "marasi-app", "k"}, want: want},
+		{args: []string{"settings", "set", "marasi-app", "k", "1"}, stdin: "2", want: want},
+		{args: []string{"settings", "set", "marasi-app", "k", "--file", "/dev/null"}, stdin: "2", want: want},
+	})
 }

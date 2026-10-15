@@ -268,13 +268,17 @@ var trafficBulkNoteAppendCmd = &cobra.Command{
 	Short: "Append text to the notes of the selected pairs",
 	Long: `Append text to the notes of the selected pairs. A pair with no note gets
 the text as its note; a pair with a note gets a blank line and then the
-text. Pass exactly one of TEXT or --file. Stdin is not read, so it stays
-free for --ids-file -.
+text. Pass exactly one of TEXT, --file, or piped stdin. With --ids-file -
+stdin holds the ids, so pass TEXT or --file.
 
 ` + trafficSelectionHelp,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		text, err := readTextOrFile(cmd, args, trafficBulkNoteAppendFile, "note")
+		input := textInput{what: "note", file: trafficBulkNoteAppendFile}
+		if trafficBulkNoteAppendSelection.idsFile == "-" {
+			input.stdinTaken = "--ids-file is -"
+		}
+		text, err := input.read(cmd, args)
 		if err != nil {
 			return err
 		}
@@ -330,29 +334,6 @@ func init() {
 		trafficBulkDeleteCmd,
 	)
 	trafficCmd.AddCommand(trafficBulkCmd)
-}
-
-// readTextOrFile returns the one positional TEXT argument or the contents of
-// --file, whichever was given. It rejects both, neither, and empty text.
-func readTextOrFile(cmd *cobra.Command, args []string, file, what string) (string, error) {
-	fileSet := cmd.Flags().Changed("file")
-	if fileSet == (len(args) == 1) {
-		return "", fmt.Errorf("pass the %s as text or with --file, not both or neither", what)
-	}
-	text := ""
-	if fileSet {
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			return "", fmt.Errorf("reading %s file: %w", what, err)
-		}
-		text = string(raw)
-	} else {
-		text = args[0]
-	}
-	if text == "" {
-		return "", fmt.Errorf("the %s is empty", what)
-	}
-	return text, nil
 }
 
 // trafficBulkRequest is a bulk route body: the selection and the fields of

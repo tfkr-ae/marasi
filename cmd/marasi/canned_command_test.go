@@ -48,24 +48,26 @@ func runCannedCommandCases(t *testing.T, binary string, cases []cannedCommandCas
 	}
 }
 
-// usageCase is one invalid invocation, with optional piped stdin. An empty
-// stdin leaves stdin at /dev/null, a character device, so it reads as no
-// piped input.
+// usageCase is one invalid invocation, with optional piped stdin and the
+// text its error must contain. An empty stdin leaves stdin at /dev/null, a
+// character device, so it reads as no piped input.
 type usageCase struct {
 	args  []string
 	stdin string
+	want  string
 }
 
 // assertUsageErrorsBeforeRequest runs each invocation and requires a failure
-// with empty stdout and no request to the control API.
+// with empty stdout, stderr containing the case's want, and no request to the
+// control API.
 func assertUsageErrorsBeforeRequest(t *testing.T, binary string, cases []usageCase) {
 	t.Helper()
 	configDir := serviceConfigDir(t)
 	sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{}`)
 	for _, test := range cases {
 		commandArgs := append([]string{"--config-dir", configDir, "--instance", "work"}, test.args...)
-		if stdout, stderr, err := runMarasiWithStdin(binary, test.stdin, commandArgs...); err == nil || stdout != "" {
-			t.Fatalf("\nwanted:\nusage error for %v\ngot:\nstdout %q, stderr %q", test.args, stdout, stderr)
+		if stdout, stderr, err := runMarasiWithStdin(binary, test.stdin, commandArgs...); err == nil || stdout != "" || !strings.Contains(stderr, test.want) {
+			t.Fatalf("\nwanted:\nusage error %q for %v\ngot:\nstdout %q, stderr %q", test.want, test.args, stdout, stderr)
 		}
 		if got := sent.snapshot(); got.Method != "" {
 			t.Fatalf("\nwanted:\nno request for %v\ngot:\n%s %s", test.args, got.Method, got.Path)
