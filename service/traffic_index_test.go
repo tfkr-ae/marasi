@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -140,8 +141,8 @@ func paceIndexBuild(lifecycle *ProjectLifecycle, paced string) *indexPacer {
 }
 
 func (pacer *indexPacer) batch(ctx context.Context, path string, runner jobRunner, name string) (int, bool, error) {
-	if name != db.TrafficIndexJob {
-		// Only the traffic index build is paced and counted.
+	if !slices.Contains(db.SearchIndexJobs, name) {
+		// Only the search index builds are paced and counted.
 		return runner.RunJobBatch(name, jobBatchBytes)
 	}
 	if path == pacer.paced && !pacer.released() {
@@ -190,6 +191,24 @@ func (pacer *indexPacer) indexedPairs(path string) int {
 	pacer.mu.Lock()
 	defer pacer.mu.Unlock()
 	return pacer.indexed[path]
+}
+
+// countIndexComplete returns index.complete from GET /traffic/count.
+func countIndexComplete(t *testing.T, server *Server) bool {
+	t.Helper()
+	response := requestListener(t, server, http.MethodGet, "/traffic/count", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("counting traffic: %d %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Index *struct {
+			Complete bool `json:"complete"`
+		} `json:"index"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body.Index == nil {
+		t.Fatalf("decoding traffic count %s: %v", response.Body.String(), err)
+	}
+	return body.Index.Complete
 }
 
 func listIndexComplete(t *testing.T, server *Server) bool {
@@ -346,9 +365,12 @@ func TestTrafficIndexBuild(t *testing.T) {
 		if got := missingFromIndex(t, path); got != 1 {
 			t.Fatalf("\nwanted:\nonly the broken pair missing\ngot:\n%d", got)
 		}
+		// Its metadata is unreadable, so each search index job skips it
+		// once.
 		skips := strings.Count(logs.String(), "Skipped a pair the traffic index could not index")
-		if skips != 1 || !strings.Contains(logs.String(), "id="+broken.String()) {
-			t.Fatalf("\nwanted:\none skip logged for %s\ngot:\n%s", broken, logs.String())
+		if skips != 2 || strings.Count(logs.String(), "id="+broken.String()) != 2 ||
+			!strings.Contains(logs.String(), "job="+db.TrafficIndexJob) || !strings.Contains(logs.String(), "job="+db.AnnotationIndexJob) {
+			t.Fatalf("\nwanted:\none skip logged for %s by each search index job\ngot:\n%s", broken, logs.String())
 		}
 	})
 

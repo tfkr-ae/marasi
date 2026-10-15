@@ -48,6 +48,16 @@ func listJob(t *testing.T, server *Server, name string) []listedJob {
 	return named
 }
 
+// listSearchJobs returns the listed state of the search index jobs.
+func listSearchJobs(t *testing.T, server *Server) []listedJob {
+	t.Helper()
+	var named []listedJob
+	for _, name := range db.SearchIndexJobs {
+		named = append(named, listJob(t, server, name)...)
+	}
+	return named
+}
+
 // jobCompleted waits for the job.complete event of the job called name,
 // skipping other events, and reports whether it arrived within wait.
 func jobCompleted(subscriber *eventSubscriber, name string, wait time.Duration) bool {
@@ -105,13 +115,17 @@ func (refusingRebuild) RebuildJob(name string) error {
 }
 
 func TestJobs(t *testing.T) {
-	t.Run("should list the traffic index job of a new project as complete", func(t *testing.T) {
+	t.Run("should list the search index jobs of a new project as complete", func(t *testing.T) {
 		path := canonicalProjectPath(t, filepath.Join(t.TempDir(), "fresh.marasi"))
 		server, lifecycle, _ := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
 
-		got := append(listJob(t, server, db.TrafficIndexJob), listJob(t, server, db.SitemapJob)...)
-		want := []listedJob{{Name: db.TrafficIndexJob, Complete: true}, {Name: db.SitemapJob, Complete: true}}
+		got := append(listSearchJobs(t, server), listJob(t, server, db.SitemapJob)...)
+		want := []listedJob{
+			{Name: db.TrafficIndexJob, Complete: true},
+			{Name: db.AnnotationIndexJob, Complete: true},
+			{Name: db.SitemapJob, Complete: true},
+		}
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
 		}
@@ -129,16 +143,23 @@ func TestJobs(t *testing.T) {
 		openProjectPath(t, lifecycle, path)
 
 		got := eventsUntil(subscriber, "traffic.index_complete", 30*time.Second)
+		// The traffic index build writes both indexes, so the annotation
+		// index backfill that follows it finds nothing left to do.
 		want := []string{
 			`job.progress {"name":"traffic_index","done":1,"total":20}`,
 			`job.complete {"name":"traffic_index"}`,
+			`job.complete {"name":"annotation_index"}`,
 			fmt.Sprintf("traffic.index_complete {\"project\":%q}", path),
 		}
 		if strings.Join(got, "\n") != strings.Join(want, "\n") {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", strings.Join(want, "\n"), strings.Join(got, "\n"))
 		}
-		jobs := listJob(t, server, db.TrafficIndexJob)
-		if wantJobs := []listedJob{{Name: db.TrafficIndexJob, Complete: true, Done: 20, Total: 20}}; fmt.Sprint(jobs) != fmt.Sprint(wantJobs) {
+		jobs := listSearchJobs(t, server)
+		wantJobs := []listedJob{
+			{Name: db.TrafficIndexJob, Complete: true, Done: 20, Total: 20},
+			{Name: db.AnnotationIndexJob, Complete: true, Done: 20, Total: 20},
+		}
+		if fmt.Sprint(jobs) != fmt.Sprint(wantJobs) {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", wantJobs, jobs)
 		}
 	})
@@ -170,6 +191,39 @@ func TestJobs(t *testing.T) {
 		got := eventNamed(subscriber, "job.progress", 30*time.Second)
 		if want := `{"name":"traffic_index","done":3,"total":30}`; got != want {
 			t.Fatalf("\nwanted:\nprogress resumed from the saved state %s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should report an incomplete index while the annotation index rebuilds", func(t *testing.T) {
+		path := canonicalProjectPath(t, filepath.Join(t.TempDir(), "annotations.marasi"))
+		seedUnindexedProject(t, path, 5)
+		server, lifecycle, subscriber := newIndexServer(t)
+		openProjectPath(t, lifecycle, path)
+		// The sitemap job runs last, so its completion ends the first open's jobs.
+		if !jobCompleted(subscriber, db.SitemapJob, 30*time.Second) {
+			t.Fatal("the first build did not complete")
+		}
+		pacer := paceIndexBuild(lifecycle, path)
+
+		response := requestListener(t, server, http.MethodPost, "/jobs/annotation_index/rebuild", "")
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("\nwanted:\n202\ngot:\n%d %s", response.Code, response.Body.String())
+		}
+		pacer.waitBatch(t)
+		if listIndexComplete(t, server) {
+			t.Fatalf("\nwanted:\nindex.complete false while the annotation index rebuilds\ngot:\ntrue")
+		}
+		if countIndexComplete(t, server) {
+			t.Fatalf("\nwanted:\na count's index.complete false while the annotation index rebuilds\ngot:\ntrue")
+		}
+		pacer.release()
+		got := eventsUntil(subscriber, "traffic.index_complete", 30*time.Second)
+		want := []string{`job.complete {"name":"annotation_index"}`, fmt.Sprintf("traffic.index_complete {\"project\":%q}", path)}
+		if strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", strings.Join(want, "\n"), strings.Join(got, "\n"))
+		}
+		if !listIndexComplete(t, server) {
+			t.Fatalf("\nwanted:\nindex.complete true after the rebuild\ngot:\nfalse")
 		}
 	})
 

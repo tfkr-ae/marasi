@@ -381,7 +381,11 @@ func listPage(repo *Repository, cursor *string, limit int, text string) ([]*doma
 		q.Cursor = *cursor
 	}
 	page, err := repo.ListTraffic(q)
-	return page.Items, page.NextCursor, page.Complete[domain.JobTrafficIndex], err
+	complete := len(page.Complete) > 0
+	for _, done := range page.Complete {
+		complete = complete && done
+	}
+	return page.Items, page.NextCursor, complete, err
 }
 
 func TestLaunchpadRepo_GetLaunchpadRequests_Exclusion(t *testing.T) {

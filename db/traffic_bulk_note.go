@@ -59,10 +59,11 @@ func selectedIDs(tx *sqlx.Tx, query string, args []any) ([]uuid.UUID, error) {
 	return ids, nil
 }
 
-// reindexNotes rewrites the search index rows of pairs whose note changed.
+// reindexNotes rewrites the annotation index rows of pairs whose note
+// changed. Their bodies did not change, so the body index is left alone.
 func reindexNotes(tx *sqlx.Tx, ids []uuid.UUID) error {
 	for _, id := range ids {
-		if err := indexPair(tx, id); err != nil {
+		if err := indexAnnotations(tx, id); err != nil {
 			return err
 		}
 	}
