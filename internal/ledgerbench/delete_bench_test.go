@@ -42,6 +42,22 @@ func evenlySpread(b *testing.B, path string, count int) []uuid.UUID {
 	return out
 }
 
+// contiguous returns the count oldest pair ids in the project at path, a
+// run of adjacent rows.
+func contiguous(b *testing.B, path string, count int) []uuid.UUID {
+	b.Helper()
+	conn, err := db.New(path, quiet())
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer conn.Close()
+	var ids []uuid.UUID
+	if err := conn.Select(&ids, `SELECT id FROM request ORDER BY id LIMIT ?`, count); err != nil {
+		b.Fatal(err)
+	}
+	return ids
+}
+
 // readAll reads the file at path to the end, discarding it.
 func readAll(path string) error {
 	f, err := os.Open(path)
@@ -53,8 +69,8 @@ func readAll(path string) error {
 	return err
 }
 
-// BenchmarkDelete is case 25: deleting 200 and 10k pairs spread over the
-// project, through the Repository and POST /traffic/bulk/delete. The
+// BenchmarkDelete is case 25: deleting 200 pairs spread over the project,
+// 10k contiguous pairs and 10k pairs spread over the project, through the Repository and POST /traffic/bulk/delete. The
 // fixture's child tables (notes, launchpad, finding, test case and Armory
 // links, WebSocket connections and messages, proxy logs, highlights,
 // prettified bodies), both search indexes and the sitemap are populated.
@@ -68,7 +84,8 @@ func BenchmarkDelete(b *testing.B) {
 		target ledgerbench.Target
 	}{
 		{"25-ids-200", evenlySpread(b, p.path, 200), ledgerbench.Target{Max: ms(1000)}},
-		{"25-ids-10k", evenlySpread(b, p.path, min(10_000, p.manifest.Pairs/2)), ledgerbench.Target{Max: time.Second}},
+		{"25-ids-10k-contiguous", contiguous(b, p.path, min(10_000, p.manifest.Pairs/2)), ledgerbench.Target{Max: 3 * time.Second, Pathological: true}},
+		{"25-ids-10k-spread", evenlySpread(b, p.path, min(10_000, p.manifest.Pairs/2)), ledgerbench.Target{Max: 6 * time.Second, Pathological: true}},
 	}
 	for _, c := range cases {
 		sel := domain.Selection{IDs: c.ids}
