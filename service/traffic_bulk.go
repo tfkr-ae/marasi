@@ -75,25 +75,26 @@ func decodeBulkBody(r *http.Request, body bulkBody) (domain.Selection, error) {
 // publishes one traffic.changed event with change. apply may return
 // errInvalidBulkRequest for operation fields it rejects. Failures are written as
 // JSON errors and publish nothing: a bad body or selection or query is 400,
-// a missing target is 404.
-func serveBulk(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, events *eventBroadcaster, change string, body bulkBody, apply func(repo domain.TrafficRepository, sel domain.Selection) (int, error)) {
+// a missing target is 404. It reports whether the operation ran.
+func serveBulk(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, events *eventBroadcaster, change string, body bulkBody, apply func(repo domain.TrafficRepository, sel domain.Selection) (int, error)) bool {
 	sel, err := decodeBulkBody(r, body)
 	if err != nil {
 		writeBulkError(w, r, err)
-		return
+		return false
 	}
 	repo, err := proxy.GetTrafficRepo()
 	if err != nil {
 		writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
-		return
+		return false
 	}
 	count, err := apply(repo, sel)
 	if err != nil {
 		writeBulkError(w, r, err)
-		return
+		return false
 	}
 	events.publish("traffic.changed", trafficChanged{Change: change, Count: count, Selection: body.rawSelection().Selection})
 	writeJSON(w, r, http.StatusOK, bulkResult{Count: count})
+	return true
 }
 
 // writeBulkError writes the response for a failed bulk operation.
@@ -197,6 +198,13 @@ func addTrafficBulkRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadc
 	mux.HandleFunc("POST /traffic/bulk/highlight", func(w http.ResponseWriter, r *http.Request) {
 		var body bulkHighlightBody
 		serveBulk(w, r, proxy, events, "highlight", &body, body.apply)
+	})
+	mux.HandleFunc("POST /traffic/bulk/delete", func(w http.ResponseWriter, r *http.Request) {
+		// Deleted pairs leave the sitemap counts, so clients re-read the
+		// nodes they have expanded.
+		if serveBulk(w, r, proxy, events, "delete", &bulkSelection{}, domain.TrafficRepository.DeleteTraffic) {
+			events.publishSitemapChanged("delete")
+		}
 	})
 	for change, run := range map[string]func(domain.TrafficRepository, domain.Selection, domain.LinkTarget) (int, error){
 		"link":   domain.TrafficRepository.LinkTraffic,
