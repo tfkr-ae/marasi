@@ -12,12 +12,15 @@ CREATE TABLE IF NOT EXISTS sitemap_node (
 );
 CREATE INDEX IF NOT EXISTS sitemap_node_parent ON sitemap_node(parent_id);
 
+-- sitemap_count leads with the node's parent, 0 for an origin, so a node's
+-- children and their buckets are one range read.
 CREATE TABLE IF NOT EXISTS sitemap_count (
+    parent_id INTEGER NOT NULL,
     node_id INTEGER NOT NULL,
     content_type TEXT NOT NULL,
     pairs INTEGER NOT NULL DEFAULT 0,
     errors INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (node_id, content_type)
+    PRIMARY KEY (parent_id, node_id, content_type)
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS pair_sitemap (
