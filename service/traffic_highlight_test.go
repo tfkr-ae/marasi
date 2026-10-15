@@ -112,8 +112,8 @@ func TestTrafficBulkHighlightAPI(t *testing.T) {
 			want string
 		}{
 			{`{"selection":` + ids + `}`, `{"error":"invalid_bulk_request"}`},
-			{`{"selection":` + ids + `,"highlight":0}`, `{"error":"invalid_bulk_request"}`},
-			{`{"selection":` + ids + `,"highlight":9}`, `{"error":"invalid_bulk_request"}`},
+			{`{"selection":` + ids + `,"highlight":0}`, `{"error":"invalid_bulk_request","message":"invalid highlight: 0 is not from 1 to 8"}`},
+			{`{"selection":` + ids + `,"highlight":9}`, `{"error":"invalid_bulk_request","message":"invalid highlight: 9 is not from 1 to 8"}`},
 			{`{"selection":` + ids + `,"highlight":2.5}`, `{"error":"invalid_bulk_request"}`},
 			{`{"selection":` + ids + `,"highlight":"3"}`, `{"error":"invalid_bulk_request"}`},
 			{`{"selection":` + ids + `,"highlight":3,"extra":1}`, `{"error":"invalid_bulk_request"}`},
