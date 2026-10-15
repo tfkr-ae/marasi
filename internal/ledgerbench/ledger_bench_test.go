@@ -329,6 +329,13 @@ var queryCases = []queryCase{
 	{"12-launchpad-big", text("launchpad = %q", func(m *fixture.Manifest) any { return m.BigLaunchpad }), ledgerbench.Target{Max: ms(150)}},
 	{"12-launchpad-old", text("launchpad = %q", func(m *fixture.Manifest) any { return m.OldLaunchpad }), ledgerbench.Target{Max: ms(150)}},
 	{"12-launchpad-any", text("launchpad:*"), ledgerbench.Target{Max: ms(150)}},
+	{"12-finding-small", text("finding = %q", func(m *fixture.Manifest) any { return m.SmallFinding }), ledgerbench.Target{Max: ms(150)}},
+	{"12-test-case-large", text("test_case = %q", func(m *fixture.Manifest) any { return m.LargeTestCase }), ledgerbench.Target{Max: ms(150)}},
+	// Case 14: the day before the newest pair.
+	{"14-requested-at-yesterday", text("requested_at >= %q AND requested_at < %q",
+		func(m *fixture.Manifest) any { return m.Newest.Add(-48 * time.Hour).Format(time.RFC3339) },
+		func(m *fixture.Manifest) any { return m.Newest.Add(-24 * time.Hour).Format(time.RFC3339) }),
+		ledgerbench.Target{Max: ms(150)}},
 	{"13-metadata-extension", text("metadata.extension = %q", func(m *fixture.Manifest) any { return m.RareExtension }),
 		ledgerbench.Target{Max: 3 * time.Second, Pathological: true}},
 	{"15-rare-text", text("%q", func(m *fixture.Manifest) any { return m.RareTerm }), ledgerbench.Target{Max: ms(50)}},
@@ -344,10 +351,10 @@ var queryCases = []queryCase{
 	{"17-text-and-exclusion", func(p *project) domain.TrafficQuery {
 		return domain.TrafficQuery{Text: p.manifest.CommonTerm, Exclusion: fixture.SeedExclusion}
 	}, ledgerbench.Target{Max: time.Second, Pathological: true}},
-	// 3 s (P) until ticket 07 makes OR index-driven; then 150 ms.
+	// Ticket 07 makes a top-level OR of index-driven branches a UNION.
 	{"18-host-or-note", text("host = %q OR note:%q",
 		func(m *fixture.Manifest) any { return m.RareOldHost }, func(m *fixture.Manifest) any { return m.RareNoteTerm }),
-		ledgerbench.Target{Max: 3 * time.Second, Pathological: true}},
+		ledgerbench.Target{Max: ms(150)}},
 }
 
 // BenchmarkQuery runs every list case warm, through the Repository and
@@ -421,6 +428,39 @@ func BenchmarkCountContentTypes(b *testing.B) {
 			return err
 		})
 	})
+}
+
+// BenchmarkNewMatches is case 33: counting the matches newer than a
+// snapshot with 1,000 pairs after it, as a client does while traffic is in
+// flight.
+func BenchmarkNewMatches(b *testing.B) {
+	p := benchProject(b)
+	repo := openRepo(b, p.path)
+	page, err := repo.ListTraffic(domain.TrafficQuery{Limit: 1001})
+	if err != nil {
+		b.Fatal(err)
+	}
+	snapshot := page.Items[len(page.Items)-1].ID
+	cases := []struct {
+		name  string
+		query domain.TrafficCountQuery
+	}{
+		{"33-new-matches", domain.TrafficCountQuery{}},
+		{"33-new-matches-seed-exclusion", domain.TrafficCountQuery{Exclusion: fixture.SeedExclusion}},
+		{"33-new-matches-dense-host", domain.TrafficCountQuery{
+			Text: fmt.Sprintf("host = %q", p.manifest.DominantHost), Exclusion: fixture.SeedExclusion}},
+		{"33-new-matches-common-text", domain.TrafficCountQuery{Text: p.manifest.CommonTerm, Exclusion: fixture.SeedExclusion}},
+	}
+	for _, c := range cases {
+		query := c.query
+		query.After = &snapshot
+		b.Run(c.name, func(b *testing.B) {
+			ledgerbench.Measure(b, ledgerbench.Target{Max: ms(50)}, func() error {
+				_, err := repo.CountTraffic(query)
+				return err
+			})
+		})
+	}
 }
 
 // Case 21 adds a node with wideChildren children, one pair each, to a copy
