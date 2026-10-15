@@ -507,14 +507,19 @@ func (t *queryTranslator) textMatch(e *expr.Expr, column string) (string, error)
 	// Quoting makes the term one literal phrase, so FTS5 syntax characters
 	// such as - and : in it are plain text.
 	phrase := `"` + strings.ReplaceAll(term, `"`, `""`) + `"`
+	var search string
 	switch column {
 	case "":
-		body := t.indexMatch("traffic_index", bodyColumns+" : "+phrase)
-		return "(" + body + " OR " + t.indexMatch("traffic_annotation_index", phrase) + ")", nil
+		// One IN over the union, not an OR of two INs, so SQLite builds a
+		// single match set and still drives the page from it.
+		search = t.indexSearch("traffic_index", bodyColumns+" : "+phrase) +
+			" UNION " + t.indexSearch("traffic_annotation_index", phrase)
 	case "note", "metadata":
-		return t.indexMatch("traffic_annotation_index", column+" : "+phrase), nil
+		search = t.indexSearch("traffic_annotation_index", column+" : "+phrase)
+	default:
+		search = t.indexSearch("traffic_index", column+" : "+phrase)
 	}
-	return t.indexMatch("traffic_index", column+" : "+phrase), nil
+	return "request.id IN (" + search + ")", nil
 }
 
 // bodyColumns is the column filter on every body index match. Body index rows
@@ -522,21 +527,21 @@ func (t *queryTranslator) textMatch(e *expr.Expr, column string) (string, error)
 // must never match (ADR-0038).
 const bodyColumns = "{request_head request_body response_head response_body}"
 
-// indexMatch matches pairs whose row in the FTS5 table, the body index
-// traffic_index or the annotation index traffic_annotation_index, matches
-// the FTS5 expression match. Both are keyed on traffic_index_key.
-func (t *queryTranslator) indexMatch(table, match string) string {
+// indexSearch selects the ids of pairs whose row in the FTS5 table, the body
+// index traffic_index or the annotation index traffic_annotation_index,
+// matches the FTS5 expression match. Both are keyed on traffic_index_key.
+func (t *queryTranslator) indexSearch(table, match string) string {
 	t.bind(match)
-	search := "request.id IN (SELECT k.request_id FROM " + table + " JOIN traffic_index_key k ON k.id = " + table + ".rowid WHERE " + table + " MATCH ?"
+	search := "SELECT k.request_id FROM " + table + " JOIN traffic_index_key k ON k.id = " + table + ".rowid WHERE " + table + " MATCH ?"
 	if t.after == nil {
-		return search + ")"
+		return search
 	}
 	// Every pair above after has an index key at or above the smallest key
 	// of those pairs, so the search can start there. When none of them is
 	// indexed yet, the bound is NULL and the term matches none of them,
 	// as it would without the bound.
 	t.bind(*t.after)
-	return search + " AND " + table + ".rowid >= (SELECT min(id) FROM traffic_index_key WHERE request_id > ?))"
+	return search + " AND " + table + ".rowid >= (SELECT min(id) FROM traffic_index_key WHERE request_id > ?)"
 }
 
 // textTerm returns the text of a quoted string, an unquoted word, or a number
