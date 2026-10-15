@@ -106,6 +106,9 @@ func TestTrafficReadUsage(t *testing.T) {
 		{"traffic", "sitemap", "extra"},
 		{"traffic", "count", "--as-of", "junk"},
 		{"traffic", "count", "--after", "junk"},
+		{"traffic", "count", "--as-of", ""},
+		{"traffic", "count", "--after", ""},
+		{"traffic", "sitemap", "-q", "a", "--as-of", ""},
 		{"traffic", "types", "extra"},
 		{"traffic", "validate", "extra"},
 	} {
