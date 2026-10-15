@@ -45,6 +45,9 @@ const (
 	// fieldLink matches a pair's links to a launchpad, finding or test case:
 	// = and != against the target's id, and :* for a link to any target.
 	fieldLink
+	// fieldSitemap matches a sitemap node's subtree with =, and its
+	// complement with !=, by node name (ADR-0040).
+	fieldSitemap
 )
 
 // member is true for a pair linked to the target bound to its ?. It is an
@@ -72,6 +75,12 @@ var launchpadMember = launchpadLinks.member()
 
 // noteExists is true for a pair that has a note.
 const noteExists = "request.id IN (SELECT request_id FROM notes)"
+
+// sitemapSubtree is true for a pair linked to the node named by the first ?
+// or to a node below it. Names below a node extend its name with /, so the
+// subtree is the name itself and the range [name/, name0), which the unique
+// index on name serves.
+const sitemapSubtree = "request.id IN (SELECT ps.request_id FROM pair_sitemap ps JOIN sitemap_node n ON n.id = ps.node_id WHERE n.name = ? OR (n.name >= ? AND n.name < ?))"
 
 // minTextTermLength is the shortest text term the trigram index can find.
 // Shorter terms would silently match nothing, so they are rejected.
@@ -107,6 +116,7 @@ var trafficFields = map[string]trafficField{
 	"launchpad": {kind: fieldLink, links: launchpadLinks},
 	"finding":   {kind: fieldLink, links: findingLinks},
 	"test_case": {kind: fieldLink, links: testCaseLinks},
+	"sitemap":   {kind: fieldSitemap, column: "pair_sitemap"},
 
 	"request_head":  {kind: fieldIndexedText, column: "request_head"},
 	"request_body":  {kind: fieldIndexedText, column: "request_body"},
@@ -129,6 +139,9 @@ var comparisonOperators = map[string]string{
 type trafficQuery struct {
 	where string
 	args  []any
+	// sitemap means the query names the sitemap field, so its answer
+	// depends on the sitemap job.
+	sitemap bool
 }
 
 // translateTrafficQuery parses query as an AIP-160 filter, checks it against
@@ -168,7 +181,7 @@ func translateTrafficQuery(query string, after *uuid.UUID) (trafficQuery, error)
 	if err != nil {
 		return trafficQuery{}, err
 	}
-	return trafficQuery{where: where, args: t.args}, nil
+	return trafficQuery{where: where, args: t.args, sitemap: t.sitemap}, nil
 }
 
 type queryTranslator struct {
@@ -177,6 +190,7 @@ type queryTranslator struct {
 	positions map[int64]int32
 	args      []any
 	depth     int
+	sitemap   bool
 	// topLevel is set while translating the root, or a condition the root
 	// ANDs with others.
 	topLevel bool
@@ -415,7 +429,7 @@ func (t *queryTranslator) indexDriven(e *expr.Expr) bool {
 		}
 		field := trafficFields[name]
 		switch {
-		case field.kind == fieldLink:
+		case field.kind == fieldLink, field.kind == fieldSitemap:
 			return op == "="
 		case name == "requested_at":
 			return op == "=" || op == ">" || op == ">="
@@ -582,6 +596,18 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 		}
 		t.bind(id)
 		return negate(op, field.links.member()), nil
+
+	case fieldSitemap:
+		if op != "=" && op != "!=" {
+			return "", t.errorAt(e, "operator %s is not supported on sitemap; use = or !=", op)
+		}
+		node, ok := rhs.GetConstExpr().GetConstantKind().(*expr.Constant_StringValue)
+		if !ok {
+			return "", t.errorAt(rhs, "sitemap needs a quoted node name, for example sitemap = \"https://api.example.com/users\"")
+		}
+		t.sitemap = true
+		t.bind(node.StringValue, node.StringValue+"/", node.StringValue+"0")
+		return negate(op, sitemapSubtree), nil
 
 	case fieldMetadata:
 		if len(path) == 0 {

@@ -19,7 +19,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
+	"regexp"
+	"slices"
 	"testing"
 	"time"
 
@@ -105,5 +108,49 @@ func BenchmarkLedgerCount(b *testing.B) {
 			b.StopTimer()
 			reportLatencies(b, latencies, c.target)
 		})
+	}
+}
+
+// seedExclusion returns the content-type exclusion every project was seeded
+// with, read from the first migration so it does not depend on where a
+// project now keeps its settings.
+func seedExclusion(b *testing.B) []string {
+	b.Helper()
+	raw, err := embedMigrations.ReadFile("migrations/00001_db_setup.sql")
+	if err != nil {
+		b.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?s)filters JSON DEFAULT '(\[.*?\])'`).FindSubmatch(raw)
+	if match == nil {
+		b.Fatal("no seeded filters in the first migration")
+	}
+	var seed []string
+	if err := json.Unmarshal(match[1], &seed); err != nil {
+		b.Fatal(err)
+	}
+	return seed
+}
+
+// reportLatencies reports p50, p95 and the target in milliseconds, and pass
+// 1 or 0. With MARASI_BENCH_GATE=1 a p95 over the target fails the case.
+func reportLatencies(b *testing.B, latencies []time.Duration, target time.Duration) {
+	b.Helper()
+	slices.Sort(latencies)
+	percentile := func(p float64) time.Duration {
+		rank := int(math.Ceil(p / 100 * float64(len(latencies))))
+		return latencies[max(rank, 1)-1]
+	}
+	ms := func(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
+	p95 := percentile(95)
+	b.ReportMetric(ms(percentile(50)), "p50-ms")
+	b.ReportMetric(ms(p95), "p95-ms")
+	b.ReportMetric(ms(target), "target-ms")
+	pass := 0.0
+	if p95 <= target {
+		pass = 1
+	}
+	b.ReportMetric(pass, "pass")
+	if pass == 0 && os.Getenv("MARASI_BENCH_GATE") == "1" {
+		b.Errorf("p95 %v is over the target %v", p95, target)
 	}
 }

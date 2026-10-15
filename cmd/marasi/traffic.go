@@ -64,6 +64,10 @@ const trafficListLong = `List the newest page of traffic.
       Links to findings and test cases, the same way as launchpad, for
       example finding = "<finding id>", finding != "<finding id>" and
       test_case:*. The id is a quoted UUID.
+  sitemap
+      A sitemap node and everything below it, by node name, for example
+      sitemap = "https://api.example.com/users/{int}". != matches every
+      other pair. A name no node has matches nothing.
 
 Bare text, for example "hbGci", searches every text part. Text terms
 need at least 3 characters.
