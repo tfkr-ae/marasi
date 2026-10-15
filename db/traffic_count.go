@@ -22,6 +22,9 @@ func (repo *Repository) CountTrafficContext(ctx context.Context, q domain.Traffi
 	if err != nil {
 		return domain.TrafficCount{}, err
 	}
+	if err := repo.indexReadyFor(match); err != nil {
+		return domain.TrafficCount{}, err
+	}
 	if q.AsOf != nil {
 		match.add(`id <= ?`, *q.AsOf)
 	}

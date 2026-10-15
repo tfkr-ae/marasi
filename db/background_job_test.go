@@ -98,6 +98,7 @@ func TestBackgroundJobs(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 		ids := captureTextPairs(t, repo, textSearchPairs())
+		indexCapturedTraffic(t, repo)
 
 		if err := repo.RebuildJob(domain.JobTrafficIndex); err != nil {
 			t.Fatalf("RebuildJob: %v", err)
