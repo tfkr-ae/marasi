@@ -268,7 +268,7 @@ func (repo *Repository) ListSitemapChildren(ctx context.Context, q domain.Sitema
 		}
 		after = &decoded
 	}
-	var children func(parent int64) (string, []any)
+	var children func(parent int64) sitemapChildren
 	if q.Query == nil {
 		normalized, err := domain.NormalizeExclusion(q.Exclusion)
 		if err != nil {
@@ -306,16 +306,17 @@ func (repo *Repository) ListSitemapChildren(ctx context.Context, q domain.Sitema
 				return err
 			}
 		}
-		counts, args := children(parent)
+		counts := children(parent)
+		args := append(append([]any{}, counts.hasChildrenArgs...), counts.args...)
 		bound := `pairs > 0`
 		if after != nil {
 			bound += ` AND (pairs < ? OR (pairs = ? AND id > ?))`
 			args = append(args, after.Pairs, after.Pairs, after.ID)
 		}
 		args = append(args, limit+1)
-		// Names are read for the page only.
-		query := `SELECT p.id, n.name, p.pairs, p.errors, p.has_children
-			FROM (SELECT * FROM (` + counts + `) WHERE ` + bound + ` ORDER BY pairs DESC, id LIMIT ?) p
+		// Names, and stored has_children, are read for the page only.
+		query := `SELECT p.id, n.name, p.pairs, p.errors, ` + counts.hasChildren + ` AS has_children
+			FROM (SELECT * FROM (` + counts.query + `) WHERE ` + bound + ` ORDER BY pairs DESC, id LIMIT ?) p
 			JOIN sitemap_node n ON n.id = p.id
 			ORDER BY p.pairs DESC, p.id`
 		return tx.SelectContext(ctx, &rows, query, args...)
@@ -342,36 +343,44 @@ func (repo *Repository) ListSitemapChildren(ctx context.Context, q domain.Sitema
 	return page, nil
 }
 
-// storedChildren returns a query for the stored counts of a node's
-// children, with columns id, pairs, errors and has_children, leaving out the
-// normalised exclusion. sitemap_count is clustered by parent, so the
+// sitemapChildren is a query for the counts of a node's children, with
+// columns id, pairs and errors, and an expression for whether the child p
+// of a page has children of its own, each with its arguments.
+type sitemapChildren struct {
+	query           string
+	args            []any
+	hasChildren     string
+	hasChildrenArgs []any
+}
+
+// storedChildren returns the stored counts of a node's children, leaving out
+// the normalised exclusion. sitemap_count is clustered by parent, so the
 // children's buckets are one range read.
-func storedChildren(exclusion []string) func(int64) (string, []any) {
+func storedChildren(exclusion []string) func(int64) sitemapChildren {
 	kept, keptArgs := exclusionCondition(exclusion)
 	if kept == "" {
 		kept = "1"
 	}
-	return func(parent int64) (string, []any) {
-		args := append([]any{}, keptArgs...)
-		args = append(args, parent)
-		args = append(args, keptArgs...)
-		return `SELECT node_id AS id, sum(pairs) AS pairs, sum(errors) AS errors,
-				EXISTS (SELECT 1 FROM sitemap_count c
-					WHERE c.parent_id = s.node_id AND c.pairs > 0 AND (` + kept + `)) AS has_children
-			FROM sitemap_count s
-			WHERE parent_id = ? AND (` + kept + `)
-			GROUP BY node_id`, args
+	return func(parent int64) sitemapChildren {
+		return sitemapChildren{
+			query: `SELECT node_id AS id, sum(pairs) AS pairs, sum(errors) AS errors
+				FROM sitemap_count WHERE parent_id = ? AND (` + kept + `)
+				GROUP BY node_id`,
+			args: append([]any{parent}, keptArgs...),
+			hasChildren: `EXISTS (SELECT 1 FROM sitemap_count c
+				WHERE c.parent_id = p.id AND c.pairs > 0 AND (` + kept + `))`,
+			hasChildrenArgs: keptArgs,
+		}
 	}
 }
 
 // queriedChildren returns a query that counts the pairs matching filter
-// under each child of the node named node, with columns id, pairs, errors
-// and has_children. It counts the matching pairs per sitemap leaf, keeps the
+// under each child of the node named node. It counts the matching pairs per sitemap leaf, keeps the
 // leaves in the node's subtree, and names each leaf's child of the node by
 // cutting the leaf's name after the next segment: names are canonical paths,
 // and a segment never holds a literal slash.
-func queriedChildren(node string, filter trafficFilter) func(int64) (string, []any) {
-	return func(int64) (string, []any) {
+func queriedChildren(node string, filter trafficFilter) func(int64) sitemapChildren {
+	return func(int64) sitemapChildren {
 		args := append([]any{}, filter.args...)
 		// prefix is the length, in characters, of the part of a leaf's name
 		// before its child's segment: up to "://" for an origin.
@@ -384,7 +393,7 @@ func queriedChildren(node string, filter trafficFilter) func(int64) (string, []a
 		}
 		slash := `instr(substr(ln.name, ` + prefix + ` + 1), '/')`
 		child := `CASE WHEN ` + slash + ` = 0 THEN ln.name ELSE substr(ln.name, 1, ` + prefix + ` + ` + slash + ` - 1) END`
-		return `SELECT c.id, sum(l.pairs) AS pairs, sum(l.errors) AS errors, max(l.leaf <> c.id) AS has_children
+		query := `SELECT c.id, sum(l.pairs) AS pairs, sum(l.errors) AS errors, max(l.leaf <> c.id) AS has_children
 			FROM (
 				SELECT ps.node_id AS leaf, count(*) AS pairs, sum(coalesce(m.status_code, 0) >= 500) AS errors
 				FROM (SELECT id, status_code FROM request` + filter.where() + `) m
@@ -393,6 +402,7 @@ func queriedChildren(node string, filter trafficFilter) func(int64) (string, []a
 			JOIN sitemap_node ln ON ln.id = l.leaf
 			JOIN sitemap_node c ON c.name = ` + child + `
 			WHERE ` + subtree + `
-			GROUP BY c.id`, args
+			GROUP BY c.id`
+		return sitemapChildren{query: query, args: args, hasChildren: `p.has_children`}
 	}
 }
