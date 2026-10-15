@@ -70,6 +70,13 @@ type TrafficRepository interface {
 	// returns a *QueryError.
 	CountTraffic(q TrafficCountQuery) (TrafficCount, error)
 
+	// ListSitemapChildren returns one page of the children of the sitemap
+	// node named node, or of the origins when node is empty, by pair count,
+	// highest first, with the exclusion's content types left out of the
+	// counts. An unknown node returns ErrSitemapNodeNotFound, an invalid
+	// exclusion a *QueryError, and a malformed cursor wraps ErrInvalidCursor.
+	ListSitemapChildren(node string, exclusion []string, cursor string, limit int) (SitemapPage, error)
+
 	// GetMetadata returns the metadata map for a specific request ID.
 	GetMetadata(id uuid.UUID) (metadata map[string]any, err error)
 
@@ -146,6 +153,10 @@ type ProxyRequest struct {
 	Metadata    map[string]any // Additional metadata and extension data
 	Prettified  string         // Prettified copy of Raw, or "" when the body could not be prettified
 	RequestedAt time.Time      // Timestamp when request was made
+	// SitemapNode names the pair's leaf node in the sitemap, from
+	// SitemapLeaf. It is not stored: the repository computes the leaf from
+	// Scheme, Host and Path.
+	SitemapNode string
 }
 
 // ProxyResponse represents the data captured from an HTTP response.

@@ -254,6 +254,9 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 		if err := savePrettified(tx, req.ID, "request", dbRequest.dbPrettified.Request.String); err != nil {
 			return err
 		}
+		if err := linkPairToSitemap(tx, req.ID, req.Scheme, req.Host, req.Path, sitemapBucket{}); err != nil {
+			return err
+		}
 		return indexPair(tx, req.ID)
 	})
 	if err != nil {
@@ -281,6 +284,10 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 		if _, err := movePrettified(tx, resp.ID); err != nil {
 			return err
 		}
+		node, before, err := sitemapState(tx, resp.ID)
+		if err != nil {
+			return err
+		}
 		result, err := tx.NamedExec(query, dbResponse)
 		if err != nil {
 			return err
@@ -294,6 +301,12 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 		}
 		if err := savePrettified(tx, resp.ID, "response", dbResponse.dbPrettified.Response.String); err != nil {
 			return err
+		}
+		if node.Valid {
+			after := bucketOf(dbResponse.ContentType, dbResponse.StatusCode)
+			if err := rebucketInSitemap(tx, node.Int64, before, after); err != nil {
+				return err
+			}
 		}
 		return indexPair(tx, resp.ID)
 	})
