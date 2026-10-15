@@ -279,7 +279,7 @@ func (repo *Repository) ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID,
 	query := `SELECT
 		request.id, request.scheme, request.method, request.host, request.path, request.requested_at,
 		request.status, request.status_code, request.content_type, request.length, request.responded_at,
-		json_remove(request.metadata, '$.prettified-request', '$.prettified-response') AS metadata
+		request.metadata
 		FROM armory_entry
 		JOIN request ON request.id = armory_entry.request_id
 		WHERE armory_entry.run_id = ?`
