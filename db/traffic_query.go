@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -41,21 +42,39 @@ const (
 	// fieldIndexedText fields are text parts of a pair in the traffic index.
 	// They match a term with : (contains), ignoring case.
 	fieldIndexedText
-	// fieldLaunchpad matches a pair's launchpad membership: = and != against
-	// a launchpad id, and :* for membership in any launchpad.
-	fieldLaunchpad
+	// fieldLink matches a pair's links to a launchpad, finding or test case:
+	// = and != against the target's id, and :* for a link to any target.
+	fieldLink
 	// fieldSitemap matches a sitemap node's subtree with =, and its
 	// complement with !=, by node name (ADR-0040).
 	fieldSitemap
 )
 
+// member is true for a pair linked to the target bound to its ?. It is an
+// uncorrelated IN rather than a correlated EXISTS, so a sparse link can
+// drive the plan instead of being checked on every row.
+func (l linkTable) member() string {
+	return "request.id IN (SELECT request_id FROM " + l.table + " WHERE " + l.column + " = ?)"
+}
+
+// anyMember is true for a pair linked to at least one target.
+func (l linkTable) anyMember() string {
+	return "request.id IN (SELECT request_id FROM " + l.table + ")"
+}
+
+var (
+	launchpadLinks = linkTables[domain.LinkLaunchpad]
+	findingLinks   = linkTables[domain.LinkFinding]
+	testCaseLinks  = linkTables[domain.LinkTestCase]
+)
+
 // launchpadMember is true for a pair linked to the launchpad bound to its ?.
 // Every launchpad-scoped read uses it, so the launchpad query field and a
 // launchpad's entries agree on what membership means.
-const launchpadMember = "EXISTS (SELECT 1 FROM launchpad_request WHERE launchpad_request.request_id = request.id AND launchpad_request.launchpad_id = ?)"
+var launchpadMember = launchpadLinks.member()
 
-// anyLaunchpadMember is true for a pair linked to at least one launchpad.
-const anyLaunchpadMember = "EXISTS (SELECT 1 FROM launchpad_request WHERE launchpad_request.request_id = request.id)"
+// noteExists is true for a pair that has a note.
+const noteExists = "request.id IN (SELECT request_id FROM notes)"
 
 // sitemapSubtree is true for a pair linked to the node named by the first ?
 // or to a node below it. Names below a node extend its name with /, so the
@@ -72,15 +91,20 @@ type trafficField struct {
 	// column is the SQL expression for the field's value, or the index column
 	// for fieldIndexedText.
 	column string
+	// links is the link table of a fieldLink.
+	links linkTable
+	// indexed fields have an index on (column, id), so an equality or range
+	// on them can drive a read.
+	indexed bool
 }
 
 // trafficFields declares the fields a traffic query can name.
 var trafficFields = map[string]trafficField{
-	"host":         {kind: fieldExactText, column: "host"},
+	"host":         {kind: fieldExactText, column: "host", indexed: true},
 	"method":       {kind: fieldExactText, column: "method"},
 	"scheme":       {kind: fieldExactText, column: "scheme"},
 	"path":         {kind: fieldExactText, column: "path"},
-	"content_type": {kind: fieldExactText, column: "content_type"},
+	"content_type": {kind: fieldExactText, column: "content_type", indexed: true},
 	// In-flight pairs store -1. Treat that as no status code.
 	"status_code":  {kind: fieldInteger, column: "nullif(status_code, -1)"},
 	"requested_at": {kind: fieldTimestamp, column: sqlEpochSeconds("requested_at")},
@@ -88,7 +112,10 @@ var trafficFields = map[string]trafficField{
 	"metadata":     {kind: fieldMetadata, column: "metadata"},
 	// Membership is a row in launchpad_request, not the launchpad_id
 	// metadata, which pairs linked from captured traffic do not have.
-	"launchpad": {kind: fieldLaunchpad, column: "launchpad_request"},
+	// finding and test_case read their link tables the same way.
+	"launchpad": {kind: fieldLink, links: launchpadLinks},
+	"finding":   {kind: fieldLink, links: findingLinks},
+	"test_case": {kind: fieldLink, links: testCaseLinks},
 	"sitemap":   {kind: fieldSitemap, column: "pair_sitemap"},
 
 	"request_head":  {kind: fieldIndexedText, column: "request_head"},
@@ -120,14 +147,19 @@ type trafficQuery struct {
 // translateTrafficQuery parses query as an AIP-160 filter, checks it against
 // the declared traffic fields, and translates it to SQL. Invalid queries
 // return a *domain.QueryError.
-func translateTrafficQuery(query string) (trafficQuery, error) {
+//
+// after, when set, promises that the caller reads only pairs with an id
+// above it. Text terms then search only the traffic index rows that such
+// pairs can have, so a common term does not gather every older match first.
+func translateTrafficQuery(query string, after *uuid.UUID) (trafficQuery, error) {
 	trimmed := strings.TrimSpace(query)
 	if trimmed == "" {
 		return trafficQuery{}, nil
 	}
 	t := &queryTranslator{
-		raw:  query,
-		lead: len(query) - len(strings.TrimLeft(query, " \t\r\n\v\f")),
+		raw:   query,
+		lead:  len(query) - len(strings.TrimLeft(query, " \t\r\n\v\f")),
+		after: after,
 	}
 	if len(query) > maxQueryLength {
 		return trafficQuery{}, &domain.QueryError{
@@ -144,6 +176,7 @@ func translateTrafficQuery(query string) (trafficQuery, error) {
 	}
 	t.positions = parsed.GetSourceInfo().GetPositions()
 
+	t.topLevel = true
 	where, err := t.condition(parsed.GetExpr())
 	if err != nil {
 		return trafficQuery{}, err
@@ -158,6 +191,11 @@ type queryTranslator struct {
 	args      []any
 	depth     int
 	sitemap   bool
+	// topLevel is set while translating the root, or a condition the root
+	// ANDs with others.
+	topLevel bool
+	// after is the id every pair the caller reads is above, if any.
+	after *uuid.UUID
 }
 
 // position converts a byte offset in the trimmed query to a 1-based character
@@ -273,6 +311,9 @@ func (t *queryTranslator) condition(e *expr.Expr) (string, error) {
 	if t.depth > maxQueryDepth {
 		return "", t.errorAt(e, "query nests more than %d conditions; use fewer conditions or less nesting", maxQueryDepth)
 	}
+	// Only the root and the conditions it ANDs together are top level.
+	topLevel := t.topLevel
+	t.topLevel = false
 	call := e.GetCallExpr()
 	if call == nil {
 		// Bare text searches every indexed text part.
@@ -281,9 +322,12 @@ func (t *queryTranslator) condition(e *expr.Expr) (string, error) {
 	args := call.GetArgs()
 	switch call.GetFunction() {
 	case filtering.FunctionAnd, filtering.FunctionFuzzyAnd:
-		return t.junction("AND", args)
+		return t.junction("AND", args, topLevel)
 	case filtering.FunctionOr:
-		return t.junction("OR", args)
+		if branches := orBranches(e); topLevel && t.allIndexDriven(branches) {
+			return t.union(branches)
+		}
+		return t.junction("OR", args, false)
 	case filtering.FunctionNot:
 		inner, err := t.condition(args[0])
 		if err != nil {
@@ -300,9 +344,12 @@ func (t *queryTranslator) condition(e *expr.Expr) (string, error) {
 	return "", t.errorAt(e, "unknown function %q", call.GetFunction())
 }
 
-func (t *queryTranslator) junction(op string, args []*expr.Expr) (string, error) {
+// junction joins args with op. The args of a top-level AND are top level
+// too.
+func (t *queryTranslator) junction(op string, args []*expr.Expr, topLevel bool) (string, error) {
 	parts := make([]string, len(args))
 	for i, arg := range args {
+		t.topLevel = topLevel
 		part, err := t.condition(arg)
 		if err != nil {
 			return "", err
@@ -310,6 +357,91 @@ func (t *queryTranslator) junction(op string, args []*expr.Expr) (string, error)
 		parts[i] = "(" + part + ")"
 	}
 	return strings.Join(parts, " "+op+" "), nil
+}
+
+// union translates a top-level OR whose branches can each be read through
+// an index as a UNION of the branches, so each branch drives its own read
+// instead of every pair being checked against the whole OR.
+func (t *queryTranslator) union(branches []*expr.Expr) (string, error) {
+	parts := make([]string, len(branches))
+	for i, branch := range branches {
+		part, err := t.condition(branch)
+		if err != nil {
+			return "", err
+		}
+		parts[i] = "SELECT request.id FROM request WHERE " + part
+	}
+	return "request.id IN (" + strings.Join(parts, " UNION ") + ")", nil
+}
+
+// orBranches returns the branches of an OR, with nested ORs flattened.
+func orBranches(e *expr.Expr) []*expr.Expr {
+	call := e.GetCallExpr()
+	if call.GetFunction() != filtering.FunctionOr {
+		return []*expr.Expr{e}
+	}
+	var branches []*expr.Expr
+	for _, arg := range call.GetArgs() {
+		branches = append(branches, orBranches(arg)...)
+	}
+	return branches
+}
+
+func (t *queryTranslator) allIndexDriven(branches []*expr.Expr) bool {
+	for _, branch := range branches {
+		if !t.indexDriven(branch) {
+			return false
+		}
+	}
+	return true
+}
+
+// indexDriven reports whether an index can find the pairs that match e
+// without checking every pair: a text term, a link or note, a requested_at
+// lower bound, an equality on an indexed field, or an AND with one of these.
+// An invalid e reports false; translating it reports the error.
+func (t *queryTranslator) indexDriven(e *expr.Expr) bool {
+	call := e.GetCallExpr()
+	if call == nil {
+		return true // bare text
+	}
+	args := call.GetArgs()
+	switch function := call.GetFunction(); function {
+	case filtering.FunctionAnd, filtering.FunctionFuzzyAnd:
+		return slices.ContainsFunc(args, t.indexDriven)
+	case filtering.FunctionOr:
+		return t.allIndexDriven(orBranches(e))
+	case filtering.FunctionHas:
+		name, _, err := t.fieldName(args[0])
+		if err != nil {
+			return false
+		}
+		kind := trafficFields[name].kind
+		return kind == fieldIndexedText || kind == fieldMetadata || kind == fieldLink
+	default:
+		op, ok := comparisonOperators[function]
+		if !ok || len(args) != 2 {
+			return false
+		}
+		name, _, err := t.fieldName(args[0])
+		if err != nil {
+			return false
+		}
+		field := trafficFields[name]
+		switch {
+		case field.kind == fieldLink, field.kind == fieldSitemap:
+			return op == "="
+		case name == "requested_at":
+			return op == "=" || op == ">" || op == ">="
+		case !field.indexed:
+			return false
+		case field.kind == fieldExactText:
+			value, ok := literalText(args[1])
+			return ok && op == "=" && !strings.Contains(value, "*")
+		default:
+			return op != "!="
+		}
+	}
 }
 
 // has translates field:value, which searches one indexed text part.
@@ -323,6 +455,11 @@ func (t *queryTranslator) has(e, lhs, rhs *expr.Expr) (string, error) {
 		if len(path) > 0 {
 			return "", t.errorAt(lhs, "field %q has no member %q", name, path[0])
 		}
+		// An unquoted note:* means the pair has a note. Any other value,
+		// including a quoted "*", stays a text search.
+		if name == "note" && t.sourceToken(rhs) == "*" {
+			return noteExists, nil
+		}
 		return t.textMatch(rhs, field.column)
 	case fieldExactText:
 		return "", t.errorAt(e, "operator : is not supported on %s; use = or !=, with * at the start or end", name)
@@ -332,15 +469,16 @@ func (t *queryTranslator) has(e, lhs, rhs *expr.Expr) (string, error) {
 		}
 		// metadata:"text" searches the whole indexed metadata.
 		return t.textMatch(rhs, field.column)
-	case fieldLaunchpad:
+	case fieldLink:
 		if len(path) > 0 {
 			return "", t.errorAt(lhs, "field %q has no member %q", name, path[0])
 		}
 		// The parser reads launchpad:* as the string "*".
 		if rhs.GetConstExpr().GetStringValue() != "*" {
-			return "", t.errorAt(e, "operator : on launchpad takes only *, as in launchpad:*; use launchpad = \"<launchpad id>\" for one launchpad")
+			noun := field.links.noun
+			return "", t.errorAt(e, "operator : on %s takes only *, as in %s:*; use %s = \"<%s id>\" for one %s", name, name, name, noun, noun)
 		}
-		return anyLaunchpadMember, nil
+		return field.links.anyMember(), nil
 	}
 	return "", t.errorAt(e, "operator : is not supported on %s; use = or another comparison", name)
 }
@@ -362,7 +500,16 @@ func (t *queryTranslator) textMatch(e *expr.Expr, column string) (string, error)
 		match = column + " : " + match
 	}
 	t.bind(match)
-	return "request.id IN (SELECT k.request_id FROM traffic_index JOIN traffic_index_key k ON k.id = traffic_index.rowid WHERE traffic_index MATCH ?)", nil
+	const search = "request.id IN (SELECT k.request_id FROM traffic_index JOIN traffic_index_key k ON k.id = traffic_index.rowid WHERE traffic_index MATCH ?"
+	if t.after == nil {
+		return search + ")", nil
+	}
+	// Every pair above after has an index key at or above the smallest key
+	// of those pairs, so the search can start there. When none of them is
+	// indexed yet, the bound is NULL and the term matches none of them,
+	// as it would without the bound.
+	t.bind(*t.after)
+	return search + " AND traffic_index.rowid >= (SELECT min(id) FROM traffic_index_key WHERE request_id > ?))", nil
 }
 
 // textTerm returns the text of a quoted string, an unquoted word, or a number
@@ -430,18 +577,25 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 		if err != nil {
 			return "", err
 		}
-		return t.compare(field.column, op, float64(value.UnixNano())/1e9), nil
-
-	case fieldLaunchpad:
-		if op != "=" && op != "!=" {
-			return "", t.errorAt(e, "operator %s is not supported on launchpad; use =, !=, or launchpad:*", op)
+		cond := t.compare(field.column, op, float64(value.UnixNano())/1e9)
+		if name == "requested_at" && (op == ">" || op == ">=" || op == "=") {
+			// The condition implies the id bound, so adding it changes no
+			// result, but lets the id index drive the read.
+			t.bind(idFloor(value.Add(-requestedAtIDSlack)))
+			cond = "(" + cond + ") AND id >= ?"
 		}
-		id, err := t.launchpadID(rhs)
+		return cond, nil
+
+	case fieldLink:
+		if op != "=" && op != "!=" {
+			return "", t.errorAt(e, "operator %s is not supported on %s; use =, !=, or %s:*", op, name, name)
+		}
+		id, err := t.linkTargetID(rhs, name, field.links.noun)
 		if err != nil {
 			return "", err
 		}
 		t.bind(id)
-		return negate(op, launchpadMember), nil
+		return negate(op, field.links.member()), nil
 
 	case fieldSitemap:
 		if op != "=" && op != "!=" {
@@ -580,15 +734,16 @@ func (t *queryTranslator) matchExactText(column, value string) string {
 	}
 }
 
-// launchpadID returns the launchpad id a quoted string names.
-func (t *queryTranslator) launchpadID(e *expr.Expr) (uuid.UUID, error) {
+// linkTargetID returns the id of the launchpad, finding or test case (noun)
+// that a quoted string names for the field name.
+func (t *queryTranslator) linkTargetID(e *expr.Expr, name, noun string) (uuid.UUID, error) {
 	value, ok := e.GetConstExpr().GetConstantKind().(*expr.Constant_StringValue)
 	if !ok {
-		return uuid.Nil, t.errorAt(e, "launchpad needs a quoted launchpad id, for example launchpad = \"01937f5d-351a-7e68-936d-61a7a25661a3\"")
+		return uuid.Nil, t.errorAt(e, "%s needs a quoted %s id, for example %s = \"01937f5d-351a-7e68-936d-61a7a25661a3\"", name, noun, name)
 	}
 	id, err := uuid.Parse(value.StringValue)
 	if err != nil {
-		return uuid.Nil, t.errorAt(e, "%q is not a launchpad id; use a launchpad UUID", value.StringValue)
+		return uuid.Nil, t.errorAt(e, "%q is not a %s id; use a %s UUID", value.StringValue, noun, noun)
 	}
 	return id, nil
 }
@@ -655,6 +810,30 @@ func (t *queryTranslator) metadataEquals(rhs *expr.Expr, path string) (string, e
 	}
 	t.bind(path, path, value)
 	return "(json_type(" + column + ", ?) IN " + jsonTypes + " AND json_extract(" + column + ", ?) = ?)", nil
+}
+
+// requestedAtIDSlack is how much older than its requested_at a pair's id may
+// be. A pair's UUIDv7 id is minted when the proxy receives the request,
+// just after requested_at is read, except for a launch: its id is minted
+// when the launch is registered, shortly before the request reaches the
+// proxy. A lower bound on requested_at therefore implies a lower bound on id
+// this much earlier.
+//
+// Only lower bounds are derived. An id can be much newer than requested_at,
+// for example after the clock steps back (UUIDv7 ids stay monotonic) or for
+// pairs written with an older requested_at, so an upper bound on
+// requested_at implies no upper bound on id.
+const requestedAtIDSlack = time.Hour
+
+// idFloor returns the smallest pair id, in the id column's text form, that a
+// UUIDv7 minted at or after at can have.
+func idFloor(at time.Time) string {
+	var id uuid.UUID
+	ms := max(at.UnixMilli(), 0)
+	for i := range 6 {
+		id[i] = byte(ms >> (8 * (5 - i)))
+	}
+	return id.String()
 }
 
 // sqlEpochSeconds converts a timestamp column to Unix seconds. The SQLite
