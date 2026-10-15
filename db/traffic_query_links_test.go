@@ -184,3 +184,72 @@ func TestTrafficRepo_ListTrafficLinkQueryErrors(t *testing.T) {
 		})
 	}
 }
+
+// v7At returns a UUIDv7 whose timestamp is at.
+func v7At(t *testing.T, at time.Time) uuid.UUID {
+	t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	ms := uint64(at.UnixMilli())
+	for i := range 6 {
+		id[i] = byte(ms >> (8 * (5 - i)))
+	}
+	return id
+}
+
+func TestTrafficRepo_ListTrafficRequestedAtBounds(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	pairs := []struct {
+		name string
+		// minted is when the pair's id was made, requested when its request
+		// was sent. A launch's id is made before its request is sent.
+		minted, requested time.Time
+	}{
+		{name: "before", minted: base.Add(-2 * time.Minute), requested: base.Add(-2 * time.Minute)},
+		{name: "launch", minted: base.Add(-30 * time.Minute), requested: base.Add(time.Minute)},
+		{name: "at", minted: base, requested: base},
+		{name: "after", minted: base.Add(time.Hour), requested: base.Add(time.Hour)},
+	}
+	ids := map[string]uuid.UUID{}
+	for _, pair := range pairs {
+		id := v7At(t, pair.minted)
+		err := repo.InsertRequest(&domain.ProxyRequest{
+			ID: id, Scheme: "https", Method: "GET", Host: "t.example.com", Path: "/" + pair.name,
+			Raw: []byte("GET / HTTP/1.1\r\n\r\n"), Metadata: map[string]any{}, RequestedAt: pair.requested,
+		})
+		if err != nil {
+			t.Fatalf("inserting %s: %v", pair.name, err)
+		}
+		ids[pair.name] = id
+	}
+
+	tests := []struct {
+		query string
+		want  string // names, newest id first
+	}{
+		{query: `requested_at >= "2026-10-01T12:00:00Z"`, want: "afteratlaunch"},
+		{query: `requested_at > "2026-10-01T12:00:00Z"`, want: "afterlaunch"},
+		{query: `requested_at = "2026-10-01T12:01:00Z"`, want: "launch"},
+		{query: `requested_at >= "2026-10-01T12:00:00Z" AND requested_at < "2026-10-01T12:30:00Z"`, want: "atlaunch"},
+		{query: `NOT requested_at >= "2026-10-01T12:00:00Z"`, want: "before"},
+		{query: `path = "/before"`, want: "before"},
+		{query: `requested_at >= "2026-10-01T12:00:00Z" OR path = "/before"`, want: "afteratbeforelaunch"},
+	}
+	for _, test := range tests {
+		t.Run(test.query, func(t *testing.T) {
+			items, _, _, err := listPage(repo, nil, 200, test.query)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			got := make([]uuid.UUID, len(items))
+			for i, item := range items {
+				got[i] = item.ID
+			}
+			if names := namesOf(ids, got); names != test.want {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", test.want, names)
+			}
+		})
+	}
+}

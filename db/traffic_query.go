@@ -445,7 +445,14 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 		if err != nil {
 			return "", err
 		}
-		return t.compare(field.column, op, float64(value.UnixNano())/1e9), nil
+		cond := t.compare(field.column, op, float64(value.UnixNano())/1e9)
+		if name == "requested_at" && (op == ">" || op == ">=" || op == "=") {
+			// The condition implies the id bound, so adding it changes no
+			// result, but lets the id index drive the read.
+			t.bind(idFloor(value.Add(-requestedAtIDSlack)))
+			cond = "(" + cond + ") AND id >= ?"
+		}
+		return cond, nil
 
 	case fieldLink:
 		if op != "=" && op != "!=" {
@@ -659,6 +666,30 @@ func (t *queryTranslator) metadataEquals(rhs *expr.Expr, path string) (string, e
 	}
 	t.bind(path, path, value)
 	return "(json_type(" + column + ", ?) IN " + jsonTypes + " AND json_extract(" + column + ", ?) = ?)", nil
+}
+
+// requestedAtIDSlack is how much older than its requested_at a pair's id may
+// be. A pair's UUIDv7 id is minted when the proxy receives the request,
+// just after requested_at is read, except for a launch: its id is minted
+// when the launch is registered, shortly before the request reaches the
+// proxy. A lower bound on requested_at therefore implies a lower bound on id
+// this much earlier.
+//
+// Only lower bounds are derived. An id can be much newer than requested_at,
+// for example after the clock steps back (UUIDv7 ids stay monotonic) or for
+// pairs written with an older requested_at, so an upper bound on
+// requested_at implies no upper bound on id.
+const requestedAtIDSlack = time.Hour
+
+// idFloor returns the smallest pair id, in the id column's text form, that a
+// UUIDv7 minted at or after at can have.
+func idFloor(at time.Time) string {
+	var id uuid.UUID
+	ms := max(at.UnixMilli(), 0)
+	for i := range 6 {
+		id[i] = byte(ms >> (8 * (5 - i)))
+	}
+	return id.String()
 }
 
 // sqlEpochSeconds converts a timestamp column to Unix seconds. The SQLite
