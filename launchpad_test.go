@@ -986,6 +986,25 @@ func TestProxy_InterruptedLaunches(t *testing.T) {
 		}
 	})
 
+	t.Run("should end a launch's Checkpoint hold before InterruptLaunches returns", func(t *testing.T) {
+		held := make(chan domain.CheckpointItem, 1)
+		h := startLaunchHarness(t,
+			WithInterceptHandler(func(item domain.CheckpointItem) error { held <- item; return nil }),
+		)
+		origin := startLaunchOrigin(t)
+		h.proxy.SetIntercept(true)
+		if _, err := h.proxy.Launch(rawGet(origin.Server, "/held"), h.launchpadID.String(), false); err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+		receiveCheckpointItem(t, held, "the launch to be held")
+
+		h.proxy.InterruptLaunches()
+
+		if h.proxy.HasPendingCheckpoint() {
+			t.Fatalf("\nwanted:\nno pending Checkpoint item\ngot:\n%v", h.proxy.CheckpointItems())
+		}
+	})
+
 	t.Run("should end a launch pending when the service stops as interrupted", func(t *testing.T) {
 		h := startLaunchHarness(t)
 		origin := startLaunchOrigin(t)
