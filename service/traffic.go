@@ -33,6 +33,8 @@ type trafficPage struct {
 	PrevCursor *string          `json:"prev_cursor"`
 	AsOf       *uuid.UUID       `json:"as_of"`
 	Index      trafficIndex     `json:"index"`
+	// Sitemap is set when the query has a sitemap condition.
+	Sitemap *jobCompleteness `json:"sitemap,omitempty"`
 }
 
 // trafficCount is the GET /traffic/count response body. Count is exact up to
@@ -56,6 +58,20 @@ type trafficIndex struct {
 	// Complete is false while the background build is still indexing pairs.
 	// Text conditions in a query can miss pairs until it is true.
 	Complete bool `json:"complete"`
+}
+
+// jobCompleteness reports whether a background job a read depends on had
+// finished. While the sitemap job runs, pairs it has not reached are missing
+// from the sitemap's counts and from sitemap query conditions.
+type jobCompleteness struct {
+	Complete bool `json:"complete"`
+}
+
+// sitemapPage is the body of GET /traffic/sitemap.
+type sitemapPage struct {
+	Items      []domain.SitemapChild `json:"items"`
+	NextCursor *string               `json:"next_cursor"`
+	Sitemap    jobCompleteness       `json:"sitemap"`
 }
 
 // trafficSummary is one request/response pair in a traffic list page.
@@ -146,12 +162,54 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			return
 		}
 		slices.Reverse(page.Items)
-		writeJSON(w, r, http.StatusOK, trafficPage{
+		body := trafficPage{
 			Items:      trafficListFromSummaries(page.Items, nil).Items,
 			NextCursor: page.NextCursor,
 			PrevCursor: page.PrevCursor,
 			AsOf:       page.AsOf,
 			Index:      trafficIndex{Complete: page.Complete[domain.JobTrafficIndex]},
+		}
+		if complete, ok := page.Complete[domain.JobSitemap]; ok {
+			body.Sitemap = &jobCompleteness{Complete: complete}
+		}
+		writeJSON(w, r, http.StatusOK, body)
+	})
+	mux.HandleFunc("GET /traffic/sitemap", func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		limit := 100
+		if raw := query.Get("limit"); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed < 1 || parsed > domain.MaxSitemapPage {
+				writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+				return
+			}
+			limit = parsed
+		}
+		repo, err := proxy.GetTrafficRepo()
+		if err != nil {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		page, err := repo.ListSitemapChildren(query.Get("node"), query["exclude"], query.Get("cursor"), limit)
+		var queryErr *domain.QueryError
+		switch {
+		case errors.Is(err, domain.ErrSitemapNodeNotFound):
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		case errors.As(err, &queryErr):
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
+			return
+		case errors.Is(err, domain.ErrInvalidCursor):
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_cursor", Message: err.Error()})
+			return
+		case err != nil:
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+			return
+		}
+		writeJSON(w, r, http.StatusOK, sitemapPage{
+			Items:      page.Children,
+			NextCursor: page.NextCursor,
+			Sitemap:    jobCompleteness{Complete: page.Complete[domain.JobSitemap]},
 		})
 	})
 	mux.HandleFunc("GET /traffic/count", func(w http.ResponseWriter, r *http.Request) {
