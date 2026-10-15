@@ -376,6 +376,23 @@ func TestTrafficListCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("should print why a cursor is invalid on stderr", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"invalid_cursor","message":"invalid cursor: the cursor is for order_by \"path\", not \"method\""}`)
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--order-by", "method", "--cursor", "eyJrIjoiL2EifQ")
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if stdout != "" {
+			t.Fatalf("\nwanted:\nno stdout\ngot:\n%s", stdout)
+		}
+		want := `listing traffic: invalid_cursor: invalid cursor: the cursor is for order_by "path", not "method"`
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("\nwanted stderr containing:\n%s\ngot:\n%s", want, stderr)
+		}
+	})
+
 	t.Run("should normalize a JSON query error keeping the message and position", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"invalid_query","message":"unknown field \"stauts\"","position":1}`)
