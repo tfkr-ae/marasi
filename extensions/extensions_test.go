@@ -1,6 +1,7 @@
 package extensions
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -153,7 +154,7 @@ func (m *mockTrafficRepo) CountTraffic(q domain.TrafficCountQuery) (domain.Traff
 	return domain.TrafficCount{Count: len(m.summaryData), Complete: map[string]bool{domain.JobTrafficIndex: true}}, nil
 }
 
-func (m *mockTrafficRepo) ListSitemapChildren(string, []string, string, int) (domain.SitemapPage, error) {
+func (m *mockTrafficRepo) ListSitemapChildren(context.Context, domain.SitemapQuery) (domain.SitemapPage, error) {
 	return domain.SitemapPage{}, errors.New("not implemented")
 }
 
