@@ -34,8 +34,8 @@ type TrafficQuery struct {
 	// Exclusion hides pairs with these content types (see NormalizeExclusion).
 	// Pairs with no content type are never hidden.
 	Exclusion []string
-	// OrderBy is an AIP-132 sort. Empty means "requested_at desc", which is
-	// the only sort accepted until sortable columns land (ADR-0041).
+	// OrderBy is an AIP-132 sort on one sortable column, ascending or
+	// descending (ADR-0041). Empty means "requested_at desc".
 	OrderBy string
 	// Cursor is an opaque token from an earlier TrafficPage. Empty starts at
 	// the first row in display order, or the last one when walking Backward.
