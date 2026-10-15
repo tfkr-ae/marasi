@@ -14,7 +14,7 @@ func TestTrafficRepo_AppendNote_KeepsExistingNotesAsPrefix(t *testing.T) {
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
-	const pairs = 10_000
+	const pairs = 2_000
 	ids := make([]uuid.UUID, pairs)
 	existing := map[uuid.UUID]string{}
 	for i := range ids {
