@@ -196,6 +196,47 @@ func TestTrafficRepo_ListTraffic_OrderByDuringCapture(t *testing.T) {
 	}
 }
 
+func TestLaunchpadRepo_GetLaunchpadRequests_OrderBy(t *testing.T) {
+	t.Run("should list entries in the order_by order with no value last, and oldest first by default", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		launchpadID, err := repo.CreateLaunchpad("lp", "")
+		if err != nil {
+			t.Fatalf("creating launchpad: %v", err)
+		}
+		hundred := insertSortPair(t, repo, sortPair{status: code(200), length: "100"})
+		inFlight := insertSortPair(t, repo, sortPair{})
+		twenty := insertSortPair(t, repo, sortPair{status: code(404), length: "20"})
+		_ = insertSortPair(t, repo, sortPair{status: code(200), length: "5"}) // not linked
+		for _, id := range []uuid.UUID{hundred, inFlight, twenty} {
+			if err := repo.LinkRequestToLaunchpad(id, launchpadID); err != nil {
+				t.Fatalf("linking: %v", err)
+			}
+		}
+
+		for orderBy, want := range map[string][]uuid.UUID{
+			"":                 {hundred, inFlight, twenty},
+			"length":           {twenty, hundred, inFlight},
+			"length desc":      {hundred, twenty, inFlight},
+			"status_code desc": {twenty, hundred, inFlight},
+		} {
+			items, err := repo.GetLaunchpadRequests(launchpadID, "", nil, orderBy)
+			if err != nil {
+				t.Fatalf("%q: %v", orderBy, err)
+			}
+			if got := idsOf(items); !reflect.DeepEqual(got, want) {
+				t.Fatalf("%q\nwanted:\n%v\ngot:\n%v", orderBy, want, got)
+			}
+		}
+		_, err = repo.GetLaunchpadRequests(launchpadID, "", nil, "size")
+		var queryErr *domain.QueryError
+		if !errors.As(err, &queryErr) {
+			t.Fatalf("\nwanted:\n*domain.QueryError\ngot:\n%v", err)
+		}
+	})
+}
+
 // walkBackward pages Backward through q from the end and returns each
 // page's ids, last page first, each page reversed, so the result is the
 // display order reversed.

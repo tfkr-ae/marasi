@@ -403,7 +403,7 @@ func TestLaunchpadRepo_GetLaunchpadRequests_Exclusion(t *testing.T) {
 			}
 		}
 
-		items, err := repo.GetLaunchpadRequests(launchpadID, "", []string{"image/*"})
+		items, err := repo.GetLaunchpadRequests(launchpadID, "", []string{"image/*"}, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -411,7 +411,7 @@ func TestLaunchpadRepo_GetLaunchpadRequests_Exclusion(t *testing.T) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, idsOf(items))
 		}
 
-		_, err = repo.GetLaunchpadRequests(launchpadID, "", []string{"ima*"})
+		_, err = repo.GetLaunchpadRequests(launchpadID, "", []string{"ima*"}, "")
 		var queryErr *domain.QueryError
 		if !errors.As(err, &queryErr) {
 			t.Fatalf("\nwanted:\n*domain.QueryError\ngot:\n%v", err)

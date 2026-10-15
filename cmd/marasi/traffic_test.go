@@ -285,6 +285,21 @@ func TestTrafficListCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("should send --order-by as order_by", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--order-by", "length desc")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		got := sent.snapshot()
+		want := "limit=200&order_by=length+desc"
+		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != want {
+			t.Fatalf("\nwanted:\nGET /traffic?%s\ngot:\n%s %s?%s", want, got.Method, got.Path, got.RawQuery)
+		}
+	})
+
 	t.Run("should reject a malformed --as-of without a request", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
@@ -777,6 +792,20 @@ func TestLaunchpadCommands(t *testing.T) {
 		}
 		got := sent.snapshot()
 		want := "exclude=image%2F%2A&exclude=font%2F%2A&q=status_code+%3D+200"
+		if got.Method != http.MethodGet || got.Path != "/launchpad/"+id || got.RawQuery != want {
+			t.Fatalf("\nwanted:\nGET /launchpad/%s?%s\ngot:\n%s %s?%s", id, want, got.Method, got.Path, got.RawQuery)
+		}
+	})
+
+	t.Run("should send get --order-by as order_by", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"id":"`+id+`","name":"Login","description":"","items":[]}`)
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "launchpad", "get", id, "--order-by", "status_code")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		got := sent.snapshot()
+		want := "order_by=status_code"
 		if got.Method != http.MethodGet || got.Path != "/launchpad/"+id || got.RawQuery != want {
 			t.Fatalf("\nwanted:\nGET /launchpad/%s?%s\ngot:\n%s %s?%s", id, want, got.Method, got.Path, got.RawQuery)
 		}
@@ -1364,6 +1393,7 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	oldQuery, oldLimit, oldCursor := trafficListQueryText, trafficListLimit, trafficListCursor
 	oldExclude, oldAsOf, oldBackward := trafficListExclude, trafficListAsOf, trafficListBackward
 	oldLaunchpadQuery, oldLaunchpadExclude := launchpadGetQuery, launchpadGetExclude
+	oldOrderBy, oldLaunchpadOrderBy := trafficListOrderBy, launchpadGetOrderBy
 	oldConfigDir, oldInstance, oldInstancePath := configDir, instance, instancePath
 	var outBuf, errBuf bytes.Buffer
 	rootCmd.SetArgs(args)
@@ -1374,6 +1404,7 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 		trafficListQueryText, trafficListLimit, trafficListCursor = oldQuery, oldLimit, oldCursor
 		trafficListExclude, trafficListAsOf, trafficListBackward = oldExclude, oldAsOf, oldBackward
 		launchpadGetQuery, launchpadGetExclude = oldLaunchpadQuery, oldLaunchpadExclude
+		trafficListOrderBy, launchpadGetOrderBy = oldOrderBy, oldLaunchpadOrderBy
 		configDir, instance, instancePath = oldConfigDir, oldInstance, oldInstancePath
 		rootCmd.SetArgs(nil)
 		rootCmd.SetOut(nil)

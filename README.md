@@ -174,7 +174,11 @@ Pairs with no content type yet are never hidden. Each page reports
 `next_cursor`, `prev_cursor` and `as_of`. Cursors are opaque: pass one back with
 `--cursor`, adding `--backward` to walk toward newer pairs, and pass `as_of`
 back with `--as-of` so later pages leave out pairs captured since the first.
-A malformed cursor returns 400 `{"error":"invalid_cursor","message":"..."}`.
+`--order-by` (`order_by=`) sorts by one of `requested_at`, `method`, `host`,
+`path`, `status_code`, `content_type` or `length`, with an optional `desc`; the
+default is `requested_at desc`. Pairs with no response sort last.
+A malformed cursor, or one from another sort, returns 400
+`{"error":"invalid_cursor","message":"..."}`.
 
 `UUID` denotes an ID returned by `traffic list`. Raw request and response bytes
 are base64-encoded in JSON output. Events are live notifications with no replay.
