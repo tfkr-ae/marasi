@@ -572,3 +572,42 @@ func capture(ctx context.Context, repo *db.Repository, manifest *fixture.Manifes
 		}
 	}
 }
+
+// BenchmarkMetadataKey is case 34 (P): marasi-app's one-time clear of every
+// old metadata.highlight, ClearMetadataKey("highlight") on the selection
+// metadata.highlight:*. The has-key read cannot use an index, so it parses
+// every pair's metadata. Every run clears a fresh copy of the fixture; the
+// copy is made and opened outside the timing.
+func BenchmarkMetadataKey(b *testing.B) {
+	p := benchProject(b)
+	b.Run("34-clear-every-highlight", func(b *testing.B) {
+		var (
+			repo *db.Repository
+			sel  domain.Selection
+		)
+		prepare := func() error {
+			conn, err := db.New(cloneOf(b, p.path), quiet())
+			if err != nil {
+				return err
+			}
+			repo = db.NewProxyRepo(conn)
+			page, err := repo.ListTraffic(domain.TrafficQuery{Limit: 1})
+			if err != nil {
+				return err
+			}
+			if len(page.Items) == 0 {
+				return fmt.Errorf("the fixture has no pairs")
+			}
+			sel = domain.Selection{Query: &domain.SelectionQuery{Text: `metadata.highlight:*`, AsOf: page.Items[0].ID}}
+			return nil
+		}
+		ledgerbench.MeasurePrepared(b, ledgerbench.Target{Max: 3 * time.Second, Pathological: true}, prepare, func() (func(), error) {
+			count, err := repo.ClearMetadataKey(sel, "highlight")
+			cleanup := func() { repo.Close() }
+			if err == nil && count == 0 {
+				err = fmt.Errorf("cleared no highlights")
+			}
+			return cleanup, err
+		})
+	})
+}
