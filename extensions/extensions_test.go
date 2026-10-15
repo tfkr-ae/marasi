@@ -253,11 +253,11 @@ func (m *mockTrafficRepo) SearchByMetadata(path string, value any) ([]*domain.Re
 	return []*domain.RequestResponseSummary{}, nil
 }
 
-func (m *mockTrafficRepo) CountContentTypes() ([]*domain.ContentTypeCount, error) {
+func (m *mockTrafficRepo) CountContentTypes() (domain.ContentTypeCounts, error) {
 	if m.forceError {
-		return nil, errors.New("forced repo error")
+		return domain.ContentTypeCounts{}, errors.New("forced repo error")
 	}
-	return []*domain.ContentTypeCount{}, nil
+	return domain.ContentTypeCounts{Counts: []*domain.ContentTypeCount{}}, nil
 }
 
 func (m *mockTrafficRepo) LinkTraffic(domain.Selection, domain.LinkTarget) (int, error) {

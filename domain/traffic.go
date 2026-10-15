@@ -105,8 +105,10 @@ type TrafficRepository interface {
 	// CountContentTypes returns every distinct response content type with its
 	// row count, ordered by count descending and then content type ascending.
 	// Pairs with no content type, including in-flight requests, are counted
-	// under ContentType "".
-	CountContentTypes() ([]*ContentTypeCount, error)
+	// under ContentType "". The counts come from the stored sitemap's
+	// buckets, or from the pairs themselves while the sitemap job is
+	// incomplete (ADR-0040).
+	CountContentTypes() (ContentTypeCounts, error)
 
 	// LinkTraffic links every pair in sel to target in one transaction and
 	// returns the number of pairs it newly linked; pairs already linked are
@@ -202,4 +204,13 @@ type RequestResponseSummary struct {
 type ContentTypeCount struct {
 	ContentType string // Response content type, or "" when absent
 	Count       int    // Number of pairs with this content type
+}
+
+// ContentTypeCounts is the count of pairs per content type across the
+// project.
+type ContentTypeCounts struct {
+	Counts []*ContentTypeCount
+	// Complete reports whether the sitemap job had finished, keyed by
+	// JobSitemap. The counts are exact either way.
+	Complete map[string]bool
 }
