@@ -22,6 +22,9 @@ type sortKey struct {
 	// integer means the key compares as a number; otherwise it is text in
 	// byte order.
 	integer bool
+	// expression means expr is served by an expression index rather than
+	// a column index.
+	expression bool
 	// hasValue and noValue split pairs into those with a sort value and
 	// those with none, which sort last in both directions. They are empty
 	// when every pair has a value.
@@ -39,7 +42,7 @@ var sortKeys = map[string]sortKey{
 		hasValue: "status_code > -1", noValue: "(status_code IS NULL OR status_code <= -1)"},
 	"content_type": {expr: "content_type",
 		hasValue: "content_type > ''", noValue: "(content_type IS NULL OR content_type = '')"},
-	"length": {expr: lengthKey, integer: true,
+	"length": {expr: lengthKey, integer: true, expression: true,
 		hasValue: lengthKey + " IS NOT NULL", noValue: lengthKey + " IS NULL"},
 }
 
