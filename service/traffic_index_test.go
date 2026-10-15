@@ -140,6 +140,10 @@ func paceIndexBuild(lifecycle *ProjectLifecycle, paced string) *indexPacer {
 }
 
 func (pacer *indexPacer) batch(ctx context.Context, path string, runner jobRunner, name string) (int, bool, error) {
+	if name != db.TrafficIndexJob {
+		// Only the traffic index build is paced and counted.
+		return runner.RunJobBatch(name, jobBatchBytes)
+	}
 	if path == pacer.paced && !pacer.released() {
 		pacer.calls <- indexCall{path: path, ctx: ctx}
 		select {

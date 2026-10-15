@@ -33,6 +33,9 @@ type Repository struct {
 	// jobMu serialises background job batches with job resets, so a reset
 	// never lands between a batch reading its progress and committing it.
 	jobMu sync.Mutex
+	// sitemapFrom, when set, means every pair with an id at or above it is
+	// in the sitemap. jobMu guards it.
+	sitemapFrom *uuid.UUID
 	// prettifiedMovedTo is the oldest pair the prettified move has passed in
 	// this session, so its next batch starts below it. It is guarded by jobMu.
 	prettifiedMovedTo *uuid.UUID
