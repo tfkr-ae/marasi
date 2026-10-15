@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
@@ -273,6 +272,8 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 
 // InsertResponse updates an existing request entry with response details.
 // It expects a domain.ProxyResponse and uses its ID to locate and update the corresponding row.
+// A pair that no longer exists, deleted while in flight, gets no row and
+// returns an error wrapping domain.ErrPairNotFound.
 // The response metadata is merged into the stored metadata with json_patch
 // (RFC 7396), so a key set while the pair was in flight survives; a null
 // value in the response metadata deletes its key.
@@ -306,7 +307,7 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 			return fmt.Errorf("checking rows affected: %w", err)
 		}
 		if rowsAffected == 0 {
-			return errors.New("no request found to update")
+			return domain.ErrPairNotFound
 		}
 		if err := savePrettified(tx, resp.ID, "response", dbResponse.dbPrettified.Response.String); err != nil {
 			return err
