@@ -657,7 +657,7 @@ func TestArmoryRunTrafficControlAPI(t *testing.T) {
 		server := newArmoryServer(repo)
 
 		response := requestControlAPI(server, http.MethodGet, "/armory/run/"+runID.String()+"/traffic?limit=1&cursor="+cursor.String(), "")
-		want := fmt.Sprintf(`{"items":[{"id":%q,"scheme":"https","method":"GET","host":"example.com","path":"/login","status":"","status_code":-1,"content_type":"","length":"","metadata":{"armory_run_id":%q},"requested_at":"2026-09-17T10:30:00Z","responded_at":null,"highlight":null}],"next_cursor":%q,"index":{"complete":true}}`+"\n", nextCursor, runID, nextCursor)
+		want := fmt.Sprintf(`{"items":[{"id":%q,"number":0,"scheme":"https","method":"GET","host":"example.com","path":"/login","status":"","status_code":-1,"content_type":"","length":"","metadata":{"armory_run_id":%q},"requested_at":"2026-09-17T10:30:00Z","responded_at":null,"highlight":null}],"next_cursor":%q,"index":{"complete":true}}`+"\n", nextCursor, runID, nextCursor)
 		assertControlAPIResponse(t, response, http.StatusOK, want)
 	})
 

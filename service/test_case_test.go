@@ -183,7 +183,7 @@ func TestTestCaseControlAPI(t *testing.T) {
 
 		response = httptest.NewRecorder()
 		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/test-case/"+testCaseID.String(), nil))
-		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"items":[{"id":"`+requestID.String()+`","scheme":"https","method":"GET"`) || !strings.Contains(response.Body.String(), `"status_code":-1`) || !strings.Contains(response.Body.String(), `"responded_at":null`) {
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"items":[{"id":"`+requestID.String()+`","number":0,"scheme":"https","method":"GET"`) || !strings.Contains(response.Body.String(), `"status_code":-1`) || !strings.Contains(response.Body.String(), `"responded_at":null`) {
 			t.Fatalf("wanted linked in-flight traffic summary, got %d %s", response.Code, response.Body.String())
 		}
 
