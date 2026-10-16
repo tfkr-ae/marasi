@@ -265,6 +265,11 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 		if err := insertPairNumber(tx, req.ID, req.Number); err != nil {
 			return err
 		}
+		if _, ok := req.Metadata[interceptedKey]; ok {
+			if err := syncIntercepted(tx, req.ID); err != nil {
+				return err
+			}
+		}
 		if err := advanceHighWater(tx, req.ID); err != nil {
 			return err
 		}
@@ -325,6 +330,11 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 		}
 		if err := savePrettified(tx, resp.ID, "response", dbResponse.dbPrettified.Response.String); err != nil {
 			return err
+		}
+		if _, ok := resp.Metadata[interceptedKey]; ok {
+			if err := syncIntercepted(tx, resp.ID); err != nil {
+				return err
+			}
 		}
 		if node.Valid {
 			after := bucketOf(dbResponse.ContentType, dbResponse.StatusCode)
@@ -490,6 +500,9 @@ func (repo *Repository) UpdateMetadata(metadata map[string]any, ids ...uuid.UUID
 			}
 			if err := indexAnnotations(tx, id); err != nil {
 				return fmt.Errorf("updating metadata %v for %v : %w", dbMeta, id, err)
+			}
+			if err := syncIntercepted(tx, id); err != nil {
+				return err
 			}
 		}
 		return nil
