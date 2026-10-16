@@ -26,6 +26,7 @@ Start `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANC
 - If the instance is not running, the command fails with `instance $VERIFY_INSTANCE is not running`.
 - After `: connected`, SIGINT or SIGTERM is a zero exit. Closing before that comment fails. `events` installs its own SIGINT handler, so `kill -INT` of that PID is a zero exit even when the job inherited SIGINT ignored. Windows cannot deliver `os.Interrupt` to another process. Foreground Ctrl-C is the equivalent.
 - `traffic.request` has `sitemap_node`, the name of the pair's leaf in the sitemap, such as `http://127.0.0.1:8080/users/{int}`.
+- `traffic.request` has `number`, the pair's number in capture order. It equals the `number` that `traffic list --json` and `traffic get --json` return for that pair. Numbers can have gaps: a deleted pair, or a capture whose write failed, keeps its number.
 - `sitemap.changed` with `{"reason":"rebuild"}` follows `POST /jobs/sitemap/rebuild`, and `{"reason":"delete"}` follows the `traffic.changed` of a successful `POST /traffic/bulk/delete`, even when `count` is 0. Clients re-read the sitemap nodes they have expanded.
 - `traffic.response` has `id`, `status`, `status_code`, `content_type`, `length`, `metadata`, and `responded_at`. It has no `path`.
 - Checkpoint event names are `checkpoint.held`, `checkpoint.forwarded`, `checkpoint.dropped`, and `checkpoint.updated`.

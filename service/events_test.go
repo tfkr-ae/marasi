@@ -231,7 +231,7 @@ func TestServiceEvents(t *testing.T) {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
-		if got := readEventFrame(t, reader); got != "event: traffic.request\ndata: {\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a?b=c\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"sitemap_node\":\"https://example.com/a\"}\n\n" {
+		if got := readEventFrame(t, reader); got != "event: traffic.request\ndata: {\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"number\":0,\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a?b=c\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"sitemap_node\":\"https://example.com/a\"}\n\n" {
 			t.Fatalf("\nwanted exact traffic.request frame\ngot:\n%s", got)
 		}
 		if got := readEventFrame(t, reader); got != "event: traffic.response\ndata: {\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"responded_at\":\"2026-01-02T03:04:06Z\"}\n\n" {
@@ -596,7 +596,7 @@ func TestEventBroadcaster(t *testing.T) {
 		if requestEvent.name != "traffic.request" {
 			t.Fatalf("\nwanted:\ntraffic.request\ngot:\n%s", requestEvent.name)
 		}
-		wantRequest := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","scheme":"https","method":"GET","host":"example.com","path":"/a?b=c","metadata":{"foo":"bar"},"requested_at":"2026-01-02T03:04:05Z","sitemap_node":"https://example.com/a"}`
+		wantRequest := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","number":0,"scheme":"https","method":"GET","host":"example.com","path":"/a?b=c","metadata":{"foo":"bar"},"requested_at":"2026-01-02T03:04:05Z","sitemap_node":"https://example.com/a"}`
 		if got := string(requestEvent.data); got != wantRequest {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantRequest, got)
 		}

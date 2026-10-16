@@ -28,7 +28,8 @@ var trafficMetadataUpdateFile string
 
 const trafficPathDisplayLimit = 40
 
-const trafficListLong = `List the newest page of traffic.
+const trafficListLong = `List the newest page of traffic. Each row starts with the pair's
+number, its # in capture order, then its id.
 
 --query (-q) takes an AIP-160 query that narrows the list. Fields:
 
@@ -36,6 +37,10 @@ const trafficListLong = `List the newest page of traffic.
       = and !=, with exact case. A * at the start or end of the value
       matches anything there, for example host = "*.example.com" or
       path = "/api/*".
+  number
+      = != < <= > >= against the pair's number in capture order, for
+      example number = 10 or number > 500. Numbers start at 1, never
+      change and are never reused, so deleted pairs leave gaps.
   status_code
       = != < <= > >=, for example status_code >= 500.
   length
@@ -93,9 +98,10 @@ image/*; parameters such as charset are ignored. Pairs with no content
 type yet are never hidden.
 
 Sorting: --order-by takes one field and an optional desc, for example
---order-by 'length desc'. The fields are requested_at, method, host,
-path, status_code, content_type and length. The default is
-'requested_at desc', newest first. Text sorts in byte order, as stored:
+--order-by 'length desc'. The fields are requested_at, number, method,
+host, path, status_code, content_type and length. The default is
+'requested_at desc', newest first. number is capture order; under
+concurrent capture it can differ from requested_at by a few places. Text sorts in byte order, as stored:
 host includes its port and path its ?query. Equal values list oldest
 first ascending and newest first with desc. Pairs with no response yet
 have no status_code, content_type or length, and sort last either way.
@@ -280,6 +286,7 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 	var page struct {
 		Items []struct {
 			ID         string `json:"id"`
+			Number     int64  `json:"number"`
 			Method     string `json:"method"`
 			Host       string `json:"host"`
 			Path       string `json:"path"`
@@ -304,7 +311,7 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 		if len(pathRunes) > trafficPathDisplayLimit {
 			path = string(pathRunes[:trafficPathDisplayLimit-3]) + "..."
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%d\t%s\n", item.ID, item.Method, item.Host, path, item.StatusCode, item.Length)
+		fmt.Fprintf(writer, "%d\t%s\t%s\t%s\t%s\t%d\t%s\n", item.Number, item.ID, item.Method, item.Host, path, item.StatusCode, item.Length)
 	}
 	if err := writer.Flush(); err != nil {
 		return err
@@ -392,6 +399,7 @@ func isInvalidRequest(statusCode int, body []byte) bool {
 func writeTrafficGetHuman(body []byte, stdout io.Writer) error {
 	var detail struct {
 		ID       string          `json:"id"`
+		Number   int64           `json:"number"`
 		Note     string          `json:"note"`
 		Metadata json.RawMessage `json:"metadata"`
 		Request  struct {
@@ -416,6 +424,7 @@ func writeTrafficGetHuman(body []byte, stdout io.Writer) error {
 	}
 
 	fmt.Fprintf(stdout, "id: %s\n", detail.ID)
+	fmt.Fprintf(stdout, "number: %d\n", detail.Number)
 	fmt.Fprintf(stdout, "scheme: %s\n", detail.Request.Scheme)
 	fmt.Fprintf(stdout, "method: %s\n", detail.Request.Method)
 	fmt.Fprintf(stdout, "host: %s\n", detail.Request.Host)

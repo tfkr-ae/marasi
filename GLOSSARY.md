@@ -41,6 +41,10 @@ _Avoid_: Flow, exchange, HTTP history when referring to this collection.
 One captured HTTP request and its matching response, identified by a single UUID.
 _Avoid_: Flow, exchange, transaction.
 
+**Pair number**:
+The position of a request/response pair in its project's capture order, starting at 1. It never changes and is never reused, so deleting pairs leaves gaps.
+_Avoid_: row number, index, rowid, sequence, id
+
 **Note**:
 An optional annotation on a request/response pair, identified by that pair's UUID. A pair has at most one.
 _Avoid_: comment, row note, traffic comment
