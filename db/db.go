@@ -49,6 +49,8 @@ type Repository struct {
 	captured atomic.Int64
 	// indexQueue indexes captured pairs in batches (ADR-0026).
 	indexQueue indexQueue
+	// pairNumber is the last pair number issued (ADR-0042).
+	pairNumber atomic.Int64
 }
 
 // optimizeEveryPairs is how many captured pairs pass between refreshes of
@@ -58,6 +60,13 @@ const optimizeEveryPairs = 1000
 // NewProxyRepo initializes a new Repository with the given sqlx.DB database connection.
 func NewProxyRepo(db *sqlx.DB) *Repository {
 	repo := &Repository{dbConn: db}
+	highest, err := highestPairNumber(db)
+	if err != nil {
+		// Numbers then start at 1, and a capture whose number is taken
+		// fails its insert rather than reusing a number.
+		slog.Default().Error("Failed to read the highest pair number", "error", err)
+	}
+	repo.pairNumber.Store(highest)
 	repo.resumeIndexQueue()
 	return repo
 }

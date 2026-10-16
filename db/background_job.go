@@ -134,6 +134,9 @@ func reconcileJobs(conn *sqlx.DB) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := numberUnnumberedPairs(tx); err != nil {
+		return err
+	}
 	newest, err := newestPair(tx)
 	if err != nil {
 		return fmt.Errorf("finding the newest pair: %w", err)

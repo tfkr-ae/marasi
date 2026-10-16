@@ -20,13 +20,14 @@ var _ domain.TrafficRepository = (*Repository)(nil)
 // and combines both request and response data into a single struct for database operations.
 type dbRequestResponse struct {
 	// Request
-	ID          uuid.UUID `db:"id"`
-	Scheme      string    `db:"scheme"`
-	Method      string    `db:"method"`
-	Host        string    `db:"host"`
-	Path        string    `db:"path"`
-	RequestRaw  []byte    `db:"request_raw"`
-	RequestedAt time.Time `db:"requested_at"`
+	ID          uuid.UUID     `db:"id"`
+	Number      sql.NullInt64 `db:"number"`
+	Scheme      string        `db:"scheme"`
+	Method      string        `db:"method"`
+	Host        string        `db:"host"`
+	Path        string        `db:"path"`
+	RequestRaw  []byte        `db:"request_raw"`
+	RequestedAt time.Time     `db:"requested_at"`
 
 	// Response
 	// TODO: DB will set default values for these columns so they will not be "null". Need to revist and either remove that DB restriction / keep these as normal fields
@@ -49,12 +50,13 @@ type dbRequestResponse struct {
 // It uses sql.Null* types for potentially absent response fields, similar to dbRequestResponse.
 type dbRequestResponseSummary struct {
 	// Request
-	ID          uuid.UUID `db:"id"`
-	Scheme      string    `db:"scheme"`
-	Method      string    `db:"method"`
-	Host        string    `db:"host"`
-	Path        string    `db:"path"`
-	RequestedAt time.Time `db:"requested_at"`
+	ID          uuid.UUID     `db:"id"`
+	Number      sql.NullInt64 `db:"number"`
+	Scheme      string        `db:"scheme"`
+	Method      string        `db:"method"`
+	Host        string        `db:"host"`
+	Path        string        `db:"path"`
+	RequestedAt time.Time     `db:"requested_at"`
 
 	// Response
 	Status      sql.NullString `db:"status"`
@@ -94,6 +96,7 @@ func fromDomainProxyRequest(preq *domain.ProxyRequest) *dbRequestResponse {
 func toDomainProxyRequest(dbReqRes *dbRequestResponse) *domain.ProxyRequest {
 	return &domain.ProxyRequest{
 		ID:          dbReqRes.ID,
+		Number:      dbReqRes.Number.Int64,
 		Scheme:      dbReqRes.Scheme,
 		Method:      dbReqRes.Method,
 		Host:        dbReqRes.Host,
@@ -201,6 +204,7 @@ func toDomainRequestResponseRow(dbReqRes *dbRequestResponse) *domain.RequestResp
 func toDomainRequestResponseSummary(dbSummary *dbRequestResponseSummary) *domain.RequestResponseSummary {
 	reqResSummary := &domain.RequestResponseSummary{
 		ID:          dbSummary.ID,
+		Number:      dbSummary.Number.Int64,
 		Scheme:      dbSummary.Scheme,
 		Method:      dbSummary.Method,
 		Host:        dbSummary.Host,
@@ -243,7 +247,12 @@ func highlightOf(h sql.NullInt64) *int {
 }
 
 // InsertRequest inserts a new domain.ProxyRequest into the database.
+// A request with no Number takes the next pair number, and req.Number is
+// set to it.
 func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
+	if req.Number == 0 {
+		req.Number = repo.NextPairNumber()
+	}
 	dbRequest := fromDomainProxyRequest(req)
 	// length is NULL until the response arrives (ADR-0041); the column's
 	// '0' default predates the length sort.
@@ -251,6 +260,9 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 			  VALUES(:id, :scheme, :method, :host, :path, :request_raw, :requested_at, :metadata, NULL)`
 	err := repo.inTx(func(tx *sqlx.Tx) error {
 		if _, err := tx.NamedExec(query, dbRequest); err != nil {
+			return err
+		}
+		if err := insertPairNumber(tx, req.ID, req.Number); err != nil {
 			return err
 		}
 		if err := advanceHighWater(tx, req.ID); err != nil {
@@ -352,10 +364,11 @@ func (repo *Repository) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResp
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.request_raw, r.requested_at,
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
-			  r.metadata, n.note, h.highlight, ` + prettifiedColumns + `
+			  r.metadata, n.note, h.highlight, pn.number, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
 			  LEFT JOIN pair_highlight h ON h.request_id = r.id
+			  LEFT JOIN pair_number pn ON pn.request_id = r.id
 			  LEFT JOIN pair_prettified p ON p.request_id = r.id
 			  WHERE r.id = ?`
 
@@ -377,10 +390,11 @@ func (repo *Repository) GetRequestResponseRows(ids []uuid.UUID) ([]*domain.Reque
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.request_raw, r.requested_at,
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
-			  r.metadata, n.note, h.highlight, ` + prettifiedColumns + `
+			  r.metadata, n.note, h.highlight, pn.number, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
 			  LEFT JOIN pair_highlight h ON h.request_id = r.id
+			  LEFT JOIN pair_number pn ON pn.request_id = r.id
 			  LEFT JOIN pair_prettified p ON p.request_id = r.id
 			  WHERE r.id IN (?)`
 
@@ -420,8 +434,8 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
 			  metadata,
-			  pair_highlight.highlight
-			  FROM request` + highlightJoin + `
+			  pair_highlight.highlight, pair_number.number
+			  FROM request` + highlightJoin + numberJoin + `
 			  ORDER BY id ASC`
 
 	err := repo.dbConn.Select(&dbSummary, query)
@@ -567,10 +581,11 @@ func (repo *Repository) ListNotes(cursor *uuid.UUID, limit int) ([]*domain.Reque
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
 			  r.metadata,
-			  n.note, h.highlight
+			  n.note, h.highlight, pn.number
 			  FROM request r
 			  INNER JOIN notes n ON r.id = n.request_id
 			  LEFT JOIN pair_highlight h ON h.request_id = r.id
+			  LEFT JOIN pair_number pn ON pn.request_id = r.id
 			  WHERE n.note IS NOT NULL AND n.note != ''`
 	args := make([]any, 0, 2)
 	if cursor != nil {
@@ -613,8 +628,8 @@ func (repo *Repository) SearchByMetadata(path string, value any) ([]*domain.Requ
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
 			  metadata,
-			  pair_highlight.highlight
-			  FROM request` + highlightJoin + `
+			  pair_highlight.highlight, pair_number.number
+			  FROM request` + highlightJoin + numberJoin + `
 			  WHERE json_extract(metadata, ?) = ?
 			  ORDER BY id ASC`
 

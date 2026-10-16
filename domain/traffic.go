@@ -32,7 +32,13 @@ var ErrPairNotFound = errors.New("request/response pair not found")
 
 // TrafficRepository is the interface that holds all the traffic related repository methods in Marasi
 type TrafficRepository interface {
-	// InsertRequest will insert the ProxyRequest in the DB
+	// NextPairNumber takes the next pair number (ADR-0042). The capture
+	// path stores it on the ProxyRequest before the request event fires.
+	// A number taken for a pair whose insert fails leaves a gap.
+	NextPairNumber() int64
+
+	// InsertRequest will insert the ProxyRequest in the DB. A request with
+	// no Number takes NextPairNumber, and req.Number is set to it.
 	InsertRequest(req *ProxyRequest) error
 
 	// InsertResponse will update the row with the response data
@@ -189,7 +195,11 @@ type TrafficRepository interface {
 
 // ProxyRequest represents the data captured from an HTTP request.
 type ProxyRequest struct {
-	ID          uuid.UUID      // Unique identifier for the request
+	ID uuid.UUID // Unique identifier for the request
+	// Number is the pair's number in its project's capture order, from 1
+	// (ADR-0042). It never changes and is never reused. The capture path
+	// sets it before the request event fires; 0 means not yet assigned.
+	Number      int64
 	Scheme      string         // URL scheme (http or https)
 	Method      string         // HTTP method (GET, POST, etc.)
 	Host        string         // Request host
@@ -240,6 +250,7 @@ type Prettified struct {
 // excluding raw body and prettified data
 type RequestResponseSummary struct {
 	ID          uuid.UUID
+	Number      int64 // the pair's number in capture order (ADR-0042)
 	Scheme      string
 	Method      string
 	Host        string
