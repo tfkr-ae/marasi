@@ -25,6 +25,9 @@ type sortKey struct {
 	// expression means expr is served by an expression index rather than
 	// a column index.
 	expression bool
+	// unique means no two pairs share a key, so the key alone orders pairs
+	// and bounds a page, without id to break ties.
+	unique bool
 	// hasValue and noValue split pairs into those with a sort value and
 	// those with none, which sort last in both directions. They are empty
 	// when every pair has a value.
@@ -44,6 +47,12 @@ var sortKeys = map[string]sortKey{
 		hasValue: "content_type > ''", noValue: "(content_type IS NULL OR content_type = '')"},
 	"length": {expr: lengthKey, integer: true, expression: true,
 		hasValue: lengthKey + " IS NOT NULL", noValue: lengthKey + " IS NULL"},
+	// The pair number's own primary key, not id: under concurrent capture
+	// the two orders can differ (ADR-0042). Every pair has a number, and
+	// requiring one turns the number join into an inner join, so the read
+	// walks pair_number.
+	"number": {expr: "pair_number.number", integer: true, unique: true,
+		hasValue: "pair_number.number IS NOT NULL"},
 }
 
 // trafficSort is a parsed order_by.
@@ -76,6 +85,9 @@ func (s trafficSort) order() string {
 	}
 	if s.key.expr == "" {
 		return "id " + dir
+	}
+	if s.key.unique {
+		return s.key.expr + " " + dir
 	}
 	if !s.phased() {
 		return s.key.expr + " " + dir + ", id " + dir
@@ -116,7 +128,7 @@ func parseTrafficOrderBy(orderBy string) (trafficSort, error) {
 	key, ok := sortKeys[field.text]
 	if !ok {
 		return trafficSort{}, sortError(orderBy, field.offset,
-			fmt.Sprintf("cannot sort by %q; sort by requested_at, method, host, path, status_code, content_type or length", field.text))
+			fmt.Sprintf("cannot sort by %q; sort by requested_at, number, method, host, path, status_code, content_type or length", field.text))
 	}
 	sort := trafficSort{name: field.text, key: key}
 	if len(words) > 1 {

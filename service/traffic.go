@@ -119,6 +119,7 @@ type contentTypeCount struct {
 // trafficSummary is one request/response pair in a traffic list page.
 type trafficSummary struct {
 	ID          uuid.UUID      `json:"id"`           // request UUID
+	Number      int64          `json:"number"`       // pair number in capture order (ADR-0042)
 	Scheme      string         `json:"scheme"`       // http or https
 	Method      string         `json:"method"`       // HTTP method
 	Host        string         `json:"host"`         // request host
@@ -136,6 +137,7 @@ type trafficSummary struct {
 // trafficDetail is the GET /traffic/{id} response body.
 type trafficDetail struct {
 	ID        uuid.UUID       `json:"id"`        // request UUID
+	Number    int64           `json:"number"`    // pair number in capture order (ADR-0042)
 	Note      string          `json:"note"`      // user note, empty if none
 	Metadata  map[string]any  `json:"metadata"`  // combined metadata without prettified bodies
 	Highlight *int            `json:"highlight"` // highlight from 1 to 8; nil if none
@@ -565,6 +567,7 @@ func trafficListFromSummaries(items []*domain.RequestResponseSummary, nextCursor
 func trafficSummaryFromDomain(item *domain.RequestResponseSummary) trafficSummary {
 	summary := trafficSummary{
 		ID:          item.ID,
+		Number:      item.Number,
 		Scheme:      item.Scheme,
 		Method:      item.Method,
 		Host:        item.Host,
@@ -594,6 +597,7 @@ func trafficDetailFromRow(row *domain.RequestResponseRow) trafficDetail {
 	metadata := metadataWithoutPrettified(row.Metadata)
 	return trafficDetail{
 		ID:        row.Request.ID,
+		Number:    row.Request.Number,
 		Note:      row.Note,
 		Metadata:  metadata,
 		Highlight: row.Highlight,
