@@ -2,7 +2,6 @@ package db
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -130,16 +129,13 @@ func (repo *Repository) CountLaunchpads() (int, error) {
 	return count, nil
 }
 
-// CountIntercepted returns the total number of intercepted requests. It is
-// exact: until the intercepted_count job is complete it scans request, which
-// is slow on a large project. DashboardCounts instead reports the job.
+// CountIntercepted returns the total number of intercepted requests, as
+// maintained so far. Until the intercepted_count job is complete it leaves
+// out the pairs the job has not reached (ADR-0039); DashboardCounts reports
+// whether the job is complete. It never scans request.
 func (repo *Repository) CountIntercepted() (int, error) {
 	var count int
-	err := repo.dbConn.Get(&count, `SELECT c.value FROM dashboard_count c, background_job j
-		WHERE c.name = 'intercepted' AND j.name = ? AND j.complete`, domain.JobInterceptedCount)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = repo.dbConn.Get(&count, `SELECT COUNT(*) FROM request WHERE `+isIntercepted)
-	}
+	err := repo.dbConn.Get(&count, `SELECT value FROM dashboard_count WHERE name = 'intercepted'`)
 	if err != nil {
 		return 0, fmt.Errorf("getting intercepted count: %w", err)
 	}

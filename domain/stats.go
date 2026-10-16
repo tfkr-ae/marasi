@@ -9,7 +9,9 @@ type StatsRepository interface {
 	CountNotes() (int, error)
 	// CountLaunchpads returns the total number of created launchpads.
 	CountLaunchpads() (int, error)
-	// CountIntercepted returns the total number of intercepted requests.
+	// CountIntercepted returns the total number of intercepted requests. Until
+	// the JobInterceptedCount job is complete, it leaves out the pairs the job
+	// has not reached; DashboardCounts reports whether it is complete.
 	CountIntercepted() (int, error)
 	// DashboardCounts returns every dashboard count in one read, from
 	// counts the project maintains as it is written.

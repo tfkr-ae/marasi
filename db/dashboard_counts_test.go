@@ -2,7 +2,9 @@ package db
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -227,9 +229,13 @@ func TestDashboardCountsMigration(t *testing.T) {
 		if counts.Complete[domain.JobInterceptedCount] {
 			t.Errorf("DashboardCounts().Complete[%s] = true before the job ran", domain.JobInterceptedCount)
 		}
-		// The old method stays exact while the job runs.
-		if got, err := repo.CountIntercepted(); err != nil || got != 4 {
-			t.Errorf("CountIntercepted() = %d, %v, want 4", got, err)
+		// Neither read scans while the job runs: both return the count so
+		// far, which has none of the pairs from before the migration.
+		if counts.Intercepted != 0 {
+			t.Errorf("DashboardCounts().Intercepted = %d before the job ran, want 0", counts.Intercepted)
+		}
+		if got, err := repo.CountIntercepted(); err != nil || got != 0 {
+			t.Errorf("CountIntercepted() = %d, %v before the job ran, want 0", got, err)
 		}
 
 		// A pair is un-intercepted before the job reaches it, and another
@@ -266,5 +272,56 @@ func TestDashboardCountsMigration(t *testing.T) {
 		reopened := openProject(t, path)
 		defer reopened.Close()
 		assertDashboardCounts(t, reopened, 8, 5)
+	})
+}
+
+func TestDashboardCounts_IncompleteJobDoesNotScan(t *testing.T) {
+	t.Run("should return the counts so far quickly, not complete, on a large project before the job runs", func(t *testing.T) {
+		path, conn := projectBeforePairNumbers(t)
+		// 2,000 intercepted pairs with 32 KB bodies: metadata sits after the
+		// bodies, so a scan would read about 64 MB.
+		body := strings.Repeat("x", 32<<10)
+		tx := conn.MustBegin()
+		for _, id := range ascendingIDs(t, 2000) {
+			_, err := tx.Exec(`INSERT INTO request(id, scheme, method, host, path, request_raw, response_raw, metadata, requested_at)
+				VALUES(?, 'https', 'GET', 'example.com', '/', ?, ?, '{"intercepted":true}', ?)`, id, body, body, time.Now())
+			if err != nil {
+				t.Fatalf("inserting: %v", err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("committing: %v", err)
+		}
+		if err := conn.Close(); err != nil {
+			t.Fatalf("closing: %v", err)
+		}
+
+		repo := openProject(t, path)
+		defer repo.Close()
+		started := time.Now()
+		counts, err := repo.DashboardCounts()
+		elapsed := time.Since(started)
+		if err != nil {
+			t.Fatalf("DashboardCounts() error = %v", err)
+		}
+		if counts.Pairs != 2000 || counts.Intercepted != 0 || counts.Complete[domain.JobInterceptedCount] {
+			t.Errorf("DashboardCounts() = %d pairs, %d intercepted, complete %v; want 2000, 0, false",
+				counts.Pairs, counts.Intercepted, counts.Complete[domain.JobInterceptedCount])
+		}
+		if elapsed > 50*time.Millisecond {
+			t.Errorf("DashboardCounts() took %s, want at most 50ms", elapsed)
+		}
+		started = time.Now()
+		got, err := repo.CountIntercepted()
+		elapsed = time.Since(started)
+		if err != nil || got != 0 {
+			t.Errorf("CountIntercepted() = %d, %v before the job ran, want 0", got, err)
+		}
+		if elapsed > 50*time.Millisecond {
+			t.Errorf("CountIntercepted() took %s, want at most 50ms", elapsed)
+		}
+
+		runInterceptedJob(t, repo)
+		assertDashboardCounts(t, repo, 2000, 2000)
 	})
 }
