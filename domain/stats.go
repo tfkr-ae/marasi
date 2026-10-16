@@ -9,6 +9,29 @@ type StatsRepository interface {
 	CountNotes() (int, error)
 	// CountLaunchpads returns the total number of created launchpads.
 	CountLaunchpads() (int, error)
-	// CountIntercepted returns the total number of intercepted requests.
+	// CountIntercepted returns the total number of intercepted requests. Until
+	// the JobInterceptedCount job is complete, it leaves out the pairs the job
+	// has not reached; DashboardCounts reports whether it is complete.
 	CountIntercepted() (int, error)
+	// DashboardCounts returns every dashboard count in one read, from
+	// counts the project maintains as it is written.
+	DashboardCounts() (DashboardCounts, error)
+}
+
+// DashboardCounts are a project's dashboard counts.
+type DashboardCounts struct {
+	// Pairs is the number of request/response pairs.
+	Pairs int
+	// Notes is the number of pairs with a non-empty note.
+	Notes int
+	// Launchpads is the number of launchpads.
+	Launchpads int
+	// Intercepted is the number of pairs whose metadata has intercepted set
+	// to true. Until Complete[JobInterceptedCount] is true it leaves out
+	// pairs captured before the project kept this count that the job has
+	// not reached yet (ADR-0039).
+	Intercepted int
+	// Complete reports whether each background job the counts depend on is
+	// complete.
+	Complete map[JobName]bool
 }

@@ -47,6 +47,10 @@ type jobDefinition struct {
 	forget func(repo *Repository)
 	// rebuildable means a client may ask for the job to be rebuilt.
 	rebuildable bool
+	// reopen, when set, tells the job that the pairs above row's high-water
+	// mark are new work. It runs in the open's transaction before the job
+	// reopens.
+	reopen func(tx *sqlx.Tx, row jobRow) error
 }
 
 // jobRegistry lists the background jobs this binary runs, in the order they
@@ -87,6 +91,7 @@ var jobRegistry = []jobDefinition{
 		forget: func(repo *Repository) { repo.prettifiedMovedTo = nil },
 	},
 	sitemapJob,
+	interceptedCountJob,
 }
 
 func findJob(name domain.JobName) (jobDefinition, bool) {
@@ -137,6 +142,9 @@ func reconcileJobs(conn *sqlx.DB) error {
 	if err := numberUnnumberedPairs(tx); err != nil {
 		return err
 	}
+	if err := foldPairCount(tx); err != nil {
+		return err
+	}
 	newest, err := newestPair(tx)
 	if err != nil {
 		return fmt.Errorf("finding the newest pair: %w", err)
@@ -152,6 +160,11 @@ func reconcileJobs(conn *sqlx.DB) error {
 		case row.Version != job.version:
 			err = restartJob(tx, job, newest)
 		case newest.Valid && (!row.HighWater.Valid || newest.String > row.HighWater.String):
+			if job.reopen != nil {
+				if err = job.reopen(tx, row); err != nil {
+					break
+				}
+			}
 			err = reopenJob(tx, row, newest)
 		}
 		if err != nil {
