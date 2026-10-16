@@ -280,9 +280,9 @@ func (repo *Repository) ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID,
 		request.id, request.scheme, request.method, request.host, request.path, request.requested_at,
 		request.status, request.status_code, request.content_type, request.length, request.responded_at,
 		request.metadata,
-		pair_highlight.highlight
+		pair_highlight.highlight, pair_number.number
 		FROM armory_entry
-		JOIN request ON request.id = armory_entry.request_id` + highlightJoin + `
+		JOIN request ON request.id = armory_entry.request_id` + highlightJoin + numberJoin + `
 		WHERE armory_entry.run_id = ?`
 	args := []any{runID}
 	if cursor != nil {

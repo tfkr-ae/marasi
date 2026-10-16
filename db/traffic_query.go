@@ -51,6 +51,8 @@ const (
 	// fieldHighlight matches a pair's highlight (ADR-0035): = and != against
 	// a number from 1 to 8, and :* for any highlight.
 	fieldHighlight
+	// fieldNumber matches a pair's number (ADR-0042) with = != < <= > >=.
+	fieldNumber
 )
 
 // member is true for a pair linked to the target bound to its ?. It is an
@@ -89,6 +91,11 @@ const sitemapSubtree = "request.id IN (SELECT ps.request_id FROM pair_sitemap ps
 // ?. It is a set of ids rather than a correlated EXISTS, so the
 // (highlight, request_id) index can drive a sparse highlight's plan.
 const highlightIs = "request.id IN (SELECT request_id FROM pair_highlight WHERE highlight = ?)"
+
+// numberIs is true for a pair whose number compares with the value bound to
+// its ? under the operator %s. It reads pair_number, so = is a primary-key
+// lookup and a range walks the primary key.
+const numberIs = "request.id IN (SELECT request_id FROM pair_number WHERE number %s ?)"
 
 // anyHighlight is true for a pair with a highlight.
 const anyHighlight = "request.id IN (SELECT request_id FROM pair_highlight)"
@@ -132,6 +139,7 @@ var trafficFields = map[string]trafficField{
 	"test_case": {kind: fieldLink, links: testCaseLinks},
 	"sitemap":   {kind: fieldSitemap, column: "pair_sitemap"},
 	"highlight": {kind: fieldHighlight, column: "pair_highlight"},
+	"number":    {kind: fieldNumber, column: "pair_number"},
 
 	"request_head":  {kind: fieldIndexedText, column: "request_head"},
 	"request_body":  {kind: fieldIndexedText, column: "request_body"},
@@ -416,7 +424,7 @@ func (t *queryTranslator) allIndexDriven(branches []*expr.Expr) bool {
 }
 
 // indexDriven reports whether an index can find the pairs that match e
-// without checking every pair: a text term, a link, note or highlight, a requested_at
+// without checking every pair: a text term, a link, note or highlight, a number, a requested_at
 // lower bound, an equality on an indexed field, or an AND with one of these.
 // An invalid e reports false; translating it reports the error.
 func (t *queryTranslator) indexDriven(e *expr.Expr) bool {
@@ -450,6 +458,8 @@ func (t *queryTranslator) indexDriven(e *expr.Expr) bool {
 		switch {
 		case field.kind == fieldLink, field.kind == fieldSitemap, field.kind == fieldHighlight:
 			return op == "="
+		case field.kind == fieldNumber:
+			return op != "!="
 		case name == "requested_at":
 			return op == "=" || op == ">" || op == ">="
 		case !field.indexed:
@@ -679,6 +689,17 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 		}
 		t.bind(value.Int64Value)
 		return negate(op, highlightIs), nil
+
+	case fieldNumber:
+		value, ok := rhs.GetConstExpr().GetConstantKind().(*expr.Constant_Int64Value)
+		if !ok {
+			return "", t.errorAt(rhs, "number needs a whole number, for example number = 10")
+		}
+		t.bind(value.Int64Value)
+		if op == "!=" {
+			return negate(op, fmt.Sprintf(numberIs, "=")), nil
+		}
+		return fmt.Sprintf(numberIs, op), nil
 
 	case fieldMetadata:
 		if len(path) == 0 {

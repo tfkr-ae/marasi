@@ -20,10 +20,10 @@ import (
 const trafficSummaryColumns = `id, scheme, method, host, path, requested_at,
 	status, status_code, content_type, length, responded_at,
 	metadata,
-	pair_highlight.highlight`
+	pair_highlight.highlight, pair_number.number`
 
 // trafficSummarySource is the FROM clause trafficSummaryColumns read.
-const trafficSummarySource = ` FROM request` + highlightJoin
+const trafficSummarySource = ` FROM request` + highlightJoin + numberJoin
 
 // trafficCursorVersion is the version of the cursor token format.
 const trafficCursorVersion = 1
@@ -378,7 +378,10 @@ func sortSegments(sort trafficSort, backward bool, cursor *trafficCursor, cursor
 		op, dir = "<", "DESC"
 	}
 	valued := sortSegment{phase: 0, order: `id ` + dir}
-	if sort.key.expr != "" {
+	switch {
+	case sort.key.unique:
+		valued.order = sort.key.expr + ` ` + dir
+	case sort.key.expr != "":
 		valued.order = sort.key.expr + ` ` + dir + `, id ` + dir
 	}
 	if sort.key.hasValue != "" {
@@ -393,6 +396,8 @@ func sortSegments(sort trafficSort, backward bool, cursor *trafficCursor, cursor
 			unvalued.conditions = append(unvalued.conditions, sqlCondition{`id ` + op + ` ?`, []any{cursor.ID}})
 		case sort.key.expr == "":
 			valued.conditions = append(valued.conditions, sqlCondition{`id ` + op + ` ?`, []any{cursor.ID}})
+		case sort.key.unique:
+			valued.conditions = append(valued.conditions, sqlCondition{sort.key.expr + ` ` + op + ` ?`, []any{cursorKey}})
 		case sort.key.expression:
 			// SQLite cannot seek an expression index with a row value, so
 			// the key bounds the range and the id breaks ties within it.
