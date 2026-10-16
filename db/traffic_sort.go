@@ -50,9 +50,10 @@ var sortKeys = map[string]sortKey{
 	// The pair number's own primary key, not id: under concurrent capture
 	// the two orders can differ (ADR-0042). Every pair has a number, and
 	// requiring one turns the number join into an inner join, so the read
-	// walks pair_number.
+	// walks pair_number. It must be a comparison: SQLite keeps the join
+	// outer under IS NOT NULL, and then sorts every pair for the first page.
 	"number": {expr: "pair_number.number", integer: true, unique: true,
-		hasValue: "pair_number.number IS NOT NULL"},
+		hasValue: "pair_number.number > 0"},
 }
 
 // trafficSort is a parsed order_by.
