@@ -13,6 +13,9 @@ const (
 	JobSitemap JobName = "sitemap"
 	// JobPrettifiedMove moves prettified copies out of metadata (ADR-0036).
 	JobPrettifiedMove JobName = "prettified_move"
+	// JobInterceptedCount counts the intercepted pairs captured before the
+	// dashboard's maintained counts existed.
+	JobInterceptedCount JobName = "intercepted_count"
 )
 
 // SearchIndexJobs are the jobs text search depends on. A traffic read's

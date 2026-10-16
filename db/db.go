@@ -75,6 +75,9 @@ func NewProxyRepo(db *sqlx.DB) *Repository {
 // It is critical to call this to free up database resources.
 func (repo *Repository) Close() error {
 	repo.closeIndexQueue()
+	// Fold this session's captures into the pair count, so the next open
+	// does not count them. A failure leaves them to the next open.
+	_ = foldPairCount(repo.dbConn)
 	// Refresh the statistics the planner uses to choose an index
 	// (ADR-0041). A failure here must not keep the project open.
 	_, _ = repo.dbConn.Exec(`PRAGMA optimize`)
