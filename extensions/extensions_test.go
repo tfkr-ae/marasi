@@ -121,6 +121,7 @@ type mockTrafficRepo struct {
 	forceError    bool
 }
 
+func (m *mockTrafficRepo) NextPairNumber() int64                        { return 0 }
 func (m *mockTrafficRepo) InsertRequest(req *domain.ProxyRequest) error { return nil }
 func (m *mockTrafficRepo) InsertResponse(res *domain.ProxyResponse) error {
 	return nil

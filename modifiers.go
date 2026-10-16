@@ -421,6 +421,11 @@ func WriteRequestModifier(proxy *Proxy, req *http.Request) error {
 		if err != nil {
 			return fmt.Errorf("%w : %w", ErrProxyRequest, err)
 		}
+		// The number is taken here, not by the writer, so the request
+		// event already carries it (ADR-0042).
+		if proxy.TrafficRepo != nil {
+			proxyRequest.Number = proxy.TrafficRepo.NextPairNumber()
+		}
 		proxy.DBWriteChannel <- proxyRequest
 		if proxy.OnRequest == nil {
 			return ErrRequestHandlerUndefined
