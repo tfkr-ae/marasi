@@ -4,7 +4,7 @@ The open project runs background jobs that build the search indexes and the site
 
 ## Sub-features
 
-- List the jobs with `jobs list` (`GET /jobs`): `traffic_index`, `annotation_index`, `sitemap`, and `prettified_move`, each with `complete`, `done`, and `total`.
+- List the jobs with `jobs list` (`GET /jobs`): `traffic_index`, `annotation_index`, `sitemap`, `prettified_move`, and `intercepted_count`, each with `complete`, `done`, and `total`.
 - Restart one with `jobs rebuild NAME` (`POST /jobs/{name}/rebuild`, 202).
 - Choose human-readable or `--json` output.
 

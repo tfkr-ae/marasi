@@ -62,7 +62,7 @@ func (repo *Repository) SetMetadataKey(sel domain.Selection, path string, value 
 			RETURNING id`
 		queryArgs := append([]any{jsonPath, string(value)}, args...)
 		queryArgs = append(queryArgs, jsonPath, string(value))
-		return updateAndIndex(tx, fmt.Sprintf("setting metadata key %q", path), query, queryArgs...)
+		return updateAndIndex(tx, path, fmt.Sprintf("setting metadata key %q", path), query, queryArgs...)
 	})
 }
 
@@ -79,20 +79,26 @@ func (repo *Repository) ClearMetadataKey(sel domain.Selection, path string) (int
 			RETURNING id`
 		queryArgs := append([]any{jsonPath}, args...)
 		queryArgs = append(queryArgs, jsonPath)
-		return updateAndIndex(tx, fmt.Sprintf("clearing metadata key %q", path), query, queryArgs...)
+		return updateAndIndex(tx, path, fmt.Sprintf("clearing metadata key %q", path), query, queryArgs...)
 	})
 }
 
-// updateAndIndex runs an UPDATE ... RETURNING id in tx, re-indexes the
-// metadata of every pair it returns in the annotation index, and returns how
-// many there were.
-func updateAndIndex(tx *sqlx.Tx, what, query string, args ...any) (int, error) {
+// updateAndIndex runs an UPDATE ... RETURNING id of the metadata key at
+// path in tx, re-indexes the metadata of every pair it returns in the
+// annotation index, recounts them when the key is the intercepted key, and
+// returns how many there were.
+func updateAndIndex(tx *sqlx.Tx, path, what, query string, args ...any) (int, error) {
 	var ids []uuid.UUID
 	if err := tx.Select(&ids, query, args...); err != nil {
 		return 0, fmt.Errorf("%s: %w", what, err)
 	}
 	for _, id := range ids {
 		if err := indexAnnotations(tx, id); err != nil {
+			return 0, fmt.Errorf("%s: %w", what, err)
+		}
+	}
+	if strings.Split(path, ".")[0] == interceptedKey {
+		if err := syncIntercepted(tx, ids...); err != nil {
 			return 0, fmt.Errorf("%s: %w", what, err)
 		}
 	}

@@ -203,8 +203,8 @@ func TestJobs(t *testing.T) {
 		seedUnindexedProject(t, path, 5)
 		server, lifecycle, subscriber := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
-		// The sitemap job runs last, so its completion ends the first open's jobs.
-		if !jobCompleted(subscriber, domain.JobSitemap, 30*time.Second) {
+		// The intercepted_count job runs last, so its completion ends the first open's jobs.
+		if !jobCompleted(subscriber, domain.JobInterceptedCount, 30*time.Second) {
 			t.Fatal("the first build did not complete")
 		}
 		pacer := paceIndexBuild(lifecycle, path)
@@ -236,8 +236,8 @@ func TestJobs(t *testing.T) {
 		seedUnindexedProject(t, path, 5)
 		server, lifecycle, subscriber := newIndexServer(t)
 		openProjectPath(t, lifecycle, path)
-		// The sitemap job runs last, so its completion ends the first open's jobs.
-		if !jobCompleted(subscriber, domain.JobSitemap, 30*time.Second) {
+		// The intercepted_count job runs last, so its completion ends the first open's jobs.
+		if !jobCompleted(subscriber, domain.JobInterceptedCount, 30*time.Second) {
 			t.Fatal("the first build did not complete")
 		}
 		pacer := paceIndexBuild(lifecycle, path)
