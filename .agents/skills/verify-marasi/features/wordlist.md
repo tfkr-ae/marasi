@@ -17,7 +17,7 @@ Start a service first. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --inst
 
 ## Driving it with shell and curl
 
-Run `wordlist list --json` and require `{"items":[]}`. Write a source file outside `$VERIFY_CONFIG_DIR/wordlists` whose basename is `users.txt` and whose lines are `alpha`, `beta`, and `gamma`. Run `wordlist add "$SOURCE_FILE" --json` and require an item whose `name` is `users.txt`. Require the source path to be gone and `$VERIFY_CONFIG_DIR/wordlists/users.txt` to exist. Run `wordlist preview users.txt --json` and require those three lines. Run `wordlist preview users.txt --limit 1 --json` and require only `alpha`. Duplicate add of the same basename must fail. Run `wordlist remove users.txt --json`, then `wordlist list --json`, and require `{"items":[]}`.
+Run `wordlist list --json` and require `{"items":[]}`. Write a source file outside `$VERIFY_CONFIG_DIR/wordlists` whose basename is `users.txt` and whose lines are `alpha`, `beta`, and `gamma`. Run `wordlist add "$SOURCE_FILE" --json` and require an item whose `name` is `users.txt`. Require the source path to be gone and `$VERIFY_CONFIG_DIR/wordlists/users.txt` to exist. Run `wordlist preview users.txt --json` and require those three lines. Run `wordlist preview users.txt --limit 1 --json` and require only `alpha`. Duplicate add of the same basename must fail. Run `wordlist remove users.txt --json`, then `wordlist list --json`, and require `{"items":[]}`. `wordlist preview missing.txt --json` must fail with `previewing wordlist: not_found`.
 
 ## Gotchas
 
@@ -26,3 +26,4 @@ Run `wordlist list --json` and require `{"items":[]}`. Write a source file outsi
 - Add and remove publish `wordlist.added` and `wordlist.removed`. Subscribe with `events` before the mutation; the stream has no replay.
 - Wordlists live under the config directory, not the open project. `project open` does not hide them.
 - Human add and remove print a confirmation to stderr. `--json` add and remove print the full list.
+- Previewing a missing name fails. With `--json` the error is `previewing wordlist: not_found`.
