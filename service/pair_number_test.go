@@ -89,13 +89,25 @@ func newCapturingService(t *testing.T) *capturingService {
 	}
 	transport := &http.Transport{Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: statusAddress(t, started)}), MaxIdleConnsPerHost: 64}
 	t.Cleanup(transport.CloseIdleConnections)
-	service.client = &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	// No per-request timeout: the proxy's writer queue holds 10 writes, so
+	// once it is full each capture waits for the writer. Under -race on a
+	// loaded machine 1000 pairs take over 10 s, and a request queued behind
+	// them is slow, not lost. captureBudget bounds the whole test instead.
+	service.client = &http.Client{Transport: transport}
 	return service
 }
 
+// captureBudget bounds how long a capturing test may take to send its
+// traffic and see it stored.
+const captureBudget = 5 * time.Minute
+
 // capture sends one request through the proxy.
-func (s *capturingService) capture(t *testing.T, path string) error {
-	response, err := s.client.Get(s.origin.URL + path)
+func (s *capturingService) capture(ctx context.Context, path string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, s.origin.URL+path, nil)
+	if err != nil {
+		return err
+	}
+	response, err := s.client.Do(request)
 	if err != nil {
 		return err
 	}
@@ -107,7 +119,7 @@ func (s *capturingService) capture(t *testing.T, path string) error {
 // waitForPairs waits until the project holds n pairs and n events arrived.
 func (s *capturingService) waitForPairs(t *testing.T, n int) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(captureBudget)
 	for {
 		summaries, err := s.repository.GetRequestResponseSummary()
 		s.mu.Lock()
@@ -142,7 +154,7 @@ func TestPairNumbers(t *testing.T) {
 	t.Run("should carry the same number in the request event, the list row and the single read", func(t *testing.T) {
 		service := newCapturingService(t)
 		for _, path := range []string{"/first", "/second"} {
-			if err := service.capture(t, path); err != nil {
+			if err := service.capture(t.Context(), path); err != nil {
 				t.Fatalf("capturing %s: %v", path, err)
 			}
 		}
@@ -181,6 +193,8 @@ func TestPairNumbers(t *testing.T) {
 
 	t.Run("should give 1000 concurrently captured pairs unique numbers that match their events", func(t *testing.T) {
 		service := newCapturingService(t)
+		ctx, cancel := context.WithTimeout(t.Context(), captureBudget)
+		defer cancel()
 		const pairs = 1000
 		paths := make(chan string, pairs)
 		for i := range pairs {
@@ -194,7 +208,7 @@ func TestPairNumbers(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for path := range paths {
-					errs <- service.capture(t, path)
+					errs <- service.capture(ctx, path)
 				}
 			}()
 		}
