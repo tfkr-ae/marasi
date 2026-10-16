@@ -20,7 +20,7 @@ import (
 func TestTrafficListCommand(t *testing.T) {
 	t.Run("should print the newest page oldest first", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","scheme":"https","method":"POST","host":"example.com","path":"/login","status":"401 Unauthorized","status_code":401,"content_type":"text/plain","length":"45","metadata":{},"requested_at":"2026-01-02T03:04:04Z","responded_at":"2026-01-02T03:04:05Z"},{"id":"0193802f-f0e7-73d9-a764-06d21e367809","scheme":"https","method":"GET","host":"example.com","path":"/a","status":"200 OK","status_code":200,"content_type":"application/json","length":"12","metadata":{"foo":"bar"},"requested_at":"2026-01-02T03:04:05Z","responded_at":"2026-01-02T03:04:06Z"}],"next_cursor":null}`)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","number":9,"scheme":"https","method":"POST","host":"example.com","path":"/login","status":"401 Unauthorized","status_code":401,"content_type":"text/plain","length":"45","metadata":{},"requested_at":"2026-01-02T03:04:04Z","responded_at":"2026-01-02T03:04:05Z"},{"id":"0193802f-f0e7-73d9-a764-06d21e367809","number":10,"scheme":"https","method":"GET","host":"example.com","path":"/a","status":"200 OK","status_code":200,"content_type":"application/json","length":"12","metadata":{"foo":"bar"},"requested_at":"2026-01-02T03:04:05Z","responded_at":"2026-01-02T03:04:06Z"}],"next_cursor":null}`)
 
 		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "list")
 		if err != nil {
@@ -30,7 +30,7 @@ func TestTrafficListCommand(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "limit=200" {
 			t.Fatalf("\nwanted:\nGET /traffic?limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
-		want := "01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /login  401  45\n0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /a      200  12\n"
+		want := "9   01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /login  401  45\n10  0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /a      200  12\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -47,7 +47,7 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /123456789012345678901234567890123456...  200  12\n01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /short                                    404  45\n"
+		want := "0  0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /123456789012345678901234567890123456...  200  12\n0  01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /short                                    404  45\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -61,7 +61,7 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "0193802f-f0e7-73d9-a764-06d21e367809  GET  example.com  /12345678901234567890123456789012345😀...  200  12\n"
+		want := "0  0193802f-f0e7-73d9-a764-06d21e367809  GET  example.com  /12345678901234567890123456789012345😀...  200  12\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -78,7 +78,7 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "01938032-1b17-7243-b035-e6a9f4645904  GET  example.com  /a  200  12\n"
+		want := "0  01938032-1b17-7243-b035-e6a9f4645904  GET  example.com  /a  200  12\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -126,7 +126,7 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "01938032-1b17-7243-b035-e6a9f4645904  GET  example.com  /a  200  12\n"
+		want := "0  01938032-1b17-7243-b035-e6a9f4645904  GET  example.com  /a  200  12\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -434,7 +434,7 @@ func TestTrafficGetCommand(t *testing.T) {
 	t.Run("should print the control API detail body with --json", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		id := "0193802f-f0e7-73d9-a764-06d21e367809"
-		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","note":"a note","metadata":{"foo":"bar"},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/json","length":"12","raw":"aGVsbG8K","responded_at":"2026-01-02T03:04:06Z"}}`
+		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","number":42,"note":"a note","metadata":{"foo":"bar"},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/json","length":"12","raw":"aGVsbG8K","responded_at":"2026-01-02T03:04:06Z"}}`
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 
 		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "get", "--json", id)
@@ -474,7 +474,7 @@ func TestTrafficGetCommand(t *testing.T) {
 	t.Run("should print fields, note, metadata, and utf-8 raw", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		id := "0193802f-f0e7-73d9-a764-06d21e367809"
-		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","note":"a note","metadata":{"foo":"bar"},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/json","length":"12","raw":"aGVsbG8K","responded_at":"2026-01-02T03:04:06Z"}}`
+		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","number":42,"note":"a note","metadata":{"foo":"bar"},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/json","length":"12","raw":"aGVsbG8K","responded_at":"2026-01-02T03:04:06Z"}}`
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 
 		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "get", id)
@@ -485,7 +485,7 @@ func TestTrafficGetCommand(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/traffic/"+id {
 			t.Fatalf("\nwanted:\nGET /traffic/%s\ngot:\n%s %s", id, got.Method, got.Path)
 		}
-		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: 200 OK\nstatus_code: 200\ncontent_type: application/json\nlength: 12\nresponded_at: 2026-01-02T03:04:06Z\nnote: a note\nmetadata: {\"foo\":\"bar\"}\nGET /a\nhello\n"
+		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nnumber: 42\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: 200 OK\nstatus_code: 200\ncontent_type: application/json\nlength: 12\nresponded_at: 2026-01-02T03:04:06Z\nnote: a note\nmetadata: {\"foo\":\"bar\"}\nGET /a\nhello\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -504,7 +504,7 @@ func TestTrafficGetCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: 400 Bad Request\nstatus_code: 400\ncontent_type: text/plain\nlength: 12\nresponded_at: 2026-01-02T03:04:06Z\nGET /a\nHTTP/1.1 400 Bad Request\n"
+		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nnumber: 0\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: 400 Bad Request\nstatus_code: 400\ncontent_type: text/plain\nlength: 12\nresponded_at: 2026-01-02T03:04:06Z\nGET /a\nHTTP/1.1 400 Bad Request\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -556,7 +556,7 @@ func TestTrafficGetCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: N/A\nstatus_code: -1\ncontent_type: \nlength: 0\nresponded_at: \nGET /a\nno response yet\n"
+		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nnumber: 0\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: N/A\nstatus_code: -1\ncontent_type: \nlength: 0\nresponded_at: \nGET /a\nno response yet\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -572,7 +572,7 @@ func TestTrafficGetCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: N/A\nstatus_code: -1\ncontent_type: \nlength: 0\nresponded_at: \nGET /a\nno response yet\n"
+		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nnumber: 0\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: N/A\nstatus_code: -1\ncontent_type: \nlength: 0\nresponded_at: \nGET /a\nno response yet\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -778,7 +778,7 @@ func TestLaunchpadCommands(t *testing.T) {
 		body := `{"id":"` + id + `","name":"Login","description":"Try variants","items":[{"id":"` + requestID + `","method":"POST","host":"example.com","path":"/login","status_code":200,"length":"2"}]}` + "\n"
 		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "get", id)
-		want := "id: " + id + "\nname: Login\ndescription: Try variants\n" + requestID + "  POST  example.com  /login  200  2\n"
+		want := "id: " + id + "\nname: Login\ndescription: Try variants\n" + "0  " + requestID + "  POST  example.com  /login  200  2\n"
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}

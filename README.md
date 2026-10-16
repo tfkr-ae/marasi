@@ -174,9 +174,11 @@ Pairs with no content type yet are never hidden. Each page reports
 `next_cursor`, `prev_cursor` and `as_of`. Cursors are opaque: pass one back with
 `--cursor`, adding `--backward` to walk toward newer pairs, and pass `as_of`
 back with `--as-of` so later pages leave out pairs captured since the first.
-`--order-by` (`order_by=`) sorts by one of `requested_at`, `method`, `host`,
-`path`, `status_code`, `content_type` or `length`, with an optional `desc`; the
-default is `requested_at desc`. Pairs with no response sort last.
+`--order-by` (`order_by=`) sorts by one of `requested_at`, `number`, `method`,
+`host`, `path`, `status_code`, `content_type` or `length`, with an optional
+`desc`; the default is `requested_at desc`. Pairs with no response sort last.
+Every pair has a `number`, its position in capture order from 1. Numbers never
+change and are never reused, and `-q 'number = 10'` finds one pair.
 A malformed cursor, or one from another sort, returns 400
 `{"error":"invalid_cursor","message":"..."}`.
 
