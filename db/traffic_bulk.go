@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
+	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/tfkr-ae/marasi/domain"
 )
@@ -78,10 +80,18 @@ func (repo *Repository) bulkInTx(sel domain.Selection, apply func(tx *sqlx.Tx, s
 			return 0, err
 		}
 	}
+	if repo.afterBulkFlush != nil {
+		repo.afterBulkFlush()
+	}
 	var count int
 	err = repo.inTx(func(tx *sqlx.Tx) error {
 		if err := selectionReady(tx, jobs); err != nil {
 			return err
+		}
+		if slices.Contains(jobs, domain.JobTrafficIndex) {
+			if err := indexQueuedUpTo(tx, sel.Query.AsOf); err != nil {
+				return err
+			}
 		}
 		changed, err := apply(tx, selected, args)
 		count = changed
@@ -91,6 +101,32 @@ func (repo *Repository) bulkInTx(sel domain.Selection, apply func(tx *sqlx.Tx, s
 		return 0, err
 	}
 	return count, nil
+}
+
+// indexQueuedUpTo indexes, in tx, the queued pairs with an id at or below
+// asOf. The flush before a bulk transaction leaves a window: a response
+// written between the flush and the transaction is queued, not indexed, and
+// a text query selection would read that pair's old index row. A pair that
+// fails to index for an error in its own data refuses the selection as
+// incomplete; the queue drops such a pair, and a retry then succeeds.
+func indexQueuedUpTo(tx *sqlx.Tx, asOf uuid.UUID) error {
+	var queued []uuid.UUID
+	err := tx.Select(&queued, `SELECT request_id FROM traffic_index_pending WHERE request_id <= ? ORDER BY request_id`, asOf)
+	if err != nil {
+		return fmt.Errorf("reading the index queue: %w", err)
+	}
+	for _, id := range queued {
+		if err := indexPair(tx, id); err != nil {
+			if databaseFailure(err) {
+				return err
+			}
+			return &domain.SelectionIncompleteError{Jobs: []domain.JobName{domain.JobTrafficIndex}}
+		}
+		if _, err := tx.Exec(`DELETE FROM traffic_index_pending WHERE request_id = ?`, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // linkTable describes the table that links pairs to one kind of target.
