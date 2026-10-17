@@ -1,11 +1,13 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -230,4 +232,41 @@ func eventSummary(events []serviceEvent) []string {
 		summary[i] = event.name + " " + string(event.data)
 	}
 	return summary
+}
+
+// TestBulkRoutes_RefuseQuerySelectionsWhileTheirJobsBuild checks the 409 a
+// bulk route answers when its query selection depends on an unfinished
+// background job (ticket 26).
+func TestBulkRoutes_RefuseQuerySelectionsWhileTheirJobsBuild(t *testing.T) {
+	t.Run("should answer 409 selection_incomplete naming the job and keep the pair", func(t *testing.T) {
+		p := setupBulkProject(t)
+		id := p.insertPair(t, "GET")
+		if err := p.repo.RebuildJob(domain.JobTrafficIndex); err != nil {
+			t.Fatalf("RebuildJob() error = %v", err)
+		}
+		body := fmt.Sprintf(`{"selection":{"query":"NOT request_head:\"bulk.example.com\"","as_of":%q}}`, id)
+		response := requestControlAPI(p.server, http.MethodPost, "/traffic/bulk/delete", body)
+		if response.Code != http.StatusConflict {
+			t.Fatalf("POST /traffic/bulk/delete = %d, want 409: %s", response.Code, response.Body)
+		}
+		var got struct {
+			Error   string   `json:"error"`
+			Message string   `json:"message"`
+			Jobs    []string `json:"jobs"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decoding %s: %v", response.Body, err)
+		}
+		if got.Error != "selection_incomplete" || !slices.Equal(got.Jobs, []string{"traffic_index"}) || !strings.Contains(got.Message, "traffic_index") {
+			t.Errorf("body = %+v, want selection_incomplete naming traffic_index", got)
+		}
+		if _, err := p.repo.GetRequestResponseRow(id); err != nil {
+			t.Errorf("GetRequestResponseRow() after the refused delete error = %v", err)
+		}
+
+		ids := fmt.Sprintf(`{"selection":{"ids":[%q]},"highlight":2}`, id)
+		if response := requestControlAPI(p.server, http.MethodPost, "/traffic/bulk/highlight", ids); response.Code != http.StatusOK {
+			t.Errorf("POST /traffic/bulk/highlight by id = %d, want 200: %s", response.Code, response.Body)
+		}
+	})
 }

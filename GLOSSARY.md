@@ -54,7 +54,7 @@ A document of extra data stored with a request/response pair.
 _Avoid_: tags, highlight, properties
 
 **Selection**:
-The request/response pairs that one bulk operation applies to: either listed pairs, or every pair that matches a query and content-type exclusion, up to the newest pair the client had seen.
+The request/response pairs that one bulk operation applies to: either listed pairs, or every pair that matches a query and content-type exclusion, up to the newest pair the client had seen. A query selection is refused while a background job its query depends on is unfinished.
 _Avoid_: checked rows, batch, bulk target
 
 **Sitemap**:

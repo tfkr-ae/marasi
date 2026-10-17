@@ -14,34 +14,60 @@ import (
 // (ADR-0033), with its arguments. Ids are bound as one JSON array read with
 // json_each, so a selection of any size uses a single parameter; ids with no
 // pair are dropped by the join and a repeated id is selected once. A query selection is the translated query,
-// plus the exclusion, plus id <= as_of. An invalid query selection returns a
-// *domain.QueryError; a selection with neither or both forms wraps
-// domain.ErrInvalidSelection.
-func selectionSubquery(sel domain.Selection) (string, []any, error) {
+// plus the exclusion, plus id <= as_of, and its jobs are the background jobs
+// whose progress changes which pairs the query matches. An invalid query
+// selection returns a *domain.QueryError; a selection with neither or both
+// forms wraps domain.ErrInvalidSelection.
+func selectionSubquery(sel domain.Selection) (string, []any, []domain.JobName, error) {
 	switch {
 	case sel.Query != nil && sel.IDs == nil:
 		match, err := newTrafficMatch(sel.Query.Text, sel.Query.Exclusion)
 		if err != nil {
-			return "", nil, err
+			return "", nil, nil, err
 		}
 		match.add(`request.id <= ?`, sel.Query.AsOf)
-		return `SELECT request.id FROM request` + match.where(), match.args, nil
+		return `SELECT request.id FROM request` + match.where(), match.args, match.jobs(), nil
 	case sel.Query == nil && len(sel.IDs) > 0:
 		ids, err := json.Marshal(sel.IDs)
 		if err != nil {
-			return "", nil, fmt.Errorf("encoding selection ids: %w", err)
+			return "", nil, nil, fmt.Errorf("encoding selection ids: %w", err)
 		}
-		return `SELECT DISTINCT request.id FROM json_each(?) AS selected JOIN request ON request.id = selected.value`, []any{string(ids)}, nil
+		return `SELECT DISTINCT request.id FROM json_each(?) AS selected JOIN request ON request.id = selected.value`, []any{string(ids)}, nil, nil
 	default:
-		return "", nil, fmt.Errorf("%w: expected either ids or a query", domain.ErrInvalidSelection)
+		return "", nil, nil, fmt.Errorf("%w: expected either ids or a query", domain.ErrInvalidSelection)
 	}
+}
+
+// selectionReady returns a *domain.SelectionIncompleteError naming the jobs
+// in jobs that are not complete, or nil when all are. Bulk operations check
+// it in their transaction, so a job cannot finish or restart between the
+// check and the change.
+func selectionReady(q sqlx.Queryer, jobs []domain.JobName) error {
+	complete, err := jobCompleteness(q, jobs...)
+	if err != nil {
+		return err
+	}
+	var unfinished []domain.JobName
+	for _, job := range jobs {
+		if !complete[job] {
+			unfinished = append(unfinished, job)
+		}
+	}
+	if len(unfinished) > 0 {
+		return &domain.SelectionIncompleteError{Jobs: unfinished}
+	}
+	return nil
 }
 
 // bulkInTx resolves sel inside one transaction and runs apply with the
 // selection subquery and its arguments. apply returns the number of pairs it
-// changed, which bulkInTx returns once the transaction commits.
+// changed, which bulkInTx returns once the transaction commits. A query
+// selection whose query depends on an unfinished background job returns a
+// *domain.SelectionIncompleteError and changes nothing: while a search index
+// or the sitemap is building, a query such as NOT note:"keep" would select
+// pairs the finished job would leave out.
 func (repo *Repository) bulkInTx(sel domain.Selection, apply func(tx *sqlx.Tx, selected string, args []any) (int, error)) (int, error) {
-	selected, args, err := selectionSubquery(sel)
+	selected, args, jobs, err := selectionSubquery(sel)
 	if err != nil {
 		return 0, err
 	}
@@ -54,6 +80,9 @@ func (repo *Repository) bulkInTx(sel domain.Selection, apply func(tx *sqlx.Tx, s
 	}
 	var count int
 	err = repo.inTx(func(tx *sqlx.Tx) error {
+		if err := selectionReady(tx, jobs); err != nil {
+			return err
+		}
 		changed, err := apply(tx, selected, args)
 		count = changed
 		return err
