@@ -59,7 +59,7 @@ func registerEncodingLibrary(extension *Runtime) {
 	l.NewTable()
 
 	register := func(name string, funcs []APIFunction) {
-		newLibrary(extension, "marasi.encoding."+name, funcs)
+		extension.newLibrary("marasi.encoding."+name, funcs)
 		l.SetField(-2, name)
 	}
 

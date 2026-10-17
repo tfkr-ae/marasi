@@ -27,22 +27,22 @@ func registerCryptoLibrary(extension *Runtime) {
 		return
 	}
 
-	newLibrary(extension, "marasi.crypto", cryptoLibrary())
+	extension.newLibrary("marasi.crypto", cryptoLibrary())
 
-	newLibrary(extension, "marasi.crypto.aes", aesLibrary())
+	extension.newLibrary("marasi.crypto.aes", aesLibrary())
 
-	newLibrary(extension, "marasi.crypto.aes.gcm", aesGCM())
+	extension.newLibrary("marasi.crypto.aes.gcm", aesGCM())
 	l.SetField(-2, "gcm")
 
-	newLibrary(extension, "marasi.crypto.aes.cbc", aesCBC())
+	extension.newLibrary("marasi.crypto.aes.cbc", aesCBC())
 	l.SetField(-2, "cbc")
 
 	l.SetField(-2, "aes")
 
-	newLibrary(extension, "marasi.crypto.rsa", rsaLibrary())
+	extension.newLibrary("marasi.crypto.rsa", rsaLibrary())
 	l.SetField(-2, "rsa")
 
-	newLibrary(extension, "marasi.crypto.ed25519", ed25519Library())
+	extension.newLibrary("marasi.crypto.ed25519", ed25519Library())
 	l.SetField(-2, "ed25519")
 
 	l.SetField(-2, "crypto")

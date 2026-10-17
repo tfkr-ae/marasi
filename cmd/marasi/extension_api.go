@@ -29,7 +29,7 @@ such as req:method. A function or method name may use . or :.`,
 		stdout := cmd.OutOrStdout()
 		if len(args) == 0 {
 			if jsonOutput {
-				return writeJSON(stdout, ref)
+				return json.NewEncoder(stdout).Encode(ref)
 			}
 			return writeAPIOverview(stdout, ref)
 		}
@@ -38,11 +38,22 @@ such as req:method. A function or method name may use . or :.`,
 			return fmt.Errorf("no Lua API entry named %q; run marasi extension api to list names", args[0])
 		}
 		if jsonOutput {
-			return writeJSON(stdout, item)
+			return json.NewEncoder(stdout).Encode(item)
 		}
 		return writeAPIItem(stdout, item)
 	},
 }
+
+// Kinds of apiItem. They are the kind values in --json output.
+const (
+	apiKindHooks    = "hooks"
+	apiKindHook     = "hook"
+	apiKindGlobal   = "global"
+	apiKindLibrary  = "library"
+	apiKindFunction = "function"
+	apiKindType     = "type"
+	apiKindMethod   = "method"
+)
 
 // apiItem is one named part of the reference.
 type apiItem struct {
@@ -57,29 +68,29 @@ type apiItem struct {
 
 func findAPIItem(ref extensions.APIReference, name string) (apiItem, bool) {
 	if name == "hooks" {
-		return apiItem{Kind: "hooks", Name: name, Entries: ref.Hooks}, true
+		return apiItem{Kind: apiKindHooks, Name: name, Entries: ref.Hooks}, true
 	}
 	for _, hook := range ref.Hooks {
 		if hook.Name == name {
-			return apiItem{Kind: "hook", Name: hook.Name, Signature: hook.Signature, Summary: hook.Summary}, true
+			return apiItem{Kind: apiKindHook, Name: hook.Name, Signature: hook.Signature, Summary: hook.Summary}, true
 		}
 	}
 	for _, global := range ref.Globals {
 		if global.Name == name {
-			return apiItem{Kind: "global", Name: global.Name, Signature: global.Signature, Summary: global.Summary}, true
+			return apiItem{Kind: apiKindGlobal, Name: global.Name, Signature: global.Signature, Summary: global.Summary}, true
 		}
 	}
 	for _, library := range ref.Libraries {
 		if library.Name == name {
-			return apiItem{Kind: "library", Name: library.Name, Entries: library.Functions, Libraries: subLibraries(ref, library.Name)}, true
+			return apiItem{Kind: apiKindLibrary, Name: library.Name, Entries: library.Functions, Libraries: subLibraries(ref, library.Name)}, true
 		}
 	}
 	if libraries := subLibraries(ref, name); len(libraries) > 0 {
-		return apiItem{Kind: "library", Name: name, Libraries: libraries}, true
+		return apiItem{Kind: apiKindLibrary, Name: name, Libraries: libraries}, true
 	}
 	for _, typ := range ref.Types {
 		if typ.Name == name {
-			return apiItem{Kind: "type", Name: typ.Name, Summary: typ.Summary, Entries: typ.Methods}, true
+			return apiItem{Kind: apiKindType, Name: typ.Name, Summary: typ.Summary, Entries: typ.Methods}, true
 		}
 	}
 	// A function or method name splits at its last . or :.
@@ -91,14 +102,14 @@ func findAPIItem(ref extensions.APIReference, name string) (apiItem, bool) {
 	for _, library := range ref.Libraries {
 		if library.Name == owner {
 			if entry, ok := findEntry(library.Functions, member); ok {
-				return apiItem{Kind: "function", Name: owner + ":" + entry.Name, Signature: entry.Signature, Summary: entry.Summary}, true
+				return apiItem{Kind: apiKindFunction, Name: owner + ":" + entry.Name, Signature: entry.Signature, Summary: entry.Summary}, true
 			}
 		}
 	}
 	for _, typ := range ref.Types {
 		if typ.Name == owner {
 			if entry, ok := findEntry(typ.Methods, member); ok {
-				return apiItem{Kind: "method", Name: owner + ":" + entry.Name, Signature: entry.Signature, Summary: entry.Summary}, true
+				return apiItem{Kind: apiKindMethod, Name: owner + ":" + entry.Name, Signature: entry.Signature, Summary: entry.Summary}, true
 			}
 		}
 	}
@@ -137,8 +148,8 @@ func writeAPIOverview(w io.Writer, ref extensions.APIReference) error {
 	var b strings.Builder
 	b.WriteString(`Call library functions and object methods with a colon: marasi.strings:upper(s), request:method().
 There is no string library, so use marasi.strings. A Lua error in a hook is
-logged and the item continues. A hook interrupted by a project switch, service
-stop, or client disconnect drops the item.
+logged and the request, response, or message continues. A hook interrupted by
+a project switch, service stop, or client disconnect drops it.
 
 HOOKS
 `)
@@ -178,11 +189,11 @@ func writeAPINameTable(w io.Writer, libraries []extensions.Library) error {
 func writeAPIItem(w io.Writer, item apiItem) error {
 	var b strings.Builder
 	switch item.Kind {
-	case "hooks":
+	case apiKindHooks:
 		for _, hook := range item.Entries {
 			writeAPIEntry(&b, hook.Name, hook)
 		}
-	case "library":
+	case apiKindLibrary:
 		for _, function := range item.Entries {
 			writeAPIEntry(&b, item.Name+":"+function.Name, function)
 		}
@@ -192,7 +203,7 @@ func writeAPIItem(w io.Writer, item apiItem) error {
 				fmt.Fprintf(&b, "  %s\n", library)
 			}
 		}
-	case "type":
+	case apiKindType:
 		fmt.Fprintf(&b, "%s\n    %s\n\n", item.Name, item.Summary)
 		for _, method := range item.Entries {
 			writeAPIEntry(&b, item.Name+":"+method.Name, method)
@@ -214,13 +225,4 @@ func entryNames(entries []extensions.Entry) string {
 		names[i] = entry.Name
 	}
 	return strings.Join(names, " ")
-}
-
-func writeJSON(w io.Writer, value any) error {
-	body, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Errorf("encoding Lua API reference: %w", err)
-	}
-	_, err = fmt.Fprintf(w, "%s\n", body)
-	return err
 }

@@ -17,7 +17,7 @@ func registerStringsLibrary(extension *Runtime) {
 		return
 	}
 
-	newLibrary(extension, "marasi.strings", stringsLibrary())
+	extension.newLibrary("marasi.strings", stringsLibrary())
 
 	l.SetField(-2, "strings")
 
@@ -48,13 +48,13 @@ func stringsLibrary() []APIFunction {
 			l.PushString(string(runes))
 			return 1
 		}},
-		{Name: "len", Signature: "(input: string) -> number", Summary: "Returns the length of a string.", Function: func(l *lua.State) int {
+		{Name: "len", Signature: "(input: string) -> integer", Summary: "Returns the length of a string in bytes.", Function: func(l *lua.State) int {
 			inputString := lua.CheckString(l, 2)
 
 			l.PushInteger(len(inputString))
 			return 1
 		}},
-		{Name: "replace", Signature: "(input: string, target: string, replacement: string, n?: number) -> string", Summary: "Replaces all occurrences of a substring with another string.", Function: func(l *lua.State) int {
+		{Name: "replace", Signature: "(input: string, target: string, replacement?: string, n?: integer) -> string", Summary: "Replaces the first n occurrences of target, or every occurrence when n is omitted. replacement defaults to an empty string.", Function: func(l *lua.State) int {
 			inputString := lua.CheckString(l, 2)
 			target := lua.CheckString(l, 3)
 			replacement := lua.OptString(l, 4, "")
@@ -98,7 +98,7 @@ func stringsLibrary() []APIFunction {
 			l.PushString(strings.TrimSpace(inputString))
 			return 1
 		}},
-		{Name: "substring", Signature: "(input: string, start: number, end?: number) -> string", Summary: "Returns a substring of a string.", Function: func(l *lua.State) int {
+		{Name: "substring", Signature: "(input: string, start: integer, end?: integer) -> string", Summary: "Returns the characters from start up to, but not including, end. Indices count characters from 0, unlike Lua's string.sub. end defaults to the length in characters.", Function: func(l *lua.State) int {
 			inputString := lua.CheckString(l, 2)
 			runes := []rune(inputString)
 			lenRunes := len(runes)

@@ -17,7 +17,7 @@ func registerSettingsLibrary(extension *Runtime, proxy ProxyService) {
 		return
 	}
 
-	newLibrary(extension, "marasi.settings", settingsLibrary(proxy))
+	extension.newLibrary("marasi.settings", settingsLibrary(proxy))
 
 	l.SetField(-2, "settings")
 

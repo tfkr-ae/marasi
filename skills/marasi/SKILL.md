@@ -114,7 +114,7 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 
 ## Write Lua extensions
 
-An extension is Lua source stored in the project. The proxy calls hooks the source defines, such as `processRequest(request)`, and `extension call` runs any global function. Read the API for the installed version before you write Lua, then read each library or type you use:
+An extension is Lua source stored in the project. The proxy calls the hooks the source defines: `startup` when it loads, and `processRequest`, `processResponse`, and `processWebSocketMessage` for traffic. Only the `checkpoint` extension's `intercept*` hooks decide what Checkpoint holds. `extension call` runs any global function. Read the API for the installed version before you write Lua, then read each library or type you use:
 
 ```sh
 marasi extension api
@@ -122,7 +122,7 @@ marasi extension api marasi.repo
 marasi extension api req
 ```
 
-Call library functions and object methods with `:`, for example `marasi.strings:upper(s)` and `request:method()`. A call with `.` passes the wrong arguments. The sandbox has no `string`, `io`, or `os` library. A Lua error in a hook is logged and the item continues. An interrupted hook drops the item.
+Call library functions and object methods with `:`, for example `marasi.strings:upper(s)` and `request:method()`. A call with `.` passes the wrong arguments. The sandbox has no `string`, `io`, or `os` library. `drop()` stops a request, response, or message from being sent on. A Lua error in a hook is logged and the item continues. A hook interrupted by a project switch, service stop, or client disconnect drops the item.
 
 Replace the source with `extension update`, which runs it at once, then check `extension logs` and the affected traffic.
 

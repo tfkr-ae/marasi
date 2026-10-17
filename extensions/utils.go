@@ -18,7 +18,7 @@ func registerUtilsLibrary(extension *Runtime) {
 		return
 	}
 
-	newLibrary(extension, "marasi.utils", utilsLibrary(extension))
+	extension.newLibrary("marasi.utils", utilsLibrary(extension))
 
 	l.SetField(-2, "utils")
 	l.Pop(1)
