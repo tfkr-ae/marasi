@@ -173,18 +173,20 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 	if lifecycle.projectBusy(old) {
 		return errors.Join(ErrProjectBusy, cleanupPreparedProject(path, true, resources, unlock))
 	}
-	if err := lifecycle.gate.drain(ctx, held); err != nil {
+	if err := lifecycle.gate.seal(ctx, held); err != nil {
 		if errors.Is(err, errBlockAborted) {
 			err = ErrProjectBusy
 		}
 		return errors.Join(err, cleanupPreparedProject(path, true, resources, unlock))
 	}
-	// The late nested requests may have queued persistence after the first flush.
+	// The late nested requests may have queued persistence after the first
+	// flush. The seal keeps anything else from queuing more.
 	if err := lifecycle.flushOpenProject(); err != nil {
 		return errors.Join(err, cleanupPreparedProject(path, true, resources, unlock))
 	}
 
 	lifecycle.proxy.SetProjectResources(resources)
+	lifecycle.gate.publish()
 	lifecycle.setOpen(targetProject)
 	if old != nil && lifecycle.opened != nil {
 		lifecycle.opened(path)
@@ -272,7 +274,8 @@ func (lifecycle *ProjectLifecycle) projectBusy(project *openProject) bool {
 
 // Admit admits project-bound work and returns its matching release operation.
 func (lifecycle *ProjectLifecycle) Admit(ctx context.Context) (func(), error) {
-	return lifecycle.gate.admit(ctx, false)
+	release, _, err := lifecycle.gate.admit(ctx, false)
+	return release, err
 }
 
 // Shutdown flushes, closes, and releases the open project.
@@ -500,11 +503,18 @@ func ResolveProjectPath(path string) (string, error) {
 var _ extensions.ProxyService = stagedExtensionService{}
 
 type projectGate struct {
-	mu                  sync.Mutex
-	changed             chan struct{}
-	blocked             bool
+	mu      sync.Mutex
+	changed chan struct{}
+	blocked bool
+	// sealed refuses all admission, nested Lua work included, from the
+	// moment a handoff sees no project work until it publishes or gives up.
+	sealed              bool
 	active              int
 	extensionExecutions int
+	// generation counts published open projects. Work records the generation
+	// it was admitted in, and work admitted again in another generation
+	// belongs to a project that is no longer open (ADR-0045).
+	generation uint64
 }
 
 func newProjectGate() *projectGate {
@@ -533,12 +543,15 @@ func (gate *projectGate) trackExtension() func() {
 	}
 }
 
-func (gate *projectGate) admit(ctx context.Context, internal bool) (func(), error) {
+// admit waits until project-bound work may run and returns its release and
+// the generation of the open project it runs in.
+func (gate *projectGate) admit(ctx context.Context, internal bool) (func(), uint64, error) {
 	for {
 		gate.mu.Lock()
 		// Only the self-client can finish nested Lua requests during a handoff.
-		if !gate.blocked || internal && gate.extensionExecutions > 0 {
+		if !gate.sealed && (!gate.blocked || internal && gate.extensionExecutions > 0) {
 			gate.active++
+			generation := gate.generation
 			gate.mu.Unlock()
 			var once sync.Once
 			return func() {
@@ -548,13 +561,13 @@ func (gate *projectGate) admit(ctx context.Context, internal bool) (func(), erro
 					gate.signal()
 					gate.mu.Unlock()
 				})
-			}, nil
+			}, generation, nil
 		}
 		changed := gate.changed
 		gate.mu.Unlock()
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, 0, ctx.Err()
 		case <-changed:
 		}
 	}
@@ -575,7 +588,7 @@ func (gate *projectGate) block(ctx context.Context, abort <-chan struct{}) (func
 	gate.blocked = true
 	gate.signal()
 	gate.mu.Unlock()
-	if err := gate.drain(ctx, abort); err != nil {
+	if err := gate.drain(ctx, abort, false); err != nil {
 		return gate.abortBlock(err)
 	}
 	var once sync.Once
@@ -583,13 +596,31 @@ func (gate *projectGate) block(ctx context.Context, abort <-chan struct{}) (func
 		once.Do(func() {
 			gate.mu.Lock()
 			gate.blocked = false
+			gate.sealed = false
 			gate.signal()
 			gate.mu.Unlock()
 		})
 	}, nil
 }
 
-func (gate *projectGate) drain(ctx context.Context, abort <-chan struct{}) error {
+// seal waits for project work to finish, then refuses all admission until
+// publish or unblock. Work cannot start between the wait and the seal, so a
+// flush after seal is the last write to the open project.
+func (gate *projectGate) seal(ctx context.Context, abort <-chan struct{}) error {
+	return gate.drain(ctx, abort, true)
+}
+
+// publish starts the next generation and lifts the seal. Admission stays
+// blocked until unblock.
+func (gate *projectGate) publish() {
+	gate.mu.Lock()
+	gate.generation++
+	gate.sealed = false
+	gate.signal()
+	gate.mu.Unlock()
+}
+
+func (gate *projectGate) drain(ctx context.Context, abort <-chan struct{}, seal bool) error {
 	gate.mu.Lock()
 	for gate.active != 0 || gate.extensionExecutions != 0 {
 		changed := gate.changed
@@ -602,6 +633,9 @@ func (gate *projectGate) drain(ctx context.Context, abort <-chan struct{}) error
 		case <-changed:
 			gate.mu.Lock()
 		}
+	}
+	if seal {
+		gate.sealed = true
 	}
 	gate.mu.Unlock()
 	return nil

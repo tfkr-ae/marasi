@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/google/martian"
 	"github.com/google/martian/mitm"
@@ -22,6 +23,7 @@ import (
 	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
+	marasiws "github.com/tfkr-ae/marasi/websocket"
 	"github.com/tfkr-ae/marasi/wordlist"
 )
 
@@ -493,7 +495,11 @@ func WithWordlistManager(manager wordlist.Provider) func(*Proxy) error {
 
 // WithWorkAdmission coordinates proxy traffic with service lifecycle changes.
 // The boolean identifies requests made by the proxy's own client, including CONNECT.
-func WithWorkAdmission(admit func(context.Context, bool) (func(), error)) func(*Proxy) error {
+// admit returns the work's release and the generation of the open project it
+// runs in. A request is admitted for its request-side work and again for its
+// response-side work, and a response admitted in another generation than its
+// request skips every project-bound step (ADR-0045).
+func WithWorkAdmission(admit func(context.Context, bool) (func(), uint64, error)) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		if admit == nil {
 			return errors.New("work admission cannot be nil")
@@ -506,6 +512,8 @@ func WithWorkAdmission(admit func(context.Context, bool) (func(), error)) func(*
 // WithBasePipeline will setup the base modifier pipeline for marasi
 // It will define the main Request & Response modifiers that will execute the
 // attached modifiers and hande `ErrDropped` and `ErrSkipPipeline`.
+// Work is admitted for the request modifiers and again, once the response body
+// has been buffered, for the response modifiers, never for the wait on the origin.
 // If a response is dropped the `martian.Session` is read from the context and hijacked to
 // close the `conn`
 func WithBasePipeline() func(*Proxy) error {
@@ -526,11 +534,14 @@ func WithBasePipeline() func(*Proxy) error {
 				// Only the proxy's own client may name a launch. The header never leaves the proxy.
 				launchID, launchErr := uuid.Parse(req.Header.Get(launchIDHeader))
 				req.Header.Del(launchIDHeader)
-				release, err := proxy.admitWork(req.Context(), internal)
+				release, generation, err := proxy.admitWork(req.Context(), internal)
 				if err != nil {
 					return err
 				}
-				ctx := context.WithValue(req.Context(), projectReleaseKey{}, release)
+				// The wait on the origin is not project work, so the request
+				// side releases its admission before the round trip (ADR-0045).
+				defer release()
+				ctx := context.WithValue(req.Context(), projectAdmissionKey{}, projectAdmission{internal: internal, generation: generation})
 				if internal && launchErr == nil {
 					ctx = context.WithValue(ctx, launchIDKey{}, launchID)
 				}
@@ -541,12 +552,8 @@ func WithBasePipeline() func(*Proxy) error {
 					proxy.recordLaunchDropped(req)
 				}
 				if err == nil || errors.Is(err, ErrDropped) || errors.Is(err, ErrSkipPipeline) {
-					if err != nil {
-						release()
-					}
 					return nil
 				}
-				release()
 				// TODO this should be handled through logging
 				log.Printf("request pipeline: %v", err)
 				return err
@@ -554,13 +561,31 @@ func WithBasePipeline() func(*Proxy) error {
 		)
 		proxy.martianProxy.SetResponseModifier(
 			martianResModifierFunc(func(res *http.Response) error {
-				if release, ok := res.Request.Context().Value(projectReleaseKey{}).(func()); ok {
-					defer release()
-				}
 				// A launch whose client left was cancelled or interrupted. Its
 				// round trip was abandoned, so it has no response to process or store.
 				if _, launch := core.LaunchpadIDFromContext(res.Request.Context()); launch && res.Request.Context().Err() != nil {
 					return nil
+				}
+				// The body is still the wait on the origin, so it is read
+				// before the response side is admitted (ADR-0045).
+				if err := BufferStreamingBodyModifier(proxy, res); err != nil {
+					log.Printf("response pipeline: %v", err)
+					return err
+				}
+				if admission, ok := res.Request.Context().Value(projectAdmissionKey{}).(projectAdmission); ok {
+					release, generation, err := proxy.admitWork(res.Request.Context(), admission.internal)
+					if err != nil {
+						// The client left while a handoff paused admission.
+						return nil
+					}
+					defer release()
+					if generation != admission.generation {
+						// The pair was captured in a project that is no longer
+						// open. It stays response-less there (ADR-0045).
+						return proxy.passStaleResponse(res)
+					}
+					// In place: martian finds its context by the request's address.
+					*res.Request = *res.Request.WithContext(context.WithValue(res.Request.Context(), projectReleaseKey{}, release))
 				}
 				err := proxy.Modifiers.ModifyResponse(res)
 				if err == nil || errors.Is(err, ErrSkipPipeline) {
@@ -591,7 +616,45 @@ func WithBasePipeline() func(*Proxy) error {
 	}
 }
 
+// projectAdmissionKey holds the projectAdmission of a request's request side.
+type projectAdmissionKey struct{}
+
+// projectAdmission is how a request was admitted: whether by the proxy's own
+// client, and in which generation of the open project.
+type projectAdmission struct {
+	internal   bool
+	generation uint64
+}
+
+// projectReleaseKey holds the release of a response's admission, which a
+// WebSocket session calls once it is registered.
 type projectReleaseKey struct{}
+
+// passStaleResponse passes a response whose pair belongs to a project that is
+// no longer open straight to the client. A WebSocket upgrade cannot be relayed
+// without recording it, so it is refused instead.
+func (proxy *Proxy) passStaleResponse(res *http.Response) error {
+	if !marasiws.IsUpgradeResponse(res) {
+		return nil
+	}
+	if res.Body != nil {
+		res.Body.Close()
+	}
+	body := "the open project changed while the WebSocket handshake was in flight\n"
+	*res = http.Response{
+		Status:        http.StatusText(http.StatusBadGateway),
+		StatusCode:    http.StatusBadGateway,
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        http.Header{"Content-Type": {"text/plain; charset=utf-8"}},
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+		Close:         true,
+		Request:       res.Request,
+	}
+	return nil
+}
 
 // launchIDKey holds the launch id an internal request named.
 type launchIDKey struct{}
@@ -607,7 +670,8 @@ func requestedLaunchID(ctx context.Context) (uuid.UUID, bool) {
 // WithDefaultModifierPipeline will apply the default modifier pipelines for Requests & Responses.
 // The processing order is:
 // (Request): Compass -> Waypoint -> Extensions -> Checkpoint -> Database Write
-// (Response): Buffer Streaming -> Decompress -> Compass -> Extensions -> Checkpoint -> Database Write
+// (Response): Decompress -> Compass -> Extensions -> Checkpoint -> Database Write
+// The base pipeline has already buffered the response body.
 func WithDefaultModifierPipeline() func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		// Request Modifiers
@@ -624,7 +688,6 @@ func WithDefaultModifierPipeline() func(*Proxy) error {
 		// Response Modifiers
 		proxy.AddResponseModifier(ResponseFilterModifier)
 		proxy.AddResponseModifier(WebSocketPrepareModifier)
-		proxy.AddResponseModifier(BufferStreamingBodyModifier)
 		proxy.AddResponseModifier(CompressedResponseModifier)
 		proxy.AddResponseModifier(CompassResponseModifier)
 		proxy.AddResponseModifier(ExtensionsResponseModifier)

@@ -1214,10 +1214,10 @@ func assertExtensionLuaOwnsProject(t *testing.T, id uuid.UUID, httpsNested bool,
 	lifecycle.proxy.Client.Transport = direct
 	admittedWhileBlocked := false
 	var admittedMu sync.Mutex
-	if err := lifecycle.proxy.WithOptions(marasi.WithWorkAdmission(func(ctx context.Context, internal bool) (func(), error) {
-		release, err := lifecycle.gate.admit(ctx, internal)
+	if err := lifecycle.proxy.WithOptions(marasi.WithWorkAdmission(func(ctx context.Context, internal bool) (func(), uint64, error) {
+		release, generation, err := lifecycle.gate.admit(ctx, internal)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		lifecycle.gate.mu.Lock()
 		blocked := lifecycle.gate.blocked
@@ -1227,7 +1227,7 @@ func assertExtensionLuaOwnsProject(t *testing.T, id uuid.UUID, httpsNested bool,
 			admittedWhileBlocked = true
 			admittedMu.Unlock()
 		}
-		return release, nil
+		return release, generation, nil
 	})); err != nil {
 		t.Fatalf("wrapping work admission: %v", err)
 	}

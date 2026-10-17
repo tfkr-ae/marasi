@@ -664,7 +664,7 @@ end`, holdURL)
 			time.Sleep(time.Millisecond)
 		}
 
-		nested, err := lifecycle.gate.admit(context.Background(), true)
+		nested, _, err := lifecycle.gate.admit(context.Background(), true)
 		if err != nil {
 			endExecution()
 			releaseOld()
@@ -685,6 +685,64 @@ end`, holdURL)
 		}
 		if lifecycle.Path() != target {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", target, lifecycle.Path())
+		}
+	})
+
+	t.Run("should admit no work between the final flush and publication", func(t *testing.T) {
+		lifecycle, proxy, dir := newTestProjectLifecycle(t)
+		oldPath := canonicalProjectPath(t, filepath.Join(dir, "old.marasi"))
+		target := canonicalProjectPath(t, filepath.Join(dir, "target.marasi"))
+		if err := lifecycle.Open(context.Background(), oldPath); err != nil {
+			t.Fatalf("opening old project: %v", err)
+		}
+		oldRepository := proxy.TrafficRepo
+		releaseBefore, before, err := lifecycle.gate.admit(context.Background(), false)
+		if err != nil {
+			t.Fatalf("admitting old work: %v", err)
+		}
+		releaseBefore()
+		// Lua that starts after the drain must not take a pair number from the
+		// old project once its writes have been flushed, or the number is stored
+		// in the target (ADR-0042).
+		type lateWork struct {
+			generation uint64
+			old        bool
+		}
+		flush := lifecycle.flushOpenProject
+		flushes := 0
+		late := make(chan lateWork, 1)
+		lifecycle.flushOpenProject = func() error {
+			flushes++
+			if flushes == 2 {
+				endExecution := lifecycle.gate.trackExtension()
+				admitted := make(chan struct{})
+				go func() {
+					defer endExecution()
+					release, generation, err := lifecycle.gate.admit(context.Background(), true)
+					if err != nil {
+						return
+					}
+					close(admitted)
+					late <- lateWork{generation: generation, old: proxy.TrafficRepo == oldRepository}
+					release()
+				}()
+				select {
+				case <-admitted:
+				case <-time.After(50 * time.Millisecond):
+				}
+			}
+			return flush()
+		}
+		if err := lifecycle.Open(context.Background(), target); err != nil {
+			t.Fatalf("opening target: %v", err)
+		}
+		select {
+		case work := <-late:
+			if work.old || work.generation == before {
+				t.Fatalf("\nwanted:\nlate work admitted in the target\ngot:\nold repository %v, generation %d of %d", work.old, work.generation, before)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("late work was never admitted")
 		}
 	})
 
