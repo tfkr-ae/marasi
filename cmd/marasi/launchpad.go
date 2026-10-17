@@ -29,6 +29,8 @@ var launchpadLaunchScheme string
 var launchpadLaunchRawFile string
 var launchpadLaunchDetach bool
 var launchpadGetQuery string
+var launchpadGetExclude []string
+var launchpadGetOrderBy string
 
 type launchpadRequest struct {
 	Name        *string `json:"name,omitempty"`
@@ -43,6 +45,8 @@ func init() {
 	launchpadCreateCmd.Flags().StringVar(&launchpadCreateDescription, "description", "", "Launchpad description")
 	launchpadCreateCmd.MarkFlagRequired("name")
 	launchpadGetCmd.Flags().StringVarP(&launchpadGetQuery, "query", "q", "", "AIP-160 traffic query that narrows the entries; see marasi traffic list --help")
+	launchpadGetCmd.Flags().StringArrayVar(&launchpadGetExclude, "exclude", nil, "Content type to hide, exact or major/*; repeat for more")
+	launchpadGetCmd.Flags().StringVar(&launchpadGetOrderBy, "order-by", "", "Sort the entries: one field, then optional desc, as in marasi traffic list --help; default oldest first")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateName, "name", "", "Launchpad name")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateDescription, "description", "", "Launchpad description")
 	launchpadLinkCmd.Flags().StringVar(&launchpadLinkRequest, "request", "", "UUID of the request/response pair")
@@ -51,7 +55,7 @@ func init() {
 	launchpadLaunchCmd.Flags().StringVar(&launchpadLaunchRawFile, "raw-file", "", "Read the raw HTTP request from a file. If omitted, read it from stdin")
 	launchpadLaunchCmd.Flags().BoolVar(&launchpadLaunchDetach, "detach", false, "Print the launch id and pending status, and return without waiting for the launch to finish")
 	launchpadLaunchCmd.MarkFlagRequired("scheme")
-	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadLaunchCmd, launchpadPendingCmd, launchpadStatusCmd, launchpadCancelCmd)
+	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadUnlinkCmd, launchpadLaunchCmd, launchpadPendingCmd, launchpadStatusCmd, launchpadCancelCmd)
 	rootCmd.AddCommand(launchpadCmd)
 }
 
@@ -100,8 +104,18 @@ only the entries that match it. See marasi traffic list --help for the fields.`,
 		if err != nil {
 			return err
 		}
+		query := url.Values{}
 		if launchpadGetQuery != "" {
-			path += "?" + url.Values{"q": {launchpadGetQuery}}.Encode()
+			query.Set("q", launchpadGetQuery)
+		}
+		if len(launchpadGetExclude) > 0 {
+			query["exclude"] = launchpadGetExclude
+		}
+		if launchpadGetOrderBy != "" {
+			query.Set("order_by", launchpadGetOrderBy)
+		}
+		if len(query) > 0 {
+			path += "?" + query.Encode()
 		}
 		return runLaunchpadCommand(cmd, http.MethodGet, path, "getting launchpad", "get", launchpadRequest{})
 	},
@@ -143,6 +157,24 @@ var launchpadLinkCmd = &cobra.Command{
 			return err
 		}
 		return runLaunchpadCommand(cmd, http.MethodPost, path, "linking launchpad request", "link", launchpadRequest{RequestID: &launchpadLinkRequest})
+	},
+}
+
+var launchpadUnlinkCmd = &cobra.Command{
+	Use:   "unlink UUID REQUEST_UUID",
+	Short: "Unlink a traffic pair from a launchpad",
+	Long:  "Unlink a traffic pair from a launchpad. The pair stays in the traffic list.",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := serviceIDPath("/launchpad/", args[0], "/link/")
+		if err != nil {
+			return err
+		}
+		requestID, err := parseServiceID(args[1])
+		if err != nil {
+			return err
+		}
+		return runLaunchpadCommand(cmd, http.MethodDelete, path+requestID, "unlinking launchpad request", "unlink", launchpadRequest{})
 	},
 }
 
@@ -419,28 +451,44 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 		return writeLaunchpadGetHuman(response, cmd.OutOrStdout())
 	case "pending":
 		return writeLaunchListHuman(response, cmd.OutOrStdout())
-	case "create", "update":
-		var result struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal(response, &result); err != nil || result.ID == "" {
-			return errors.New("decoding launchpad response")
-		}
-		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "launchpad %s %sd successfully\n", result.ID, action)
-		return err
+	case "create":
+		return writeLaunchpadChanged(cmd, response, "created")
+	case "update":
+		return writeLaunchpadChanged(cmd, response, "updated")
 	case "link":
-		var result struct {
-			LaunchpadID string `json:"launchpad_id"`
-			RequestID   string `json:"request_id"`
-		}
-		if err := json.Unmarshal(response, &result); err != nil || result.LaunchpadID == "" || result.RequestID == "" {
-			return errors.New("decoding launchpad response")
-		}
-		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "request %s linked to launchpad %s successfully\n", result.RequestID, result.LaunchpadID)
-		return err
+		return writeLaunchpadLinkChanged(cmd, response, "linked to")
+	case "unlink":
+		return writeLaunchpadLinkChanged(cmd, response, "unlinked from")
 	default:
 		return fmt.Errorf("unsupported launchpad action %q", action)
 	}
+}
+
+// writeLaunchpadChanged reports a created or updated launchpad on stderr.
+// done is the past tense of the action, such as "created".
+func writeLaunchpadChanged(cmd *cobra.Command, response []byte, done string) error {
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(response, &result); err != nil || result.ID == "" {
+		return errors.New("decoding launchpad response")
+	}
+	_, err := fmt.Fprintf(cmd.ErrOrStderr(), "launchpad %s %s successfully\n", result.ID, done)
+	return err
+}
+
+// writeLaunchpadLinkChanged reports a linked or unlinked request on stderr.
+// done is the past tense with its preposition, such as "linked to".
+func writeLaunchpadLinkChanged(cmd *cobra.Command, response []byte, done string) error {
+	var result struct {
+		LaunchpadID string `json:"launchpad_id"`
+		RequestID   string `json:"request_id"`
+	}
+	if err := json.Unmarshal(response, &result); err != nil || result.LaunchpadID == "" || result.RequestID == "" {
+		return errors.New("decoding launchpad response")
+	}
+	_, err := fmt.Fprintf(cmd.ErrOrStderr(), "request %s %s launchpad %s successfully\n", result.RequestID, done, result.LaunchpadID)
+	return err
 }
 
 func writeLaunchpadListHuman(body []byte, stdout io.Writer) error {

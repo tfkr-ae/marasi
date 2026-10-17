@@ -20,7 +20,7 @@ import (
 func TestTrafficListCommand(t *testing.T) {
 	t.Run("should print the newest page oldest first", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","scheme":"https","method":"POST","host":"example.com","path":"/login","status":"401 Unauthorized","status_code":401,"content_type":"text/plain","length":"45","metadata":{},"requested_at":"2026-01-02T03:04:04Z","responded_at":"2026-01-02T03:04:05Z"},{"id":"0193802f-f0e7-73d9-a764-06d21e367809","scheme":"https","method":"GET","host":"example.com","path":"/a","status":"200 OK","status_code":200,"content_type":"application/json","length":"12","metadata":{"foo":"bar"},"requested_at":"2026-01-02T03:04:05Z","responded_at":"2026-01-02T03:04:06Z"}],"next_cursor":null}`)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"01938032-1b17-7243-b035-e6a9f4645904","number":9,"scheme":"https","method":"POST","host":"example.com","path":"/login","status":"401 Unauthorized","status_code":401,"content_type":"text/plain","length":"45","metadata":{},"requested_at":"2026-01-02T03:04:04Z","responded_at":"2026-01-02T03:04:05Z"},{"id":"0193802f-f0e7-73d9-a764-06d21e367809","number":10,"scheme":"https","method":"GET","host":"example.com","path":"/a","status":"200 OK","status_code":200,"content_type":"application/json","length":"12","metadata":{"foo":"bar"},"requested_at":"2026-01-02T03:04:05Z","responded_at":"2026-01-02T03:04:06Z"}],"next_cursor":null}`)
 
 		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "list")
 		if err != nil {
@@ -30,7 +30,7 @@ func TestTrafficListCommand(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "limit=200" {
 			t.Fatalf("\nwanted:\nGET /traffic?limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
-		want := "01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /login  401  45\n0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /a      200  12\n"
+		want := "9   01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /login  401  45\n10  0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /a      200  12\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -47,7 +47,7 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /123456789012345678901234567890123456...  200  12\n01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /short                                    404  45\n"
+		want := "0  0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /123456789012345678901234567890123456...  200  12\n0  01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /short                                    404  45\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -61,7 +61,7 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "0193802f-f0e7-73d9-a764-06d21e367809  GET  example.com  /12345678901234567890123456789012345😀...  200  12\n"
+		want := "0  0193802f-f0e7-73d9-a764-06d21e367809  GET  example.com  /12345678901234567890123456789012345😀...  200  12\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -78,12 +78,26 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "01938032-1b17-7243-b035-e6a9f4645904  GET  example.com  /a  200  12\n"
+		want := "0  01938032-1b17-7243-b035-e6a9f4645904  GET  example.com  /a  200  12\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
 		if stderr != "next_cursor=0193802f-f0e7-73d9-a764-06d21e367809\n" {
 			t.Fatalf("\nwanted:\nnext_cursor=0193802f-f0e7-73d9-a764-06d21e367809\ngot:\n%s", stderr)
+		}
+	})
+
+	t.Run("should write prev_cursor and as_of to stderr after next_cursor", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":"bmV4dA","prev_cursor":"cHJldg","as_of":"01938032-1b17-7243-b035-e6a9f4645904","index":{"complete":true}}`)
+
+		_, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		want := "next_cursor=bmV4dA\nprev_cursor=cHJldg\nas_of=01938032-1b17-7243-b035-e6a9f4645904\n"
+		if stderr != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stderr)
 		}
 	})
 
@@ -112,7 +126,7 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "01938032-1b17-7243-b035-e6a9f4645904  GET  example.com  /a  200  12\n"
+		want := "0  01938032-1b17-7243-b035-e6a9f4645904  GET  example.com  /a  200  12\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -241,17 +255,61 @@ func TestTrafficListCommand(t *testing.T) {
 		})
 	}
 
-	t.Run("should send --cursor as the cursor query parameter", func(t *testing.T) {
+	t.Run("should send the opaque --cursor as the cursor query parameter", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
 
-		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--cursor", "0193802f-f0e7-73d9-a764-06d21e367809")
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--cursor", "eyJ2IjoxfQ")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 		got := sent.snapshot()
-		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "cursor=0193802f-f0e7-73d9-a764-06d21e367809&limit=200" {
-			t.Fatalf("\nwanted:\nGET /traffic?cursor=0193802f-f0e7-73d9-a764-06d21e367809&limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
+		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "cursor=eyJ2IjoxfQ&limit=200" {
+			t.Fatalf("\nwanted:\nGET /traffic?cursor=eyJ2IjoxfQ&limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
+		}
+	})
+
+	t.Run("should send --exclude, --as-of and --backward", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list",
+			"--exclude", "image/*", "--exclude", "text/html", "--as-of", "01938032-1b17-7243-b035-e6a9f4645904", "--backward", "--cursor", "abc")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		got := sent.snapshot()
+		want := "as_of=01938032-1b17-7243-b035-e6a9f4645904&cursor=abc&direction=backward&exclude=image%2F%2A&exclude=text%2Fhtml&limit=200"
+		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != want {
+			t.Fatalf("\nwanted:\nGET /traffic?%s\ngot:\n%s %s?%s", want, got.Method, got.Path, got.RawQuery)
+		}
+	})
+
+	t.Run("should send --order-by as order_by", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--order-by", "length desc")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		got := sent.snapshot()
+		want := "limit=200&order_by=length+desc"
+		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != want {
+			t.Fatalf("\nwanted:\nGET /traffic?%s\ngot:\n%s %s?%s", want, got.Method, got.Path, got.RawQuery)
+		}
+	})
+
+	t.Run("should reject a malformed --as-of without a request", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[],"next_cursor":null}`)
+
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--as-of", "nope")
+		if err == nil || err.Error() != `invalid uuid "nope"` {
+			t.Fatalf("\nwanted:\ninvalid uuid \"nope\"\ngot:\n%v", err)
+		}
+		if sent.snapshot().Path != "" {
+			t.Fatalf("\nwanted:\nno request\ngot:\n%s", sent.snapshot().Path)
 		}
 	})
 
@@ -318,6 +376,23 @@ func TestTrafficListCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("should print why a cursor is invalid on stderr", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"invalid_cursor","message":"invalid cursor: the cursor is for order_by \"path\", not \"method\""}`)
+
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "list", "--order-by", "method", "--cursor", "eyJrIjoiL2EifQ")
+		if err == nil {
+			t.Fatal("\nwanted:\nerror\ngot:\nnil")
+		}
+		if stdout != "" {
+			t.Fatalf("\nwanted:\nno stdout\ngot:\n%s", stdout)
+		}
+		want := `listing traffic: invalid_cursor: invalid cursor: the cursor is for order_by "path", not "method"`
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("\nwanted stderr containing:\n%s\ngot:\n%s", want, stderr)
+		}
+	})
+
 	t.Run("should normalize a JSON query error keeping the message and position", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"invalid_query","message":"unknown field \"stauts\"","position":1}`)
@@ -331,7 +406,7 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		for _, want := range []string{"-q, --query", "host", "method", "scheme", "path", "content_type", "status_code", "requested_at", "responded_at", "metadata.<key>", "request_head", "request_body", "response_head", "response_body", "response_body:\"password\"", "note:\"idor candidate\"", "metadata:\"workshop\"", "launchpad = \"<launchpad id>\"", "launchpad != \"<launchpad id>\"", "launchpad:*", "including pairs in no launchpad", "at least 3 characters", "OR binds tighter than AND"} {
+		for _, want := range []string{"-q, --query", "host", "method", "scheme", "path", "content_type", "status_code", "requested_at", "responded_at", "metadata.<key>", "metadata.<key>:*", "request_head", "request_body", "response_head", "response_body", "response_body:\"password\"", "note:\"idor candidate\"", "metadata:\"workshop\"", "launchpad = \"<launchpad id>\"", "launchpad != \"<launchpad id>\"", "launchpad:*", "including pairs in no launchpad", "finding = \"<finding id>\"", "test_case:*", "note:*", "NOT note:*", "at least 3 characters", "OR binds tighter than AND"} {
 			if !strings.Contains(stdout, want) {
 				t.Fatalf("\nwanted help containing:\n%s\ngot:\n%s", want, stdout)
 			}
@@ -359,7 +434,7 @@ func TestTrafficGetCommand(t *testing.T) {
 	t.Run("should print the control API detail body with --json", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		id := "0193802f-f0e7-73d9-a764-06d21e367809"
-		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","note":"a note","metadata":{"foo":"bar"},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/json","length":"12","raw":"aGVsbG8K","responded_at":"2026-01-02T03:04:06Z"}}`
+		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","number":42,"note":"a note","metadata":{"foo":"bar"},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/json","length":"12","raw":"aGVsbG8K","responded_at":"2026-01-02T03:04:06Z"}}`
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 
 		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "get", "--json", id)
@@ -399,7 +474,7 @@ func TestTrafficGetCommand(t *testing.T) {
 	t.Run("should print fields, note, metadata, and utf-8 raw", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		id := "0193802f-f0e7-73d9-a764-06d21e367809"
-		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","note":"a note","metadata":{"foo":"bar"},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/json","length":"12","raw":"aGVsbG8K","responded_at":"2026-01-02T03:04:06Z"}}`
+		body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","number":42,"note":"a note","metadata":{"foo":"bar"},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/json","length":"12","raw":"aGVsbG8K","responded_at":"2026-01-02T03:04:06Z"}}`
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 
 		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "traffic", "get", id)
@@ -410,7 +485,7 @@ func TestTrafficGetCommand(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/traffic/"+id {
 			t.Fatalf("\nwanted:\nGET /traffic/%s\ngot:\n%s %s", id, got.Method, got.Path)
 		}
-		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: 200 OK\nstatus_code: 200\ncontent_type: application/json\nlength: 12\nresponded_at: 2026-01-02T03:04:06Z\nnote: a note\nmetadata: {\"foo\":\"bar\"}\nGET /a\nhello\n"
+		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nnumber: 42\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: 200 OK\nstatus_code: 200\ncontent_type: application/json\nlength: 12\nresponded_at: 2026-01-02T03:04:06Z\nnote: a note\nmetadata: {\"foo\":\"bar\"}\nGET /a\nhello\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -429,7 +504,7 @@ func TestTrafficGetCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: 400 Bad Request\nstatus_code: 400\ncontent_type: text/plain\nlength: 12\nresponded_at: 2026-01-02T03:04:06Z\nGET /a\nHTTP/1.1 400 Bad Request\n"
+		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nnumber: 0\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: 400 Bad Request\nstatus_code: 400\ncontent_type: text/plain\nlength: 12\nresponded_at: 2026-01-02T03:04:06Z\nGET /a\nHTTP/1.1 400 Bad Request\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -481,7 +556,7 @@ func TestTrafficGetCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: N/A\nstatus_code: -1\ncontent_type: \nlength: 0\nresponded_at: \nGET /a\nno response yet\n"
+		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nnumber: 0\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: N/A\nstatus_code: -1\ncontent_type: \nlength: 0\nresponded_at: \nGET /a\nno response yet\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -497,7 +572,7 @@ func TestTrafficGetCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: N/A\nstatus_code: -1\ncontent_type: \nlength: 0\nresponded_at: \nGET /a\nno response yet\n"
+		want := "id: 0193802f-f0e7-73d9-a764-06d21e367809\nnumber: 0\nscheme: https\nmethod: GET\nhost: example.com\npath: /a\nrequested_at: 2026-01-02T03:04:05Z\nstatus: N/A\nstatus_code: -1\ncontent_type: \nlength: 0\nresponded_at: \nGET /a\nno response yet\n"
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -703,7 +778,7 @@ func TestLaunchpadCommands(t *testing.T) {
 		body := `{"id":"` + id + `","name":"Login","description":"Try variants","items":[{"id":"` + requestID + `","method":"POST","host":"example.com","path":"/login","status_code":200,"length":"2"}]}` + "\n"
 		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "get", id)
-		want := "id: " + id + "\nname: Login\ndescription: Try variants\n" + requestID + "  POST  example.com  /login  200  2\n"
+		want := "id: " + id + "\nname: Login\ndescription: Try variants\n" + "0  " + requestID + "  POST  example.com  /login  200  2\n"
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
@@ -724,6 +799,34 @@ func TestLaunchpadCommands(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("should send get --exclude as exclude query parameters", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"id":"`+id+`","name":"Login","description":"","items":[]}`)
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "launchpad", "get", id, "-q", "status_code = 200", "--exclude", "image/*", "--exclude", "font/*")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		got := sent.snapshot()
+		want := "exclude=image%2F%2A&exclude=font%2F%2A&q=status_code+%3D+200"
+		if got.Method != http.MethodGet || got.Path != "/launchpad/"+id || got.RawQuery != want {
+			t.Fatalf("\nwanted:\nGET /launchpad/%s?%s\ngot:\n%s %s?%s", id, want, got.Method, got.Path, got.RawQuery)
+		}
+	})
+
+	t.Run("should send get --order-by as order_by", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"id":"`+id+`","name":"Login","description":"","items":[]}`)
+		_, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "launchpad", "get", id, "--order-by", "status_code")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		got := sent.snapshot()
+		want := "order_by=status_code"
+		if got.Method != http.MethodGet || got.Path != "/launchpad/"+id || got.RawQuery != want {
+			t.Fatalf("\nwanted:\nGET /launchpad/%s?%s\ngot:\n%s %s?%s", id, want, got.Method, got.Path, got.RawQuery)
+		}
+	})
 
 	t.Run("should send no q query parameter on get without --query", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
@@ -1305,7 +1408,9 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	t.Helper()
 	oldJSON := jsonOutput
 	oldQuery, oldLimit, oldCursor := trafficListQueryText, trafficListLimit, trafficListCursor
-	oldLaunchpadQuery := launchpadGetQuery
+	oldExclude, oldAsOf, oldBackward := trafficListExclude, trafficListAsOf, trafficListBackward
+	oldLaunchpadQuery, oldLaunchpadExclude := launchpadGetQuery, launchpadGetExclude
+	oldOrderBy, oldLaunchpadOrderBy := trafficListOrderBy, launchpadGetOrderBy
 	oldConfigDir, oldInstance, oldInstancePath := configDir, instance, instancePath
 	var outBuf, errBuf bytes.Buffer
 	rootCmd.SetArgs(args)
@@ -1314,7 +1419,9 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	t.Cleanup(func() {
 		jsonOutput = oldJSON
 		trafficListQueryText, trafficListLimit, trafficListCursor = oldQuery, oldLimit, oldCursor
-		launchpadGetQuery = oldLaunchpadQuery
+		trafficListExclude, trafficListAsOf, trafficListBackward = oldExclude, oldAsOf, oldBackward
+		launchpadGetQuery, launchpadGetExclude = oldLaunchpadQuery, oldLaunchpadExclude
+		trafficListOrderBy, launchpadGetOrderBy = oldOrderBy, oldLaunchpadOrderBy
 		configDir, instance, instancePath = oldConfigDir, oldInstance, oldInstancePath
 		rootCmd.SetArgs(nil)
 		rootCmd.SetOut(nil)

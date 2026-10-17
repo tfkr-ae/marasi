@@ -64,6 +64,8 @@ var (
 	ErrReportingRepoNotFound = errors.New("reporting repo not found")
 	// ErrArmoryRepoNotFound is returned when the Armory repository is not found.
 	ErrArmoryRepoNotFound = errors.New("armory repo not found")
+	// ErrConfigRepoNotFound is returned when the config repository is not found.
+	ErrConfigRepoNotFound = errors.New("config repo not found")
 	// ErrArmoryNotFound is returned when the Armory service is not found.
 	ErrArmoryNotFound = errors.New("armory service not found")
 	// ErrWordlistManagerNotSet is returned when the wordlist manager is not set.
@@ -281,6 +283,15 @@ func (proxy *Proxy) GetArmoryRepo() (domain.ArmoryRepository, error) {
 	return proxy.ArmoryRepo, nil
 }
 
+// GetConfigRepo returns the config repository, which holds client settings.
+// It returns an error if the repository is not set.
+func (proxy *Proxy) GetConfigRepo() (domain.ConfigRepository, error) {
+	if proxy.ConfigRepo == nil {
+		return nil, ErrConfigRepoNotFound
+	}
+	return proxy.ConfigRepo, nil
+}
+
 // GetArmory returns the Armory service.
 // It returns an error if the service is not set.
 func (proxy *Proxy) GetArmory() (ArmoryService, error) {
@@ -491,6 +502,7 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyReque
 			Path:        path,
 			RequestedAt: requestTime,
 		}
+		proxyRequest.SitemapNode = domain.SitemapLeaf(proxyRequest.Scheme, proxyRequest.Host, proxyRequest.Path)
 
 		// TODO Check prettified error
 		rawReq, prettified, err := rawhttp.DumpRequest(req)
@@ -503,10 +515,7 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyReque
 		}
 
 		proxyRequest.Raw = domain.RawField(rawReq)
-		if prettified != "" {
-			// Kept on the request's own metadata too, so the response write keeps it.
-			metadata["prettified-request"] = prettified
-		}
+		proxyRequest.Prettified = prettified
 		// The response pipeline goes on changing the request's metadata while
 		// the database writer stores this request, so the request gets its own copy.
 		proxyRequest.Metadata = maps.Clone(metadata)
@@ -576,11 +585,8 @@ func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
 		Length:      res.Header.Get("Content-Length"),
 		Raw:         domain.RawField(rawRes),
 		Metadata:    metadata,
+		Prettified:  prettified,
 		RespondedAt: responseTime,
-	}
-
-	if prettified != "" {
-		proxyResponse.Metadata["prettified-response"] = prettified
 	}
 	return proxyResponse, nil
 }
@@ -597,10 +603,7 @@ func (proxy *Proxy) WriteToDB() {
 			if proxy.launchIs(castItem.ID, func(entry *launchEntry) bool { return entry.duplicate }) {
 				continue
 			}
-			err := proxy.TrafficRepo.InsertResponse(castItem)
-			if err != nil {
-				log.Println(err)
-			}
+			proxy.writeResponse(castItem)
 		case *domain.WebSocketConnection:
 			err := proxy.WebSocketRepo.InsertConnection(castItem)
 			if err != nil {
@@ -636,6 +639,21 @@ func (proxy *Proxy) WriteToDB() {
 		default:
 			log.Print(castItem)
 		}
+	}
+}
+
+// writeResponse stores a response. The response of a pair deleted while in
+// flight, or while Checkpoint held it, is dropped (ADR-0034): that is not an
+// error, so it is logged at debug only.
+func (proxy *Proxy) writeResponse(response *domain.ProxyResponse) {
+	err := proxy.TrafficRepo.InsertResponse(response)
+	switch {
+	case errors.Is(err, domain.ErrPairNotFound):
+		if proxy.Logger != nil {
+			proxy.Logger.Debug("dropping the response of a deleted pair", "id", response.ID)
+		}
+	case err != nil:
+		log.Println(err)
 	}
 }
 

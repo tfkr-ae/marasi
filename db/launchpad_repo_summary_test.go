@@ -17,6 +17,7 @@ import (
 )
 
 func TestLaunchpadRepo_GetLaunchpadsEntrySummary(t *testing.T) {
+	t.Parallel()
 	t.Run("should report no entries and no status for an empty launchpad", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -118,6 +119,7 @@ func TestLaunchpadRepo_GetLaunchpadsEntrySummary(t *testing.T) {
 }
 
 func TestLaunchpadRepo_GetLaunchpadEntrySummary(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -205,10 +207,16 @@ func countingRepo(t *testing.T, repo *Repository) (*Repository, *atomic.Int64) {
 	if err := repo.dbConn.Get(&file, `SELECT file FROM pragma_database_list WHERE name = 'main'`); err != nil {
 		t.Fatalf("reading database path: %v", err)
 	}
+	// Nothing left queued for the index, so the counting repository
+	// schedules no flush of its own.
+	indexCapturedTraffic(t, repo)
 	statements := new(atomic.Int64)
 	conn := sqlx.NewDb(sql.OpenDB(countingConnector{dsn: file, statements: statements}), "sqlite")
 	t.Cleanup(func() { conn.Close() })
-	return NewProxyRepo(conn), statements
+	counted := NewProxyRepo(conn)
+	// Count only the statements of the calls under test.
+	statements.Store(0)
+	return counted, statements
 }
 
 type countingConnector struct {

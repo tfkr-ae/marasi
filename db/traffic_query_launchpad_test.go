@@ -128,6 +128,7 @@ func tableCounts(t *testing.T, repo *Repository) [3]int {
 }
 
 func TestTrafficRepo_ListTrafficLaunchpadQuery(t *testing.T) {
+	t.Parallel()
 	f := setupLaunchpadQueryFixture(t)
 
 	tests := []struct {
@@ -152,7 +153,7 @@ func TestTrafficRepo_ListTrafficLaunchpadQuery(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.query, func(t *testing.T) {
-			items, _, _, err := f.repo.ListTraffic(nil, 200, f.expand(test.query))
+			items, _, _, err := listPage(f.repo, nil, 200, f.expand(test.query))
 			if err != nil {
 				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 			}
@@ -164,6 +165,7 @@ func TestTrafficRepo_ListTrafficLaunchpadQuery(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficLaunchpadQueryErrors(t *testing.T) {
+	t.Parallel()
 	f := setupLaunchpadQueryFixture(t)
 
 	tests := []struct {
@@ -185,13 +187,14 @@ func TestTrafficRepo_ListTrafficLaunchpadQueryErrors(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.query, func(t *testing.T) {
-			_, _, _, err := f.repo.ListTraffic(nil, 200, f.expand(test.query))
+			_, _, _, err := listPage(f.repo, nil, 200, f.expand(test.query))
 			assertQueryError(t, err, test.message, test.position)
 		})
 	}
 }
 
 func TestLaunchpadRepo_GetLaunchpadRequestsQuery(t *testing.T) {
+	t.Parallel()
 	f := setupLaunchpadQueryFixture(t)
 
 	tests := []struct {
@@ -214,7 +217,7 @@ func TestLaunchpadRepo_GetLaunchpadRequestsQuery(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.launchpad+" "+test.query, func(t *testing.T) {
-			items, err := f.repo.GetLaunchpadRequests(f.launchpads[test.launchpad], f.expand(test.query))
+			items, _, err := f.repo.GetLaunchpadRequests(f.launchpads[test.launchpad], f.expand(test.query), nil, "")
 			if err != nil {
 				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 			}
@@ -225,7 +228,7 @@ func TestLaunchpadRepo_GetLaunchpadRequestsQuery(t *testing.T) {
 	}
 
 	t.Run("should return an invalid query with its position", func(t *testing.T) {
-		items, err := f.repo.GetLaunchpadRequests(f.launchpads["one"], `status_code = 200 AND stauts = 5`)
+		items, _, err := f.repo.GetLaunchpadRequests(f.launchpads["one"], `status_code = 200 AND stauts = 5`, nil, "")
 		assertQueryError(t, err, `unknown field "stauts"`, 23)
 		if items != nil {
 			t.Fatalf("\nwanted:\nno items\ngot:\n%v", items)

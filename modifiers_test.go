@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1783,6 +1784,7 @@ func TestWriteRequestModifier(t *testing.T) {
 			Path:        "/blog",
 			Metadata:    make(map[string]any),
 			RequestedAt: wantTime,
+			SitemapNode: "https://marasi.app/blog",
 		}
 		proxy := newTestProxy(t)
 		proxy.OnRequest = func(req domain.ProxyRequest) error {
@@ -1814,6 +1816,29 @@ func TestWriteRequestModifier(t *testing.T) {
 			t.Fatalf("wanted: %v\ngot: %v", want, got)
 		}
 
+	})
+
+	t.Run("should carry a request's prettified copy outside metadata", func(t *testing.T) {
+		proxy := newTestProxy(t)
+		proxy.OnRequest = func(req domain.ProxyRequest) error { return nil }
+		req := httptest.NewRequest(http.MethodPost, "https://marasi.app/api", strings.NewReader(`{"b":2,"a":1}`))
+		req.Header.Set("Content-Type", "application/json")
+		*req = *core.ContextWithRequestID(req, uuid.New())
+		*req = *core.ContextWithRequestTime(req, time.Now())
+		metadata := map[string]any{"source": "test"}
+		*req = *core.ContextWithMetadata(req, metadata)
+
+		if err := WriteRequestModifier(proxy, req); err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+
+		got := (<-proxy.DBWriteChannel).(*domain.ProxyRequest)
+		if !strings.Contains(got.Prettified, "{\n  \"a\": 1,\n  \"b\": 2\n}") {
+			t.Fatalf("wanted: the prettified JSON body\ngot: %q", got.Prettified)
+		}
+		if want := map[string]any{"source": "test"}; !reflect.DeepEqual(got.Metadata, want) || !reflect.DeepEqual(metadata, want) {
+			t.Fatalf("wanted: %v in the request and the context\ngot: %v and %v", want, got.Metadata, metadata)
+		}
 	})
 
 	t.Run("requests coming from launchpad should include launchpad_id in metadata", func(t *testing.T) {
@@ -1877,6 +1902,7 @@ func TestWriteRequestModifier(t *testing.T) {
 			Path:        "/blog",
 			Metadata:    make(map[string]any),
 			RequestedAt: wantTime,
+			SitemapNode: "https://marasi.app/blog",
 		}
 		proxy := newTestProxy(t)
 		proxy.OnRequest = func(req domain.ProxyRequest) error {
@@ -3864,6 +3890,33 @@ func TestWriteResponseModifier(t *testing.T) {
 
 	})
 
+	t.Run("should carry a response's prettified copy outside metadata", func(t *testing.T) {
+		proxy := newTestProxy(t)
+		proxy.OnResponse = func(res domain.ProxyResponse) error { return nil }
+		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+		*req = *core.ContextWithRequestID(req, uuid.New())
+		*req = *core.ContextWithResponseTime(req, time.Now())
+		*req = *core.ContextWithMetadata(req, map[string]any{"source": "test"})
+		res := &http.Response{
+			Status: "200 OK", StatusCode: http.StatusOK, Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+			Header:  http.Header{"Content-Type": {"application/json"}},
+			Request: req,
+			Body:    io.NopCloser(strings.NewReader(`{"b":2,"a":1}`)),
+		}
+
+		if err := WriteResponseModifier(proxy, res); err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+
+		got := (<-proxy.DBWriteChannel).(*domain.ProxyResponse)
+		if !strings.Contains(got.Prettified, "{\n  \"a\": 1,\n  \"b\": 2\n}") {
+			t.Fatalf("wanted: the prettified JSON body\ngot: %q", got.Prettified)
+		}
+		if want := map[string]any{"source": "test"}; !reflect.DeepEqual(got.Metadata, want) {
+			t.Fatalf("wanted: %v\ngot: %v", want, got.Metadata)
+		}
+	})
+
 	t.Run("responses should still be written to the DB when onresponse is undefined", func(t *testing.T) {
 		proxy := newTestProxy(t)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
@@ -4024,4 +4077,37 @@ func TestWriteResponseModifier(t *testing.T) {
 			t.Fatalf("expected onResponse to be called")
 		}
 	})
+}
+
+// A null in the response-time metadata deletes the stored key (RFC 7396
+// merge in InsertResponse), so set_metadata never puts one there.
+func TestExtensionsResponseModifierPutsNoNullInMetadata(t *testing.T) {
+	proxy := newTestProxy(t, testExtensions["workshop"])
+	updateExtension(t, proxy, "workshop", `
+		function processResponse(response)
+			response:set_metadata({kept = "x", fn = function() end, nested = {fn = function() end, n = 1}, list = {1, 2}})
+		end
+	`)
+	req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
+	*req = *core.ContextWithExtensionID(req, "")
+	*req = *core.ContextWithMetadata(req, map[string]any{})
+	_, remove, err := martian.TestContext(req, nil, nil)
+	if err != nil {
+		t.Fatalf("applying martian context : %v", err)
+	}
+	defer remove()
+	res := &http.Response{Header: make(http.Header), Request: req}
+
+	if err := ExtensionsResponseModifier(proxy, res); err != nil {
+		t.Fatalf("wanted: nil\ngot: %v", err)
+	}
+	metadata, _ := core.MetadataFromContext(res.Request.Context())
+	got, err := json.Marshal(metadata["workshop"])
+	if err != nil {
+		t.Fatalf("marshalling metadata: %v", err)
+	}
+	want := `{"kept":"x","list":[1,2],"nested":{"n":1}}`
+	if string(got) != want {
+		t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+	}
 }

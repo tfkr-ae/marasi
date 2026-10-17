@@ -8,9 +8,12 @@ import (
 	"log/slog"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
+	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/pressly/goose/v3"
 	_ "github.com/tfkr-ae/marasi/db/migrations"
@@ -29,16 +32,59 @@ var migrateMu sync.Mutex
 type Repository struct {
 	dbConn *sqlx.DB // dbConn is the active database connection pool.
 	index  indexBuildState
+	// annotationIndex is what the repository knows about the annotation
+	// index backfill.
+	annotationIndex indexBuildState
+	// jobMu serialises background job batches with job resets, so a reset
+	// never lands between a batch reading its progress and committing it.
+	jobMu sync.Mutex
+	// sitemapFrom, when set, means every pair with an id at or above it is
+	// in the sitemap. jobMu guards it.
+	sitemapFrom *uuid.UUID
+	// prettifiedMovedTo is the oldest pair the prettified move has passed in
+	// this session, so its next batch starts below it. It is guarded by jobMu.
+	prettifiedMovedTo *uuid.UUID
+	// captured counts the pairs captured in this session, for the periodic
+	// statistics refresh.
+	captured atomic.Int64
+	// indexQueue indexes captured pairs in batches (ADR-0026).
+	indexQueue indexQueue
+	// pairNumber is the last pair number issued (ADR-0042).
+	pairNumber atomic.Int64
+	// afterBulkFlush, when set by a test, runs between a bulk operation's
+	// index flush and its transaction.
+	afterBulkFlush func()
 }
+
+// optimizeEveryPairs is how many captured pairs pass between refreshes of
+// the planner statistics while a project is open (ADR-0041).
+const optimizeEveryPairs = 1000
 
 // NewProxyRepo initializes a new Repository with the given sqlx.DB database connection.
 func NewProxyRepo(db *sqlx.DB) *Repository {
-	return &Repository{dbConn: db}
+	repo := &Repository{dbConn: db}
+	highest, err := highestPairNumber(db)
+	if err != nil {
+		// Numbers then start at 1, and a capture whose number is taken
+		// fails its insert rather than reusing a number.
+		slog.Default().Error("Failed to read the highest pair number", "error", err)
+	}
+	repo.pairNumber.Store(highest)
+	repo.resumeIndexQueue()
+	return repo
 }
 
 // Close terminates the database connection.
 // It is critical to call this to free up database resources.
 func (repo *Repository) Close() error {
+	repo.closeIndexQueue()
+	// Fold this session's captures into the pair count, so the next open
+	// does not count them. Both of the fold's updates commit together, so
+	// a failure leaves them to the next open to count once.
+	_ = repo.inTx(func(tx *sqlx.Tx) error { return foldPairCount(tx) })
+	// Refresh the statistics the planner uses to choose an index
+	// (ADR-0041). A failure here must not keep the project open.
+	_, _ = repo.dbConn.Exec(`PRAGMA optimize`)
 	err := repo.dbConn.Close()
 	if err != nil {
 		return fmt.Errorf("closing repo : %w", err)
@@ -130,5 +176,87 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 	} else {
 		dbLogger.Info("Migrations up to date", "count", 0)
 	}
+	if err := reconcileJobs(db); err != nil {
+		db.Close()
+		dbLogger.Error("Failed to reconcile background jobs", "error", err)
+		return nil, fmt.Errorf("reconciling background jobs: %w", err)
+	}
+	// 0x10000 checks every table, not only those this connection has used.
+	if err := optimize(db, `PRAGMA optimize = 0x10002`); err != nil {
+		db.Close()
+		dbLogger.Error("Failed to optimize the database", "error", err)
+		return nil, fmt.Errorf("optimizing the database: %w", err)
+	}
 	return db, nil
+}
+
+// optimize refreshes the statistics the planner uses to choose between a
+// sort index and a filter's index (ADR-0041) with the PRAGMA optimize
+// statement pragma, which analyses only the tables whose size has changed
+// a lot since their last analysis. analysis_limit keeps each analysis of a
+// large project to a sample; it is set every time because the pool may have
+// replaced the connection. The FTS5 shadow tables are then pinned again,
+// since optimize may have measured them.
+func optimize(db *sqlx.DB, pragma string) error {
+	if _, err := db.Exec(`PRAGMA analysis_limit = 400; ` + pragma); err != nil {
+		return err
+	}
+	if err := pinSearchIndexStatistics(db); err != nil {
+		return fmt.Errorf("pinning search index statistics: %w", err)
+	}
+	return nil
+}
+
+// pairCaptured counts a captured pair and, every optimizeEveryPairs pairs,
+// refreshes the planner statistics between writes. Statistics taken when a
+// project was opened small would otherwise steer list reads for the rest of
+// a long session. A failed refresh leaves the old statistics and must not
+// fail the capture.
+func (repo *Repository) pairCaptured() {
+	if repo.captured.Add(1)%optimizeEveryPairs == 0 {
+		_ = optimize(repo.dbConn, `PRAGMA optimize`)
+	}
+}
+
+// pinSearchIndexStatistics gives every FTS5 shadow table the statistics
+// SQLite assumes for a table it has never analysed, a million rows, in place
+// of whatever ANALYZE measured. FTS5 reads and writes its shadow tables only
+// by key, so measured statistics can only make that worse: taken while a
+// project is new, they record a two-row traffic_index_data, and the planner
+// runs the rowid-range DELETE that every FTS5 segment merge issues as a full
+// scan of the index. Each capture then costs more the larger the index has
+// grown, until the project is reopened and analysed again. Deleting the rows
+// is not enough: reloading statistics keeps a table's last measured size.
+func pinSearchIndexStatistics(db *sqlx.DB) error {
+	var statTables []string
+	if err := db.Select(&statTables, `SELECT name FROM sqlite_schema
+		WHERE type = 'table' AND name IN ('sqlite_stat1', 'sqlite_stat4')`); err != nil {
+		return err
+	}
+	if !slices.Contains(statTables, "sqlite_stat1") {
+		return nil
+	}
+	shadows := `SELECT s.name FROM sqlite_schema s
+		JOIN sqlite_schema v ON v.type = 'table' AND v.sql LIKE 'CREATE VIRTUAL TABLE%USING fts5%'
+		WHERE s.type = 'table' AND s.name IN (v.name || '_data', v.name || '_idx',
+			v.name || '_content', v.name || '_docsize', v.name || '_config')`
+	tx, err := db.Beginx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, stat := range statTables {
+		if _, err := tx.Exec(`DELETE FROM ` + stat + ` WHERE tbl IN (` + shadows + `)`); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO sqlite_stat1 (tbl, idx, stat)
+		SELECT name, NULL, '1000000' FROM (` + shadows + `)`); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ANALYZE sqlite_schema`)
+	return err
 }

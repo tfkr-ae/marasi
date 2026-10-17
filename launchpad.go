@@ -254,7 +254,9 @@ func (proxy *Proxy) CancelLaunch(id uuid.UUID) (domain.Launch, error) {
 // InterruptLaunches ends every pending launch as failed with reason
 // interrupted, because the open project is being switched or the service is
 // stopping. It cancels each launch and returns once all of them have ended,
-// so their outcomes are written to the project they were launched in.
+// so their outcomes are written to the project they were launched in, and
+// once any Checkpoint hold of theirs has ended, so a held launch does not
+// leave the project busy.
 //
 // A launch already cancelled stays cancelled, and one that already reached a
 // terminal state keeps it. Both are still waited for.
@@ -272,9 +274,14 @@ func (proxy *Proxy) InterruptLaunches() {
 	for _, entry := range entries {
 		entry.cancel()
 	}
-	for _, entry := range entries {
+	ids := make([]uuid.UUID, len(entries))
+	for i, entry := range entries {
 		<-entry.done
+		ids[i] = entry.launch.ID
 	}
+	// The launch ends when its proxy client gives up, but its hold ends only
+	// once the proxy sees the client's connection close.
+	proxy.waitHTTPHoldsEnded(ids)
 }
 
 // final returns the launch's terminal state. A cancel wins over everything,

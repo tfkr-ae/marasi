@@ -168,6 +168,44 @@ query, `OR` binds tighter than `AND`, so `a AND b OR c` means `a AND (b OR c)`.
 An invalid query returns 400
 `{"error":"invalid_query","message":"...","position":N}`.
 
+`traffic list --exclude 'image/*'` (repeatable, `GET /traffic?exclude=`) hides
+pairs of a content type: an exact type, or a whole major type such as `image/*`.
+Pairs with no content type yet are never hidden. Each page reports
+`next_cursor`, `prev_cursor` and `as_of`. Cursors are opaque: pass one back with
+`--cursor`, adding `--backward` to walk toward newer pairs, and pass `as_of`
+back with `--as-of` so later pages leave out pairs captured since the first.
+`--order-by` (`order_by=`) sorts by one of `requested_at`, `number`, `method`,
+`host`, `path`, `status_code`, `content_type` or `length`, with an optional
+`desc`; the default is `requested_at desc`. Pairs with no response sort last.
+Every pair has a `number`, its position in capture order from 1. Numbers never
+change and are never reused, and `-q 'number = 10'` finds one pair.
+A malformed cursor, or one from another sort, returns 400
+`{"error":"invalid_cursor","message":"..."}`.
+
+These commands count, check, and change traffic in bulk, and manage background
+jobs and client settings:
+
+```sh
+marasi --instance assessment traffic count -q 'status_code >= 500' --json
+marasi --instance assessment traffic types --json
+marasi --instance assessment traffic sitemap --node 'https://api.example.com' --json
+marasi --instance assessment traffic validate -q 'host = "api.example.com"'
+marasi --instance assessment traffic bulk highlight 3 --id UUID --id UUID
+marasi --instance assessment traffic bulk note append 'checked' -q 'path = "/api/*"' --as-of UUID
+marasi --instance assessment traffic bulk delete --ids-file ids.txt
+marasi --instance assessment jobs list --json
+marasi --instance assessment settings list my-client --json
+```
+
+`traffic bulk` commands (`highlight`, `link`, `unlink`, `metadata set`,
+`metadata clear`, `note append`, `note clear`, `delete`) take exactly one
+selection: `--id` (repeatable) or `--ids-file` (`-` for stdin), or `-q` with a
+required `--as-of` and optional `--exclude`. They print the number of pairs
+changed and do not ask for confirmation. `traffic validate` exits non-zero
+with the message and position when a query, exclusion, or sort is invalid.
+`settings` manages client settings: JSON values a client stores in the project
+under its own name and a key.
+
 `UUID` denotes an ID returned by `traffic list`. Raw request and response bytes
 are base64-encoded in JSON output. Events are live notifications with no replay.
 Traffic events can arrive before the matching row is persisted.

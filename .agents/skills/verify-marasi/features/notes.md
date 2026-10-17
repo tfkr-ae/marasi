@@ -9,6 +9,7 @@ Users attach a text note to one captured request/response pair, list pairs that 
 - Get the full note with `notes get UUID`, using the captured traffic UUID.
 - Page the list with `--limit` and `--cursor`.
 - Clear a note with `notes clear UUID`.
+- Append to or clear the notes of many pairs with `traffic bulk note append` and `traffic bulk note clear`.
 - Choose human-readable or `--json` output.
 
 ## How to get to it (user POV)
@@ -30,3 +31,4 @@ Run `notes get "$TRAFFIC_ID" --json` after setting and require the same `id` and
 - `notes set` stores `has_note` as the JSON number `1`. A later `traffic metadata update` while the note exists stores boolean `true` instead; the note remains readable. Clearing the note removes the key.
 - Notes belong to the currently open project. After opening a different project, previous notes are not visible. Opening the current path does not hide them.
 - Set publishes `note.updated`. Clear publishes `note.deleted`. Subscribe with `events` before the mutation; the stream has no replay.
+- Bulk notes: `traffic bulk note append TEXT` (or `--file PATH` or piped stdin, exactly one; with `--ids-file -` stdin holds the ids and is never read as text, so pass TEXT or `--file`) and `traffic bulk note clear`, each with a selection, call `POST /traffic/bulk/note`. Human output is `N pairs noted` or `N pairs cleared` on stderr. Prove it: `traffic bulk note append "bulk noted" --id "$ONE" --id "$TWO" </dev/null` prints `2 pairs noted` and `notes get "$ONE"` prints `bulk noted`; `traffic bulk note clear -q '' --as-of "$AS_OF" --json` returns `{"count":2}`; `printf '%s\n%s\n' "$ONE" "$TWO" | traffic bulk note append "from ids" --ids-file -` prints `2 pairs noted`; empty text, more than one of TEXT, `--file`, and piped stdin, or none fails before any request with `traffic bulk note append requires exactly one of text, --file, or piped stdin` (`... of text or --file when --ids-file is -` with `--ids-file -`). The route takes `{"selection":…, "append":"<text>"}` or `{"selection":…, "clear":true}` and returns `{"count":n}`. Append gives a pair without a note the text and adds a blank line plus the text to an existing note, so `count` is every selected pair. Clear counts only pairs that had a note. An empty `append` is 400 `{"error":"invalid_bulk_request","message":"note text is empty"}`; `clear:false`, both fields, or neither is 400 `invalid_bulk_request`. Bulk writes publish one `traffic.changed` with `change` `note`, not `note.updated` or `note.deleted`. There is no confirmation; the client asks before a clear.

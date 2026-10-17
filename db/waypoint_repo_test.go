@@ -9,6 +9,7 @@ import (
 )
 
 func TestWaypointRepo_GetWaypoints(t *testing.T) {
+	t.Parallel()
 	t.Run("should return an empty waypoint slice if there are none configured", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -56,6 +57,7 @@ func TestWaypointRepo_GetWaypoints(t *testing.T) {
 }
 
 func TestWaypointRepo_CreateWaypoint(t *testing.T) {
+	t.Parallel()
 	t.Run("should insert without replacing an existing hostname", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -79,6 +81,7 @@ func TestWaypointRepo_CreateWaypoint(t *testing.T) {
 }
 
 func TestWaypointRepo_CreateOrUpdateWaypoint(t *testing.T) {
+	t.Parallel()
 	t.Run("should create a new waypoint and save it", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -152,6 +155,7 @@ func TestWaypointRepo_CreateOrUpdateWaypoint(t *testing.T) {
 }
 
 func TestWaypointRepo_UpdateWaypoint(t *testing.T) {
+	t.Parallel()
 	t.Run("should update only an existing waypoint and report whether it changed", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -208,6 +212,7 @@ func TestWaypointRepo_UpdateWaypoint(t *testing.T) {
 }
 
 func TestWaypointRepo_DeleteWaypoint(t *testing.T) {
+	t.Parallel()
 	t.Run("should delete an existing waypoint", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()

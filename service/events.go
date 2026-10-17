@@ -33,12 +33,14 @@ type eventBroadcaster struct {
 // trafficRequestEvent is the JSON body of a traffic.request SSE event.
 type trafficRequestEvent struct {
 	ID          uuid.UUID      `json:"id"`           // request UUID
+	Number      int64          `json:"number"`       // pair number in capture order (ADR-0042)
 	Scheme      string         `json:"scheme"`       // http or https
 	Method      string         `json:"method"`       // HTTP method
 	Host        string         `json:"host"`         // request host
 	Path        string         `json:"path"`         // path including query
 	Metadata    map[string]any `json:"metadata"`     // request metadata without prettified bodies
 	RequestedAt time.Time      `json:"requested_at"` // when the request was made
+	SitemapNode string         `json:"sitemap_node"` // name of the pair's leaf node in the sitemap
 }
 
 // trafficResponseEvent is the JSON body of a traffic.response SSE event.
@@ -99,8 +101,14 @@ func (b *eventBroadcaster) unsubscribe(subscriber *eventSubscriber) {
 
 // publishRequest publishes a traffic.request event.
 func (b *eventBroadcaster) publishRequest(request domain.ProxyRequest) {
+	sitemapNode := request.SitemapNode
+	if sitemapNode == "" {
+		sitemapNode = domain.SitemapLeaf(request.Scheme, request.Host, request.Path)
+	}
 	b.publish("traffic.request", trafficRequestEvent{
+		SitemapNode: sitemapNode,
 		ID:          request.ID,
+		Number:      request.Number,
 		Scheme:      request.Scheme,
 		Method:      request.Method,
 		Host:        request.Host,
@@ -108,6 +116,15 @@ func (b *eventBroadcaster) publishRequest(request domain.ProxyRequest) {
 		Metadata:    metadataWithoutPrettified(request.Metadata),
 		RequestedAt: request.RequestedAt,
 	})
+}
+
+// publishSitemapChanged publishes a sitemap.changed event, after which
+// clients re-read the sitemap nodes they have expanded. reason is "rebuild"
+// or "delete".
+func (b *eventBroadcaster) publishSitemapChanged(reason string) {
+	b.publish("sitemap.changed", struct {
+		Reason string `json:"reason"`
+	}{Reason: reason})
 }
 
 // publishResponse publishes a traffic.response event.

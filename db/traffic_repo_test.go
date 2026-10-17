@@ -14,6 +14,7 @@ import (
 )
 
 func TestTrafficRepo_InsertRequest(t *testing.T) {
+	t.Parallel()
 	t.Run("should insert request", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -55,7 +56,7 @@ func TestTrafficRepo_InsertRequest(t *testing.T) {
 		if got.Host != "marasi.app" {
 			t.Fatalf("\nwanted:\nmarasi.app\ngot:\n%s", got.Host)
 		}
-		if !reflect.DeepEqual(got.Metadata, Metadata(wantMeta)) {
+		if !reflect.DeepEqual(got.Metadata, pairMetadata(wantMeta)) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", wantMeta, got.Metadata)
 		}
 		if !got.RequestedAt.Equal(wantTime) {
@@ -93,6 +94,7 @@ func TestTrafficRepo_InsertRequest(t *testing.T) {
 }
 
 func TestTrafficRepo_InsertResponse(t *testing.T) {
+	t.Parallel()
 	t.Run("should update an existing request row with response data", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -132,8 +134,35 @@ func TestTrafficRepo_InsertResponse(t *testing.T) {
 		if !got.RespondedAt.Time.Equal(want.RespondedAt) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want.RespondedAt, got.RespondedAt.Time)
 		}
-		if !reflect.DeepEqual(got.Metadata, Metadata(want.Metadata)) {
+		if !reflect.DeepEqual(got.Metadata, pairMetadata(want.Metadata)) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want.Metadata, got.Metadata)
+		}
+	})
+
+	t.Run("should keep a metadata key set while the pair was in flight", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		reqID := testRequest(t, repo, nil)
+		// The request-time context, as the proxy carries it to the response.
+		context := map[string]any{"extension": "workshop", "nested": map[string]any{"a": 1}}
+		if err := repo.UpdateMetadata(map[string]any{"extension": "workshop", "nested": map[string]any{"b": 2}, "tag": "set in flight"}, reqID); err != nil {
+			t.Fatalf("UpdateMetadata() error = %v", err)
+		}
+		if err := repo.InsertResponse(&domain.ProxyResponse{
+			ID: reqID, Status: "200 OK", StatusCode: 200, Raw: []byte("HTTP/1.1 200 OK\r\n\r\n"),
+			Metadata: context, RespondedAt: time.Now(),
+		}); err != nil {
+			t.Fatalf("InsertResponse() error = %v", err)
+		}
+
+		got, err := repo.GetMetadata(reqID)
+		if err != nil {
+			t.Fatalf("GetMetadata() error = %v", err)
+		}
+		want := map[string]any{"extension": "workshop", "nested": map[string]any{"a": float64(1), "b": float64(2)}, "tag": "set in flight"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
 		}
 	})
 
@@ -149,13 +178,14 @@ func TestTrafficRepo_InsertResponse(t *testing.T) {
 			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
 		}
 
-		if !strings.Contains(err.Error(), "no request found") {
-			t.Fatalf("\nwanted:\nerror containing 'no request found'\ngot:\n%v", err)
+		if !errors.Is(err, domain.ErrPairNotFound) {
+			t.Fatalf("\nwanted:\nan error wrapping domain.ErrPairNotFound\ngot:\n%v", err)
 		}
 	})
 }
 
 func TestTrafficRepo_GetResponse(t *testing.T) {
+	t.Parallel()
 	t.Run("should get an existing response", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -170,6 +200,31 @@ func TestTrafficRepo_GetResponse(t *testing.T) {
 
 		if !reflect.DeepEqual(want, got) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
+		}
+	})
+
+	t.Run("should return the stored prettified response", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		reqID := testRequest(t, repo, nil)
+		resp := &domain.ProxyResponse{
+			ID: reqID, Status: "200 OK", StatusCode: 200, ContentType: "application/json", Length: "13",
+			Raw:         []byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"b\":2,\"a\":1}"),
+			Prettified:  "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\n  \"a\": 1,\n  \"b\": 2\n}",
+			Metadata:    map[string]any{},
+			RespondedAt: time.Now().UTC().Truncate(time.Millisecond),
+		}
+		if err := repo.InsertResponse(resp); err != nil {
+			t.Fatalf("InsertResponse() error = %v", err)
+		}
+
+		got, err := repo.GetResponse(reqID)
+		if err != nil {
+			t.Fatalf("GetResponse() error = %v", err)
+		}
+		if got.Prettified != resp.Prettified {
+			t.Fatalf("GetResponse() Prettified = %q, want %q", got.Prettified, resp.Prettified)
 		}
 	})
 
@@ -215,6 +270,7 @@ func TestTrafficRepo_GetResponse(t *testing.T) {
 }
 
 func TestTrafficRepo_GetRequestResponseRow(t *testing.T) {
+	t.Parallel()
 	t.Run("should get a full row with request, response, and note", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -307,6 +363,7 @@ func TestTrafficRepo_GetRequestResponseRow(t *testing.T) {
 }
 
 func TestTrafficRepo_GetRequestResponseRows(t *testing.T) {
+	t.Parallel()
 	t.Run("should get multiple full rows with mixed details and notes", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -407,6 +464,7 @@ func TestTrafficRepo_GetRequestResponseRows(t *testing.T) {
 }
 
 func TestTrafficRepo_GetRequestResponseSummary(t *testing.T) {
+	t.Parallel()
 	t.Run("should return an empty slice if database is empty", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -470,6 +528,7 @@ func TestTrafficRepo_GetRequestResponseSummary(t *testing.T) {
 }
 
 func TestTrafficRepo_GetMetadata(t *testing.T) {
+	t.Parallel()
 	t.Run("should get metadata for an existing request", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -522,6 +581,7 @@ func TestTrafficRepo_GetMetadata(t *testing.T) {
 }
 
 func TestTrafficRepo_UpdateMetadata(t *testing.T) {
+	t.Parallel()
 	t.Run("should update metadata for a single request", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -578,6 +638,7 @@ func TestTrafficRepo_UpdateMetadata(t *testing.T) {
 }
 
 func TestTrafficRepo_GetNotes(t *testing.T) {
+	t.Parallel()
 	t.Run("should return error if no note exists", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -595,6 +656,7 @@ func TestTrafficRepo_GetNotes(t *testing.T) {
 	})
 }
 func TestTrafficRepo_Notes(t *testing.T) {
+	t.Parallel()
 	t.Run("should add a new note", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -647,6 +709,7 @@ func TestTrafficRepo_Notes(t *testing.T) {
 }
 
 func TestTrafficRepo_NoteTriggers(t *testing.T) {
+	t.Parallel()
 	t.Run("adding a note should set has_note in request metadata", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -700,6 +763,7 @@ func TestTrafficRepo_NoteTriggers(t *testing.T) {
 }
 
 func TestTrafficRepo_DeleteNote(t *testing.T) {
+	t.Parallel()
 	t.Run("should remove the note row and leave has_note absent", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -746,6 +810,7 @@ func TestTrafficRepo_DeleteNote(t *testing.T) {
 }
 
 func TestTrafficRepo_ListNotes(t *testing.T) {
+	t.Parallel()
 	t.Run("should return an empty page if no notes exist", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -966,6 +1031,7 @@ func TestTrafficRepo_ListNotes(t *testing.T) {
 }
 
 func TestTrafficRepo_SearchByMetadata(t *testing.T) {
+	t.Parallel()
 	t.Run("should return matching requests", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -1040,11 +1106,12 @@ func TestTrafficRepo_SearchByMetadata(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTraffic(t *testing.T) {
+	t.Parallel()
 	t.Run("should return an empty page if database is empty", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 
-		items, nextCursor, _, err := repo.ListTraffic(nil, 200, "")
+		items, nextCursor, _, err := listPage(repo, nil, 200, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1065,7 +1132,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		newer := testRequest(t, repo, nil)
 		insertTestResponseAndGet(t, repo, newer, nil)
 
-		items, nextCursor, _, err := repo.ListTraffic(nil, 200, "")
+		items, nextCursor, _, err := listPage(repo, nil, 200, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1093,7 +1160,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		newest := testRequest(t, repo, nil)
 
-		items, nextCursor, _, err := repo.ListTraffic(nil, 2, "")
+		items, nextCursor, _, err := listPage(repo, nil, 2, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1109,11 +1176,8 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		if nextCursor == nil {
 			t.Fatal("\nwanted:\nnext cursor\ngot:\nnil")
 		}
-		if *nextCursor != middle {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, *nextCursor)
-		}
 
-		older, olderNext, _, err := repo.ListTraffic(nextCursor, 2, "")
+		older, olderNext, _, err := listPage(repo, nextCursor, 2, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1138,21 +1202,21 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		newest := testRequest(t, repo, nil)
 
-		first, nextCursor, _, err := repo.ListTraffic(nil, 2, "")
+		first, nextCursor, _, err := listPage(repo, nil, 2, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 		if len(first) != 2 || first[0].ID != newest || first[1].ID != middle {
 			t.Fatalf("\nwanted:\n%v then %v\ngot:\n%v", newest, middle, idsOf(first))
 		}
-		if nextCursor == nil || *nextCursor != middle {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, nextCursor)
+		if nextCursor == nil {
+			t.Fatal("\nwanted:\nnext cursor\ngot:\nnil")
 		}
 
 		time.Sleep(2 * time.Millisecond)
 		_ = testRequest(t, repo, nil)
 
-		older, olderNext, _, err := repo.ListTraffic(nextCursor, 2, "")
+		older, olderNext, _, err := listPage(repo, nextCursor, 2, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1167,32 +1231,13 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		}
 	})
 
-	t.Run("should treat a zero uuid cursor as older than that id", func(t *testing.T) {
-		repo, teardown := setupTestDB(t)
-		defer teardown()
-
-		_ = testRequest(t, repo, nil)
-		zero := uuid.Nil
-
-		items, nextCursor, _, err := repo.ListTraffic(&zero, 200, "")
-		if err != nil {
-			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
-		}
-		if len(items) != 0 {
-			t.Fatalf("\nwanted:\n0\ngot:\n%d", len(items))
-		}
-		if nextCursor != nil {
-			t.Fatalf("\nwanted:\nnil next_cursor\ngot:\n%v", nextCursor)
-		}
-	})
-
 	t.Run("should include in-flight rows with status code -1", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
 
 		id := testRequest(t, repo, nil)
 
-		items, nextCursor, _, err := repo.ListTraffic(nil, 200, "")
+		items, nextCursor, _, err := listPage(repo, nil, 200, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1223,7 +1268,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 			"prettified-response": "pretty-res",
 		})
 
-		items, _, _, err := repo.ListTraffic(nil, 200, "")
+		items, _, _, err := listPage(repo, nil, 200, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1246,7 +1291,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		_ = insertTraffic(t, repo, "GET", "other.com", "/")
 
-		items, nextCursor, _, err := repo.ListTraffic(nil, 200, `host = "example.com"`)
+		items, nextCursor, _, err := listPage(repo, nil, 200, `host = "example.com"`)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1271,7 +1316,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		_ = insertTraffic(t, repo, "GET", "example.com", "/")
 
-		items, nextCursor, _, err := repo.ListTraffic(nil, 200, `method = "POST"`)
+		items, nextCursor, _, err := listPage(repo, nil, 200, `method = "POST"`)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1298,7 +1343,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		_ = insertTraffic(t, repo, "GET", "example.com", "/")
 
-		items, nextCursor, _, err := repo.ListTraffic(nil, 200, `status_code = 200`)
+		items, nextCursor, _, err := listPage(repo, nil, 200, `status_code = 200`)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1323,7 +1368,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		_ = insertTraffic(t, repo, "GET", "example.com", "/users?id=1")
 
-		items, nextCursor, _, err := repo.ListTraffic(nil, 200, `path = "/api/users*"`)
+		items, nextCursor, _, err := listPage(repo, nil, 200, `path = "/api/users*"`)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1357,7 +1402,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		wrongStatus := insertTraffic(t, repo, "POST", "example.com", "/api/users")
 		insertTrafficResponse(t, repo, wrongStatus, 404)
 
-		items, nextCursor, _, err := repo.ListTraffic(nil, 200, `host = "example.com" AND method = "POST" path = "/api*" AND status_code = 200`)
+		items, nextCursor, _, err := listPage(repo, nil, 200, `host = "example.com" AND method = "POST" path = "/api*" AND status_code = 200`)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1385,7 +1430,7 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		newest := insertTraffic(t, repo, "GET", "example.com", "/")
 
 		query := `host = "example.com"`
-		items, nextCursor, _, err := repo.ListTraffic(nil, 2, query)
+		items, nextCursor, _, err := listPage(repo, nil, 2, query)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1401,11 +1446,8 @@ func TestTrafficRepo_ListTraffic(t *testing.T) {
 		if nextCursor == nil {
 			t.Fatal("\nwanted:\nnext cursor\ngot:\nnil")
 		}
-		if *nextCursor != middle {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", middle, *nextCursor)
-		}
 
-		older, olderNext, _, err := repo.ListTraffic(nextCursor, 2, query)
+		older, olderNext, _, err := listPage(repo, nextCursor, 2, query)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -1469,6 +1511,7 @@ func insertTrafficResponse(t *testing.T, repo *Repository, id uuid.UUID, statusC
 }
 
 func TestTrafficRepo_CountContentTypes(t *testing.T) {
+	t.Parallel()
 	insertWithContentType := func(t *testing.T, repo *Repository, contentType string) {
 		t.Helper()
 		id := testRequest(t, repo, nil)
@@ -1495,8 +1538,8 @@ func TestTrafficRepo_CountContentTypes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if len(got) != 0 {
-			t.Fatalf("\nwanted:\n0\ngot:\n%d", len(got))
+		if len(got.Counts) != 0 || !got.Complete[domain.JobSitemap] {
+			t.Fatalf("\nwanted:\nno counts from a complete sitemap\ngot:\n%+v", got)
 		}
 	})
 
@@ -1526,8 +1569,8 @@ func TestTrafficRepo_CountContentTypes(t *testing.T) {
 			{ContentType: "image/png", Count: 2},
 			{ContentType: "text/css", Count: 1},
 		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", contentTypeCounts(want), contentTypeCounts(got))
+		if !reflect.DeepEqual(got.Counts, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", contentTypeCounts(want), contentTypeCounts(got.Counts))
 		}
 	})
 
@@ -1554,8 +1597,42 @@ func TestTrafficRepo_CountContentTypes(t *testing.T) {
 			{ContentType: "", Count: 4},
 			{ContentType: "text/html", Count: 1},
 		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", contentTypeCounts(want), contentTypeCounts(got))
+		if !reflect.DeepEqual(got.Counts, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", contentTypeCounts(want), contentTypeCounts(got.Counts))
+		}
+	})
+
+	t.Run("should count pairs the sitemap job has not reached, and report it incomplete", func(t *testing.T) {
+		path := t.TempDir() + "/project.marasi"
+		repo := openTestProjectFile(t, path)
+		insertUnlinkedPair(t, repo, "https://api.x.com/users/42", "application/json", 200)
+		insertUnlinkedPair(t, repo, "https://api.x.com/users/43", "application/json", 503)
+		insertUnlinkedPair(t, repo, "https://cdn.x.com/logo.png", "image/png", 200)
+		insertUnlinkedPair(t, repo, "https://cdn.x.com/", "", 0)
+		repo = reopenProject(t, repo)
+		insertWithContentType(t, repo, "image/png")
+
+		want := []*domain.ContentTypeCount{
+			{ContentType: "application/json", Count: 2},
+			{ContentType: "image/png", Count: 2},
+			{ContentType: "", Count: 1},
+		}
+		got, err := repo.CountContentTypes()
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if !reflect.DeepEqual(got.Counts, want) || got.Complete[domain.JobSitemap] {
+			t.Fatalf("\nwanted:\n%v from an incomplete sitemap\ngot:\n%v %v", contentTypeCounts(want), contentTypeCounts(got.Counts), got.Complete)
+		}
+
+		runSitemapJob(t, repo, 2)
+
+		got, err = repo.CountContentTypes()
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if !reflect.DeepEqual(got.Counts, want) || !got.Complete[domain.JobSitemap] {
+			t.Fatalf("\nwanted:\n%v from a complete sitemap\ngot:\n%v %v", contentTypeCounts(want), contentTypeCounts(got.Counts), got.Complete)
 		}
 	})
 }

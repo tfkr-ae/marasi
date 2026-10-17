@@ -7,11 +7,13 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Service lifecycle | `service start`, `service status`, `service stop`, `service list` | [service lifecycle](service-lifecycle.md) |
 | Proxy listener control | `listener status`, `listener address`, `listener stop`, `listener start`, `listener update` | [proxy listener control](proxy-listener-control.md) |
 | HTTP traffic capture | Configure a client with `proxy_listener`, then make HTTP or HTTPS requests | [HTTP traffic capture](http-traffic-capture.md) |
-| Captured traffic inspection | `traffic list`, list queries (`-q`) and pagination, `traffic get`, `traffic metadata get`, `traffic metadata update` | [captured traffic inspection](captured-traffic-inspection.md) |
-| Notes | `notes set`, `notes get`, `notes list`, list pagination, `notes clear` | [notes](notes.md) |
+| Captured traffic inspection | `traffic list`, list queries (`-q`) and pagination, `traffic get`, `traffic metadata get`, `traffic metadata update`, `traffic count`, `traffic types`, `traffic sitemap` (one level, or several with `--node`/`--scope`), `traffic validate`, `traffic bulk metadata set`, `traffic bulk metadata clear`, `traffic bulk delete` | [captured traffic inspection](captured-traffic-inspection.md) |
+| Notes | `notes set`, `notes get`, `notes list`, list pagination, `notes clear`, `traffic bulk note append`, `traffic bulk note clear` | [notes](notes.md) |
 | Project open | `project open --name`, `project open --path`, `project switch`, `project list` | [project open](project-open.md) |
-| Events | `events` | [events](events.md) |
-| Launchpad | `launchpad create`, `launchpad list`, `launchpad get`, `launchpad update`, `launchpad link`, `launchpad launch`, `launchpad pending`, `launchpad status`, `launchpad cancel` | [launchpad](launchpad.md) |
+| Events | `events`, `traffic bulk highlight` | [events](events.md) |
+| Launchpad | `launchpad create`, `launchpad list`, `launchpad get`, `launchpad update`, `launchpad link`, `launchpad unlink`, `launchpad launch`, `launchpad pending`, `launchpad status`, `launchpad cancel`, `traffic bulk link`, `traffic bulk unlink` | [launchpad](launchpad.md) |
+| Background jobs | `jobs list`, `jobs rebuild` | [jobs](jobs.md) |
+| Client settings | `settings list`, `settings get`, `settings set`, `settings delete` | [settings](settings.md) |
 | Test case | `test-case create`, `test-case list`, `test-case get`, `test-case list-requests`, `test-case update`, `test-case delete`, `test-case link`, `test-case unlink`, `test-case checklist` | [test case](test-case.md) |
 | Finding | `finding create`, `finding list`, `finding get`, `finding list-requests`, `finding update`, `finding delete`, `finding link`, `finding unlink` | [finding](finding.md) |
 | Artifact | `artifact upload`, `artifact list`, `artifact get`, `artifact download`, `artifact delete` | [artifact](artifact.md) |
@@ -27,5 +29,7 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Proxy logs | `logs`, list pagination with `--limit` and `--cursor` | [proxy logs](logs.md) |
 | CA certificate | `certificate get`, `--format pem` or `der` | [CA certificate](certificate.md) |
 | Agent skill | `skill` | [agent skill](agent-skill.md) |
+
+Every `traffic bulk` command takes exactly one selection: `--id` (repeatable) or `--ids-file PATH` (`-` reads stdin), or `-q TEXT` with a required `--as-of UUID` and optional repeatable `--exclude`. No selection, both forms, `-q` without `--as-of`, or `--as-of`/`--exclude` with ids fails before any request; prove that by running it against an instance name that is not running and requiring the usage message, not `instance … is not running`. Human mode prints `N pairs <verb>` (`1 pair …`) on stderr; `--json` prints the route's `{"count":n}`. None asks for confirmation.
 
 When a change touches one row, read that feature file and cover every entry point it names. There is no bundled script. A command that inspects or acts on captured traffic is proven only after real client traffic has gone through the proxy.

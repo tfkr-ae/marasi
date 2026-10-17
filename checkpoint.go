@@ -320,6 +320,22 @@ func checkpointHoldContext(req *http.Request, res *http.Response) context.Contex
 	return context.Background()
 }
 
+// waitHTTPHoldsEnded waits until no HTTP item with one of ids is held. A
+// launch's pair id is its launch id, so this waits for launches' holds.
+func (proxy *Proxy) waitHTTPHoldsEnded(ids []uuid.UUID) {
+	if proxy.checkpoint == nil {
+		return
+	}
+	for _, id := range ids {
+		proxy.checkpoint.mu.Lock()
+		pending, ok := proxy.checkpoint.http[id]
+		proxy.checkpoint.mu.Unlock()
+		if ok {
+			<-pending.done
+		}
+	}
+}
+
 // abandonHTTP drops a held item whose client left. A forward or drop that already
 // removed it wins, and the abandon does nothing.
 func (proxy *Proxy) abandonHTTP(pending *pendingHTTP) {

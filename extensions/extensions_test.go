@@ -1,6 +1,8 @@
 package extensions
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -119,6 +121,7 @@ type mockTrafficRepo struct {
 	forceError    bool
 }
 
+func (m *mockTrafficRepo) NextPairNumber() int64                        { return 0 }
 func (m *mockTrafficRepo) InsertRequest(req *domain.ProxyRequest) error { return nil }
 func (m *mockTrafficRepo) InsertResponse(res *domain.ProxyResponse) error {
 	return nil
@@ -137,14 +140,39 @@ func (m *mockTrafficRepo) GetRequestResponseSummary() ([]*domain.RequestResponse
 	return []*domain.RequestResponseSummary{}, nil
 }
 
-func (m *mockTrafficRepo) ListTraffic(cursor *uuid.UUID, limit int, query string) ([]*domain.RequestResponseSummary, *uuid.UUID, bool, error) {
+func (m *mockTrafficRepo) ListTraffic(q domain.TrafficQuery) (domain.TrafficPage, error) {
 	if m.forceError {
-		return nil, nil, false, errors.New("forced repo error")
+		return domain.TrafficPage{}, errors.New("forced repo error")
 	}
+	complete := map[domain.JobName]bool{domain.JobTrafficIndex: true}
 	if m.summaryData != nil {
-		return m.summaryData, nil, true, nil
+		return domain.TrafficPage{Items: m.summaryData, Complete: complete}, nil
 	}
-	return []*domain.RequestResponseSummary{}, nil, true, nil
+	return domain.TrafficPage{Items: []*domain.RequestResponseSummary{}, Complete: complete}, nil
+}
+
+func (m *mockTrafficRepo) ListTrafficContext(_ context.Context, q domain.TrafficQuery) (domain.TrafficPage, error) {
+	return m.ListTraffic(q)
+}
+
+func (m *mockTrafficRepo) CountTrafficContext(_ context.Context, q domain.TrafficCountQuery) (domain.TrafficCount, error) {
+	return m.CountTraffic(q)
+}
+
+func (m *mockTrafficRepo) CountContentTypesContext(context.Context) (domain.ContentTypeCounts, error) {
+	return m.CountContentTypes()
+}
+
+func (m *mockTrafficRepo) CountTraffic(q domain.TrafficCountQuery) (domain.TrafficCount, error) {
+	return domain.TrafficCount{Count: len(m.summaryData), Complete: map[domain.JobName]bool{domain.JobTrafficIndex: true}}, nil
+}
+
+func (m *mockTrafficRepo) ListSitemapChildren(context.Context, domain.SitemapQuery) (domain.SitemapPage, error) {
+	return domain.SitemapPage{}, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) ListSitemapLevels(context.Context, domain.SitemapLevelsQuery) (domain.SitemapLevels, error) {
+	return domain.SitemapLevels{}, errors.New("not implemented")
 }
 
 func (m *mockTrafficRepo) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResponseRow, error) {
@@ -244,11 +272,47 @@ func (m *mockTrafficRepo) SearchByMetadata(path string, value any) ([]*domain.Re
 	return []*domain.RequestResponseSummary{}, nil
 }
 
-func (m *mockTrafficRepo) CountContentTypes() ([]*domain.ContentTypeCount, error) {
+func (m *mockTrafficRepo) CountContentTypes() (domain.ContentTypeCounts, error) {
 	if m.forceError {
-		return nil, errors.New("forced repo error")
+		return domain.ContentTypeCounts{}, errors.New("forced repo error")
 	}
-	return []*domain.ContentTypeCount{}, nil
+	return domain.ContentTypeCounts{Counts: []*domain.ContentTypeCount{}}, nil
+}
+
+func (m *mockTrafficRepo) LinkTraffic(domain.Selection, domain.LinkTarget) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) UnlinkTraffic(domain.Selection, domain.LinkTarget) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) SetHighlight(domain.Selection, int) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) ClearHighlight(domain.Selection) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) SetMetadataKey(domain.Selection, string, json.RawMessage) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) ClearMetadataKey(domain.Selection, string) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) AppendNote(domain.Selection, string) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) ClearNotes(domain.Selection) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *mockTrafficRepo) DeleteTraffic(domain.Selection) (int, error) {
+	return 0, errors.New("not implemented")
 }
 
 func setupTestExtension(t *testing.T, luaCode string, options ...func(*Runtime) error) (*Runtime, *mockProxyService) {

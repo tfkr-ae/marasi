@@ -11,6 +11,10 @@ _Avoid_: Service, daemon, or process when referring to the named running copy. T
 **Project**:
 A Marasi workspace stored in a `.marasi` file and identified by its canonical absolute path.
 
+**Client setting**:
+A JSON value that a client stores in a project under its own client name and a key, such as `marasi-app` and `ledger.exclusion`. Marasi keeps it but never reads its meaning.
+_Avoid_: preference, config, app settings
+
 **Open project**:
 The project whose persisted data and configuration a service instance currently controls. A service instance always has exactly one.
 _Avoid_: Active project, current project, closed project, projectless instance.
@@ -37,6 +41,10 @@ _Avoid_: Flow, exchange, HTTP history when referring to this collection.
 One captured HTTP request and its matching response, identified by a single UUID.
 _Avoid_: Flow, exchange, transaction.
 
+**Pair number**:
+The position of a request/response pair in its project's capture order, starting at 1. It never changes and is never reused, so deleting pairs leaves gaps.
+_Avoid_: row number, index, rowid, sequence, id
+
 **Note**:
 An optional annotation on a request/response pair, identified by that pair's UUID. A pair has at most one.
 _Avoid_: comment, row note, traffic comment
@@ -45,9 +53,25 @@ _Avoid_: comment, row note, traffic comment
 A document of extra data stored with a request/response pair.
 _Avoid_: tags, highlight, properties
 
+**Selection**:
+The request/response pairs that one bulk operation applies to: either listed pairs, or every pair that matches a query and content-type exclusion, up to the newest pair the client had seen. A query selection is refused while a background job its query depends on is unfinished.
+_Avoid_: checked rows, batch, bulk target
+
+**Sitemap**:
+A project's traffic arranged as a tree, first by origin and then by path segment, with a count of pairs and of server errors at each node.
+_Avoid_: site tree, target tree
+
+**Highlight**:
+A number from 1 to 8 that a client puts on a request/response pair to mark it. A pair has at most one. Marasi gives the number no meaning; the client decides what each number looks like and stands for.
+_Avoid_: colour, tag, label, slot
+
 **Query**:
 A text expression that narrows one collection's list to the items that match it. It is not stored and has no id.
 _Avoid_: filter, search string, FTS
+
+**Content-type exclusion**:
+A list of content types, each exact or a whole major type such as `image/*`, that a client passes with a traffic read to hide request/response pairs of those types. Marasi does not store it. A pair with no content type yet is never hidden by it.
+_Avoid_: filter, content type filter, app filters
 
 **Checkpoint**:
 The intercept capability of a service instance. It is not stored and has no id.
@@ -148,6 +172,10 @@ _Avoid_: using logbook as a control API collection or as a synonym for test case
 **Proxy log**:
 A message recorded by the proxy and stored in the open project, identified by UUID. It has a severity and may name a request/response pair or an extension.
 _Avoid_: instance log, extension log, event
+
+**Background job**:
+Work that Marasi does on an open project after opening it, such as building the search index or the sitemap. It stops when the project closes and resumes from where it stopped on the next open. A client can ask for it to be rebuilt.
+_Avoid_: task, migration, maintenance
 
 **Event**:
 A named live notification emitted by a service instance at the moment something happens. It is not stored with the open project and is not replayed.
