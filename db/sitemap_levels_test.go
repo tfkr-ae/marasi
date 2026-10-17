@@ -40,6 +40,7 @@ func formatLevels(levels domain.SitemapLevels) string {
 }
 
 func TestSitemap_ListLevels(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	for _, pair := range referencePairs {

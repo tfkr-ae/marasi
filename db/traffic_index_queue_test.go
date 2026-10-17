@@ -56,6 +56,7 @@ func storedIndexMatches(t *testing.T, path, match string) []uuid.UUID {
 // A captured pair reaches the stored index within about a second, at its
 // request and again at its response, even when nothing reads the traffic.
 func TestTrafficRepo_CapturedPairIsIndexedWithinASecond(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	path := projectFile(t, repo)
@@ -86,6 +87,7 @@ func TestTrafficRepo_CapturedPairIsIndexedWithinASecond(t *testing.T) {
 // neither closes nor indexes them, are searchable by their request and
 // response text once the project is opened again.
 func TestTrafficRepo_PairsCapturedBeforeACrashAreSearchableAfterReopening(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	path := projectFile(t, repo)

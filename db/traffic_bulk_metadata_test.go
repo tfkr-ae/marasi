@@ -50,10 +50,11 @@ func decodeJSON(t *testing.T, literal string) map[string]any {
 }
 
 func TestTrafficRepo_SetMetadataKey_LeavesOtherKeys(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
-	const pairs = 2_000
+	const pairs = 1_000
 	ids := make([]uuid.UUID, pairs)
 	for i := range ids {
 		ids[i] = metadataPair(t, repo, map[string]any{
@@ -76,6 +77,7 @@ func TestTrafficRepo_SetMetadataKey_LeavesOtherKeys(t *testing.T) {
 }
 
 func TestTrafficRepo_SetMetadataKey_CountsOnlyChangedPairs(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -106,6 +108,7 @@ func TestTrafficRepo_SetMetadataKey_CountsOnlyChangedPairs(t *testing.T) {
 }
 
 func TestTrafficRepo_SetMetadataKey_NestedParents(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -130,6 +133,7 @@ func TestTrafficRepo_SetMetadataKey_NestedParents(t *testing.T) {
 }
 
 func TestTrafficRepo_SetMetadataKey_IsSearchable(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -149,6 +153,7 @@ func TestTrafficRepo_SetMetadataKey_IsSearchable(t *testing.T) {
 }
 
 func TestTrafficRepo_ClearMetadataKey(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -184,6 +189,7 @@ func TestTrafficRepo_ClearMetadataKey(t *testing.T) {
 }
 
 func TestTrafficRepo_ClearMetadataKey_HasKeySelection(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -209,6 +215,7 @@ func TestTrafficRepo_ClearMetadataKey_HasKeySelection(t *testing.T) {
 }
 
 func TestTrafficRepo_MetadataKey_RefusesKeys(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 

@@ -9,6 +9,7 @@ import (
 )
 
 func TestTrafficRepo_BulkOpsCountARepeatedIDOnce(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		// prepare puts the pair in the state the op changes.

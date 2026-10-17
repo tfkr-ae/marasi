@@ -102,6 +102,7 @@ func sitemapTree(t *testing.T, repo *Repository, exclusion ...string) string {
 }
 
 func TestSitemap_Capture(t *testing.T) {
+	t.Parallel()
 	t.Run("should count captured pairs at each node of their path", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -158,6 +159,7 @@ func TestSitemap_Capture(t *testing.T) {
 }
 
 func TestSitemap_Exclusion(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	types := []string{"text/html", "application/json", "image/png", "image/gif", ""}
@@ -213,6 +215,7 @@ func TestSitemap_Exclusion(t *testing.T) {
 }
 
 func TestSitemap_ListChildren(t *testing.T) {
+	t.Parallel()
 	t.Run("should page children by pair count, highest first", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -359,6 +362,7 @@ func runSitemapJob(t *testing.T, repo *Repository, maxPairs int) {
 }
 
 func TestSitemap_Job(t *testing.T) {
+	t.Parallel()
 	captured, teardown := setupTestDB(t)
 	defer teardown()
 	for _, pair := range sitemapPairs {
@@ -431,6 +435,7 @@ func TestSitemap_Job(t *testing.T) {
 }
 
 func TestSitemap_QueryField(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := map[string]uuid.UUID{
@@ -483,6 +488,7 @@ func TestSitemap_QueryField(t *testing.T) {
 }
 
 func TestSitemap_CapturedTree(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	for _, pair := range sitemapPairs {

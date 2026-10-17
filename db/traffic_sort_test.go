@@ -12,6 +12,7 @@ import (
 )
 
 func TestTrafficRepo_ListTraffic_OrderBy(t *testing.T) {
+	t.Parallel()
 	t.Run("should page through host asc in byte order with ties oldest first", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -84,6 +85,7 @@ func TestTrafficRepo_ListTraffic_OrderBy(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTraffic_OrderByEveryKey(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -147,6 +149,7 @@ func TestTrafficRepo_ListTraffic_OrderByEveryKey(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTraffic_OrderByDuringCapture(t *testing.T) {
+	t.Parallel()
 	for _, orderBy := range []string{"method", "host desc", "path", "status_code", "status_code desc", "content_type", "content_type desc", "length", "length desc"} {
 		t.Run("should return each pair at most once and none after as_of under "+orderBy, func(t *testing.T) {
 			repo, teardown := setupTestDB(t)
@@ -197,6 +200,7 @@ func TestTrafficRepo_ListTraffic_OrderByDuringCapture(t *testing.T) {
 }
 
 func TestLaunchpadRepo_GetLaunchpadRequests_OrderBy(t *testing.T) {
+	t.Parallel()
 	t.Run("should list entries in the order_by order with no value last, and oldest first by default", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
