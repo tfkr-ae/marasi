@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"text/tabwriter"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
@@ -194,16 +193,16 @@ var websocketListCmd = &cobra.Command{
 		if err := json.Unmarshal(body, &page); err != nil {
 			return fmt.Errorf("decoding websocket list: %w", err)
 		}
-		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+		table := newListTable(cmd.OutOrStdout(), "ID", "REQUEST ID", "STATE", "TRANSPORT", "HOST", "PATH")
 		for _, item := range page.Items {
 			path := item.Path
 			pathRunes := []rune(path)
 			if len(pathRunes) > trafficPathDisplayLimit {
 				path = string(pathRunes[:trafficPathDisplayLimit-3]) + "..."
 			}
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", item.ID, item.RequestID, item.State, item.Transport, item.Host, path)
+			table.row(item.ID, item.RequestID, item.State, item.Transport, item.Host, path)
 		}
-		if err := writer.Flush(); err != nil {
+		if err := table.flush(); err != nil {
 			return err
 		}
 		if page.NextCursor != nil {
@@ -269,7 +268,7 @@ var websocketMessagesCmd = &cobra.Command{
 		if err := json.Unmarshal(body, &page); err != nil {
 			return fmt.Errorf("decoding websocket messages: %w", err)
 		}
-		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+		table := newListTable(cmd.OutOrStdout(), "ID", "DIRECTION", "OPCODE", "PREVIEW")
 		for i := len(page.Items) - 1; i >= 0; i-- {
 			message := page.Items[i]
 			payload, err := base64.StdEncoding.DecodeString(message.Payload)
@@ -285,9 +284,9 @@ var websocketMessagesCmd = &cobra.Command{
 				quoted := strconv.Quote(string(runes))
 				preview = quoted[1 : len(quoted)-1]
 			}
-			fmt.Fprintf(writer, "%s\t%s\t%d\t%s\n", message.ID, message.Direction, message.Opcode, preview)
+			table.row(message.ID, message.Direction, message.Opcode, preview)
 		}
-		if err := writer.Flush(); err != nil {
+		if err := table.flush(); err != nil {
 			return err
 		}
 		if page.NextCursor != nil {

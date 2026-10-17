@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"text/tabwriter"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
@@ -304,16 +303,16 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 		return fmt.Errorf("decoding traffic list: %w", err)
 	}
 
-	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	table := newListTable(stdout, "#", "ID", "METHOD", "HOST", "PATH", "STATUS", "LENGTH")
 	for _, item := range page.Items {
 		path := item.Path
 		pathRunes := []rune(path)
 		if len(pathRunes) > trafficPathDisplayLimit {
 			path = string(pathRunes[:trafficPathDisplayLimit-3]) + "..."
 		}
-		fmt.Fprintf(writer, "%d\t%s\t%s\t%s\t%s\t%d\t%s\n", item.Number, item.ID, item.Method, item.Host, path, item.StatusCode, item.Length)
+		table.row(item.Number, item.ID, item.Method, item.Host, path, item.StatusCode, item.Length)
 	}
-	if err := writer.Flush(); err != nil {
+	if err := table.flush(); err != nil {
 		return err
 	}
 	if page.NextCursor != nil {

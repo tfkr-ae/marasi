@@ -13,7 +13,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
@@ -69,11 +68,11 @@ var artifactListCmd = &cobra.Command{
 		if err := json.Unmarshal(body, &list); err != nil {
 			return fmt.Errorf("decoding artifact list: %w", err)
 		}
-		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+		table := newListTable(cmd.OutOrStdout(), "ID", "FILENAME", "MIME TYPE", "SIZE", "TEST CASE", "FINDING", "CREATED AT")
 		for _, item := range list.Items {
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%d\t%s\t%s\t%s\n", item.ID, truncateDisplay(item.Filename, trafficPathDisplayLimit), item.MIMEType, item.Size, optionalString(item.TestCaseID), optionalString(item.FindingID), item.CreatedAt)
+			table.row(item.ID, truncateDisplay(item.Filename, trafficPathDisplayLimit), item.MIMEType, item.Size, optionalString(item.TestCaseID), optionalString(item.FindingID), item.CreatedAt)
 		}
-		return writer.Flush()
+		return table.flush()
 	},
 }
 

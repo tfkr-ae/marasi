@@ -29,7 +29,7 @@ func TestCheckpointCommands(t *testing.T) {
 	wsItem := `{"id":"` + wsID + `","type":"websocket","payload":"` + base64.StdEncoding.EncodeToString(wsPayload) + `","opcode":1,"direction":"client","connection_id":"0193802f-f0e7-73d9-a764-06d21e36780a","request_id":"0193802f-f0e7-73d9-a764-06d21e36780b"}` + "\n"
 	listBody := `{"items":[{"id":"` + httpID + `","type":"request","raw":"` + base64.StdEncoding.EncodeToString(httpDump) + `"},{"id":"` + wsID + `","type":"websocket","payload":"` + base64.StdEncoding.EncodeToString(wsPayload) + `","opcode":1,"direction":"client","connection_id":"0193802f-f0e7-73d9-a764-06d21e36780a","request_id":"0193802f-f0e7-73d9-a764-06d21e36780b"}],"intercept":true,"websocket_intercept":false}` + "\n"
 
-	t.Run("should list checkpoint items as id type lines", func(t *testing.T) {
+	t.Run("should list checkpoint items in an id type table", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		sent := startCannedControlAPI(t, configDir, "list", http.StatusOK, listBody)
 
@@ -41,7 +41,8 @@ func TestCheckpointCommands(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/checkpoint" || got.RawQuery != "" || got.Body != "" {
 			t.Fatalf("\nwanted:\nGET /checkpoint empty body\ngot:\n%s %s?%s body %q", got.Method, got.Path, got.RawQuery, got.Body)
 		}
-		wantStdout := httpID + " request\n" + wsID + " websocket\n"
+		header := "ID                                    TYPE\n"
+		wantStdout := header + httpID + "  request\n" + wsID + "  websocket\n" + header
 		if stdout != wantStdout || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr\ngot:\nstdout %q, stderr %q", wantStdout, stdout, stderr)
 		}
@@ -61,7 +62,8 @@ func TestCheckpointCommands(t *testing.T) {
 		sent := startCannedControlAPI(t, configDir, "kind-http", http.StatusOK, listBody)
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "kind-http", "checkpoint", "list", "--kind", "http")
 		got := sent.snapshot()
-		if err != nil || stdout != httpID+" request\n"+wsID+" websocket\n" || stderr != "" || got.Method != http.MethodGet || got.Path != "/checkpoint" || got.RawQuery != "kind=http" {
+		header := "ID                                    TYPE\n"
+		if err != nil || stdout != header+httpID+"  request\n"+wsID+"  websocket\n"+header || stderr != "" || got.Method != http.MethodGet || got.Path != "/checkpoint" || got.RawQuery != "kind=http" {
 			t.Fatalf("\nwanted:\nGET /checkpoint?kind=http\ngot:\n%s %s?%s, stdout %q, stderr %q, error %v", got.Method, got.Path, got.RawQuery, stdout, stderr, err)
 		}
 
@@ -416,7 +418,8 @@ func TestCheckpointCommandLifecycle(t *testing.T) {
 	id := waitForCheckpointID(t, binary, configDir, "request")
 
 	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "checkpoint", "list")
-	if err != nil || stdout != id+" request\n" || stderr != "" {
+	header := "ID                                    TYPE\n"
+	if err != nil || stdout != header+id+"  request\n"+header || stderr != "" {
 		t.Fatalf("list held request: stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
 
@@ -585,10 +588,15 @@ func waitForCheckpointID(t *testing.T, binary, configDir, wantType string) strin
 	for time.Now().Before(deadline) {
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "checkpoint", "list")
 		if err == nil && stderr == "" {
-			for _, line := range strings.Split(strings.TrimSuffix(stdout, "\n"), "\n") {
-				id, kind, ok := strings.Cut(line, " ")
-				if ok && kind == wantType && id != "" {
-					return id
+			lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n")
+			// An empty list prints nothing; otherwise skip the column-name
+			// header and footer around the rows.
+			if len(lines) >= 3 {
+				for _, line := range lines[1 : len(lines)-1] {
+					fields := strings.Fields(line)
+					if len(fields) == 2 && fields[1] == wantType {
+						return fields[0]
+					}
 				}
 			}
 		}

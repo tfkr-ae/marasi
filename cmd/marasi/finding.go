@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
@@ -272,11 +271,11 @@ func writeFindingListHuman(body []byte, stdout io.Writer) error {
 	if err := json.Unmarshal(body, &response); err != nil {
 		return fmt.Errorf("decoding finding list: %w", err)
 	}
-	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	table := newListTable(stdout, "ID", "TITLE", "SEVERITY", "TEST CASE", "CVSS", "CREATED AT")
 	for _, item := range response.Items {
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%g\t%s\n", item.ID, truncateDisplay(item.Title, trafficPathDisplayLimit), item.Severity, findingTestCaseText(item.TestCaseID), item.CVSSScore, item.CreatedAt)
+		table.row(item.ID, truncateDisplay(item.Title, trafficPathDisplayLimit), item.Severity, findingTestCaseText(item.TestCaseID), item.CVSSScore, item.CreatedAt)
 	}
-	return writer.Flush()
+	return table.flush()
 }
 
 func writeFindingGetHuman(body []byte, stdout io.Writer) error {

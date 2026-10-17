@@ -19,7 +19,7 @@ func TestSettingsCommands(t *testing.T) {
 			name: "settings list", args: []string{"settings", "list", "marasi-app", "--prefix", "ledger/"},
 			status: http.StatusOK, response: `{"items":[` + testClientSetting + `]}`,
 			method: http.MethodGet, path: "/client-settings/marasi-app", query: "prefix=ledger%2F",
-			stdout: "ledger/view  {\"columns\":[\"host\"]}\n",
+			stdout: "KEY          VALUE\nledger/view  {\"columns\":[\"host\"]}\nKEY          VALUE\n",
 		},
 		{
 			name: "settings get", args: []string{"settings", "get", "marasi-app", "ledger/view"},
