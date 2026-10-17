@@ -76,8 +76,9 @@ func NewProxyRepo(db *sqlx.DB) *Repository {
 func (repo *Repository) Close() error {
 	repo.closeIndexQueue()
 	// Fold this session's captures into the pair count, so the next open
-	// does not count them. A failure leaves them to the next open.
-	_ = foldPairCount(repo.dbConn)
+	// does not count them. Both of the fold's updates commit together, so
+	// a failure leaves them to the next open to count once.
+	_ = repo.inTx(func(tx *sqlx.Tx) error { return foldPairCount(tx) })
 	// Refresh the statistics the planner uses to choose an index
 	// (ADR-0041). A failure here must not keep the project open.
 	_, _ = repo.dbConn.Exec(`PRAGMA optimize`)

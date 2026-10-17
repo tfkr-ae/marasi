@@ -328,3 +328,35 @@ func TestDashboardCounts_IncompleteJobDoesNotScan(t *testing.T) {
 		assertDashboardCounts(t, repo, 2000, 2000)
 	})
 }
+
+// TestClose_FoldsThePairCountAtomically checks that a close whose pair count
+// fold fails part way leaves the count for the next open to fold once
+// (ticket 27).
+func TestClose_FoldsThePairCountAtomically(t *testing.T) {
+	t.Run("should count a session's captures once after the fold fails on close", func(t *testing.T) {
+		path, repo := fileProject(t)
+		for range 3 {
+			captureMetaPair(t, repo, nil, nil)
+		}
+		// The trigger lives on the repository's one connection and ends
+		// with it, so it fails only this close's second fold statement.
+		_, err := repo.dbConn.Exec(`CREATE TEMP TRIGGER fail_fold BEFORE UPDATE ON main.dashboard_count
+			WHEN NEW.name = 'pairs_through' BEGIN SELECT RAISE(ABORT, 'injected'); END`)
+		if err != nil {
+			t.Fatalf("creating the trigger: %v", err)
+		}
+		if err := repo.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		repo = openProject(t, path)
+		defer repo.Close()
+		counts, err := repo.DashboardCounts()
+		if err != nil {
+			t.Fatalf("DashboardCounts() error = %v", err)
+		}
+		if counts.Pairs != 3 {
+			t.Errorf("DashboardCounts().Pairs = %d, want 3", counts.Pairs)
+		}
+	})
+}
