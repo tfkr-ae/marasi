@@ -183,12 +183,19 @@ func TestMarasiRoundTripper(t *testing.T) {
 			t.Fatal("expected base RoundTrip to be called")
 		}
 
-		if baseRoundTripper.request != req {
-			t.Error("expected base RoundTrip to receive an modified request")
+		sent := baseRoundTripper.request
+		if sent == req {
+			t.Error("expected base RoundTrip to receive a copy of the request, not the request itself")
+		}
+		if sent.Method != req.Method || sent.URL != req.URL || sent.Body != req.Body {
+			t.Errorf("wanted: copy of %s %s\ngot: %s %s", req.Method, req.URL, sent.Method, sent.URL)
 		}
 
 		if resp != want {
 			t.Errorf("wanted: %v\n got: %v", resp, want)
+		}
+		if resp.Request != req {
+			t.Error("expected the response to point at the original request")
 		}
 	})
 
