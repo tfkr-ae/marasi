@@ -100,6 +100,14 @@ type TrafficRepository interface {
 	// and a malformed cursor wraps ErrInvalidCursor.
 	ListSitemapChildren(ctx context.Context, q SitemapQuery) (SitemapPage, error)
 
+	// ListSitemapLevels returns one page of children for each node in
+	// q.Nodes, with all-traffic counts and, with q.Selection, matching
+	// counts, resolving the selection once for the whole call. A node that
+	// does not exist comes back Missing. An invalid query or exclusion
+	// returns a *QueryError, a malformed cursor wraps ErrInvalidCursor, and
+	// a malformed read wraps ErrInvalidSitemapLevels.
+	ListSitemapLevels(ctx context.Context, q SitemapLevelsQuery) (SitemapLevels, error)
+
 	// GetMetadata returns the metadata map for a specific request ID.
 	GetMetadata(id uuid.UUID) (metadata map[string]any, err error)
 

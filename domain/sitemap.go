@@ -19,6 +19,11 @@ const MaxSitemapPage = 500
 // ErrSitemapNodeNotFound means no sitemap node has the requested name.
 var ErrSitemapNodeNotFound = errors.New("sitemap node not found")
 
+// ErrInvalidSitemapLevels means a sitemap levels read is malformed: it has
+// no nodes or too many, an unknown scope, or the matching scope without a
+// selection.
+var ErrInvalidSitemapLevels = errors.New("invalid sitemap levels read")
+
 // SitemapNode is one node on a pair's path through the sitemap.
 type SitemapNode struct {
 	// Name is the node's canonical path, such as
@@ -64,6 +69,78 @@ type SitemapPage struct {
 	NextCursor *string
 	// Complete reports whether the sitemap job had finished. Keyed by
 	// JobSitemap. Pairs the job has not reached are not counted.
+	Complete map[JobName]bool
+}
+
+// SitemapScope is which children a sitemap levels read lists.
+type SitemapScope string
+
+const (
+	// SitemapScopeAll lists every child with pairs in all traffic, by its
+	// all-traffic pair count. It is the default.
+	SitemapScopeAll SitemapScope = "all"
+	// SitemapScopeMatching lists only the children with pairs the selection
+	// matches, by their matching pair count, as query mode does.
+	SitemapScopeMatching SitemapScope = "matching"
+)
+
+// MaxSitemapLevels is the most nodes one sitemap levels read takes.
+const MaxSitemapLevels = 64
+
+// SitemapLevelsQuery reads one page of the children of each of several
+// sitemap nodes in one call, such as every level a client has open. With a
+// Selection, the matching pairs are resolved once for the whole call.
+type SitemapLevelsQuery struct {
+	Nodes []string // node names; "" for the origins
+	// Scope chooses the children listed; "" is SitemapScopeAll.
+	// SitemapScopeMatching needs a Selection.
+	Scope SitemapScope
+	// Exclusion is left out of the all-traffic Pairs and Errors.
+	Exclusion []string
+	// Selection, when set, gives each child its Matching and MatchingErrors
+	// counts: the pairs that match Selection.Text, are not hidden by
+	// Selection.Exclusion, and have an id at or below Selection.AsOf
+	// (ADR-0033).
+	Selection *SelectionQuery
+	// Cursors continue a node's earlier page, keyed by node name. A cursor
+	// belongs to the scope it came from. ListSitemapChildren takes a
+	// matching-scope cursor in query mode and an all-scope cursor without a
+	// query.
+	Cursors map[string]string
+	Limit   int // per node, capped at MaxSitemapPage
+}
+
+// SitemapLevelChild is a child in a sitemap levels read.
+type SitemapLevelChild struct {
+	// SitemapChild holds the all-traffic Pairs and Errors, leaving out the
+	// read's Exclusion. HasChildren is over all traffic in the all scope,
+	// and over the matching pairs in the matching scope.
+	SitemapChild
+	// Matching and MatchingErrors count the subtree's pairs, and those with
+	// a 5xx response, that the selection matches. Nil without a selection.
+	Matching       *int64 `json:"matching"`
+	MatchingErrors *int64 `json:"matching_errors"`
+}
+
+// SitemapLevel is one page of one node's children in a sitemap levels read,
+// by the scope's pair count, highest first.
+type SitemapLevel struct {
+	Node     string
+	Children []SitemapLevelChild
+	// NextCursor continues after the last child. Nil at the end.
+	NextCursor *string
+	// Missing reports that no node has the name Node, for example because
+	// its pairs were deleted.
+	Missing bool
+}
+
+// SitemapLevels is the answer to a SitemapLevelsQuery: one level per node,
+// in the order of its Nodes.
+type SitemapLevels struct {
+	Levels []SitemapLevel
+	// Complete reports whether the background jobs the counts depend on had
+	// finished: the sitemap job, and the search index jobs when the
+	// selection has a text term.
 	Complete map[JobName]bool
 }
 

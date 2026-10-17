@@ -171,6 +171,10 @@ func (m *mockTrafficRepo) ListSitemapChildren(context.Context, domain.SitemapQue
 	return domain.SitemapPage{}, errors.New("not implemented")
 }
 
+func (m *mockTrafficRepo) ListSitemapLevels(context.Context, domain.SitemapLevelsQuery) (domain.SitemapLevels, error) {
+	return domain.SitemapLevels{}, errors.New("not implemented")
+}
+
 func (m *mockTrafficRepo) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResponseRow, error) {
 	if m.forceError {
 		return nil, errors.New("forced repo error")
