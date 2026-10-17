@@ -11,7 +11,7 @@ func TestJobsCommands(t *testing.T) {
 			name: "jobs list", args: []string{"jobs", "list"},
 			status: http.StatusOK, response: `{"items":[{"name":"traffic_index","complete":true,"done":10,"total":10},{"name":"sitemap","complete":false,"done":3,"total":10}]}`,
 			method: http.MethodGet, path: "/jobs",
-			stdout: "traffic_index  complete  10/10\nsitemap        running   3/10\n",
+			stdout: "NAME           STATE     PROGRESS\ntraffic_index  complete  10/10\nsitemap        running   3/10\nNAME           STATE     PROGRESS\n",
 		},
 		{
 			name: "jobs rebuild", args: []string{"jobs", "rebuild", "sitemap"},

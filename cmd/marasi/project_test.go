@@ -293,7 +293,7 @@ func TestProjectListCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "../ignored", "project", "list")
-		want := fmt.Sprintf("alpha %s\nzeta %s\n", alpha, zeta)
+		want := fmt.Sprintf("NAME   PROJECT\nalpha  %s\nzeta   %s\nNAME   PROJECT\n", alpha, zeta)
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("wanted stdout %q, empty stderr, and nil error; got stdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
@@ -368,7 +368,7 @@ func TestProjectListCommand(t *testing.T) {
 		}
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "project", "list")
-		want := fmt.Sprintf("alias %s\nalias-copy %s\ninside %s\n", canonicalTarget, canonicalTarget, inside)
+		want := fmt.Sprintf("NAME        PROJECT\nalias       %s\nalias-copy  %s\ninside      %s\nNAME        PROJECT\n", canonicalTarget, canonicalTarget, inside)
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("wanted stdout %q, empty stderr, and nil error; got stdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}

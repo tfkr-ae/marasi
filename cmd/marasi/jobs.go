@@ -41,15 +41,15 @@ var jobsListCmd = &cobra.Command{
 		if err := json.Unmarshal(body, &list); err != nil {
 			return fmt.Errorf("decoding jobs: %w", err)
 		}
-		writer := newTableWriter(cmd.OutOrStdout())
+		table := newListTable(cmd.OutOrStdout(), "NAME", "STATE", "PROGRESS")
 		for _, job := range list.Items {
 			state := "running"
 			if job.Complete {
 				state = "complete"
 			}
-			fmt.Fprintf(writer, "%s\t%s\t%d/%d\n", job.Name, state, job.Done, job.Total)
+			table.row(job.Name, state, fmt.Sprintf("%d/%d", job.Done, job.Total))
 		}
-		return writer.Flush()
+		return table.flush()
 	},
 }
 

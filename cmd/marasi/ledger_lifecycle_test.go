@@ -263,7 +263,8 @@ func TestLedgerCommandsLifecycle(t *testing.T) {
 		}
 		originName := "http://" + originURL.Host
 		stdout, _ = must("traffic", "sitemap")
-		if !strings.HasPrefix(stdout, originName+"  3  0  +") {
+		// The origin is the only row, between the column names above and below it.
+		if rows := strings.Split(stdout, "\n"); len(rows) != 4 || rows[1] != originName+"  3      0    +" {
 			t.Fatalf("sitemap origins: got %q", stdout)
 		}
 		var sitemap struct {
@@ -306,7 +307,7 @@ func TestLedgerCommandsLifecycle(t *testing.T) {
 			t.Fatalf("get JSON: got %+v", setting)
 		}
 		must("settings", "set", "cli-test", "other", "1")
-		if stdout, _ := must("settings", "list", "cli-test", "--prefix", "ledger/"); stdout != key+`  {"columns":["host"]}`+"\n" {
+		if stdout, _ := must("settings", "list", "cli-test", "--prefix", "ledger/"); stdout != "KEY              VALUE\n"+key+`  {"columns":["host"]}`+"\nKEY              VALUE\n" {
 			t.Fatalf("list: got %q", stdout)
 		}
 		var list struct {

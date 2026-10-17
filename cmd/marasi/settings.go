@@ -55,11 +55,11 @@ var settingsListCmd = &cobra.Command{
 		if err := json.Unmarshal(body, &list); err != nil {
 			return fmt.Errorf("decoding client settings: %w", err)
 		}
-		writer := newTableWriter(cmd.OutOrStdout())
+		table := newListTable(cmd.OutOrStdout(), "KEY", "VALUE")
 		for _, setting := range list.Items {
-			fmt.Fprintf(writer, "%s\t%s\n", setting.Key, truncateDisplay(compactJSON(setting.Value), settingsValueDisplayLimit))
+			table.row(setting.Key, truncateDisplay(compactJSON(setting.Value), settingsValueDisplayLimit))
 		}
-		return writer.Flush()
+		return table.flush()
 	},
 }
 

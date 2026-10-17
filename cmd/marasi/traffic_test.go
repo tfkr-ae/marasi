@@ -30,7 +30,11 @@ func TestTrafficListCommand(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "limit=200" {
 			t.Fatalf("\nwanted:\nGET /traffic?limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
-		want := "9   01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /login  401  45\n10  0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /a      200  12\n"
+		header := "#   ID                                    METHOD  HOST         PATH    STATUS  LENGTH\n"
+		want := header +
+			"9   01938032-1b17-7243-b035-e6a9f4645904  POST    example.com  /login  401     45\n" +
+			"10  0193802f-f0e7-73d9-a764-06d21e367809  GET     example.com  /a      200     12\n" +
+			header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -47,7 +51,11 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "0  0193802f-f0e7-73d9-a764-06d21e367809  GET   example.com  /123456789012345678901234567890123456...  200  12\n0  01938032-1b17-7243-b035-e6a9f4645904  POST  example.com  /short                                    404  45\n"
+		header := "#  ID                                    METHOD  HOST         PATH                                      STATUS  LENGTH\n"
+		want := header +
+			"0  0193802f-f0e7-73d9-a764-06d21e367809  GET     example.com  /123456789012345678901234567890123456...  200     12\n" +
+			"0  01938032-1b17-7243-b035-e6a9f4645904  POST    example.com  /short                                    404     45\n" +
+			header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -61,7 +69,8 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "0  0193802f-f0e7-73d9-a764-06d21e367809  GET  example.com  /12345678901234567890123456789012345😀...  200  12\n"
+		header := "#  ID                                    METHOD  HOST         PATH                                      STATUS  LENGTH\n"
+		want := header + "0  0193802f-f0e7-73d9-a764-06d21e367809  GET     example.com  /12345678901234567890123456789012345😀...  200     12\n" + header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -78,7 +87,8 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "0  01938032-1b17-7243-b035-e6a9f4645904  GET  example.com  /a  200  12\n"
+		header := "#  ID                                    METHOD  HOST         PATH  STATUS  LENGTH\n"
+		want := header + "0  01938032-1b17-7243-b035-e6a9f4645904  GET     example.com  /a    200     12\n" + header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -126,7 +136,8 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "0  01938032-1b17-7243-b035-e6a9f4645904  GET  example.com  /a  200  12\n"
+		header := "#  ID                                    METHOD  HOST         PATH  STATUS  LENGTH\n"
+		want := header + "0  01938032-1b17-7243-b035-e6a9f4645904  GET     example.com  /a    200     12\n" + header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -700,20 +711,25 @@ func TestLaunchpadCommands(t *testing.T) {
 			wantStderr: "launchpad " + id + " created successfully\n",
 		},
 		{
-			name:       "list",
-			args:       []string{"launchpad", "list"},
-			response:   `{"items":[{"id":"` + id + `","name":"Login","description":"Try variants","entry_count":500,"last_status_code":404}]}` + "\n",
-			method:     http.MethodGet,
-			path:       "/launchpad",
-			wantStdout: id + "  Login  Try variants  500  404\n",
+			name:     "list",
+			args:     []string{"launchpad", "list"},
+			response: `{"items":[{"id":"` + id + `","name":"Login","description":"Try variants","entry_count":500,"last_status_code":404}]}` + "\n",
+			method:   http.MethodGet,
+			path:     "/launchpad",
+			wantStdout: "ID                                    NAME   DESCRIPTION   ENTRIES  LAST STATUS\n" +
+				id + "  Login  Try variants  500      404\n" +
+				"ID                                    NAME   DESCRIPTION   ENTRIES  LAST STATUS\n",
 		},
 		{
-			name:       "list empty and in-flight launchpads",
-			args:       []string{"launchpad", "list"},
-			response:   `{"items":[{"id":"` + id + `","name":"Empty","description":"","entry_count":0,"last_status_code":null},{"id":"` + requestID + `","name":"Sending","description":"","entry_count":2,"last_status_code":null}]}` + "\n",
-			method:     http.MethodGet,
-			path:       "/launchpad",
-			wantStdout: id + "  Empty      0  -\n" + requestID + "  Sending    2  -\n",
+			name:     "list empty and in-flight launchpads",
+			args:     []string{"launchpad", "list"},
+			response: `{"items":[{"id":"` + id + `","name":"Empty","description":"","entry_count":0,"last_status_code":null},{"id":"` + requestID + `","name":"Sending","description":"","entry_count":2,"last_status_code":null}]}` + "\n",
+			method:   http.MethodGet,
+			path:     "/launchpad",
+			wantStdout: "ID                                    NAME     DESCRIPTION  ENTRIES  LAST STATUS\n" +
+				id + "  Empty                 0        -\n" +
+				requestID + "  Sending               2        -\n" +
+				"ID                                    NAME     DESCRIPTION  ENTRIES  LAST STATUS\n",
 		},
 		{
 			name:       "get",
@@ -778,7 +794,9 @@ func TestLaunchpadCommands(t *testing.T) {
 		body := `{"id":"` + id + `","name":"Login","description":"Try variants","items":[{"id":"` + requestID + `","method":"POST","host":"example.com","path":"/login","status_code":200,"length":"2"}]}` + "\n"
 		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "get", id)
-		want := "id: " + id + "\nname: Login\ndescription: Try variants\n" + "0  " + requestID + "  POST  example.com  /login  200  2\n"
+		members := "#  ID                                    METHOD  HOST         PATH    STATUS  LENGTH\n"
+		want := "id: " + id + "\nname: Login\ndescription: Try variants\n" +
+			members + "0  " + requestID + "  POST    example.com  /login  200     2\n" + members
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
@@ -1001,7 +1019,8 @@ func TestLaunchpadPendingCommand(t *testing.T) {
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "pending")
 
-		want := first + "  " + launchpadID + "  pending\n" + second + "  " + launchpadID + "  pending\n"
+		header := "LAUNCH ID                             LAUNCHPAD ID                          STATUS\n"
+		want := header + first + "  " + launchpadID + "  pending\n" + second + "  " + launchpadID + "  pending\n" + header
 		got := sent.snapshot()
 		if err != nil || stdout != want || stderr != "" || got.Method != http.MethodGet || got.Path != "/launch" {
 			t.Fatalf("\nwanted:\nGET /launch and stdout %q\ngot:\n%s %s, stdout %q, stderr %q, error %v", want, got.Method, got.Path, stdout, stderr, err)

@@ -21,8 +21,11 @@ func TestHumanListColumnsStayBounded(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := id + "  " + truncated + "  High    8.1  " + created + "\n" +
-			other + "  short" + strings.Repeat(" ", 35) + "  Low     1    " + created + "\n"
+		header := "ID" + strings.Repeat(" ", 34) + "  TITLE" + strings.Repeat(" ", 35) + "  SEVERITY  TEST CASE  CVSS  CREATED AT\n"
+		want := header +
+			id + "  " + truncated + "  High                 8.1   " + created + "\n" +
+			other + "  short" + strings.Repeat(" ", 35) + "  Low                  1     " + created + "\n" +
+			header
 		if stdout != want || stderr != "" {
 			t.Fatalf("\nwanted:\n%s\ngot:\nstdout %q stderr %q", want, stdout, stderr)
 		}
@@ -36,8 +39,10 @@ func TestHumanListColumnsStayBounded(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := id + "  line1 line2 ok  High    8.1  " + created + "\n"
-		if stdout != want || strings.Count(stdout, "\n") != 1 {
+		header := "ID" + strings.Repeat(" ", 34) + "  TITLE           SEVERITY  TEST CASE  CVSS  CREATED AT\n"
+		want := header + id + "  line1 line2 ok  High                 8.1   " + created + "\n" + header
+		// One row between the header and the footer: the breaks did not split it.
+		if stdout != want || strings.Count(stdout, "\n") != 3 {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, stdout)
 		}
 	})
@@ -50,7 +55,8 @@ func TestHumanListColumnsStayBounded(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := id + "  " + strings.Repeat("A", 36) + "😀...  High    8.1  " + created + "\n"
+		header := "ID" + strings.Repeat(" ", 34) + "  TITLE" + strings.Repeat(" ", 35) + "  SEVERITY  TEST CASE  CVSS  CREATED AT\n"
+		want := header + id + "  " + strings.Repeat("A", 36) + "😀...  High                 8.1   " + created + "\n" + header
 		if stdout != want || !utf8.ValidString(stdout) {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, stdout)
 		}
@@ -65,8 +71,11 @@ func TestHumanListColumnsStayBounded(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := id + "  " + truncated + "  " + truncated + "  " + truncated + "  " + created + "\n" +
-			other + "  short" + strings.Repeat(" ", 35) + "  Web" + strings.Repeat(" ", 37) + "  auth" + strings.Repeat(" ", 36) + "  " + created + "\n"
+		header := "ID" + strings.Repeat(" ", 34) + "  TITLE" + strings.Repeat(" ", 35) + "  CATEGORY" + strings.Repeat(" ", 32) + "  TAGS" + strings.Repeat(" ", 36) + "  CREATED AT\n"
+		want := header +
+			id + "  " + truncated + "  " + truncated + "  " + truncated + "  " + created + "\n" +
+			other + "  short" + strings.Repeat(" ", 35) + "  Web" + strings.Repeat(" ", 37) + "  auth" + strings.Repeat(" ", 36) + "  " + created + "\n" +
+			header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, stdout)
 		}
@@ -81,7 +90,8 @@ func TestHumanListColumnsStayBounded(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := truncated + "  " + truncated + "\nshort" + strings.Repeat(" ", 35) + "  Web\n"
+		header := "TITLE" + strings.Repeat(" ", 35) + "  CATEGORY\n"
+		want := header + truncated + "  " + truncated + "\nshort" + strings.Repeat(" ", 35) + "  Web\n" + header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, stdout)
 		}
@@ -96,8 +106,11 @@ func TestHumanListColumnsStayBounded(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := id + "  " + truncated + "  " + truncated + "  500  200\n" +
-			other + "  short" + strings.Repeat(" ", 35) + "  ok" + strings.Repeat(" ", 38) + "  0    -\n"
+		header := "ID" + strings.Repeat(" ", 34) + "  NAME" + strings.Repeat(" ", 36) + "  DESCRIPTION" + strings.Repeat(" ", 29) + "  ENTRIES  LAST STATUS\n"
+		want := header +
+			id + "  " + truncated + "  " + truncated + "  500      200\n" +
+			other + "  short" + strings.Repeat(" ", 35) + "  ok" + strings.Repeat(" ", 38) + "  0        -\n" +
+			header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, stdout)
 		}

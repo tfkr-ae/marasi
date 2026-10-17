@@ -24,7 +24,10 @@ func TestTrafficReadCommands(t *testing.T) {
 		{
 			name: "sitemap origins", args: []string{"traffic", "sitemap"},
 			status: http.StatusOK, body: sitemapBody, path: "/traffic/sitemap", query: url.Values{"limit": {"100"}},
-			stdout: "https://a.test      12  1  +\nhttp://b.test:8080  3   0  \n",
+			stdout: "NAME                PAIRS  5XX  CHILDREN\n" +
+				"https://a.test      12     1    +\n" +
+				"http://b.test:8080  3      0    \n" +
+				"NAME                PAIRS  5XX  CHILDREN\n",
 			stderr: "next_cursor=opaque\nnotice: the sitemap is still building; counts may be incomplete\nnotice: the traffic index is still building; text results may be incomplete\n",
 		},
 		{
@@ -46,7 +49,7 @@ func TestTrafficReadCommands(t *testing.T) {
 		{
 			name: "types", args: []string{"traffic", "types"},
 			status: http.StatusOK, body: `{"items":[{"content_type":"text/html","count":4},{"content_type":"","count":1}],"sitemap":{"complete":false}}`, path: "/traffic/content-types", query: url.Values{},
-			stdout: "text/html  4\n-          1\n", stderr: "notice: the sitemap is still building; counts may be incomplete\n",
+			stdout: "CONTENT TYPE  PAIRS\ntext/html     4\n-             1\nCONTENT TYPE  PAIRS\n", stderr: "notice: the sitemap is still building; counts may be incomplete\n",
 		},
 		{
 			name: "validate", args: []string{"traffic", "validate", "-q", "status_code >= 500", "--exclude", "image/*", "--order-by", "length desc"},
@@ -117,8 +120,14 @@ func TestTrafficSitemapLevels(t *testing.T) {
 			sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 			args := append([]string{"--config-dir", configDir, "--instance", "work", "traffic", "sitemap"}, test.args...)
 			stdout, stderr, err := runMarasi(binary, args...)
-			wantStdout := "# (origins)\nhttps://a.test  12  1  3  1  +\n" +
-				"# https://a.test/api\nhttps://a.test/api/v2  7  0  -  -  \n" +
+			wantStdout := "# (origins)\n" +
+				"NAME            PAIRS  5XX  MATCHING  MATCHING 5XX  CHILDREN\n" +
+				"https://a.test  12     1    3         1             +\n" +
+				"NAME            PAIRS  5XX  MATCHING  MATCHING 5XX  CHILDREN\n" +
+				"# https://a.test/api\n" +
+				"NAME                   PAIRS  5XX  MATCHING  MATCHING 5XX  CHILDREN\n" +
+				"https://a.test/api/v2  7      0    -         -             \n" +
+				"NAME                   PAIRS  5XX  MATCHING  MATCHING 5XX  CHILDREN\n" +
 				"# https://gone.test (missing)\n"
 			wantStderr := "next_cursor=opaque node=\nnotice: the sitemap is still building; counts may be incomplete\n"
 			if err != nil || stdout != wantStdout || stderr != wantStderr {
