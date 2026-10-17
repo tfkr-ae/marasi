@@ -177,7 +177,7 @@ type Proxy struct {
 	ReportGenerator domain.ReportGenerator // Generator for report templates and exports.
 	DBCloser        io.Closer              // Closer for the database connection.
 	Logger          *slog.Logger           // Logger for Marasi
-	admitWork       func(context.Context, bool) (func(), error)
+	admitWork       func(context.Context, bool) (func(), uint64, error)
 	clientWorkToken string
 }
 
@@ -331,8 +331,8 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 		checkpoint:           newCheckpointState(),
 		launchpadWS:          make(map[io.Closer]struct{}),
 		clientWorkToken:      uuid.NewString(),
-		admitWork: func(context.Context, bool) (func(), error) {
-			return func() {}, nil
+		admitWork: func(context.Context, bool) (func(), uint64, error) {
+			return func() {}, 0, nil
 		},
 	}
 	err := proxy.WithOptions(options...)
