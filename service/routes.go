@@ -71,7 +71,9 @@ func addRoutes(mux *http.ServeMux, projects *ProjectLifecycle, proxy *marasi.Pro
 	addLogRoutes(projectRoutes, proxy)
 	addWebSocketRoutes(projectRoutes, mux, projects, proxy)
 	addNoteRoutes(projectRoutes, proxy, events)
-	addCheckpointRoutes(projectRoutes, proxy, events)
+	// Checkpoint items live in memory, not in the open project, and a switch
+	// waits for them, so forwarding or dropping one is not admitted (ADR-0046).
+	addCheckpointRoutes(mux, proxy, events)
 	addLaunchpadRoutes(projectRoutes, mux, proxy, events)
 	addLaunchRoutes(mux, proxy)
 	addWaypointRoutes(projectRoutes, proxy, events)

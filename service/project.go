@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,14 @@ import (
 	"github.com/tfkr-ae/marasi/internal/filelock"
 	"github.com/tfkr-ae/marasi/report"
 	"github.com/tfkr-ae/marasi/wordlist"
+)
+
+const (
+	// waitReportDelay is how long a switch waits on project work before it
+	// reports what it is waiting for.
+	waitReportDelay = 500 * time.Millisecond
+	// waitReportInterval is how often a waiting switch checks for a change.
+	waitReportInterval = 100 * time.Millisecond
 )
 
 var (
@@ -58,6 +67,10 @@ type ProjectLifecycle struct {
 	lock             func(string) (func() error, error)
 	flushOpenProject func() error
 	opened           func(string)
+	// waiting receives what a switch to the target project is still waiting
+	// for. waitReportDelay is how long a switch waits before it reports.
+	waiting          func(target string, waits []ProjectWait)
+	waitReportDelay  time.Duration
 	logAdded         func(*domain.Log)
 	armoryRunUpdated func(*domain.ArmoryRun)
 	extensionOptions []func(*extensions.Runtime) error
@@ -90,6 +103,7 @@ func NewProjectLifecycle(proxy *marasi.Proxy, configDir string, wordlists wordli
 	lifecycle.prepare = lifecycle.prepareProject
 	lifecycle.jobBatch = runJobBatch
 	lifecycle.jobProgressInterval = jobProgressInterval
+	lifecycle.waitReportDelay = waitReportDelay
 	lifecycle.flushOpenProject = proxy.CloseWebSocketsAndFlush
 	_ = proxy.WithOptions(marasi.WithWorkAdmission(lifecycle.gate.admit))
 	return lifecycle
@@ -144,6 +158,8 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 	// launches first, so they end in the project they were launched in.
 	lifecycle.proxy.InterruptLaunches()
 	old := lifecycle.openProject()
+	stopReporting := lifecycle.reportWaits(path)
+	defer stopReporting()
 	unblock, err := lifecycle.waitForHandoff(ctx, old)
 	if err != nil {
 		return errors.Join(err, cleanupPreparedProject(path, true, resources, unlock))
@@ -152,7 +168,6 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 	if err := ctx.Err(); err != nil {
 		return errors.Join(err, cleanupPreparedProject(path, true, resources, unlock))
 	}
-	held := lifecycle.proxy.CheckpointHoldStarted()
 	flushed := make(chan error, 1)
 	flush := lifecycle.flushOpenProject
 	go func() { flushed <- flush() }()
@@ -161,24 +176,19 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 		if err != nil {
 			return errors.Join(err, cleanupPreparedProject(path, true, resources, unlock))
 		}
-	case <-held:
-		// Reopen admission so a late Lua hold can be forwarded or dropped.
-		// The proxy still owns the closing sessions and their flush.
-		return errors.Join(ErrProjectBusy, cleanupPreparedProject(path, true, resources, unlock))
 	case <-ctx.Done():
 		return errors.Join(ctx.Err(), cleanupPreparedProject(path, true, resources, unlock))
 	}
 	// Closing a WebSocket can run Lua on its peer's final frame. Drain that
-	// work and its nested requests before replacing repositories.
-	if lifecycle.projectBusy(old) {
+	// work, its nested requests, and any Checkpoint item it held before
+	// replacing repositories.
+	if lifecycle.armoryBusy(old) {
 		return errors.Join(ErrProjectBusy, cleanupPreparedProject(path, true, resources, unlock))
 	}
-	if err := lifecycle.gate.seal(ctx, held); err != nil {
-		if errors.Is(err, errBlockAborted) {
-			err = ErrProjectBusy
-		}
+	if err := lifecycle.gate.seal(ctx); err != nil {
 		return errors.Join(err, cleanupPreparedProject(path, true, resources, unlock))
 	}
+	stopReporting()
 	// The late nested requests may have queued persistence after the first
 	// flush. The seal keeps anything else from queuing more.
 	if err := lifecycle.flushOpenProject(); err != nil {
@@ -239,22 +249,19 @@ func (repository *eventLogRepository) startPublishing() {
 	}
 }
 
-// waitForHandoff blocks admission until in-flight work finishes. A Checkpoint
-// hold that begins during the wait cannot be resolved until admission reopens,
-// so the handoff stops instead of waiting for that hold.
+// waitForHandoff blocks admission until in-flight work finishes, including
+// held Checkpoint items. Checkpoint routes are not admitted, so a held item
+// can still be forwarded or dropped while admission is blocked (ADR-0046).
 func (lifecycle *ProjectLifecycle) waitForHandoff(ctx context.Context, project *openProject) (func(), error) {
-	held := lifecycle.proxy.CheckpointHoldStarted()
-	if lifecycle.projectBusy(project) {
+	if lifecycle.armoryBusy(project) {
 		return nil, ErrProjectBusy
 	}
-	unblock, err := lifecycle.gate.block(ctx, held)
-	if errors.Is(err, errBlockAborted) {
-		return nil, ErrProjectBusy
-	}
+	// A held WebSocket message is not admitted work, so it is waited on here.
+	unblock, err := lifecycle.gate.block(ctx, func() bool { return !lifecycle.proxy.HasPendingCheckpoint() })
 	if err != nil {
 		return nil, err
 	}
-	if lifecycle.projectBusy(project) {
+	if lifecycle.armoryBusy(project) {
 		unblock()
 		return nil, ErrProjectBusy
 	}
@@ -265,11 +272,92 @@ func (lifecycle *ProjectLifecycle) waitForHandoff(ctx context.Context, project *
 	return unblock, nil
 }
 
-func (lifecycle *ProjectLifecycle) projectBusy(project *openProject) bool {
-	if project != nil && project.resources.Armory != nil && len(project.resources.Armory.ActiveRunIDs()) != 0 {
-		return true
+// armoryBusy reports an active Armory run, which a switch refuses rather than
+// waits for: the run's client owns it.
+func (lifecycle *ProjectLifecycle) armoryBusy(project *openProject) bool {
+	return project != nil && project.resources.Armory != nil && len(project.resources.Armory.ActiveRunIDs()) != 0
+}
+
+// ProjectWait is one thing a project switch is still waiting for.
+type ProjectWait struct {
+	// Kind is checkpoint, extension, or work.
+	Kind string `json:"kind"`
+	// ID is the Checkpoint item's id.
+	ID string `json:"id,omitempty"`
+	// Type is the Checkpoint item's type: request, response, or websocket.
+	Type string `json:"type,omitempty"`
+	// Summary is the first line of a held HTTP item, or a WebSocket message's direction.
+	Summary string `json:"summary,omitempty"`
+	// Name is the name of an extension whose Lua is running.
+	Name string `json:"name,omitempty"`
+	// Count is the number of other admitted requests and control calls.
+	Count int `json:"count,omitempty"`
+}
+
+// projectWaits lists the project work a switch is waiting for: held
+// Checkpoint items, running extensions, then other admitted work.
+func (lifecycle *ProjectLifecycle) projectWaits() []ProjectWait {
+	var waits []ProjectWait
+	heldHTTP := 0
+	for _, item := range lifecycle.proxy.CheckpointItems() {
+		wait := ProjectWait{Kind: "checkpoint", ID: item.ID.String(), Type: item.Type}
+		if item.Type == "websocket" {
+			wait.Summary = item.Direction
+		} else {
+			heldHTTP++
+			wait.Summary, _, _ = strings.Cut(string(item.Raw), "\n")
+			wait.Summary = strings.TrimSuffix(wait.Summary, "\r")
+		}
+		waits = append(waits, wait)
 	}
-	return lifecycle.proxy.HasPendingCheckpoint()
+	active, running := lifecycle.gate.snapshot()
+	for _, name := range running {
+		waits = append(waits, ProjectWait{Kind: "extension", Name: name})
+	}
+	// A held HTTP item is admitted work, so it is counted once, as the item.
+	if other := active - heldHTTP; other > 0 {
+		waits = append(waits, ProjectWait{Kind: "work", Count: other})
+	}
+	return waits
+}
+
+// reportWaits reports what a switch to target waits for once it has waited
+// waitReportDelay, then again each time that changes. The returned stop is
+// idempotent and returns once reporting has ended.
+func (lifecycle *ProjectLifecycle) reportWaits(target string) func() {
+	if lifecycle.waiting == nil {
+		return func() {}
+	}
+	done, finished := make(chan struct{}), make(chan struct{})
+	delay := lifecycle.waitReportDelay
+	go func() {
+		defer close(finished)
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-done:
+			return
+		case <-timer.C:
+		}
+		ticker := time.NewTicker(waitReportInterval)
+		defer ticker.Stop()
+		var last []ProjectWait
+		for {
+			if waits := lifecycle.projectWaits(); len(waits) != 0 && !slices.Equal(waits, last) {
+				lifecycle.waiting(target, waits)
+				last = waits
+			}
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return sync.OnceFunc(func() {
+		close(done)
+		<-finished
+	})
 }
 
 // Admit admits project-bound work and returns its matching release operation.
@@ -360,7 +448,7 @@ func (lifecycle *ProjectLifecycle) prepareProject(ctx context.Context, path stri
 			return fail(err)
 		}
 		executionContext, cancel := context.WithCancel(lifecycle.executionContext)
-		runtime := &extensions.Runtime{Data: stored, ExecutionContext: executionContext, CancelExecution: cancel, TrackExecution: lifecycle.gate.trackExtension}
+		runtime := &extensions.Runtime{Data: stored, ExecutionContext: executionContext, CancelExecution: cancel, TrackExecution: func() func() { return lifecycle.gate.trackExtension(stored.Name) }}
 		resources.Extensions = append(resources.Extensions, runtime)
 		stop := context.AfterFunc(ctx, cancel)
 		if err := runtime.PrepareState(extensionService, lifecycle.extensionOptions); err != nil {
@@ -508,8 +596,10 @@ type projectGate struct {
 	blocked bool
 	// sealed refuses all admission, nested Lua work included, from the
 	// moment a handoff sees no project work until it publishes or gives up.
-	sealed              bool
-	active              int
+	sealed bool
+	active int
+	// extensions counts in-flight extension executions by extension name.
+	extensions          map[string]int
 	extensionExecutions int
 	// generation counts published open projects. Work records the generation
 	// it was admitted in, and work admitted again in another generation
@@ -518,7 +608,7 @@ type projectGate struct {
 }
 
 func newProjectGate() *projectGate {
-	return &projectGate{changed: make(chan struct{})}
+	return &projectGate{changed: make(chan struct{}), extensions: make(map[string]int)}
 }
 
 func (gate *projectGate) signal() {
@@ -526,21 +616,39 @@ func (gate *projectGate) signal() {
 	gate.changed = make(chan struct{})
 }
 
-// trackExtension counts an in-flight extension execution as project-owned work.
-// The returned release is idempotent.
-func (gate *projectGate) trackExtension() func() {
+// trackExtension counts an in-flight execution of the named extension as
+// project-owned work. The returned release is idempotent.
+func (gate *projectGate) trackExtension(name string) func() {
 	gate.mu.Lock()
 	gate.extensionExecutions++
+	gate.extensions[name]++
+	gate.signal()
 	gate.mu.Unlock()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			gate.mu.Lock()
 			gate.extensionExecutions--
+			if gate.extensions[name]--; gate.extensions[name] == 0 {
+				delete(gate.extensions, name)
+			}
 			gate.signal()
 			gate.mu.Unlock()
 		})
 	}
+}
+
+// snapshot returns the admitted work count and the sorted names of the
+// extensions whose Lua is running.
+func (gate *projectGate) snapshot() (int, []string) {
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	names := make([]string, 0, len(gate.extensions))
+	for name := range gate.extensions {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return gate.active, names
 }
 
 // admit waits until project-bound work may run and returns its release and
@@ -573,23 +681,19 @@ func (gate *projectGate) admit(ctx context.Context, internal bool) (func(), uint
 	}
 }
 
-var errBlockAborted = errors.New("admission block aborted")
-
-func (gate *projectGate) abortBlock(err error) (func(), error) {
-	gate.mu.Lock()
-	gate.blocked = false
-	gate.signal()
-	gate.mu.Unlock()
-	return nil, err
-}
-
-func (gate *projectGate) block(ctx context.Context, abort <-chan struct{}) (func(), error) {
+// block stops new admission and waits for admitted work to finish and, when
+// idle is non-nil, for idle to report true.
+func (gate *projectGate) block(ctx context.Context, idle func() bool) (func(), error) {
 	gate.mu.Lock()
 	gate.blocked = true
 	gate.signal()
 	gate.mu.Unlock()
-	if err := gate.drain(ctx, abort, false); err != nil {
-		return gate.abortBlock(err)
+	if err := gate.drain(ctx, idle, false); err != nil {
+		gate.mu.Lock()
+		gate.blocked = false
+		gate.signal()
+		gate.mu.Unlock()
+		return nil, err
 	}
 	var once sync.Once
 	return func() {
@@ -606,8 +710,8 @@ func (gate *projectGate) block(ctx context.Context, abort <-chan struct{}) (func
 // seal waits for project work to finish, then refuses all admission until
 // publish or unblock. Work cannot start between the wait and the seal, so a
 // flush after seal is the last write to the open project.
-func (gate *projectGate) seal(ctx context.Context, abort <-chan struct{}) error {
-	return gate.drain(ctx, abort, true)
+func (gate *projectGate) seal(ctx context.Context) error {
+	return gate.drain(ctx, nil, true)
 }
 
 // publish starts the next generation and lifts the seal. Admission stays
@@ -620,23 +724,35 @@ func (gate *projectGate) publish() {
 	gate.mu.Unlock()
 }
 
-func (gate *projectGate) drain(ctx context.Context, abort <-chan struct{}, seal bool) error {
-	gate.mu.Lock()
-	for gate.active != 0 || gate.extensionExecutions != 0 {
+// idlePoll is how often drain rechecks an idle condition the gate is not
+// signalled about.
+const idlePoll = 10 * time.Millisecond
+
+func (gate *projectGate) drain(ctx context.Context, idle func() bool, seal bool) error {
+	var poll <-chan time.Time
+	if idle != nil {
+		ticker := time.NewTicker(idlePoll)
+		defer ticker.Stop()
+		poll = ticker.C
+	}
+	for {
+		// idle is checked outside the lock: it reads Checkpoint, not the gate.
+		idleNow := idle == nil || idle()
+		gate.mu.Lock()
+		if idleNow && gate.active == 0 && gate.extensionExecutions == 0 {
+			if seal {
+				gate.sealed = true
+			}
+			gate.mu.Unlock()
+			return nil
+		}
 		changed := gate.changed
 		gate.mu.Unlock()
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-abort:
-			return errBlockAborted
 		case <-changed:
-			gate.mu.Lock()
+		case <-poll:
 		}
 	}
-	if seal {
-		gate.sealed = true
-	}
-	gate.mu.Unlock()
-	return nil
 }

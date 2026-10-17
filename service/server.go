@@ -67,6 +67,12 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 				Project string `json:"project"`
 			}{Project: path})
 		}
+		projects.waiting = func(target string, waits []ProjectWait) {
+			events.publish("project.waiting", struct {
+				Project    string        `json:"project"`
+				WaitingFor []ProjectWait `json:"waiting_for"`
+			}{Project: target, WaitingFor: waits})
+		}
 		projects.logAdded = func(entry *domain.Log) {
 			events.publish("log.added", proxyLogFromDomain(entry))
 		}
