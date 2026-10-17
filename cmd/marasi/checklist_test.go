@@ -22,7 +22,10 @@ func TestTestCaseChecklistCommand(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/test-case/checklist" || got.Body != "" {
 			t.Fatalf("wanted GET /test-case/checklist, got %s %s body %q", got.Method, got.Path, got.Body)
 		}
-		want := "Check authorization  Access control\nCheck headers        Configuration\n"
+		want := "TITLE                CATEGORY\n" +
+			"Check authorization  Access control\n" +
+			"Check headers        Configuration\n" +
+			"TITLE                CATEGORY\n"
 		if stdout != want || stderr != "" {
 			t.Fatalf("wanted stdout %q and empty stderr, got stdout %q stderr %q", want, stdout, stderr)
 		}

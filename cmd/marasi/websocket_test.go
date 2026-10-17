@@ -32,8 +32,11 @@ func TestWebSocketListCommand(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/websocket" || got.RawQuery != "cursor="+newID+"&limit=2" || got.Body != "" {
 			t.Fatalf("\nwanted:\nGET /websocket?cursor=%s&limit=2 without a body\ngot:\n%s %s?%s body %q", newID, got.Method, got.Path, got.RawQuery, got.Body)
 		}
-		want := newID + "  pair-new  error   ws   example.com  /123456789012345678901234567890123456...\n" +
-			oldID + "  pair-old  closed  wss  other.test   /short\n"
+		header := "ID                                    REQUEST ID  STATE   TRANSPORT  HOST         PATH\n"
+		want := header +
+			newID + "  pair-new    error   ws         example.com  /123456789012345678901234567890123456...\n" +
+			oldID + "  pair-old    closed  wss        other.test   /short\n" +
+			header
 		if stdout != want || stderr != "next_cursor="+oldID+"\n" {
 			t.Fatalf("\nwanted:\nstdout %q\nstderr %q\ngot:\nstdout %q\nstderr %q", want, "next_cursor="+oldID+"\n", stdout, stderr)
 		}
@@ -465,7 +468,11 @@ func TestWebSocketMessagesCommand(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/websocket/"+connectionID+"/message" || got.RawQuery != "cursor="+cursor+"&limit=2" || got.Body != "" {
 			t.Fatalf("\nwanted:\nGET /websocket/%s/message?cursor=%s&limit=2, no body\ngot:\n%s %s?%s body %q", connectionID, cursor, got.Method, got.Path, got.RawQuery, got.Body)
 		}
-		want := secondID + "  server  9  binary 0 bytes\n" + firstID + "  client  1  " + strings.Repeat("é", 80) + "\n"
+		header := "ID                                    DIRECTION  OPCODE  PREVIEW\n"
+		want := header +
+			secondID + "  server     9       binary 0 bytes\n" +
+			firstID + "  client     1       " + strings.Repeat("é", 80) + "\n" +
+			header
 		if stdout != want || stderr != "next_cursor="+secondID+"\n" {
 			t.Fatalf("\nwanted:\nstdout %q\nstderr %q\ngot:\nstdout %q\nstderr %q", want, "next_cursor="+secondID+"\n", stdout, stderr)
 		}
@@ -475,7 +482,8 @@ func TestWebSocketMessagesCommand(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"`+firstID+`","direction":"client","opcode":1,"payload":"/w=="}],"next_cursor":null}`+"\n")
 		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "websocket", "messages", connectionID)
-		if err != nil || stdout != firstID+"  client  1  binary 1 bytes\n" || stderr != "" {
+		header := "ID                                    DIRECTION  OPCODE  PREVIEW\n"
+		if err != nil || stdout != header+firstID+"  client     1       binary 1 bytes\n"+header || stderr != "" {
 			t.Fatalf("\nwanted:\nbinary 1 byte preview and empty stderr\ngot:\nstdout %q stderr %q error %v", stdout, stderr, err)
 		}
 		if got := sent.snapshot(); got.RawQuery != "limit=200" {
@@ -487,7 +495,8 @@ func TestWebSocketMessagesCommand(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[{"id":"`+firstID+`","direction":"client","opcode":1,"payload":"`+base64.StdEncoding.EncodeToString([]byte("hello\tthere\nworld"))+`"}],"next_cursor":null}`+"\n")
 		stdout, stderr, err := runMarasi(buildMarasi(t), "--config-dir", configDir, "--instance", "work", "websocket", "messages", connectionID)
-		if err != nil || stderr != "" || stdout != firstID+`  client  1  hello\tthere\nworld`+"\n" {
+		header := "ID                                    DIRECTION  OPCODE  PREVIEW\n"
+		if err != nil || stderr != "" || stdout != header+firstID+`  client     1       hello\tthere\nworld`+"\n"+header {
 			t.Fatalf("\nwanted:\none row with escaped tab and newline\ngot:\nstdout %q stderr %q error %v", stdout, stderr, err)
 		}
 	})

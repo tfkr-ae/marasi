@@ -172,7 +172,8 @@ func TestArtifactListCommand(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 		args := []string{"--config-dir", configDir, "--instance", "work", "artifact", "list"}
-		want := id + "  proof.txt  text/plain  5  " + parentID + "    2026-10-03T10:00:00Z\n"
+		header := "ID                                    FILENAME   MIME TYPE   SIZE  TEST CASE                             FINDING  CREATED AT\n"
+		want := header + id + "  proof.txt  text/plain  5     " + parentID + "           2026-10-03T10:00:00Z\n" + header
 		if asJSON {
 			args = append(args, "--json")
 			want = body

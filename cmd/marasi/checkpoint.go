@@ -235,12 +235,11 @@ func writeCheckpointList(body []byte, stdout io.Writer) error {
 	if err := json.Unmarshal(body, &response); err != nil {
 		return fmt.Errorf("decoding checkpoint list: %w", err)
 	}
+	table := newListTable(stdout, "ID", "TYPE")
 	for _, item := range response.Items {
-		if _, err := fmt.Fprintf(stdout, "%s %s\n", item.ID, item.Type); err != nil {
-			return err
-		}
+		table.row(item.ID, item.Type)
 	}
-	return nil
+	return table.flush()
 }
 
 // writeCheckpointGet writes the item's bytes unchanged, so get, edit, and

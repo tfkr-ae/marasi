@@ -40,12 +40,14 @@ func TestTestCaseCommands(t *testing.T) {
 		wantStderr string
 	}{
 		{
-			name:       "list",
-			args:       []string{"test-case", "list"},
-			response:   `{"items":[{"id":"` + id + `","title":"Access control","category":"Web","tags":["auth"],"created_at":"2026-09-16T10:00:00Z"}]}` + "\n",
-			method:     http.MethodGet,
-			path:       "/test-case",
-			wantStdout: id + "  Access control  Web  auth  2026-09-16T10:00:00Z\n",
+			name:     "list",
+			args:     []string{"test-case", "list"},
+			response: `{"items":[{"id":"` + id + `","title":"Access control","category":"Web","tags":["auth"],"created_at":"2026-09-16T10:00:00Z"}]}` + "\n",
+			method:   http.MethodGet,
+			path:     "/test-case",
+			wantStdout: "ID                                    TITLE           CATEGORY  TAGS  CREATED AT\n" +
+				id + "  Access control  Web       auth  2026-09-16T10:00:00Z\n" +
+				"ID                                    TITLE           CATEGORY  TAGS  CREATED AT\n",
 		},
 		{
 			name:       "get",

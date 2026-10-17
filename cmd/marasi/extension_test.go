@@ -18,7 +18,7 @@ func TestExtensionCommands(t *testing.T) {
 	checkpointID := "01937d13-9632-75b1-9e73-c5129b06fa8c"
 	workshopID := "01937d13-9632-7f84-add5-14ec2c2c7f43"
 
-	t.Run("should list extensions as id name enabled lines", func(t *testing.T) {
+	t.Run("should list extensions in an id name state table", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		response := `{"items":[{"id":"` + compassID + `","name":"compass","enabled":true},{"id":"` + checkpointID + `","name":"checkpoint","enabled":false}]}` + "\n"
 		sent := startCannedControlAPI(t, configDir, "list", http.StatusOK, response)
@@ -31,7 +31,11 @@ func TestExtensionCommands(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/extension" || got.Body != "" {
 			t.Fatalf("\nwanted:\nGET /extension empty body\ngot:\n%s %s body %q", got.Method, got.Path, got.Body)
 		}
-		wantStdout := compassID + " compass enabled\n" + checkpointID + " checkpoint disabled\n"
+		header := "ID                                    NAME        STATE\n"
+		wantStdout := header +
+			compassID + "  compass     enabled\n" +
+			checkpointID + "  checkpoint  disabled\n" +
+			header
 		if stdout != wantStdout || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr\ngot:\nstdout %q, stderr %q", wantStdout, stdout, stderr)
 		}
@@ -377,7 +381,12 @@ func TestExtensionCommandLifecycle(t *testing.T) {
 	workshopID := "01937d13-9632-7f84-add5-14ec2c2c7f43"
 
 	stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "list")
-	wantList := compassID + " compass enabled\n" + checkpointID + " checkpoint enabled\n" + workshopID + " workshop enabled\n"
+	header := "ID                                    NAME        STATE\n"
+	wantList := header +
+		compassID + "  compass     enabled\n" +
+		checkpointID + "  checkpoint  enabled\n" +
+		workshopID + "  workshop    enabled\n" +
+		header
 	if err != nil || stdout != wantList || stderr != "" {
 		t.Fatalf("listing extensions: stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
@@ -533,7 +542,11 @@ end`
 		t.Fatalf("disabling workshop: stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
 	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "extension", "list")
-	wantDisabled := compassID + " compass enabled\n" + checkpointID + " checkpoint enabled\n" + workshopID + " workshop disabled\n"
+	wantDisabled := header +
+		compassID + "  compass     enabled\n" +
+		checkpointID + "  checkpoint  enabled\n" +
+		workshopID + "  workshop    disabled\n" +
+		header
 	if err != nil || stdout != wantDisabled || stderr != "" {
 		t.Fatalf("listing after disable: stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}

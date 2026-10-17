@@ -55,10 +55,12 @@ var projectListCmd = &cobra.Command{
 				Items []projectListItem `json:"items"`
 			}{Items: items})
 		}
+		table := newListTable(cmd.OutOrStdout(), "NAME", "PROJECT")
 		for _, item := range items {
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", item.Name, item.Project); err != nil {
-				return fmt.Errorf("writing project list: %w", err)
-			}
+			table.row(item.Name, item.Project)
+		}
+		if err := table.flush(); err != nil {
+			return fmt.Errorf("writing project list: %w", err)
 		}
 		return nil
 	},

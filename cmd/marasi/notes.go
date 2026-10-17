@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
@@ -154,11 +153,11 @@ func writeNotesListHuman(body []byte, stdout, stderr io.Writer) error {
 		return fmt.Errorf("decoding notes list: %w", err)
 	}
 
-	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	table := newListTable(stdout, "ID", "URL", "NOTE")
 	for _, item := range page.Items {
-		fmt.Fprintf(writer, "%s\t%s\t%s\n", item.ID, truncateDisplay(item.Host+item.Path, notesDisplayLimit), truncateDisplay(item.Note, notesDisplayLimit))
+		table.row(item.ID, truncateDisplay(item.Host+item.Path, notesDisplayLimit), truncateDisplay(item.Note, notesDisplayLimit))
 	}
-	if err := writer.Flush(); err != nil {
+	if err := table.flush(); err != nil {
 		return err
 	}
 	if page.NextCursor != nil {

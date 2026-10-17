@@ -27,7 +27,8 @@ func testListRequests(t *testing.T, parent string) {
 			args = append(args, "--json")
 		}
 		stdout, stderr, err := runMarasi(binary, args...)
-		want := "0  " + requestID + "  GET  example.com  /proof.txt  200  5\n"
+		header := "#  ID                                    METHOD  HOST         PATH        STATUS  LENGTH\n"
+		want := header + "0  " + requestID + "  GET     example.com  /proof.txt  200     5\n" + header
 		if asJSON {
 			want = `{"items":` + items + "}\n"
 		}
