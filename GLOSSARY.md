@@ -165,6 +165,10 @@ _Avoid_: artefact, attachment
 A Lua program stored in the open project, identified by UUID, with a unique name. Every new project includes compass, checkpoint, and workshop.
 _Avoid_: plugin, script, special extension
 
+**Hook**:
+A global function in an extension's Lua that the proxy calls by name, such as processRequest or startup. `marasi extension api hooks` lists them.
+_Avoid_: callback, handler
+
 **Logbook**:
 The GUI name for the combined test case and finding list. It is not stored and has no id.
 _Avoid_: using logbook as a control API collection or as a synonym for test case or finding
