@@ -91,10 +91,20 @@ func TestTrafficRepo_PairsCapturedBeforeACrashAreSearchableAfterReopening(t *tes
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	path := projectFile(t, repo)
+	// The repository dies before its first flush, so every pair is still
+	// queued when the next run opens the project.
+	stopIndexQueue(repo)
 	ids := captureTextPairs(t, repo, textSearchPairs())
+	var queued int
+	if err := repo.dbConn.Get(&queued, `SELECT count(*) FROM traffic_index_pending`); err != nil {
+		t.Fatalf("counting queued pairs: %v", err)
+	}
+	if queued != len(ids) {
+		t.Fatalf("wanted every pair queued before the crash, got %d of %d", queued, len(ids))
+	}
 
-	// A second repository on the same file stands in for the next run: the
-	// first is never closed.
+	// A second repository on the same file stands in for the next run.
+	crash(repo)
 	reopened := openTestProjectFile(t, path)
 	defer reopened.Close()
 
@@ -107,4 +117,27 @@ func TestTrafficRepo_PairsCapturedBeforeACrashAreSearchableAfterReopening(t *tes
 			t.Fatalf("%s\nwanted:\n%q\ngot:\n%q", query, want, got)
 		}
 	}
+}
+
+// crash stops repo the way a dead process would: no scheduled or final index
+// flush and no close-time writes. It waits for a flush already in progress, so
+// the file has a single writer when the test opens it again.
+func crash(repo *Repository) {
+	stopIndexQueue(repo)
+	_ = repo.dbConn.Close()
+}
+
+// stopIndexQueue stops repo's scheduled index flushes, without a final one,
+// and waits for a flush already in progress.
+func stopIndexQueue(repo *Repository) {
+	queue := &repo.indexQueue
+	queue.mu.Lock()
+	queue.closed = true
+	if queue.timer != nil {
+		queue.timer.Stop()
+		queue.timer = nil
+	}
+	queue.mu.Unlock()
+	queue.flushMu.Lock()
+	queue.flushMu.Unlock()
 }
