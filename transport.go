@@ -111,5 +111,13 @@ func (m *marasiRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		req.Header.Set("User-Agent", "")
 	}
 
-	return m.base.RoundTrip(req)
+	// The transport reads the request it sends until the response is done, while the
+	// response pipeline replaces *res.Request in place. Send a copy so they never share
+	// it, and hand back the original, whose address martian keys its context on.
+	sent := *req
+	res, err := m.base.RoundTrip(&sent)
+	if res != nil {
+		res.Request = req
+	}
+	return res, err
 }
