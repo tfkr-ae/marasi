@@ -109,7 +109,12 @@ func DumpRequest(req *http.Request) (rawDump []byte, prettyDump string, err erro
 	if err != nil {
 		return []byte{}, "", fmt.Errorf("reading request body: %w", err)
 	}
-	req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	// An empty body goes back as http.NoBody, or net/http sends it chunked.
+	if len(bodyBytes) == 0 {
+		req.Body = http.NoBody
+	} else {
+		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	}
 
 	fullDump := append(requestDump, bodyBytes...)
 	prettified, err := Prettify(bodyBytes)
