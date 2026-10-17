@@ -355,9 +355,11 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 // It returns a domain.ProxyResponse or an error if the ID is not found.
 func (repo *Repository) GetResponse(id uuid.UUID) (*domain.ProxyResponse, error) {
 	var dbRow dbRequestResponse
-	query := `SELECT id, status, status_code, response_raw, content_type, length, responded_at, metadata
-		      FROM request
-			  WHERE id = ?`
+	query := `SELECT r.id, r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at, r.metadata,
+			  ` + prettifiedColumns + `
+			  FROM request r
+			  LEFT JOIN pair_prettified p ON p.request_id = r.id
+			  WHERE r.id = ?`
 
 	err := repo.dbConn.Get(&dbRow, query, id)
 	if err != nil {
