@@ -22,7 +22,7 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Waypoint | `waypoint list`, `waypoint add`, `waypoint update`, `waypoint remove` | [waypoint](waypoint.md) |
 | Wordlist | `wordlist list`, `wordlist preview`, `wordlist add`, `wordlist remove` | [wordlist](wordlist.md) |
 | Armory | `armory template create`, `armory template list`, `armory template get`, `armory template update`, `armory template delete`, `armory run validate`, `armory run create`, `armory run list`, `armory run get`, `armory run start`, `armory run cancel`, `armory run traffic`, `armory run delete` | [armory](armory.md) |
-| Extension | `extension list`, `extension get`, `extension update`, `extension logs`, `extension settings get`, `extension settings set`, `extension call`, `extension enable`, `extension disable` | [extension](extension.md) |
+| Extension | `extension list`, `extension get`, `extension update`, `extension logs`, `extension settings get`, `extension settings set`, `extension call`, `extension enable`, `extension disable`, `extension api` | [extension](extension.md) |
 | Report | `report template list`, `report template add`, `report template remove`, `report template restore`, `report export` | [report](report.md) |
 | WebSocket | `websocket list`, `websocket get`, `websocket messages`, `traffic websocket`, `websocket inject`, `websocket close` | [websocket](websocket.md) |
 | Scope check | `scope check` | [scope check](scope.md) |

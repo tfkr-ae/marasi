@@ -18,7 +18,8 @@ import (
 	"github.com/Shopify/go-lua"
 )
 
-func registerCryptoLibrary(l *lua.State) {
+func registerCryptoLibrary(extension *Runtime) {
+	l := extension.LuaState
 	l.Global("marasi")
 
 	if l.IsNil(-1) {
@@ -26,22 +27,22 @@ func registerCryptoLibrary(l *lua.State) {
 		return
 	}
 
-	lua.NewLibrary(l, cryptoLibrary())
+	extension.newLibrary("marasi.crypto", cryptoLibrary())
 
-	lua.NewLibrary(l, aesLibrary())
+	extension.newLibrary("marasi.crypto.aes", aesLibrary())
 
-	lua.NewLibrary(l, aesGCM())
+	extension.newLibrary("marasi.crypto.aes.gcm", aesGCM())
 	l.SetField(-2, "gcm")
 
-	lua.NewLibrary(l, aesCBC())
+	extension.newLibrary("marasi.crypto.aes.cbc", aesCBC())
 	l.SetField(-2, "cbc")
 
 	l.SetField(-2, "aes")
 
-	lua.NewLibrary(l, rsaLibrary())
+	extension.newLibrary("marasi.crypto.rsa", rsaLibrary())
 	l.SetField(-2, "rsa")
 
-	lua.NewLibrary(l, ed25519Library())
+	extension.newLibrary("marasi.crypto.ed25519", ed25519Library())
 	l.SetField(-2, "ed25519")
 
 	l.SetField(-2, "crypto")
@@ -52,47 +53,30 @@ func registerCryptoLibrary(l *lua.State) {
 // cryptoLibrary returns a list of Lua functions that provide cryptographic
 // hashing functionalities. These functions are available under the `marasi.crypto`
 // table in Lua scripts.
-func cryptoLibrary() []lua.RegistryFunction {
-	return []lua.RegistryFunction{
-		// md5 calculates the MD5 hash of a given string.
-		//
-		// @param input string The string to hash.
-		// @return string The MD5 hash encoded as a hexadecimal string.
-		{Name: "md5", Function: func(l *lua.State) int {
+func cryptoLibrary() []APIFunction {
+	return []APIFunction{
+		{Name: "md5", Signature: "(input: string) -> string", Summary: "Calculates the MD5 hash of a given string.", Function: func(l *lua.State) int {
 			inputString := lua.CheckString(l, 2)
 
 			hash := md5.Sum([]byte(inputString))
 			l.PushString(hex.EncodeToString(hash[:]))
 			return 1
 		}},
-		// sha1 calculates the SHA1 hash of a given string.
-		//
-		// @param input string The string to hash.
-		// @return string The SHA1 hash encoded as a hexadecimal string.
-		{Name: "sha1", Function: func(l *lua.State) int {
+		{Name: "sha1", Signature: "(input: string) -> string", Summary: "Calculates the SHA1 hash of a given string.", Function: func(l *lua.State) int {
 			inputString := lua.CheckString(l, 2)
 
 			hash := sha1.Sum([]byte(inputString))
 			l.PushString(hex.EncodeToString(hash[:]))
 			return 1
 		}},
-		// sha256 calculates the SHA256 hash of a given string.
-		//
-		// @param input string The string to hash.
-		// @return string The SHA256 hash encoded as a hexadecimal string.
-		{Name: "sha256", Function: func(l *lua.State) int {
+		{Name: "sha256", Signature: "(input: string) -> string", Summary: "Calculates the SHA256 hash of a given string.", Function: func(l *lua.State) int {
 			inputString := lua.CheckString(l, 2)
 
 			hash := sha256.Sum256([]byte(inputString))
 			l.PushString(hex.EncodeToString(hash[:]))
 			return 1
 		}},
-		// hmac_sha256 calculates the HMAC-SHA256 of a message with a given secret.
-		//
-		// @param secret string The secret key.
-		// @param message string The message to authenticate.
-		// @return string The HMAC-SHA256 encoded as a hexadecimal string.
-		{Name: "hmac_sha256", Function: func(l *lua.State) int {
+		{Name: "hmac_sha256", Signature: "(secret: string, message: string) -> string", Summary: "Calculates the HMAC-SHA256 of a message with a given secret.", Function: func(l *lua.State) int {
 			secret := lua.CheckString(l, 2)
 			message := lua.CheckString(l, 3)
 
@@ -107,14 +91,9 @@ func cryptoLibrary() []lua.RegistryFunction {
 
 // aesLibrary returns a list of Lua functions for AES key generation.
 // These functions are available under the `marasi.crypto.aes` table in Lua scripts.
-func aesLibrary() []lua.RegistryFunction {
-	return []lua.RegistryFunction{
-		// generate_key generates a new AES key of a specified length.
-		// Supported lengths are 16, 24, or 32 bytes (for AES-128, AES-192, and AES-256 respectively).
-		//
-		// @param length number (optional) The desired key length in bytes. Defaults to 32.
-		// @return string The generated AES key encoded as a hexadecimal string.
-		{Name: "generate_key", Function: func(l *lua.State) int {
+func aesLibrary() []APIFunction {
+	return []APIFunction{
+		{Name: "generate_key", Signature: "(length?: number) -> string", Summary: "Generates a new AES key of a specified length. Supported lengths are 16, 24, or 32 bytes (for AES-128, AES-192, and AES-256 respectively). length defaults to 32.", Function: func(l *lua.State) int {
 			length := lua.OptInteger(l, 2, 32)
 
 			if length != 16 && length != 24 && length != 32 {
@@ -137,12 +116,9 @@ func aesLibrary() []lua.RegistryFunction {
 
 // aesGCM returns a list of Lua functions for AES-GCM encryption and decryption.
 // These functions are available under the `marasi.crypto.aes.gcm` table in Lua scripts.
-func aesGCM() []lua.RegistryFunction {
-	return []lua.RegistryFunction{
-		// generate_iv generates a 12-byte initialization vector suitable for AES-GCM.
-		//
-		// @return string The generated IV encoded as a hexadecimal string.
-		{Name: "generate_iv", Function: func(l *lua.State) int {
+func aesGCM() []APIFunction {
+	return []APIFunction{
+		{Name: "generate_iv", Signature: "() -> string", Summary: "Generates a 12-byte initialization vector suitable for AES-GCM.", Function: func(l *lua.State) int {
 			iv := make([]byte, 12)
 			_, err := io.ReadFull(rand.Reader, iv)
 			if err != nil {
@@ -155,13 +131,7 @@ func aesGCM() []lua.RegistryFunction {
 
 		}},
 
-		// encrypt encrypts plaintext using AES-GCM.
-		//
-		// @param key string The AES key, hex encoded.
-		// @param plaintext string The plaintext to encrypt.
-		// @param iv string The initialization vector, hex encoded.
-		// @return string The encrypted ciphertext, hex encoded.
-		{Name: "encrypt", Function: func(l *lua.State) int {
+		{Name: "encrypt", Signature: "(key: string, plaintext: string, iv: string) -> string", Summary: "Encrypts plaintext using AES-GCM.", Function: func(l *lua.State) int {
 			keyHex := lua.CheckString(l, 2)
 			plaintext := lua.CheckString(l, 3)
 			ivHex := lua.CheckString(l, 4)
@@ -201,13 +171,7 @@ func aesGCM() []lua.RegistryFunction {
 			return 1
 		}},
 
-		// decrypt decrypts ciphertext using AES-GCM.
-		//
-		// @param key string The AES key, hex encoded.
-		// @param ciphertext string The ciphertext to decrypt, hex encoded.
-		// @param iv string The initialization vector, hex encoded.
-		// @return string The decrypted plaintext.
-		{Name: "decrypt", Function: func(l *lua.State) int {
+		{Name: "decrypt", Signature: "(key: string, ciphertext: string, iv: string) -> string", Summary: "Decrypts ciphertext using AES-GCM.", Function: func(l *lua.State) int {
 			keyHex := lua.CheckString(l, 2)
 			cipherHex := lua.CheckString(l, 3)
 			ivHex := lua.CheckString(l, 4)
@@ -261,12 +225,9 @@ func aesGCM() []lua.RegistryFunction {
 
 // aesCBC returns a list of Lua functions for AES-CBC encryption and decryption.
 // These functions are available under the `marasi.crypto.aes.cbc` table in Lua scripts.
-func aesCBC() []lua.RegistryFunction {
-	return []lua.RegistryFunction{
-		// generate_iv generates a 16-byte initialization vector suitable for AES-CBC.
-		//
-		// @return string The generated IV encoded as a hexadecimal string.
-		{Name: "generate_iv", Function: func(l *lua.State) int {
+func aesCBC() []APIFunction {
+	return []APIFunction{
+		{Name: "generate_iv", Signature: "() -> string", Summary: "Generates a 16-byte initialization vector suitable for AES-CBC.", Function: func(l *lua.State) int {
 			iv := make([]byte, aes.BlockSize)
 			if _, err := io.ReadFull(rand.Reader, iv); err != nil {
 				lua.Errorf(l, fmt.Sprintf("generating iv: %s", err.Error()))
@@ -275,13 +236,7 @@ func aesCBC() []lua.RegistryFunction {
 			l.PushString(hex.EncodeToString(iv))
 			return 1
 		}},
-		// encrypt encrypts plaintext using AES-CBC with PKCS7 padding.
-		//
-		// @param key string The AES key, hex encoded.
-		// @param plaintext string The plaintext to encrypt.
-		// @param iv string The initialization vector, hex encoded.
-		// @return string The encrypted and padded ciphertext, hex encoded.
-		{Name: "encrypt", Function: func(l *lua.State) int {
+		{Name: "encrypt", Signature: "(key: string, plaintext: string, iv: string) -> string", Summary: "Encrypts plaintext using AES-CBC with PKCS7 padding.", Function: func(l *lua.State) int {
 			keyHex := lua.CheckString(l, 2)
 			plaintext := lua.CheckString(l, 3)
 			ivHex := lua.CheckString(l, 4)
@@ -325,13 +280,7 @@ func aesCBC() []lua.RegistryFunction {
 			l.PushString(hex.EncodeToString(ciphertext))
 			return 1
 		}},
-		// decrypt decrypts ciphertext using AES-CBC and removes PKCS7 padding.
-		//
-		// @param key string The AES key, hex encoded.
-		// @param ciphertext string The ciphertext to decrypt, hex encoded.
-		// @param iv string The initialization vector, hex encoded.
-		// @return string The decrypted plaintext.
-		{Name: "decrypt", Function: func(l *lua.State) int {
+		{Name: "decrypt", Signature: "(key: string, ciphertext: string, iv: string) -> string", Summary: "Decrypts ciphertext using AES-CBC and removes PKCS7 padding.", Function: func(l *lua.State) int {
 			keyHex := lua.CheckString(l, 2)
 			cipherHex := lua.CheckString(l, 3)
 			ivHex := lua.CheckString(l, 4)
@@ -402,15 +351,9 @@ func aesCBC() []lua.RegistryFunction {
 
 // rsaLibrary returns a list of Lua functions for RSA encryption, decryption, and key generation.
 // These functions are available under the `marasi.crypto.rsa` table in Lua scripts.
-func rsaLibrary() []lua.RegistryFunction {
-	return []lua.RegistryFunction{
-		// generate_pair generates a new RSA private/public key pair.
-		// Supported bit lengths are 2048, 3072, and 4096.
-		//
-		// @param length number (optional) The desired key length in bits. Defaults to 2048.
-		// @return string The generated private key, hex encoded.
-		// @return string The generated public key, hex encoded.
-		{Name: "generate_pair", Function: func(l *lua.State) int {
+func rsaLibrary() []APIFunction {
+	return []APIFunction{
+		{Name: "generate_pair", Signature: "(length?: number) -> string, string", Summary: "Generates a new RSA private/public key pair. Supported bit lengths are 2048, 3072, and 4096. length defaults to 2048.", Function: func(l *lua.State) int {
 			length := lua.OptInteger(l, 2, 2048)
 
 			if length != 2048 && length != 3072 && length != 4096 {
@@ -436,12 +379,7 @@ func rsaLibrary() []lua.RegistryFunction {
 			return 2
 
 		}},
-		// encrypt encrypts plaintext using RSA with OAEP padding and SHA-256.
-		//
-		// @param public_key string The RSA public key, hex encoded.
-		// @param plaintext string The plaintext to encrypt.
-		// @return string The encrypted ciphertext, hex encoded.
-		{Name: "encrypt", Function: func(l *lua.State) int {
+		{Name: "encrypt", Signature: "(public_key: string, plaintext: string) -> string", Summary: "Encrypts plaintext using RSA with OAEP padding and SHA-256.", Function: func(l *lua.State) int {
 			pubHex := lua.CheckString(l, 2)
 			plaintext := lua.CheckString(l, 3)
 
@@ -473,12 +411,7 @@ func rsaLibrary() []lua.RegistryFunction {
 			return 1
 		}},
 
-		// decrypt decrypts ciphertext using RSA with OAEP padding and SHA-256.
-		//
-		// @param private_key string The RSA private key, hex encoded.
-		// @param ciphertext string The ciphertext to decrypt, hex encoded.
-		// @return string The decrypted plaintext.
-		{Name: "decrypt", Function: func(l *lua.State) int {
+		{Name: "decrypt", Signature: "(private_key: string, ciphertext: string) -> string", Summary: "Decrypts ciphertext using RSA with OAEP padding and SHA-256.", Function: func(l *lua.State) int {
 			keyHex := lua.CheckString(l, 2)
 			cipherHex := lua.CheckString(l, 3)
 
@@ -513,13 +446,9 @@ func rsaLibrary() []lua.RegistryFunction {
 }
 
 // ed25519Library returns a list of Lua functions for Ed25519 signing and verification.
-func ed25519Library() []lua.RegistryFunction {
-	return []lua.RegistryFunction{
-		// generate_pair generates a new Ed25519 private/public key pair.
-		//
-		// @return string Private Key (Hex encoded, 64 bytes)
-		// @return string Public Key (Hex encoded, 32 bytes)
-		{Name: "generate_pair", Function: func(l *lua.State) int {
+func ed25519Library() []APIFunction {
+	return []APIFunction{
+		{Name: "generate_pair", Signature: "() -> string, string", Summary: "Generates a new Ed25519 private/public key pair.", Function: func(l *lua.State) int {
 			pub, priv, err := ed25519.GenerateKey(rand.Reader)
 			if err != nil {
 				lua.Errorf(l, fmt.Sprintf("generating key pair: %s", err.Error()))
@@ -531,12 +460,7 @@ func ed25519Library() []lua.RegistryFunction {
 			return 2
 		}},
 
-		// sign calculates the signature of a message using a private key.
-		//
-		// @param private_key string Hex encoded private key (64 bytes).
-		// @param message string The message to sign.
-		// @return string The signature (Hex encoded, 64 bytes).
-		{Name: "sign", Function: func(l *lua.State) int {
+		{Name: "sign", Signature: "(private_key: string, message: string) -> string", Summary: "Calculates the signature of a message using a private key.", Function: func(l *lua.State) int {
 			privHex := lua.CheckString(l, 2)
 			message := lua.CheckString(l, 3)
 
@@ -556,13 +480,7 @@ func ed25519Library() []lua.RegistryFunction {
 			return 1
 		}},
 
-		// verify checks if a signature is valid for a given message and public key.
-		//
-		// @param public_key string Hex encoded public key (32 bytes).
-		// @param message string The message that was signed.
-		// @param signature string Hex encoded signature.
-		// @return boolean True if valid, False otherwise.
-		{Name: "verify", Function: func(l *lua.State) int {
+		{Name: "verify", Signature: "(public_key: string, message: string, signature: string) -> boolean", Summary: "Checks if a signature is valid for a given message and public key.", Function: func(l *lua.State) int {
 			pubHex := lua.CheckString(l, 2)
 			message := lua.CheckString(l, 3)
 			sigHex := lua.CheckString(l, 4)

@@ -47,7 +47,8 @@ func deepExpand(v any) any {
 	}
 }
 
-func registerEncodingLibrary(l *lua.State) {
+func registerEncodingLibrary(extension *Runtime) {
+	l := extension.LuaState
 	l.Global("marasi")
 
 	if l.IsNil(-1) {
@@ -57,8 +58,8 @@ func registerEncodingLibrary(l *lua.State) {
 
 	l.NewTable()
 
-	register := func(name string, funcs []lua.RegistryFunction) {
-		lua.NewLibrary(l, funcs)
+	register := func(name string, funcs []APIFunction) {
+		extension.newLibrary("marasi.encoding."+name, funcs)
 		l.SetField(-2, name)
 	}
 
@@ -75,22 +76,14 @@ func registerEncodingLibrary(l *lua.State) {
 // base64Library returns a list of Lua functions for base64 encoding and
 // decoding. These functions are available under the `marasi.encoding.base64`
 // table in Lua scripts.
-func base64Library() []lua.RegistryFunction {
-	return []lua.RegistryFunction{
-		// encode encodes a string using base64.
-		//
-		// @param input string The string to encode.
-		// @return string The base64 encoded string.
-		{Name: "encode", Function: func(l *lua.State) int {
+func base64Library() []APIFunction {
+	return []APIFunction{
+		{Name: "encode", Signature: "(input: string) -> string", Summary: "Encodes a string using base64.", Function: func(l *lua.State) int {
 			inputString := lua.CheckString(l, 2)
 			l.PushString(base64.StdEncoding.EncodeToString([]byte(inputString)))
 			return 1
 		}},
-		// decode decodes a base64 encoded string.
-		//
-		// @param input string The base64 encoded string to decode.
-		// @return string The decoded string.
-		{Name: "decode", Function: func(l *lua.State) int {
+		{Name: "decode", Signature: "(input: string) -> string", Summary: "Decodes a base64 encoded string.", Function: func(l *lua.State) int {
 			encodedString := lua.CheckString(l, 2)
 
 			decoded, err := base64.StdEncoding.DecodeString(encodedString)
@@ -107,23 +100,15 @@ func base64Library() []lua.RegistryFunction {
 // hexLibrary returns a list of Lua functions for hexadecimal encoding and
 // decoding. These functions are available under the `marasi.encoding.hex`
 // table in Lua scripts.
-func hexLibrary() []lua.RegistryFunction {
-	return []lua.RegistryFunction{
-		// encode encodes a string using hexadecimal.
-		//
-		// @param input string The string to encode.
-		// @return string The hexadecimal encoded string.
-		{Name: "encode", Function: func(l *lua.State) int {
+func hexLibrary() []APIFunction {
+	return []APIFunction{
+		{Name: "encode", Signature: "(input: string) -> string", Summary: "Encodes a string using hexadecimal.", Function: func(l *lua.State) int {
 			inputString := lua.CheckString(l, 2)
 
 			l.PushString(hex.EncodeToString([]byte(inputString)))
 			return 1
 		}},
-		// decode decodes a hexadecimal encoded string.
-		//
-		// @param input string The hexadecimal encoded string to decode.
-		// @return string The decoded string.
-		{Name: "decode", Function: func(l *lua.State) int {
+		{Name: "decode", Signature: "(input: string) -> string", Summary: "Decodes a hexadecimal encoded string.", Function: func(l *lua.State) int {
 			encodedString := lua.CheckString(l, 2)
 
 			decoded, err := hex.DecodeString(encodedString)
@@ -140,23 +125,15 @@ func hexLibrary() []lua.RegistryFunction {
 // urlEncodeLibrary returns a list of Lua functions for URL encoding and
 // decoding. These functions are available under the `marasi.encoding.url`
 // table in Lua scripts.
-func urlEncodeLibrary() []lua.RegistryFunction {
-	return []lua.RegistryFunction{
-		// encode encodes a string for use in a URL query.
-		//
-		// @param input string The string to encode.
-		// @return string The URL encoded string.
-		{Name: "encode", Function: func(l *lua.State) int {
+func urlEncodeLibrary() []APIFunction {
+	return []APIFunction{
+		{Name: "encode", Signature: "(input: string) -> string", Summary: "Encodes a string for use in a URL query.", Function: func(l *lua.State) int {
 			inputString := lua.CheckString(l, 2)
 
 			l.PushString(url.QueryEscape(inputString))
 			return 1
 		}},
-		// decode decodes a URL encoded string.
-		//
-		// @param input string The URL encoded string to decode.
-		// @return string The decoded string.
-		{Name: "decode", Function: func(l *lua.State) int {
+		{Name: "decode", Signature: "(input: string) -> string", Summary: "Decodes a URL encoded string.", Function: func(l *lua.State) int {
 			encodedString := lua.CheckString(l, 2)
 
 			decoded, err := url.QueryUnescape(encodedString)
@@ -173,22 +150,14 @@ func urlEncodeLibrary() []lua.RegistryFunction {
 // htmlLibrary returns a list of Lua functions for HTML escaping and
 // unescaping. These functions are available under the `marasi.encoding.html`
 // table in Lua scripts.
-func htmlLibrary() []lua.RegistryFunction {
-	return []lua.RegistryFunction{
-		// escape escapes a string for use in HTML.
-		//
-		// @param input string The string to escape.
-		// @return string The HTML escaped string.
-		{Name: "escape", Function: func(l *lua.State) int {
+func htmlLibrary() []APIFunction {
+	return []APIFunction{
+		{Name: "escape", Signature: "(input: string) -> string", Summary: "Escapes a string for use in HTML.", Function: func(l *lua.State) int {
 			inputString := lua.CheckString(l, 2)
 			l.PushString(html.EscapeString(inputString))
 			return 1
 		}},
-		// unescape unescapes an HTML escaped string.
-		//
-		// @param input string The HTML escaped string to unescape.
-		// @return string The unescaped string.
-		{Name: "unescape", Function: func(l *lua.State) int {
+		{Name: "unescape", Signature: "(input: string) -> string", Summary: "Unescapes an HTML escaped string.", Function: func(l *lua.State) int {
 			inputString := lua.CheckString(l, 2)
 			l.PushString(html.UnescapeString(inputString))
 			return 1
@@ -199,14 +168,9 @@ func htmlLibrary() []lua.RegistryFunction {
 // jsonLibrary returns a list of Lua functions for JSON encoding and
 // decoding. These functions are available under the `marasi.encoding.json`
 // table in Lua scripts.
-func jsonLibrary() []lua.RegistryFunction {
-	return []lua.RegistryFunction{
-		// encode encodes a Lua value to a JSON string.
-		//
-		// @param value any The Lua value to encode.
-		// @param indent number (optional) The number of spaces to use for indentation.
-		// @return string The JSON encoded string.
-		{Name: "encode", Function: func(l *lua.State) int {
+func jsonLibrary() []APIFunction {
+	return []APIFunction{
+		{Name: "encode", Signature: "(value: any, indent?: number) -> string", Summary: "Encodes a Lua value to a JSON string.", Function: func(l *lua.State) int {
 			val := GoValue(l, 2)
 			indent := lua.OptInteger(l, 3, 0)
 
@@ -227,13 +191,7 @@ func jsonLibrary() []lua.RegistryFunction {
 			l.PushString(string(jsonBytes))
 			return 1
 		}},
-		// decode decodes a JSON string to a Lua value. It also recursively
-		// decodes any nested JSON objects or arrays found within the string
-		// values of the initial JSON structure.
-		//
-		// @param input string The JSON string to decode.
-		// @return any The fully decoded Lua value.
-		{Name: "decode", Function: func(l *lua.State) int {
+		{Name: "decode", Signature: "(input: string) -> any", Summary: "Decodes a JSON string to a Lua value. It also recursively decodes any nested JSON objects or arrays found within the string values of the initial JSON structure.", Function: func(l *lua.State) int {
 			inputString := lua.CheckString(l, 2)
 			var decoded any
 
