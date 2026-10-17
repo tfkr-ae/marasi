@@ -19,6 +19,28 @@ const MaxSelectionIDs = 100_000
 // selection nor a query selection.
 var ErrInvalidSelection = errors.New("invalid selection")
 
+// ErrSelectionIncomplete reports a query selection that depends on a
+// background job that has not finished, so it could select pairs the
+// finished job would not (ADR-0033). A bulk operation refuses it and changes
+// nothing; the client retries once the job completes.
+var ErrSelectionIncomplete = errors.New("the selection depends on an unfinished background job")
+
+// SelectionIncompleteError is the ErrSelectionIncomplete a bulk operation
+// returns. Jobs are the unfinished jobs the selection's query depends on.
+type SelectionIncompleteError struct {
+	Jobs []JobName
+}
+
+func (e *SelectionIncompleteError) Error() string {
+	names := make([]string, len(e.Jobs))
+	for i, job := range e.Jobs {
+		names[i] = string(job)
+	}
+	return fmt.Sprintf("%v: %s", ErrSelectionIncomplete, strings.Join(names, ", "))
+}
+
+func (e *SelectionIncompleteError) Unwrap() error { return ErrSelectionIncomplete }
+
 // Selection is the set of request/response pairs that one bulk operation
 // applies to (ADR-0033). Exactly one of IDs and Query is set.
 type Selection struct {

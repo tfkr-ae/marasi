@@ -117,7 +117,10 @@ func serveBulk(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, even
 // writeBulkError writes the response for a failed bulk operation.
 func writeBulkError(w http.ResponseWriter, r *http.Request, err error) {
 	var queryErr *domain.QueryError
+	var incomplete *domain.SelectionIncompleteError
 	switch {
+	case errors.As(err, &incomplete):
+		writeJSON(w, r, http.StatusConflict, selectionIncomplete{Error: "selection_incomplete", Message: incomplete.Error(), Jobs: incomplete.Jobs})
 	case errors.Is(err, errInvalidBulkRequest):
 		writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_bulk_request"})
 	case errors.Is(err, domain.ErrEmptyNote), errors.Is(err, domain.ErrInvalidHighlight):
@@ -133,6 +136,15 @@ func writeBulkError(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
 	}
+}
+
+// selectionIncomplete is the 409 body of a bulk operation that refused a
+// query selection because a background job its query depends on has not
+// finished. Jobs names those jobs; GET /jobs shows their progress.
+type selectionIncomplete struct {
+	Error   string           `json:"error"`
+	Message string           `json:"message"`
+	Jobs    []domain.JobName `json:"jobs"`
 }
 
 // bulkLinkBody is the body of POST /traffic/bulk/link and /unlink: a
