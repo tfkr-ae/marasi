@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -307,4 +309,114 @@ func insertSortPair(t *testing.T, repo *Repository, p sortPair) uuid.UUID {
 		t.Fatalf("inserting response: %v", err)
 	}
 	return id
+}
+
+// TestTrafficRepo_ListTraffic_ResponsesDuringAWalk checks that a pair whose
+// response arrives after it was returned is not returned again, walking
+// either way (ticket 28). Backward walks read the pairs with no value
+// first, so a pair that then gets its value would otherwise be read again
+// in the valued part of the walk.
+func TestTrafficRepo_ListTraffic_ResponsesDuringAWalk(t *testing.T) {
+	t.Parallel()
+	for _, direction := range []domain.Direction{domain.Forward, domain.Backward} {
+		for _, orderBy := range []string{"status_code", "status_code desc", "content_type", "content_type desc", "length", "length desc"} {
+			t.Run(fmt.Sprintf("should return each pair once walking %v under %s", direction, orderBy), func(t *testing.T) {
+				t.Parallel()
+				repo, teardown := setupTestDB(t)
+				defer teardown()
+
+				pending := map[uuid.UUID]bool{}
+				for i := range 4 {
+					insertSortPair(t, repo, sortPair{status: code(200 + i), contentType: "text/html", length: fmt.Sprint(10 * i)})
+					pending[insertSortPair(t, repo, sortPair{})] = true
+				}
+
+				q := domain.TrafficQuery{OrderBy: orderBy, Limit: 1, Direction: direction}
+				seen := map[uuid.UUID]bool{}
+				for pages := 0; ; pages++ {
+					page, err := repo.ListTraffic(q)
+					if err != nil {
+						t.Fatalf("listing traffic: %v", err)
+					}
+					for _, item := range page.Items {
+						if seen[item.ID] {
+							t.Fatalf("\nwanted:\neach pair once\ngot:\n%s twice", item.ID)
+						}
+						seen[item.ID] = true
+						// The pair just returned gets its response.
+						if pending[item.ID] {
+							insertTrafficResponse(t, repo, item.ID, 200)
+							delete(pending, item.ID)
+						}
+					}
+					next := page.NextCursor
+					if direction == domain.Backward {
+						next = page.PrevCursor
+					}
+					if next == nil {
+						break
+					}
+					if pages > 100 {
+						t.Fatal("walk did not end")
+					}
+					q.Cursor, q.AsOf = *next, page.AsOf
+				}
+				if len(seen) != 8 {
+					t.Errorf("walk returned %d pairs, want 8", len(seen))
+				}
+
+				// A new walk reads every pair, now all with a value, in its
+				// valued place.
+				page, err := repo.ListTraffic(domain.TrafficQuery{OrderBy: orderBy, Limit: 100})
+				if err != nil {
+					t.Fatalf("listing traffic: %v", err)
+				}
+				field, desc, _ := strings.Cut(orderBy, " ")
+				keys := make([]string, len(page.Items))
+				for i, item := range page.Items {
+					switch field {
+					case "status_code":
+						keys[i] = fmt.Sprintf("%03d", item.StatusCode)
+					case "content_type":
+						keys[i] = item.ContentType
+					case "length":
+						keys[i] = fmt.Sprintf("%06s", item.Length)
+					}
+				}
+				sorted := slices.Clone(keys)
+				slices.Sort(sorted)
+				if desc != "" {
+					slices.Reverse(sorted)
+				}
+				if !slices.Equal(keys, sorted) {
+					t.Errorf("new walk keys = %v, want %v", keys, sorted)
+				}
+			})
+		}
+	}
+}
+
+func TestTrafficRepo_ListTraffic_CursorWithoutResponseMark(t *testing.T) {
+	t.Parallel()
+	t.Run("should continue a status_code walk from a cursor made before cursors carried the response mark", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+		var ids []uuid.UUID
+		for i := range 3 {
+			ids = append(ids, insertSortPair(t, repo, sortPair{status: code(200 + i)}))
+		}
+		sort, err := parseTrafficOrderBy("status_code")
+		if err != nil {
+			t.Fatal(err)
+		}
+		row := sortedRow{dbRequestResponseSummary: dbRequestResponseSummary{ID: ids[0]}, SortKey: int64(200)}
+		token := cursorAt(sort, row, nil)
+		page, err := repo.ListTraffic(domain.TrafficQuery{OrderBy: "status_code", Cursor: *token, Limit: 10})
+		if err != nil {
+			t.Fatalf("ListTraffic() error = %v", err)
+		}
+		if got := idsOf(page.Items); !slices.Equal(got, ids[1:]) {
+			t.Errorf("ListTraffic() ids = %v, want %v", got, ids[1:])
+		}
+	})
 }

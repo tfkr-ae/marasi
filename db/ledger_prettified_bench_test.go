@@ -82,7 +82,7 @@ func BenchmarkLedgerPrettified(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	deepCursor := cursorAt(defaultSort, sortedRow{dbRequestResponseSummary: dbRequestResponseSummary{ID: deep}})
+	deepCursor := cursorAt(defaultSort, sortedRow{dbRequestResponseSummary: dbRequestResponseSummary{ID: deep}}, nil)
 	b.Run("03_unfiltered_deep_cursor", func(b *testing.B) {
 		measurePrettifiedCase(b, 20*time.Millisecond, func() {
 			if _, err := repo.ListTraffic(domain.TrafficQuery{Cursor: *deepCursor, Limit: prettifiedBenchPageSize}); err != nil {

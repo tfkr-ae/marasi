@@ -39,6 +39,11 @@ type trafficCursor struct {
 	Key     json.RawMessage `json:"k,omitempty"`
 	ID      uuid.UUID       `json:"id"`
 	Phase   int             `json:"p"`
+	// Responses is the highest pair_response_order seq when the walk's
+	// first page was read. Pairs whose response was written later are
+	// walked with the pairs that have no value. Nil in a cursor of a sort
+	// without that phase, or made before ticket 28.
+	Responses *int64 `json:"r,omitempty"`
 }
 
 // encode returns the cursor as an opaque token: unpadded URL-safe base64 of
@@ -68,6 +73,8 @@ func decodeTrafficCursor(token string, sort trafficSort) (trafficCursor, any, er
 		return trafficCursor{}, nil, fmt.Errorf("%w: the cursor was made under order_by %q, not %q", domain.ErrInvalidCursor, cursor.Sort, sort.name)
 	case cursor.ID == uuid.Nil || cursor.Phase < 0 || cursor.Phase > 1 || (cursor.Phase == 1 && !sort.phased()):
 		return trafficCursor{}, nil, invalid
+	case cursor.Responses != nil && *cursor.Responses < 0:
+		return trafficCursor{}, nil, invalid
 	}
 	hasKey := len(cursor.Key) > 0 && string(cursor.Key) != "null"
 	if wantKey := sort.key.expr != "" && cursor.Phase == 0; hasKey != wantKey {
@@ -91,9 +98,10 @@ func decodeTrafficCursor(token string, sort trafficSort) (trafficCursor, any, er
 	return cursor, string(key), nil
 }
 
-// cursorAt returns the token for a row under sort.
-func cursorAt(sort trafficSort, row sortedRow) *string {
-	cursor := trafficCursor{Version: trafficCursorVersion, Sort: sort.name, ID: row.ID, Phase: row.phase}
+// cursorAt returns the token for a row under sort, in a walk that started
+// at responses.
+func cursorAt(sort trafficSort, row sortedRow, responses *int64) *string {
+	cursor := trafficCursor{Version: trafficCursorVersion, Sort: sort.name, ID: row.ID, Phase: row.phase, Responses: responses}
 	if sort.key.expr != "" && row.phase == 0 {
 		var key any
 		switch value := row.SortKey.(type) {
@@ -297,6 +305,10 @@ func (repo *Repository) ListTrafficContext(ctx context.Context, q domain.Traffic
 		cursor, cursorKey = &decoded, key
 	}
 	backward := q.Direction == domain.Backward
+	var responses *int64
+	if cursor != nil {
+		responses = cursor.Responses
+	}
 
 	var page domain.TrafficPage
 	var rows []sortedRow
@@ -320,7 +332,14 @@ func (repo *Repository) ListTrafficContext(ctx context.Context, q domain.Traffic
 			page.AsOf = &newest
 		}
 		match.add(`id <= ?`, *page.AsOf)
-		for _, segment := range sortSegments(sort, backward, cursor, cursorKey) {
+		if cursor == nil && sort.phased() {
+			var seq int64
+			if err := tx.GetContext(ctx, &seq, `SELECT coalesce(max(seq), 0) FROM pair_response_order`); err != nil {
+				return err
+			}
+			responses = &seq
+		}
+		for _, segment := range sortSegments(sort, backward, cursor, cursorKey, responses) {
 			segmentMatch := trafficMatch{
 				conditions: slices.Clone(match.conditions),
 				args:       slices.Clone(match.args),
@@ -365,8 +384,8 @@ func (repo *Repository) ListTrafficContext(ctx context.Context, q domain.Traffic
 	// exactly when the read found more than a page.
 	var first, last *string
 	if len(rows) > 0 {
-		first = cursorAt(sort, rows[0])
-		last = cursorAt(sort, rows[len(rows)-1])
+		first = cursorAt(sort, rows[0], responses)
+		last = cursorAt(sort, rows[len(rows)-1], responses)
 	} else if cursor != nil {
 		first, last = &q.Cursor, &q.Cursor
 	}
@@ -400,7 +419,13 @@ type sortSegment struct {
 // direction, then the pairs with none by id in the same direction. A
 // backward walk reads the inverse order. Keyset conditions use row values so
 // SQLite walks the (key, id) index.
-func sortSegments(sort trafficSort, backward bool, cursor *trafficCursor, cursorKey any) []sortSegment {
+//
+// When responses is set, a pair whose response was written after it counts
+// as having no value, so a pair that gets its response during the walk stays
+// in the part it was in when the walk started. A backward walk reads the
+// pairs with no value first; without this, such a pair would be read again
+// with the valued pairs (ADR-0041).
+func sortSegments(sort trafficSort, backward bool, cursor *trafficCursor, cursorKey any, responses *int64) []sortSegment {
 	walkDesc := sort.desc != backward
 	op, dir := ">", "ASC"
 	if walkDesc {
@@ -418,6 +443,11 @@ func sortSegments(sort trafficSort, backward bool, cursor *trafficCursor, cursor
 	}
 	unvalued := sortSegment{phase: 1, order: `id ` + dir,
 		conditions: []sqlCondition{{sql: sort.key.noValue}}}
+	if responses != nil && sort.phased() {
+		const later = `SELECT request_id FROM pair_response_order WHERE seq > ?`
+		valued.conditions = append(valued.conditions, sqlCondition{`id NOT IN (` + later + `)`, []any{*responses}})
+		unvalued.conditions[0] = sqlCondition{`(` + sort.key.noValue + ` OR id IN (` + later + `))`, []any{*responses}}
+	}
 
 	if cursor != nil {
 		switch {

@@ -331,6 +331,11 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 		if err := savePrettified(tx, resp.ID, "response", dbResponse.dbPrettified.Response.String); err != nil {
 			return err
 		}
+		// Sorted walks started before this write keep the pair with the
+		// pairs that have no value (ADR-0041).
+		if _, err := tx.Exec(`INSERT INTO pair_response_order (request_id) VALUES (?)`, resp.ID); err != nil {
+			return fmt.Errorf("recording the response order: %w", err)
+		}
 		if _, ok := resp.Metadata[interceptedKey]; ok {
 			if err := syncIntercepted(tx, resp.ID); err != nil {
 				return err
