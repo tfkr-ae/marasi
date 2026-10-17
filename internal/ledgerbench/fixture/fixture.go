@@ -49,6 +49,11 @@ const inFlight = 50
 type Config struct {
 	Seed  uint64
 	Pairs int
+	// MaxBody, when above zero, caps every request and response body at
+	// about that many bytes. Everything else follows the distribution, so
+	// tests can build a small project quickly; a reference project leaves it
+	// at zero.
+	MaxBody int
 	// Progress, when set, is called as the build goes with a stage name and
 	// how much of it is done.
 	Progress func(stage string, done, total int)
@@ -158,6 +163,12 @@ func Build(path string, cfg Config) (*Manifest, error) {
 	defer repo.Close()
 
 	plans, hosts, layout := planPairs(cfg.Seed, cfg.Pairs, End)
+	if cfg.MaxBody > 0 {
+		for i := range plans {
+			plans[i].respSize = min(plans[i].respSize, cfg.MaxBody)
+			plans[i].reqBodySize = min(plans[i].reqBodySize, cfg.MaxBody)
+		}
+	}
 	b := &builder{repo: repo, seed: cfg.Seed, plans: plans, hosts: hosts, layout: layout, progress: progress}
 	manifest, err := b.build()
 	if err != nil {
