@@ -12,6 +12,7 @@ import (
 // each read reports. The traffic index is marked incomplete so a flag's
 // value is checked as well as its presence.
 func TestTrafficReads_ReportTheJobsTheirAnswerDependsOn(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	id := capturePair(t, repo, "https://api.x.com/users/1", "application/json", 200)

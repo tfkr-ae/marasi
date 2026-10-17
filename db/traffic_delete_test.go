@@ -147,6 +147,7 @@ func indexRows(t *testing.T, repo *Repository) string {
 }
 
 func TestTrafficRepo_DeleteTraffic(t *testing.T) {
+	t.Parallel()
 	t.Run("should delete every row the pairs own and nothing of the pairs kept", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -199,6 +200,7 @@ func TestTrafficRepo_DeleteTraffic(t *testing.T) {
 // tenth of the pairs rewrote every segment of the body index inside the
 // delete's transaction. Both indexes must leave tombstones to the automerge.
 func TestTrafficRepo_DeleteTrafficLeavesIndexMergesToAutomerge(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	for _, index := range []string{"traffic_index", "traffic_annotation_index"} {
@@ -219,6 +221,7 @@ func formatTypeCounts(counts domain.ContentTypeCounts) string {
 }
 
 func TestTrafficRepo_DeleteTrafficSitemap(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	var ids []uuid.UUID

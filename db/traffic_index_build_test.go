@@ -107,6 +107,7 @@ func indexComplete(t *testing.T, repo *Repository) bool {
 }
 
 func TestTrafficRepo_IndexMissingTraffic(t *testing.T) {
+	t.Parallel()
 	t.Run("should index missing pairs newest first in batches that fit the byte budget", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()

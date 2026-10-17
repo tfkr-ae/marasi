@@ -24,6 +24,7 @@ func trafficIndexJob(t *testing.T, repo *Repository) JobState {
 }
 
 func TestBackgroundJobs(t *testing.T) {
+	t.Parallel()
 	t.Run("should list the traffic index as complete on a new project", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()

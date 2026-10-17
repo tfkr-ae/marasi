@@ -9,6 +9,7 @@ import (
 )
 
 func TestLogRepo_ListLogs(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -46,6 +47,7 @@ func TestLogRepo_ListLogs(t *testing.T) {
 }
 
 func TestLogRepo_ListLogsEmpty(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 

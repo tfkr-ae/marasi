@@ -115,6 +115,7 @@ func (f *linkQueryFixture) names(items []*domain.RequestResponseSummary) string 
 }
 
 func TestTrafficRepo_ListTrafficLinkQuery(t *testing.T) {
+	t.Parallel()
 	f := setupLinkQueryFixture(t)
 
 	tests := []struct {
@@ -169,6 +170,7 @@ func TestTrafficRepo_ListTrafficLinkQuery(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficLinkQueryPaging(t *testing.T) {
+	t.Parallel()
 	f := setupLinkQueryFixture(t)
 	query := f.expand(`host = "a.example.com" OR note:* OR finding = "<f2>"`)
 
@@ -200,6 +202,7 @@ func TestTrafficRepo_ListTrafficLinkQueryPaging(t *testing.T) {
 }
 
 func TestTrafficRepo_CountTrafficTextAfter(t *testing.T) {
+	t.Parallel()
 	f := setupLinkQueryFixture(t)
 	// A note rewrites a's index entry after the others were written.
 	if err := f.repo.UpdateNote(f.ids["a"], "late note"); err != nil {
@@ -235,6 +238,7 @@ func TestTrafficRepo_CountTrafficTextAfter(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficLinkQueryErrors(t *testing.T) {
+	t.Parallel()
 	f := setupLinkQueryFixture(t)
 
 	tests := []struct {
@@ -276,6 +280,7 @@ func v7At(t *testing.T, at time.Time) uuid.UUID {
 }
 
 func TestTrafficRepo_ListTrafficRequestedAtBounds(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
