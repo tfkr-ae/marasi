@@ -1,6 +1,7 @@
 package fixture_test
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"path/filepath"
@@ -12,6 +13,15 @@ import (
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/internal/ledgerbench/fixture"
 )
+
+// testMaxBody caps the bodies of the projects these tests build. Capturing
+// and indexing full-size bodies takes minutes under -race; what the tests
+// check does not depend on body size. The bench1m tag builds full-size bodies.
+var testMaxBody = 1 << 10
+
+func testConfig(seed uint64, pairs int) fixture.Config {
+	return fixture.Config{Seed: seed, Pairs: pairs, MaxBody: testMaxBody}
+}
 
 // openProject opens a built project through the real repository.
 func openProject(t *testing.T, path string) *db.Repository {
@@ -27,9 +37,10 @@ func openProject(t *testing.T, path string) *db.Repository {
 
 func TestBuild(t *testing.T) {
 	t.Run("should write a fully indexed project with the requested number of pairs", func(t *testing.T) {
+		t.Parallel()
 		path := filepath.Join(t.TempDir(), "small.marasi")
 
-		if _, err := fixture.Build(path, fixture.Config{Seed: 1, Pairs: 500}); err != nil {
+		if _, err := fixture.Build(path, testConfig(1, 150)); err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
@@ -38,8 +49,8 @@ func TestBuild(t *testing.T) {
 		if err != nil {
 			t.Fatalf("counting pairs: %v", err)
 		}
-		if count != 500 {
-			t.Fatalf("\nwanted:\n500\ngot:\n%d", count)
+		if count != 150 {
+			t.Fatalf("\nwanted:\n150\ngot:\n%d", count)
 		}
 		page, err := repo.ListTraffic(domain.TrafficQuery{Limit: 200})
 		if err != nil {
@@ -59,11 +70,33 @@ func TestBuild(t *testing.T) {
 		}
 	})
 
+	t.Run("should cap every body at MaxBody", func(t *testing.T) {
+		t.Parallel()
+		const maxBody = 1 << 10
+		path := filepath.Join(t.TempDir(), "capped.marasi")
+		if _, err := fixture.Build(path, fixture.Config{Seed: 1, Pairs: 100, MaxBody: maxBody}); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		// A body is written in whole records until it reaches its size, so
+		// it may run over by one record.
+		const slack = 1 << 10
+		for _, row := range pairRows(t, openProject(t, path)) {
+			for _, raw := range [][]byte{row.Request.Raw, row.Response.Raw} {
+				_, body, _ := bytes.Cut(raw, []byte("\r\n\r\n"))
+				if len(body) > maxBody+slack {
+					t.Fatalf("\nwanted:\nbodies of at most about %d bytes\ngot:\n%d bytes", maxBody, len(body))
+				}
+			}
+		}
+	})
+
 	t.Run("should write the same pairs for the same seed and different pairs for another", func(t *testing.T) {
+		t.Parallel()
 		dir := t.TempDir()
 		build := func(name string, seed uint64) []string {
 			path := filepath.Join(dir, name)
-			if _, err := fixture.Build(path, fixture.Config{Seed: seed, Pairs: 300}); err != nil {
+			if _, err := fixture.Build(path, testConfig(seed, 100)); err != nil {
 				t.Fatalf("building %s: %v", name, err)
 			}
 			return pairDigests(t, openProject(t, path))
@@ -83,9 +116,10 @@ func TestBuild(t *testing.T) {
 }
 
 func TestManifest(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "facts.marasi")
 	const pairs = 2500
-	built, err := fixture.Build(path, fixture.Config{Seed: 3, Pairs: pairs})
+	built, err := fixture.Build(path, testConfig(3, pairs))
 	if err != nil {
 		t.Fatalf("building: %v", err)
 	}
@@ -197,15 +231,16 @@ func TestManifest(t *testing.T) {
 }
 
 func TestNewPairs(t *testing.T) {
+	t.Parallel()
 	t.Run("should give new pairs after a time that the capture path accepts", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "grow.marasi")
-		manifest, err := fixture.Build(path, fixture.Config{Seed: 1, Pairs: 300})
+		manifest, err := fixture.Build(path, testConfig(1, 100))
 		if err != nil {
 			t.Fatalf("building: %v", err)
 		}
 		repo := openProject(t, path)
 
-		pairs := fixture.NewPairs(9, 120, manifest.Newest, 50_000)
+		pairs := fixture.NewPairs(9, 120, manifest.Newest, 5_000)
 
 		if len(pairs) != 120 {
 			t.Fatalf("\nwanted:\n120 pairs\ngot:\n%d", len(pairs))
@@ -217,8 +252,8 @@ func TestNewPairs(t *testing.T) {
 			if i > 0 && pair.Request.ID.String() <= pairs[i-1].Request.ID.String() {
 				t.Fatalf("\nwanted:\nids in order\ngot:\npair %d out of order", i)
 			}
-			if pair.Response != nil && len(pair.Response.Raw) < 50_000 {
-				t.Fatalf("\nwanted:\n50 KB bodies\ngot:\n%d bytes", len(pair.Response.Raw))
+			if pair.Response != nil && len(pair.Response.Raw) < 5_000 {
+				t.Fatalf("\nwanted:\n5 KB bodies\ngot:\n%d bytes", len(pair.Response.Raw))
 			}
 			if err := repo.InsertRequest(pair.Request); err != nil {
 				t.Fatalf("inserting request: %v", err)
@@ -230,14 +265,29 @@ func TestNewPairs(t *testing.T) {
 			}
 		}
 		count, _ := repo.CountRows()
-		if count != 420 {
-			t.Fatalf("\nwanted:\n420\ngot:\n%d", count)
+		if count != 220 {
+			t.Fatalf("\nwanted:\n220\ngot:\n%d", count)
 		}
 	})
 }
 
 // pairDigests returns one line per pair with everything stored about it.
 func pairDigests(t *testing.T, repo *db.Repository) []string {
+	t.Helper()
+	rows := pairRows(t, repo)
+	digests := make([]string, len(rows))
+	for i, row := range rows {
+		digests[i] = fmt.Sprintf("%v|%s|%s|%s|%s|%s|%d|%s|%s|%x|%x|%v|%v|%q",
+			row.Request.ID, row.Request.Scheme, row.Request.Method, row.Request.Host, row.Request.Path,
+			row.Response.Status, row.Response.StatusCode, row.Response.ContentType, row.Response.Length,
+			sha256.Sum256(row.Request.Raw), sha256.Sum256(row.Response.Raw),
+			row.Request.RequestedAt.UnixNano(), row.Metadata, row.Note)
+	}
+	return digests
+}
+
+// pairRows reads every pair in full.
+func pairRows(t *testing.T, repo *db.Repository) []*domain.RequestResponseRow {
 	t.Helper()
 	summaries, err := repo.GetRequestResponseSummary()
 	if err != nil {
@@ -251,15 +301,7 @@ func pairDigests(t *testing.T, repo *db.Repository) []string {
 	if err != nil {
 		t.Fatalf("reading pairs: %v", err)
 	}
-	digests := make([]string, len(rows))
-	for i, row := range rows {
-		digests[i] = fmt.Sprintf("%v|%s|%s|%s|%s|%s|%d|%s|%s|%x|%x|%v|%v|%q",
-			row.Request.ID, row.Request.Scheme, row.Request.Method, row.Request.Host, row.Request.Path,
-			row.Response.Status, row.Response.StatusCode, row.Response.ContentType, row.Response.Length,
-			sha256.Sum256(row.Request.Raw), sha256.Sum256(row.Response.Raw),
-			row.Request.RequestedAt.UnixNano(), row.Metadata, row.Note)
-	}
-	return digests
+	return rows
 }
 
 func countDiffering(a, b []string) int {
