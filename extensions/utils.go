@@ -18,7 +18,7 @@ func registerUtilsLibrary(extension *Runtime) {
 		return
 	}
 
-	lua.NewLibrary(l, utilsLibrary(extension))
+	newLibrary(extension, "marasi.utils", utilsLibrary(extension))
 
 	l.SetField(-2, "utils")
 	l.Pop(1)
@@ -27,12 +27,9 @@ func registerUtilsLibrary(extension *Runtime) {
 // utilsLibrary returns a list of Lua functions that provide utility
 // functionalities. These functions are available under the `marasi.utils`
 // table in Lua scripts.
-func utilsLibrary(extension *Runtime) []lua.RegistryFunction {
-	return []lua.RegistryFunction{
-		// uuid generates a new UUIDv7 and returns it as a string.
-		//
-		// @return string The new UUID.
-		{Name: "uuid", Function: func(l *lua.State) int {
+func utilsLibrary(extension *Runtime) []APIFunction {
+	return []APIFunction{
+		{Name: "uuid", Signature: "() -> string", Summary: "Generates a new UUIDv7 and returns it as a string.", Function: func(l *lua.State) int {
 			id, err := uuid.NewV7()
 			if err != nil {
 				lua.Errorf(l, "generating uuid: %s", err.Error())
@@ -41,18 +38,11 @@ func utilsLibrary(extension *Runtime) []lua.RegistryFunction {
 			l.PushString(id.String())
 			return 1
 		}},
-		// timestamp returns the current time as a Unix timestamp in milliseconds.
-		//
-		// @return number The current timestamp.
-		{Name: "timestamp", Function: func(l *lua.State) int {
+		{Name: "timestamp", Signature: "() -> number", Summary: "Returns the current time as a Unix timestamp in milliseconds.", Function: func(l *lua.State) int {
 			l.PushNumber(float64(time.Now().UnixMilli()))
 			return 1
 		}},
-		// sleep pauses the execution for a given number of milliseconds.
-		//
-		// @param milliseconds int The number of milliseconds to sleep.
-		// @param limit int (optional) The maximum number of milliseconds to sleep.
-		{Name: "sleep", Function: func(l *lua.State) int {
+		{Name: "sleep", Signature: "(milliseconds: integer, limit?: integer)", Summary: "Pauses for a given number of milliseconds. Returns at once if milliseconds is not below limit, which defaults to 60000.", Function: func(l *lua.State) int {
 			milliseconds := lua.CheckInteger(l, 2)
 			limit := lua.OptInteger(l, 3, 60000)
 
@@ -67,12 +57,7 @@ func utilsLibrary(extension *Runtime) []lua.RegistryFunction {
 			}
 			return 0
 		}},
-		// cookie creates a new cookie object.
-		//
-		// @param name string The name of the cookie.
-		// @param value string The value of the cookie.
-		// @return Cookie The new cookie object.
-		{Name: "cookie", Function: func(l *lua.State) int {
+		{Name: "cookie", Signature: "(name: string, value: string) -> cookie", Summary: "Creates a new cookie object.", Function: func(l *lua.State) int {
 			name := lua.CheckString(l, 2)
 			value := lua.CheckString(l, 3)
 
@@ -86,11 +71,7 @@ func utilsLibrary(extension *Runtime) []lua.RegistryFunction {
 			lua.SetMetaTableNamed(l, "cookie")
 			return 1
 		}},
-		// url creates a new URL object from a string.
-		//
-		// @param url string The URL string.
-		// @return URL The new URL object.
-		{Name: "url", Function: func(l *lua.State) int {
+		{Name: "url", Signature: "(url: string) -> url", Summary: "Creates a new URL object from a string.", Function: func(l *lua.State) int {
 			inputString := lua.CheckString(l, 2)
 			parsed, err := url.Parse(inputString)
 

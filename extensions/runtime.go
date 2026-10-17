@@ -68,7 +68,9 @@ type Runtime struct {
 	// When non-nil, it returns a non-nil function that releases the record when the work ends.
 	TrackExecution   func() func()
 	executionContext context.Context
-	asyncExecutions  sync.WaitGroup
+	// reference is set only while Reference records what registration adds.
+	reference       *APIReference
+	asyncExecutions sync.WaitGroup
 }
 
 // LogSnapshot returns detached entries in print order, even while Lua is running.
@@ -163,45 +165,8 @@ func (extension *Runtime) beginExecution(ctx context.Context) func() {
 // to sandbox the extension.
 func (extension *Runtime) PrepareState(proxy ProxyService, options []func(*Runtime) error) error {
 	extension.LuaState = lua.NewState()
-	extension.LuaState.PushString(extension.Data.ID.String())
-	extension.LuaState.SetGlobal("extension_id")
-
-	lua.BaseOpen(extension.LuaState)
-	extension.LuaState.Pop(1)
-
-	lua.TableOpen(extension.LuaState)
-	extension.LuaState.SetGlobal("table")
-
-	lua.MathOpen(extension.LuaState)
-	extension.LuaState.SetGlobal("math")
-
-	lua.Bit32Open(extension.LuaState)
-	extension.LuaState.SetGlobal("bit32")
-
-	extension.LuaState.PushNil()
-	extension.LuaState.SetGlobal("loadfile")
-	extension.LuaState.PushNil()
-	extension.LuaState.SetGlobal("dofile")
-	extension.LuaState.PushNil()
-	extension.LuaState.SetGlobal("load")
-	extension.LuaState.PushNil()
-	extension.LuaState.SetGlobal("require")
-	extension.LuaState.PushNil()
-	extension.LuaState.SetGlobal("collectgarbage")
-
-	// Register functions
-	RegisterCustomPrint(extension)
-	RegisterRequestType(extension)
-	RegisterResponseType(extension)
-	RegisterWebSocketMessageType(extension)
-	RegisterURLType(extension)
-	RegisterHeaderType(extension)
-	RegisterCookieType(extension)
-	RegisterRequestBuilderType(extension)
-	RegisterRegexType(extension)
-	RegisterScopeType(extension)
-
-	registerMarasiLibrary(extension, proxy)
+	openStandardLibraries(extension.LuaState)
+	registerAPI(extension, proxy)
 
 	for _, option := range options {
 		err := option(extension)
@@ -213,7 +178,7 @@ func (extension *Runtime) PrepareState(proxy ProxyService, options []func(*Runti
 		return fmt.Errorf("preparing state for extension %s : %w", extension.Data.Name, err)
 	}
 
-	if err := extension.CallFunction("startup"); err != nil {
+	if err := extension.CallFunction(hookStartup); err != nil {
 		return fmt.Errorf("running startup for %s : %w", extension.Data.Name, err)
 	}
 	return nil
@@ -288,7 +253,7 @@ func (extension *Runtime) ShouldInterceptRequest(req *http.Request) (bool, error
 	defer extension.Mu.Unlock()
 	defer extension.beginExecution(req.Context())()
 
-	extension.LuaState.Global("interceptRequest")
+	extension.LuaState.Global(hookInterceptRequest)
 
 	if !extension.LuaState.IsFunction(-1) {
 		extension.LuaState.Pop(1)
@@ -319,7 +284,7 @@ func (extension *Runtime) ShouldInterceptResponse(res *http.Response) (bool, err
 		ctx = res.Request.Context()
 	}
 	defer extension.beginExecution(ctx)()
-	extension.LuaState.Global("interceptResponse")
+	extension.LuaState.Global(hookInterceptResponse)
 
 	if !extension.LuaState.IsFunction(-1) {
 		extension.LuaState.Pop(1)
@@ -356,7 +321,7 @@ func (extension *Runtime) ShouldInterceptWebSocketMessage(message *marasiws.Mess
 	defer extension.Mu.Unlock()
 	defer extension.beginExecution(nil)()
 
-	extension.LuaState.Global("interceptWebSocketMessage")
+	extension.LuaState.Global(hookInterceptWebSocketMessage)
 	if !extension.LuaState.IsFunction(-1) {
 		extension.LuaState.Pop(1)
 		return false, nil
@@ -381,7 +346,7 @@ func (extension *Runtime) CallWebSocketMessageHandler(message *marasiws.Message)
 	defer extension.Mu.Unlock()
 	defer extension.beginExecution(nil)()
 
-	extension.LuaState.Global("processWebSocketMessage")
+	extension.LuaState.Global(hookProcessWebSocketMessage)
 	if !extension.LuaState.IsFunction(-1) {
 		extension.LuaState.Pop(1)
 		return nil
@@ -408,7 +373,7 @@ func (extension *Runtime) CallResponseHandler(res *http.Response) error {
 	}
 	defer extension.beginExecution(ctx)()
 
-	extension.LuaState.Global("processResponse")
+	extension.LuaState.Global(hookProcessResponse)
 
 	if !extension.LuaState.IsFunction(-1) {
 		extension.LuaState.Pop(1)
@@ -432,7 +397,7 @@ func (extension *Runtime) CallRequestHandler(req *http.Request) error {
 	defer extension.Mu.Unlock()
 	defer extension.beginExecution(req.Context())()
 
-	extension.LuaState.Global("processRequest")
+	extension.LuaState.Global(hookProcessRequest)
 
 	if !extension.LuaState.IsFunction(-1) {
 		extension.LuaState.Pop(1)
@@ -526,6 +491,7 @@ func RegisterCustomPrint(extension *Runtime) {
 		}
 		return 0
 	})
+	extension.recordGlobal(Entry{Name: "print", Signature: "(...: any)", Summary: "Write the values, separated by tabs, to this extension's print log. Read the log with marasi extension logs."})
 }
 
 func PrintValue(l *lua.State, index int) any {

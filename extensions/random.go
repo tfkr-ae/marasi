@@ -7,7 +7,8 @@ import (
 	"github.com/Shopify/go-lua"
 )
 
-func registerRandomLibrary(l *lua.State) {
+func registerRandomLibrary(extension *Runtime) {
+	l := extension.LuaState
 	l.Global("marasi")
 
 	if l.IsNil(-1) {
@@ -15,7 +16,7 @@ func registerRandomLibrary(l *lua.State) {
 		return
 	}
 
-	lua.NewLibrary(l, randomLibrary())
+	newLibrary(extension, "marasi.random", randomLibrary())
 
 	l.SetField(-2, "random")
 
@@ -25,14 +26,9 @@ func registerRandomLibrary(l *lua.State) {
 // randomLibrary returns a list of Lua functions that provide random data
 // generation functionalities. These functions are available under the `marasi.random`
 // table in Lua scripts.
-func randomLibrary() []lua.RegistryFunction {
-	return []lua.RegistryFunction{
-		// int returns a random integer in a given range.
-		//
-		// @param min int The minimum value of the range.
-		// @param max int The maximum value of the range.
-		// @return int A random integer between min and max (inclusive).
-		{Name: "int", Function: func(l *lua.State) int {
+func randomLibrary() []APIFunction {
+	return []APIFunction{
+		{Name: "int", Signature: "(min: integer, max: integer) -> integer", Summary: "Returns a random integer in a given range.", Function: func(l *lua.State) int {
 			min := lua.CheckInteger(l, 2)
 			max := lua.CheckInteger(l, 3)
 
@@ -57,13 +53,7 @@ func randomLibrary() []lua.RegistryFunction {
 			l.PushInteger(int(resultBig.Int64()))
 			return 1
 		}},
-		// string returns a random string of a given length, using an optional charset.
-		//
-		// @param length int The length of the random string.
-		// @param charset string (optional) The set of characters to use for the random
-		// string. Defaults to alphanumeric characters.
-		// @return string The generated random string.
-		{Name: "string", Function: func(l *lua.State) int {
+		{Name: "string", Signature: "(length: integer, charset?: string) -> string", Summary: "Returns a random string of a given length, using an optional charset. charset defaults to letters and digits.", Function: func(l *lua.State) int {
 			length := lua.CheckInteger(l, 2)
 			charset := lua.OptString(l, 3, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 

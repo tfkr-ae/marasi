@@ -8,7 +8,8 @@ import (
 	"github.com/google/uuid"
 )
 
-func registerSettingsLibrary(l *lua.State, proxy ProxyService) {
+func registerSettingsLibrary(extension *Runtime, proxy ProxyService) {
+	l := extension.LuaState
 	l.Global("marasi")
 
 	if l.IsNil(-1) {
@@ -16,7 +17,7 @@ func registerSettingsLibrary(l *lua.State, proxy ProxyService) {
 		return
 	}
 
-	lua.NewLibrary(l, settingsLibrary(proxy))
+	newLibrary(extension, "marasi.settings", settingsLibrary(proxy))
 
 	l.SetField(-2, "settings")
 
@@ -26,12 +27,9 @@ func registerSettingsLibrary(l *lua.State, proxy ProxyService) {
 // settingsLibrary returns a list of Lua functions for managing extension
 // settings. These functions are available under the `marasi.settings` table
 // in Lua scripts.
-func settingsLibrary(proxy ProxyService) []lua.RegistryFunction {
-	return []lua.RegistryFunction{
-		// get returns the settings for the current extension.
-		//
-		// @return table The extension's settings as a Lua table.
-		{Name: "get", Function: func(l *lua.State) int {
+func settingsLibrary(proxy ProxyService) []APIFunction {
+	return []APIFunction{
+		{Name: "get", Signature: "() -> table", Summary: "Returns the settings for the current extension.", Function: func(l *lua.State) int {
 			repo, err := proxy.GetExtensionRepo()
 			if err != nil {
 				lua.Errorf(l, "getting extension repo: %s", err.Error())
@@ -53,11 +51,7 @@ func settingsLibrary(proxy ProxyService) []lua.RegistryFunction {
 			util.DeepPush(l, settings)
 			return 1
 		}},
-		// set updates the settings for the current extension.
-		//
-		// @param settings table The new settings for the extension.
-		// @return boolean True if the settings were updated successfully.
-		{Name: "set", Function: func(l *lua.State) int {
+		{Name: "set", Signature: "(settings: table) -> boolean", Summary: "Updates the settings for the current extension.", Function: func(l *lua.State) int {
 			// util.PullTable cannot handle mixed keys
 			val := GoValue(l, 2)
 
