@@ -117,6 +117,35 @@ func TestBulk_RefusesQuerySelectionsWhileTheirJobsBuild(t *testing.T) {
 		}
 	})
 
+	t.Run("should match a response written between the index flush and the bulk transaction", func(t *testing.T) {
+		t.Parallel()
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+		// No timer flush: the only flushes are the bulk operation's own.
+		stopIndexQueue(repo)
+		id := insertTraffic(t, repo, "GET", "a.example.com", "/late-response")
+		repo.afterBulkFlush = func() {
+			err := repo.InsertResponse(&domain.ProxyResponse{
+				ID: id, Status: "200 OK", StatusCode: 200, ContentType: "text/plain", Length: "11",
+				Raw: []byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nneedle body"), Metadata: map[string]any{},
+			})
+			if err != nil {
+				t.Errorf("InsertResponse() error = %v", err)
+			}
+		}
+		sel := domain.Selection{Query: &domain.SelectionQuery{Text: `NOT response_body:"needle"`, AsOf: id}}
+		if count, err := repo.DeleteTraffic(sel); err != nil || count != 0 {
+			t.Fatalf("DeleteTraffic() = %d, %v; want 0, nil: the pair's response has needle", count, err)
+		}
+		if got := pairCount(t, repo); got != 1 {
+			t.Errorf("pairs after the delete = %d, want 1", got)
+		}
+		var queued int
+		if err := repo.dbConn.Get(&queued, `SELECT count(*) FROM traffic_index_pending`); err != nil || queued != 0 {
+			t.Errorf("queued pairs after the bulk operation = %d, %v; want 0", queued, err)
+		}
+	})
+
 	t.Run("should run a text query selection once its jobs complete", func(t *testing.T) {
 		t.Parallel()
 		repo, teardown := setupTestDB(t)

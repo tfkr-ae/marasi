@@ -51,6 +51,9 @@ type Repository struct {
 	indexQueue indexQueue
 	// pairNumber is the last pair number issued (ADR-0042).
 	pairNumber atomic.Int64
+	// afterBulkFlush, when set by a test, runs between a bulk operation's
+	// index flush and its transaction.
+	afterBulkFlush func()
 }
 
 // optimizeEveryPairs is how many captured pairs pass between refreshes of
