@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,7 +22,8 @@ const (
 )
 
 var (
-	trafficSitemapNode   string
+	trafficSitemapNodes  []string
+	trafficSitemapScope  string
 	trafficSitemapFilter *trafficQueryFlags
 	trafficSitemapLimit  string
 	trafficSitemapCursor string
@@ -36,7 +38,8 @@ var (
 
 func init() {
 	flags := trafficSitemapCmd.Flags()
-	flags.StringVar(&trafficSitemapNode, "node", "", "Name of the node whose children to list; omit for the origins")
+	flags.StringArrayVar(&trafficSitemapNodes, "node", nil, "Name of the node whose children to list; omit for the origins, repeat to list several levels")
+	flags.StringVar(&trafficSitemapScope, "scope", "", "Levels read: all lists every child, matching only the children with -q matches; all by default, matching with -q")
 	flags.StringVar(&trafficSitemapLimit, "limit", "100", "Maximum number of children to return, from 1 to 500")
 	flags.StringVar(&trafficSitemapCursor, "cursor", "", "next_cursor from an earlier page")
 
@@ -67,20 +70,31 @@ Each row is the name, the pairs in its subtree, the pairs among them with a
 --as-of, the as_of of the traffic list page you looked at. --exclude leaves
 content types out of the counts.
 
-Paging: stderr shows next_cursor; pass it back with --cursor.`,
+Paging: stderr shows next_cursor; pass it back with --cursor.
+
+Repeat --node, or pass --scope, to read several levels in one call. Each
+level prints under a "# <node>" line, and each row adds the matching pairs
+and 5xx responses, or - without -q. With -q, --scope matching (the default)
+lists only the children with matches, and --scope all lists every child,
+counted over all traffic, with its matching counts. --exclude applies to
+both counts. A node that does not exist prints as (missing).`,
 	Example: `  marasi traffic sitemap
   marasi traffic sitemap --node 'https://api.example.com/users/{int}'
-  marasi traffic sitemap -q 'status_code >= 500' --as-of "$AS_OF"`,
+  marasi traffic sitemap -q 'status_code >= 500' --as-of "$AS_OF"
+  marasi traffic sitemap --node '' --node https://api.example.com --scope all -q 'status_code >= 500' --as-of "$AS_OF"`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		limit, err := parsePageLimit(trafficSitemapLimit)
 		if err != nil {
 			return err
 		}
+		if len(trafficSitemapNodes) > 1 || cmd.Flags().Changed("scope") {
+			return runSitemapLevels(cmd, limit)
+		}
 		query := url.Values{}
 		query.Set("limit", limit)
-		if cmd.Flags().Changed("node") {
-			query.Set("node", trafficSitemapNode)
+		if len(trafficSitemapNodes) == 1 {
+			query.Set("node", trafficSitemapNodes[0])
 		}
 		if trafficSitemapCursor != "" {
 			query.Set("cursor", trafficSitemapCursor)
@@ -237,6 +251,136 @@ not, it prints the error with its position in the query and exits 1.`,
 		_, err := fmt.Fprintln(cmd.ErrOrStderr(), "query is valid")
 		return err
 	},
+}
+
+// sitemapLevelsSelection is the selection of a POST /traffic/sitemap/levels
+// body.
+type sitemapLevelsSelection struct {
+	Query     string   `json:"query"`
+	Exclusion []string `json:"exclusion"`
+	AsOf      string   `json:"as_of"`
+}
+
+// runSitemapLevels reads every --node in one POST /traffic/sitemap/levels
+// call.
+func runSitemapLevels(cmd *cobra.Command, limit string) error {
+	asOf, err := trafficSitemapFilter.asOfID(cmd)
+	if err != nil {
+		return err
+	}
+	hasQuery := cmd.Flags().Changed("query")
+	scope := trafficSitemapScope
+	switch {
+	case scope == "" && hasQuery:
+		scope = "matching"
+	case scope == "":
+		scope = "all"
+	case scope != "all" && scope != "matching":
+		return fmt.Errorf("--scope is %q; use all or matching", scope)
+	case scope == "matching" && !hasQuery:
+		return errors.New("--scope matching needs -q")
+	}
+	nodes := trafficSitemapNodes
+	if len(nodes) == 0 {
+		nodes = []string{""}
+	}
+	if trafficSitemapCursor != "" && len(nodes) > 1 {
+		return errors.New("--cursor continues one level; pass a single --node")
+	}
+	parsedLimit, _ := strconv.Atoi(limit) // parsePageLimit checked it
+	exclusion := append([]string{}, trafficSitemapFilter.exclude...)
+	request := struct {
+		Nodes     []string                `json:"nodes"`
+		Scope     string                  `json:"scope"`
+		Exclusion []string                `json:"exclusion"`
+		Selection *sitemapLevelsSelection `json:"selection,omitempty"`
+		Cursors   map[string]string       `json:"cursors,omitempty"`
+		Limit     int                     `json:"limit"`
+	}{Nodes: nodes, Scope: scope, Exclusion: exclusion, Limit: parsedLimit}
+	if hasQuery {
+		request.Selection = &sitemapLevelsSelection{Query: trafficSitemapFilter.query, Exclusion: exclusion, AsOf: asOf}
+	}
+	if trafficSitemapCursor != "" {
+		request.Cursors = map[string]string{nodes[0]: trafficSitemapCursor}
+	}
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false) // keep >= in a query readable
+	if err := encoder.Encode(request); err != nil {
+		return err
+	}
+	body, err := runControlRequest(cmd, http.MethodPost, "/traffic/sitemap/levels", "listing sitemap levels", bytes.TrimSpace(encoded.Bytes()))
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		return writeJSONBody(cmd, body)
+	}
+	return writeSitemapLevelsHuman(body, cmd.OutOrStdout(), cmd.ErrOrStderr())
+}
+
+func writeSitemapLevelsHuman(body []byte, stdout, stderr io.Writer) error {
+	var page struct {
+		Levels []struct {
+			Node  string `json:"node"`
+			Items []struct {
+				Name           string `json:"name"`
+				Pairs          int64  `json:"pairs"`
+				Errors         int64  `json:"errors"`
+				HasChildren    bool   `json:"has_children"`
+				Matching       *int64 `json:"matching"`
+				MatchingErrors *int64 `json:"matching_errors"`
+			} `json:"items"`
+			NextCursor *string `json:"next_cursor"`
+			Missing    bool    `json:"missing"`
+		} `json:"levels"`
+		Sitemap struct {
+			Complete bool `json:"complete"`
+		} `json:"sitemap"`
+		Index *struct {
+			Complete bool `json:"complete"`
+		} `json:"index"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return fmt.Errorf("decoding sitemap levels: %w", err)
+	}
+	count := func(value *int64) string {
+		if value == nil {
+			return "-"
+		}
+		return strconv.FormatInt(*value, 10)
+	}
+	for _, level := range page.Levels {
+		header := "# " + level.Node
+		if level.Node == "" {
+			header = "# (origins)"
+		}
+		if level.Missing {
+			header += " (missing)"
+		}
+		fmt.Fprintln(stdout, header)
+		writer := newTableWriter(stdout)
+		for _, item := range level.Items {
+			children := ""
+			if item.HasChildren {
+				children = "+"
+			}
+			fmt.Fprintf(writer, "%s\t%d\t%d\t%s\t%s\t%s\n", item.Name, item.Pairs, item.Errors, count(item.Matching), count(item.MatchingErrors), children)
+		}
+		if err := writer.Flush(); err != nil {
+			return err
+		}
+		if level.NextCursor != nil {
+			fmt.Fprintf(stderr, "next_cursor=%s node=%s\n", *level.NextCursor, level.Node)
+		}
+	}
+	if !page.Sitemap.Complete {
+		fmt.Fprintln(stderr, sitemapBuildingNotice)
+	}
+	if page.Index != nil && !page.Index.Complete {
+		fmt.Fprintln(stderr, indexBuildingNotice)
+	}
+	return nil
 }
 
 func writeSitemapHuman(body []byte, stdout, stderr io.Writer) error {

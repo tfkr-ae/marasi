@@ -103,6 +103,63 @@ type sitemapPage struct {
 	Index *trafficIndex `json:"index,omitempty"`
 }
 
+// sitemapLevelsRequest is the body of POST /traffic/sitemap/levels.
+type sitemapLevelsRequest struct {
+	Nodes     []string            `json:"nodes"`
+	Scope     domain.SitemapScope `json:"scope"`
+	Exclusion []string            `json:"exclusion"`
+	Selection *struct {
+		Query     string     `json:"query"`
+		Exclusion []string   `json:"exclusion"`
+		AsOf      *uuid.UUID `json:"as_of"`
+	} `json:"selection"`
+	Cursors map[string]string `json:"cursors"`
+	Limit   *int              `json:"limit"`
+}
+
+// sitemapLevelsPage is the response of POST /traffic/sitemap/levels.
+type sitemapLevelsPage struct {
+	Levels  []sitemapLevel  `json:"levels"`
+	Sitemap jobCompleteness `json:"sitemap"`
+	// Index is set when the selection has a text term.
+	Index *trafficIndex `json:"index,omitempty"`
+}
+
+// sitemapLevel is one node's page in a sitemapLevelsPage.
+type sitemapLevel struct {
+	Node       string                     `json:"node"`
+	Items      []domain.SitemapLevelChild `json:"items"`
+	NextCursor *string                    `json:"next_cursor"`
+	Missing    bool                       `json:"missing"`
+}
+
+// decodeSitemapLevelsQuery reads a POST /traffic/sitemap/levels body. It
+// reports false for malformed JSON, an unknown field, a selection without
+// as_of, or a limit outside 1 to domain.MaxSitemapPage. The limit defaults
+// to 100, as GET /traffic/sitemap's does.
+func decodeSitemapLevelsQuery(r *http.Request) (domain.SitemapLevelsQuery, bool) {
+	var body sitemapLevelsRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		return domain.SitemapLevelsQuery{}, false
+	}
+	q := domain.SitemapLevelsQuery{Nodes: body.Nodes, Scope: body.Scope, Exclusion: body.Exclusion, Cursors: body.Cursors, Limit: 100}
+	if body.Limit != nil {
+		if *body.Limit < 1 || *body.Limit > domain.MaxSitemapPage {
+			return domain.SitemapLevelsQuery{}, false
+		}
+		q.Limit = *body.Limit
+	}
+	if body.Selection != nil {
+		if body.Selection.AsOf == nil {
+			return domain.SitemapLevelsQuery{}, false
+		}
+		q.Selection = &domain.SelectionQuery{Text: body.Selection.Query, Exclusion: body.Selection.Exclusion, AsOf: *body.Selection.AsOf}
+	}
+	return q, true
+}
+
 // contentTypeCounts is the body of GET /traffic/content-types.
 type contentTypeCounts struct {
 	Items   []contentTypeCount `json:"items"`
@@ -254,6 +311,47 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 		}
 		if _, ok := page.Complete[domain.JobTrafficIndex]; ok {
 			body.Index = &trafficIndex{Complete: searchComplete(page.Complete)}
+		}
+		writeJSON(w, r, http.StatusOK, body)
+	})
+	mux.HandleFunc("POST /traffic/sitemap/levels", func(w http.ResponseWriter, r *http.Request) {
+		levelsQuery, ok := decodeSitemapLevelsQuery(r)
+		if !ok {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
+		repo, err := proxy.GetTrafficRepo()
+		if err != nil {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		levels, err := repo.ListSitemapLevels(r.Context(), levelsQuery)
+		var queryErr *domain.QueryError
+		switch {
+		case r.Context().Err() != nil:
+			return // the client went away; nobody reads the answer
+		case errors.Is(err, domain.ErrInvalidSitemapLevels):
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "bad_request", Message: err.Error()})
+			return
+		case errors.As(err, &queryErr):
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
+			return
+		case errors.Is(err, domain.ErrInvalidCursor):
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_cursor", Message: err.Error()})
+			return
+		case err != nil:
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+			return
+		}
+		body := sitemapLevelsPage{
+			Levels:  make([]sitemapLevel, len(levels.Levels)),
+			Sitemap: jobCompleteness{Complete: levels.Complete[domain.JobSitemap]},
+		}
+		for i, level := range levels.Levels {
+			body.Levels[i] = sitemapLevel{Node: level.Node, Items: level.Children, NextCursor: level.NextCursor, Missing: level.Missing}
+		}
+		if _, ok := levels.Complete[domain.JobTrafficIndex]; ok {
+			body.Index = &trafficIndex{Complete: searchComplete(levels.Complete)}
 		}
 		writeJSON(w, r, http.StatusOK, body)
 	})
