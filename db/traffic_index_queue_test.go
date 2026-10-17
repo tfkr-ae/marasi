@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 )
 
 // indexCapturedTraffic indexes the pairs capture queued, as the repository
@@ -35,10 +36,16 @@ func projectFile(t *testing.T, repo *Repository) string {
 // so that nothing in the capturing repository runs first.
 func storedIndexMatches(t *testing.T, path, match string) []uuid.UUID {
 	t.Helper()
-	reader := openTestProjectFile(t, path)
-	defer reader.dbConn.Close()
+	// A plain read-only connection, not a second Repository: opening a
+	// Repository runs open-time writes that would race the live one's index
+	// flush, and Marasi never opens one project twice.
+	reader, err := sqlx.Connect("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatalf("opening the stored index: %v", err)
+	}
+	defer reader.Close()
 	var ids []uuid.UUID
-	err := reader.dbConn.Select(&ids, `SELECT k.request_id FROM traffic_index
+	err = reader.Select(&ids, `SELECT k.request_id FROM traffic_index
 		JOIN traffic_index_key k ON k.id = traffic_index.rowid WHERE traffic_index MATCH ?`, match)
 	if err != nil {
 		t.Fatalf("reading the stored index: %v", err)
