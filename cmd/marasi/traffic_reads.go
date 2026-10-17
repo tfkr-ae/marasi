@@ -203,15 +203,15 @@ no content type yet counts under -. Use a type with traffic list --exclude.`,
 		if err := json.Unmarshal(body, &counts); err != nil {
 			return fmt.Errorf("decoding content types: %w", err)
 		}
-		writer := newTableWriter(cmd.OutOrStdout())
+		table := newListTable(cmd.OutOrStdout(), "CONTENT TYPE", "PAIRS")
 		for _, item := range counts.Items {
 			contentType := item.ContentType
 			if contentType == "" {
 				contentType = "-"
 			}
-			fmt.Fprintf(writer, "%s\t%d\n", truncateDisplay(contentType, contentTypeDisplayLimit), item.Count)
+			table.row(truncateDisplay(contentType, contentTypeDisplayLimit), item.Count)
 		}
-		if err := writer.Flush(); err != nil {
+		if err := table.flush(); err != nil {
 			return err
 		}
 		if !counts.Sitemap.Complete {
@@ -359,15 +359,15 @@ func writeSitemapLevelsHuman(body []byte, stdout, stderr io.Writer) error {
 			header += " (missing)"
 		}
 		fmt.Fprintln(stdout, header)
-		writer := newTableWriter(stdout)
+		table := newListTable(stdout, "NAME", "PAIRS", "5XX", "MATCHING", "MATCHING 5XX", "CHILDREN")
 		for _, item := range level.Items {
 			children := ""
 			if item.HasChildren {
 				children = "+"
 			}
-			fmt.Fprintf(writer, "%s\t%d\t%d\t%s\t%s\t%s\n", item.Name, item.Pairs, item.Errors, count(item.Matching), count(item.MatchingErrors), children)
+			table.row(item.Name, item.Pairs, item.Errors, count(item.Matching), count(item.MatchingErrors), children)
 		}
-		if err := writer.Flush(); err != nil {
+		if err := table.flush(); err != nil {
 			return err
 		}
 		if level.NextCursor != nil {
@@ -402,15 +402,15 @@ func writeSitemapHuman(body []byte, stdout, stderr io.Writer) error {
 	if err := json.Unmarshal(body, &page); err != nil {
 		return fmt.Errorf("decoding sitemap: %w", err)
 	}
-	writer := newTableWriter(stdout)
+	table := newListTable(stdout, "NAME", "PAIRS", "5XX", "CHILDREN")
 	for _, item := range page.Items {
 		children := ""
 		if item.HasChildren {
 			children = "+"
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", item.Name, strconv.FormatInt(item.Pairs, 10), strconv.FormatInt(item.Errors, 10), children)
+		table.row(item.Name, item.Pairs, item.Errors, children)
 	}
-	if err := writer.Flush(); err != nil {
+	if err := table.flush(); err != nil {
 		return err
 	}
 	if page.NextCursor != nil {

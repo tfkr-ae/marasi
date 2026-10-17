@@ -316,16 +316,15 @@ func writeExtensionList(body []byte, stdout io.Writer) error {
 	if err := json.Unmarshal(body, &response); err != nil {
 		return fmt.Errorf("decoding extension list: %w", err)
 	}
+	table := newListTable(stdout, "ID", "NAME", "STATE")
 	for _, item := range response.Items {
 		state := "disabled"
 		if item.Enabled {
 			state = "enabled"
 		}
-		if _, err := fmt.Fprintf(stdout, "%s %s %s\n", item.ID, item.Name, state); err != nil {
-			return err
-		}
+		table.row(item.ID, item.Name, state)
 	}
-	return nil
+	return table.flush()
 }
 
 func writeExtensionGet(body []byte, stdout io.Writer) error {

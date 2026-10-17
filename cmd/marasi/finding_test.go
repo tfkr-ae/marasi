@@ -41,12 +41,14 @@ func TestFindingCommands(t *testing.T) {
 		wantStderr string
 	}{
 		{
-			name:       "list",
-			args:       []string{"finding", "list"},
-			response:   `{"items":[{"id":"` + id + `","title":"Access control","severity":"High","test_case_id":"` + testCaseID + `","cvss_score":8.1,"created_at":"2026-09-16T10:00:00Z"}]}` + "\n",
-			method:     http.MethodGet,
-			path:       "/finding",
-			wantStdout: id + "  Access control  High  " + testCaseID + "  8.1  2026-09-16T10:00:00Z\n",
+			name:     "list",
+			args:     []string{"finding", "list"},
+			response: `{"items":[{"id":"` + id + `","title":"Access control","severity":"High","test_case_id":"` + testCaseID + `","cvss_score":8.1,"created_at":"2026-09-16T10:00:00Z"}]}` + "\n",
+			method:   http.MethodGet,
+			path:     "/finding",
+			wantStdout: "ID                                    TITLE           SEVERITY  TEST CASE                             CVSS  CREATED AT\n" +
+				id + "  Access control  High      " + testCaseID + "  8.1   2026-09-16T10:00:00Z\n" +
+				"ID                                    TITLE           SEVERITY  TEST CASE                             CVSS  CREATED AT\n",
 		},
 		{
 			name:       "get",

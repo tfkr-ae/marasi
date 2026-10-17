@@ -222,7 +222,11 @@ func TestNotesListCommand(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/notes" || got.RawQuery != "limit=200" {
 			t.Fatalf("\nwanted:\nGET /notes?limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
-		want := "01938032-1b17-7243-b035-e6a9f4645904  example.com/login  newer note\n0193802f-f0e7-73d9-a764-06d21e367809  example.com/a      older note\n"
+		header := "ID                                    URL                NOTE\n"
+		want := header +
+			"01938032-1b17-7243-b035-e6a9f4645904  example.com/login  newer note\n" +
+			"0193802f-f0e7-73d9-a764-06d21e367809  example.com/a      older note\n" +
+			header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -239,7 +243,11 @@ func TestNotesListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "0193802f-f0e7-73d9-a764-06d21e367809  example.com/1234567890123456789012345...  0123456789012345678901234567890123456...\n01938032-1b17-7243-b035-e6a9f4645904  example.com/short" + strings.Repeat(" ", 25) + "short\n"
+		header := "ID" + strings.Repeat(" ", 36) + "URL" + strings.Repeat(" ", 39) + "NOTE\n"
+		want := header +
+			"0193802f-f0e7-73d9-a764-06d21e367809  example.com/1234567890123456789012345...  0123456789012345678901234567890123456...\n" +
+			"01938032-1b17-7243-b035-e6a9f4645904  example.com/short" + strings.Repeat(" ", 25) + "short\n" +
+			header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -253,8 +261,10 @@ func TestNotesListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "0193802f-f0e7-73d9-a764-06d21e367809  example.com/a  keep this ok\n"
-		if stdout != want || strings.Count(stdout, "\n") != 1 {
+		header := "ID                                    URL            NOTE\n"
+		want := header + "0193802f-f0e7-73d9-a764-06d21e367809  example.com/a  keep this ok\n" + header
+		// One row between the header and the footer: the breaks did not split it.
+		if stdout != want || strings.Count(stdout, "\n") != 3 {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%q", want, stdout)
 		}
 	})
@@ -267,7 +277,8 @@ func TestNotesListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "0193802f-f0e7-73d9-a764-06d21e367809  example.com/a  012345678901234567890123456789012345😀...\n"
+		header := "ID                                    URL            NOTE\n"
+		want := header + "0193802f-f0e7-73d9-a764-06d21e367809  example.com/a  012345678901234567890123456789012345😀...\n" + header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -284,7 +295,8 @@ func TestNotesListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		want := "01938032-1b17-7243-b035-e6a9f4645904  example.com/a  keep\n"
+		header := "ID                                    URL            NOTE\n"
+		want := header + "01938032-1b17-7243-b035-e6a9f4645904  example.com/a  keep\n" + header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}

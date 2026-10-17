@@ -14,7 +14,6 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -504,16 +503,16 @@ func writeLaunchpadListHuman(body []byte, stdout io.Writer) error {
 	if err := json.Unmarshal(body, &response); err != nil {
 		return fmt.Errorf("decoding launchpad list: %w", err)
 	}
-	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	table := newListTable(stdout, "ID", "NAME", "DESCRIPTION", "ENTRIES", "LAST STATUS")
 	for _, item := range response.Items {
 		// "-" marks a launchpad with no entries or a newest entry still in flight.
 		lastStatus := "-"
 		if item.LastStatusCode != nil {
 			lastStatus = strconv.Itoa(*item.LastStatusCode)
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%d\t%s\n", item.ID, truncateDisplay(item.Name, trafficPathDisplayLimit), truncateDisplay(item.Description, trafficPathDisplayLimit), item.EntryCount, lastStatus)
+		table.row(item.ID, truncateDisplay(item.Name, trafficPathDisplayLimit), truncateDisplay(item.Description, trafficPathDisplayLimit), item.EntryCount, lastStatus)
 	}
-	return writer.Flush()
+	return table.flush()
 }
 
 func writeLaunchListHuman(body []byte, stdout io.Writer) error {
@@ -527,11 +526,11 @@ func writeLaunchListHuman(body []byte, stdout io.Writer) error {
 	if err := json.Unmarshal(body, &response); err != nil {
 		return fmt.Errorf("decoding launch list: %w", err)
 	}
-	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	table := newListTable(stdout, "LAUNCH ID", "LAUNCHPAD ID", "STATUS")
 	for _, item := range response.Items {
-		fmt.Fprintf(writer, "%s\t%s\t%s\n", item.LaunchID, item.LaunchpadID, item.Status)
+		table.row(item.LaunchID, item.LaunchpadID, item.Status)
 	}
-	return writer.Flush()
+	return table.flush()
 }
 
 func writeLaunchStatusHuman(body []byte, stdout io.Writer) error {

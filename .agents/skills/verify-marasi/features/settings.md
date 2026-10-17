@@ -16,7 +16,7 @@ Start a service, then run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --insta
 
 ## Driving it with shell and curl
 
-Run `settings set cli-test 'ledger/view one' '{"columns": ["host"]}' </dev/null` and require `setting cli-test ledger/view one set` on stderr. `settings get cli-test 'ledger/view one'` prints the compact value `{"columns":["host"]}`; with `--json` it prints the stored object with `client`, `key`, `value`, and `updated_at`. Set a second key from stdin, `printf 1 | settings set cli-test other`. `settings list cli-test --prefix ledger/` prints only `ledger/view one  {"columns":["host"]}`, and `settings list cli-test --json` has both items. `settings delete cli-test 'ledger/view one'` prints `setting cli-test ledger/view one deleted`, and a later get exits 1 with `getting client setting: not_found`.
+Run `settings set cli-test 'ledger/view one' '{"columns": ["host"]}' </dev/null` and require `setting cli-test ledger/view one set` on stderr. `settings get cli-test 'ledger/view one'` prints the compact value `{"columns":["host"]}`; with `--json` it prints the stored object with `client`, `key`, `value`, and `updated_at`. Set a second key from stdin, `printf 1 | settings set cli-test other`. `settings list cli-test --prefix ledger/` prints only the row `ledger/view one  {"columns":["host"]}` between the `KEY  VALUE` column-name lines, and `settings list cli-test --json` has both items. `settings delete cli-test 'ledger/view one'` prints `setting cli-test ledger/view one deleted`, and a later get exits 1 with `getting client setting: not_found`.
 
 ## Gotchas
 

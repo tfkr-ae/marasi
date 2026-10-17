@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
@@ -311,11 +310,11 @@ func writeTestCaseListHuman(body []byte, stdout io.Writer) error {
 	if err := json.Unmarshal(body, &response); err != nil {
 		return fmt.Errorf("decoding test case list: %w", err)
 	}
-	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	table := newListTable(stdout, "ID", "TITLE", "CATEGORY", "TAGS", "CREATED AT")
 	for _, item := range response.Items {
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", item.ID, truncateDisplay(item.Title, trafficPathDisplayLimit), truncateDisplay(item.Category, trafficPathDisplayLimit), truncateDisplay(strings.Join(item.Tags, ","), trafficPathDisplayLimit), item.CreatedAt)
+		table.row(item.ID, truncateDisplay(item.Title, trafficPathDisplayLimit), truncateDisplay(item.Category, trafficPathDisplayLimit), truncateDisplay(strings.Join(item.Tags, ","), trafficPathDisplayLimit), item.CreatedAt)
 	}
-	return writer.Flush()
+	return table.flush()
 }
 
 func writeTestCaseGetHuman(body []byte, stdout io.Writer) error {
@@ -345,9 +344,9 @@ func writeTestCaseChecklistHuman(body []byte, stdout io.Writer) error {
 	if err := json.Unmarshal(body, &response); err != nil {
 		return fmt.Errorf("decoding test case checklist: %w", err)
 	}
-	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	table := newListTable(stdout, "TITLE", "CATEGORY")
 	for _, item := range response.Items {
-		fmt.Fprintf(writer, "%s\t%s\n", truncateDisplay(item.Title, trafficPathDisplayLimit), truncateDisplay(item.Category, trafficPathDisplayLimit))
+		table.row(truncateDisplay(item.Title, trafficPathDisplayLimit), truncateDisplay(item.Category, trafficPathDisplayLimit))
 	}
-	return writer.Flush()
+	return table.flush()
 }
