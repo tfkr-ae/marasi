@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -145,40 +147,53 @@ func (repo *Repository) DeleteLaunchpad(launchpadID uuid.UUID) error {
 }
 
 // GetLaunchpadRequests retrieves the requests linked to a launchpad that
-// match trafficQuery, oldest first. The read is the launchpad's membership
-// plus the translated traffic query. An invalid query returns a
-// *domain.QueryError.
-func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string) ([]*domain.RequestResponseSummary, error) {
-	translated, err := translateTrafficQuery(trafficQuery)
+// match trafficQuery and are not hidden by exclusion, in the orderBy order
+// that ListTraffic uses, or oldest first when orderBy is empty, with the
+// completeness of each background job the answer depends on, as ListTraffic
+// reports it. The read is the launchpad's membership plus the translated
+// traffic query and the exclusion. An invalid query, exclusion or orderBy
+// returns a *domain.QueryError.
+func (repo *Repository) GetLaunchpadRequests(id uuid.UUID, trafficQuery string, exclusion []string, orderBy string) ([]*domain.RequestResponseSummary, map[domain.JobName]bool, error) {
+	order := `id ASC`
+	if strings.TrimSpace(orderBy) != "" {
+		sort, err := parseTrafficOrderBy(orderBy)
+		if err != nil {
+			return nil, nil, err
+		}
+		order = sort.order()
+	}
+	matching, err := newTrafficMatch(trafficQuery, exclusion)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-
-	query := `SELECT
-			  id, scheme, method, host, path, requested_at,
-			  status, status_code, content_type, length, responded_at,
-			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
-		      FROM request
-		      WHERE ` + launchpadMember
-	args := append(make([]any, 0, len(translated.args)+1), id)
-	if translated.where != "" {
-		query += ` AND (` + translated.where + `)`
-		args = append(args, translated.args...)
+	if err := repo.indexReadyFor(matching); err != nil {
+		return nil, nil, err
 	}
-	query += ` ORDER BY id ASC`
+	match := trafficMatch{sitemap: matching.sitemap, text: matching.text}
+	match.add(launchpadMember, id)
+	match.conditions = append(match.conditions, matching.conditions...)
+	match.args = append(match.args, matching.args...)
+	query := `SELECT ` + trafficSummaryColumns + trafficSummarySource + match.where() + ` ORDER BY ` + order
 
 	var dbRequests []*dbRequestResponseSummary
-	err = repo.dbConn.Select(&dbRequests, query, args...)
+	var jobs map[domain.JobName]bool
+	err = repo.inTx(func(tx *sqlx.Tx) error {
+		read, err := listCompleteness(tx, match)
+		if err != nil {
+			return err
+		}
+		jobs = read
+		return tx.Select(&dbRequests, query, match.args...)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("getting launchpad requests: %w", err)
+		return nil, nil, fmt.Errorf("getting launchpad requests: %w", err)
 	}
 
 	domainRequests := make([]*domain.RequestResponseSummary, len(dbRequests))
 	for i, dbReq := range dbRequests {
 		domainRequests[i] = toDomainRequestResponseSummary(dbReq)
 	}
-
-	return domainRequests, nil
+	return domainRequests, jobs, nil
 }
 
 // LinkRequestToLaunchpad creates an association between a request and a launchpad.
@@ -197,5 +212,24 @@ func (repo *Repository) LinkRequestToLaunchpad(requestID uuid.UUID, launchpadID 
 		return domain.ErrLaunchpadAlreadyLinked
 	}
 
+	return nil
+}
+
+// UnlinkRequestFromLaunchpad removes the association between a request and a
+// launchpad. It returns domain.ErrLaunchpadNotLinked if there is none.
+func (repo *Repository) UnlinkRequestFromLaunchpad(requestID uuid.UUID, launchpadID uuid.UUID) error {
+	query := `DELETE FROM launchpad_request WHERE request_id = ? AND launchpad_id = ?`
+
+	result, err := repo.dbConn.Exec(query, requestID, launchpadID)
+	if err != nil {
+		return fmt.Errorf("unlinking request %s from launchpad %s: %w", requestID, launchpadID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("fetching unlinked rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return domain.ErrLaunchpadNotLinked
+	}
 	return nil
 }

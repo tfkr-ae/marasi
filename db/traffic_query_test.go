@@ -109,6 +109,7 @@ func queryTestPairs() []queryPair {
 }
 
 func TestTrafficRepo_ListTrafficQuery(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := seedQueryPairs(t, repo, queryTestPairs())
@@ -183,7 +184,7 @@ func TestTrafficRepo_ListTrafficQuery(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.query, func(t *testing.T) {
-			items, nextCursor, _, err := repo.ListTraffic(nil, 200, test.query)
+			items, nextCursor, _, err := listPage(repo, nil, 200, test.query)
 			if err != nil {
 				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 			}
@@ -202,22 +203,23 @@ func TestTrafficRepo_ListTrafficQuery(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficQueryPaging(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := seedQueryPairs(t, repo, queryTestPairs())
 
-	items, nextCursor, _, err := repo.ListTraffic(nil, 2, `method = "GET"`)
+	items, nextCursor, _, err := listPage(repo, nil, 2, `method = "GET"`)
 	if err != nil {
 		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 	}
 	if got, want := idsOf(items), []uuid.UUID{ids["e"], ids["c"]}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
 	}
-	if nextCursor == nil || *nextCursor != ids["c"] {
-		t.Fatalf("\nwanted:\n%v\ngot:\n%v", ids["c"], nextCursor)
+	if nextCursor == nil {
+		t.Fatal("\nwanted:\nnext cursor\ngot:\nnil")
 	}
 
-	older, olderNext, _, err := repo.ListTraffic(nextCursor, 2, `method = "GET"`)
+	older, olderNext, _, err := listPage(repo, nextCursor, 2, `method = "GET"`)
 	if err != nil {
 		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 	}
@@ -234,6 +236,7 @@ func TestTrafficRepo_ListTrafficQueryPaging(t *testing.T) {
 var parserTokenName = regexp.MustCompile(`\b(WS|TEXT|STRING|NUM|HEX)\b|trailing token`)
 
 func TestTrafficRepo_ListTrafficQueryLimits(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	captureTextPairs(t, repo, textSearchPairs())
@@ -246,23 +249,24 @@ func TestTrafficRepo_ListTrafficQueryLimits(t *testing.T) {
 		"200 ORed comparisons": strings.Repeat(`metadata.k != "v" OR `, 199) + `status_code >= 200`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, _, _, err := repo.ListTraffic(nil, 10, query); err != nil {
+			if _, _, _, err := listPage(repo, nil, 10, query); err != nil {
 				t.Fatalf("\nwanted:\nthe query to run\ngot:\n%v", err)
 			}
 		})
 	}
 }
 
-func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
-	repo, teardown := setupTestDB(t)
-	defer teardown()
-	seedQueryPairs(t, repo, queryTestPairs()[:1])
+// invalidTrafficQuery is one query the translator rejects, with the message
+// it must contain and the position it must report.
+type invalidTrafficQuery struct {
+	query    string
+	message  string
+	position int
+}
 
-	tests := []struct {
-		query    string
-		message  string
-		position int
-	}{
+// invalidTrafficQueries is every invalid query the translator tests cover.
+func invalidTrafficQueries() []invalidTrafficQuery {
+	return []invalidTrafficQuery{
 		{query: `stauts = 5`, message: `unknown field "stauts"`, position: 1},
 		{query: `   stauts = 5`, message: `unknown field "stauts"`, position: 4},
 		{query: `host = "a" AND stauts = 5`, message: `unknown field "stauts"`, position: 16},
@@ -276,6 +280,8 @@ func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
 		{query: `requested_at > 5`, message: `requested_at needs an RFC 3339 timestamp`, position: 16},
 		{query: `metadata = "x"`, message: `compare a metadata key`, position: 1},
 		{query: `metadata.k > 5`, message: `operator > is not supported on metadata keys`, position: 1},
+		{query: `metadata.k:"x"`, message: `operator : on a metadata key takes only *, as in metadata.k:*`, position: 1},
+		{query: `metadata.k:x*`, message: `operator : on a metadata key takes only *`, position: 1},
 		{query: `foo(bar)`, message: `unknown function "foo"`, position: 1},
 		{query: `(host = "a"`, message: `expected ")"`, position: 12},
 		{query: `host = "a")`, message: `unexpected ")"`, position: 11},
@@ -297,9 +303,17 @@ func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
 		{query: strings.Repeat(`"abc" AND `, 200) + `"abc"`, message: `query nests more than 200 conditions`, position: 1},
 		{query: strings.Repeat(`NOT (`, 200) + `"abc"` + strings.Repeat(`)`, 200), message: `query nests more than 200 conditions`, position: 1001},
 	}
-	for _, test := range tests {
+}
+
+func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
+	t.Parallel()
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	seedQueryPairs(t, repo, queryTestPairs()[:1])
+
+	for _, test := range invalidTrafficQueries() {
 		t.Run(test.query, func(t *testing.T) {
-			items, nextCursor, _, err := repo.ListTraffic(nil, 200, test.query)
+			items, nextCursor, _, err := listPage(repo, nil, 200, test.query)
 			var queryErr *domain.QueryError
 			if !errors.As(err, &queryErr) {
 				t.Fatalf("\nwanted:\n*domain.QueryError\ngot:\n%T %v", err, err)
@@ -330,4 +344,50 @@ func namesOf(ids map[string]uuid.UUID, got []uuid.UUID) string {
 		}
 	}
 	return b.String()
+}
+
+func TestTrafficRepo_ListTrafficQueryMetadataHasKey(t *testing.T) {
+	t.Parallel()
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	at := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
+	ids := seedQueryPairs(t, repo, []queryPair{
+		{name: "s", scheme: "https", method: "GET", host: "a.example.com", path: "/", requestedAt: at, statusCode: 200,
+			metadata: map[string]any{"highlight": "#EF4444"}},
+		{name: "n", scheme: "https", method: "GET", host: "a.example.com", path: "/", requestedAt: at, statusCode: 200,
+			metadata: map[string]any{"highlight": 3}},
+		// In flight: a null in the response metadata would delete the key
+		// (RFC 7396 merge).
+		{name: "z", scheme: "https", method: "GET", host: "a.example.com", path: "/", requestedAt: at,
+			metadata: map[string]any{"highlight": nil}},
+		{name: "o", scheme: "https", method: "GET", host: "a.example.com", path: "/", requestedAt: at, statusCode: 200,
+			metadata: map[string]any{"other": "highlight", "nested": map[string]any{"highlight": "x"}}},
+		{name: "e", scheme: "https", method: "GET", host: "a.example.com", path: "/", requestedAt: at},
+	})
+
+	tests := []struct {
+		query string
+		want  string // names, newest first
+	}{
+		{query: `metadata.highlight:*`, want: "zns"},
+		{query: `NOT metadata.highlight:*`, want: "eo"},
+		{query: `-metadata.highlight:*`, want: "eo"},
+		{query: `metadata.nested.highlight:*`, want: "o"},
+		{query: `metadata."highlight":*`, want: "zns"},
+	}
+	for _, test := range tests {
+		t.Run(test.query, func(t *testing.T) {
+			items, _, _, err := listPage(repo, nil, 200, test.query)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			want := make([]uuid.UUID, 0, len(test.want))
+			for _, name := range test.want {
+				want = append(want, ids[string(name)])
+			}
+			if got := idsOf(items); !reflect.DeepEqual(got, want) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", namesOf(ids, want), namesOf(ids, got))
+			}
+		})
+	}
 }

@@ -1,16 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi/wordlist"
@@ -121,23 +117,6 @@ var wordlistRemoveCmd = &cobra.Command{
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "wordlist %s removed\n", args[0])
 		return err
 	},
-}
-
-func runControlRequest(cmd *cobra.Command, method, path, operation string, body []byte) ([]byte, error) {
-	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-	var requestBody io.Reader
-	if body != nil {
-		requestBody = bytes.NewReader(body)
-	}
-	response, err := callInstance(ctx, method, path, "application/json", requestBody)
-	if err != nil {
-		return nil, err
-	}
-	if err := rejectInstanceStatus(operation, response, true); err != nil {
-		return nil, err
-	}
-	return response.Body, nil
 }
 
 func writeSizedList(body []byte, stdout io.Writer) error {

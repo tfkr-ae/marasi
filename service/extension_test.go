@@ -1263,6 +1263,9 @@ func assertExtensionLuaOwnsProject(t *testing.T, id uuid.UUID, httpsNested bool,
 		t.Fatal("timed out waiting for extension lua to send")
 	}
 
+	// Open prepares the target before it pauses work, so the deadline
+	// starts once the target is prepared (see awaitTargetPrepared).
+	waitPrepared := awaitTargetPrepared(t, lifecycle)
 	openDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		request := httptest.NewRequest(http.MethodPost, "/project/open", strings.NewReader(projectOpenBody(target)))
@@ -1270,6 +1273,7 @@ func assertExtensionLuaOwnsProject(t *testing.T, id uuid.UUID, httpsNested bool,
 		server.ServeHTTP(response, request)
 		openDone <- response
 	}()
+	waitPrepared()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		select {

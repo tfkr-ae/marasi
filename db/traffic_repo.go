@@ -1,10 +1,10 @@
 package db
 
 import (
+	"cmp"
+	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,13 +20,14 @@ var _ domain.TrafficRepository = (*Repository)(nil)
 // and combines both request and response data into a single struct for database operations.
 type dbRequestResponse struct {
 	// Request
-	ID          uuid.UUID `db:"id"`
-	Scheme      string    `db:"scheme"`
-	Method      string    `db:"method"`
-	Host        string    `db:"host"`
-	Path        string    `db:"path"`
-	RequestRaw  []byte    `db:"request_raw"`
-	RequestedAt time.Time `db:"requested_at"`
+	ID          uuid.UUID     `db:"id"`
+	Number      sql.NullInt64 `db:"number"`
+	Scheme      string        `db:"scheme"`
+	Method      string        `db:"method"`
+	Host        string        `db:"host"`
+	Path        string        `db:"path"`
+	RequestRaw  []byte        `db:"request_raw"`
+	RequestedAt time.Time     `db:"requested_at"`
 
 	// Response
 	// TODO: DB will set default values for these columns so they will not be "null". Need to revist and either remove that DB restriction / keep these as normal fields
@@ -38,8 +39,10 @@ type dbRequestResponse struct {
 	RespondedAt sql.NullTime   `db:"responded_at"`
 
 	// Common
-	Metadata Metadata       `db:"metadata"`
-	Note     sql.NullString `db:"note"`
+	Metadata  pairMetadata   `db:"metadata"`
+	Note      sql.NullString `db:"note"`
+	Highlight sql.NullInt64  `db:"highlight"`
+	dbPrettified
 }
 
 // dbRequestResponseSummary represents a summarized version of a request and response entry
@@ -47,12 +50,13 @@ type dbRequestResponse struct {
 // It uses sql.Null* types for potentially absent response fields, similar to dbRequestResponse.
 type dbRequestResponseSummary struct {
 	// Request
-	ID          uuid.UUID `db:"id"`
-	Scheme      string    `db:"scheme"`
-	Method      string    `db:"method"`
-	Host        string    `db:"host"`
-	Path        string    `db:"path"`
-	RequestedAt time.Time `db:"requested_at"`
+	ID          uuid.UUID     `db:"id"`
+	Number      sql.NullInt64 `db:"number"`
+	Scheme      string        `db:"scheme"`
+	Method      string        `db:"method"`
+	Host        string        `db:"host"`
+	Path        string        `db:"path"`
+	RequestedAt time.Time     `db:"requested_at"`
 
 	// Response
 	Status      sql.NullString `db:"status"`
@@ -62,7 +66,8 @@ type dbRequestResponseSummary struct {
 	RespondedAt sql.NullTime   `db:"responded_at"`
 
 	// Common
-	Metadata Metadata `db:"metadata"`
+	Metadata  pairMetadata  `db:"metadata"`
+	Highlight sql.NullInt64 `db:"highlight"`
 }
 
 type dbNoteSummary struct {
@@ -80,7 +85,10 @@ func fromDomainProxyRequest(preq *domain.ProxyRequest) *dbRequestResponse {
 		Path:        preq.Path,
 		RequestRaw:  preq.Raw,
 		RequestedAt: preq.RequestedAt,
-		Metadata:    Metadata(preq.Metadata),
+		Metadata:    pairMetadata(preq.Metadata),
+		dbPrettified: dbPrettified{Request: sql.NullString{
+			String: prettifiedCopy(preq.Prettified, preq.Metadata, prettifiedRequestKey),
+		}},
 	}
 }
 
@@ -88,6 +96,7 @@ func fromDomainProxyRequest(preq *domain.ProxyRequest) *dbRequestResponse {
 func toDomainProxyRequest(dbReqRes *dbRequestResponse) *domain.ProxyRequest {
 	return &domain.ProxyRequest{
 		ID:          dbReqRes.ID,
+		Number:      dbReqRes.Number.Int64,
 		Scheme:      dbReqRes.Scheme,
 		Method:      dbReqRes.Method,
 		Host:        dbReqRes.Host,
@@ -95,6 +104,7 @@ func toDomainProxyRequest(dbReqRes *dbRequestResponse) *domain.ProxyRequest {
 		Raw:         dbReqRes.RequestRaw,
 		RequestedAt: dbReqRes.RequestedAt,
 		Metadata:    map[string]any(dbReqRes.Metadata),
+		Prettified:  dbReqRes.dbPrettified.Request.String,
 	}
 }
 
@@ -116,15 +126,20 @@ func fromDomainProxyResponse(presp *domain.ProxyResponse) *dbRequestResponse {
 			String: presp.ContentType,
 			Valid:  presp.ContentType != "",
 		},
+		// A response with no Content-Length stores 0, so it sorts as 0
+		// (ADR-0041). Only a pair with no response has a NULL length.
 		Length: sql.NullString{
-			String: presp.Length,
-			Valid:  presp.Length != "",
+			String: cmp.Or(presp.Length, "0"),
+			Valid:  true,
 		},
 		RespondedAt: sql.NullTime{
 			Time:  presp.RespondedAt,
 			Valid: !presp.RespondedAt.IsZero(),
 		},
-		Metadata: Metadata(presp.Metadata),
+		Metadata: pairMetadata(presp.Metadata),
+		dbPrettified: dbPrettified{Response: sql.NullString{
+			String: prettifiedCopy(presp.Prettified, presp.Metadata, prettifiedResponseKey),
+		}},
 	}
 }
 
@@ -132,9 +147,10 @@ func fromDomainProxyResponse(presp *domain.ProxyResponse) *dbRequestResponse {
 // It safely extracts values from sql.Null* types.
 func toDomainProxyResponse(dbReqRes *dbRequestResponse) *domain.ProxyResponse {
 	resp := &domain.ProxyResponse{
-		ID:       dbReqRes.ID,
-		Raw:      dbReqRes.ResponseRaw,
-		Metadata: map[string]any(dbReqRes.Metadata),
+		ID:         dbReqRes.ID,
+		Raw:        dbReqRes.ResponseRaw,
+		Metadata:   map[string]any(dbReqRes.Metadata),
+		Prettified: dbReqRes.dbPrettified.Response.String,
 	}
 
 	if dbReqRes.Status.Valid {
@@ -149,9 +165,9 @@ func toDomainProxyResponse(dbReqRes *dbRequestResponse) *domain.ProxyResponse {
 		resp.ContentType = dbReqRes.ContentType.String
 	}
 
-	if dbReqRes.Length.Valid {
-		resp.Length = dbReqRes.Length.String
-	}
+	// A pair with no response stores a NULL length (ADR-0041) and reads
+	// as "0", as it did when the column defaulted to '0'.
+	resp.Length = cmp.Or(dbReqRes.Length.String, "0")
 
 	if dbReqRes.RespondedAt.Valid {
 		resp.RespondedAt = dbReqRes.RespondedAt.Time
@@ -169,11 +185,16 @@ func toDomainRequestResponseRow(dbReqRes *dbRequestResponse) *domain.RequestResp
 		Request:  *req,
 		Response: *resp,
 		Metadata: map[string]any(dbReqRes.Metadata),
+		Prettified: domain.Prettified{
+			Request:  req.Prettified,
+			Response: resp.Prettified,
+		},
 	}
 
 	if dbReqRes.Note.Valid {
 		row.Note = dbReqRes.Note.String
 	}
+	row.Highlight = highlightOf(dbReqRes.Highlight)
 
 	return row
 }
@@ -183,6 +204,7 @@ func toDomainRequestResponseRow(dbReqRes *dbRequestResponse) *domain.RequestResp
 func toDomainRequestResponseSummary(dbSummary *dbRequestResponseSummary) *domain.RequestResponseSummary {
 	reqResSummary := &domain.RequestResponseSummary{
 		ID:          dbSummary.ID,
+		Number:      dbSummary.Number.Int64,
 		Scheme:      dbSummary.Scheme,
 		Method:      dbSummary.Method,
 		Host:        dbSummary.Host,
@@ -203,36 +225,77 @@ func toDomainRequestResponseSummary(dbSummary *dbRequestResponseSummary) *domain
 		reqResSummary.ContentType = dbSummary.ContentType.String
 	}
 
-	if dbSummary.Length.Valid {
-		reqResSummary.Length = dbSummary.Length.String
-	}
+	// A pair with no response stores a NULL length (ADR-0041) and reads
+	// as "0", as it did when the column defaulted to '0'.
+	reqResSummary.Length = cmp.Or(dbSummary.Length.String, "0")
 
 	if dbSummary.RespondedAt.Valid {
 		reqResSummary.RespondedAt = dbSummary.RespondedAt.Time
 	}
+	reqResSummary.Highlight = highlightOf(dbSummary.Highlight)
 
 	return reqResSummary
 }
 
+// highlightOf returns a read highlight, or nil when the pair has none.
+func highlightOf(h sql.NullInt64) *int {
+	if !h.Valid {
+		return nil
+	}
+	value := int(h.Int64)
+	return &value
+}
+
 // InsertRequest inserts a new domain.ProxyRequest into the database.
+// A request with no Number takes the next pair number, and req.Number is
+// set to it.
 func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
+	if req.Number == 0 {
+		req.Number = repo.NextPairNumber()
+	}
 	dbRequest := fromDomainProxyRequest(req)
-	query := `INSERT INTO request(id, scheme, method, host, path, request_raw, requested_at, metadata)
-			  VALUES(:id, :scheme, :method, :host, :path, :request_raw, :requested_at, :metadata)`
+	// length is NULL until the response arrives (ADR-0041); the column's
+	// '0' default predates the length sort.
+	query := `INSERT INTO request(id, scheme, method, host, path, request_raw, requested_at, metadata, length)
+			  VALUES(:id, :scheme, :method, :host, :path, :request_raw, :requested_at, :metadata, NULL)`
 	err := repo.inTx(func(tx *sqlx.Tx) error {
 		if _, err := tx.NamedExec(query, dbRequest); err != nil {
 			return err
 		}
-		return indexPair(tx, req.ID)
+		if err := insertPairNumber(tx, req.ID, req.Number); err != nil {
+			return err
+		}
+		if _, ok := req.Metadata[interceptedKey]; ok {
+			if err := syncIntercepted(tx, req.ID); err != nil {
+				return err
+			}
+		}
+		if err := advanceHighWater(tx, req.ID); err != nil {
+			return err
+		}
+		if err := savePrettified(tx, req.ID, "request", dbRequest.dbPrettified.Request.String); err != nil {
+			return err
+		}
+		if err := linkPairToSitemap(tx, req.ID, req.Scheme, req.Host, req.Path, sitemapBucket{}); err != nil {
+			return err
+		}
+		return queueIndex(tx, req.ID)
 	})
 	if err != nil {
 		return fmt.Errorf("inserting request %s : %w", req.ID, err)
 	}
+	repo.indexQueued()
+	repo.pairCaptured()
 	return nil
 }
 
 // InsertResponse updates an existing request entry with response details.
 // It expects a domain.ProxyResponse and uses its ID to locate and update the corresponding row.
+// A pair that no longer exists, deleted while in flight, gets no row and
+// returns an error wrapping domain.ErrPairNotFound.
+// The response metadata is merged into the stored metadata with json_patch
+// (RFC 7396), so a key set while the pair was in flight survives; a null
+// value in the response metadata deletes its key.
 func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 	dbResponse := fromDomainProxyResponse(resp)
 	query := `UPDATE request SET
@@ -242,9 +305,18 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 				content_type = :content_type,
 				length = :length,
 				responded_at = :responded_at,
-				metadata = :metadata
+				metadata = json_patch(coalesce(metadata, '{}'), :metadata)
 			  WHERE id = :id`
 	err := repo.inTx(func(tx *sqlx.Tx) error {
+		// Copies an older binary left in the stored metadata move out
+		// first, so the merge below cannot keep them there.
+		if _, err := movePrettified(tx, resp.ID); err != nil {
+			return err
+		}
+		node, before, err := sitemapState(tx, resp.ID)
+		if err != nil {
+			return err
+		}
 		result, err := tx.NamedExec(query, dbResponse)
 		if err != nil {
 			return err
@@ -254,13 +326,33 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 			return fmt.Errorf("checking rows affected: %w", err)
 		}
 		if rowsAffected == 0 {
-			return errors.New("no request found to update")
+			return domain.ErrPairNotFound
 		}
-		return indexPair(tx, resp.ID)
+		if err := savePrettified(tx, resp.ID, "response", dbResponse.dbPrettified.Response.String); err != nil {
+			return err
+		}
+		// Sorted walks started before this write keep the pair with the
+		// pairs that have no value (ADR-0041).
+		if _, err := tx.Exec(`INSERT INTO pair_response_order (request_id) VALUES (?)`, resp.ID); err != nil {
+			return fmt.Errorf("recording the response order: %w", err)
+		}
+		if _, ok := resp.Metadata[interceptedKey]; ok {
+			if err := syncIntercepted(tx, resp.ID); err != nil {
+				return err
+			}
+		}
+		if node.Valid {
+			after := bucketOf(dbResponse.ContentType, dbResponse.StatusCode)
+			if err := rebucketInSitemap(tx, node.Int64, before, after); err != nil {
+				return err
+			}
+		}
+		return queueIndex(tx, resp.ID)
 	})
 	if err != nil {
 		return fmt.Errorf("inserting response %s : %w", resp.ID, err)
 	}
+	repo.indexQueued()
 	return nil
 }
 
@@ -268,9 +360,11 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 // It returns a domain.ProxyResponse or an error if the ID is not found.
 func (repo *Repository) GetResponse(id uuid.UUID) (*domain.ProxyResponse, error) {
 	var dbRow dbRequestResponse
-	query := `SELECT id, status, status_code, response_raw, content_type, length, responded_at, metadata
-		      FROM request
-			  WHERE id = ?`
+	query := `SELECT r.id, r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at, r.metadata,
+			  ` + prettifiedColumns + `
+			  FROM request r
+			  LEFT JOIN pair_prettified p ON p.request_id = r.id
+			  WHERE r.id = ?`
 
 	err := repo.dbConn.Get(&dbRow, query, id)
 	if err != nil {
@@ -287,9 +381,12 @@ func (repo *Repository) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResp
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.request_raw, r.requested_at,
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
-			  r.metadata, n.note
+			  r.metadata, n.note, h.highlight, pn.number, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
+			  LEFT JOIN pair_highlight h ON h.request_id = r.id
+			  LEFT JOIN pair_number pn ON pn.request_id = r.id
+			  LEFT JOIN pair_prettified p ON p.request_id = r.id
 			  WHERE r.id = ?`
 
 	err := repo.dbConn.Get(&dbRow, query, id)
@@ -310,9 +407,12 @@ func (repo *Repository) GetRequestResponseRows(ids []uuid.UUID) ([]*domain.Reque
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.request_raw, r.requested_at,
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
-			  r.metadata, n.note
+			  r.metadata, n.note, h.highlight, pn.number, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
+			  LEFT JOIN pair_highlight h ON h.request_id = r.id
+			  LEFT JOIN pair_number pn ON pn.request_id = r.id
+			  LEFT JOIN pair_prettified p ON p.request_id = r.id
 			  WHERE r.id IN (?)`
 
 	query, args, err := sqlx.In(query, ids)
@@ -344,14 +444,15 @@ func (repo *Repository) GetRequestResponseRows(ids []uuid.UUID) ([]*domain.Reque
 }
 
 // GetRequestResponseSummary retrieves a list of summarized request-response entries.
-// It excludes raw request/response bodies and prettified metadata for efficiency.
+// It excludes raw request/response bodies and prettified copies for efficiency.
 func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSummary, error) {
 	var dbSummary []*dbRequestResponseSummary
 	query := `SELECT
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
-			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
-			  FROM request
+			  metadata,
+			  pair_highlight.highlight, pair_number.number
+			  FROM request` + highlightJoin + numberJoin + `
 			  ORDER BY id ASC`
 
 	err := repo.dbConn.Select(&dbSummary, query)
@@ -366,70 +467,9 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 	return reqResSummary, nil
 }
 
-// ListTraffic returns a newest-first page of summaries older than cursor that
-// match the query, and whether every pair is in the traffic index. An invalid
-// query returns a *domain.QueryError.
-func (repo *Repository) ListTraffic(cursor *uuid.UUID, limit int, trafficQuery string) ([]*domain.RequestResponseSummary, *uuid.UUID, bool, error) {
-	translated, err := translateTrafficQuery(trafficQuery)
-	if err != nil {
-		return nil, nil, false, err
-	}
-
-	query := `SELECT
-			  id, scheme, method, host, path, requested_at,
-			  status, status_code, content_type, length, responded_at,
-			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
-			  FROM request`
-	args := make([]any, 0, len(translated.args)+2)
-	var conditions []string
-	if cursor != nil {
-		conditions = append(conditions, `id < ?`)
-		args = append(args, *cursor)
-	}
-	if translated.where != "" {
-		conditions = append(conditions, `(`+translated.where+`)`)
-		args = append(args, translated.args...)
-	}
-	if len(conditions) > 0 {
-		query += ` WHERE ` + strings.Join(conditions, ` AND `)
-	}
-	query += ` ORDER BY id DESC LIMIT ?`
-	args = append(args, limit+1)
-
-	var dbSummary []*dbRequestResponseSummary
-	var indexComplete bool
-	err = repo.inTx(func(tx *sqlx.Tx) error {
-		var err error
-		if indexComplete, err = repo.indexComplete(tx); err != nil {
-			return err
-		}
-		return tx.Select(&dbSummary, query, args...)
-	})
-	if err != nil {
-		return nil, nil, false, fmt.Errorf("listing traffic: %w", err)
-	}
-
-	hasMore := len(dbSummary) > limit
-	if hasMore {
-		dbSummary = dbSummary[:limit]
-	}
-
-	items := make([]*domain.RequestResponseSummary, len(dbSummary))
-	for i, row := range dbSummary {
-		items[i] = toDomainRequestResponseSummary(row)
-	}
-
-	var nextCursor *uuid.UUID
-	if hasMore {
-		id := items[len(items)-1].ID
-		nextCursor = &id
-	}
-	return items, nextCursor, indexComplete, nil
-}
-
 // GetMetadata retrieves the metadata map for a specific request ID.
 func (repo *Repository) GetMetadata(id uuid.UUID) (map[string]any, error) {
-	var dbMeta Metadata
+	var dbMeta pairMetadata
 	query := `SELECT metadata FROM request WHERE id = ?`
 
 	err := repo.dbConn.Get(&dbMeta, query, id)
@@ -443,10 +483,15 @@ func (repo *Repository) GetMetadata(id uuid.UUID) (map[string]any, error) {
 // UpdateMetadata updates the metadata for one or more requests identified by their IDs.
 // All requests and their index rows are updated in one transaction.
 func (repo *Repository) UpdateMetadata(metadata map[string]any, ids ...uuid.UUID) error {
-	dbMeta := Metadata(metadata)
+	dbMeta := pairMetadata(metadata)
 	query := `UPDATE request SET metadata = ? WHERE id = ?`
 
 	return repo.inTx(func(tx *sqlx.Tx) error {
+		// The new metadata replaces the old, so copies an older binary left
+		// there move out first.
+		if _, err := movePrettified(tx, ids...); err != nil {
+			return err
+		}
 		for _, id := range ids {
 			result, err := tx.Exec(query, dbMeta, id)
 			if err != nil {
@@ -460,8 +505,11 @@ func (repo *Repository) UpdateMetadata(metadata map[string]any, ids ...uuid.UUID
 				// No such request: nothing changed, so there is nothing to index.
 				continue
 			}
-			if err := indexPair(tx, id); err != nil {
+			if err := indexAnnotations(tx, id); err != nil {
 				return fmt.Errorf("updating metadata %v for %v : %w", dbMeta, id, err)
+			}
+			if err := syncIntercepted(tx, id); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -484,7 +532,7 @@ func (repo *Repository) GetNote(requestID uuid.UUID) (string, error) {
 
 // UpdateNote creates or updates a user-created note for a specific request ID.
 // If a note already exists for the request, it will be updated; otherwise, a new note will be inserted.
-// The pair's index row is rebuilt in the same transaction.
+// The pair's annotation index row is rebuilt in the same transaction.
 func (repo *Repository) UpdateNote(requestID uuid.UUID, note string) error {
 	query := `INSERT INTO notes (request_id, note, created_at)
               VALUES (?, ?, CURRENT_TIMESTAMP)
@@ -497,7 +545,7 @@ func (repo *Repository) UpdateNote(requestID uuid.UUID, note string) error {
 		if _, err := tx.Exec(query, requestID, note); err != nil {
 			return err
 		}
-		return indexPair(tx, requestID)
+		return indexAnnotations(tx, requestID)
 	})
 	if err != nil {
 		return fmt.Errorf("updating note for request %s: %w", requestID, err)
@@ -506,7 +554,7 @@ func (repo *Repository) UpdateNote(requestID uuid.UUID, note string) error {
 }
 
 // DeleteNote removes the note row for a request ID and rebuilds the pair's
-// index row in the same transaction.
+// annotation index row in the same transaction.
 func (repo *Repository) DeleteNote(requestID uuid.UUID) error {
 	err := repo.inTx(func(tx *sqlx.Tx) error {
 		result, err := tx.Exec(`DELETE FROM notes WHERE request_id = ?`, requestID)
@@ -520,7 +568,7 @@ func (repo *Repository) DeleteNote(requestID uuid.UUID) error {
 		if rowsAffected == 0 {
 			return sql.ErrNoRows
 		}
-		return indexPair(tx, requestID)
+		return indexAnnotations(tx, requestID)
 	})
 	if err != nil {
 		return fmt.Errorf("deleting note for request %s: %w", requestID, err)
@@ -530,7 +578,13 @@ func (repo *Repository) DeleteNote(requestID uuid.UUID) error {
 
 // inTx runs fn in a transaction and commits when fn succeeds.
 func (repo *Repository) inTx(fn func(tx *sqlx.Tx) error) error {
-	tx, err := repo.dbConn.Beginx()
+	return repo.inTxContext(context.Background(), fn)
+}
+
+// inTxContext runs fn in a transaction bound to ctx: when ctx ends, the
+// statements fn runs with ctx are interrupted and the transaction rolls back.
+func (repo *Repository) inTxContext(ctx context.Context, fn func(tx *sqlx.Tx) error) error {
+	tx, err := repo.dbConn.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -546,10 +600,12 @@ func (repo *Repository) ListNotes(cursor *uuid.UUID, limit int) ([]*domain.Reque
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
-			  json_remove(r.metadata, '$.prettified-request', '$.prettified-response') AS metadata,
-			  n.note
+			  r.metadata,
+			  n.note, h.highlight, pn.number
 			  FROM request r
 			  INNER JOIN notes n ON r.id = n.request_id
+			  LEFT JOIN pair_highlight h ON h.request_id = r.id
+			  LEFT JOIN pair_number pn ON pn.request_id = r.id
 			  WHERE n.note IS NOT NULL AND n.note != ''`
 	args := make([]any, 0, 2)
 	if cursor != nil {
@@ -591,8 +647,9 @@ func (repo *Repository) SearchByMetadata(path string, value any) ([]*domain.Requ
 	query := `SELECT
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
-			  json_remove(metadata, '$.prettified-request', '$.prettified-response') AS metadata
-			  FROM request
+			  metadata,
+			  pair_highlight.highlight, pair_number.number
+			  FROM request` + highlightJoin + numberJoin + `
 			  WHERE json_extract(metadata, ?) = ?
 			  ORDER BY id ASC`
 
@@ -609,27 +666,51 @@ func (repo *Repository) SearchByMetadata(path string, value any) ([]*domain.Requ
 }
 
 // CountContentTypes returns every distinct response content type with its row
-// count. NULL and empty content types are grouped under "".
-func (repo *Repository) CountContentTypes() ([]*domain.ContentTypeCount, error) {
+// count. NULL and empty content types are grouped under "". Once the sitemap
+// job is complete the counts are the sums of the origins' sitemap buckets, one
+// range read; until then they are grouped from the pairs themselves.
+func (repo *Repository) CountContentTypes() (domain.ContentTypeCounts, error) {
+	return repo.CountContentTypesContext(context.Background())
+}
+
+// CountContentTypesContext is CountContentTypes for a read that stops when
+// ctx ends.
+func (repo *Repository) CountContentTypesContext(ctx context.Context) (domain.ContentTypeCounts, error) {
 	var rows []struct {
 		ContentType string `db:"content_type"`
 		Count       int    `db:"count"`
 	}
-	query := `SELECT
+	result := domain.ContentTypeCounts{Counts: []*domain.ContentTypeCount{}}
+	err := repo.inTxContext(ctx, func(tx *sqlx.Tx) error {
+		job, err := loadJob(tx, domain.JobSitemap)
+		if err != nil {
+			return fmt.Errorf("reading the sitemap job: %w", err)
+		}
+		result.Complete = map[domain.JobName]bool{domain.JobSitemap: job.Complete}
+		// Origins have parent 0 in sitemap_count, and their buckets hold
+		// every linked pair.
+		query := `SELECT content_type, sum(pairs) AS count
+			  FROM sitemap_count
+			  WHERE parent_id = 0
+			  GROUP BY content_type
+			  HAVING count > 0
+			  ORDER BY count DESC, content_type ASC`
+		if !job.Complete {
+			query = `SELECT
 			  COALESCE(content_type, '') AS content_type,
 			  COUNT(*) AS count
 			  FROM request
 			  GROUP BY COALESCE(content_type, '')
 			  ORDER BY count DESC, content_type ASC`
-
-	err := repo.dbConn.Select(&rows, query)
+		}
+		return tx.SelectContext(ctx, &rows, query)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("counting content types: %w", err)
+		return domain.ContentTypeCounts{}, fmt.Errorf("counting content types: %w", err)
 	}
 
-	counts := make([]*domain.ContentTypeCount, len(rows))
-	for i, row := range rows {
-		counts[i] = &domain.ContentTypeCount{ContentType: row.ContentType, Count: row.Count}
+	for _, row := range rows {
+		result.Counts = append(result.Counts, &domain.ContentTypeCount{ContentType: row.ContentType, Count: row.Count})
 	}
-	return counts, nil
+	return result, nil
 }

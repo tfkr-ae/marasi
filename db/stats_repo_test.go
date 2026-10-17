@@ -5,6 +5,7 @@ import (
 )
 
 func TestStatsRepo_CountRows(t *testing.T) {
+	t.Parallel()
 	t.Run("should return 0 when no requests exist", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -40,6 +41,7 @@ func TestStatsRepo_CountRows(t *testing.T) {
 }
 
 func TestStatsRepo_CountNotes(t *testing.T) {
+	t.Parallel()
 	t.Run("should return 0 if there are no notes", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -88,6 +90,7 @@ func TestStatsRepo_CountNotes(t *testing.T) {
 }
 
 func TestStatsRepo_CountLaunchpads(t *testing.T) {
+	t.Parallel()
 	t.Run("should return 0 when there are no launchpads", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -127,6 +130,7 @@ func TestStatsRepo_CountLaunchpads(t *testing.T) {
 }
 
 func TestStatsRepo_CountIntercepted(t *testing.T) {
+	t.Parallel()
 	t.Run("should return 0 when no intercepted requests exist", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()

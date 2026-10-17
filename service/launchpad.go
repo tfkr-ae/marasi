@@ -33,6 +33,9 @@ type launchpadList struct {
 type launchpadDetail struct {
 	launchpadSummary
 	Items []trafficSummary `json:"items"`
+	Index trafficIndex     `json:"index"`
+	// Sitemap is set when the query has a sitemap condition.
+	Sitemap *jobCompleteness `json:"sitemap,omitempty"`
 }
 
 type launchpadMutation struct {
@@ -110,7 +113,7 @@ func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, e
 			writeLaunchpadRepositoryError(w, r, err)
 			return
 		}
-		members, err := repo.GetLaunchpadRequests(id, r.URL.Query().Get("q"))
+		members, complete, err := repo.GetLaunchpadRequests(id, r.URL.Query().Get("q"), r.URL.Query()["exclude"], r.URL.Query().Get("order_by"))
 		var queryErr *domain.QueryError
 		if errors.As(err, &queryErr) {
 			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
@@ -123,6 +126,8 @@ func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, e
 		writeJSON(w, r, http.StatusOK, launchpadDetail{
 			launchpadSummary: launchpadSummaryFromDomain(launchpad),
 			Items:            trafficListFromSummaries(members, nil).Items,
+			Index:            trafficIndex{Complete: searchComplete(complete)},
+			Sitemap:          sitemapCompleteness(complete),
 		})
 	})
 
@@ -160,6 +165,34 @@ func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, e
 		}
 		response := launchpadLink{LaunchpadID: id, RequestID: requestID}
 		events.publish("launchpad.linked", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
+
+	mux.HandleFunc("DELETE /launchpad/{id}/link/{request_id}", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseLaunchpadID(w, r)
+		if !ok {
+			return
+		}
+		requestID, err := uuid.Parse(r.PathValue("request_id"))
+		if err != nil {
+			writeLaunchpadError(w, r, http.StatusBadRequest, "bad_request")
+			return
+		}
+		repo, err := proxy.GetLaunchpadRepo()
+		if err != nil {
+			writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		if _, err := repo.GetLaunchpad(id); err != nil {
+			writeLaunchpadRepositoryError(w, r, err)
+			return
+		}
+		if err := repo.UnlinkRequestFromLaunchpad(requestID, id); err != nil {
+			writeLaunchpadRepositoryError(w, r, err)
+			return
+		}
+		response := launchpadLink{LaunchpadID: id, RequestID: requestID}
+		events.publish("launchpad.unlinked", response)
 		writeJSON(w, r, http.StatusOK, response)
 	})
 
@@ -327,6 +360,10 @@ func writeLaunchpadError(w http.ResponseWriter, r *http.Request, status int, cod
 
 func writeLaunchpadRepositoryError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, domain.ErrLaunchpadNotFound) {
+		writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
+		return
+	}
+	if errors.Is(err, domain.ErrLaunchpadNotLinked) {
 		writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
 		return
 	}

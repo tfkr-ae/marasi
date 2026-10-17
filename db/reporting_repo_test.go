@@ -11,6 +11,7 @@ import (
 )
 
 func TestReportingRepo_LinkedTrafficSummaries(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -70,6 +71,7 @@ func TestReportingRepo_LinkedTrafficSummaries(t *testing.T) {
 }
 
 func TestReportingRepo_SaveTestCase(t *testing.T) {
+	t.Parallel()
 	t.Run("should insert a new test case with the correct fields", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -405,6 +407,7 @@ func TestReportingRepo_SaveTestCase(t *testing.T) {
 }
 
 func TestReportingRepo_SaveFinding(t *testing.T) {
+	t.Parallel()
 	t.Run("should insert a new finding with the correct fields", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -947,6 +950,7 @@ func TestReportingRepo_SaveFinding(t *testing.T) {
 }
 
 func TestReportingRepo_GetTestCase(t *testing.T) {
+	t.Parallel()
 	t.Run("should not return a non-existant test case", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -968,6 +972,7 @@ func TestReportingRepo_GetTestCase(t *testing.T) {
 }
 
 func TestReportingRepo_GetFinding(t *testing.T) {
+	t.Parallel()
 	t.Run("should not return a non-existant finding", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -1021,6 +1026,7 @@ func TestReportingRepo_GetFinding(t *testing.T) {
 }
 
 func TestReportingRepo_ListTestCases(t *testing.T) {
+	t.Parallel()
 	t.Run("should return an empty list when no test cases exist", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -1154,6 +1160,7 @@ func TestReportingRepo_ListTestCases(t *testing.T) {
 }
 
 func TestReportingRepo_ListFindings(t *testing.T) {
+	t.Parallel()
 	t.Run("should return all saved findings", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -1273,6 +1280,7 @@ func TestReportingRepo_ListFindings(t *testing.T) {
 }
 
 func TestReportingRepo_LinkRequestToTestCase(t *testing.T) {
+	t.Parallel()
 	t.Run("should successfully link a request to an existing test case", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -1374,6 +1382,7 @@ func TestReportingRepo_LinkRequestToTestCase(t *testing.T) {
 }
 
 func TestReportingRepo_UnlinkRequestFromTestCase(t *testing.T) {
+	t.Parallel()
 	t.Run("should successfully remove an existing request link", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -1431,6 +1440,7 @@ func TestReportingRepo_UnlinkRequestFromTestCase(t *testing.T) {
 }
 
 func TestReportingRepo_LinkRequestToFinding(t *testing.T) {
+	t.Parallel()
 	t.Run("should successfully link a request to an existing finding", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -1568,6 +1578,7 @@ func TestReportingRepo_LinkRequestToFinding(t *testing.T) {
 }
 
 func TestReportingRepo_UnlinkRequestFromFinding(t *testing.T) {
+	t.Parallel()
 	t.Run("should successfully remove an existing request link", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -1643,6 +1654,7 @@ func TestReportingRepo_UnlinkRequestFromFinding(t *testing.T) {
 }
 
 func TestReportingRepo_SaveArtifact(t *testing.T) {
+	t.Parallel()
 	t.Run("should successfully insert an artifact linked to a test case", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -1869,6 +1881,7 @@ func TestReportingRepo_SaveArtifact(t *testing.T) {
 }
 
 func TestReportingRepo_DeleteTestCase(t *testing.T) {
+	t.Parallel()
 	t.Run("should successfully delete an existing test case", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -2054,6 +2067,7 @@ func TestReportingRepo_DeleteTestCase(t *testing.T) {
 	})
 }
 func TestReportingRepo_DeleteFinding(t *testing.T) {
+	t.Parallel()
 	t.Run("should successfully delete an existing finding", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()

@@ -11,6 +11,7 @@ import (
 )
 
 func TestLaunchpadRepo_GetLaunchpads(t *testing.T) {
+	t.Parallel()
 	t.Run("should return 0 launchpads if none are configured", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -60,6 +61,7 @@ func TestLaunchpadRepo_GetLaunchpads(t *testing.T) {
 }
 
 func TestLaunchpadRepo_GetLaunchpad(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -84,6 +86,7 @@ func TestLaunchpadRepo_GetLaunchpad(t *testing.T) {
 }
 
 func TestLaunchpadRepo_CreateLaunchpad(t *testing.T) {
+	t.Parallel()
 	t.Run("should create a launchpad", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -122,6 +125,7 @@ func TestLaunchpadRepo_CreateLaunchpad(t *testing.T) {
 }
 
 func TestLaunchpadRepo_UpdateLaunchpad(t *testing.T) {
+	t.Parallel()
 	t.Run("should update an existing launchpad", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -265,6 +269,7 @@ func TestLaunchpadRepo_UpdateLaunchpad(t *testing.T) {
 	})
 }
 func TestLaunchpadRepo_DeleteLaunchpad(t *testing.T) {
+	t.Parallel()
 	t.Run("should delete an existing launchpad", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -307,6 +312,7 @@ func TestLaunchpadRepo_DeleteLaunchpad(t *testing.T) {
 }
 
 func TestLaunchpadRepo_GetLaunchpadRequests(t *testing.T) {
+	t.Parallel()
 	t.Run("should return an empty slice if no requests are linked", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -318,7 +324,7 @@ func TestLaunchpadRepo_GetLaunchpadRequests(t *testing.T) {
 
 		_ = testRequest(t, repo, nil)
 
-		requests, err := repo.GetLaunchpadRequests(launchpadID, "")
+		requests, _, err := repo.GetLaunchpadRequests(launchpadID, "", nil, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -363,7 +369,7 @@ func TestLaunchpadRepo_GetLaunchpadRequests(t *testing.T) {
 			t.Fatalf("linking req4 to launchpad 2: %v", err)
 		}
 
-		got, err := repo.GetLaunchpadRequests(launchpadID, "")
+		got, _, err := repo.GetLaunchpadRequests(launchpadID, "", nil, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -395,7 +401,7 @@ func TestLaunchpadRepo_GetLaunchpadRequests(t *testing.T) {
 
 		nonExistentID := uuid.MustParse("01937f5d-351a-7e68-936d-61a7a25661a3")
 
-		requests, err := repo.GetLaunchpadRequests(nonExistentID, "")
+		requests, _, err := repo.GetLaunchpadRequests(nonExistentID, "", nil, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -407,6 +413,7 @@ func TestLaunchpadRepo_GetLaunchpadRequests(t *testing.T) {
 }
 
 func TestLaunchpadRepo_LinkRequestToLaunchpad(t *testing.T) {
+	t.Parallel()
 	t.Run("should link a request to launchpad", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -423,7 +430,7 @@ func TestLaunchpadRepo_LinkRequestToLaunchpad(t *testing.T) {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 
-		requests, err := repo.GetLaunchpadRequests(launchpadID, "")
+		requests, _, err := repo.GetLaunchpadRequests(launchpadID, "", nil, "")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -517,7 +524,7 @@ func TestLaunchpadRepo_LinkRequestToLaunchpad(t *testing.T) {
 		}
 
 		for _, launchpadID := range []uuid.UUID{first, second} {
-			members, err := repo.GetLaunchpadRequests(launchpadID, "")
+			members, _, err := repo.GetLaunchpadRequests(launchpadID, "", nil, "")
 			if err != nil {
 				t.Fatalf("getting members for %s: %v", launchpadID, err)
 			}

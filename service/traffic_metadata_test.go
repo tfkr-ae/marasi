@@ -2,6 +2,7 @@ package service
 
 import (
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -83,7 +84,7 @@ func TestTrafficMetadataControlAPI(t *testing.T) {
 		}
 	})
 
-	t.Run("should overlay prettified bodies and recompute has_note", func(t *testing.T) {
+	t.Run("should drop prettified keys the client sends and recompute has_note", func(t *testing.T) {
 		repo := &stubTrafficRepository{
 			row: &domain.RequestResponseRow{
 				Request: domain.ProxyRequest{ID: id},
@@ -106,8 +107,10 @@ func TestTrafficMetadataControlAPI(t *testing.T) {
 		if repo.row.Metadata["highlight"] != "red" || repo.row.Metadata["has_note"] != true {
 			t.Fatalf("\nwanted:\nhighlight red and has_note true\ngot:\n%v", repo.row.Metadata)
 		}
-		if repo.row.Metadata["prettified-request"] != "GET /" || repo.row.Metadata["prettified-response"] != "200 OK" {
-			t.Fatalf("\nwanted:\nprevious prettified bodies\ngot:\n%v", repo.row.Metadata)
+		// Prettified copies live outside metadata (ADR-0036), so the
+		// overlay neither stores the client's nor copies the previous ones.
+		if want := map[string]any{"highlight": "red", "has_note": true}; !reflect.DeepEqual(repo.row.Metadata, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, repo.row.Metadata)
 		}
 		event := <-subscriber.events
 		wantEvent := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","metadata":{"has_note":true,"highlight":"red"}}`
@@ -130,11 +133,8 @@ func TestTrafficMetadataControlAPI(t *testing.T) {
 		if _, ok := repo.row.Metadata["highlight"]; ok {
 			t.Fatalf("\nwanted:\nhighlight removed\ngot:\n%v", repo.row.Metadata["highlight"])
 		}
-		if repo.row.Metadata["prettified-request"] != "GET /" {
-			t.Fatalf("\nwanted:\nprevious prettified-request\ngot:\n%v", repo.row.Metadata["prettified-request"])
-		}
-		if _, ok := repo.row.Metadata["has_note"]; ok {
-			t.Fatalf("\nwanted:\nhas_note absent\ngot:\n%v", repo.row.Metadata["has_note"])
+		if len(repo.row.Metadata) != 0 {
+			t.Fatalf("\nwanted:\nempty metadata\ngot:\n%v", repo.row.Metadata)
 		}
 	})
 

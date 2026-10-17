@@ -59,25 +59,10 @@ func startServiceProcess(ctx context.Context, configDir, projectPath, instancePa
 	}
 	defer discard.Close()
 	command.Stderr = discard
-	childInput, err := command.StdinPipe()
+	childInput, startupResult, processResult, err := launchServiceChild(command)
 	if err != nil {
-		return fmt.Errorf("opening service child input: %w", err)
+		return err
 	}
-	childOutput, err := command.StdoutPipe()
-	if err != nil {
-		childInput.Close()
-		return fmt.Errorf("opening service child output: %w", err)
-	}
-	if err := command.Start(); err != nil {
-		childInput.Close()
-		childOutput.Close()
-		return fmt.Errorf("starting service process: %w", err)
-	}
-	processResult := make(chan error, 1)
-	go func() { processResult <- command.Wait() }()
-	childStdout := bufio.NewReader(childOutput)
-	startupResult := make(chan childStartup, 1)
-	go func() { startupResult <- readChildStartup(childStdout) }()
 
 	select {
 	case startup := <-startupResult:
@@ -103,6 +88,45 @@ func startServiceProcess(ctx context.Context, configDir, projectPath, instancePa
 		stopChild(childInput, processResult)
 		return ctx.Err()
 	}
+}
+
+// launchServiceChild starts command and reads its startup status from its
+// stdout. The child writes to an os.Pipe rather than a StdoutPipe, because
+// Wait closes a StdoutPipe when the child exits, and a child that writes its
+// startup error and exits at once would otherwise close the pipe under the
+// read. The parent drops its copy of the write end, so the read sees EOF once
+// the child is gone.
+func launchServiceChild(command *exec.Cmd) (io.WriteCloser, <-chan childStartup, <-chan error, error) {
+	childInput, err := command.StdinPipe()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("opening service child input: %w", err)
+	}
+	childOutput, childOutputWriter, err := os.Pipe()
+	if err != nil {
+		childInput.Close()
+		return nil, nil, nil, fmt.Errorf("opening service child output: %w", err)
+	}
+	command.Stdout = childOutputWriter
+	if err := command.Start(); err != nil {
+		childInput.Close()
+		childOutput.Close()
+		childOutputWriter.Close()
+		return nil, nil, nil, fmt.Errorf("starting service process: %w", err)
+	}
+	_ = childOutputWriter.Close()
+	processResult := make(chan error, 1)
+	go func() { processResult <- command.Wait() }()
+	startupResult := make(chan childStartup, 1)
+	go func() {
+		startup := readChildStartup(bufio.NewReader(childOutput))
+		// A ready child keeps running after the parent detaches, and keeps
+		// its stdout open until the parent exits, as before.
+		if startup.err != nil {
+			_ = childOutput.Close()
+		}
+		startupResult <- startup
+	}()
+	return childInput, startupResult, processResult, nil
 }
 
 // writeStartOutput writes the start result in JSON or human form.
