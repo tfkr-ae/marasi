@@ -180,13 +180,7 @@ type matchedLeaf struct {
 // order to skip sorting the GROUP BY, and looks each pair up in request,
 // which reads the whole project for a query that matches a few pairs.
 func matchedLeaves(ctx context.Context, tx *sqlx.Tx, match trafficMatch) ([]matchedLeaf, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT n.name, l.pairs, l.errors
-		FROM (
-			SELECT ps.node_id AS leaf, count(*) AS pairs, sum(coalesce(m.status_code, 0) >= 500) AS errors
-			FROM (SELECT id, status_code FROM request`+match.where()+`) m
-			CROSS JOIN pair_sitemap ps ON ps.request_id = m.id
-			GROUP BY ps.node_id) l
-		CROSS JOIN sitemap_node n ON n.id = l.leaf`, match.args...)
+	rows, err := tx.QueryContext(ctx, matchedLeavesSQL(match), match.args...)
 	if err != nil {
 		return nil, err
 	}
@@ -202,6 +196,17 @@ func matchedLeaves(ctx context.Context, tx *sqlx.Tx, match trafficMatch) ([]matc
 		leaves = append(leaves, leaf)
 	}
 	return leaves, rows.Err()
+}
+
+// matchedLeavesSQL is matchedLeaves' read, which takes match's arguments.
+func matchedLeavesSQL(match trafficMatch) string {
+	return `SELECT n.name, l.pairs, l.errors
+		FROM (
+			SELECT ps.node_id AS leaf, count(*) AS pairs, sum(coalesce(m.status_code, 0) >= 500) AS errors
+			FROM (SELECT id, status_code FROM request` + match.where() + `) m
+			CROSS JOIN pair_sitemap ps ON ps.request_id = m.id
+			GROUP BY ps.node_id) l
+		CROSS JOIN sitemap_node n ON n.id = l.leaf`
 }
 
 // sitemapChildOf returns the name of the child of node, "" for the origins,

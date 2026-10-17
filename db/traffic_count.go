@@ -37,8 +37,7 @@ func (repo *Repository) CountTrafficContext(ctx context.Context, q domain.Traffi
 		}
 		result.Complete = complete
 
-		query := `SELECT count(*) FROM (SELECT 1 FROM request` + match.where() + ` LIMIT ?)`
-		return tx.GetContext(ctx, &result.Count, query, append(match.args, domain.MaxTrafficCount+1)...)
+		return tx.GetContext(ctx, &result.Count, trafficCountSQL(match), append(match.args, domain.MaxTrafficCount+1)...)
 	})
 	if err != nil {
 		return domain.TrafficCount{}, fmt.Errorf("counting traffic: %w", err)
@@ -47,4 +46,10 @@ func (repo *Repository) CountTrafficContext(ctx context.Context, q domain.Traffi
 		result.Count, result.Capped = domain.MaxTrafficCount, true
 	}
 	return result, nil
+}
+
+// trafficCountSQL counts the pairs match selects, up to the bound in its
+// last argument, which follows match's arguments.
+func trafficCountSQL(match trafficMatch) string {
+	return `SELECT count(*) FROM (SELECT 1 FROM request` + match.where() + ` LIMIT ?)`
 }

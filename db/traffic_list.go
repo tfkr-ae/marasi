@@ -135,6 +135,35 @@ func exclusionCondition(exclusion []string) (string, []any) {
 	return `content_type IS NULL OR content_type = '' OR (` + strings.Join(parts, ` AND `) + `)`, args
 }
 
+// pairExclusionCondition returns a condition on request that hides the
+// pairs whose content type is in exclusion, which must be normalised, as
+// exclusionCondition does. It looks each candidate's content type up by
+// rowid, so it filters the pairs the rest of the WHERE clause selects
+// rather than steering the plan: a read that the query's index covers
+// stays on that index, where a plain condition on content_type sent SQLite
+// through every row of request. It returns "" for an empty exclusion.
+func pairExclusionCondition(exclusion []string) (string, []any) {
+	if len(exclusion) == 0 {
+		return "", nil
+	}
+	var exact []any
+	var parts []string
+	var args []any
+	for _, value := range exclusion {
+		if major, ok := strings.CutSuffix(value, "/*"); ok {
+			parts = append(parts, `(excluded.content_type >= ? AND excluded.content_type < ?)`)
+			args = append(args, major+"/", major+"0")
+			continue
+		}
+		exact = append(exact, value)
+	}
+	if len(exact) > 0 {
+		parts = append([]string{`excluded.content_type IN (?` + strings.Repeat(`, ?`, len(exact)-1) + `)`}, parts...)
+		args = append(exact, args...)
+	}
+	return `NOT EXISTS (SELECT 1 FROM request excluded WHERE excluded.rowid = request.rowid AND (` + strings.Join(parts, ` OR `) + `))`, args
+}
+
 // trafficMatch is a translated traffic query and exclusion, ready to be
 // combined with other conditions in a WHERE clause.
 type trafficMatch struct {
@@ -190,7 +219,7 @@ func newTrafficMatchAfter(text string, exclusion []string, after *uuid.UUID) (tr
 	if translated.where != "" {
 		match.add(translated.where, translated.args...)
 	}
-	if where, args := exclusionCondition(normalized); where != "" {
+	if where, args := pairExclusionCondition(normalized); where != "" {
 		match.add(where, args...)
 	}
 	if after != nil {
