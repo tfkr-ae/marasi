@@ -54,6 +54,44 @@ func TestProjectCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("should report on stderr what a switch waits for", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		path := canonicalProjectPath(t, filepath.Join(t.TempDir(), "waiting.marasi"))
+		other := canonicalProjectPath(t, filepath.Join(t.TempDir(), "other.marasi"))
+		posted, reported := make(chan struct{}), make(chan struct{})
+		waiting := fmt.Sprintf(`{"project":%q,"waiting_for":[{"kind":"checkpoint","id":"0193802f-f0e7-73d9-a764-06d21e36780a","type":"request","summary":"GET http://example.com/ HTTP/1.1"},{"kind":"extension","name":"workshop"},{"kind":"work","count":1}]}`, path)
+		elsewhere := fmt.Sprintf(`{"project":%q,"waiting_for":[{"kind":"work","count":3}]}`, other)
+		startCannedControlAPIHandler(t, configDir, "work", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/events" {
+				w.Header().Set("Content-Type", "text/event-stream")
+				io.WriteString(w, ": connected\n\n")
+				w.(http.Flusher).Flush()
+				<-posted
+				fmt.Fprintf(w, "event: project.waiting\ndata: %s\n\nevent: project.waiting\ndata: %s\n\n", elsewhere, waiting)
+				w.(http.Flusher).Flush()
+				close(reported)
+				<-r.Context().Done()
+				return
+			}
+			close(posted)
+			<-reported
+			// Let the CLI print the event before the open returns.
+			time.Sleep(100 * time.Millisecond)
+			fmt.Fprintf(w, `{"project":%q}`+"\n", path)
+		})
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "project", "open", "--path", path)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		wantStderr := "waiting for Checkpoint request 0193802f-f0e7-73d9-a764-06d21e36780a: GET http://example.com/ HTTP/1.1\n" +
+			"waiting for extension workshop\n" +
+			"waiting for 1 request or control call in project work\n"
+		if stdout != "project: "+path+"\n" || stderr != wantStderr {
+			t.Fatalf("\nwanted:\nstdout %q, stderr %q\ngot:\nstdout %q, stderr %q", "project: "+path+"\n", wantStderr, stdout, stderr)
+		}
+	})
+
 	t.Run("should treat switch as an alias for open", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		path := canonicalProjectPath(t, filepath.Join(t.TempDir(), "alias.marasi"))

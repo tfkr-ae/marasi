@@ -2799,9 +2799,20 @@ func TestStartService(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolving other project: %v", err)
 		}
-		status, body = doInstanceRequest(t, socketPath, http.MethodPost, "/project/open", fmt.Sprintf(`{"path":%q}`, otherPath))
-		if status != http.StatusConflict || body != `{"error":"project_busy"}`+"\n" {
-			t.Fatalf("\nwanted:\n409 project_busy\ngot:\n%d %s", status, body)
+		// A switch waits for the held item (ADR-0046). Leaving the open
+		// cancels it and keeps the current project.
+		openClient := service.NewClient(socketPath)
+		openContext, cancelOpen := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		openRequest, err := http.NewRequestWithContext(openContext, http.MethodPost, "http://marasi/project/open", strings.NewReader(fmt.Sprintf(`{"path":%q}`, otherPath)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		openResponse, err := openClient.Do(openRequest)
+		cancelOpen()
+		openClient.Close()
+		if err == nil {
+			openResponse.Body.Close()
+			t.Fatalf("\nwanted:\nthe open to wait on the held item\ngot:\n%d", openResponse.StatusCode)
 		}
 		status, body = doInstanceRequest(t, socketPath, http.MethodGet, "/checkpoint/"+held.ID, "")
 		if status != http.StatusOK {

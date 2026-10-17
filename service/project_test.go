@@ -249,27 +249,34 @@ end`, holdURL)
 				t.Fatal("published while close callback is running")
 			}
 			if checkpoint {
-				var err error
 				select {
-				case err = <-opened:
+				case err := <-opened:
+					t.Fatalf("handoff returned while late Lua held a Checkpoint item: %v", err)
 				case <-time.After(500 * time.Millisecond):
-					t.Error("handoff did not abort when late Lua created a Checkpoint hold")
-					for _, item := range proxy.CheckpointItems() {
-						proxy.DropCheckpoint(item.ID)
-					}
-					err = <-opened
 				}
+				if lifecycle.Path() != current {
+					t.Fatal("published while a late Checkpoint item was held")
+				}
+				// Checkpoint is not admitted work, so the held item can be
+				// dropped while the handoff waits for it.
 				proxy.SetIntercept(false)
 				for _, item := range proxy.CheckpointItems() {
-					proxy.DropCheckpoint(item.ID)
+					drop := requestControlAPI(server, http.MethodPost, "/checkpoint/"+item.ID.String()+"/drop", "{}")
+					if drop.Code != http.StatusOK {
+						t.Fatalf("dropping the late hold during the handoff: %d %s", drop.Code, drop.Body.String())
+					}
 				}
 				releaseLua()
-				if !errors.Is(err, ErrProjectBusy) {
-					t.Fatalf("late Checkpoint hold should abort handoff, got %v", err)
+				select {
+				case err := <-opened:
+					if err != nil {
+						t.Fatalf("handoff after the late hold was dropped: %v", err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("handoff did not finish once the late hold was dropped")
 				}
-				status := requestControlAPI(server, http.MethodGet, "/traffic", "")
-				if status.Code != http.StatusOK {
-					t.Fatalf("admission did not reopen: %s", status.Body.String())
+				if lifecycle.Path() != target {
+					t.Fatalf("\nwanted:\n%s\ngot:\n%s", target, lifecycle.Path())
 				}
 				return
 			}
@@ -643,7 +650,7 @@ end`, holdURL)
 		if err != nil {
 			t.Fatalf("admitting extension execution: %v", err)
 		}
-		endExecution := lifecycle.gate.trackExtension()
+		endExecution := lifecycle.gate.trackExtension("workshop")
 		waitPrepared := awaitTargetPrepared(t, lifecycle)
 		result := make(chan error, 1)
 		go func() { result <- lifecycle.Open(context.Background(), target) }()
@@ -714,7 +721,7 @@ end`, holdURL)
 		lifecycle.flushOpenProject = func() error {
 			flushes++
 			if flushes == 2 {
-				endExecution := lifecycle.gate.trackExtension()
+				endExecution := lifecycle.gate.trackExtension("workshop")
 				admitted := make(chan struct{})
 				go func() {
 					defer endExecution()
@@ -833,7 +840,7 @@ end`, holdURL)
 		}
 	})
 
-	t.Run("should retain the old project when intercepts are queued", func(t *testing.T) {
+	t.Run("should retain the old project when an open waiting on intercepts is cancelled", func(t *testing.T) {
 		lifecycle, proxy, dir := newTestProjectLifecycle(t)
 		oldPath := canonicalProjectPath(t, filepath.Join(dir, "old.marasi"))
 		target := canonicalProjectPath(t, filepath.Join(dir, "target.marasi"))
@@ -842,8 +849,10 @@ end`, holdURL)
 		}
 		release := holdPendingWebSocket(t, proxy)
 		defer release()
-		if err := lifecycle.Open(context.Background(), target); !errors.Is(err, ErrProjectBusy) {
-			t.Fatalf("\nwanted:\nproject busy\ngot:\n%v", err)
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		if err := lifecycle.Open(ctx, target); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("\nwanted:\nthe open to wait on the held item until cancelled\ngot:\n%v", err)
 		}
 		if lifecycle.Path() != oldPath {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", oldPath, lifecycle.Path())

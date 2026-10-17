@@ -204,7 +204,7 @@ func TestProjectOpen(t *testing.T) {
 		}
 	})
 
-	t.Run("should refuse open when interception begins during handoff", func(t *testing.T) {
+	t.Run("should wait for interception that begins during handoff", func(t *testing.T) {
 		server, lifecycle, dir, current := newProjectOpenServer(t)
 		if err := lifecycle.proxy.WithOptions(marasi.WithExtension(&domain.Extension{
 			Name:    "checkpoint",
@@ -227,7 +227,6 @@ func TestProjectOpen(t *testing.T) {
 		if err != nil {
 			t.Fatalf("admitting in-flight work: %v", err)
 		}
-		defer release()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -258,17 +257,14 @@ func TestProjectOpen(t *testing.T) {
 
 		responseID, holdDone := startCheckpointHTTPResponseHold(t, lifecycle.proxy)
 		waitForCheckpointItems(t, lifecycle.proxy, 1)
+		release()
 		select {
 		case response := <-openResult:
-			assertProjectError(t, response, http.StatusConflict, "project_busy")
-		case <-time.After(2 * time.Second):
-			t.Fatal("open stalled after interception began during handoff")
+			t.Fatalf("open returned while a Checkpoint item was held: %d %s", response.Code, response.Body.String())
+		case <-time.After(300 * time.Millisecond):
 		}
 		if lifecycle.Path() != current {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", current, lifecycle.Path())
-		}
-		if !lifecycle.proxy.HasPendingCheckpoint() {
-			t.Fatal("\nwanted:\nintercept left pending\ngot:\nqueue cleared")
 		}
 
 		dropResult := make(chan *httptest.ResponseRecorder, 1)
@@ -284,27 +280,47 @@ func TestProjectOpen(t *testing.T) {
 		if err := receiveCheckpointHold(t, holdDone); !errors.Is(err, marasi.ErrDropped) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", marasi.ErrDropped, err)
 		}
-		wantCurrent := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null}\n", current)
-		status := requestListener(t, server, http.MethodGet, "/service/status", "")
-		if status.Code != http.StatusOK || status.Body.String() != wantCurrent {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%d %s", wantCurrent, status.Code, status.Body.String())
+		select {
+		case response := <-openResult:
+			assertControlAPIResponse(t, response, http.StatusOK, fmt.Sprintf("{\"project\":%q}\n", target))
+		case <-time.After(5 * time.Second):
+			t.Fatal("open did not finish once the Checkpoint item was dropped")
 		}
 	})
 
-	t.Run("should refuse open when intercepts are queued", func(t *testing.T) {
-		server, lifecycle, dir, current := newProjectOpenServer(t)
+	t.Run("should wait for queued intercepts and report them", func(t *testing.T) {
+		server, lifecycle, dir, _ := newProjectOpenServer(t)
+		waits := make(chan []ProjectWait, 8)
+		lifecycle.waitReportDelay = 0
+		lifecycle.waiting = func(_ string, reported []ProjectWait) { waits <- reported }
 		release := holdPendingWebSocket(t, lifecycle.proxy)
-		defer release()
 		target := canonicalProjectPath(t, filepath.Join(dir, "queued.marasi"))
-		response := requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(target))
-		assertProjectError(t, response, http.StatusConflict, "project_busy")
-		wantCurrent := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null}\n", current)
-		status := requestListener(t, server, http.MethodGet, "/service/status", "")
-		if status.Code != http.StatusOK || status.Body.String() != wantCurrent {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%d %s", wantCurrent, status.Code, status.Body.String())
+		openResult := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			openResult <- requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(target))
+		}()
+		select {
+		case reported := <-waits:
+			if len(reported) != 1 || reported[0].Kind != "checkpoint" || reported[0].Type != "websocket" {
+				t.Fatalf("\nwanted:\nthe held WebSocket message\ngot:\n%+v", reported)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("open did not report the held item")
 		}
-		if !lifecycle.proxy.HasPendingCheckpoint() {
-			t.Fatal("\nwanted:\nqueued intercept left untouched\ngot:\nqueue changed")
+		select {
+		case response := <-openResult:
+			t.Fatalf("open returned while a Checkpoint item was held: %d %s", response.Code, response.Body.String())
+		default:
+		}
+		release()
+		select {
+		case response := <-openResult:
+			assertControlAPIResponse(t, response, http.StatusOK, fmt.Sprintf("{\"project\":%q}\n", target))
+		case <-time.After(5 * time.Second):
+			t.Fatal("open did not finish once the Checkpoint item was dropped")
+		}
+		if lifecycle.Path() != target {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", target, lifecycle.Path())
 		}
 	})
 

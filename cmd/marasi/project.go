@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi/service"
@@ -117,7 +119,7 @@ var projectOpenCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return openProject(ctx, instancePath, instance, jsonOutput, path, cmd.OutOrStdout())
+		return openProject(ctx, instancePath, instance, jsonOutput, path, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
@@ -136,7 +138,12 @@ func resolveProjectOpenPath(cmd *cobra.Command) (string, error) {
 	return path, nil
 }
 
-func openProject(ctx context.Context, instancePath, instanceName string, asJSON bool, path string, stdout io.Writer) error {
+func openProject(ctx context.Context, instancePath, instanceName string, asJSON bool, path string, stdout, stderr io.Writer) error {
+	// JSON mode writes nothing to stderr (ADR-0007), so only a human sees waits.
+	if !asJSON {
+		stop := watchProjectWaits(ctx, instancePath, path, stderr)
+		defer stop()
+	}
 	body, err := json.Marshal(struct {
 		Path string `json:"path"`
 	}{Path: path})
@@ -177,4 +184,96 @@ func writeProjectOpenHuman(body []byte, stdout io.Writer) error {
 		return fmt.Errorf("writing project open result: %w", err)
 	}
 	return nil
+}
+
+// projectWaitConnectTimeout bounds how long project open waits for its
+// events subscription before it opens without reporting waits.
+const projectWaitConnectTimeout = 2 * time.Second
+
+// watchProjectWaits prints each project.waiting event for target to stderr
+// until the returned stop is called. It returns once the subscription is
+// connected, or has failed, so no wait is missed. A failed subscription is
+// not an error: the open itself reports an instance that is not running.
+func watchProjectWaits(ctx context.Context, instancePath, target string, stderr io.Writer) func() {
+	ctx, cancel := context.WithCancel(ctx)
+	client := service.NewClient(instancePath + ".sock")
+	connected, finished := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(finished)
+		defer client.Close()
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/events", nil)
+		if err != nil {
+			return
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			return
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			return
+		}
+		reader := bufio.NewReader(response.Body)
+		eventName, data := "", ""
+		for {
+			line, err := reader.ReadString('\n')
+			line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+			switch {
+			case line == ": connected":
+				close(connected)
+			case strings.HasPrefix(line, "event:"):
+				eventName = strings.TrimPrefix(strings.TrimPrefix(line, "event:"), " ")
+			case strings.HasPrefix(line, "data:"):
+				data = strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
+			case line == "":
+				if eventName == "project.waiting" {
+					writeProjectWaits(stderr, target, data)
+				}
+				eventName, data = "", ""
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	timer := time.NewTimer(projectWaitConnectTimeout)
+	defer timer.Stop()
+	select {
+	case <-connected:
+	case <-finished:
+	case <-timer.C:
+	}
+	return func() {
+		cancel()
+		<-finished
+	}
+}
+
+// writeProjectWaits prints one line per wait in a project.waiting event for target.
+func writeProjectWaits(stderr io.Writer, target, data string) {
+	var event struct {
+		Project    string                `json:"project"`
+		WaitingFor []service.ProjectWait `json:"waiting_for"`
+	}
+	if err := json.Unmarshal([]byte(data), &event); err != nil || event.Project != target {
+		return
+	}
+	for _, wait := range event.WaitingFor {
+		switch wait.Kind {
+		case "checkpoint":
+			line := fmt.Sprintf("waiting for Checkpoint %s %s", wait.Type, wait.ID)
+			if wait.Summary != "" {
+				line += ": " + wait.Summary
+			}
+			fmt.Fprintln(stderr, line)
+		case "extension":
+			fmt.Fprintf(stderr, "waiting for extension %s\n", wait.Name)
+		case "work":
+			noun := "requests or control calls"
+			if wait.Count == 1 {
+				noun = "request or control call"
+			}
+			fmt.Fprintf(stderr, "waiting for %d %s in project work\n", wait.Count, noun)
+		}
+	}
 }
