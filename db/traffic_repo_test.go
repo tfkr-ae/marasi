@@ -203,6 +203,31 @@ func TestTrafficRepo_GetResponse(t *testing.T) {
 		}
 	})
 
+	t.Run("should return the stored prettified response", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		reqID := testRequest(t, repo, nil)
+		resp := &domain.ProxyResponse{
+			ID: reqID, Status: "200 OK", StatusCode: 200, ContentType: "application/json", Length: "13",
+			Raw:         []byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"b\":2,\"a\":1}"),
+			Prettified:  "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\n  \"a\": 1,\n  \"b\": 2\n}",
+			Metadata:    map[string]any{},
+			RespondedAt: time.Now().UTC().Truncate(time.Millisecond),
+		}
+		if err := repo.InsertResponse(resp); err != nil {
+			t.Fatalf("InsertResponse() error = %v", err)
+		}
+
+		got, err := repo.GetResponse(reqID)
+		if err != nil {
+			t.Fatalf("GetResponse() error = %v", err)
+		}
+		if got.Prettified != resp.Prettified {
+			t.Fatalf("GetResponse() Prettified = %q, want %q", got.Prettified, resp.Prettified)
+		}
+	})
+
 	t.Run("should return empty fields for a request with no response", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
