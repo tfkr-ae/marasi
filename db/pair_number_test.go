@@ -87,6 +87,7 @@ func ascendingIDs(t *testing.T, n int) []uuid.UUID {
 }
 
 func TestPairNumberMigration(t *testing.T) {
+	t.Parallel()
 	t.Run("should number existing pairs 1 to N in id order", func(t *testing.T) {
 		path, conn := projectBeforePairNumbers(t)
 		ids := ascendingIDs(t, 4)
@@ -112,6 +113,7 @@ func TestPairNumberMigration(t *testing.T) {
 func fileProject(t *testing.T) (string, *Repository) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "project.db")
+	writeNewProject(t, path)
 	return path, openProject(t, path)
 }
 
@@ -131,6 +133,7 @@ func newPair(t *testing.T) *domain.ProxyRequest {
 }
 
 func TestTrafficRepo_PairNumbers(t *testing.T) {
+	t.Parallel()
 	t.Run("should number pairs inserted without a number 1, 2, 3", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -316,6 +319,7 @@ func idsOfRequests(reqs []*domain.ProxyRequest) []uuid.UUID {
 }
 
 func TestPairNumbers_OlderBinaryPairs(t *testing.T) {
+	t.Parallel()
 	t.Run("should number pairs an older binary captured on the next open, after the highest number", func(t *testing.T) {
 		path, repo := fileProject(t)
 		first := insertTraffic(t, repo, "GET", "example.com", "/")
@@ -356,6 +360,7 @@ func TestPairNumbers_OlderBinaryPairs(t *testing.T) {
 }
 
 func TestTrafficRepo_ReadsReturnNumber(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	launchpadID, err := repo.CreateLaunchpad("lp", "")
@@ -462,6 +467,7 @@ func listedNumbers(items []*domain.RequestResponseSummary) string {
 }
 
 func TestTrafficRepo_ListTrafficNumberQuery(t *testing.T) {
+	t.Parallel()
 	repo, _ := numberQueryFixture(t)
 	tests := []struct {
 		query string
@@ -494,6 +500,7 @@ func TestTrafficRepo_ListTrafficNumberQuery(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficNumberQueryErrors(t *testing.T) {
+	t.Parallel()
 	repo, _ := numberQueryFixture(t)
 	tests := []struct {
 		query    string
@@ -517,6 +524,7 @@ func TestTrafficRepo_ListTrafficNumberQueryErrors(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficOrderByNumber(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	// Numbers taken in one order and stored in another, as under concurrent

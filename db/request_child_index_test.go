@@ -11,6 +11,7 @@ import (
 // each of those tables needs an index that leads with the referencing
 // column, or every deleted pair scans the table.
 func TestEveryRequestChildIsIndexedByRequest(t *testing.T) {
+	t.Parallel()
 	conn, err := New(filepath.Join(t.TempDir(), "p.marasi"), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)

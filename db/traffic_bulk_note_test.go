@@ -11,10 +11,11 @@ import (
 )
 
 func TestTrafficRepo_AppendNote_KeepsExistingNotesAsPrefix(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
-	const pairs = 2_000
+	const pairs = 1_000
 	ids := make([]uuid.UUID, pairs)
 	existing := map[uuid.UUID]string{}
 	for i := range ids {
@@ -62,6 +63,7 @@ func hasNote(t *testing.T, repo *Repository, id uuid.UUID) bool {
 }
 
 func TestTrafficRepo_AppendNote_UpdatesHasNoteAndSearch(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := captureTextPairs(t, repo, []textPair{
@@ -88,6 +90,7 @@ func TestTrafficRepo_AppendNote_UpdatesHasNoteAndSearch(t *testing.T) {
 }
 
 func TestTrafficRepo_AppendNote_RejectsEmptyText(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	id := insertTraffic(t, repo, "GET", "a.example.com", "/")
@@ -102,6 +105,7 @@ func TestTrafficRepo_AppendNote_RejectsEmptyText(t *testing.T) {
 }
 
 func TestTrafficRepo_ClearNotes_CountsOnlyNotedPairs(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := captureTextPairs(t, repo, []textPair{

@@ -18,9 +18,16 @@ import (
 // Case 22 cannot see this: it captures a few pairs into a project that is
 // already full size. A new project that slows down as it fills ran at 80
 // pairs/s at the start and 2 to 4 pairs/s by 20k pairs.
+//
+// It takes seconds, and minutes under the race detector, which also distorts
+// what it times, so it skips there. db's
+// TestRepository_SearchIndexMergesReadByRowid checks the cause cheaply.
 func TestCaptureCostDoesNotGrowWithProjectSize(t *testing.T) {
 	if testing.Short() {
 		t.Skip("captures 1500 pairs")
+	}
+	if raceEnabled {
+		t.Skip("times capture, which the race detector slows about 30 times")
 	}
 	const (
 		pairs    = 1500

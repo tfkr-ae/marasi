@@ -13,10 +13,14 @@ import (
 	"github.com/tfkr-ae/marasi/internal/ledgerbench/fixture"
 )
 
+// testMaxBody caps the bodies of the projects these tests build, so they
+// build in seconds under -race. The bench1m tag builds full-size bodies.
+var testMaxBody = 1 << 10
+
 func buildSmall(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "small.marasi")
-	if _, err := fixture.Build(path, fixture.Config{Seed: 1, Pairs: 300}); err != nil {
+	if _, err := fixture.Build(path, fixture.Config{Seed: 1, Pairs: 100, MaxBody: testMaxBody}); err != nil {
 		t.Fatalf("building: %v", err)
 	}
 	return path
@@ -34,6 +38,7 @@ func open(t *testing.T, path string) *db.Repository {
 }
 
 func TestProbeEnvironment(t *testing.T) {
+	t.Parallel()
 	path := buildSmall(t)
 
 	env, err := ledgerbench.ProbeEnvironment(path)
@@ -73,6 +78,7 @@ func TestProbeEnvironment(t *testing.T) {
 }
 
 func TestCloneProject(t *testing.T) {
+	t.Parallel()
 	t.Run("should give a copy whose writes leave the original alone", func(t *testing.T) {
 		path := buildSmall(t)
 
@@ -90,8 +96,8 @@ func TestCloneProject(t *testing.T) {
 
 		original, _ := open(t, path).CountRows()
 		after, _ := cloned.CountRows()
-		if before != 300 || after != 301 || original != 300 {
-			t.Fatalf("\nwanted:\n300 then 301 in the clone, 300 in the original\ngot:\n%d then %d, %d", before, after, original)
+		if before != 100 || after != 101 || original != 100 {
+			t.Fatalf("\nwanted:\n100 then 101 in the clone, 100 in the original\ngot:\n%d then %d, %d", before, after, original)
 		}
 	})
 }

@@ -8,6 +8,7 @@ import (
 )
 
 func TestTrafficRepo_CountTraffic(t *testing.T) {
+	t.Parallel()
 	t.Run("should count the pairs that match the query and survive the exclusion", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()

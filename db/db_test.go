@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +18,7 @@ import (
 )
 
 func TestNewLiteralPaths(t *testing.T) {
+	t.Parallel()
 	names := []string{"shared#", "shared%23", "shared%", "shared space 雪"}
 	if runtime.GOOS != "windows" {
 		// Windows forbids '?' in filenames; the other URI characters are valid.
@@ -71,6 +75,7 @@ func TestNewLiteralPaths(t *testing.T) {
 }
 
 func TestNewConcurrent(t *testing.T) {
+	t.Parallel()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	const n = 2
 	errc := make(chan error, n)
@@ -92,6 +97,7 @@ func TestNewConcurrent(t *testing.T) {
 }
 
 func TestNewMemory(t *testing.T) {
+	t.Parallel()
 	connection, err := New(":memory:", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("opening in-memory database: %v", err)
@@ -107,6 +113,7 @@ func TestNewMemory(t *testing.T) {
 }
 
 func TestNewPragmas(t *testing.T) {
+	t.Parallel()
 	t.Run("should open a project file in WAL mode with normal sync, a busy timeout, and foreign keys", func(t *testing.T) {
 		connection, err := New(filepath.Join(t.TempDir(), "pragmas.marasi"), slog.New(slog.NewTextHandler(io.Discard, nil)))
 		if err != nil {
@@ -132,6 +139,75 @@ func TestNewPragmas(t *testing.T) {
 	})
 }
 
+// newProjectBytes is a new project file with every migration applied, made
+// once per test binary. Migrating takes about half a second under -race;
+// opening a copy takes a tenth of that.
+var newProjectBytes = sync.OnceValues(func() ([]byte, error) {
+	dir, err := os.MkdirTemp("", "marasi-db-test-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "new.marasi")
+	conn, err := New(path, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		return nil, err
+	}
+	// Closing checkpoints the write-ahead log into the file.
+	if err := NewProxyRepo(conn).Close(); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
+})
+
+// writeNewProject writes a new, fully migrated project file at path.
+func writeNewProject(t *testing.T, path string) {
+	t.Helper()
+	raw, err := newProjectBytes()
+	if err != nil {
+		t.Fatalf("making a new project: %v", err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("writing a new project: %v", err)
+	}
+}
+
+// TestNewProjectCopy holds the copied project setupTestDB opens to what
+// New makes of an empty file.
+func TestNewProjectCopy(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dump := func(path string) []string {
+		conn, err := New(path, logger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		var rows []string
+		queries := []string{
+			`SELECT type || ' ' || name || ' ' || coalesce(sql, '') FROM sqlite_schema ORDER BY name`,
+			`SELECT version_id || ' ' || is_applied FROM goose_db_version ORDER BY id`,
+			`SELECT name || ' ' || complete || ' ' || version || ' ' || done || ' ' || coalesce(total, '-') || ' ' || coalesce(high_water, '-') FROM background_job ORDER BY name`,
+		}
+		for _, query := range queries {
+			var got []string
+			if err := conn.Select(&got, query); err != nil {
+				t.Fatalf("%s: %v", query, err)
+			}
+			rows = append(rows, got...)
+		}
+		return rows
+	}
+
+	fresh := filepath.Join(t.TempDir(), "fresh.marasi")
+	copied := filepath.Join(t.TempDir(), "copied.marasi")
+	writeNewProject(t, copied)
+
+	if want, got := dump(fresh), dump(copied); !slices.Equal(want, got) {
+		t.Fatalf("\nwanted:\n%s\ngot:\n%s", strings.Join(want, "\n"), strings.Join(got, "\n"))
+	}
+}
+
 func setupTestDB(t *testing.T) (*Repository, func()) {
 	t.Helper()
 
@@ -140,6 +216,7 @@ func setupTestDB(t *testing.T) (*Repository, func()) {
 		t.Fatalf("os.CreateTemp() failed: %v", err)
 	}
 	tempFile.Close()
+	writeNewProject(t, tempFile.Name())
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dbConn, err := New(tempFile.Name(), logger)
