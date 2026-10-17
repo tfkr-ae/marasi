@@ -71,6 +71,7 @@ func captureMetaPair(t *testing.T, repo *Repository, requestMeta, responseMeta m
 }
 
 func TestStatsRepo_DashboardCounts(t *testing.T) {
+	t.Parallel()
 	t.Run("should count notes, launchpads, pairs and intercepted pairs, complete on a new project", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -202,6 +203,7 @@ func runInterceptedJob(t *testing.T, repo *Repository) int {
 }
 
 func TestDashboardCountsMigration(t *testing.T) {
+	// Not parallel: it sets interceptedBatchPairs.
 	t.Run("should count existing intercepted pairs with a background job, and report it until done", func(t *testing.T) {
 		path, conn := projectBeforePairNumbers(t)
 		ids := ascendingIDs(t, 7)
@@ -276,6 +278,7 @@ func TestDashboardCountsMigration(t *testing.T) {
 }
 
 func TestDashboardCounts_IncompleteJobDoesNotScan(t *testing.T) {
+	// Not parallel: it times reads, which other tests would slow.
 	t.Run("should return the counts so far quickly, not complete, on a large project before the job runs", func(t *testing.T) {
 		path, conn := projectBeforePairNumbers(t)
 		// 2,000 intercepted pairs with 32 KB bodies: metadata sits after the

@@ -17,6 +17,7 @@ import (
 )
 
 func TestLaunchpadRepo_GetLaunchpadsEntrySummary(t *testing.T) {
+	t.Parallel()
 	t.Run("should report no entries and no status for an empty launchpad", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -118,6 +119,7 @@ func TestLaunchpadRepo_GetLaunchpadsEntrySummary(t *testing.T) {
 }
 
 func TestLaunchpadRepo_GetLaunchpadEntrySummary(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 

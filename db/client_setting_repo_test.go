@@ -12,6 +12,7 @@ import (
 )
 
 func TestClientSettings(t *testing.T) {
+	t.Parallel()
 	t.Run("should get a value that was set", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -155,6 +156,7 @@ func TestClientSettings(t *testing.T) {
 }
 
 func TestClientSettingValidation(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 

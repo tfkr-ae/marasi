@@ -33,6 +33,7 @@ func listedHighlights(t *testing.T, repo *Repository) map[uuid.UUID]int {
 }
 
 func TestTrafficRepo_SetHighlight(t *testing.T) {
+	t.Parallel()
 	t.Run("should highlight the selected pairs and list them with their highlight", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -58,6 +59,7 @@ func TestTrafficRepo_SetHighlight(t *testing.T) {
 }
 
 func TestTrafficRepo_SetHighlight_CountsOnlyChanges(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	a := insertTraffic(t, repo, "GET", "a.example.com", "/a")
@@ -96,6 +98,7 @@ func TestTrafficRepo_SetHighlight_CountsOnlyChanges(t *testing.T) {
 }
 
 func TestTrafficRepo_SetHighlight_QuerySelectionStopsAtAsOf(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	post1 := insertTraffic(t, repo, "POST", "a.example.com", "/1")
@@ -146,6 +149,7 @@ func storedRowAndIndex(t *testing.T, repo *Repository, id uuid.UUID) string {
 }
 
 func TestTrafficRepo_SetHighlight_LeavesRequestAndIndexAlone(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := captureTextPairs(t, repo, []textPair{{name: "pair", request: "GET /a HTTP/1.1\r\n\r\n", response: []byte("HTTP/1.1 200 OK\r\n\r\nbody text")}})
@@ -169,6 +173,7 @@ func TestTrafficRepo_SetHighlight_LeavesRequestAndIndexAlone(t *testing.T) {
 }
 
 func TestTrafficRepo_DeletingAPairRemovesItsHighlight(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	kept := insertTraffic(t, repo, "GET", "a.example.com", "/kept")
@@ -191,6 +196,7 @@ func TestTrafficRepo_DeletingAPairRemovesItsHighlight(t *testing.T) {
 }
 
 func TestTrafficRepo_ReadsReturnHighlight(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	launchpadID, err := repo.CreateLaunchpad("lp", "")
@@ -301,6 +307,7 @@ func TestTrafficRepo_ReadsReturnHighlight(t *testing.T) {
 }
 
 func TestTrafficRepo_SetHighlight_Rejects(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	a := insertTraffic(t, repo, "GET", "a.example.com", "/a")
@@ -345,6 +352,7 @@ func highlightQueryFixture(t *testing.T) (*Repository, map[string]uuid.UUID) {
 }
 
 func TestTrafficRepo_ListTrafficHighlightQuery(t *testing.T) {
+	t.Parallel()
 	repo, ids := highlightQueryFixture(t)
 	names := func(items []*domain.RequestResponseSummary) string {
 		var out []string
@@ -388,6 +396,7 @@ func TestTrafficRepo_ListTrafficHighlightQuery(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficHighlightQueryErrors(t *testing.T) {
+	t.Parallel()
 	repo, _ := highlightQueryFixture(t)
 
 	tests := []struct {

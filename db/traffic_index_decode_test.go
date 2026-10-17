@@ -52,6 +52,7 @@ func encode(t *testing.T, body string, codings ...string) string {
 }
 
 func TestTrafficRepo_ListTrafficSearchesDecodedBodies(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	response := func(header, body string) []byte {
@@ -93,6 +94,7 @@ func TestTrafficRepo_ListTrafficSearchesDecodedBodies(t *testing.T) {
 }
 
 func TestTrafficRepo_RebuildDecodesPairsIndexedBeforeDecoding(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := captureTextPairs(t, repo, []textPair{{
@@ -119,6 +121,7 @@ func TestTrafficRepo_RebuildDecodesPairsIndexedBeforeDecoding(t *testing.T) {
 }
 
 func TestTrafficRepo_DecodedBodyCap(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	// Past the 10 MiB cap the body is indexed as stored, which is binary,

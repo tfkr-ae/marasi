@@ -24,6 +24,7 @@ func launchpadMembers(t *testing.T, repo *Repository, launchpadID uuid.UUID) []u
 }
 
 func TestTrafficRepo_LinkTraffic_QuerySelectionStopsAtAsOf(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -61,6 +62,7 @@ func TestTrafficRepo_LinkTraffic_QuerySelectionStopsAtAsOf(t *testing.T) {
 }
 
 func TestTrafficRepo_LinkTraffic_LargeIDSelection(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -98,6 +100,7 @@ func TestTrafficRepo_LinkTraffic_LargeIDSelection(t *testing.T) {
 }
 
 func TestTrafficRepo_UnlinkTraffic_CountsOnlyLinkedPairs(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -141,6 +144,7 @@ func sameIDs(a, b []uuid.UUID) bool {
 }
 
 func TestTrafficRepo_LinkTraffic_InvalidQuery(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	launchpadID, err := repo.CreateLaunchpad("bulk", "")
@@ -158,6 +162,7 @@ func TestTrafficRepo_LinkTraffic_InvalidQuery(t *testing.T) {
 }
 
 func TestLaunchpadRepo_UnlinkRequestFromLaunchpad(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	launchpadID, err := repo.CreateLaunchpad("unlink", "")
@@ -184,6 +189,7 @@ func TestLaunchpadRepo_UnlinkRequestFromLaunchpad(t *testing.T) {
 }
 
 func TestTrafficRepo_LinkTraffic_MissingTarget(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	id := insertTraffic(t, repo, "GET", "a.example.com", "/")

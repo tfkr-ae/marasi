@@ -109,6 +109,7 @@ func queryTestPairs() []queryPair {
 }
 
 func TestTrafficRepo_ListTrafficQuery(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := seedQueryPairs(t, repo, queryTestPairs())
@@ -202,6 +203,7 @@ func TestTrafficRepo_ListTrafficQuery(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficQueryPaging(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := seedQueryPairs(t, repo, queryTestPairs())
@@ -234,6 +236,7 @@ func TestTrafficRepo_ListTrafficQueryPaging(t *testing.T) {
 var parserTokenName = regexp.MustCompile(`\b(WS|TEXT|STRING|NUM|HEX)\b|trailing token`)
 
 func TestTrafficRepo_ListTrafficQueryLimits(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	captureTextPairs(t, repo, textSearchPairs())
@@ -303,6 +306,7 @@ func invalidTrafficQueries() []invalidTrafficQuery {
 }
 
 func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	seedQueryPairs(t, repo, queryTestPairs()[:1])
@@ -343,6 +347,7 @@ func namesOf(ids map[string]uuid.UUID, got []uuid.UUID) string {
 }
 
 func TestTrafficRepo_ListTrafficQueryMetadataHasKey(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	at := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)

@@ -54,6 +54,7 @@ func armoryTestRun(t *testing.T, repo *Repository, template *domain.ArmoryTempla
 }
 
 func TestArmoryRepo_Templates(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -118,6 +119,7 @@ func TestArmoryRepo_Templates(t *testing.T) {
 }
 
 func TestArmoryRepo_TemplateNotFound(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -134,6 +136,7 @@ func TestArmoryRepo_TemplateNotFound(t *testing.T) {
 }
 
 func TestArmoryRepo_Runs(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -182,6 +185,7 @@ func TestArmoryRepo_Runs(t *testing.T) {
 }
 
 func TestArmoryRepo_RunForeignKey(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -201,6 +205,7 @@ func TestArmoryRepo_RunForeignKey(t *testing.T) {
 }
 
 func TestArmoryRepo_RunNotFound(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -214,6 +219,7 @@ func TestArmoryRepo_RunNotFound(t *testing.T) {
 }
 
 func TestArmoryRepo_Entries(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -246,6 +252,7 @@ func TestArmoryRepo_Entries(t *testing.T) {
 }
 
 func TestArmoryRepo_RunTraffic(t *testing.T) {
+	t.Parallel()
 	t.Run("should page linked traffic oldest first by request id", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -308,6 +315,7 @@ func TestArmoryRepo_RunTraffic(t *testing.T) {
 }
 
 func TestArmoryRepo_EntryForeignKeys(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -326,6 +334,7 @@ func TestArmoryRepo_EntryForeignKeys(t *testing.T) {
 }
 
 func TestArmoryRepo_DeleteRunCascadesEntries(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 

@@ -5,6 +5,7 @@ import (
 )
 
 func TestConfigRepo_SPKI(t *testing.T) {
+	t.Parallel()
 	t.Run("should update SPKI", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()

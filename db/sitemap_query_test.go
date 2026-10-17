@@ -33,6 +33,7 @@ func newestID(t *testing.T, repo *Repository) uuid.UUID {
 }
 
 func TestSitemap_QueryMode(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	for _, pair := range sitemapPairs {
@@ -74,6 +75,7 @@ func matchCount(t *testing.T, repo *Repository, text string, exclusion []string,
 }
 
 func TestSitemap_QueryModeAgreesWithTheTable(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	for _, pair := range sitemapPairs {
@@ -138,6 +140,7 @@ func TestSitemap_QueryModeAgreesWithTheTable(t *testing.T) {
 }
 
 func TestSitemap_QueryModeCancel(t *testing.T) {
+	// Not parallel: it times reads, which other tests would slow.
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	// Many pairs under one leaf, written directly so the setup is quick.

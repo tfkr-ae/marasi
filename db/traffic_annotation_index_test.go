@@ -36,7 +36,10 @@ func dropBodyIndexRow(t *testing.T, repo *Repository, id uuid.UUID) {
 }
 
 func TestTrafficRepo_AnnotationWritesSkipBodyIndex(t *testing.T) {
-	body := strings.Repeat("large-body-text ", 5<<20/16)
+	t.Parallel()
+	// The body index row is dropped and must not come back; the size of
+	// the body does not matter.
+	body := strings.Repeat("large-body-text ", 1<<10)
 	for name, annotate := range map[string]func(repo *Repository, id uuid.UUID) error{
 		"note": func(repo *Repository, id uuid.UUID) error { return repo.UpdateNote(id, "annotated note") },
 		"metadata": func(repo *Repository, id uuid.UUID) error {
@@ -111,6 +114,7 @@ func writeOldBodyIndexRow(t *testing.T, repo *Repository, id uuid.UUID, note, me
 }
 
 func TestTrafficRepo_ListTrafficSearchesBothIndexes(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := captureTextPairs(t, repo, []textPair{
@@ -205,6 +209,7 @@ func finishJob(t *testing.T, repo *Repository, name domain.JobName) {
 }
 
 func TestAnnotationIndexJob(t *testing.T) {
+	t.Parallel()
 	t.Run("should list the annotation index as complete on a new project", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -264,6 +269,7 @@ func TestAnnotationIndexJob(t *testing.T) {
 }
 
 func TestTrafficRepo_CountTrafficAfterSearchesBothIndexes(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := captureTextPairs(t, repo, []textPair{
