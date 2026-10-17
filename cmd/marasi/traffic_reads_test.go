@@ -81,6 +81,80 @@ func TestTrafficReadCommands(t *testing.T) {
 	}
 }
 
+func TestTrafficSitemapLevels(t *testing.T) {
+	binary := buildMarasi(t)
+	body := `{"levels":[` +
+		`{"node":"","items":[{"name":"https://a.test","segment":"https://a.test","pairs":12,"errors":1,"has_children":true,"matching":3,"matching_errors":1}],"next_cursor":"opaque","missing":false},` +
+		`{"node":"https://a.test/api","items":[{"name":"https://a.test/api/v2","segment":"v2","pairs":7,"errors":0,"has_children":false,"matching":null,"matching_errors":null}],"next_cursor":null,"missing":false},` +
+		`{"node":"https://gone.test","items":[],"next_cursor":null,"missing":true}` +
+		`],"sitemap":{"complete":false}}` + "\n"
+	for _, test := range []struct {
+		name   string
+		args   []string
+		sent   string
+		stdout string
+	}{
+		{
+			name: "matching levels",
+			args: []string{"--node", "", "--node", "https://a.test/api", "--node", "https://gone.test", "-q", "status_code >= 500", "--as-of", bulkAsOf, "--exclude", "image/*", "--limit", "5"},
+			sent: `{"nodes":["","https://a.test/api","https://gone.test"],"scope":"matching","exclusion":["image/*"],` +
+				`"selection":{"query":"status_code >= 500","exclusion":["image/*"],"as_of":"` + bulkAsOf + `"},"limit":5}`,
+		},
+		{
+			name: "all levels with matching counts",
+			args: []string{"--node", "", "--node", "https://a.test/api", "--scope", "all", "-q", "status_code >= 500", "--as-of", bulkAsOf},
+			sent: `{"nodes":["","https://a.test/api"],"scope":"all","exclusion":[],` +
+				`"selection":{"query":"status_code >= 500","exclusion":[],"as_of":"` + bulkAsOf + `"},"limit":100}`,
+		},
+		{
+			name: "all levels",
+			args: []string{"--node", "https://a.test", "--node", "https://a.test/api"},
+			sent: `{"nodes":["https://a.test","https://a.test/api"],"scope":"all","exclusion":[],"limit":100}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+			args := append([]string{"--config-dir", configDir, "--instance", "work", "traffic", "sitemap"}, test.args...)
+			stdout, stderr, err := runMarasi(binary, args...)
+			wantStdout := "# (origins)\nhttps://a.test  12  1  3  1  +\n" +
+				"# https://a.test/api\nhttps://a.test/api/v2  7  0  -  -  \n" +
+				"# https://gone.test (missing)\n"
+			wantStderr := "next_cursor=opaque node=\nnotice: the sitemap is still building; counts may be incomplete\n"
+			if err != nil || stdout != wantStdout || stderr != wantStderr {
+				t.Fatalf("\nwanted:\nstdout %q, stderr %q\ngot:\nstdout %q, stderr %q, error %v", wantStdout, wantStderr, stdout, stderr, err)
+			}
+			got := sent.snapshot()
+			if got.Method != http.MethodPost || got.Path != "/traffic/sitemap/levels" || got.Body != test.sent {
+				t.Fatalf("\nwanted:\nPOST /traffic/sitemap/levels %s\ngot:\n%s %s %s", test.sent, got.Method, got.Path, got.Body)
+			}
+			stdout, stderr, err = runMarasi(binary, append(args, "--json")...)
+			if err != nil || stdout != body || stderr != "" {
+				t.Fatalf("\nwanted:\nstdout %q\ngot:\nstdout %q, stderr %q, error %v", body, stdout, stderr, err)
+			}
+		})
+	}
+
+	t.Run("should reject a levels read it cannot send", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+		for _, args := range [][]string{
+			{"--node", "a", "--node", "b", "--cursor", "opaque"},
+			{"--node", "a", "--node", "b", "--scope", "matching"},
+			{"--node", "a", "--node", "b", "--scope", "some"},
+			{"--node", "a", "--node", "b", "-q", "a"},
+		} {
+			commandArgs := append([]string{"--config-dir", configDir, "--instance", "work", "traffic", "sitemap"}, args...)
+			if stdout, stderr, err := runMarasi(binary, commandArgs...); err == nil || stdout != "" {
+				t.Fatalf("\nwanted:\nusage error for %v\ngot:\nstdout %q, stderr %q", args, stdout, stderr)
+			}
+			if got := sent.snapshot(); got.Method != "" {
+				t.Fatalf("\nwanted:\nno request for %v\ngot:\n%s %s", args, got.Method, got.Path)
+			}
+		}
+	})
+}
+
 func TestTrafficValidateRejectsInvalidQuery(t *testing.T) {
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
