@@ -24,6 +24,7 @@ func insertManyPairs(t *testing.T, repo *Repository, pairs int) {
 }
 
 func TestTrafficRepo_ReadsStopWhenContextEnds(t *testing.T) {
+	// Not parallel: it times reads, which other tests would slow.
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	insertManyPairs(t, repo, 100_000)

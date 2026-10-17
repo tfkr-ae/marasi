@@ -16,6 +16,7 @@ var (
 )
 
 func TestExtensionRepo_GetExtensions(t *testing.T) {
+	t.Parallel()
 	t.Run("should return the default extensions", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -44,6 +45,7 @@ func TestExtensionRepo_GetExtensions(t *testing.T) {
 }
 
 func TestExtensionRepo_GetExtensionByName(t *testing.T) {
+	t.Parallel()
 	t.Run("should return a specific extension by name", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -80,6 +82,7 @@ func TestExtensionRepo_GetExtensionByName(t *testing.T) {
 }
 
 func TestExtensionRepo_GetExtensionByUUID(t *testing.T) {
+	t.Parallel()
 	t.Run("should return a seeded extension by uuid", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -111,6 +114,7 @@ func TestExtensionRepo_GetExtensionByUUID(t *testing.T) {
 }
 
 func TestExtensionRepo_GetExtensionLuaCodeByName(t *testing.T) {
+	t.Parallel()
 	t.Run("should return lua code for a specific extension", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -141,6 +145,7 @@ func TestExtensionRepo_GetExtensionLuaCodeByName(t *testing.T) {
 }
 
 func TestExtensionRepo_UpdateExtensionLuaCodeByUUID(t *testing.T) {
+	t.Parallel()
 	t.Run("should persist lua and bump update_at", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -198,6 +203,7 @@ func TestExtensionRepo_UpdateExtensionLuaCodeByUUID(t *testing.T) {
 }
 
 func TestExtensionRepo_UpdateExtensionLuaCodeByName(t *testing.T) {
+	t.Parallel()
 	t.Run("should update lua code for an existing extension", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -232,6 +238,7 @@ func TestExtensionRepo_UpdateExtensionLuaCodeByName(t *testing.T) {
 }
 
 func TestExtensionRepo_GetExtensionSettingsByUUID(t *testing.T) {
+	t.Parallel()
 	t.Run("should get default settings for an extension", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -266,6 +273,7 @@ func TestExtensionRepo_GetExtensionSettingsByUUID(t *testing.T) {
 }
 
 func TestExtensionRepo_SetExtensionEnabledByUUID(t *testing.T) {
+	t.Parallel()
 	t.Run("should persist enabled false and true", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -329,6 +337,7 @@ func TestExtensionRepo_SetExtensionEnabledByUUID(t *testing.T) {
 }
 
 func TestExtensionRepo_SetExtensionSettingsByUUID(t *testing.T) {
+	t.Parallel()
 	t.Run("should set settings for an existing extension", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -397,6 +406,7 @@ func TestExtensionRepo_SetExtensionSettingsByUUID(t *testing.T) {
 }
 
 func TestExtensionRepo_GetExtensionsOrdering(t *testing.T) {
+	t.Parallel()
 	t.Run("should return extensions ordered by ID ascending", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()

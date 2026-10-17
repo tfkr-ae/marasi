@@ -128,6 +128,7 @@ func tableCounts(t *testing.T, repo *Repository) [3]int {
 }
 
 func TestTrafficRepo_ListTrafficLaunchpadQuery(t *testing.T) {
+	t.Parallel()
 	f := setupLaunchpadQueryFixture(t)
 
 	tests := []struct {
@@ -164,6 +165,7 @@ func TestTrafficRepo_ListTrafficLaunchpadQuery(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficLaunchpadQueryErrors(t *testing.T) {
+	t.Parallel()
 	f := setupLaunchpadQueryFixture(t)
 
 	tests := []struct {
@@ -192,6 +194,7 @@ func TestTrafficRepo_ListTrafficLaunchpadQueryErrors(t *testing.T) {
 }
 
 func TestLaunchpadRepo_GetLaunchpadRequestsQuery(t *testing.T) {
+	t.Parallel()
 	f := setupLaunchpadQueryFixture(t)
 
 	tests := []struct {

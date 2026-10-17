@@ -12,6 +12,7 @@ import (
 )
 
 func TestTrafficRepo_ListTraffic_Exclusion(t *testing.T) {
+	t.Parallel()
 	t.Run("should fill every page to the limit when excluded pairs sit between matches", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -127,6 +128,7 @@ func TestTrafficRepo_ListTraffic_Exclusion(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTraffic_AsOf(t *testing.T) {
+	t.Parallel()
 	t.Run("should report the newest pair id as as_of when none is given", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -203,6 +205,7 @@ func TestTrafficRepo_ListTraffic_AsOf(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTraffic_Cursor(t *testing.T) {
+	t.Parallel()
 	t.Run("should return exactly the rows before a forward page's cursor when walking backward", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -389,6 +392,7 @@ func listPage(repo *Repository, cursor *string, limit int, text string) ([]*doma
 }
 
 func TestLaunchpadRepo_GetLaunchpadRequests_Exclusion(t *testing.T) {
+	t.Parallel()
 	t.Run("should hide excluded entries and keep entries with no content type", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()

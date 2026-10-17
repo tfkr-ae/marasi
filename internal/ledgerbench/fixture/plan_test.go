@@ -10,6 +10,7 @@ import (
 // The plan is the fixture's distribution. These checks hold it to the
 // ticket's table, at a size where the shares are stable.
 func TestPlanDistribution(t *testing.T) {
+	t.Parallel()
 	const pairs = 200_000
 	plans, hosts, _ := planPairs(1, pairs, End)
 

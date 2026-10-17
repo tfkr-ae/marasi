@@ -9,6 +9,7 @@ import (
 )
 
 func TestValidateTrafficQuery(t *testing.T) {
+	t.Parallel()
 	t.Run("should report each invalid query as ListTraffic does", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()

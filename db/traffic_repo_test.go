@@ -14,6 +14,7 @@ import (
 )
 
 func TestTrafficRepo_InsertRequest(t *testing.T) {
+	t.Parallel()
 	t.Run("should insert request", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -93,6 +94,7 @@ func TestTrafficRepo_InsertRequest(t *testing.T) {
 }
 
 func TestTrafficRepo_InsertResponse(t *testing.T) {
+	t.Parallel()
 	t.Run("should update an existing request row with response data", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -183,6 +185,7 @@ func TestTrafficRepo_InsertResponse(t *testing.T) {
 }
 
 func TestTrafficRepo_GetResponse(t *testing.T) {
+	t.Parallel()
 	t.Run("should get an existing response", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -242,6 +245,7 @@ func TestTrafficRepo_GetResponse(t *testing.T) {
 }
 
 func TestTrafficRepo_GetRequestResponseRow(t *testing.T) {
+	t.Parallel()
 	t.Run("should get a full row with request, response, and note", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -334,6 +338,7 @@ func TestTrafficRepo_GetRequestResponseRow(t *testing.T) {
 }
 
 func TestTrafficRepo_GetRequestResponseRows(t *testing.T) {
+	t.Parallel()
 	t.Run("should get multiple full rows with mixed details and notes", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -434,6 +439,7 @@ func TestTrafficRepo_GetRequestResponseRows(t *testing.T) {
 }
 
 func TestTrafficRepo_GetRequestResponseSummary(t *testing.T) {
+	t.Parallel()
 	t.Run("should return an empty slice if database is empty", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -497,6 +503,7 @@ func TestTrafficRepo_GetRequestResponseSummary(t *testing.T) {
 }
 
 func TestTrafficRepo_GetMetadata(t *testing.T) {
+	t.Parallel()
 	t.Run("should get metadata for an existing request", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -549,6 +556,7 @@ func TestTrafficRepo_GetMetadata(t *testing.T) {
 }
 
 func TestTrafficRepo_UpdateMetadata(t *testing.T) {
+	t.Parallel()
 	t.Run("should update metadata for a single request", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -605,6 +613,7 @@ func TestTrafficRepo_UpdateMetadata(t *testing.T) {
 }
 
 func TestTrafficRepo_GetNotes(t *testing.T) {
+	t.Parallel()
 	t.Run("should return error if no note exists", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -622,6 +631,7 @@ func TestTrafficRepo_GetNotes(t *testing.T) {
 	})
 }
 func TestTrafficRepo_Notes(t *testing.T) {
+	t.Parallel()
 	t.Run("should add a new note", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -674,6 +684,7 @@ func TestTrafficRepo_Notes(t *testing.T) {
 }
 
 func TestTrafficRepo_NoteTriggers(t *testing.T) {
+	t.Parallel()
 	t.Run("adding a note should set has_note in request metadata", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -727,6 +738,7 @@ func TestTrafficRepo_NoteTriggers(t *testing.T) {
 }
 
 func TestTrafficRepo_DeleteNote(t *testing.T) {
+	t.Parallel()
 	t.Run("should remove the note row and leave has_note absent", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -773,6 +785,7 @@ func TestTrafficRepo_DeleteNote(t *testing.T) {
 }
 
 func TestTrafficRepo_ListNotes(t *testing.T) {
+	t.Parallel()
 	t.Run("should return an empty page if no notes exist", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -993,6 +1006,7 @@ func TestTrafficRepo_ListNotes(t *testing.T) {
 }
 
 func TestTrafficRepo_SearchByMetadata(t *testing.T) {
+	t.Parallel()
 	t.Run("should return matching requests", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -1067,6 +1081,7 @@ func TestTrafficRepo_SearchByMetadata(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTraffic(t *testing.T) {
+	t.Parallel()
 	t.Run("should return an empty page if database is empty", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -1471,6 +1486,7 @@ func insertTrafficResponse(t *testing.T, repo *Repository, id uuid.UUID, statusC
 }
 
 func TestTrafficRepo_CountContentTypes(t *testing.T) {
+	t.Parallel()
 	insertWithContentType := func(t *testing.T, repo *Repository, contentType string) {
 		t.Helper()
 		id := testRequest(t, repo, nil)

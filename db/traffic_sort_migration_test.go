@@ -21,6 +21,7 @@ import (
 const sortMigrationVersion = 18
 
 func TestSortMigration(t *testing.T) {
+	t.Parallel()
 	t.Run("should sort pairs stored before it by length, with no response last", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "project.db")
 		conn, err := sqlx.Connect("sqlite", path)

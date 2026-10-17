@@ -11,6 +11,7 @@ import (
 )
 
 func TestLogRepo_GetLogs(t *testing.T) {
+	t.Parallel()
 	t.Run("should return 0 logs if there are none", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()

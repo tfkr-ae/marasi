@@ -21,6 +21,7 @@ const clientSettingsMigrationVersion = 12
 const legacyExclusionKey = "legacy.content_type_exclusion"
 
 func TestFiltersMigration(t *testing.T) {
+	t.Parallel()
 	t.Run("should leave no marasi key for a project with the seeded filters", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
