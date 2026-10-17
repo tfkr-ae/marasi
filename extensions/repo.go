@@ -11,25 +11,23 @@ import (
 // registerRepoLibrary registers the `marasi.repo` library into the Lua state.
 // This library provides access to the traffic repository for querying
 // request/response data.
-func registerRepoLibrary(l *lua.State, proxy ProxyService) {
+func registerRepoLibrary(extension *Runtime, proxy ProxyService) {
+	l := extension.LuaState
 	l.Global("marasi")
 	if l.IsNil(-1) {
 		l.Pop(1)
 		return
 	}
 
-	lua.NewLibrary(l, trafficLibrary(proxy))
+	newLibrary(extension, "marasi.repo", trafficLibrary(proxy))
 	l.SetField(-2, "repo")
 	l.Pop(1)
 }
 
 // trafficLibrary returns the list of Lua functions for the traffic repository.
-func trafficLibrary(proxy ProxyService) []lua.RegistryFunction {
-	return []lua.RegistryFunction{
-		// get_summary retrieves a summary of all request/response pairs in the repository.
-		//
-		// @return []table A list of tables, each containing summary information for a request/response pair.
-		{Name: "get_summary", Function: func(l *lua.State) int {
+func trafficLibrary(proxy ProxyService) []APIFunction {
+	return []APIFunction{
+		{Name: "get_summary", Signature: "() -> table", Summary: "Retrieves a summary of all request/response pairs in the repository.", Function: func(l *lua.State) int {
 			repo, err := proxy.GetTrafficRepo()
 			if err != nil {
 				lua.Errorf(l, "getting traffic repo: %s", err.Error())
@@ -63,11 +61,7 @@ func trafficLibrary(proxy ProxyService) []lua.RegistryFunction {
 			util.DeepPush(l, result)
 			return 1
 		}},
-		// get_details retrieves full details for a specific request/response pair.
-		//
-		// @param id string The UUID of the request/response pair.
-		// @return table A table containing detailed information about the request and response.
-		{Name: "get_details", Function: func(l *lua.State) int {
+		{Name: "get_details", Signature: "(id: string) -> table", Summary: "Retrieves full details for a specific request/response pair.", Function: func(l *lua.State) int {
 			repo, err := proxy.GetTrafficRepo()
 			if err != nil {
 				lua.Errorf(l, "getting traffic repo: %s", err.Error())
@@ -119,11 +113,7 @@ func trafficLibrary(proxy ProxyService) []lua.RegistryFunction {
 			util.DeepPush(l, result)
 			return 1
 		}},
-		// get_metadata retrieves the metadata associated with a specific request/response pair.
-		//
-		// @param id string The UUID of the request/response pair.
-		// @return table A table containing the metadata key-value pairs.
-		{Name: "get_metadata", Function: func(l *lua.State) int {
+		{Name: "get_metadata", Signature: "(id: string) -> table", Summary: "Retrieves the metadata associated with a specific request/response pair.", Function: func(l *lua.State) int {
 			repo, err := proxy.GetTrafficRepo()
 			if err != nil {
 				lua.Errorf(l, "getting traffic repo: %s", err.Error())
@@ -145,11 +135,7 @@ func trafficLibrary(proxy ProxyService) []lua.RegistryFunction {
 			util.DeepPush(l, metadata)
 			return 1
 		}},
-		// set_metadata updates the metadata for a specific request/response pair.
-		//
-		// @param id string The UUID of the request/response pair.
-		// @param metadata table A table containing the new metadata key-value pairs.
-		{Name: "set_metadata", Function: func(l *lua.State) int {
+		{Name: "set_metadata", Signature: "(id: string, metadata: table)", Summary: "Replaces the metadata for a specific request/response pair.", Function: func(l *lua.State) int {
 			repo, err := proxy.GetTrafficRepo()
 			if err != nil {
 				lua.Errorf(l, "getting traffic repo: %s", err.Error())
@@ -183,11 +169,7 @@ func trafficLibrary(proxy ProxyService) []lua.RegistryFunction {
 			}
 			return 0
 		}},
-		// get_note retrieves the note associated with a specific request/response pair.
-		//
-		// @param id string The UUID of the request/response pair.
-		// @return string The note content.
-		{Name: "get_note", Function: func(l *lua.State) int {
+		{Name: "get_note", Signature: "(id: string) -> string", Summary: "Retrieves the note associated with a specific request/response pair.", Function: func(l *lua.State) int {
 			repo, err := proxy.GetTrafficRepo()
 			if err != nil {
 				lua.Errorf(l, "getting traffic repo: %s", err.Error())
@@ -209,11 +191,7 @@ func trafficLibrary(proxy ProxyService) []lua.RegistryFunction {
 			util.DeepPush(l, note)
 			return 1
 		}},
-		// set_note updates the note for a specific request/response pair.
-		//
-		// @param id string The UUID of the request/response pair.
-		// @param note string The new note content.
-		{Name: "set_note", Function: func(l *lua.State) int {
+		{Name: "set_note", Signature: "(id: string, note: string)", Summary: "Updates the note for a specific request/response pair.", Function: func(l *lua.State) int {
 			repo, err := proxy.GetTrafficRepo()
 			if err != nil {
 				lua.Errorf(l, "getting traffic repo: %s", err.Error())
@@ -236,12 +214,7 @@ func trafficLibrary(proxy ProxyService) []lua.RegistryFunction {
 			}
 			return 0
 		}},
-		// search_by_metadata retrieves requests where the value at the specified JSON path matches the provided value.
-		//
-		// @param path string The JSON path (e.g., "$.intercepted").
-		// @param value any The value to match against.
-		// @return []table A list of tables, each containing summary information for a matching request/response pair.
-		{Name: "search_by_metadata", Function: func(l *lua.State) int {
+		{Name: "search_by_metadata", Signature: "(path: string, value: any) -> table", Summary: "Retrieves requests where the value at the specified JSON path matches the provided value. path is a JSON path such as \"$.intercepted\".", Function: func(l *lua.State) int {
 			repo, err := proxy.GetTrafficRepo()
 			if err != nil {
 				lua.Errorf(l, "getting traffic repo: %s", err.Error())

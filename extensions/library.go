@@ -18,13 +18,8 @@ import (
 // functionality to Lua scripts.
 func registerMarasiLibrary(extension *Runtime, proxy ProxyService) {
 	l := extension.LuaState
-	funcs := []lua.RegistryFunction{
-		// log writes a message to the proxy's log.
-		//
-		// @param message string The message to log.
-		// @param level string (optional) The log level (e.g., "INFO", "WARN", "ERROR").
-		// Defaults to "INFO".
-		{Name: "log", Function: func(l *lua.State) int {
+	funcs := []APIFunction{
+		{Name: "log", Signature: "(message: string, level?: string)", Summary: "Writes a message to the proxy's log. level is \"INFO\" (the default), \"WARN\", or \"ERROR\".", Function: func(l *lua.State) int {
 			message := lua.CheckString(l, 2)
 			level := lua.OptString(l, 3, "INFO")
 			if extID := GetExtensionID(l); extID != uuid.Nil {
@@ -42,10 +37,7 @@ func registerMarasiLibrary(extension *Runtime, proxy ProxyService) {
 			}
 			return 0
 		}},
-		// config returns the path to the proxy's configuration directory.
-		//
-		// @return string The configuration directory path.
-		{Name: "config", Function: func(l *lua.State) int {
+		{Name: "config", Signature: "() -> string", Summary: "Returns the path to the proxy's configuration directory.", Function: func(l *lua.State) int {
 			config, err := proxy.GetConfigDir()
 			if err != nil {
 				l.PushString("")
@@ -54,10 +46,7 @@ func registerMarasiLibrary(extension *Runtime, proxy ProxyService) {
 			l.PushString(config)
 			return 1
 		}},
-		// scope returns the proxy's current scope.
-		//
-		// @return Scope The scope object.
-		{Name: "scope", Function: func(l *lua.State) int {
+		{Name: "scope", Signature: "() -> scope", Summary: "Returns the proxy's current scope.", Function: func(l *lua.State) int {
 			scope, err := proxy.GetScope()
 			if err != nil {
 				lua.Errorf(l, fmt.Sprintf("getting scope : %s", err.Error()))
@@ -67,11 +56,7 @@ func registerMarasiLibrary(extension *Runtime, proxy ProxyService) {
 			lua.SetMetaTableNamed(l, "scope")
 			return 1
 		}},
-		// builder creates a new request builder.
-		//
-		// @param request Request (optional) An existing request object to use as a template.
-		// @return RequestBuilder A new request builder.
-		{Name: "builder", Function: func(l *lua.State) int {
+		{Name: "builder", Signature: "(request?: req) -> RequestBuilder", Summary: "Creates a new request builder.", Function: func(l *lua.State) int {
 			nargs := l.Top()
 			client, err := proxy.GetClient()
 
@@ -124,14 +109,14 @@ func registerMarasiLibrary(extension *Runtime, proxy ProxyService) {
 		}},
 	}
 
-	lua.NewLibrary(l, funcs)
+	newLibrary(extension, "marasi", funcs)
 	l.SetGlobal("marasi")
 
-	registerSettingsLibrary(l, proxy)
-	registerEncodingLibrary(l)
-	registerCryptoLibrary(l)
+	registerSettingsLibrary(extension, proxy)
+	registerEncodingLibrary(extension)
+	registerCryptoLibrary(extension)
 	registerUtilsLibrary(extension)
-	registerStringsLibrary(l)
-	registerRandomLibrary(l)
-	registerRepoLibrary(l, proxy)
+	registerStringsLibrary(extension)
+	registerRandomLibrary(extension)
+	registerRepoLibrary(extension, proxy)
 }

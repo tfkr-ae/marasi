@@ -105,12 +105,26 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 | Launch a proxied browser | `chrome` | Register an executable path and profile before launch. |
 | Record methodology and vulnerabilities | `test-case`, `finding` | Link captured request IDs as evidence. |
 | Attach evidence files | `artifact` | Uploads require exactly one of `--finding` or `--test-case`, never both. |
-| Modify traffic with Lua | `extension` | Inspect source and settings before enabling or calling an extension. |
+| Modify traffic with Lua | `extension` | Inspect source and settings before enabling or calling an extension. See [Write Lua extensions](#write-lua-extensions) before changing source. |
 | Manage attack inputs | `wordlist` | `add` moves the source file. Copy it first if the original must remain. |
 | Automate requests from templates | `armory` | Validate inputs before creating a run. Creation does not start it. Starting sends traffic. |
 | Export assessment evidence | `report` | Template `add` moves the source file. Exports default to draft and include test cases. Select `--output` explicitly. |
 | Watch live activity | `events` | Blocking stream with no replay. `--json` emits one event object per line. |
 | Diagnose proxy activity | `logs` | Filter traffic separately with `traffic list`; logs are not captured request/response pairs. |
+
+## Write Lua extensions
+
+An extension is Lua source stored in the project. The proxy calls hooks the source defines, such as `processRequest(request)`, and `extension call` runs any global function. Read the API for the installed version before you write Lua, then read each library or type you use:
+
+```sh
+marasi extension api
+marasi extension api marasi.repo
+marasi extension api req
+```
+
+Call library functions and object methods with `:`, for example `marasi.strings:upper(s)` and `request:method()`. A call with `.` passes the wrong arguments. The sandbox has no `string`, `io`, or `os` library. A Lua error in a hook is logged and the item continues. An interrupted hook drops the item.
+
+Replace the source with `extension update`, which runs it at once, then check `extension logs` and the affected traffic.
 
 ## Verify and finish
 
