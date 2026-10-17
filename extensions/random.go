@@ -16,7 +16,7 @@ func registerRandomLibrary(extension *Runtime) {
 		return
 	}
 
-	newLibrary(extension, "marasi.random", randomLibrary())
+	extension.newLibrary("marasi.random", randomLibrary())
 
 	l.SetField(-2, "random")
 

@@ -19,7 +19,7 @@ func registerRepoLibrary(extension *Runtime, proxy ProxyService) {
 		return
 	}
 
-	newLibrary(extension, "marasi.repo", trafficLibrary(proxy))
+	extension.newLibrary("marasi.repo", trafficLibrary(proxy))
 	l.SetField(-2, "repo")
 	l.Pop(1)
 }

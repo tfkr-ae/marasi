@@ -702,7 +702,7 @@ func RegisterURLType(extension *Runtime) {
 func RegisterRequestType(extension *Runtime) {
 	var funcs []APIFunction
 
-	funcs = append(funcs, APIFunction{Name: "id", Signature: "() -> string", Summary: "Returns the request's unique ID.", Function: func(l *lua.State) int {
+	funcs = append(funcs, APIFunction{Name: "id", Signature: "() -> string|nil", Summary: "Returns the request's unique ID.", Function: func(l *lua.State) int {
 		req := lua.CheckUserData(l, 1, "req").(*http.Request)
 		if requestId, ok := core.RequestIDFromContext(req.Context()); ok {
 			l.PushString(requestId.String())
@@ -904,7 +904,7 @@ func RegisterRequestType(extension *Runtime) {
 		return 0
 	}})
 
-	funcs = append(funcs, APIFunction{Name: "metadata", Signature: "() -> table", Summary: "Returns the request's metadata.", Function: func(l *lua.State) int {
+	funcs = append(funcs, APIFunction{Name: "metadata", Signature: "() -> table|nil", Summary: "Returns the request's metadata.", Function: func(l *lua.State) int {
 		req := lua.CheckUserData(l, 1, "req").(*http.Request)
 
 		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
@@ -944,7 +944,7 @@ func RegisterRequestType(extension *Runtime) {
 		return 0
 	}})
 
-	funcs = append(funcs, APIFunction{Name: "skip", Signature: "()", Summary: "Marks the request to be skipped by other extensions.", Function: func(l *lua.State) int {
+	funcs = append(funcs, APIFunction{Name: "skip", Signature: "()", Summary: "Forwards the request without running later extensions or Checkpoint. A skipped request is not stored.", Function: func(l *lua.State) int {
 		req := lua.CheckUserData(l, 1, "req").(*http.Request)
 		*req = *core.ContextWithSkipFlag(req, true)
 		return 0
@@ -1106,7 +1106,7 @@ func RegisterWebSocketMessageType(extension *Runtime) {
 func RegisterResponseType(extension *Runtime) {
 	var funcs []APIFunction
 
-	funcs = append(funcs, APIFunction{Name: "id", Signature: "() -> string", Summary: "Returns the response's associated request ID.", Function: func(l *lua.State) int {
+	funcs = append(funcs, APIFunction{Name: "id", Signature: "() -> string|nil", Summary: "Returns the response's associated request ID.", Function: func(l *lua.State) int {
 		res := lua.CheckUserData(l, 1, "res").(*http.Response)
 		if requestId, ok := core.RequestIDFromContext(res.Request.Context()); ok {
 			l.PushString(requestId.String())
@@ -1115,7 +1115,7 @@ func RegisterResponseType(extension *Runtime) {
 		l.PushNil()
 		return 0
 	}})
-	funcs = append(funcs, APIFunction{Name: "method", Signature: "() -> string", Summary: "Returns the method of the original request.", Function: func(l *lua.State) int {
+	funcs = append(funcs, APIFunction{Name: "method", Signature: "() -> string|nil", Summary: "Returns the method of the original request.", Function: func(l *lua.State) int {
 		res := lua.CheckUserData(l, 1, "res").(*http.Response)
 		if res.Request != nil {
 			l.PushString(res.Request.Method)
@@ -1282,7 +1282,7 @@ func RegisterResponseType(extension *Runtime) {
 		return 0
 	}})
 
-	funcs = append(funcs, APIFunction{Name: "metadata", Signature: "() -> table", Summary: "Returns the response's metadata.", Function: func(l *lua.State) int {
+	funcs = append(funcs, APIFunction{Name: "metadata", Signature: "() -> table|nil", Summary: "Returns the response's metadata.", Function: func(l *lua.State) int {
 		res := lua.CheckUserData(l, 1, "res").(*http.Response)
 
 		if metadata, ok := core.MetadataFromContext(res.Request.Context()); ok {
@@ -1331,7 +1331,7 @@ func RegisterResponseType(extension *Runtime) {
 		res.Request = core.ContextWithDropFlag(res.Request, true)
 		return 0
 	}})
-	funcs = append(funcs, APIFunction{Name: "skip", Signature: "()", Summary: "Marks the response to be skipped by other extensions.", Function: func(l *lua.State) int {
+	funcs = append(funcs, APIFunction{Name: "skip", Signature: "()", Summary: "Forwards the response without running later extensions or Checkpoint. A skipped response is not stored.", Function: func(l *lua.State) int {
 		res := lua.CheckUserData(l, 1, "res").(*http.Response)
 		res.Request = core.ContextWithSkipFlag(res.Request, true)
 		return 0

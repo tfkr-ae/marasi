@@ -109,7 +109,7 @@ func registerMarasiLibrary(extension *Runtime, proxy ProxyService) {
 		}},
 	}
 
-	newLibrary(extension, "marasi", funcs)
+	extension.newLibrary("marasi", funcs)
 	l.SetGlobal("marasi")
 
 	registerSettingsLibrary(extension, proxy)

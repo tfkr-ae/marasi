@@ -80,6 +80,8 @@ type APIReference struct {
 var Reference = sync.OnceValue(func() APIReference {
 	ref := APIReference{Hooks: hooks}
 
+	// Registration only stores the proxy in closures, so a nil proxy is safe
+	// in a runtime that never runs Lua.
 	extension := &Runtime{Data: &domain.Extension{}, LuaState: lua.NewState(), reference: &ref}
 	registerAPI(extension, nil)
 
@@ -168,7 +170,7 @@ func standardLibraries(l *lua.State, replaced []Entry) []Library {
 
 // newLibrary pushes a table holding functions. When the reference is being
 // built, it records the functions under path.
-func newLibrary(extension *Runtime, path string, functions []APIFunction) {
+func (extension *Runtime) newLibrary(path string, functions []APIFunction) {
 	registry := make([]lua.RegistryFunction, len(functions))
 	for i, function := range functions {
 		registry[i] = lua.RegistryFunction{Name: function.Name, Function: function.Function}
