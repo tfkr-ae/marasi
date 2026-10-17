@@ -95,6 +95,7 @@ var referencePairs = []struct {
 }
 
 func TestSitemap_QueryModeAgreesWithTheReference(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	var ids []uuid.UUID

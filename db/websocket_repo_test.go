@@ -11,6 +11,7 @@ import (
 )
 
 func TestWebSocketRepo_InsertConnection(t *testing.T) {
+	t.Parallel()
 	t.Run("should insert a connection", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -129,6 +130,7 @@ func TestWebSocketRepo_InsertConnection(t *testing.T) {
 }
 
 func TestWebSocketRepo_UpdateConnection(t *testing.T) {
+	t.Parallel()
 	t.Run("should update lifecyle fields", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -216,6 +218,7 @@ func TestWebSocketRepo_UpdateConnection(t *testing.T) {
 }
 
 func TestWebSocketRepo_GetConnection(t *testing.T) {
+	t.Parallel()
 	t.Run("should return connection by id", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -327,6 +330,7 @@ func TestWebSocketRepo_GetConnection(t *testing.T) {
 }
 
 func TestWebSocketRepo_GetConnectionByRequestID(t *testing.T) {
+	t.Parallel()
 	t.Run("should return connection for upgrade request", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -381,6 +385,7 @@ func TestWebSocketRepo_GetConnectionByRequestID(t *testing.T) {
 }
 
 func TestWebSocketRepo_InsertMessage(t *testing.T) {
+	t.Parallel()
 	t.Run("should insert a message", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -538,6 +543,7 @@ func TestWebSocketRepo_InsertMessage(t *testing.T) {
 }
 
 func TestWebSocketRepo_GetMessages(t *testing.T) {
+	t.Parallel()
 	t.Run("should return messages ordered by id ascending", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -650,6 +656,7 @@ func TestWebSocketRepo_GetMessages(t *testing.T) {
 }
 
 func TestWebSocketRepo_GetMessage(t *testing.T) {
+	t.Parallel()
 	t.Run("should return message by id", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -728,6 +735,7 @@ func TestWebSocketRepo_GetMessage(t *testing.T) {
 }
 
 func TestWebSocketRepo_CountMessages(t *testing.T) {
+	t.Parallel()
 	t.Run("should return zero when there are no messages", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -836,6 +844,7 @@ func TestWebSocketRepo_CountMessages(t *testing.T) {
 }
 
 func TestWebSocketRepo_GetMessagesByRequestID(t *testing.T) {
+	t.Parallel()
 	t.Run("should return messages for upgrade request ordered by id ascending", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()

@@ -11,6 +11,7 @@ import (
 )
 
 func TestLaunchpadRepo_GetLaunchpads(t *testing.T) {
+	t.Parallel()
 	t.Run("should return 0 launchpads if none are configured", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -60,6 +61,7 @@ func TestLaunchpadRepo_GetLaunchpads(t *testing.T) {
 }
 
 func TestLaunchpadRepo_GetLaunchpad(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -84,6 +86,7 @@ func TestLaunchpadRepo_GetLaunchpad(t *testing.T) {
 }
 
 func TestLaunchpadRepo_CreateLaunchpad(t *testing.T) {
+	t.Parallel()
 	t.Run("should create a launchpad", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -122,6 +125,7 @@ func TestLaunchpadRepo_CreateLaunchpad(t *testing.T) {
 }
 
 func TestLaunchpadRepo_UpdateLaunchpad(t *testing.T) {
+	t.Parallel()
 	t.Run("should update an existing launchpad", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -265,6 +269,7 @@ func TestLaunchpadRepo_UpdateLaunchpad(t *testing.T) {
 	})
 }
 func TestLaunchpadRepo_DeleteLaunchpad(t *testing.T) {
+	t.Parallel()
 	t.Run("should delete an existing launchpad", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -307,6 +312,7 @@ func TestLaunchpadRepo_DeleteLaunchpad(t *testing.T) {
 }
 
 func TestLaunchpadRepo_GetLaunchpadRequests(t *testing.T) {
+	t.Parallel()
 	t.Run("should return an empty slice if no requests are linked", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -407,6 +413,7 @@ func TestLaunchpadRepo_GetLaunchpadRequests(t *testing.T) {
 }
 
 func TestLaunchpadRepo_LinkRequestToLaunchpad(t *testing.T) {
+	t.Parallel()
 	t.Run("should link a request to launchpad", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()

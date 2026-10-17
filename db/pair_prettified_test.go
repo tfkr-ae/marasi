@@ -63,6 +63,7 @@ func fullRead(t *testing.T, repo *Repository, id uuid.UUID) (domain.Prettified, 
 }
 
 func TestPrettifiedBodies(t *testing.T) {
+	t.Parallel()
 	t.Run("should return the copies of a pair that has not moved yet, without them in metadata", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()
@@ -165,6 +166,7 @@ func metadataWithPrettified(t *testing.T, repo *Repository) int {
 }
 
 func TestPrettifiedMoveJob(t *testing.T) {
+	t.Parallel()
 	t.Run("should be complete on a new project", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()

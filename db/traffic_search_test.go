@@ -127,6 +127,7 @@ func textSearchPairs() []textPair {
 }
 
 func TestTrafficRepo_ListTrafficTextSearch(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := captureTextPairs(t, repo, textSearchPairs())
@@ -180,6 +181,7 @@ func TestTrafficRepo_ListTrafficTextSearch(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficTextSearchSkipsBinaryBodies(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := captureTextPairs(t, repo, []textPair{
@@ -223,6 +225,7 @@ func TestTrafficRepo_ListTrafficTextSearchSkipsBinaryBodies(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficTextSearchLateResponse(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	id := captureRequest(t, repo, "example.com", "GET /later HTTP/1.1\r\nHost: example.com\r\n\r\n")
@@ -242,6 +245,7 @@ func TestTrafficRepo_ListTrafficTextSearchLateResponse(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficTextSearchArmoryEntries(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	run := armoryTestRun(t, repo, armoryTestTemplate(t, repo, "Template"))
@@ -258,6 +262,7 @@ func TestTrafficRepo_ListTrafficTextSearchArmoryEntries(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficTextSearchPaging(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := captureTextPairs(t, repo, []textPair{
@@ -291,6 +296,7 @@ func TestTrafficRepo_ListTrafficTextSearchPaging(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficTextSearchErrors(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	captureTextPairs(t, repo, textSearchPairs()[:1])
@@ -344,6 +350,7 @@ func assertListNames(t *testing.T, repo *Repository, ids map[string]uuid.UUID, s
 }
 
 func TestTrafficRepo_ListTrafficNoteSearch(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := captureTextPairs(t, repo, []textPair{
@@ -377,6 +384,7 @@ func TestTrafficRepo_ListTrafficNoteSearch(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficMetadataSearch(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := captureTextPairs(t, repo, []textPair{
@@ -407,6 +415,7 @@ func TestTrafficRepo_ListTrafficMetadataSearch(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficMetadataSearchAtCapture(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	id, err := uuid.NewV7()
@@ -461,6 +470,7 @@ func TestTrafficRepo_ListTrafficMetadataSearchAtCapture(t *testing.T) {
 }
 
 func TestTrafficRepo_ListTrafficNoteChangesKeepMetadataSearch(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := captureTextPairs(t, repo, []textPair{{name: "a", request: "GET /a HTTP/1.1\r\n\r\n"}})
@@ -508,6 +518,7 @@ func rebuildRequestTable(t *testing.T, repo *Repository) {
 }
 
 func TestTrafficRepo_ListTrafficTextSearchAfterRequestTableRebuild(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := captureTextPairs(t, repo, textSearchPairs())
@@ -533,6 +544,7 @@ func TestTrafficRepo_ListTrafficTextSearchAfterRequestTableRebuild(t *testing.T)
 }
 
 func TestTrafficRepo_ListTrafficTextSearchAfterPairDeleted(t *testing.T) {
+	t.Parallel()
 	repo, teardown := setupTestDB(t)
 	defer teardown()
 	ids := captureTextPairs(t, repo, []textPair{{name: "deleted", request: "GET /old HTTP/1.1\r\n\r\n", response: []byte("HTTP/1.1 200 OK\r\n\r\nleftover-secret")}})
