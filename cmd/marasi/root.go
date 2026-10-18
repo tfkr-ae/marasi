@@ -33,10 +33,10 @@ var rootCmd = &cobra.Command{
 // executeCommand runs the root cobra command with args.
 func executeCommand(args []string) error {
 	rootCmd.SetArgs(args)
-	eventsConnected = false
+	streamConnected = false
 	jsonOutput = recognizedJSONMode(args)
 	command, _, _ := rootCmd.Find(args)
-	streamingJSON := jsonOutput && command == eventsCmd
+	streamingJSON := jsonOutput && (command == eventsCmd || command == updateInstallCmd || command == updateReinstallCmd)
 	rootCmd.SilenceErrors = jsonOutput
 	stdout := rootCmd.OutOrStdout()
 	var output bytes.Buffer
@@ -55,7 +55,7 @@ func executeCommand(args []string) error {
 		return err
 	}
 	if jsonOutput {
-		if streamingJSON && eventsConnected {
+		if streamingJSON && streamConnected {
 			return err
 		}
 		encodeErr := json.NewEncoder(stdout).Encode(struct {

@@ -483,10 +483,20 @@ func (c *Chrome) withConfig(ctx context.Context, operation func() error) (result
 }
 
 func (c *Chrome) acquireConfigLock(ctx context.Context) (*os.File, error) {
-	path := filepath.Join(c.proxy.ConfigDir, chromeConfigLockFile)
+	return acquireConfigLock(ctx, c.proxy.ConfigDir)
+}
+
+// acquireConfigLock takes the lock every instance holds while it rereads
+// and writes marasi_config.yaml (ADR-0013).
+func acquireConfigLock(ctx context.Context, configDir string) (*os.File, error) {
+	return acquireFileLock(ctx, filepath.Join(configDir, chromeConfigLockFile), "chrome config")
+}
+
+// acquireFileLock polls for an exclusive lock on path until ctx is done.
+func acquireFileLock(ctx context.Context, path, name string) (*os.File, error) {
 	lock, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
-		return nil, fmt.Errorf("opening chrome config lock %s: %w", path, err)
+		return nil, fmt.Errorf("opening %s lock %s: %w", name, path, err)
 	}
 	ticker := time.NewTicker(chromeLockPollDelay)
 	defer ticker.Stop()
@@ -497,7 +507,7 @@ func (c *Chrome) acquireConfigLock(ctx context.Context) (*os.File, error) {
 		if err := filelock.TryLock(lock); err == nil {
 			return lock, nil
 		} else if !filelock.IsUnavailable(err) {
-			return nil, errors.Join(fmt.Errorf("locking chrome config %s: %w", path, err), lock.Close())
+			return nil, errors.Join(fmt.Errorf("locking %s %s: %w", name, path, err), lock.Close())
 		}
 		select {
 		case <-ctx.Done():

@@ -4,7 +4,8 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 
 | Feature | User entry points | Proof file |
 | --- | --- | --- |
-| Service lifecycle | `service start`, `service status`, `service stop`, `service list` | [service lifecycle](service-lifecycle.md) |
+| Service lifecycle | `service start`, `service status`, `service stop`, `service list`, `service restart` | [service lifecycle](service-lifecycle.md) |
+| Update | `update`, `update check`, `update channel`, `update install`, `update reinstall` | [update](update.md) |
 | Proxy listener control | `listener status`, `listener address`, `listener stop`, `listener start`, `listener update` | [proxy listener control](proxy-listener-control.md) |
 | HTTP traffic capture | Configure a client with `proxy_listener`, then make HTTP or HTTPS requests | [HTTP traffic capture](http-traffic-capture.md) |
 | Captured traffic inspection | `traffic list`, list queries (`-q`) and pagination, `traffic get`, `traffic metadata get`, `traffic metadata update`, `traffic count`, `traffic types`, `traffic sitemap` (one level, or several with `--node`/`--scope`), `traffic validate`, `traffic bulk metadata set`, `traffic bulk metadata clear`, `traffic bulk delete` | [captured traffic inspection](captured-traffic-inspection.md) |
