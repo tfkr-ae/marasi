@@ -70,6 +70,10 @@ type updateInstaller struct {
 	mu      sync.Mutex
 	running *runningInstall
 	state   installState
+	// restarting keeps installs from starting while a restart runs;
+	// closed keeps them from starting once close has begun.
+	restarting bool
+	closed     bool
 	// installed is the version this instance installed, so a repeated
 	// request does not install it again before the restart.
 	installed string
@@ -85,9 +89,31 @@ func newUpdateInstaller() *updateInstaller {
 }
 
 // close cancels a running install before its swap and waits for it to end.
+// No install starts after close begins.
 func (in *updateInstaller) close() {
+	in.mu.Lock()
+	in.closed = true
+	in.mu.Unlock()
 	in.cancelAll()
 	in.wg.Wait()
+}
+
+// holdForRestart keeps installs from starting until releaseRestart. It
+// fails while an install runs.
+func (in *updateInstaller) holdForRestart() bool {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.running != nil {
+		return false
+	}
+	in.restarting = true
+	return true
+}
+
+func (in *updateInstaller) releaseRestart() {
+	in.mu.Lock()
+	in.restarting = false
+	in.mu.Unlock()
 }
 
 func (in *updateInstaller) current() installState {
@@ -359,6 +385,14 @@ func (s *Server) startInstall(w http.ResponseWriter, r *http.Request, c update.C
 		return
 	}
 	defer in.mu.Unlock()
+	if in.closed {
+		writeUpdateError(w, r, http.StatusServiceUnavailable, "service_stopping", "the instance is stopping")
+		return
+	}
+	if in.restarting {
+		writeUpdateError(w, r, http.StatusConflict, "restart_in_progress", "the instance is restarting")
+		return
+	}
 	if !reinstall && in.installed == c.Build.Version {
 		writeUpdateError(w, r, http.StatusConflict, "already_installed", fmt.Sprintf("build %s is installed; restart the instance to run it", c.Build.Version))
 		return
