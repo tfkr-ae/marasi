@@ -59,9 +59,9 @@ func (m admittingMux) HandleFunc(pattern string, handler func(http.ResponseWrite
 }
 
 // addRoutes registers control and traffic routes on mux.
-func addRoutes(mux *http.ServeMux, projects *ProjectLifecycle, proxy *marasi.Proxy, chrome *Chrome, events *eventBroadcaster, status http.HandlerFunc, stop func()) {
+func addRoutes(mux *http.ServeMux, projects *ProjectLifecycle, proxy *marasi.Proxy, chrome *Chrome, events *eventBroadcaster, status, restart http.HandlerFunc, stop func()) {
 	serviceMux := http.NewServeMux()
-	addServiceRoutes(serviceMux, status, stop)
+	addServiceRoutes(serviceMux, status, restart, stop)
 	mux.Handle("/service/", http.StripPrefix("/service", serviceMux))
 	projectRoutes := admittingMux{ServeMux: mux, projects: projects}
 	addScopeRoutes(projectRoutes, proxy)
@@ -89,10 +89,12 @@ func addRoutes(mux *http.ServeMux, projects *ProjectLifecycle, proxy *marasi.Pro
 	addJobRoutes(projectRoutes, mux, projects, events)
 }
 
-// addServiceRoutes registers the service status and stop routes.
-func addServiceRoutes(mux *http.ServeMux, status http.HandlerFunc, stop func()) {
+// addServiceRoutes registers the service status, restart, and stop routes.
+// They are not admitted: a restart releases the project itself (ADR-0051).
+func addServiceRoutes(mux *http.ServeMux, status, restart http.HandlerFunc, stop func()) {
 	var stopOnce sync.Once
 	mux.HandleFunc("/status", status)
+	mux.HandleFunc("POST /restart", restart)
 	mux.HandleFunc("POST /stop", func(w http.ResponseWriter, r *http.Request) {
 		stopOnce.Do(stop)
 		if err := encode(w, r, http.StatusAccepted, map[string]string{"status": "shutdown_in_progress"}); err != nil {
