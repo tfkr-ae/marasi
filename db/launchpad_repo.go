@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -266,4 +267,93 @@ func (repo *Repository) UnlinkRequestFromLaunchpad(requestID uuid.UUID, launchpa
 		return domain.ErrLaunchpadNotLinked
 	}
 	return nil
+}
+
+// MoveLaunchpadEntries moves entries within a launchpad in one transaction,
+// as domain.LaunchpadRepository describes. The moved links are deleted and
+// inserted again with new keys between the keys of the entry before BeforeID
+// and BeforeID, or after the last entry. It does not check for pending
+// launches.
+func (repo *Repository) MoveLaunchpadEntries(move domain.LaunchpadMove) ([]uuid.UUID, error) {
+	if move.TargetID != move.SourceID {
+		return nil, fmt.Errorf("moving entries to another launchpad: %w", errors.ErrUnsupported)
+	}
+	var moved []uuid.UUID
+	err := repo.inTx(func(tx *sqlx.Tx) error {
+		var exists int
+		if err := tx.Get(&exists, `SELECT count(*) FROM launchpad WHERE id = ?`, move.SourceID); err != nil {
+			return err
+		}
+		if exists == 0 {
+			return domain.ErrLaunchpadNotFound
+		}
+		requested := slices.Clone(move.RequestIDs)
+		slices.SortFunc(requested, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+		requested = slices.Compact(requested)
+		if len(requested) == 0 {
+			return nil
+		}
+		query, args, err := sqlx.In(`SELECT request_id FROM launchpad_request WHERE launchpad_id = ? AND request_id IN (?) ORDER BY position`, move.SourceID, requested)
+		if err != nil {
+			return err
+		}
+		if err := tx.Select(&moved, tx.Rebind(query), args...); err != nil {
+			return err
+		}
+		if len(moved) != len(requested) {
+			return domain.ErrLaunchpadNotLinked
+		}
+		if move.BeforeID != uuid.Nil && slices.Contains(moved, move.BeforeID) {
+			return domain.ErrInvalidPlacement
+		}
+		query, args, err = sqlx.In(`DELETE FROM launchpad_request WHERE launchpad_id = ? AND request_id IN (?)`, move.SourceID, moved)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(tx.Rebind(query), args...); err != nil {
+			return err
+		}
+		keys, err := keysForPlacement(tx, move.TargetID, move.BeforeID, len(moved))
+		if err != nil {
+			return err
+		}
+		for i, id := range moved {
+			if _, err := tx.Exec(`INSERT INTO launchpad_request (request_id, launchpad_id, position) VALUES (?, ?, ?)`, id, move.TargetID, keys[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("moving launchpad entries: %w", err)
+	}
+	return moved, nil
+}
+
+// keysForPlacement returns n ascending entry-order keys (ADR-0048) that place
+// new entries just before the launchpad's entry beforeID, or after its last
+// entry when beforeID is uuid.Nil. It returns domain.ErrInvalidPlacement if
+// beforeID is not an entry. The caller inserts the keys in tx.
+func keysForPlacement(tx *sqlx.Tx, launchpadID, beforeID uuid.UUID, n int) ([]string, error) {
+	if beforeID == uuid.Nil {
+		return keysAfterLastEntry(tx, launchpadID, n)
+	}
+	var before string
+	err := tx.Get(&before, `SELECT position FROM launchpad_request WHERE launchpad_id = ? AND request_id = ?`, launchpadID, beforeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, domain.ErrInvalidPlacement
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading the entry to place before: %w", err)
+	}
+	var previous sql.NullString
+	err = tx.Get(&previous, `SELECT max(position) FROM launchpad_request WHERE launchpad_id = ? AND position < ?`, launchpadID, before)
+	if err != nil {
+		return nil, fmt.Errorf("reading the entry before %s: %w", beforeID, err)
+	}
+	keys, err := fracdex.NKeysBetween(previous.String, before, uint(n))
+	if err != nil {
+		return nil, fmt.Errorf("generating entry order keys: %w", err)
+	}
+	return keys, nil
 }
