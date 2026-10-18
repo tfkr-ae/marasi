@@ -187,7 +187,7 @@ func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, e
 			writeLaunchpadRepositoryError(w, r, err)
 			return
 		}
-		if err := repo.UnlinkRequestFromLaunchpad(requestID, id); err != nil {
+		if err := proxy.UnlinkRequestFromLaunchpad(requestID, id); err != nil {
 			writeLaunchpadRepositoryError(w, r, err)
 			return
 		}
@@ -359,6 +359,11 @@ func writeLaunchpadError(w http.ResponseWriter, r *http.Request, status int, cod
 }
 
 func writeLaunchpadRepositoryError(w http.ResponseWriter, r *http.Request, err error) {
+	var pending *domain.LaunchPendingError
+	if errors.As(err, &pending) {
+		writeLaunchPending(w, r, pending)
+		return
+	}
 	if errors.Is(err, domain.ErrLaunchpadNotFound) {
 		writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
 		return

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -63,8 +64,19 @@ func rejectInstanceStatus(operation string, response instanceResponse, asJSON bo
 	if response.StatusCode == http.StatusOK {
 		return nil
 	}
-	if asJSON || isInvalidRequest(response.StatusCode, response.Body) {
+	if asJSON || isInvalidRequest(response.StatusCode, response.Body) || isLaunchPending(response) {
 		return controlAPIError(operation, response.Status, response.Body)
 	}
 	return fmt.Errorf("%s: %s", operation, response.Status)
+}
+
+// isLaunchPending reports whether the control API refused the request
+// because it would take a pending launch's pair out of its launchpad
+// (ADR-0049). Its message names the pending pairs, so it is shown in human
+// mode too.
+func isLaunchPending(response instanceResponse) bool {
+	var payload struct {
+		Error string `json:"error"`
+	}
+	return response.StatusCode == http.StatusConflict && json.Unmarshal(response.Body, &payload) == nil && payload.Error == "launch_pending"
 }
