@@ -17,6 +17,9 @@ import (
 // connections and messages, proxy logs, the highlight, the prettified
 // bodies, the sitemap link and the index key. A sitemap node left with no
 // pairs stays until the next rebuild.
+//
+// It does not check for pending launches; clients call the Proxy method of
+// the same name, which refuses a pending launch's pair (ADR-0049).
 func (repo *Repository) DeleteTraffic(sel domain.Selection) (int, error) {
 	return repo.bulkInTx(sel, func(tx *sqlx.Tx, selected string, args []any) (int, error) {
 		// The selection is resolved once into temp.deleting, so a query
