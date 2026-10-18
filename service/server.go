@@ -29,6 +29,7 @@ type Server struct {
 	projects          *ProjectLifecycle
 	chrome            *Chrome
 	version           string
+	channel           string // build channel; "" for a development build
 	instance          string
 	project           string
 }
@@ -356,19 +357,31 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxyListener := s.listener.Status().ProxyListener
+	var channel *string
+	if s.channel != "" {
+		channel = &s.channel
+	}
 	writeJSON(w, r, http.StatusOK, struct {
 		Status        string  `json:"status"`
 		Version       string  `json:"version"`
+		Channel       *string `json:"channel"`
 		Instance      string  `json:"instance"`
 		Project       string  `json:"project"`
 		ProxyListener *string `json:"proxy_listener"`
 	}{
 		Status:        "running",
 		Version:       s.version,
+		Channel:       channel,
 		Instance:      s.instance,
 		Project:       project,
 		ProxyListener: proxyListener,
 	})
+}
+
+// SetBuildChannel records the channel the running build was published on,
+// reported by GET /service/status. "" (the default) is a development build.
+func (s *Server) SetBuildChannel(channel string) {
+	s.channel = channel
 }
 
 // ServeHTTP serves the instance control API.
