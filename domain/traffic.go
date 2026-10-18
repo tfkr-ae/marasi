@@ -157,6 +157,11 @@ type TrafficRepository interface {
 	// It returns the same errors as LinkTraffic.
 	UnlinkTraffic(sel Selection, target LinkTarget) (int, error)
 
+	// SelectionIncludes returns the ids among ids that are pairs in sel, in
+	// the order of ids, resolving sel as the bulk operations do. It returns
+	// the same selection errors they do.
+	SelectionIncludes(sel Selection, ids []uuid.UUID) ([]uuid.UUID, error)
+
 	// SetHighlight gives every pair in sel the highlight h, from MinHighlight
 	// to MaxHighlight, in one transaction, and returns the number of pairs
 	// whose highlight changed. It never writes the request row or the search
