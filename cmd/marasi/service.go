@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/internal/filelock"
+	"github.com/tfkr-ae/marasi/internal/update"
 	"github.com/tfkr-ae/marasi/service"
 	"github.com/tfkr-ae/marasi/wordlist"
 )
@@ -430,6 +431,25 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	instanceName := filepath.Base(instancePath)
 	serviceServer := service.NewServer(proxy, listenerLifecycle, projects, stopService, version, instanceName, projects.Path())
 	serviceServer.SetBuildChannel(buildChannel)
+	updates, err := service.NewUpdates(service.UpdatesConfig{
+		ConfigDir:    proxy.ConfigDir,
+		Version:      version,
+		BuildChannel: buildChannel,
+		PublicKey:    signingPublicKey,
+	})
+	if err != nil {
+		// A build that cannot name itself still serves; it just never checks.
+		logger.Warn("Updates are off: the build identity is invalid", "error", err)
+		updates, err = service.NewUpdates(service.UpdatesConfig{ConfigDir: proxy.ConfigDir, Version: version})
+		if err != nil {
+			return fmt.Errorf("starting updates: %w", err)
+		}
+	}
+	serviceServer.SetUpdates(updates)
+	if target, err := update.Executable(); err == nil {
+		// A Windows install leaves the replaced build beside the new one.
+		_ = update.CleanupAside(target)
+	}
 	if handlerErr := proxy.WithOptions(
 		marasi.WithRequestHandler(serviceServer.HandleRequest),
 		marasi.WithResponseHandler(serviceServer.HandleResponse),
@@ -455,6 +475,15 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	// Drain proxy traffic alongside control requests, using the same grace period.
 	// Deferred cleanup joins this callback before closing the project database.
 	server.RegisterOnShutdown(func() { _ = closeProxy() })
+	updatesDone := make(chan struct{})
+	go func() {
+		defer close(updatesDone)
+		updates.Run(serviceCtx)
+	}()
+	defer func() {
+		stopService()
+		<-updatesDone
+	}()
 	return serveControlAPIReady(serviceCtx, server, controlListener, shutdownTimeout, func() error {
 		return ready(*listenerStatus.ProxyListener)
 	})

@@ -146,3 +146,9 @@ func sameCommit(a, b string) bool {
 	a, b = strings.ToLower(a), strings.ToLower(b)
 	return strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
 }
+
+// SameCommit reports whether two commit hashes, either possibly shortened,
+// name the same commit. An empty hash matches nothing.
+func SameCommit(a, b string) bool {
+	return a != "" && b != "" && sameCommit(a, b)
+}
