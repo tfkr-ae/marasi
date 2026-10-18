@@ -67,6 +67,30 @@ func TestServiceStatusCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("should print whether the instance needs a restart to run the installed build", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		canonicalConfigDir, err := filepath.EvalSymlinks(configDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		project := filepath.Join(canonicalConfigDir, "scratchpad.marasi")
+		for _, test := range []struct {
+			field string
+			want  string
+		}{
+			{field: "true", want: "yes"},
+			{field: "false", want: "no"},
+		} {
+			startCannedControlAPI(t, configDir, "work-"+test.want, http.StatusOK, fmt.Sprintf(`{"status":"running","version":"01.10.2026","channel":"release","instance":"work","project":%q,"proxy_listener":null,"restart_required":%s}`, project, test.field))
+
+			stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work-"+test.want, "service", "status")
+			want := fmt.Sprintf("status: running\nversion: 01.10.2026\nchannel: release\ninstance: work\nproject: %s\nproxy listener: inactive\nrestart required: %s\n", project, test.want)
+			if err != nil || stdout != want || stderr != "" {
+				t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+			}
+		}
+	})
+
 	t.Run("should pass a successful response through byte for byte in JSON mode", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		body := " {\n  \"unexpected\": true\n} "
@@ -207,7 +231,7 @@ func TestServiceStatusCommand(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := fmt.Sprintf("status: running\nversion: dev\nchannel: none\ninstance: work\nproject: %s\nproxy listener: %s\n", canonicalProject, listener)
+		want := fmt.Sprintf("status: running\nversion: dev\nchannel: none\ninstance: work\nproject: %s\nproxy listener: %s\nrestart required: no\n", canonicalProject, listener)
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
 		if err != nil || stdout != want || stderr != "" {
