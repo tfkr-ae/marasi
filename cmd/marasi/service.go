@@ -296,6 +296,8 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 		Instance      *string         `json:"instance"`
 		Project       *string         `json:"project"`
 		ProxyListener json.RawMessage `json:"proxy_listener"`
+		// RestartRequired is absent from instances older than updates.
+		RestartRequired *bool `json:"restart_required"`
 	}
 	if err := json.Unmarshal(body, &status); err != nil {
 		return fmt.Errorf("decoding service status: %w", err)
@@ -342,7 +344,12 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 		}
 	}
 
-	if _, err := fmt.Fprintf(stdout, "status: %s\nversion: %s\nchannel: %s\ninstance: %s\nproject: %s\nproxy listener: %s\n", *status.Status, *status.Version, channel, *status.Instance, *status.Project, proxyListener); err != nil {
+	var output strings.Builder
+	fmt.Fprintf(&output, "status: %s\nversion: %s\nchannel: %s\ninstance: %s\nproject: %s\nproxy listener: %s\n", *status.Status, *status.Version, channel, *status.Instance, *status.Project, proxyListener)
+	if status.RestartRequired != nil {
+		fmt.Fprintf(&output, "restart required: %s\n", yesNo(*status.RestartRequired))
+	}
+	if _, err := io.WriteString(stdout, output.String()); err != nil {
 		return fmt.Errorf("writing service status: %w", err)
 	}
 	return nil
@@ -838,4 +845,12 @@ func lockProject(path string) (func() error, error) {
 			wrapError("closing project lock", lock.Close()),
 		)
 	}, nil
+}
+
+// yesNo writes a boolean the way human output does.
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
 }
