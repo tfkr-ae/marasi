@@ -19,6 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi/internal/filelock"
+	"github.com/tfkr-ae/marasi/internal/update"
 	"github.com/tfkr-ae/marasi/service"
 )
 
@@ -68,7 +69,7 @@ func restartService(ctx context.Context, asJSON, force bool, stdout, stderr io.W
 	}
 	response, err := callInstance(ctx, http.MethodPost, "/service/restart", "application/json", strings.NewReader(string(body)))
 	if err != nil {
-		return err
+		return withStartHint(err)
 	}
 	if response.StatusCode != http.StatusOK {
 		apiErr := controlAPIError(operation, response.Status, response.Body)
@@ -112,19 +113,6 @@ func restartService(ctx context.Context, asJSON, force bool, stdout, stderr io.W
 	}
 	_, err = fmt.Fprintf(stderr, "instance %s restarted on version %s\nproxy listener: %s\n", result.Instance, result.Version, proxyListener)
 	return wrapError("writing service restart result", err)
-}
-
-// installedBuild returns this instance's own executable, symlinks resolved.
-func installedBuild() (string, error) {
-	executable, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("locating installed build: %w", err)
-	}
-	resolved, err := filepath.EvalSymlinks(executable)
-	if err != nil {
-		return "", fmt.Errorf("resolving installed build %s: %w", executable, err)
-	}
-	return resolved, nil
 }
 
 // handoverListener is the control socket listener of an instance that can
@@ -305,15 +293,17 @@ type successorStarter struct {
 }
 
 // start hands the instance name to a successor from the installed build and
-// waits for it to report ready. On failure it takes the name back.
+// waits for it to report ready. On failure it takes the name back. The
+// Server never cancels ctx: a restart finishes once begun, so only
+// readyTimeout bounds the wait.
 func (s successorStarter) start(ctx context.Context, project string, proxyListener *string) (service.Successor, error) {
 	logPath := s.instancePath + ".log"
 	fail := func(err error) (service.Successor, error) {
 		return service.Successor{}, &service.RestartError{Log: logPath, Err: errors.Join(err, wrapError("reclaiming instance", s.claim.reclaim()))}
 	}
-	executable, err := installedBuild()
+	executable, err := update.Executable()
 	if err != nil {
-		return service.Successor{}, &service.RestartError{Log: logPath, Err: err}
+		return service.Successor{}, &service.RestartError{Log: logPath, Err: fmt.Errorf("locating installed build: %w", err)}
 	}
 	instanceName := filepath.Base(s.instancePath)
 	args := []string{
@@ -358,10 +348,6 @@ func (s successorStarter) start(ctx context.Context, project string, proxyListen
 		_ = command.Process.Kill()
 		stopChild(childInput, processResult)
 		return fail(fmt.Errorf("successor did not become ready within %s", s.readyTimeout))
-	case <-ctx.Done():
-		_ = command.Process.Kill()
-		stopChild(childInput, processResult)
-		return fail(ctx.Err())
 	}
 	if startup.err != nil {
 		stopChild(childInput, processResult)
