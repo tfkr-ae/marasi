@@ -294,21 +294,26 @@ type ProjectWait struct {
 	Count int `json:"count,omitempty"`
 }
 
+// checkpointSummary names a held Checkpoint item: a WebSocket frame's
+// direction, or the first line of an HTTP request or response.
+func checkpointSummary(item domain.CheckpointItem) string {
+	if item.Type == domain.CheckpointTypeWebSocket {
+		return item.Direction
+	}
+	line, _, _ := strings.Cut(string(item.Raw), "\n")
+	return strings.TrimSuffix(line, "\r")
+}
+
 // projectWaits lists the project work a switch is waiting for: held
 // Checkpoint items, running extensions, then other admitted work.
 func (lifecycle *ProjectLifecycle) projectWaits() []ProjectWait {
 	var waits []ProjectWait
 	heldHTTP := 0
 	for _, item := range lifecycle.proxy.CheckpointItems() {
-		wait := ProjectWait{Kind: "checkpoint", ID: item.ID.String(), Type: item.Type}
-		if item.Type == "websocket" {
-			wait.Summary = item.Direction
-		} else {
+		if item.Type != domain.CheckpointTypeWebSocket {
 			heldHTTP++
-			wait.Summary, _, _ = strings.Cut(string(item.Raw), "\n")
-			wait.Summary = strings.TrimSuffix(wait.Summary, "\r")
 		}
-		waits = append(waits, wait)
+		waits = append(waits, ProjectWait{Kind: "checkpoint", ID: item.ID.String(), Type: item.Type, Summary: checkpointSummary(item)})
 	}
 	active, running := lifecycle.gate.snapshot()
 	for _, name := range running {

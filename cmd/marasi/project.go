@@ -213,28 +213,17 @@ func watchProjectWaits(ctx context.Context, instancePath, target string, stderr 
 		if response.StatusCode != http.StatusOK {
 			return
 		}
-		reader := bufio.NewReader(response.Body)
-		eventName, data := "", ""
-		for {
-			line, err := reader.ReadString('\n')
-			line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
-			switch {
-			case line == ": connected":
+		_ = readEventFrames(bufio.NewReader(response.Body), func(line string) error {
+			if line == ": connected" {
 				close(connected)
-			case strings.HasPrefix(line, "event:"):
-				eventName = strings.TrimPrefix(strings.TrimPrefix(line, "event:"), " ")
-			case strings.HasPrefix(line, "data:"):
-				data = strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
-			case line == "":
-				if eventName == "project.waiting" {
-					writeProjectWaits(stderr, target, data)
-				}
-				eventName, data = "", ""
 			}
-			if err != nil {
-				return
+			return nil
+		}, func(frame eventFrame) error {
+			if frame.name == "project.waiting" {
+				writeProjectWaits(stderr, target, frame.data)
 			}
-		}
+			return nil
+		})
 	}()
 	timer := time.NewTimer(projectWaitConnectTimeout)
 	defer timer.Stop()

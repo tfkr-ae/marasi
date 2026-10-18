@@ -259,7 +259,7 @@ func writeUpdateNotes(out *strings.Builder, notes string) {
 func describeInstall(install updateInstall) string {
 	switch install.State {
 	case "running":
-		return fmt.Sprintf("running %s, %s", install.Version, describeStep(install.Step, install.Received, install.Total))
+		return fmt.Sprintf("running %s, %s", install.Version, describeStep(install.Step, install.Received, install.Total, false))
 	case "installed":
 		return "installed " + install.Version
 	case "failed":
@@ -273,13 +273,22 @@ func describeInstall(install updateInstall) string {
 
 const mebibyte = 1 << 20
 
-// describeStep writes an install step and, while downloading, how far it got.
-func describeStep(step string, received, total int64) string {
+// describeStep writes an install step and, while downloading, how far it
+// got. coarse rounds down to a tenth (or to 10 MiB when the size is
+// unknown), so that following an install prints one line per tenth.
+func describeStep(step string, received, total int64, coarse bool) string {
 	if step != "download" {
 		return step
 	}
 	if total > 0 {
-		return fmt.Sprintf("download %d%% of %.1f MiB", received*100/total, float64(total)/mebibyte)
+		percent := received * 100 / total
+		if coarse {
+			percent = percent / 10 * 10
+		}
+		return fmt.Sprintf("download %d%% of %.1f MiB", percent, float64(total)/mebibyte)
+	}
+	if coarse {
+		received = received / (10 * mebibyte) * (10 * mebibyte)
 	}
 	return fmt.Sprintf("download %.1f MiB", float64(received)/mebibyte)
 }
@@ -307,12 +316,6 @@ func writeUpdateChannel(cmd *cobra.Command, body []byte, switchedTo update.Chann
 		return wrapError("writing update channel", err)
 	}
 	return nil
-}
-
-// eventFrame is one named event from GET /events.
-type eventFrame struct {
-	name string
-	data string
 }
 
 // eventStream is a connected GET /events subscription.
@@ -345,46 +348,34 @@ func subscribeEvents(ctx context.Context, socketPath, instanceName string) (*eve
 		return nil, fmt.Errorf("subscribing to events: %s", response.Status)
 	}
 	reader := bufio.NewReader(response.Body)
-	for {
-		line, err := reader.ReadString('\n')
-		if strings.TrimRight(line, "\r\n") == ": connected" {
-			break
+	err = readEventFrames(reader, func(line string) error {
+		if line == ": connected" {
+			return errEventsConnected
 		}
-		if err != nil {
-			response.Body.Close()
-			client.Close()
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			return nil, fmt.Errorf("instance %s closed the event subscription before connecting", instanceName)
+		return nil
+	}, nil)
+	if !errors.Is(err, errEventsConnected) {
+		response.Body.Close()
+		client.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
+		return nil, fmt.Errorf("instance %s closed the event subscription before connecting", instanceName)
 	}
 	stream := &eventStream{frames: make(chan eventFrame, 256), body: response.Body, client: client}
 	go stream.read(reader)
 	return stream, nil
 }
 
+// errEventsConnected ends the read of a subscription's handshake.
+var errEventsConnected = errors.New("connected")
+
 func (s *eventStream) read(reader *bufio.Reader) {
 	defer close(s.frames)
-	name, data := "", ""
-	for {
-		line, err := reader.ReadString('\n')
-		line = strings.TrimRight(line, "\r\n")
-		switch {
-		case strings.HasPrefix(line, "event:"):
-			name = strings.TrimPrefix(strings.TrimPrefix(line, "event:"), " ")
-		case strings.HasPrefix(line, "data:"):
-			data = strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
-		case line == "" && err == nil:
-			if name != "" {
-				s.frames <- eventFrame{name: name, data: data}
-			}
-			name, data = "", ""
-		}
-		if err != nil {
-			return
-		}
-	}
+	_ = readEventFrames(reader, nil, func(frame eventFrame) error {
+		s.frames <- frame
+		return nil
+	})
 }
 
 func (s *eventStream) close() {
@@ -470,7 +461,7 @@ func followUpdateInstall(cmd *cobra.Command, path string, body []byte, operation
 			if jsonOutput {
 				continue
 			}
-			if line := progressLine(event.Step, event.Received, event.Total); line != lastProgress {
+			if line := describeStep(event.Step, event.Received, event.Total, true); line != lastProgress {
 				lastProgress = line
 				fmt.Fprintln(stderr, line)
 			}
@@ -487,18 +478,6 @@ func followUpdateInstall(cmd *cobra.Command, path string, body []byte, operation
 			return errors.New(failure)
 		}
 	}
-}
-
-// progressLine is the human line for an update.progress event: one per step,
-// and while downloading one per tenth (or per 10 MiB when the size is unknown).
-func progressLine(step string, received, total int64) string {
-	if step != "download" {
-		return step
-	}
-	if total > 0 {
-		return fmt.Sprintf("download %d%% of %.1f MiB", received*10/total*10, float64(total)/mebibyte)
-	}
-	return fmt.Sprintf("download %d MiB", received/(10*mebibyte)*10)
 }
 
 func detachFromInstall(stderr io.Writer, version string) error {
