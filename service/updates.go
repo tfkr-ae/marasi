@@ -120,8 +120,9 @@ type Updates struct {
 }
 
 // NewUpdates returns the updates component of an instance. A development
-// build gets one that never checks; other errors are a malformed version or
-// key.
+// build gets one that never checks. A malformed version or key is an error
+// returned with one that never checks but still reports its build channel;
+// a malformed build channel is an error returned alone.
 func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 	u := &Updates{
 		configDir: cfg.ConfigDir,
@@ -153,6 +154,7 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 	if err != nil {
 		return nil, err
 	}
+	u.buildChannel = channel
 	updater, err := update.New(update.Config{
 		Version:   cfg.Version,
 		PublicKey: cfg.PublicKey,
@@ -164,12 +166,15 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		return u, nil
 	}
 	if err != nil {
-		return nil, err
+		return u, err
 	}
-	u.buildChannel = channel
 	u.updater = updater
 	return u, nil
 }
+
+// BuildChannel is the channel the running build was published on; "" for a
+// build without one.
+func (u *Updates) BuildChannel() update.Channel { return u.buildChannel }
 
 // Updater installs updates for the installed build; nil for a development
 // build.
@@ -276,11 +281,8 @@ func (u *Updates) SetChannel(ctx context.Context, channel update.Channel) (Updat
 	if u.updater == nil {
 		return UpdateStatus{}, update.ErrDevBuild
 	}
-	if _, err := update.ParseChannel(string(channel)); err != nil {
-		return UpdateStatus{}, err
-	}
 	err := u.withConfig(ctx, func(cfg *marasi.Config) error {
-		return cfg.SetUpdateChannel(string(channel))
+		return cfg.SetUpdateChannel(channel)
 	})
 	if err != nil {
 		return UpdateStatus{}, err
@@ -382,7 +384,7 @@ func (u *Updates) status(settings marasi.UpdatesConfig, cache updateCache) Updat
 // channel is the configured channel, or the build's own.
 func (u *Updates) channel(settings marasi.UpdatesConfig) update.Channel {
 	if settings.Channel != "" {
-		return update.Channel(settings.Channel)
+		return settings.Channel
 	}
 	return u.buildChannel
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tfkr-ae/marasi/chrome"
 	"github.com/tfkr-ae/marasi/internal/filelock"
+	"github.com/tfkr-ae/marasi/internal/update"
 )
 
 type Config struct {
@@ -41,9 +42,9 @@ type Config struct {
 
 // UpdatesConfig is how the installed build looks for updates.
 type UpdatesConfig struct {
-	// Channel is "release" or "nightly". Empty means the channel of the
-	// installed build.
-	Channel string `mapstructure:"channel"`
+	// Channel is update.Release or update.Nightly. Empty means the channel
+	// of the installed build.
+	Channel update.Channel `mapstructure:"channel"`
 	// AutoCheck turns automatic update checks on or off. Unset means on.
 	AutoCheck *bool `mapstructure:"auto_check"`
 }
@@ -58,22 +59,22 @@ func (cfg *Config) validate() error {
 	if cfg.WebSocketMaxMessageSize < 0 {
 		return fmt.Errorf("websocket_max_message_size is %d: use 0 for the 64 MiB default or a positive number of bytes", cfg.WebSocketMaxMessageSize)
 	}
-	switch cfg.Updates.Channel {
-	case "", "release", "nightly":
-	default:
-		return fmt.Errorf("updates.channel is %q: use release or nightly", cfg.Updates.Channel)
+	if cfg.Updates.Channel != "" {
+		if _, err := update.ParseChannel(string(cfg.Updates.Channel)); err != nil {
+			return fmt.Errorf("updates.channel is %q: use release or nightly", cfg.Updates.Channel)
+		}
 	}
 	return nil
 }
 
-// SetUpdateChannel saves channel ("release" or "nightly") as updates.channel.
-// Callers hold the config lock and reread first (ADR-0013).
-func (cfg *Config) SetUpdateChannel(channel string) error {
-	if channel != "release" && channel != "nightly" {
-		return fmt.Errorf("update channel %q: use release or nightly", channel)
+// SetUpdateChannel saves channel as updates.channel. Callers hold the
+// config lock and reread first (ADR-0013).
+func (cfg *Config) SetUpdateChannel(channel update.Channel) error {
+	if _, err := update.ParseChannel(string(channel)); err != nil {
+		return err
 	}
 	previous := cfg.viper.Get("updates.channel")
-	cfg.viper.Set("updates.channel", channel)
+	cfg.viper.Set("updates.channel", string(channel))
 	if err := cfg.viper.WriteConfig(); err != nil {
 		cfg.viper.Set("updates.channel", previous)
 		return fmt.Errorf("failed to save configuration: %w", err)

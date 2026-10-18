@@ -155,8 +155,8 @@ type updateCheckBody struct {
 }
 
 type updateInstalledBody struct {
-	Version string  `json:"version"`
-	Channel *string `json:"channel"`
+	Version string          `json:"version"`
+	Channel *update.Channel `json:"channel"`
 }
 
 // updateBody is the GET /update response.
@@ -182,8 +182,7 @@ func (s *Server) updateBody(status UpdateStatus) updateBody {
 		RestartRequired: s.updates.RestartRequired(),
 		InstallPath:     s.updates.InstallPath(),
 	}
-	if s.channel != "" {
-		channel := s.channel
+	if channel := s.updates.BuildChannel(); channel != "" {
 		body.Installed.Channel = &channel
 	}
 	if status.Channel != "" {

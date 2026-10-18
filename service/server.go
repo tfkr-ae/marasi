@@ -16,6 +16,7 @@ import (
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/internal/update"
 )
 
 const eventHeartbeatInterval = 15 * time.Second
@@ -30,7 +31,6 @@ type Server struct {
 	projects          *ProjectLifecycle
 	chrome            *Chrome
 	version           string
-	channel           string // build channel; "" for a development build
 	updates           *Updates
 	installer         *updateInstaller
 	// announced is the update last announced in update.available.
@@ -372,18 +372,19 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxyListener := s.listener.Status().ProxyListener
-	var channel *string
-	if s.channel != "" {
-		channel = &s.channel
+	var channel *update.Channel
+	if s.updates != nil && s.updates.BuildChannel() != "" {
+		buildChannel := s.updates.BuildChannel()
+		channel = &buildChannel
 	}
 	writeJSON(w, r, http.StatusOK, struct {
-		Status          string  `json:"status"`
-		Version         string  `json:"version"`
-		Channel         *string `json:"channel"`
-		Instance        string  `json:"instance"`
-		Project         string  `json:"project"`
-		ProxyListener   *string `json:"proxy_listener"`
-		RestartRequired bool    `json:"restart_required"`
+		Status          string          `json:"status"`
+		Version         string          `json:"version"`
+		Channel         *update.Channel `json:"channel"`
+		Instance        string          `json:"instance"`
+		Project         string          `json:"project"`
+		ProxyListener   *string         `json:"proxy_listener"`
+		RestartRequired bool            `json:"restart_required"`
 	}{
 		Status:          "running",
 		Version:         s.version,
@@ -393,12 +394,6 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		ProxyListener:   proxyListener,
 		RestartRequired: s.updates != nil && s.updates.RestartRequired(),
 	})
-}
-
-// SetBuildChannel records the channel the running build was published on,
-// reported by GET /service/status. "" (the default) is a development build.
-func (s *Server) SetBuildChannel(channel string) {
-	s.channel = channel
 }
 
 // SetUpdates sets the instance's updates component, which the update routes

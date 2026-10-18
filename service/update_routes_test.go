@@ -199,7 +199,6 @@ func newUpdateServer(t *testing.T, configDir, target, instance string, github *i
 	t.Helper()
 	updates := newInstallUpdates(t, configDir, target, github)
 	server := NewServer(nil, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, nil, func() {}, "01.10.2026", instance, "test-project")
-	server.SetBuildChannel("release")
 	server.SetUpdates(updates)
 	t.Cleanup(server.Close)
 	return server
