@@ -393,6 +393,30 @@ func TestUpdatesAutoCheckOffMakesNoGitHubCalls(t *testing.T) {
 	}
 }
 
+func TestUpdatesAutoCheckTurnedBackOnChecksWithinMinutes(t *testing.T) {
+	github := newUpdateGitHub(t)
+	github.setRelease("10.10.2026")
+	clock := newFakeClock()
+	configDir := t.TempDir()
+	configFile := filepath.Join(configDir, "marasi_config.yaml")
+	if err := os.WriteFile(configFile, []byte("updates:\n  auto_check: false\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	updates := newTestUpdates(t, configDir, github, clock, updatesBuild{version: "01.10.2026", channel: "release"})
+	runUpdates(t, updates)
+	clock.waitForWaiters(t, 1)
+
+	if err := os.WriteFile(configFile, []byte("updates:\n  auto_check: true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(autoCheckOffPoll)
+	clock.waitForWaiters(t, 1)
+
+	if got := github.callCount(); got != 1 {
+		t.Fatalf("\nwanted:\n1 GitHub call within %s of auto_check turning on\ngot:\n%d", autoCheckOffPoll, got)
+	}
+}
+
 func TestUpdatesDevelopmentBuildNeverChecks(t *testing.T) {
 	github := newUpdateGitHub(t)
 	github.setRelease("10.10.2026")

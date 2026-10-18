@@ -18,6 +18,9 @@ import (
 const (
 	// DefaultUpdateCheckInterval is how often an instance checks its channel.
 	DefaultUpdateCheckInterval = 6 * time.Hour
+	// autoCheckOffPoll is how often an instance with updates.auto_check off
+	// rereads it, so turning it back on takes effect within minutes.
+	autoCheckOffPoll = time.Minute
 	// updateCheckTimeout bounds one automatic check.
 	updateCheckTimeout = time.Minute
 	// updateCheckFile caches the last check of each channel for every
@@ -191,16 +194,20 @@ func (u *Updates) RestartRequired() bool {
 }
 
 // Run checks on start and then once an interval until ctx is done, unless
-// updates.auto_check is off. An instance reuses a check another instance on
-// the config dir made within the interval. A development build returns at
-// once.
+// updates.auto_check is off; while it is off, Run rereads it every
+// autoCheckOffPoll. An instance reuses a check another instance on the
+// config dir made within the interval. A development build returns at once.
 func (u *Updates) Run(ctx context.Context) {
 	if u.updater == nil {
 		return
 	}
 	for {
 		wait := u.interval
-		if status, err := u.autoCheck(ctx); err == nil && status.LastCheck != nil {
+		status, on, err := u.autoCheck(ctx)
+		switch {
+		case err == nil && !on:
+			wait = autoCheckOffPoll
+		case err == nil && status.LastCheck != nil:
 			if next := status.LastCheck.At.Add(u.interval).Sub(u.clock.Now()); next > 0 && next < wait {
 				wait = next
 			}
@@ -215,35 +222,29 @@ func (u *Updates) Run(ctx context.Context) {
 }
 
 // autoCheck checks the configured channel when auto check is on and the
-// cached check is older than the interval.
-func (u *Updates) autoCheck(ctx context.Context) (UpdateStatus, error) {
+// cached check is older than the interval. on reports whether auto check is
+// on.
+func (u *Updates) autoCheck(ctx context.Context) (status UpdateStatus, on bool, err error) {
 	settings, err := u.settings(ctx)
 	if err != nil || !settings.AutoCheckEnabled() {
-		return UpdateStatus{}, err
+		return UpdateStatus{}, false, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, updateCheckTimeout)
 	defer cancel()
-	status, err := u.check(ctx, false)
-	if err == nil && u.onCheck != nil {
-		u.onCheck(status)
-	}
-	return status, err
+	status, err = u.checkAndReport(ctx, false)
+	return status, true, err
 }
 
 // Check checks the configured channel on GitHub now, whatever the cache
 // holds, and shares the result with the other instances.
 func (u *Updates) Check(ctx context.Context) (UpdateStatus, error) {
-	status, err := u.check(ctx, true)
-	if err == nil && u.onCheck != nil {
-		u.onCheck(status)
-	}
-	return status, err
+	return u.checkAndReport(ctx, true)
 }
 
 // Latest fetches the latest build on the configured channel, even an older
 // one (a reinstall), and shares it as that channel's last check.
 func (u *Updates) Latest(ctx context.Context) (update.Candidate, error) {
-	status, err := u.check(ctx, true)
+	status, err := u.checkAndReport(ctx, true)
 	if err != nil {
 		return update.Candidate{}, err
 	}
@@ -289,6 +290,15 @@ func (u *Updates) SetChannel(ctx context.Context, channel update.Channel) (Updat
 	default:
 	}
 	return u.Status(ctx)
+}
+
+// checkAndReport runs check and then onCheck with its status.
+func (u *Updates) checkAndReport(ctx context.Context, force bool) (UpdateStatus, error) {
+	status, err := u.check(ctx, force)
+	if err == nil && u.onCheck != nil {
+		u.onCheck(status)
+	}
+	return status, err
 }
 
 // check returns the status after a check of the configured channel. Unless
