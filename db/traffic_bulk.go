@@ -176,6 +176,8 @@ func (repo *Repository) LinkTraffic(sel domain.Selection, target domain.LinkTarg
 
 // UnlinkTraffic removes the links between every pair in sel and target and
 // returns the number of pairs that were linked.
+// It does not check for pending launches; clients call the Proxy method of
+// the same name, which refuses a pending launch's pair (ADR-0049).
 func (repo *Repository) UnlinkTraffic(sel domain.Selection, target domain.LinkTarget) (int, error) {
 	return repo.bulkInTx(sel, func(tx *sqlx.Tx, selected string, args []any) (int, error) {
 		link, err := linkTableFor(tx, target)

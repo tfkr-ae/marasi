@@ -315,6 +315,10 @@ func (m *mockTrafficRepo) DeleteTraffic(domain.Selection) (int, error) {
 	return 0, errors.New("not implemented")
 }
 
+func (m *mockTrafficRepo) SelectionIncludes(domain.Selection, []uuid.UUID) ([]uuid.UUID, error) {
+	return nil, errors.New("not implemented")
+}
+
 func setupTestExtension(t *testing.T, luaCode string, options ...func(*Runtime) error) (*Runtime, *mockProxyService) {
 	t.Helper()
 
