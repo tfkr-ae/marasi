@@ -69,13 +69,15 @@ type LaunchpadRepository interface {
 
 	// MoveLaunchpadEntries moves entries in one transaction (ADR-0048) and
 	// returns the moved pair ids, deduplicated, in their new entry order.
-	// Only the moved entries change place. It refuses the whole move, and
-	// changes nothing, with ErrLaunchpadNotFound if the source launchpad
-	// does not exist, ErrLaunchpadNotLinked if a pair is not an entry of
-	// the source, and ErrInvalidPlacement if BeforeID is not an entry of
-	// the target or is one of the moved pairs. A target other than the
-	// source is not supported yet and returns an error wrapping
-	// errors.ErrUnsupported.
+	// Only the moved entries change place. Moved to another launchpad, the
+	// pairs leave the source; a move never copies. It refuses the whole
+	// move, and changes nothing, with ErrLaunchpadNotFound if the source or
+	// the target launchpad does not exist, ErrLaunchpadNotLinked if a pair
+	// is not an entry of the source, ErrLaunchpadAlreadyLinked if another
+	// target already holds a pair, and ErrInvalidPlacement if BeforeID is
+	// not an entry of the target or is one of the moved pairs. It leaves
+	// the pairs' metadata, launchpad_id included, unchanged (ADR-0049). It
+	// does not check for pending launches; Proxy.MoveLaunchpadEntries does.
 	MoveLaunchpadEntries(move LaunchpadMove) ([]uuid.UUID, error)
 }
 

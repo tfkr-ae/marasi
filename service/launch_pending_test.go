@@ -40,8 +40,13 @@ func TestControlAPIRefusesPendingLaunch(t *testing.T) {
 		}
 		server := newTestServer(proxy, func() {})
 		p := &bulkProject{repo: repo, server: server}
+		targetID, err := repo.CreateLaunchpad("Target", "")
+		if err != nil {
+			t.Fatalf("creating launchpad: %v", err)
+		}
 		other := p.insertPair(t, "GET")
 		id := startLaunch(t, server, launchpadID, launchBody(origin, "/slow"))
+		move := `{"request_ids":["` + id.String() + `"],"target_launchpad_id":"` + targetID.String() + `"}`
 		subscriber := server.events.subscribe()
 		defer server.events.unsubscribe(subscriber)
 
@@ -51,6 +56,7 @@ func TestControlAPIRefusesPendingLaunch(t *testing.T) {
 			{http.MethodPost, "/traffic/bulk/delete", selection + `}`},
 			{http.MethodPost, "/traffic/bulk/unlink", selection + `,"launchpad_id":"` + launchpadID.String() + `"}`},
 			{http.MethodDelete, "/launchpad/" + launchpadID.String() + "/link/" + id.String(), ""},
+			{http.MethodPost, "/launchpad/" + launchpadID.String() + "/move", move},
 		} {
 			response := requestControlAPI(server, call.method, call.path, call.body)
 			assertControlAPIResponse(t, response, http.StatusConflict, refused)
@@ -68,8 +74,10 @@ func TestControlAPIRefusesPendingLaunch(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("timed out waiting for the launch to finish")
 		}
-		response := requestControlAPI(server, http.MethodDelete, "/launchpad/"+launchpadID.String()+"/link/"+id.String(), "")
-		assertControlAPIResponse(t, response, http.StatusOK, `{"launchpad_id":"`+launchpadID.String()+`","request_id":"`+id.String()+`"}`+"\n")
+		response := requestControlAPI(server, http.MethodPost, "/launchpad/"+launchpadID.String()+"/move", move)
+		assertControlAPIResponse(t, response, http.StatusOK, `{"source_launchpad_id":"`+launchpadID.String()+`","target_launchpad_id":"`+targetID.String()+`","request_ids":["`+id.String()+`"]}`+"\n")
+		response = requestControlAPI(server, http.MethodDelete, "/launchpad/"+targetID.String()+"/link/"+id.String(), "")
+		assertControlAPIResponse(t, response, http.StatusOK, `{"launchpad_id":"`+targetID.String()+`","request_id":"`+id.String()+`"}`+"\n")
 		response = requestControlAPI(server, http.MethodPost, "/traffic/bulk/delete", selection+`}`)
 		assertControlAPIResponse(t, response, http.StatusOK, `{"count":2}`+"\n")
 	})

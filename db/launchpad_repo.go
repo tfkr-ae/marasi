@@ -269,22 +269,24 @@ func (repo *Repository) UnlinkRequestFromLaunchpad(requestID uuid.UUID, launchpa
 	return nil
 }
 
-// MoveLaunchpadEntries moves entries within a launchpad in one transaction,
-// as domain.LaunchpadRepository describes. The moved links are deleted and
-// inserted again with new keys between the keys of the entry before BeforeID
-// and BeforeID, or after the last entry. It does not check for pending
-// launches.
+// MoveLaunchpadEntries moves entries in one transaction, as
+// domain.LaunchpadRepository describes. The moved links are deleted from the
+// source and inserted into the target with new keys between the keys of the
+// target's entry before BeforeID and BeforeID, or after its last entry. It
+// does not check for pending launches; Proxy.MoveLaunchpadEntries does
+// (ADR-0049).
 func (repo *Repository) MoveLaunchpadEntries(move domain.LaunchpadMove) ([]uuid.UUID, error) {
-	if move.TargetID != move.SourceID {
-		return nil, fmt.Errorf("moving entries to another launchpad: %w", errors.ErrUnsupported)
-	}
 	var moved []uuid.UUID
 	err := repo.inTx(func(tx *sqlx.Tx) error {
-		var exists int
-		if err := tx.Get(&exists, `SELECT count(*) FROM launchpad WHERE id = ?`, move.SourceID); err != nil {
+		query, args, err := sqlx.In(`SELECT count(*) FROM launchpad WHERE id IN (?)`, []uuid.UUID{move.SourceID, move.TargetID})
+		if err != nil {
 			return err
 		}
-		if exists == 0 {
+		var exists int
+		if err := tx.Get(&exists, tx.Rebind(query), args...); err != nil {
+			return err
+		}
+		if want := len(slices.Compact([]uuid.UUID{move.SourceID, move.TargetID})); exists != want {
 			return domain.ErrLaunchpadNotFound
 		}
 		requested := slices.Clone(move.RequestIDs)
@@ -293,7 +295,7 @@ func (repo *Repository) MoveLaunchpadEntries(move domain.LaunchpadMove) ([]uuid.
 		if len(requested) == 0 {
 			return nil
 		}
-		query, args, err := sqlx.In(`SELECT request_id FROM launchpad_request WHERE launchpad_id = ? AND request_id IN (?) ORDER BY position`, move.SourceID, requested)
+		query, args, err = sqlx.In(`SELECT request_id FROM launchpad_request WHERE launchpad_id = ? AND request_id IN (?) ORDER BY position`, move.SourceID, requested)
 		if err != nil {
 			return err
 		}
@@ -302,6 +304,19 @@ func (repo *Repository) MoveLaunchpadEntries(move domain.LaunchpadMove) ([]uuid.
 		}
 		if len(moved) != len(requested) {
 			return domain.ErrLaunchpadNotLinked
+		}
+		if move.TargetID != move.SourceID {
+			query, args, err = sqlx.In(`SELECT count(*) FROM launchpad_request WHERE launchpad_id = ? AND request_id IN (?)`, move.TargetID, moved)
+			if err != nil {
+				return err
+			}
+			var held int
+			if err := tx.Get(&held, tx.Rebind(query), args...); err != nil {
+				return err
+			}
+			if held > 0 {
+				return domain.ErrLaunchpadAlreadyLinked
+			}
 		}
 		if move.BeforeID != uuid.Nil && slices.Contains(moved, move.BeforeID) {
 			return domain.ErrInvalidPlacement

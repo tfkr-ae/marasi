@@ -52,4 +52,38 @@ func TestProxy_MoveLaunchpadEntries(t *testing.T) {
 		origin.unblock()
 		h.waitFinished(t)
 	})
+
+	t.Run("should refuse to move a pending launch's pair to another launchpad until the launch finishes", func(t *testing.T) {
+		h := startLaunchHarness(t)
+		origin := startLaunchOrigin(t)
+		other := h.storedPair(t)
+		if err := h.repository.LinkRequestToLaunchpad(other, h.launchpadID); err != nil {
+			t.Fatalf("linking pair: %v", err)
+		}
+		target, err := h.repository.CreateLaunchpad("Target", "")
+		if err != nil {
+			t.Fatalf("creating launchpad: %v", err)
+		}
+		id := h.pendingLaunch(t, origin)
+		move := domain.LaunchpadMove{SourceID: h.launchpadID, TargetID: target, RequestIDs: []uuid.UUID{other, id}}
+
+		_, err = h.proxy.MoveLaunchpadEntries(move)
+
+		assertLaunchPending(t, err, id)
+		if got, want := h.launchpadMembers(t), []uuid.UUID{other, id}; !slices.Equal(got, want) {
+			t.Fatalf("\nwanted:\nentries %v\ngot:\n%v", want, got)
+		}
+
+		h.finishLaunch(t, origin)
+		moved, err := h.proxy.MoveLaunchpadEntries(move)
+		if err != nil {
+			t.Fatalf("MoveLaunchpadEntries() after the launch finished returned unexpected error: %v", err)
+		}
+		if want := []uuid.UUID{other, id}; !slices.Equal(moved, want) {
+			t.Fatalf("\nwanted:\nmoved %v\ngot:\n%v", want, moved)
+		}
+		if got := h.launchpadMembers(t); len(got) != 0 {
+			t.Fatalf("\nwanted:\nno entries left in the source\ngot:\n%v", got)
+		}
+	})
 }
