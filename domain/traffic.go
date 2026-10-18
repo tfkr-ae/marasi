@@ -154,8 +154,14 @@ type TrafficRepository interface {
 
 	// UnlinkTraffic removes the links between every pair in sel and target
 	// in one transaction and returns the number of pairs that were linked.
-	// It returns the same errors as LinkTraffic.
+	// It returns the same errors as LinkTraffic. It does not check for
+	// pending launches; Proxy.UnlinkTraffic does (ADR-0049).
 	UnlinkTraffic(sel Selection, target LinkTarget) (int, error)
+
+	// SelectionIncludes returns the ids among ids that are pairs in sel, in
+	// the order of ids, resolving sel as the bulk operations do. It returns
+	// the same selection errors they do.
+	SelectionIncludes(sel Selection, ids []uuid.UUID) ([]uuid.UUID, error)
 
 	// SetHighlight gives every pair in sel the highlight h, from MinHighlight
 	// to MaxHighlight, in one transaction, and returns the number of pairs
@@ -197,7 +203,8 @@ type TrafficRepository interface {
 	// logs, its search index rows, its highlight, its prettified bodies and
 	// its sitemap counts (ADR-0034). It returns the number of pairs deleted.
 	// Unknown ids in an id selection are ignored; an invalid query selection
-	// returns a *QueryError.
+	// returns a *QueryError. It does not check for pending launches;
+	// Proxy.DeleteTraffic does (ADR-0049).
 	DeleteTraffic(sel Selection) (int, error)
 }
 

@@ -128,6 +128,8 @@ func (repo *Repository) UpdateLaunchpad(launchpadID uuid.UUID, name, description
 }
 
 // DeleteLaunchpad removes a launchpad from the database.
+// It does not check for pending launches; clients call the Proxy method of
+// the same name, which refuses a pending launch's pair (ADR-0049).
 func (repo *Repository) DeleteLaunchpad(launchpadID uuid.UUID) error {
 	query := `DELETE FROM launchpad WHERE id = ?`
 
@@ -248,6 +250,8 @@ func keysAfterLastEntry(tx *sqlx.Tx, launchpadID uuid.UUID, n int) ([]string, er
 
 // UnlinkRequestFromLaunchpad removes the association between a request and a
 // launchpad. It returns domain.ErrLaunchpadNotLinked if there is none.
+// It does not check for pending launches; clients call the Proxy method of
+// the same name, which refuses a pending launch's pair (ADR-0049).
 func (repo *Repository) UnlinkRequestFromLaunchpad(requestID uuid.UUID, launchpadID uuid.UUID) error {
 	query := `DELETE FROM launchpad_request WHERE request_id = ? AND launchpad_id = ?`
 

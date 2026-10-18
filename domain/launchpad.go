@@ -41,7 +41,8 @@ type LaunchpadRepository interface {
 	UpdateLaunchpad(launchpadID uuid.UUID, name, description *string) error
 
 	// DeleteLaunchpad removes a launchpad identified by its UUID.
-	// It returns an error if the launchpad does not exist.
+	// It returns an error if the launchpad does not exist. It does not
+	// check for pending launches; Proxy.DeleteLaunchpad does (ADR-0049).
 	DeleteLaunchpad(launchpadID uuid.UUID) error
 
 	// GetLaunchpadRequests retrieves traffic summaries for requests linked
@@ -62,6 +63,8 @@ type LaunchpadRepository interface {
 
 	// UnlinkRequestFromLaunchpad removes a request from a launchpad. It
 	// returns ErrLaunchpadNotLinked if the request is not linked to it.
+	// It does not check for pending launches;
+	// Proxy.UnlinkRequestFromLaunchpad does (ADR-0049).
 	UnlinkRequestFromLaunchpad(requestID uuid.UUID, launchpadID uuid.UUID) error
 
 	// MoveLaunchpadEntries moves entries in one transaction (ADR-0048) and
