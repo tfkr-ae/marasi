@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -34,6 +35,22 @@ type Config struct {
 	// unset means websocket.DefaultMaxMessageSize (64 MiB). A negative value
 	// is rejected when the config loads.
 	WebSocketMaxMessageSize int64 `mapstructure:"websocket_max_message_size"`
+	// Updates is the updates section of marasi_config.yaml.
+	Updates UpdatesConfig `mapstructure:"updates"`
+}
+
+// UpdatesConfig is how the installed build looks for updates.
+type UpdatesConfig struct {
+	// Channel is "release" or "nightly". Empty means the channel of the
+	// installed build.
+	Channel string `mapstructure:"channel"`
+	// AutoCheck turns automatic update checks on or off. Unset means on.
+	AutoCheck *bool `mapstructure:"auto_check"`
+}
+
+// AutoCheckEnabled reports whether automatic update checks are on.
+func (u UpdatesConfig) AutoCheckEnabled() bool {
+	return u.AutoCheck == nil || *u.AutoCheck
 }
 
 // validate rejects values the loaded configuration cannot use.
@@ -41,6 +58,27 @@ func (cfg *Config) validate() error {
 	if cfg.WebSocketMaxMessageSize < 0 {
 		return fmt.Errorf("websocket_max_message_size is %d: use 0 for the 64 MiB default or a positive number of bytes", cfg.WebSocketMaxMessageSize)
 	}
+	switch cfg.Updates.Channel {
+	case "", "release", "nightly":
+	default:
+		return fmt.Errorf("updates.channel is %q: use release or nightly", cfg.Updates.Channel)
+	}
+	return nil
+}
+
+// SetUpdateChannel saves channel ("release" or "nightly") as updates.channel.
+// Callers hold the config lock and reread first (ADR-0013).
+func (cfg *Config) SetUpdateChannel(channel string) error {
+	if channel != "release" && channel != "nightly" {
+		return fmt.Errorf("update channel %q: use release or nightly", channel)
+	}
+	previous := cfg.viper.Get("updates.channel")
+	cfg.viper.Set("updates.channel", channel)
+	if err := cfg.viper.WriteConfig(); err != nil {
+		cfg.viper.Set("updates.channel", previous)
+		return fmt.Errorf("failed to save configuration: %w", err)
+	}
+	cfg.Updates.Channel = channel
 	return nil
 }
 
@@ -156,20 +194,34 @@ func (cfg *Config) DeleteChromePath(path, os string) error {
 
 // ReloadChrome rereads machine Chrome configuration into cfg.
 func (cfg *Config) ReloadChrome() error {
+	loaded, err := ReadConfig(cfg.ConfigDir)
+	if err != nil {
+		return err
+	}
+	loaded.DesktopOS = cfg.DesktopOS
+	*cfg = *loaded
+	return nil
+}
+
+// ReadConfig reads marasi_config.yaml in configDir into a new Config without
+// touching any loaded one. Callers that share the file with other instances
+// hold the config lock while they read and write (ADR-0013).
+func ReadConfig(configDir string) (*Config, error) {
+	cfg := &Config{ConfigDir: configDir, DesktopOS: runtime.GOOS}
 	config := viper.New()
 	config.SetConfigFile(filepath.Join(cfg.ConfigDir, "marasi_config.yaml"))
 	config.SetConfigType("yaml")
 	config.SetDefault("chrome_dirs", []chrome.PathConfig{})
 	config.SetDefault("chrome_profiles", []string{})
 	if err := config.ReadInConfig(); err != nil {
-		return fmt.Errorf("reading configuration: %w", err)
+		return nil, fmt.Errorf("reading configuration: %w", err)
 	}
 	loaded := Config{viper: config, ConfigDir: cfg.ConfigDir, DesktopOS: cfg.DesktopOS}
 	if err := config.Unmarshal(&loaded); err != nil {
-		return fmt.Errorf("unmarshalling config to struct: %w", err)
+		return nil, fmt.Errorf("unmarshalling config to struct: %w", err)
 	}
 	if err := loaded.validate(); err != nil {
-		return fmt.Errorf("invalid configuration: %w", err)
+		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 	if loaded.ChromeDirs == nil {
 		loaded.ChromeDirs = []chrome.PathConfig{}
@@ -177,8 +229,7 @@ func (cfg *Config) ReloadChrome() error {
 	if loaded.ChromeProfiles == nil {
 		loaded.ChromeProfiles = []string{}
 	}
-	*cfg = loaded
-	return nil
+	return &loaded, nil
 }
 
 // getSPKIHash computes the SHA-256 hash of the certificate's Subject Public Key Info

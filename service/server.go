@@ -30,6 +30,7 @@ type Server struct {
 	chrome            *Chrome
 	version           string
 	channel           string // build channel; "" for a development build
+	updates           *Updates
 	instance          string
 	project           string
 }
@@ -382,6 +383,12 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 // reported by GET /service/status. "" (the default) is a development build.
 func (s *Server) SetBuildChannel(channel string) {
 	s.channel = channel
+}
+
+// SetUpdates sets the instance's updates component, which the update routes
+// serve. Call it before serving.
+func (s *Server) SetUpdates(updates *Updates) {
+	s.updates = updates
 }
 
 // ServeHTTP serves the instance control API.
