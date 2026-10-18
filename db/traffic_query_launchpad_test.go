@@ -200,7 +200,7 @@ func TestLaunchpadRepo_GetLaunchpadRequestsQuery(t *testing.T) {
 	tests := []struct {
 		launchpad string
 		query     string
-		want      string // names oldest first
+		want      string // names in entry order
 	}{
 		{launchpad: "one", query: ``, want: "orig,launched,shared,hostile"},
 		{launchpad: "one", query: `   `, want: "orig,launched,shared,hostile"},
