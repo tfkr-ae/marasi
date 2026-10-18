@@ -9,7 +9,7 @@ import (
 	"github.com/tfkr-ae/marasi/domain"
 )
 
-// launchpadMembers returns the ids linked to a launchpad, oldest first.
+// launchpadMembers returns the ids linked to a launchpad, in entry order.
 func launchpadMembers(t *testing.T, repo *Repository, launchpadID uuid.UUID) []uuid.UUID {
 	t.Helper()
 	items, _, err := repo.GetLaunchpadRequests(launchpadID, "", nil, "")
