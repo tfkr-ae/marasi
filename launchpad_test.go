@@ -162,6 +162,36 @@ func TestProxy_Launch(t *testing.T) {
 		}
 	})
 
+	t.Run("should put the launched pair after the launchpad's last entry", func(t *testing.T) {
+		origin := startLaunchOrigin(t)
+		h := startLaunchHarness(t)
+		// A pair with a later id than any launch, so capture order would
+		// list it after the launched pair.
+		later := uuid.MustParse("ffffffff-ffff-7fff-bfff-ffffffffffff")
+		err := h.repository.InsertRequest(&domain.ProxyRequest{
+			ID: later, Scheme: "https", Method: "GET", Host: "marasi.app", Path: "/",
+			Raw: []byte("GET / HTTP/1.1\r\nHost: marasi.app\r\n\r\n"), RequestedAt: time.Now(),
+		})
+		if err != nil {
+			t.Fatalf("inserting request: %v", err)
+		}
+		if err := h.repository.LinkRequestToLaunchpad(later, h.launchpadID); err != nil {
+			t.Fatalf("linking request: %v", err)
+		}
+
+		id, err := h.proxy.Launch(rawGet(origin.Server, "/last"), h.launchpadID.String(), false)
+		if err != nil {
+			t.Fatalf("Launch() returned unexpected error: %v", err)
+		}
+		if got := h.waitFinished(t); got.Status != domain.LaunchCompleted {
+			t.Fatalf("\nwanted:\ncompleted\ngot:\n%+v", got)
+		}
+
+		if got, want := h.launchpadMembers(t), []uuid.UUID{later, id}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
+		}
+	})
+
 	t.Run("should list and read a pending launch", func(t *testing.T) {
 		release := make(chan struct{})
 		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

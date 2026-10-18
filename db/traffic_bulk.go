@@ -162,16 +162,49 @@ func linkTableFor(tx *sqlx.Tx, target domain.LinkTarget) (linkTable, error) {
 }
 
 // LinkTraffic links every pair in sel to target and returns the number of
-// pairs it newly linked.
+// pairs it newly linked. A launchpad gains the pairs as its last entries, in
+// capture order; a pair that is already an entry keeps its place.
 func (repo *Repository) LinkTraffic(sel domain.Selection, target domain.LinkTarget) (int, error) {
 	return repo.bulkInTx(sel, func(tx *sqlx.Tx, selected string, args []any) (int, error) {
 		link, err := linkTableFor(tx, target)
 		if err != nil {
 			return 0, err
 		}
+		if target.Kind == domain.LinkLaunchpad {
+			return appendEntries(tx, target.ID, selected, args)
+		}
 		query := `INSERT OR IGNORE INTO ` + link.table + ` (request_id, ` + link.column + `) SELECT id, ? FROM (` + selected + `)`
 		return execCount(tx, fmt.Sprintf("linking traffic to %s %s", target.Kind, target.ID), query, append([]any{target.ID}, args...)...)
 	})
+}
+
+// appendEntries links, in tx, the pairs the selected subquery returns that are
+// not yet entries of the launchpad, after its last entry in capture order, and
+// returns how many it linked.
+func appendEntries(tx *sqlx.Tx, launchpadID uuid.UUID, selected string, args []any) (int, error) {
+	var ids []uuid.UUID
+	query := `SELECT id FROM (` + selected + `) WHERE id NOT IN (SELECT request_id FROM launchpad_request WHERE launchpad_id = ?) ORDER BY id`
+	if err := tx.Select(&ids, query, append(slices.Clone(args), launchpadID)...); err != nil {
+		return 0, fmt.Errorf("selecting traffic to link to launchpad %s: %w", launchpadID, err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	keys, err := keysAfterLastEntry(tx, launchpadID, len(ids))
+	if err != nil {
+		return 0, err
+	}
+	insert, err := tx.Prepare(`INSERT INTO launchpad_request (request_id, launchpad_id, position) VALUES (?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("linking traffic to launchpad %s: %w", launchpadID, err)
+	}
+	defer insert.Close()
+	for i, id := range ids {
+		if _, err := insert.Exec(id, launchpadID, keys[i]); err != nil {
+			return 0, fmt.Errorf("linking traffic to launchpad %s: %w", launchpadID, err)
+		}
+	}
+	return len(ids), nil
 }
 
 // UnlinkTraffic removes the links between every pair in sel and target and
