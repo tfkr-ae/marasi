@@ -47,11 +47,34 @@ func TestLaunchpadMoveRefusedPlacement(t *testing.T) {
 	args := []string{"--config-dir", configDir, "--instance", "work", "launchpad", "move", bulkAsOf, bulkIDA, "--before", bulkIDA}
 
 	stdout, stderr, err := runMarasiWithStdin(binary, "", args...)
-	if err == nil || stdout != "" || !strings.Contains(stderr, "moving launchpad entries: 400 Bad Request") {
-		t.Fatalf("\nwanted:\n400 Bad Request on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+	if err == nil || stdout != "" || !strings.Contains(stderr, "moving launchpad entries: invalid_placement") {
+		t.Fatalf("\nwanted:\ninvalid_placement on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
 	stdout, stderr, err = runMarasiWithStdin(binary, "", append(args, "--json")...)
 	if err == nil || stdout != `{"error":"moving launchpad entries: invalid_placement"}`+"\n" || stderr != "" {
 		t.Fatalf("\nwanted:\nJSON invalid_placement error\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+}
+
+func TestLaunchpadMoveRefusalNamesItsCodeInHumanMode(t *testing.T) {
+	binary := buildMarasi(t)
+	for _, refusal := range []struct {
+		status int
+		code   string
+	}{
+		{http.StatusConflict, "already_linked"},
+		{http.StatusNotFound, "not_found"},
+	} {
+		t.Run(refusal.code, func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			startCannedControlAPI(t, configDir, "work", refusal.status, `{"error":"`+refusal.code+`"}`)
+			want := "moving launchpad entries: " + refusal.code + "\n"
+
+			stdout, stderr, err := runMarasiWithStdin(binary, "", "--config-dir", configDir, "--instance", "work", "launchpad", "move", bulkAsOf, bulkIDA)
+
+			if err == nil || stdout != "" || !strings.HasSuffix(stderr, want) {
+				t.Fatalf("\nwanted:\nstderr ending %q\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+			}
+		})
 	}
 }

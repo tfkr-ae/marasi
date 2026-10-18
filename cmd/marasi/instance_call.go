@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -64,19 +63,19 @@ func rejectInstanceStatus(operation string, response instanceResponse, asJSON bo
 	if response.StatusCode == http.StatusOK {
 		return nil
 	}
-	if asJSON || isInvalidRequest(response.StatusCode, response.Body) || isLaunchPending(response) {
+	if asJSON || explainsRefusal(response) {
 		return controlAPIError(operation, response.Status, response.Body)
 	}
 	return fmt.Errorf("%s: %s", operation, response.Status)
 }
 
-// isLaunchPending reports whether the control API refused the request
-// because it would take a pending launch's pair out of its launchpad
-// (ADR-0053). Its message names the pending pairs, so it is shown in human
-// mode too.
-func isLaunchPending(response instanceResponse) bool {
-	var payload struct {
-		Error string `json:"error"`
+// rejectLaunchpadStatus is rejectInstanceStatus for the launchpad routes,
+// whose refusals carry an error code such as invalid_placement,
+// already_linked or not_found. Human mode shows that code too, as it does for
+// launch_pending, rather than the bare HTTP status.
+func rejectLaunchpadStatus(operation string, response instanceResponse, asJSON bool) error {
+	if code, _ := controlRefusal(response); code != "" && response.StatusCode >= 400 && response.StatusCode < 500 {
+		return controlAPIError(operation, response.Status, response.Body)
 	}
-	return response.StatusCode == http.StatusConflict && json.Unmarshal(response.Body, &payload) == nil && payload.Error == "launch_pending"
+	return rejectInstanceStatus(operation, response, asJSON)
 }
