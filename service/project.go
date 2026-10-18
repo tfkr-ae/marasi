@@ -390,6 +390,82 @@ func (lifecycle *ProjectLifecycle) Shutdown() error {
 	return errors.Join(flushErr, cleanupErr)
 }
 
+// projectRelease is an open project given up for a restart. Until reopen or
+// abandon, no project can open and no project work is admitted.
+type projectRelease struct {
+	path string
+	// reopen takes the project back and admits work again. It is nil when
+	// nothing was released.
+	reopen func(context.Context) error
+	// abandon leaves the project closed, for an instance about to exit.
+	abandon func()
+}
+
+// release ends launches and Armory runs, waits for admitted work, then
+// flushes, closes, and unlocks the open project so a successor can own it
+// (ADR-0051). dropHeld is called while waiting, so an item held during the
+// wait does not keep the project busy.
+func (lifecycle *ProjectLifecycle) release(ctx context.Context, dropHeld func()) (projectRelease, error) {
+	lifecycle.mu.Lock()
+	project := lifecycle.openProject()
+	if project == nil {
+		lifecycle.mu.Unlock()
+		return projectRelease{}, errors.New("no open project")
+	}
+	lifecycle.proxy.InterruptLaunches()
+	if project.resources.Armory != nil {
+		project.resources.Armory.Shutdown()
+	}
+	unblock, err := lifecycle.gate.block(ctx, func() bool {
+		dropHeld()
+		return !lifecycle.proxy.HasPendingCheckpoint()
+	})
+	if err != nil {
+		lifecycle.mu.Unlock()
+		return projectRelease{}, err
+	}
+	finished := false
+	finish := func() {
+		if !finished {
+			finished = true
+			lifecycle.mu.Unlock()
+		}
+	}
+	path := project.path
+	reopen := func(ctx context.Context) error {
+		defer finish()
+		defer unblock()
+		unlock, err := lifecycle.lock(path)
+		if err != nil {
+			return err
+		}
+		resources, err := lifecycle.prepare(ctx, path)
+		if err != nil {
+			return errors.Join(err, cleanupPreparedProject(path, true, resources, unlock))
+		}
+		target := &openProject{path: path, resources: resources, unlock: unlock}
+		lifecycle.proxy.SetProjectResources(resources)
+		lifecycle.gate.publish()
+		lifecycle.setOpen(target)
+		if repository, ok := resources.Repository.(*eventLogRepository); ok {
+			repository.startPublishing()
+		}
+		lifecycle.startJobs(target)
+		return nil
+	}
+	// An abandoned project is never reopened here: a switch that was waiting
+	// for the restart fails rather than open a project in an exiting instance.
+	abandon := func() {
+		lifecycle.cancelExecution()
+		finish()
+	}
+	released := projectRelease{path: path, reopen: reopen, abandon: abandon}
+	flushErr := lifecycle.proxy.CloseWebSocketsAndFlush()
+	closeErr := closeProject(project)
+	lifecycle.setOpen(nil)
+	return released, errors.Join(flushErr, closeErr)
+}
+
 func (lifecycle *ProjectLifecycle) openProject() *openProject {
 	lifecycle.statusMu.RLock()
 	defer lifecycle.statusMu.RUnlock()

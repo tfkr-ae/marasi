@@ -36,7 +36,11 @@ requests over a per-instance Unix-domain socket on macOS, Linux, and Windows.
 
 The control listener and proxy listener are separate. Stopping the proxy listener
 leaves the service instance available for inspection. `service stop` shuts down
-the service instance.
+the service instance. `service restart` hands the instance name, open project,
+and proxy listener address to a new instance started from the installed build.
+If the new instance does not become ready, the old one keeps running. A restart
+ends Armory runs, held Checkpoint items, live connections, and launches. It is
+refused while Checkpoint items are held unless `--force` is given.
 
 Projects are SQLite `.marasi` files. A project can be owned by only one service
 instance at a time. `project open` changes the open project without restarting
@@ -144,6 +148,7 @@ marasi --instance assessment service status --json
 marasi service list --json
 marasi project list --json
 marasi --instance assessment project open --name another-assessment --json
+marasi --instance assessment service restart --json
 marasi --instance assessment service stop --json
 ```
 
