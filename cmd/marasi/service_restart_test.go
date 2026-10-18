@@ -205,6 +205,14 @@ func TestServiceRestart(t *testing.T) {
 		}
 	})
 
+	t.Run("should tell the user to start an instance when none is running", func(t *testing.T) {
+		binary := buildMarasi(t)
+		configDir := serviceConfigDir(t)
+		want := "instance work is not running; start one with marasi service start --instance work"
+		stdout, stderr, err := runMarasi(binary, "--json", "--config-dir", configDir, "--instance", "work", "service", "restart")
+		assertJSONCommandError(t, stdout, stderr, err, want)
+	})
+
 	t.Run("should start the successor with no proxy listener when it was stopped", func(t *testing.T) {
 		binary := buildMarasi(t)
 		configDir := serviceConfigDir(t)
