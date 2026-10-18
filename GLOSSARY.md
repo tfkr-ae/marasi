@@ -204,3 +204,33 @@ _Avoid_: export file, document, draft report
 **Report template**:
 A named file in the machine templates directory, identified by its filename. Shared across projects and service instances that use that config dir. It is the file itself, not a pointer to a file elsewhere.
 _Avoid_: Armory template, predefined test case, template
+
+### Updates
+
+**Installed build**:
+The Marasi executable on this machine that the CLI runs and that every service instance started from it runs.
+_Avoid_: binary, install, app
+
+**Channel**:
+The stream of builds an installed build follows: release or nightly. It starts as the channel of the build that was installed, and a user can switch it. A development build has no channel.
+_Avoid_: track, ring, stable, beta
+
+**Release**:
+A build of Marasi from main, named by the date it was cut.
+_Avoid_: stable release, version
+
+**Nightly**:
+The latest daily build of Marasi. Only one nightly exists at a time; each one replaces the last.
+_Avoid_: beta, preview, snapshot
+
+**Update**:
+A build on the installed build's channel that is newer than the installed build and replaces it once installed through a service instance. It is never older; going back to an older release is a reinstall.
+_Avoid_: upgrade, patch, self-update
+
+**Reinstall**:
+An explicit replacement of the installed build with the latest build on its channel, even when that build is older. Projects opened in a newer build may not open in it.
+_Avoid_: downgrade, rollback
+
+**Restart**:
+A service instance handing its name, open project, and proxy listener address to a successor started from the installed build, then exiting. If the successor does not become ready, the instance keeps them and keeps running.
+_Avoid_: reload, relaunch
