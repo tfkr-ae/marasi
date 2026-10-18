@@ -1,10 +1,228 @@
 package main
 
 import (
+	"bufio"
+	"io"
 	"net/http"
+	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// installEvent formats one SSE frame.
+func installEvent(name, data string) string {
+	return "event: " + name + "\ndata: " + data + "\n\n"
+}
+
+// startCannedInstallAPI serves GET /events and answers any other request with
+// status and response. The event stream connects at once, writes events after
+// the next non-events request, then closes, or with hold stays open until the
+// client leaves.
+func startCannedInstallAPI(t *testing.T, configDir string, status int, response string, events []string, hold bool) *cannedControlRequest {
+	t.Helper()
+	posted := make(chan struct{}, 1)
+	return startCannedControlAPIHandler(t, configDir, "work", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/events" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			io.WriteString(w, response)
+			select {
+			case posted <- struct{}{}:
+			default:
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, ": connected\n\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-posted:
+		case <-r.Context().Done():
+			return
+		}
+		for _, event := range events {
+			io.WriteString(w, event)
+			w.(http.Flusher).Flush()
+		}
+		if hold {
+			<-r.Context().Done()
+		}
+	})
+}
+
+const installStarted = `{"joined":false,"install":{"state":"running","version":"18.10.2026","step":"download","received":0,"total":0},"install_path":"/usr/local/bin/marasi"}` + "\n"
+
+var installProgress = []string{
+	`{"instance":"work","version":"18.10.2026","step":"download","received":0,"total":20971520}`,
+	`{"instance":"work","version":"18.10.2026","step":"download","received":1048576,"total":20971520}`,
+	`{"instance":"work","version":"18.10.2026","step":"download","received":10485760,"total":20971520}`,
+	`{"instance":"work","version":"18.10.2026","step":"verify","received":20971520,"total":20971520}`,
+	`{"instance":"work","version":"18.10.2026","step":"install","received":20971520,"total":20971520}`,
+}
+
+const installDone = `{"instance":"work","version":"18.10.2026","install_path":"/usr/local/bin/marasi"}`
+
+// installEvents is a whole install, after an unrelated update.available and
+// progress for another version, which install must skip.
+func installEvents() []string {
+	events := []string{
+		installEvent("update.available", `{"instance":"work","version":"18.10.2026","channel":"release","published":null,"notes":"","page":"https://example.test/18"}`),
+		installEvent("update.progress", `{"instance":"work","version":"17.10.2026","step":"download","received":0,"total":10}`),
+	}
+	for _, progress := range installProgress {
+		events = append(events, installEvent("update.progress", progress))
+	}
+	return append(events, installEvent("update.installed", installDone))
+}
+
+func installNDJSON() string {
+	var want strings.Builder
+	for _, progress := range installProgress {
+		want.WriteString(`{"event":"update.progress","data":` + progress + "}\n")
+	}
+	want.WriteString(`{"event":"update.installed","data":` + installDone + "}\n")
+	return want.String()
+}
+
+func TestUpdateInstallCommands(t *testing.T) {
+	binary := buildMarasi(t)
+	installedHuman := "download 0% of 20.0 MiB\n" +
+		"download 50% of 20.0 MiB\n" +
+		"verify\n" +
+		"install\n" +
+		"installed 18.10.2026 at /usr/local/bin/marasi; restart instances to run it with marasi service restart\n"
+
+	for _, test := range []struct {
+		name   string
+		args   []string
+		path   string
+		body   string
+		stderr string
+	}{
+		{
+			name: "should install the update and follow its progress", args: []string{"update", "install"},
+			path: "/update/install", stderr: "installing 18.10.2026 to /usr/local/bin/marasi\n" + installedHuman,
+		},
+		{
+			name: "should reinstall with confirmation and follow its progress", args: []string{"update", "reinstall", "--yes"},
+			path: "/update/reinstall", body: `{"confirm":true}`, stderr: "reinstalling 18.10.2026 to /usr/local/bin/marasi\n" + installedHuman,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			sent := startCannedInstallAPI(t, configDir, http.StatusAccepted, installStarted, installEvents(), false)
+			args := append([]string{"--config-dir", configDir, "--instance", "work"}, test.args...)
+			stdout, stderr, err := runMarasi(binary, args...)
+			if err != nil || stdout != "" || stderr != test.stderr {
+				t.Fatalf("\nwanted:\nempty stdout, stderr %q\ngot:\nstdout %q, stderr %q, error %v", test.stderr, stdout, stderr, err)
+			}
+			requests := sent.requests()
+			if len(requests) != 2 || requests[0].Path != "/events" || requests[1].Method != http.MethodPost || requests[1].Path != test.path || requests[1].Body != test.body {
+				t.Fatalf("\nwanted:\nGET /events, then POST %s %q\ngot:\n%+v", test.path, test.body, requests)
+			}
+
+			stdout, stderr, err = runMarasi(binary, append(args, "--json")...)
+			if want := installNDJSON(); err != nil || stdout != want || stderr != "" {
+				t.Fatalf("\nwanted:\nstdout %q, empty stderr\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+			}
+		})
+	}
+
+	t.Run("should follow a joined install and exit 1 when it fails", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		joined := strings.Replace(installStarted, `"joined":false`, `"joined":true`, 1)
+		failed := `{"instance":"work","version":"18.10.2026","kind":"network","step":"download","message":"connection reset","page":"https://example.test/18"}`
+		startCannedInstallAPI(t, configDir, http.StatusAccepted, joined, []string{installEvent("update.failed", failed)}, false)
+		args := []string{"--config-dir", configDir, "--instance", "work", "update", "install"}
+
+		stdout, stderr, err := runMarasi(binary, args...)
+		want := "following the install of 18.10.2026 already running on instance work\n" +
+			"Error: installing 18.10.2026 failed at download (network): connection reset; see https://example.test/18\n"
+		if err == nil || stdout != "" || stderr != want {
+			t.Fatalf("\nwanted:\nexit 1, stderr %q\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+
+		stdout, stderr, err = runMarasi(binary, append(args, "--json")...)
+		want = `{"event":"update.failed","data":` + failed + "}\n"
+		if err == nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\nexit 1, stdout %q, empty stderr\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should report an install the instance refuses", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedInstallAPI(t, configDir, http.StatusConflict, `{"error":"no_update","message":"01.10.2026 is the latest build on the release channel"}`+"\n", nil, false)
+		args := []string{"--config-dir", configDir, "--instance", "work", "update", "install"}
+		want := "installing update: no_update: 01.10.2026 is the latest build on the release channel"
+
+		stdout, stderr, err := runMarasi(binary, args...)
+		if err == nil || stdout != "" || stderr != "Error: "+want+"\n" {
+			t.Fatalf("\nwanted:\nerror %q\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+		stdout, stderr, err = runMarasi(binary, append(args, "--json")...)
+		assertJSONCommandError(t, stdout, stderr, err, want)
+	})
+
+	t.Run("should exit 1 when the event stream ends before the install does", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedInstallAPI(t, configDir, http.StatusAccepted, installStarted, nil, false)
+		args := []string{"--config-dir", configDir, "--instance", "work", "update", "install"}
+		want := "instance work closed the event stream before the install of 18.10.2026 finished; run marasi update to see its state"
+
+		_, stderr, err := runMarasi(binary, args...)
+		if err == nil || !strings.HasSuffix(stderr, "Error: "+want+"\n") {
+			t.Fatalf("\nwanted:\nerror %q\ngot:\nstderr %q, error %v", want, stderr, err)
+		}
+		stdout, stderr, err := runMarasi(binary, append(args, "--json")...)
+		if err == nil || stdout != "" || stderr != "" {
+			t.Fatalf("\nwanted:\nexit 1 with no output after the stream connected\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+	})
+
+	t.Run("should stop following on interrupt and leave the install running", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("sending an interrupt needs Unix signals")
+		}
+		configDir := serviceConfigDir(t)
+		sent := startCannedInstallAPI(t, configDir, http.StatusAccepted, installStarted, []string{installEvent("update.progress", installProgress[0])}, true)
+		command := exec.Command(binary, "--config-dir", configDir, "--instance", "work", "update", "install")
+		stderrPipe, err := command.StderrPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		reader := bufio.NewReader(stderrPipe)
+		var stderr strings.Builder
+		for !strings.Contains(stderr.String(), "download 0%") {
+			line, err := reader.ReadString('\n')
+			stderr.WriteString(line)
+			if err != nil {
+				t.Fatalf("wanted progress before interrupting, got %q: %v", stderr.String(), err)
+			}
+		}
+		if err := command.Process.Signal(os.Interrupt); err != nil {
+			t.Fatal(err)
+		}
+		rest, _ := io.ReadAll(reader)
+		stderr.Write(rest)
+		if err := command.Wait(); err != nil {
+			t.Fatalf("wanted exit 0 after interrupt, got %v, stderr %q", err, stderr.String())
+		}
+		want := "stopped following; the install of 18.10.2026 continues on instance work, run marasi update to see it\n"
+		if !strings.HasSuffix(stderr.String(), want) {
+			t.Fatalf("\nwanted stderr ending:\n%q\ngot:\n%q", want, stderr.String())
+		}
+		for _, request := range sent.requests() {
+			if request.Method == http.MethodDelete {
+				t.Fatalf("wanted the install left running, got %+v", request)
+			}
+		}
+	})
+}
 
 // updateStatusBody is a GET /update body with an update available whose
 // notes run past what human output shows.
