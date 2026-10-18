@@ -187,6 +187,32 @@ func (repo *Repository) UnlinkTraffic(sel domain.Selection, target domain.LinkTa
 	})
 }
 
+// SelectionIncludes returns the ids among ids that are pairs in sel, in the
+// order of ids. It resolves sel as a bulk operation does, so a query
+// selection that depends on an unfinished background job returns a
+// *domain.SelectionIncompleteError.
+func (repo *Repository) SelectionIncludes(sel domain.Selection, ids []uuid.UUID) ([]uuid.UUID, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	among, err := json.Marshal(ids)
+	if err != nil {
+		return nil, fmt.Errorf("encoding candidate ids: %w", err)
+	}
+	var selected []uuid.UUID
+	_, err = repo.bulkInTx(sel, func(tx *sqlx.Tx, query string, args []any) (int, error) {
+		err := tx.Select(&selected, `SELECT id FROM (`+query+`) WHERE id IN (SELECT value FROM json_each(?))`, append(args, string(among))...)
+		if err != nil {
+			return 0, fmt.Errorf("reading the selected pairs: %w", err)
+		}
+		return len(selected), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(slices.Clone(ids), func(id uuid.UUID) bool { return !slices.Contains(selected, id) }), nil
+}
+
 // execCount runs query in tx and returns the number of rows it changed.
 func execCount(tx *sqlx.Tx, what, query string, args ...any) (int, error) {
 	result, err := tx.Exec(query, args...)
