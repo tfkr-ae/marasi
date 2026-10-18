@@ -16,7 +16,7 @@ var ErrLaunchFinished = errors.New("launch finished")
 
 // ErrLaunchPending means an operation was refused because it would remove a
 // pending launch's pair from its launchpad, delete that pair, or delete the
-// launchpad a pending launch was sent from (ADR-0049). It changes nothing;
+// launchpad a pending launch was sent from (ADR-0053). It changes nothing;
 // the client retries once the launch is completed, cancelled or failed.
 var ErrLaunchPending = errors.New("launch pending")
 

@@ -72,7 +72,7 @@ func rejectInstanceStatus(operation string, response instanceResponse, asJSON bo
 
 // isLaunchPending reports whether the control API refused the request
 // because it would take a pending launch's pair out of its launchpad
-// (ADR-0049). Its message names the pending pairs, so it is shown in human
+// (ADR-0053). Its message names the pending pairs, so it is shown in human
 // mode too.
 func isLaunchPending(response instanceResponse) bool {
 	var payload struct {
