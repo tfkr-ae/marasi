@@ -291,6 +291,7 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 	var status struct {
 		Status        *string         `json:"status"`
 		Version       *string         `json:"version"`
+		Channel       json.RawMessage `json:"channel"`
 		Instance      *string         `json:"instance"`
 		Project       *string         `json:"project"`
 		ProxyListener json.RawMessage `json:"proxy_listener"`
@@ -329,7 +330,18 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 		proxyListener = address
 	}
 
-	if _, err := fmt.Fprintf(stdout, "status: %s\nversion: %s\ninstance: %s\nproject: %s\nproxy listener: %s\n", *status.Status, *status.Version, *status.Instance, *status.Project, proxyListener); err != nil {
+	// A development build has no channel (null). An instance from a build
+	// older than the channel field reports none; it is still shown.
+	channel := "none"
+	if status.Channel == nil {
+		channel = "unknown"
+	} else if string(status.Channel) != "null" {
+		if err := json.Unmarshal(status.Channel, &channel); err != nil || channel == "" {
+			return errors.New("invalid service status: channel must be a non-empty string or null")
+		}
+	}
+
+	if _, err := fmt.Fprintf(stdout, "status: %s\nversion: %s\nchannel: %s\ninstance: %s\nproject: %s\nproxy listener: %s\n", *status.Status, *status.Version, channel, *status.Instance, *status.Project, proxyListener); err != nil {
 		return fmt.Errorf("writing service status: %w", err)
 	}
 	return nil
@@ -417,6 +429,7 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	defer stopService()
 	instanceName := filepath.Base(instancePath)
 	serviceServer := service.NewServer(proxy, listenerLifecycle, projects, stopService, version, instanceName, projects.Path())
+	serviceServer.SetBuildChannel(buildChannel)
 	if handlerErr := proxy.WithOptions(
 		marasi.WithRequestHandler(serviceServer.HandleRequest),
 		marasi.WithResponseHandler(serviceServer.HandleResponse),
