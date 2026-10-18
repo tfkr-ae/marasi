@@ -1759,10 +1759,10 @@ func TestStopCommand(t *testing.T) {
 }
 
 func TestStartService(t *testing.T) {
-	t.Run("should report the Make-injected version and canonical names from the running binary", func(t *testing.T) {
+	t.Run("should report the Make-injected version, channel, and canonical names from the running binary", func(t *testing.T) {
 		dist := t.TempDir()
 		const wantVersion = "ticket-01-test-version"
-		command := exec.Command("make", "-C", filepath.Join("..", ".."), "build", "DIST="+dist, "VERSION="+wantVersion)
+		command := exec.Command("make", "-C", filepath.Join("..", ".."), "build", "DIST="+dist, "VERSION="+wantVersion, "CHANNEL=nightly")
 		command.Env = append(os.Environ(), "GOWORK=off")
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("\nwanted:\nMake-built marasi command\ngot:\n%s\n%v", output, err)
@@ -1816,9 +1816,15 @@ func TestStartService(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := fmt.Sprintf("{\"status\":\"running\",\"version\":%q,\"instance\":\"work\",\"project\":%q,\"proxy_listener\":%q}\n", wantVersion, canonicalProject, proxyListener)
+		want := fmt.Sprintf("{\"status\":\"running\",\"version\":%q,\"channel\":\"nightly\",\"instance\":\"work\",\"project\":%q,\"proxy_listener\":%q}\n", wantVersion, canonicalProject, proxyListener)
 		if got := string(body); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
+		want = fmt.Sprintf("status: running\nversion: %s\nchannel: nightly\ninstance: work\nproject: %s\nproxy listener: %s\n", wantVersion, canonicalProject, proxyListener)
+		if err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
 
 		if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop"); err != nil {
