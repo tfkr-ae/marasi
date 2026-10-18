@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"github.com/tfkr-ae/marasi/internal/update"
 	"github.com/tfkr-ae/marasi/service"
 )
 
@@ -66,12 +67,12 @@ var updateChannelCmd = &cobra.Command{
 			}
 			return writeUpdateChannel(cmd, body, "")
 		}
-		channel := args[0]
-		if channel != "release" && channel != "nightly" {
-			return fmt.Errorf("unknown channel %q: choose release or nightly", channel)
+		channel, err := update.ParseChannel(args[0])
+		if err != nil {
+			return fmt.Errorf("unknown channel %q: choose release or nightly", args[0])
 		}
 		request, err := json.Marshal(struct {
-			Channel string `json:"channel"`
+			Channel update.Channel `json:"channel"`
 		}{Channel: channel})
 		if err != nil {
 			return fmt.Errorf("encoding channel request: %w", err)
@@ -285,7 +286,7 @@ func describeStep(step string, received, total int64) string {
 
 // writeUpdateChannel prints the configured channel. After a switch from a
 // nightly build to release it says the nightly stays (ADR-0049).
-func writeUpdateChannel(cmd *cobra.Command, body []byte, switchedTo string) error {
+func writeUpdateChannel(cmd *cobra.Command, body []byte, switchedTo update.Channel) error {
 	if jsonOutput {
 		return writeJSONBody(cmd, body)
 	}
@@ -300,11 +301,7 @@ func writeUpdateChannel(cmd *cobra.Command, body []byte, switchedTo string) erro
 	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "channel: %s\n", channel); err != nil {
 		return fmt.Errorf("writing update channel: %w", err)
 	}
-	installedChannel := ""
-	if status.Installed.Channel != nil {
-		installedChannel = *status.Installed.Channel
-	}
-	if switchedTo == "release" && installedChannel == "nightly" {
+	if switchedTo == update.Release && status.Installed.Channel != nil && *status.Installed.Channel == string(update.Nightly) {
 		_, err := io.WriteString(cmd.ErrOrStderr(), "the installed nightly build stays until the release channel has a newer build; "+
 			"marasi update reinstall --yes installs the latest release build now\n")
 		return wrapError("writing update channel", err)

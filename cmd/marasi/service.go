@@ -441,7 +441,6 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 	defer stopService()
 	instanceName := filepath.Base(instancePath)
 	serviceServer := service.NewServer(proxy, listenerLifecycle, projects, stopService, version, instanceName, projects.Path())
-	serviceServer.SetBuildChannel(buildChannel)
 	updates, err := service.NewUpdates(service.UpdatesConfig{
 		ConfigDir:    proxy.ConfigDir,
 		Version:      version,
@@ -451,6 +450,8 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 	if err != nil {
 		// A build that cannot name itself still serves; it just never checks.
 		logger.Warn("Updates are off: the build identity is invalid", "error", err)
+	}
+	if updates == nil {
 		updates, err = service.NewUpdates(service.UpdatesConfig{ConfigDir: proxy.ConfigDir, Version: version})
 		if err != nil {
 			return fmt.Errorf("starting updates: %w", err)
