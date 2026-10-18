@@ -14,7 +14,7 @@ func init() {
 }
 
 // upLaunchpadEntryOrder rebuilds launchpad_request with a position, the
-// link's fractional key in its launchpad's entry order (ADR-0048), and
+// link's fractional key in its launchpad's entry order (ADR-0052), and
 // backfills each launchpad's links in request id order, which is capture
 // order.
 func upLaunchpadEntryOrder(ctx context.Context, tx *sql.Tx) error {

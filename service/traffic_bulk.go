@@ -144,7 +144,7 @@ func writeBulkError(w http.ResponseWriter, r *http.Request, err error) {
 
 // launchPending is the 409 body of an operation refused because it would
 // take a pending launch's pair out of its launchpad, delete that pair, or
-// delete the launchpad a launch is pending from (ADR-0049). RequestIDs are
+// delete the launchpad a launch is pending from (ADR-0053). RequestIDs are
 // the pending launches' pair ids.
 type launchPending struct {
 	Error      string      `json:"error"`
@@ -259,7 +259,7 @@ func addTrafficBulkRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadc
 		}
 	})
 	// Delete and unlink go through the proxy, which refuses to take a
-	// pending launch's pair out of its launchpad (ADR-0049).
+	// pending launch's pair out of its launchpad (ADR-0053).
 	unlinkTraffic := func(_ domain.TrafficRepository, sel domain.Selection, target domain.LinkTarget) (int, error) {
 		return proxy.UnlinkTraffic(sel, target)
 	}

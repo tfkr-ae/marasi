@@ -687,7 +687,7 @@ func (proxy *Proxy) writeRequest(request *domain.ProxyRequest) {
 // insertRequest stores a request and, for a launch, links it to its
 // launchpad. A launch's pair is written under launchMu, so it cannot join a
 // selection between a guarded operation's pending-launch check and its
-// repository call (ADR-0049). A failed link is logged; a failed insert is
+// repository call (ADR-0053). A failed link is logged; a failed insert is
 // returned.
 func (proxy *Proxy) insertRequest(request *domain.ProxyRequest) error {
 	launchpadID, launch := request.Metadata["launchpad_id"].(uuid.UUID)

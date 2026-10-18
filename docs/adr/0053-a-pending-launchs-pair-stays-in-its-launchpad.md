@@ -6,4 +6,6 @@ Only the launch registry in memory knows that a launch is pending: the `launch` 
 
 The `launchpad_id` key that a launch writes into its pair's metadata is set once, at launch time, and no Marasi operation updates it. After a move or an unlink it may not name a launchpad the pair is in. The links are the record of membership (ADR-0032). A later change will stop storing the key in metadata and read a launch's launchpad from the database.
 
+**Consequences:** `launchMu` is held across the repository transaction, so a long bulk delete or unlink blocks `GetLaunch`, `CancelLaunch`, `InterruptLaunches` and the writer that links a launch's pair until it commits. This is accepted because the selection guards need it: releasing the lock before the transaction would let a new launch's pair join the selection after the check.
+
 **Considered options:** write `launch.status = pending` into metadata at launch and guard in SQL; let the repository call back into the registry; rewrite `launchpad_id` on every move. Rejected because a pair left pending by a crash could then never move or be deleted, the repository would depend on the proxy, and the key is to be removed from metadata.
