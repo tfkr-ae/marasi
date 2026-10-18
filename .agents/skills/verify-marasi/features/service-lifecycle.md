@@ -5,7 +5,7 @@ Marasi users start a named detached proxy service for a named project, inspect i
 ## Sub-features
 
 - Start an instance with `service start`.
-- Inspect version, instance, project, and proxy-listener identity with `service status`.
+- Inspect version, instance, project, proxy-listener identity, and whether a restart is required with `service status`.
 - Stop the selected instance with `service stop`.
 - Restart the selected instance on the installed build with `service restart [--force]`.
 - List instances in the config directory with `service list`.

@@ -127,7 +127,7 @@ The global flags are:
 | --- | --- |
 | `--instance NAME` | Selects a service instance. Defaults to `default`. |
 | `--config-dir PATH` | Selects the machine config directory. |
-| `--json` | Prints command output as JSON. `events` emits one JSON object per line. |
+| `--json` | Prints command output as JSON. `events`, `update install`, and `update reinstall` emit one JSON object per line. |
 
 ### Service commands
 
@@ -151,6 +151,38 @@ marasi --instance assessment project open --name another-assessment --json
 marasi --instance assessment service restart --json
 marasi --instance assessment service stop --json
 ```
+
+`service status` and `service list` report `restart required: yes` when the
+installed build changed after the instance started. `service restart` moves the
+instance to the installed build and keeps its name, project, and proxy listener.
+
+### Update commands
+
+A running service instance checks for and installs updates. With no running
+instance, the update commands fail and tell you to start one with
+`marasi service start`.
+
+```sh
+marasi update                          # installed build, channel, available update
+marasi update check                    # check the channel now
+marasi update install                  # install the update and follow its progress
+marasi update channel                  # print the channel
+marasi update channel nightly          # switch to release or nightly
+marasi update reinstall --yes          # install the latest build on the channel, even if older
+```
+
+`marasi update` shows the first lines of the update's release notes and a link
+to the release page. `--json` returns the full notes. `update install` writes
+its steps (download, verify, install) to stderr. With `--json` it writes each
+`update.progress`, `update.installed`, or `update.failed` event as one JSON
+line. It exits 1 when the install fails. Ctrl-C stops following, but the
+install continues on the instance. `marasi update` shows its state.
+
+The instance replaces its own executable, with symlinks resolved. Running
+instances keep their build until `service restart`. Switching channel never
+installs a build. From nightly to release, the installed nightly stays until a
+newer release exists. `update reinstall` installs the latest release now. It
+requires `--yes`, because projects opened in a newer build may not open in it.
 
 ### Traffic and CA certificate commands
 
@@ -233,10 +265,23 @@ Named projects live at `<config-dir>/projects/<name>.marasi`. Project files stor
 traffic, notes, metadata, proxy logs, extensions, waypoints, launchpads, Armory
 templates and runs, test cases, findings, and artifacts.
 
-The config directory also contains `config.yaml`, shared CA material, Chrome
-configuration, `wordlists/`, and report `templates/`. Each service instance has
+The config directory also contains `marasi_config.yaml`, shared CA material,
+Chrome configuration, `wordlists/`, and report `templates/`. Each service instance has
 an `instances/<name>.sock` control socket and an `instances/<name>.log` process log.
 Proxy logs are stored in the project, not in the process log.
+
+`marasi_config.yaml` has an `updates` section:
+
+```yaml
+updates:
+  channel: nightly   # release or nightly; unset follows the installed build's channel
+  auto_check: false  # unset or true checks on start and every 6 hours
+```
+
+`marasi update channel` writes `updates.channel`. Instances share the last
+check of each channel in `update_check.json`, guarded by `update_check.lock`,
+so instances on one config directory call GitHub once per 6 hours. A
+development build never checks for updates.
 
 The control socket path, including its terminating byte, cannot exceed 104 bytes.
 Windows also requires an absolute socket path. A short absolute `--config-dir`
