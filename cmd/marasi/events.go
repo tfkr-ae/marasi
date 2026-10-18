@@ -25,7 +25,7 @@ var eventsCmd = &cobra.Command{
 	Short: "Subscribe to service instance events",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		eventsConnected = false
+		streamConnected = false
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
@@ -33,7 +33,7 @@ var eventsCmd = &cobra.Command{
 	},
 }
 
-var eventsConnected bool
+var streamConnected bool
 
 // printEvents subscribes to the instance and prints named events until the connection closes.
 func printEvents(ctx context.Context, instancePath, instanceName string, asJSON bool, stdout, stderr io.Writer) error {
@@ -48,7 +48,7 @@ func printEvents(ctx context.Context, instancePath, instanceName string, asJSON 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return fmt.Errorf("instance %s is not running", instanceName)
+		return instanceNotRunningError{name: instanceName}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -69,7 +69,7 @@ func printEvents(ctx context.Context, instancePath, instanceName string, asJSON 
 		switch {
 		case line == ": connected":
 			connected = true
-			eventsConnected = true
+			streamConnected = true
 			if !asJSON {
 				if _, err := fmt.Fprintln(stderr, ": connected"); err != nil {
 					return err

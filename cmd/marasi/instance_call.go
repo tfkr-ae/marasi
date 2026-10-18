@@ -10,6 +10,16 @@ import (
 	"github.com/tfkr-ae/marasi/service"
 )
 
+// instanceNotRunningError reports that no instance answers on the named
+// instance's control socket.
+type instanceNotRunningError struct {
+	name string
+}
+
+func (e instanceNotRunningError) Error() string {
+	return fmt.Sprintf("instance %s is not running", e.name)
+}
+
 type instanceResponse struct {
 	StatusCode int
 	Status     string
@@ -39,7 +49,7 @@ func dialInstance(ctx context.Context, socketPath, instanceName, method, path, c
 		if ctx.Err() != nil {
 			return instanceResponse{}, ctx.Err()
 		}
-		return instanceResponse{}, fmt.Errorf("instance %s is not running", instanceName)
+		return instanceResponse{}, instanceNotRunningError{name: instanceName}
 	}
 	responseBody, readErr := io.ReadAll(response.Body)
 	closeErr := response.Body.Close()
