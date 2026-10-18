@@ -25,7 +25,7 @@ var eventsCmd = &cobra.Command{
 	Short: "Subscribe to service instance events",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		eventsConnected = false
+		streamConnected = false
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
@@ -33,7 +33,7 @@ var eventsCmd = &cobra.Command{
 	},
 }
 
-var eventsConnected bool
+var streamConnected bool
 
 // printEvents subscribes to the instance and prints named events until the connection closes.
 func printEvents(ctx context.Context, instancePath, instanceName string, asJSON bool, stdout, stderr io.Writer) error {
@@ -48,51 +48,38 @@ func printEvents(ctx context.Context, instancePath, instanceName string, asJSON 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return fmt.Errorf("instance %s is not running", instanceName)
+		return instanceNotRunningError{name: instanceName}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("subscribing to events: %s", response.Status)
 	}
 
-	reader := bufio.NewReader(response.Body)
 	connected := false
-	eventName := ""
-	data := ""
-	for {
-		var line string
-		line, err = reader.ReadString('\n')
-		if len(line) == 0 {
-			break
+	var writeErr error
+	err = readEventFrames(bufio.NewReader(response.Body), func(line string) error {
+		if line != ": connected" {
+			return nil
 		}
-		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
-		switch {
-		case line == ": connected":
-			connected = true
-			eventsConnected = true
-			if !asJSON {
-				if _, err := fmt.Fprintln(stderr, ": connected"); err != nil {
-					return err
-				}
-				if err := flushEventsWriter(stderr); err != nil {
-					return err
-				}
-			}
-		case strings.HasPrefix(line, "event:"):
-			eventName = strings.TrimPrefix(strings.TrimPrefix(line, "event:"), " ")
-		case strings.HasPrefix(line, "data:"):
-			data = strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
-		case line == "":
-			if connected && eventName != "" {
-				if err := writeEvent(stdout, eventName, data, asJSON); err != nil {
-					return err
-				}
-			}
-			eventName, data = "", ""
+		connected = true
+		streamConnected = true
+		if asJSON {
+			return nil
 		}
-		if err != nil {
-			break
+		if _, writeErr = fmt.Fprintln(stderr, ": connected"); writeErr != nil {
+			return writeErr
 		}
+		writeErr = flushEventsWriter(stderr)
+		return writeErr
+	}, func(frame eventFrame) error {
+		if !connected {
+			return nil
+		}
+		writeErr = writeEvent(stdout, frame.name, frame.data, asJSON)
+		return writeErr
+	})
+	if writeErr != nil {
+		return writeErr
 	}
 	if connected && (err == io.EOF || ctx.Err() != nil) {
 		return nil
@@ -101,6 +88,49 @@ func printEvents(ctx context.Context, instancePath, instanceName string, asJSON 
 		return fmt.Errorf("reading events: %w", err)
 	}
 	return fmt.Errorf("instance %s closed the event subscription before connecting", instanceName)
+}
+
+// eventFrame is one named event from GET /events.
+type eventFrame struct {
+	name string
+	data string
+}
+
+// readEventFrames reads a GET /events stream, calling comment with each
+// comment line and frame with each complete named event, until the stream
+// ends or a callback fails. It returns what ended it: the read error
+// (io.EOF at the end of the stream) or the callback's error.
+func readEventFrames(reader *bufio.Reader, comment func(string) error, frame func(eventFrame) error) error {
+	name, data := "", ""
+	for {
+		line, err := reader.ReadString('\n')
+		if len(line) == 0 && err != nil {
+			return err
+		}
+		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+		switch {
+		case strings.HasPrefix(line, ":"):
+			if comment != nil {
+				if err := comment(line); err != nil {
+					return err
+				}
+			}
+		case strings.HasPrefix(line, "event:"):
+			name = strings.TrimPrefix(strings.TrimPrefix(line, "event:"), " ")
+		case strings.HasPrefix(line, "data:"):
+			data = strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
+		case line == "" && err == nil:
+			if name != "" && frame != nil {
+				if err := frame(eventFrame{name: name, data: data}); err != nil {
+					return err
+				}
+			}
+			name, data = "", ""
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 func writeEvent(writer io.Writer, name, data string, asJSON bool) error {

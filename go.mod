@@ -3,6 +3,7 @@ module github.com/tfkr-ae/marasi
 go 1.26.0
 
 require (
+	aead.dev/minisign v0.3.0
 	github.com/Shopify/go-lua v0.0.0-20240527182111-9ab1540f3f5f
 	github.com/Shopify/goluago v0.0.0-20240527182001-ec4ec6c26eab
 	github.com/beevik/etree v1.6.0

@@ -181,6 +181,41 @@ func TestWithConfigDir_WebSocketMaxMessageSize(t *testing.T) {
 	}
 }
 
+func TestWithConfigDir_Updates(t *testing.T) {
+	load := func(t *testing.T, yaml string) (*Proxy, error) {
+		t.Helper()
+		configDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(configDir, "marasi_config.yaml"), []byte(yaml), 0o600); err != nil {
+			t.Fatalf("writing config: %v", err)
+		}
+		return New(WithConfigDir(configDir))
+	}
+
+	t.Run("should reject an unknown channel", func(t *testing.T) {
+		if _, err := load(t, "updates:\n  channel: beta\n"); err == nil || !strings.Contains(err.Error(), "updates.channel") {
+			t.Fatalf("\nwanted:\nan error naming updates.channel\ngot:\n%v", err)
+		}
+	})
+
+	for yaml, want := range map[string]UpdatesConfig{
+		"":                                {},
+		"updates:\n  channel: nightly\n":  {Channel: "nightly"},
+		"updates:\n  auto_check: false\n": {AutoCheck: new(bool)},
+		"updates:\n  channel: release\n":  {Channel: "release"},
+	} {
+		t.Run("should load "+strings.ReplaceAll(strings.TrimSpace(yaml), "\n", " "), func(t *testing.T) {
+			proxy, err := load(t, yaml)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			got := proxy.Config.Updates
+			if got.Channel != want.Channel || got.AutoCheckEnabled() != want.AutoCheckEnabled() {
+				t.Fatalf("\nwanted:\nchannel %q auto check %v\ngot:\nchannel %q auto check %v", want.Channel, want.AutoCheckEnabled(), got.Channel, got.AutoCheckEnabled())
+			}
+		})
+	}
+}
+
 func TestWithTLS(t *testing.T) {
 	newProxy := func(t *testing.T, configDir string, option func(*Proxy) error) *Proxy {
 		t.Helper()

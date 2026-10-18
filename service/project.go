@@ -294,21 +294,26 @@ type ProjectWait struct {
 	Count int `json:"count,omitempty"`
 }
 
+// checkpointSummary names a held Checkpoint item: a WebSocket frame's
+// direction, or the first line of an HTTP request or response.
+func checkpointSummary(item domain.CheckpointItem) string {
+	if item.Type == domain.CheckpointTypeWebSocket {
+		return item.Direction
+	}
+	line, _, _ := strings.Cut(string(item.Raw), "\n")
+	return strings.TrimSuffix(line, "\r")
+}
+
 // projectWaits lists the project work a switch is waiting for: held
 // Checkpoint items, running extensions, then other admitted work.
 func (lifecycle *ProjectLifecycle) projectWaits() []ProjectWait {
 	var waits []ProjectWait
 	heldHTTP := 0
 	for _, item := range lifecycle.proxy.CheckpointItems() {
-		wait := ProjectWait{Kind: "checkpoint", ID: item.ID.String(), Type: item.Type}
-		if item.Type == "websocket" {
-			wait.Summary = item.Direction
-		} else {
+		if item.Type != domain.CheckpointTypeWebSocket {
 			heldHTTP++
-			wait.Summary, _, _ = strings.Cut(string(item.Raw), "\n")
-			wait.Summary = strings.TrimSuffix(wait.Summary, "\r")
 		}
-		waits = append(waits, wait)
+		waits = append(waits, ProjectWait{Kind: "checkpoint", ID: item.ID.String(), Type: item.Type, Summary: checkpointSummary(item)})
 	}
 	active, running := lifecycle.gate.snapshot()
 	for _, name := range running {
@@ -388,6 +393,91 @@ func (lifecycle *ProjectLifecycle) Shutdown() error {
 		lifecycle.setOpen(nil)
 	}
 	return errors.Join(flushErr, cleanupErr)
+}
+
+// projectRelease is an open project given up for a restart. Until reopen or
+// abandon, no project can open and no project work is admitted.
+type projectRelease struct {
+	path string
+	// reopen takes the project back and admits work again. It is nil when
+	// nothing was released.
+	reopen func(context.Context) error
+	// abandon leaves the project closed, for an instance about to exit.
+	abandon func()
+}
+
+// release ends launches and Armory runs, waits for admitted work, then
+// flushes, closes, and unlocks the open project so a successor can own it
+// (ADR-0051). dropHeld is called while waiting, so an item held during the
+// wait does not keep the project busy; when it fails instead, the release
+// stops and returns its error with nothing released.
+func (lifecycle *ProjectLifecycle) release(ctx context.Context, dropHeld func() error) (projectRelease, error) {
+	lifecycle.mu.Lock()
+	project := lifecycle.openProject()
+	if project == nil {
+		lifecycle.mu.Unlock()
+		return projectRelease{}, errors.New("no open project")
+	}
+	lifecycle.proxy.InterruptLaunches()
+	if project.resources.Armory != nil {
+		project.resources.Armory.Shutdown()
+	}
+	blockCtx, cancelBlock := context.WithCancelCause(ctx)
+	defer cancelBlock(nil)
+	unblock, err := lifecycle.gate.block(blockCtx, func() bool {
+		if err := dropHeld(); err != nil {
+			cancelBlock(err)
+			return false
+		}
+		return !lifecycle.proxy.HasPendingCheckpoint()
+	})
+	if err != nil {
+		lifecycle.mu.Unlock()
+		if cause := context.Cause(blockCtx); cause != nil && ctx.Err() == nil {
+			err = cause
+		}
+		return projectRelease{}, err
+	}
+	finished := false
+	finish := func() {
+		if !finished {
+			finished = true
+			lifecycle.mu.Unlock()
+		}
+	}
+	path := project.path
+	reopen := func(ctx context.Context) error {
+		defer finish()
+		defer unblock()
+		unlock, err := lifecycle.lock(path)
+		if err != nil {
+			return err
+		}
+		resources, err := lifecycle.prepare(ctx, path)
+		if err != nil {
+			return errors.Join(err, cleanupPreparedProject(path, true, resources, unlock))
+		}
+		target := &openProject{path: path, resources: resources, unlock: unlock}
+		lifecycle.proxy.SetProjectResources(resources)
+		lifecycle.gate.publish()
+		lifecycle.setOpen(target)
+		if repository, ok := resources.Repository.(*eventLogRepository); ok {
+			repository.startPublishing()
+		}
+		lifecycle.startJobs(target)
+		return nil
+	}
+	// An abandoned project is never reopened here: a switch that was waiting
+	// for the restart fails rather than open a project in an exiting instance.
+	abandon := func() {
+		lifecycle.cancelExecution()
+		finish()
+	}
+	released := projectRelease{path: path, reopen: reopen, abandon: abandon}
+	flushErr := lifecycle.proxy.CloseWebSocketsAndFlush()
+	closeErr := closeProject(project)
+	lifecycle.setOpen(nil)
+	return released, errors.Join(flushErr, closeErr)
 }
 
 func (lifecycle *ProjectLifecycle) openProject() *openProject {
