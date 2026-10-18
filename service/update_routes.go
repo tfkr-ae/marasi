@@ -74,13 +74,6 @@ type updateInstaller struct {
 	// closed keeps them from starting once close has begun.
 	restarting bool
 	closed     bool
-	// installed is the version this instance installed, so a repeated
-	// request does not install it again before the restart.
-	installed string
-
-	// announced is the update last announced in update.available.
-	announcedMu sync.Mutex
-	announced   string
 }
 
 func newUpdateInstaller() *updateInstaller {
@@ -227,11 +220,30 @@ func writeUpdateFailure(w http.ResponseWriter, r *http.Request, err error) {
 	writeUpdateError(w, r, http.StatusInternalServerError, "internal_server_error", "")
 }
 
+// writeAlreadyInstalled refuses an install once one, by any instance or by
+// hand, has replaced the installed build (ADR-0050).
+func writeAlreadyInstalled(w http.ResponseWriter, r *http.Request) {
+	writeUpdateError(w, r, http.StatusConflict, "already_installed", "an update is installed; restart the instance to run it")
+}
+
 // updatesReady reports whether the instance has an updates component; unit
 // test servers may not.
 func (s *Server) updatesReady(w http.ResponseWriter, r *http.Request) bool {
 	if s.updates == nil {
 		writeUpdateError(w, r, http.StatusNotImplemented, "updates_unavailable", "")
+		return false
+	}
+	return true
+}
+
+// updatesInstallable reports whether the instance can check for and install
+// updates: it has an updates component and is not a development build.
+func (s *Server) updatesInstallable(w http.ResponseWriter, r *http.Request) bool {
+	if !s.updatesReady(w, r) {
+		return false
+	}
+	if s.updates.Updater() == nil {
+		writeUpdateFailure(w, r, update.ErrDevBuild)
 		return false
 	}
 	return true
@@ -262,23 +274,20 @@ func (s *Server) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveUpdateChannel(w http.ResponseWriter, r *http.Request) {
-	if !s.updatesReady(w, r) {
+	if !s.updatesInstallable(w, r) {
 		return
 	}
-	channel, err := decodeUpdateField[string](r, "channel")
+	text, err := decodeUpdateField[string](r, "channel")
 	if err != nil {
 		writeUpdateError(w, r, http.StatusBadRequest, "invalid_update_request", `the body must be {"channel": "release" or "nightly"}`)
 		return
 	}
-	if s.updates.Updater() == nil {
-		writeUpdateFailure(w, r, update.ErrDevBuild)
-		return
-	}
-	if _, err := update.ParseChannel(channel); err != nil {
+	channel, err := update.ParseChannel(text)
+	if err != nil {
 		writeUpdateError(w, r, http.StatusBadRequest, "invalid_update_request", err.Error())
 		return
 	}
-	status, err := s.updates.SetChannel(r.Context(), update.Channel(channel))
+	status, err := s.updates.SetChannel(r.Context(), channel)
 	if err != nil {
 		writeUpdateFailure(w, r, err)
 		return
@@ -295,14 +304,14 @@ type installResponse struct {
 }
 
 func (s *Server) serveUpdateInstall(w http.ResponseWriter, r *http.Request) {
-	if !s.updatesReady(w, r) {
-		return
-	}
-	if s.updates.Updater() == nil {
-		writeUpdateFailure(w, r, update.ErrDevBuild)
+	if !s.updatesInstallable(w, r) {
 		return
 	}
 	if s.joinInstall(w, r) {
+		return
+	}
+	if s.updates.RestartRequired() {
+		writeAlreadyInstalled(w, r)
 		return
 	}
 	status, err := s.updates.Check(r.Context())
@@ -334,8 +343,7 @@ func (s *Server) serveUpdateReinstall(w http.ResponseWriter, r *http.Request) {
 		writeUpdateError(w, r, http.StatusBadRequest, "confirmation_required", "a reinstall replaces the installed build with the latest build on its channel even when that build is older, and projects opened in a newer build may not open in it; send {\"confirm\": true}")
 		return
 	}
-	if s.updates.Updater() == nil {
-		writeUpdateFailure(w, r, update.ErrDevBuild)
+	if !s.updatesInstallable(w, r) {
 		return
 	}
 	if s.joinInstall(w, r) {
@@ -393,8 +401,10 @@ func (s *Server) startInstall(w http.ResponseWriter, r *http.Request, c update.C
 		writeUpdateError(w, r, http.StatusConflict, "restart_in_progress", "the instance is restarting")
 		return
 	}
-	if !reinstall && in.installed == c.Build.Version {
-		writeUpdateError(w, r, http.StatusConflict, "already_installed", fmt.Sprintf("build %s is installed; restart the instance to run it", c.Build.Version))
+	// An install that ended since the request began replaced the installed
+	// build too.
+	if !reinstall && s.updates.RestartRequired() {
+		writeAlreadyInstalled(w, r)
 		return
 	}
 	if target == "" {
@@ -470,7 +480,6 @@ func (s *Server) runInstall(ctx context.Context, running *runningInstall, lock *
 	defer close(running.done)
 	if err == nil {
 		in.state.State = installInstalled
-		in.installed = version
 		s.events.publish("update.installed", updateInstalledEvent{Instance: s.instance, Version: version, InstallPath: target})
 		return
 	}
@@ -527,17 +536,16 @@ type updateAvailableEvent struct {
 // differs from the one last announced. Checks served from the cache report
 // the same update again; they publish nothing.
 func (s *Server) announceAvailable(status UpdateStatus) {
-	in := s.installer
 	key := ""
 	if c := status.Available; c != nil {
 		key = strings.Join([]string{c.Build.Version, c.Build.Commit, c.Build.Published.UTC().String()}, "|")
 	}
-	in.announcedMu.Lock()
-	defer in.announcedMu.Unlock()
-	if key == in.announced {
+	s.announcedMu.Lock()
+	defer s.announcedMu.Unlock()
+	if key == s.announced {
 		return
 	}
-	in.announced = key
+	s.announced = key
 	if key != "" {
 		s.events.publish("update.available", updateAvailableEvent{Instance: s.instance, updateBuildBody: *updateBuildFromCandidate(status.Available)})
 	}

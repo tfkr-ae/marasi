@@ -33,8 +33,11 @@ type Server struct {
 	channel           string // build channel; "" for a development build
 	updates           *Updates
 	installer         *updateInstaller
-	instance          string
-	project           string
+	// announced is the update last announced in update.available.
+	announcedMu sync.Mutex
+	announced   string
+	instance    string
+	project     string
 	// exit closes event streams and stops the instance.
 	exit func()
 	// restartMu guards restart and restarting.
