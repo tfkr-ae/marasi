@@ -43,16 +43,17 @@ type LaunchpadRepository interface {
 	// GetLaunchpadRequests retrieves traffic summaries for requests linked
 	// to a launchpad that match a traffic query and are not hidden by a
 	// content-type exclusion, in the AIP-132 orderBy order (see
-	// TrafficQuery.OrderBy). An empty orderBy lists them oldest first. An
+	// TrafficQuery.OrderBy). An empty orderBy lists them in entry order. An
 	// empty query matches every linked request. complete reports, for each
 	// background job the answer depends on, whether it had finished, as
 	// TrafficPage.Complete does. An invalid query, exclusion or orderBy
 	// returns a *QueryError.
 	GetLaunchpadRequests(id uuid.UUID, query string, exclusion []string, orderBy string) (items []*RequestResponseSummary, complete map[JobName]bool, err error)
 
-	// LinkRequestToLaunchpad associates a request with a launchpad using their respective UUIDs.
-	// This allows for organizing requests into collections.
-	// It returns an error if either the request or the launchpad does not exist.
+	// LinkRequestToLaunchpad makes a request the launchpad's last entry.
+	// It returns ErrLaunchpadAlreadyLinked, and leaves the entry in its
+	// place, if the request is already an entry, and an error if either the
+	// request or the launchpad does not exist.
 	LinkRequestToLaunchpad(requestID uuid.UUID, launchpadID uuid.UUID) error
 
 	// UnlinkRequestFromLaunchpad removes a request from a launchpad. It
@@ -68,8 +69,8 @@ type Launchpad struct {
 
 	// EntryCount is the number of request/response pairs linked to the launchpad.
 	EntryCount int
-	// LastStatusCode is the response status code of the newest entry, in the
-	// order GetLaunchpadRequests returns entries. It is nil when the launchpad
+	// LastStatusCode is the response status code of the newest entry by
+	// capture, whatever its place in entry order. It is nil when the launchpad
 	// has no entries or its newest entry has no response (in flight, cancelled, or failed).
 	LastStatusCode *int
 }

@@ -379,7 +379,7 @@ func TestLaunchpadRepo_GetLaunchpadRequests(t *testing.T) {
 		}
 
 		if got[0].ID != reqID1 || got[1].ID != reqID2 {
-			t.Fatalf("\nwanted oldest-first:\n%s, %s\ngot:\n%s, %s", reqID1, reqID2, got[0].ID, got[1].ID)
+			t.Fatalf("\nwanted entry order:\n%s, %s\ngot:\n%s, %s", reqID1, reqID2, got[0].ID, got[1].ID)
 		}
 		if got[0].StatusCode != -1 || got[0].Status != "N/A" || !got[0].RespondedAt.IsZero() {
 			t.Fatalf("\nwanted:\nin-flight response defaults\ngot:\n%+v", got[0])
