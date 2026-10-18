@@ -358,6 +358,12 @@ func startService(ctx context.Context, configDir, projectPath, instancePath, add
 
 // startServiceReady starts a proxy instance and calls ready with the proxy listener address.
 func startServiceReady(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, ready func(string) error) (resultErr error) {
+	return startServiceInstance(ctx, configDir, projectPath, instancePath, address, port, true, ready)
+}
+
+// startServiceInstance starts a proxy instance and calls ready with the proxy
+// listener address, or "" when startListener is false.
+func startServiceInstance(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, startListener bool, ready func(string) error) (resultErr error) {
 	socketPath := instancePath + ".sock"
 	lockPath := instancePath + ".lock"
 	logFile, err := openInstanceLog(instancePath + ".log")
@@ -418,13 +424,11 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	if err != nil {
 		return fmt.Errorf("starting proxy base options: %w", err)
 	}
-	controlListener, instanceLock, err := claimInstance(socketPath, lockPath)
+	claim, err := claimInstanceName(socketPath, lockPath)
 	if err != nil {
 		return err
 	}
-	releaseClaim = func() error {
-		return releaseInstance(controlListener, socketPath, instanceLock)
-	}
+	releaseClaim = claim.release
 
 	serviceCtx, stopService := context.WithCancel(ctx)
 	defer stopService()
@@ -466,9 +470,15 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 		return fmt.Errorf("installing traffic event handlers: %w", handlerErr)
 	}
 
-	listenerStatus, err := listenerLifecycle.Start(serviceCtx, service.ListenerSettings{Address: &address, Port: &port})
-	if err != nil {
-		return fmt.Errorf("binding proxy listener on address %s port %d: %w", address, port, err)
+	serviceServer.EnableRestart(successorStarter{claim: claim, configDir: configDir, instancePath: instancePath, readyTimeout: restartReadyTimeout}.start)
+
+	proxyListener := ""
+	if startListener {
+		listenerStatus, err := listenerLifecycle.Start(serviceCtx, service.ListenerSettings{Address: &address, Port: &port})
+		if err != nil {
+			return fmt.Errorf("binding proxy listener on address %s port %d: %w", address, port, err)
+		}
+		proxyListener = *listenerStatus.ProxyListener
 	}
 
 	server := &http.Server{Handler: serviceServer}
@@ -484,8 +494,8 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 		stopService()
 		<-updatesDone
 	}()
-	return serveControlAPIReady(serviceCtx, server, controlListener, shutdownTimeout, func() error {
-		return ready(*listenerStatus.ProxyListener)
+	return serveControlAPIReady(serviceCtx, server, claim.listener, shutdownTimeout, func() error {
+		return ready(proxyListener)
 	})
 }
 

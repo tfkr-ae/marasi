@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tfkr-ae/marasi"
@@ -33,6 +34,12 @@ type Server struct {
 	updates           *Updates
 	instance          string
 	project           string
+	// exit closes event streams and stops the instance.
+	exit func()
+	// restartMu guards restart and restarting.
+	restartMu  sync.Mutex
+	restart    SuccessorStart
+	restarting bool
 }
 
 // NewServer creates a control API server for proxy.
@@ -106,11 +113,12 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 			},
 		})
 	}
-	addRoutes(mux, projects, proxy, chrome, events, server.serveStatus, func() {
+	server.exit = func() {
 		server.dropPendingCheckpoint()
 		server.Close()
 		stop()
-	})
+	}
+	addRoutes(mux, projects, proxy, chrome, events, server.serveStatus, server.serveRestart, server.exit)
 	listenerMux := http.NewServeMux()
 	listenerMux.HandleFunc("/status", server.serveListenerStatus)
 	listenerMux.HandleFunc("/start", server.serveListenerStart)
