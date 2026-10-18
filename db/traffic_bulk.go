@@ -209,6 +209,8 @@ func appendEntries(tx *sqlx.Tx, launchpadID uuid.UUID, selected string, args []a
 
 // UnlinkTraffic removes the links between every pair in sel and target and
 // returns the number of pairs that were linked.
+// It does not check for pending launches; clients call the Proxy method of
+// the same name, which refuses a pending launch's pair (ADR-0049).
 func (repo *Repository) UnlinkTraffic(sel domain.Selection, target domain.LinkTarget) (int, error) {
 	return repo.bulkInTx(sel, func(tx *sqlx.Tx, selected string, args []any) (int, error) {
 		link, err := linkTableFor(tx, target)
@@ -218,6 +220,32 @@ func (repo *Repository) UnlinkTraffic(sel domain.Selection, target domain.LinkTa
 		query := `DELETE FROM ` + link.table + ` WHERE ` + link.column + ` = ? AND request_id IN (` + selected + `)`
 		return execCount(tx, fmt.Sprintf("unlinking traffic from %s %s", target.Kind, target.ID), query, append([]any{target.ID}, args...)...)
 	})
+}
+
+// SelectionIncludes returns the ids among ids that are pairs in sel, in the
+// order of ids. It resolves sel as a bulk operation does, so a query
+// selection that depends on an unfinished background job returns a
+// *domain.SelectionIncompleteError.
+func (repo *Repository) SelectionIncludes(sel domain.Selection, ids []uuid.UUID) ([]uuid.UUID, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	among, err := json.Marshal(ids)
+	if err != nil {
+		return nil, fmt.Errorf("encoding candidate ids: %w", err)
+	}
+	var selected []uuid.UUID
+	_, err = repo.bulkInTx(sel, func(tx *sqlx.Tx, query string, args []any) (int, error) {
+		err := tx.Select(&selected, `SELECT id FROM (`+query+`) WHERE id IN (SELECT value FROM json_each(?))`, append(args, string(among))...)
+		if err != nil {
+			return 0, fmt.Errorf("reading the selected pairs: %w", err)
+		}
+		return len(selected), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(slices.Clone(ids), func(id uuid.UUID) bool { return !slices.Contains(selected, id) }), nil
 }
 
 // execCount runs query in tx and returns the number of rows it changed.

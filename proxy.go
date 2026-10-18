@@ -660,8 +660,7 @@ func (proxy *Proxy) writeResponse(response *domain.ProxyResponse) {
 // writeRequest stores a request and links it to its launchpad and Armory run.
 // It runs on the database writer.
 func (proxy *Proxy) writeRequest(request *domain.ProxyRequest) {
-	err := proxy.TrafficRepo.InsertRequest(request)
-	if err != nil {
+	if err := proxy.insertRequest(request); err != nil {
 		log.Println(err)
 		if proxy.launchIs(request.ID, func(entry *launchEntry) bool { return entry.claimed }) {
 			if _, getErr := proxy.TrafficRepo.GetMetadata(request.ID); getErr == nil {
@@ -670,15 +669,6 @@ func (proxy *Proxy) writeRequest(request *domain.ProxyRequest) {
 			}
 		}
 		return
-	}
-
-	if val, ok := request.Metadata["launchpad_id"]; ok {
-		if launchpadID, ok := val.(uuid.UUID); ok {
-			err := proxy.LaunchpadRepo.LinkRequestToLaunchpad(request.ID, launchpadID)
-			if err != nil {
-				log.Printf("linking request to launchpad: %v", err)
-			}
-		}
 	}
 
 	if runID, ok := request.Metadata["armory_run_id"].(uuid.UUID); ok {
@@ -692,6 +682,27 @@ func (proxy *Proxy) writeRequest(request *domain.ProxyRequest) {
 			}
 		}
 	}
+}
+
+// insertRequest stores a request and, for a launch, links it to its
+// launchpad. A launch's pair is written under launchMu, so it cannot join a
+// selection between a guarded operation's pending-launch check and its
+// repository call (ADR-0049). A failed link is logged; a failed insert is
+// returned.
+func (proxy *Proxy) insertRequest(request *domain.ProxyRequest) error {
+	launchpadID, launch := request.Metadata["launchpad_id"].(uuid.UUID)
+	if !launch {
+		return proxy.TrafficRepo.InsertRequest(request)
+	}
+	proxy.launchMu.Lock()
+	defer proxy.launchMu.Unlock()
+	if err := proxy.TrafficRepo.InsertRequest(request); err != nil {
+		return err
+	}
+	if err := proxy.LaunchpadRepo.LinkRequestToLaunchpad(request.ID, launchpadID); err != nil {
+		log.Printf("linking request to launchpad: %v", err)
+	}
+	return nil
 }
 
 func (proxy *Proxy) flushDBWrites() error {
