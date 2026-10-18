@@ -6,6 +6,8 @@ Once the stream is connected, JSON mode writes one compact object per event, eac
 
 Human mode writes the `: connected` comment to stderr, then `<name> <payload>` per event on stdout, and errors to stderr. Heartbeats stay out. SIGINT and a clean close after connect exit 0. Never connected, overflow drop, and read errors exit 1.
 
+`marasi update install` and `marasi update reinstall` stream the same way while they follow an install. They connect before they start or join the install. In JSON mode they then write only that install's `update.progress`, `update.installed`, and `update.failed` events. Human mode writes progress and the result to stderr. `update.installed` exits 0 and `update.failed` exits 1. SIGINT stops following and exits 0, and the install continues on the instance (ADR-0050). Unlike `marasi events`, a clean close before the install ends exits 1, because the result is unknown.
+
 This amends ADR-0007 for streaming commands only. Other commands still write one JSON value.
 
 **Considered options:** forbidding `--json`; buffering an array until exit; printing payload JSON without the event name; appending `{"error":"..."}` as a trailing NDJSON line. Rejected because agents need a live named stream, an array is not live, payloads are mixed types that share `id`, and errors must not look like events.

@@ -14,7 +14,7 @@ Users see whether a newer build is on their channel, switch channel, and install
 
 ## How to get to it (user POV)
 
-Start a service first (see [service lifecycle](service-lifecycle.md)). Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANCE" update`. A `make build` binary is a development build (a `(dev)` version, or no embedded signing key), so it reports `development: true` and refuses to check or install. Proving a check or an install needs a downloaded signed release or nightly build and network access to GitHub.
+Start a service first (see [service lifecycle](service-lifecycle.md)). Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANCE" update`. The build `make build` produces is a development build (a `(dev)` version, or no embedded signing key), so it reports `development: true` and refuses to check or install. Proving a check or an install needs a downloaded signed release or nightly build and network access to GitHub.
 
 ## Driving it with shell and curl
 

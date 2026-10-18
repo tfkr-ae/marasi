@@ -6,4 +6,4 @@ An install reports its steps (download, verify, install) as events and through `
 
 Running instances keep the code they started with and report `restart required` until they restart (ADR-0051).
 
-**Considered options:** the CLI replaces the binary locally and the service only reports availability; shared logic that both the CLI and the service run. Rejected because service-only GUIs could not install, and two install paths would drift on locking and verification.
+**Considered options:** the CLI replaces the installed build locally and the service only reports availability; shared logic that both the CLI and the service run. Rejected because service-only GUIs could not install, and two install paths would drift on locking and verification.

@@ -234,3 +234,7 @@ _Avoid_: downgrade, rollback
 **Restart**:
 A service instance handing its name, open project, and proxy listener address to a successor started from the installed build, then exiting. If the successor does not become ready, the instance keeps them and keeps running.
 _Avoid_: reload, relaunch
+
+**Successor**:
+The service instance a restart starts from the installed build to take over the restarting instance's name, open project, and proxy listener address. It becomes that instance once it reports ready.
+_Avoid_: child, replacement, new instance
