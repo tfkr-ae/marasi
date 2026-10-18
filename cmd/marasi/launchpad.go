@@ -192,10 +192,11 @@ var launchpadMoveCmd = &cobra.Command{
 	Long:  "Move entries of a launchpad to a new place in its entry order, or to another launchpad with --target. The moved entries go before the --before entry of the target, or after its last entry without it. They keep their entry order relative to each other, whatever the order of the arguments, and a repeated id counts once. Only the moved entries change place. Moved to another launchpad, the entries leave this one; a move never copies.\n\nThe move is refused as a whole, and changes nothing, if a pair is not an entry of the launchpad, if the --before entry is not an entry of the target or is itself moved (invalid_placement), if the target launchpad already holds a pair (already_linked), or if a pair moving to another launchpad is a pending launch (launch_pending).\n\nWith --json the command writes the control API body: {\"source_launchpad_id\",\"target_launchpad_id\",\"request_ids\"}, with the moved pairs in their new entry order.",
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		path, err := serviceIDPath("/launchpad/", args[0], "/move")
+		source, err := parseServiceID(args[0])
 		if err != nil {
 			return err
 		}
+		path := "/launchpad/" + source + "/move"
 		request := launchpadRequest{RequestIDs: make([]string, 0, len(args)-1)}
 		for _, raw := range args[1:] {
 			id, err := parseServiceID(raw)
@@ -204,10 +205,7 @@ var launchpadMoveCmd = &cobra.Command{
 			}
 			request.RequestIDs = append(request.RequestIDs, id)
 		}
-		target, err := parseServiceID(args[0])
-		if err != nil {
-			return err
-		}
+		target := source
 		if cmd.Flags().Changed("target") {
 			if target, err = parseServiceID(launchpadMoveTarget); err != nil {
 				return err
@@ -369,7 +367,7 @@ func runLaunch(cmd *cobra.Command, path string, body launchpadRequest) error {
 	if err != nil {
 		return err
 	}
-	if err := rejectInstanceStatus(operation, called, jsonOutput); err != nil {
+	if err := rejectLaunchpadStatus(operation, called, jsonOutput); err != nil {
 		return err
 	}
 	var started launchRecord
@@ -483,7 +481,7 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 	if err != nil {
 		return err
 	}
-	if err := rejectInstanceStatus(operation, called, jsonOutput); err != nil {
+	if err := rejectLaunchpadStatus(operation, called, jsonOutput); err != nil {
 		return err
 	}
 	response := called.Body

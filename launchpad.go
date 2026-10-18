@@ -563,7 +563,7 @@ func (proxy *Proxy) finishLaunch(id uuid.UUID) {
 
 // storeLaunchedRequest stores the request as launched when the launch ended
 // before the pipeline wrote its pair, so every launch leaves its request in its launchpad.
-// The pair of a pending launch cannot be deleted (ADR-0049), so a pair found
+// The pair of a pending launch cannot be deleted (ADR-0053), so a pair found
 // here is the launch's own.
 func (proxy *Proxy) storeLaunchedRequest(entry *launchEntry) {
 	if proxy.TrafficRepo == nil || entry.launched == nil {

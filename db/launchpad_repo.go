@@ -129,7 +129,7 @@ func (repo *Repository) UpdateLaunchpad(launchpadID uuid.UUID, name, description
 
 // DeleteLaunchpad removes a launchpad from the database.
 // It does not check for pending launches; clients call the Proxy method of
-// the same name, which refuses a pending launch's pair (ADR-0049).
+// the same name, which refuses a pending launch's pair (ADR-0053).
 func (repo *Repository) DeleteLaunchpad(launchpadID uuid.UUID) error {
 	query := `DELETE FROM launchpad WHERE id = ?`
 
@@ -153,7 +153,7 @@ func (repo *Repository) DeleteLaunchpad(launchpadID uuid.UUID) error {
 
 // GetLaunchpadRequests retrieves the requests linked to a launchpad that
 // match trafficQuery and are not hidden by exclusion, in the orderBy order
-// that ListTraffic uses, or in entry order (ADR-0048) when orderBy is empty, with the
+// that ListTraffic uses, or in entry order (ADR-0052) when orderBy is empty, with the
 // completeness of each background job the answer depends on, as ListTraffic
 // reports it. The read is the launchpad's membership plus the translated
 // traffic query and the exclusion. An invalid query, exclusion or orderBy
@@ -220,8 +220,7 @@ func (repo *Repository) LinkRequestToLaunchpad(requestID uuid.UUID, launchpadID 
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(`INSERT INTO launchpad_request (request_id, launchpad_id, position) VALUES (?, ?, ?)`, requestID, launchpadID, keys[0])
-		return err
+		return insertEntries(tx, launchpadID, []uuid.UUID{requestID}, keys)
 	})
 	if errors.Is(err, domain.ErrLaunchpadAlreadyLinked) {
 		return err
@@ -232,7 +231,7 @@ func (repo *Repository) LinkRequestToLaunchpad(requestID uuid.UUID, launchpadID 
 	return nil
 }
 
-// keysAfterLastEntry returns n ascending entry-order keys (ADR-0048) that
+// keysAfterLastEntry returns n ascending entry-order keys (ADR-0052) that
 // place new entries after the launchpad's last entry. It reads the last key
 // in tx, so the caller inserts the keys in the same transaction.
 func keysAfterLastEntry(tx *sqlx.Tx, launchpadID uuid.UUID, n int) ([]string, error) {
@@ -241,17 +240,40 @@ func keysAfterLastEntry(tx *sqlx.Tx, launchpadID uuid.UUID, n int) ([]string, er
 	if err != nil {
 		return nil, fmt.Errorf("reading the last entry of launchpad %s: %w", launchpadID, err)
 	}
-	keys, err := fracdex.NKeysBetween(last.String, "", uint(n))
+	return keysBetween(last.String, "", n)
+}
+
+// keysBetween returns n ascending entry-order keys between previous and
+// next. An empty previous is before every key, and an empty next is after
+// every key.
+func keysBetween(previous, next string, n int) ([]string, error) {
+	keys, err := fracdex.NKeysBetween(previous, next, uint(n))
 	if err != nil {
 		return nil, fmt.Errorf("generating entry order keys: %w", err)
 	}
 	return keys, nil
 }
 
+// insertEntries links each of requestIDs to the launchpad with the
+// entry-order key of the same index in keys.
+func insertEntries(tx *sqlx.Tx, launchpadID uuid.UUID, requestIDs []uuid.UUID, keys []string) error {
+	insert, err := tx.Prepare(`INSERT INTO launchpad_request (request_id, launchpad_id, position) VALUES (?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer insert.Close()
+	for i, id := range requestIDs {
+		if _, err := insert.Exec(id, launchpadID, keys[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // UnlinkRequestFromLaunchpad removes the association between a request and a
 // launchpad. It returns domain.ErrLaunchpadNotLinked if there is none.
 // It does not check for pending launches; clients call the Proxy method of
-// the same name, which refuses a pending launch's pair (ADR-0049).
+// the same name, which refuses a pending launch's pair (ADR-0053).
 func (repo *Repository) UnlinkRequestFromLaunchpad(requestID uuid.UUID, launchpadID uuid.UUID) error {
 	query := `DELETE FROM launchpad_request WHERE request_id = ? AND launchpad_id = ?`
 
@@ -274,7 +296,7 @@ func (repo *Repository) UnlinkRequestFromLaunchpad(requestID uuid.UUID, launchpa
 // source and inserted into the target with new keys between the keys of the
 // target's entry before BeforeID and BeforeID, or after its last entry. It
 // does not check for pending launches; Proxy.MoveLaunchpadEntries does
-// (ADR-0049).
+// (ADR-0053).
 func (repo *Repository) MoveLaunchpadEntries(move domain.LaunchpadMove) ([]uuid.UUID, error) {
 	var moved []uuid.UUID
 	err := repo.inTx(func(tx *sqlx.Tx) error {
@@ -318,9 +340,6 @@ func (repo *Repository) MoveLaunchpadEntries(move domain.LaunchpadMove) ([]uuid.
 				return domain.ErrLaunchpadAlreadyLinked
 			}
 		}
-		if move.BeforeID != uuid.Nil && slices.Contains(moved, move.BeforeID) {
-			return domain.ErrInvalidPlacement
-		}
 		query, args, err = sqlx.In(`DELETE FROM launchpad_request WHERE launchpad_id = ? AND request_id IN (?)`, move.SourceID, moved)
 		if err != nil {
 			return err
@@ -328,16 +347,15 @@ func (repo *Repository) MoveLaunchpadEntries(move domain.LaunchpadMove) ([]uuid.
 		if _, err := tx.Exec(tx.Rebind(query), args...); err != nil {
 			return err
 		}
+		// The moved links are gone now, so keysForPlacement also refuses a
+		// BeforeID that is itself moved: it is no longer an entry of the
+		// target. A moved BeforeID that the target also holds was refused
+		// above as already linked.
 		keys, err := keysForPlacement(tx, move.TargetID, move.BeforeID, len(moved))
 		if err != nil {
 			return err
 		}
-		for i, id := range moved {
-			if _, err := tx.Exec(`INSERT INTO launchpad_request (request_id, launchpad_id, position) VALUES (?, ?, ?)`, id, move.TargetID, keys[i]); err != nil {
-				return err
-			}
-		}
-		return nil
+		return insertEntries(tx, move.TargetID, moved, keys)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("moving launchpad entries: %w", err)
@@ -345,10 +363,11 @@ func (repo *Repository) MoveLaunchpadEntries(move domain.LaunchpadMove) ([]uuid.
 	return moved, nil
 }
 
-// keysForPlacement returns n ascending entry-order keys (ADR-0048) that place
+// keysForPlacement returns n ascending entry-order keys (ADR-0052) that place
 // new entries just before the launchpad's entry beforeID, or after its last
 // entry when beforeID is uuid.Nil. It returns domain.ErrInvalidPlacement if
-// beforeID is not an entry. The caller inserts the keys in tx.
+// beforeID is not an entry, so a caller that deletes the moved links first
+// gets it for a beforeID that is itself moved. The caller inserts the keys in tx.
 func keysForPlacement(tx *sqlx.Tx, launchpadID, beforeID uuid.UUID, n int) ([]string, error) {
 	if beforeID == uuid.Nil {
 		return keysAfterLastEntry(tx, launchpadID, n)
@@ -366,9 +385,5 @@ func keysForPlacement(tx *sqlx.Tx, launchpadID, beforeID uuid.UUID, n int) ([]st
 	if err != nil {
 		return nil, fmt.Errorf("reading the entry before %s: %w", beforeID, err)
 	}
-	keys, err := fracdex.NKeysBetween(previous.String, before, uint(n))
-	if err != nil {
-		return nil, fmt.Errorf("generating entry order keys: %w", err)
-	}
-	return keys, nil
+	return keysBetween(previous.String, before, n)
 }

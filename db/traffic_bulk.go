@@ -194,15 +194,8 @@ func appendEntries(tx *sqlx.Tx, launchpadID uuid.UUID, selected string, args []a
 	if err != nil {
 		return 0, err
 	}
-	insert, err := tx.Prepare(`INSERT INTO launchpad_request (request_id, launchpad_id, position) VALUES (?, ?, ?)`)
-	if err != nil {
+	if err := insertEntries(tx, launchpadID, ids, keys); err != nil {
 		return 0, fmt.Errorf("linking traffic to launchpad %s: %w", launchpadID, err)
-	}
-	defer insert.Close()
-	for i, id := range ids {
-		if _, err := insert.Exec(id, launchpadID, keys[i]); err != nil {
-			return 0, fmt.Errorf("linking traffic to launchpad %s: %w", launchpadID, err)
-		}
 	}
 	return len(ids), nil
 }
@@ -210,7 +203,7 @@ func appendEntries(tx *sqlx.Tx, launchpadID uuid.UUID, selected string, args []a
 // UnlinkTraffic removes the links between every pair in sel and target and
 // returns the number of pairs that were linked.
 // It does not check for pending launches; clients call the Proxy method of
-// the same name, which refuses a pending launch's pair (ADR-0049).
+// the same name, which refuses a pending launch's pair (ADR-0053).
 func (repo *Repository) UnlinkTraffic(sel domain.Selection, target domain.LinkTarget) (int, error) {
 	return repo.bulkInTx(sel, func(tx *sqlx.Tx, selected string, args []any) (int, error) {
 		link, err := linkTableFor(tx, target)
@@ -236,7 +229,7 @@ func (repo *Repository) SelectionIncludes(sel domain.Selection, ids []uuid.UUID)
 	}
 	var selected []uuid.UUID
 	_, err = repo.bulkInTx(sel, func(tx *sqlx.Tx, query string, args []any) (int, error) {
-		err := tx.Select(&selected, `SELECT id FROM (`+query+`) WHERE id IN (SELECT value FROM json_each(?))`, append(args, string(among))...)
+		err := tx.Select(&selected, `SELECT id FROM (`+query+`) WHERE id IN (SELECT value FROM json_each(?))`, append(slices.Clone(args), string(among))...)
 		if err != nil {
 			return 0, fmt.Errorf("reading the selected pairs: %w", err)
 		}

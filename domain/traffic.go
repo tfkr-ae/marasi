@@ -155,7 +155,7 @@ type TrafficRepository interface {
 	// UnlinkTraffic removes the links between every pair in sel and target
 	// in one transaction and returns the number of pairs that were linked.
 	// It returns the same errors as LinkTraffic. It does not check for
-	// pending launches; Proxy.UnlinkTraffic does (ADR-0049).
+	// pending launches; Proxy.UnlinkTraffic does (ADR-0053).
 	UnlinkTraffic(sel Selection, target LinkTarget) (int, error)
 
 	// SelectionIncludes returns the ids among ids that are pairs in sel, in
@@ -204,7 +204,7 @@ type TrafficRepository interface {
 	// its sitemap counts (ADR-0034). It returns the number of pairs deleted.
 	// Unknown ids in an id selection are ignored; an invalid query selection
 	// returns a *QueryError. It does not check for pending launches;
-	// Proxy.DeleteTraffic does (ADR-0049).
+	// Proxy.DeleteTraffic does (ADR-0053).
 	DeleteTraffic(sel Selection) (int, error)
 }
 

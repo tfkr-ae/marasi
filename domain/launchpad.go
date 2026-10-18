@@ -42,7 +42,7 @@ type LaunchpadRepository interface {
 
 	// DeleteLaunchpad removes a launchpad identified by its UUID.
 	// It returns an error if the launchpad does not exist. It does not
-	// check for pending launches; Proxy.DeleteLaunchpad does (ADR-0049).
+	// check for pending launches; Proxy.DeleteLaunchpad does (ADR-0053).
 	DeleteLaunchpad(launchpadID uuid.UUID) error
 
 	// GetLaunchpadRequests retrieves traffic summaries for requests linked
@@ -64,10 +64,10 @@ type LaunchpadRepository interface {
 	// UnlinkRequestFromLaunchpad removes a request from a launchpad. It
 	// returns ErrLaunchpadNotLinked if the request is not linked to it.
 	// It does not check for pending launches;
-	// Proxy.UnlinkRequestFromLaunchpad does (ADR-0049).
+	// Proxy.UnlinkRequestFromLaunchpad does (ADR-0053).
 	UnlinkRequestFromLaunchpad(requestID uuid.UUID, launchpadID uuid.UUID) error
 
-	// MoveLaunchpadEntries moves entries in one transaction (ADR-0048) and
+	// MoveLaunchpadEntries moves entries in one transaction (ADR-0052) and
 	// returns the moved pair ids, deduplicated, in their new entry order.
 	// Only the moved entries change place. Moved to another launchpad, the
 	// pairs leave the source; a move never copies. It refuses the whole
@@ -76,7 +76,7 @@ type LaunchpadRepository interface {
 	// is not an entry of the source, ErrLaunchpadAlreadyLinked if another
 	// target already holds a pair, and ErrInvalidPlacement if BeforeID is
 	// not an entry of the target or is one of the moved pairs. It leaves
-	// the pairs' metadata, launchpad_id included, unchanged (ADR-0049). It
+	// the pairs' metadata, launchpad_id included, unchanged (ADR-0053). It
 	// does not check for pending launches; Proxy.MoveLaunchpadEntries does.
 	MoveLaunchpadEntries(move LaunchpadMove) ([]uuid.UUID, error)
 }
