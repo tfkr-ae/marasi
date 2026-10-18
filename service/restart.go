@@ -120,22 +120,37 @@ func (s *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 			s.restartMu.Unlock()
 		}
 	}()
+	// A restart never cancels or races an install, swap included: it waits
+	// for none to run and keeps new ones from starting until it fails.
+	if !s.installer.holdForRestart() {
+		writeJSON(w, r, http.StatusConflict, updateErrorBody{Error: "update_in_progress", Message: "an update is installing on this instance; restart once it ends"})
+		return
+	}
+	defer func() {
+		if !handedOver {
+			s.installer.releaseRestart()
+		}
+	}()
 
 	force, err := decodeRestart(r)
 	if err != nil {
 		writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_restart_request", "message": `body must be empty or {"force": true|false}`})
 		return
 	}
-	if held := heldCheckpointItems(s.proxy.CheckpointItems()); len(held) != 0 && !force {
-		writeJSON(w, r, http.StatusConflict, struct {
-			Error   string               `json:"error"`
-			Message string               `json:"message"`
-			Items   []heldCheckpointItem `json:"items"`
-		}{
-			Error:   "checkpoint_items_held",
-			Message: fmt.Sprintf("%d held Checkpoint items would be dropped; forward or drop them, or force the restart", len(held)),
-			Items:   held,
-		})
+	// Without force nothing held is dropped: every drop below checks first,
+	// and the last check runs once no project work is left to hold an item.
+	dropHeld := func() error {
+		if force {
+			s.dropPendingCheckpoint()
+			return nil
+		}
+		if held := heldCheckpointItems(s.proxy.CheckpointItems()); len(held) != 0 {
+			return &heldItemsError{items: held}
+		}
+		return nil
+	}
+	if err := dropHeld(); err != nil {
+		writeHeldItems(w, r, err.(*heldItemsError))
 		return
 	}
 
@@ -149,14 +164,13 @@ func (s *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 		ProxyListener *string `json:"proxy_listener"`
 	}{Instance: s.instance, Project: s.projects.Path(), ProxyListener: proxyListener})
 
-	s.dropPendingCheckpoint()
 	var stepErr error
 	if proxyListener != nil {
 		_, stepErr = s.listener.Stop(ctx)
 	}
 	var release projectRelease
 	if stepErr == nil {
-		release, stepErr = s.projects.release(ctx, s.dropPendingCheckpoint)
+		release, stepErr = s.projects.release(ctx, dropHeld)
 	}
 	var successor Successor
 	if stepErr == nil {
@@ -188,6 +202,16 @@ func (s *Server) rollBackRestart(w http.ResponseWriter, r *http.Request, ctx con
 	if proxyListener != nil && s.listener.Status().ProxyListener == nil {
 		rollbackErr = errors.Join(rollbackErr, wrapRestartError("restarting proxy listener", startListenerAt(ctx, s.listener, *proxyListener)))
 	}
+	var held *heldItemsError
+	if errors.As(cause, &held) {
+		s.publishRestartFailed(cause.Error(), "")
+		if rollbackErr != nil {
+			writeJSON(w, r, http.StatusInternalServerError, updateErrorBody{Error: "restart_failed", Message: fmt.Sprintf("%v; %v", cause, rollbackErr)})
+			return
+		}
+		writeHeldItems(w, r, held)
+		return
+	}
 	var restartErr *RestartError
 	logPath := ""
 	if errors.As(cause, &restartErr) {
@@ -200,16 +224,37 @@ func (s *Server) rollBackRestart(w http.ResponseWriter, r *http.Request, ctx con
 	if rollbackErr != nil {
 		message = fmt.Sprintf("%s; %v", message, rollbackErr)
 	}
-	s.events.publish("service.restart_failed", struct {
-		Instance string `json:"instance"`
-		Error    string `json:"error"`
-		Log      string `json:"log,omitempty"`
-	}{Instance: s.instance, Error: cause.Error(), Log: logPath})
+	s.publishRestartFailed(cause.Error(), logPath)
 	writeJSON(w, r, http.StatusInternalServerError, struct {
 		Error   string `json:"error"`
 		Message string `json:"message"`
 		Log     string `json:"log,omitempty"`
 	}{Error: "restart_failed", Message: message, Log: logPath})
+}
+
+func (s *Server) publishRestartFailed(message, logPath string) {
+	s.events.publish("service.restart_failed", struct {
+		Instance string `json:"instance"`
+		Error    string `json:"error"`
+		Log      string `json:"log,omitempty"`
+	}{Instance: s.instance, Error: message, Log: logPath})
+}
+
+// heldItemsError refuses a restart that would drop held Checkpoint items.
+type heldItemsError struct {
+	items []heldCheckpointItem
+}
+
+func (e *heldItemsError) Error() string {
+	return fmt.Sprintf("%d held Checkpoint items would be dropped; forward or drop them, or force the restart", len(e.items))
+}
+
+func writeHeldItems(w http.ResponseWriter, r *http.Request, held *heldItemsError) {
+	writeJSON(w, r, http.StatusConflict, struct {
+		Error   string               `json:"error"`
+		Message string               `json:"message"`
+		Items   []heldCheckpointItem `json:"items"`
+	}{Error: "checkpoint_items_held", Message: held.Error(), Items: held.items})
 }
 
 func wrapRestartError(action string, err error) error {

@@ -404,8 +404,9 @@ type projectRelease struct {
 // release ends launches and Armory runs, waits for admitted work, then
 // flushes, closes, and unlocks the open project so a successor can own it
 // (ADR-0051). dropHeld is called while waiting, so an item held during the
-// wait does not keep the project busy.
-func (lifecycle *ProjectLifecycle) release(ctx context.Context, dropHeld func()) (projectRelease, error) {
+// wait does not keep the project busy; when it fails instead, the release
+// stops and returns its error with nothing released.
+func (lifecycle *ProjectLifecycle) release(ctx context.Context, dropHeld func() error) (projectRelease, error) {
 	lifecycle.mu.Lock()
 	project := lifecycle.openProject()
 	if project == nil {
@@ -416,12 +417,20 @@ func (lifecycle *ProjectLifecycle) release(ctx context.Context, dropHeld func())
 	if project.resources.Armory != nil {
 		project.resources.Armory.Shutdown()
 	}
-	unblock, err := lifecycle.gate.block(ctx, func() bool {
-		dropHeld()
+	blockCtx, cancelBlock := context.WithCancelCause(ctx)
+	defer cancelBlock(nil)
+	unblock, err := lifecycle.gate.block(blockCtx, func() bool {
+		if err := dropHeld(); err != nil {
+			cancelBlock(err)
+			return false
+		}
 		return !lifecycle.proxy.HasPendingCheckpoint()
 	})
 	if err != nil {
 		lifecycle.mu.Unlock()
+		if cause := context.Cause(blockCtx); cause != nil && ctx.Err() == nil {
+			err = cause
+		}
 		return projectRelease{}, err
 	}
 	finished := false

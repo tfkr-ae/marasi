@@ -168,9 +168,9 @@ func installedBuildFile(t *testing.T) string {
 	return target
 }
 
-// newUpdateServer is an instance running release 01.10.2026 from target,
+// newInstallUpdates is the updates of release 01.10.2026 installed at target,
 // with config dir configDir, checking github.
-func newUpdateServer(t *testing.T, configDir, target, instance string, github *installGitHub) *Server {
+func newInstallUpdates(t *testing.T, configDir, target string, github *installGitHub) *Updates {
 	t.Helper()
 	configFile := filepath.Join(configDir, "marasi_config.yaml")
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
@@ -190,6 +190,14 @@ func newUpdateServer(t *testing.T, configDir, target, instance string, github *i
 	if err != nil {
 		t.Fatal(err)
 	}
+	return updates
+}
+
+// newUpdateServer is an instance running release 01.10.2026 from target,
+// with config dir configDir, checking github.
+func newUpdateServer(t *testing.T, configDir, target, instance string, github *installGitHub) *Server {
+	t.Helper()
+	updates := newInstallUpdates(t, configDir, target, github)
 	server := NewServer(nil, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, nil, func() {}, "01.10.2026", instance, "test-project")
 	server.SetBuildChannel("release")
 	server.SetUpdates(updates)
@@ -457,5 +465,22 @@ func TestUpdateRoutesRefuseADevelopmentBuild(t *testing.T) {
 		}
 		response := requestUpdate(server, route[0], route[1], body)
 		assertChromeResponse(t, response, http.StatusConflict, `{"error":"development_build","message":"a development build does not check for or install updates"}`+"\n")
+	}
+}
+
+func TestUpdateInstallIsRefusedOnceTheInstanceStops(t *testing.T) {
+	github := newInstallGitHub(t)
+	github.publish("18.10.2026", "new build 18.10.2026")
+	target := installedBuildFile(t)
+	server := newUpdateServer(t, t.TempDir(), target, "work", github)
+	server.Close()
+
+	response := requestUpdate(server, http.MethodPost, "/update/install", "")
+
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"error":"service_stopping"`) {
+		t.Fatalf("\nwanted:\n503 service_stopping\ngot:\n%d %s", response.Code, response.Body.String())
+	}
+	if got := github.downloadCount(); got != 0 {
+		t.Fatalf("\nwanted:\nno download\ngot:\n%d", got)
 	}
 }
