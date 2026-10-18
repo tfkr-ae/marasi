@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/internal/filelock"
+	"github.com/tfkr-ae/marasi/internal/update"
 	"github.com/tfkr-ae/marasi/service"
 	"github.com/tfkr-ae/marasi/wordlist"
 )
@@ -291,9 +292,12 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 	var status struct {
 		Status        *string         `json:"status"`
 		Version       *string         `json:"version"`
+		Channel       json.RawMessage `json:"channel"`
 		Instance      *string         `json:"instance"`
 		Project       *string         `json:"project"`
 		ProxyListener json.RawMessage `json:"proxy_listener"`
+		// RestartRequired is absent from instances older than updates.
+		RestartRequired *bool `json:"restart_required"`
 	}
 	if err := json.Unmarshal(body, &status); err != nil {
 		return fmt.Errorf("decoding service status: %w", err)
@@ -329,7 +333,23 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 		proxyListener = address
 	}
 
-	if _, err := fmt.Fprintf(stdout, "status: %s\nversion: %s\ninstance: %s\nproject: %s\nproxy listener: %s\n", *status.Status, *status.Version, *status.Instance, *status.Project, proxyListener); err != nil {
+	// A development build has no channel (null). An instance from a build
+	// older than the channel field reports none; it is still shown.
+	channel := "none"
+	if status.Channel == nil {
+		channel = "unknown"
+	} else if string(status.Channel) != "null" {
+		if err := json.Unmarshal(status.Channel, &channel); err != nil || channel == "" {
+			return errors.New("invalid service status: channel must be a non-empty string or null")
+		}
+	}
+
+	var output strings.Builder
+	fmt.Fprintf(&output, "status: %s\nversion: %s\nchannel: %s\ninstance: %s\nproject: %s\nproxy listener: %s\n", *status.Status, *status.Version, channel, *status.Instance, *status.Project, proxyListener)
+	if status.RestartRequired != nil {
+		fmt.Fprintf(&output, "restart required: %s\n", yesNo(*status.RestartRequired))
+	}
+	if _, err := io.WriteString(stdout, output.String()); err != nil {
 		return fmt.Errorf("writing service status: %w", err)
 	}
 	return nil
@@ -345,6 +365,12 @@ func startService(ctx context.Context, configDir, projectPath, instancePath, add
 
 // startServiceReady starts a proxy instance and calls ready with the proxy listener address.
 func startServiceReady(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, ready func(string) error) (resultErr error) {
+	return startServiceInstance(ctx, configDir, projectPath, instancePath, address, port, true, ready)
+}
+
+// startServiceInstance starts a proxy instance and calls ready with the proxy
+// listener address, or "" when startListener is false.
+func startServiceInstance(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, startListener bool, ready func(string) error) (resultErr error) {
 	socketPath := instancePath + ".sock"
 	lockPath := instancePath + ".lock"
 	logFile, err := openInstanceLog(instancePath + ".log")
@@ -405,18 +431,37 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 	if err != nil {
 		return fmt.Errorf("starting proxy base options: %w", err)
 	}
-	controlListener, instanceLock, err := claimInstance(socketPath, lockPath)
+	claim, err := claimInstanceName(socketPath, lockPath)
 	if err != nil {
 		return err
 	}
-	releaseClaim = func() error {
-		return releaseInstance(controlListener, socketPath, instanceLock)
-	}
+	releaseClaim = claim.release
 
 	serviceCtx, stopService := context.WithCancel(ctx)
 	defer stopService()
 	instanceName := filepath.Base(instancePath)
 	serviceServer := service.NewServer(proxy, listenerLifecycle, projects, stopService, version, instanceName, projects.Path())
+	updates, err := service.NewUpdates(service.UpdatesConfig{
+		ConfigDir:    proxy.ConfigDir,
+		Version:      version,
+		BuildChannel: buildChannel,
+		PublicKey:    signingPublicKey,
+	})
+	if err != nil {
+		// A build that cannot name itself still serves; it just never checks.
+		logger.Warn("Updates are off: the build identity is invalid", "error", err)
+	}
+	if updates == nil {
+		updates, err = service.NewUpdates(service.UpdatesConfig{ConfigDir: proxy.ConfigDir, Version: version})
+		if err != nil {
+			return fmt.Errorf("starting updates: %w", err)
+		}
+	}
+	serviceServer.SetUpdates(updates)
+	if target, err := update.Executable(); err == nil {
+		// A Windows install leaves the replaced build beside the new one.
+		_ = update.CleanupAside(target)
+	}
 	if handlerErr := proxy.WithOptions(
 		marasi.WithRequestHandler(serviceServer.HandleRequest),
 		marasi.WithResponseHandler(serviceServer.HandleResponse),
@@ -433,17 +478,32 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 		return fmt.Errorf("installing traffic event handlers: %w", handlerErr)
 	}
 
-	listenerStatus, err := listenerLifecycle.Start(serviceCtx, service.ListenerSettings{Address: &address, Port: &port})
-	if err != nil {
-		return fmt.Errorf("binding proxy listener on address %s port %d: %w", address, port, err)
+	serviceServer.EnableRestart(successorStarter{claim: claim, configDir: configDir, instancePath: instancePath, readyTimeout: restartReadyTimeout}.start)
+
+	proxyListener := ""
+	if startListener {
+		listenerStatus, err := listenerLifecycle.Start(serviceCtx, service.ListenerSettings{Address: &address, Port: &port})
+		if err != nil {
+			return fmt.Errorf("binding proxy listener on address %s port %d: %w", address, port, err)
+		}
+		proxyListener = *listenerStatus.ProxyListener
 	}
 
 	server := &http.Server{Handler: serviceServer}
 	// Drain proxy traffic alongside control requests, using the same grace period.
 	// Deferred cleanup joins this callback before closing the project database.
 	server.RegisterOnShutdown(func() { _ = closeProxy() })
-	return serveControlAPIReady(serviceCtx, server, controlListener, shutdownTimeout, func() error {
-		return ready(*listenerStatus.ProxyListener)
+	updatesDone := make(chan struct{})
+	go func() {
+		defer close(updatesDone)
+		updates.Run(serviceCtx)
+	}()
+	defer func() {
+		stopService()
+		<-updatesDone
+	}()
+	return serveControlAPIReady(serviceCtx, server, claim.listener, shutdownTimeout, func() error {
+		return ready(proxyListener)
 	})
 }
 
@@ -786,4 +846,12 @@ func lockProject(path string) (func() error, error) {
 			wrapError("closing project lock", lock.Close()),
 		)
 	}, nil
+}
+
+// yesNo writes a boolean the way human output does.
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
 }

@@ -10,11 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/internal/update"
 )
 
 const eventHeartbeatInterval = 15 * time.Second
@@ -29,8 +31,19 @@ type Server struct {
 	projects          *ProjectLifecycle
 	chrome            *Chrome
 	version           string
-	instance          string
-	project           string
+	updates           *Updates
+	installer         *updateInstaller
+	// announced is the update last announced in update.available.
+	announcedMu sync.Mutex
+	announced   string
+	instance    string
+	project     string
+	// exit closes event streams and stops the instance.
+	exit func()
+	// restartMu guards restart and restarting.
+	restartMu  sync.Mutex
+	restart    SuccessorStart
+	restarting bool
 }
 
 // NewServer creates a control API server for proxy.
@@ -57,6 +70,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		listener:          listener,
 		projects:          projects,
 		chrome:            chrome,
+		installer:         newUpdateInstaller(),
 		version:           version,
 		instance:          instance,
 		project:           project,
@@ -104,11 +118,12 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 			},
 		})
 	}
-	addRoutes(mux, projects, proxy, chrome, events, server.serveStatus, func() {
+	server.exit = func() {
 		server.dropPendingCheckpoint()
 		server.Close()
 		stop()
-	})
+	}
+	addRoutes(mux, projects, proxy, chrome, events, server.serveStatus, server.serveRestart, server.exit)
 	listenerMux := http.NewServeMux()
 	listenerMux.HandleFunc("/status", server.serveListenerStatus)
 	listenerMux.HandleFunc("/start", server.serveListenerStart)
@@ -119,6 +134,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 	projectMux.HandleFunc("/open", server.serveProjectOpen)
 	mux.Handle("/project/", http.StripPrefix("/project", projectMux))
 	mux.HandleFunc("/events", server.serveEvents)
+	addUpdateRoutes(mux, server)
 	return server
 }
 
@@ -356,19 +372,42 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxyListener := s.listener.Status().ProxyListener
+	var channel *update.Channel
+	if s.updates != nil && s.updates.BuildChannel() != "" {
+		buildChannel := s.updates.BuildChannel()
+		channel = &buildChannel
+	}
 	writeJSON(w, r, http.StatusOK, struct {
-		Status        string  `json:"status"`
-		Version       string  `json:"version"`
-		Instance      string  `json:"instance"`
-		Project       string  `json:"project"`
-		ProxyListener *string `json:"proxy_listener"`
+		Status          string          `json:"status"`
+		Version         string          `json:"version"`
+		Channel         *update.Channel `json:"channel"`
+		Instance        string          `json:"instance"`
+		Project         string          `json:"project"`
+		ProxyListener   *string         `json:"proxy_listener"`
+		RestartRequired bool            `json:"restart_required"`
 	}{
-		Status:        "running",
-		Version:       s.version,
-		Instance:      s.instance,
-		Project:       project,
-		ProxyListener: proxyListener,
+		Status:          "running",
+		Version:         s.version,
+		Channel:         channel,
+		Instance:        s.instance,
+		Project:         project,
+		ProxyListener:   proxyListener,
+		RestartRequired: s.updates != nil && s.updates.RestartRequired(),
 	})
+}
+
+// SetUpdates sets the instance's updates component, which the update routes
+// serve, and publishes update.available from its checks. Call it before
+// serving and before updates.Run.
+func (s *Server) SetUpdates(updates *Updates) {
+	s.updates = updates
+	onCheck := updates.onCheck
+	updates.onCheck = func(status UpdateStatus) {
+		if onCheck != nil {
+			onCheck(status)
+		}
+		s.announceAvailable(status)
+	}
 }
 
 // ServeHTTP serves the instance control API.
@@ -429,8 +468,10 @@ func (s *Server) dropPendingCheckpoint() {
 	}
 }
 
-// Close closes active event streams.
+// Close cancels an install that has not reached its swap, waits for it to
+// end, and closes active event streams.
 func (s *Server) Close() {
+	s.installer.close()
 	s.events.close()
 }
 
