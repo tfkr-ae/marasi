@@ -500,6 +500,23 @@ func TestUpdateInstalledByAnotherInstanceIsNotOfferedAgain(t *testing.T) {
 	}
 }
 
+func TestUpdateReinstallCheckAnnouncesTheAvailableUpdate(t *testing.T) {
+	github := newInstallGitHub(t)
+	github.publish("18.10.2026", "new build 18.10.2026")
+	server := newUpdateServer(t, t.TempDir(), installedBuildFile(t), "work", github)
+	events := server.events.subscribe()
+
+	response := requestUpdate(server, http.MethodPost, "/update/reinstall", `{"confirm":true}`)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("\nwanted:\n202\ngot:\n%d %s", response.Code, response.Body.String())
+	}
+	if got := nextUpdateEvent(t, events, "update.available"); !strings.Contains(got, `"version":"18.10.2026"`) {
+		t.Fatalf("\nwanted:\nupdate.available for 18.10.2026\ngot:\n%s", got)
+	}
+	nextUpdateEvent(t, events, "update.installed")
+}
+
 func TestUpdateInstallIsRefusedOnceTheInstanceStops(t *testing.T) {
 	github := newInstallGitHub(t)
 	github.publish("18.10.2026", "new build 18.10.2026")
