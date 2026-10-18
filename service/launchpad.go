@@ -442,9 +442,5 @@ func writeLaunchpadRepositoryError(w http.ResponseWriter, r *http.Request, err e
 		writeLaunchpadError(w, r, http.StatusBadRequest, "invalid_placement")
 		return
 	}
-	if errors.Is(err, errors.ErrUnsupported) {
-		writeLaunchpadError(w, r, http.StatusBadRequest, "invalid_launchpad_request")
-		return
-	}
 	writeLaunchpadError(w, r, http.StatusInternalServerError, "internal_server_error")
 }
