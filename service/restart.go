@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/tfkr-ae/marasi/domain"
 )
@@ -53,14 +51,7 @@ type heldCheckpointItem struct {
 func heldCheckpointItems(items []domain.CheckpointItem) []heldCheckpointItem {
 	held := make([]heldCheckpointItem, 0, len(items))
 	for _, item := range items {
-		entry := heldCheckpointItem{ID: item.ID.String(), Type: item.Type}
-		if item.Type == domain.CheckpointTypeWebSocket {
-			entry.Summary = item.Direction
-		} else {
-			entry.Summary, _, _ = strings.Cut(string(item.Raw), "\n")
-			entry.Summary = strings.TrimSuffix(entry.Summary, "\r")
-		}
-		held = append(held, entry)
+		held = append(held, heldCheckpointItem{ID: item.ID.String(), Type: item.Type, Summary: checkpointSummary(item)})
 	}
 	return held
 }
@@ -69,18 +60,8 @@ var errInvalidRestartRequest = errors.New("invalid restart request")
 
 // decodeRestart reads an optional {"force": bool} body.
 func decodeRestart(r *http.Request) (bool, error) {
-	if r.Body == nil {
-		return false, nil
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+	fields, err := decodeBodyFields(r)
 	if err != nil {
-		return false, errInvalidRestartRequest
-	}
-	if len(strings.TrimSpace(string(body))) == 0 {
-		return false, nil
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil || fields == nil {
 		return false, errInvalidRestartRequest
 	}
 	force := false

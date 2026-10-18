@@ -555,7 +555,7 @@ var errInvalidUpdateRequest = errors.New("invalid update request")
 // decodeUpdateField reads a body of exactly one non-null field.
 func decodeUpdateField[T any](r *http.Request, field string) (T, error) {
 	var value T
-	fields, err := decodeUpdateFields(r)
+	fields, err := decodeBodyFields(r)
 	if err != nil || len(fields) != 1 {
 		return value, errInvalidUpdateRequest
 	}
@@ -572,7 +572,7 @@ func decodeUpdateField[T any](r *http.Request, field string) (T, error) {
 // decodeReinstall reads {"confirm": bool}. An empty body or {} is no
 // confirmation.
 func decodeReinstall(r *http.Request) (bool, error) {
-	fields, err := decodeUpdateFields(r)
+	fields, err := decodeBodyFields(r)
 	if err != nil {
 		return false, err
 	}
@@ -590,8 +590,9 @@ func decodeReinstall(r *http.Request) (bool, error) {
 	return confirm, nil
 }
 
-// decodeUpdateFields reads a JSON object body; an empty body has no fields.
-func decodeUpdateFields(r *http.Request) (map[string]json.RawMessage, error) {
+// decodeBodyFields reads the small JSON object body of an update or restart
+// route, rejecting trailing data; an empty body has no fields.
+func decodeBodyFields(r *http.Request) (map[string]json.RawMessage, error) {
 	if r.Body == nil {
 		return nil, nil
 	}
