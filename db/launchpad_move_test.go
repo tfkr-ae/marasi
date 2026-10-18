@@ -131,3 +131,97 @@ func TestMoveLaunchpadEntries(t *testing.T) {
 		assertEntries(t, entryIDs(t, repo, other, ""), outside)
 	})
 }
+
+func TestMoveLaunchpadEntriesToAnotherLaunchpad(t *testing.T) {
+	t.Parallel()
+	t.Run("should move the entries to their place in the target in their source order", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+		source, s := movePad(t, repo, 5)
+		target, d := movePad(t, repo, 3)
+
+		moved, err := repo.MoveLaunchpadEntries(domain.LaunchpadMove{
+			SourceID: source, TargetID: target, RequestIDs: []uuid.UUID{s[3], s[1], s[3]}, BeforeID: d[1],
+		})
+		if err != nil {
+			t.Fatalf("MoveLaunchpadEntries() error = %v", err)
+		}
+
+		assertEntries(t, moved, []uuid.UUID{s[1], s[3]})
+		assertEntries(t, entryIDs(t, repo, source, ""), []uuid.UUID{s[0], s[2], s[4]})
+		assertEntries(t, entryIDs(t, repo, target, ""), []uuid.UUID{d[0], s[1], s[3], d[1], d[2]})
+	})
+
+	t.Run("should move the entries after the target's last entry without an entry to place them before", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+		source, s := movePad(t, repo, 3)
+		target, d := movePad(t, repo, 2)
+		empty, _ := movePad(t, repo, 0)
+
+		if _, err := repo.MoveLaunchpadEntries(domain.LaunchpadMove{SourceID: source, TargetID: target, RequestIDs: []uuid.UUID{s[2], s[0]}}); err != nil {
+			t.Fatalf("MoveLaunchpadEntries() error = %v", err)
+		}
+		if _, err := repo.MoveLaunchpadEntries(domain.LaunchpadMove{SourceID: source, TargetID: empty, RequestIDs: []uuid.UUID{s[1]}}); err != nil {
+			t.Fatalf("MoveLaunchpadEntries() to an empty launchpad error = %v", err)
+		}
+
+		assertEntries(t, entryIDs(t, repo, source, ""), []uuid.UUID{})
+		assertEntries(t, entryIDs(t, repo, target, ""), []uuid.UUID{d[0], d[1], s[0], s[2]})
+		assertEntries(t, entryIDs(t, repo, empty, ""), []uuid.UUID{s[1]})
+	})
+
+	t.Run("should leave the moved pairs' metadata unchanged", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+		source, _ := movePad(t, repo, 0)
+		target, _ := movePad(t, repo, 0)
+		id := testRequest(t, repo, map[string]any{"launchpad_id": source.String(), "note": "kept"})
+		if err := repo.LinkRequestToLaunchpad(id, source); err != nil {
+			t.Fatalf("linking: %v", err)
+		}
+
+		if _, err := repo.MoveLaunchpadEntries(domain.LaunchpadMove{SourceID: source, TargetID: target, RequestIDs: []uuid.UUID{id}}); err != nil {
+			t.Fatalf("MoveLaunchpadEntries() error = %v", err)
+		}
+
+		metadata, err := repo.GetMetadata(id)
+		if err != nil {
+			t.Fatalf("GetMetadata() error = %v", err)
+		}
+		if metadata["launchpad_id"] != source.String() || metadata["note"] != "kept" {
+			t.Fatalf("\nwanted:\nlaunchpad_id %s and note kept\ngot:\n%v", source, metadata)
+		}
+	})
+
+	t.Run("should refuse the whole move and change nothing", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+		source, s := movePad(t, repo, 3)
+		target, d := movePad(t, repo, 2)
+		if err := repo.LinkRequestToLaunchpad(s[1], target); err != nil {
+			t.Fatalf("linking %s to the target: %v", s[1], err)
+		}
+		d = append(d, s[1])
+		unlinked := testRequest(t, repo, nil)
+
+		for _, test := range []struct {
+			name string
+			move domain.LaunchpadMove
+			want error
+		}{
+			{"a pair the target already holds", domain.LaunchpadMove{SourceID: source, TargetID: target, RequestIDs: []uuid.UUID{s[0], s[1]}}, domain.ErrLaunchpadAlreadyLinked},
+			{"a pair that is not an entry of the source", domain.LaunchpadMove{SourceID: source, TargetID: target, RequestIDs: []uuid.UUID{s[0], unlinked}}, domain.ErrLaunchpadNotLinked},
+			{"an anchor that is not an entry of the target", domain.LaunchpadMove{SourceID: source, TargetID: target, RequestIDs: []uuid.UUID{s[0]}, BeforeID: s[2]}, domain.ErrInvalidPlacement},
+			{"a missing target", domain.LaunchpadMove{SourceID: source, TargetID: uuid.New(), RequestIDs: []uuid.UUID{s[0]}}, domain.ErrLaunchpadNotFound},
+			{"a missing source", domain.LaunchpadMove{SourceID: uuid.New(), TargetID: target, RequestIDs: []uuid.UUID{s[0]}}, domain.ErrLaunchpadNotFound},
+		} {
+			if _, err := repo.MoveLaunchpadEntries(test.move); !errors.Is(err, test.want) {
+				t.Fatalf("%s:\nwanted:\n%v\ngot:\n%v", test.name, test.want, err)
+			}
+		}
+
+		assertEntries(t, entryIDs(t, repo, source, ""), s)
+		assertEntries(t, entryIDs(t, repo, target, ""), d)
+	})
+}
