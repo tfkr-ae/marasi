@@ -45,7 +45,7 @@ func init() {
 	launchpadCreateCmd.MarkFlagRequired("name")
 	launchpadGetCmd.Flags().StringVarP(&launchpadGetQuery, "query", "q", "", "AIP-160 traffic query that narrows the entries; see marasi traffic list --help")
 	launchpadGetCmd.Flags().StringArrayVar(&launchpadGetExclude, "exclude", nil, "Content type to hide, exact or major/*; repeat for more")
-	launchpadGetCmd.Flags().StringVar(&launchpadGetOrderBy, "order-by", "", "Sort the entries: one field, then optional desc, as in marasi traffic list --help; default oldest first")
+	launchpadGetCmd.Flags().StringVar(&launchpadGetOrderBy, "order-by", "", "Sort the entries: one field, then optional desc, as in marasi traffic list --help; default entry order")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateName, "name", "", "Launchpad name")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateDescription, "description", "", "Launchpad description")
 	launchpadLinkCmd.Flags().StringVar(&launchpadLinkRequest, "request", "", "UUID of the request/response pair")
@@ -92,7 +92,8 @@ var launchpadListCmd = &cobra.Command{
 var launchpadGetCmd = &cobra.Command{
 	Use:   "get UUID",
 	Short: "Get one launchpad and its entries",
-	Long: `Get one launchpad and its entries, oldest first.
+	Long: `Get one launchpad and its entries, in entry order. Every entry the
+launchpad gains goes last.
 
 --query (-q) takes the same AIP-160 query as marasi traffic list and keeps
 only the entries that match it. See marasi traffic list --help for the fields.`,
