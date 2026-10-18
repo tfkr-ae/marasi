@@ -60,6 +60,12 @@ type UpdatesConfig struct {
 	// OnCheck, when set, runs after every check this instance makes or
 	// reads from the cache, with the status that followed it.
 	OnCheck func(UpdateStatus)
+	// Executable is the installed build this instance runs and an install
+	// replaces; update.Executable() when empty.
+	Executable string
+	// Team reads the Apple team of a build on macOS; update.Codesign{} when
+	// nil.
+	Team update.TeamReader
 }
 
 // UpdateStatus is what an instance knows about updates for its installed
@@ -103,6 +109,10 @@ type Updates struct {
 	interval     time.Duration
 	onCheck      func(UpdateStatus)
 	wake         chan struct{}
+	// executable is the installed build, symlinks resolved, and started the
+	// file it was when this instance started; nil when it could not be read.
+	executable string
+	started    os.FileInfo
 }
 
 // NewUpdates returns the updates component of an instance. A development
@@ -123,6 +133,15 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 	if u.interval <= 0 {
 		u.interval = DefaultUpdateCheckInterval
 	}
+	u.executable = cfg.Executable
+	if u.executable == "" {
+		u.executable, _ = update.Executable()
+	} else if resolved, err := filepath.EvalSymlinks(u.executable); err == nil {
+		u.executable = resolved
+	}
+	if u.executable != "" {
+		u.started, _ = os.Stat(u.executable)
+	}
 	if cfg.BuildChannel == "" {
 		return u, nil
 	}
@@ -135,6 +154,7 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		PublicKey: cfg.PublicKey,
 		BaseURL:   cfg.BaseURL,
 		Client:    cfg.Client,
+		Team:      cfg.Team,
 	})
 	if errors.Is(err, update.ErrDevBuild) {
 		return u, nil
@@ -150,6 +170,24 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 // Updater installs updates for the installed build; nil for a development
 // build.
 func (u *Updates) Updater() *update.Updater { return u.updater }
+
+// InstallPath is the installed build an install replaces, symlinks
+// resolved; "" when it could not be found.
+func (u *Updates) InstallPath() string { return u.executable }
+
+// RestartRequired reports whether the file at InstallPath is no longer the
+// one this instance started from: an install, by any instance or by hand,
+// replaced it (ADR-0050).
+func (u *Updates) RestartRequired() bool {
+	if u.started == nil {
+		return false
+	}
+	now, err := os.Stat(u.executable)
+	if err != nil {
+		return true
+	}
+	return !os.SameFile(u.started, now) || !now.ModTime().Equal(u.started.ModTime()) || now.Size() != u.started.Size()
+}
 
 // Run checks on start and then once an interval until ctx is done, unless
 // updates.auto_check is off. An instance reuses a check another instance on
