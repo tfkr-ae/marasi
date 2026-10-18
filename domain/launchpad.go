@@ -15,6 +15,10 @@ var ErrLaunchpadAlreadyLinked = errors.New("request already linked to launchpad"
 // ErrLaunchpadNotLinked means the request is not a member of the launchpad.
 var ErrLaunchpadNotLinked = errors.New("request not linked to launchpad")
 
+// ErrInvalidPlacement means a move names an entry to place the moved entries
+// before that is not an entry of the target launchpad, or is itself moved.
+var ErrInvalidPlacement = errors.New("invalid placement")
+
 // LaunchpadRepository defines the interface for managing Launchpads, which are collections of saved requests.
 // It provides methods for creating, retrieving, updating, and deleting launchpads,
 // as well as managing the requests associated with them.
@@ -59,6 +63,30 @@ type LaunchpadRepository interface {
 	// UnlinkRequestFromLaunchpad removes a request from a launchpad. It
 	// returns ErrLaunchpadNotLinked if the request is not linked to it.
 	UnlinkRequestFromLaunchpad(requestID uuid.UUID, launchpadID uuid.UUID) error
+
+	// MoveLaunchpadEntries moves entries in one transaction (ADR-0048) and
+	// returns the moved pair ids, deduplicated, in their new entry order.
+	// Only the moved entries change place. It refuses the whole move, and
+	// changes nothing, with ErrLaunchpadNotFound if the source launchpad
+	// does not exist, ErrLaunchpadNotLinked if a pair is not an entry of
+	// the source, and ErrInvalidPlacement if BeforeID is not an entry of
+	// the target or is one of the moved pairs. A target other than the
+	// source is not supported yet and returns an error wrapping
+	// errors.ErrUnsupported.
+	MoveLaunchpadEntries(move LaunchpadMove) ([]uuid.UUID, error)
+}
+
+// LaunchpadMove moves entries of a source launchpad to a place in a target
+// launchpad, which may be the source. The moved entries keep their entry
+// order relative to each other, whatever the order of RequestIDs; a
+// repeated id counts once.
+type LaunchpadMove struct {
+	SourceID   uuid.UUID   // Launchpad the entries are in.
+	TargetID   uuid.UUID   // Launchpad the entries move to; may equal SourceID.
+	RequestIDs []uuid.UUID // Pair ids of the entries to move.
+	// BeforeID is the entry of the target to place the moved entries
+	// before. uuid.Nil places them after the target's last entry.
+	BeforeID uuid.UUID
 }
 
 // Launchpad represents a collection of saved requests, allowing users to group and organize them.
