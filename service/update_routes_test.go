@@ -468,6 +468,38 @@ func TestUpdateRoutesRefuseADevelopmentBuild(t *testing.T) {
 	}
 }
 
+func TestUpdateInstalledByAnotherInstanceIsNotOfferedAgain(t *testing.T) {
+	github := newInstallGitHub(t)
+	github.publish("18.10.2026", "new build 18.10.2026")
+	configDir := t.TempDir()
+	target := installedBuildFile(t)
+	holder := newUpdateServer(t, configDir, target, "work", github)
+	other := newUpdateServer(t, configDir, target, "scratch", github)
+	otherEvents := other.events.subscribe()
+	holderEvents := holder.events.subscribe()
+	if response := requestUpdate(holder, http.MethodPost, "/update/install", ""); response.Code != http.StatusAccepted {
+		t.Fatalf("\nwanted:\n202\ngot:\n%d %s", response.Code, response.Body.String())
+	}
+	nextUpdateEvent(t, holderEvents, "update.installed")
+
+	check := requestUpdate(other, http.MethodPost, "/update/check", "")
+	install := requestUpdate(other, http.MethodPost, "/update/install", "")
+
+	if !strings.Contains(check.Body.String(), `"available":null`) || !strings.Contains(check.Body.String(), `"restart_required":true`) {
+		t.Fatalf("\nwanted:\nno update offered, restart required\ngot:\n%s", check.Body.String())
+	}
+	assertNoChromeEvent(t, otherEvents)
+	if install.Code != http.StatusConflict || !strings.Contains(install.Body.String(), `"error":"already_installed"`) {
+		t.Fatalf("\nwanted:\n409 already_installed\ngot:\n%d %s", install.Code, install.Body.String())
+	}
+	if got := github.downloadCount(); got != 1 {
+		t.Fatalf("\nwanted:\n1 build download\ngot:\n%d", got)
+	}
+	if reinstall := requestUpdate(other, http.MethodPost, "/update/reinstall", `{"confirm":true}`); reinstall.Code != http.StatusAccepted {
+		t.Fatalf("\nwanted:\n202 reinstall\ngot:\n%d %s", reinstall.Code, reinstall.Body.String())
+	}
+}
+
 func TestUpdateInstallIsRefusedOnceTheInstanceStops(t *testing.T) {
 	github := newInstallGitHub(t)
 	github.publish("18.10.2026", "new build 18.10.2026")

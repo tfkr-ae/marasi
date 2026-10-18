@@ -84,7 +84,8 @@ type UpdateStatus struct {
 	// dir, or nil when there has been none.
 	LastCheck *UpdateCheck
 	// Available is the update on Channel from LastCheck, or nil. It is never
-	// older than the installed build (ADR-0049).
+	// older than the installed build (ADR-0049), and nil once an install has
+	// replaced the installed build: a restart runs that build instead.
 	Available *update.Candidate
 }
 
@@ -355,7 +356,7 @@ func (u *Updates) status(settings marasi.UpdatesConfig, cache updateCache) Updat
 		return status
 	}
 	status.LastCheck = &last
-	if last.Latest == nil || !last.Latest.Signed() {
+	if last.Latest == nil || !last.Latest.Signed() || u.RestartRequired() {
 		return status
 	}
 	installed := status.Installed
