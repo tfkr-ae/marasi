@@ -19,7 +19,7 @@ import (
 // pairs stays until the next rebuild.
 //
 // It does not check for pending launches; clients call the Proxy method of
-// the same name, which refuses a pending launch's pair (ADR-0049).
+// the same name, which refuses a pending launch's pair (ADR-0053).
 func (repo *Repository) DeleteTraffic(sel domain.Selection) (int, error) {
 	return repo.bulkInTx(sel, func(tx *sqlx.Tx, selected string, args []any) (int, error) {
 		// The selection is resolved once into temp.deleting, so a query

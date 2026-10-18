@@ -13,10 +13,10 @@ func init() {
 	goose.AddMigrationContext(upLaunchpadEntryOrder, downLaunchpadEntryOrder)
 }
 
-// upLaunchpadEntryOrder rebuilds launchpad_request with a position, the
-// link's fractional key in its launchpad's entry order (ADR-0048), and
-// backfills each launchpad's links in request id order, which is capture
-// order.
+// upLaunchpadEntryOrder rebuilds launchpad_request with a position column
+// that holds each link's entry-order key, a fractional key in its
+// launchpad's entry order (ADR-0052), and backfills each launchpad's links in
+// request id order, which is capture order.
 func upLaunchpadEntryOrder(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `
 		CREATE TABLE launchpad_request_ordered (
@@ -84,7 +84,7 @@ func launchpadLinksInCaptureOrder(ctx context.Context, tx *sql.Tx) (map[string][
 	return links, nil
 }
 
-// downLaunchpadEntryOrder rebuilds launchpad_request without a position,
+// downLaunchpadEntryOrder rebuilds launchpad_request without an entry-order key,
 // dropping every launchpad's entry order.
 func downLaunchpadEntryOrder(ctx context.Context, tx *sql.Tx) error {
 	for _, statement := range []string{
