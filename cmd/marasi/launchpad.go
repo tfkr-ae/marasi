@@ -30,6 +30,8 @@ var launchpadLaunchDetach bool
 var launchpadGetQuery string
 var launchpadGetExclude []string
 var launchpadGetOrderBy string
+var launchpadMoveBefore string
+var launchpadMoveTarget string
 
 type launchpadRequest struct {
 	Name        *string `json:"name,omitempty"`
@@ -37,6 +39,10 @@ type launchpadRequest struct {
 	RequestID   *string `json:"request_id,omitempty"`
 	Raw         *string `json:"raw,omitempty"`
 	Scheme      *string `json:"scheme,omitempty"`
+
+	RequestIDs        []string `json:"request_ids,omitempty"`
+	TargetLaunchpadID *string  `json:"target_launchpad_id,omitempty"`
+	BeforeRequestID   *string  `json:"before_request_id,omitempty"`
 }
 
 func init() {
@@ -54,7 +60,9 @@ func init() {
 	launchpadLaunchCmd.Flags().StringVar(&launchpadLaunchRawFile, "raw-file", "", "Read the raw HTTP request from a file. If omitted, read it from stdin")
 	launchpadLaunchCmd.Flags().BoolVar(&launchpadLaunchDetach, "detach", false, "Print the launch id and pending status, and return without waiting for the launch to finish")
 	launchpadLaunchCmd.MarkFlagRequired("scheme")
-	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadUnlinkCmd, launchpadLaunchCmd, launchpadPendingCmd, launchpadStatusCmd, launchpadCancelCmd)
+	launchpadMoveCmd.Flags().StringVar(&launchpadMoveBefore, "before", "", "UUID of the entry to place the moved entries before. If omitted, they go after the last entry")
+	launchpadMoveCmd.Flags().StringVar(&launchpadMoveTarget, "target", "", "UUID of the launchpad to move the entries to. If omitted, the entries stay in their launchpad")
+	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadUnlinkCmd, launchpadMoveCmd, launchpadLaunchCmd, launchpadPendingCmd, launchpadStatusCmd, launchpadCancelCmd)
 	rootCmd.AddCommand(launchpadCmd)
 }
 
@@ -175,6 +183,45 @@ var launchpadUnlinkCmd = &cobra.Command{
 			return err
 		}
 		return runLaunchpadCommand(cmd, http.MethodDelete, path+requestID, "unlinking launchpad request", "unlink", launchpadRequest{})
+	},
+}
+
+var launchpadMoveCmd = &cobra.Command{
+	Use:   "move UUID REQUEST_UUID...",
+	Short: "Move launchpad entries to a new place",
+	Long:  "Move entries of a launchpad to a new place in its entry order. The moved entries go before the --before entry, or after the last entry without it. They keep their entry order relative to each other, whatever the order of the arguments, and a repeated id counts once. Only the moved entries change place.\n\nThe move is refused as a whole, and changes nothing, if a pair is not an entry of the launchpad, or if the --before entry is not an entry or is itself moved (invalid_placement).\n\nWith --json the command writes the control API body: {\"source_launchpad_id\",\"target_launchpad_id\",\"request_ids\"}, with the moved pairs in their new entry order.",
+	Args:  cobra.MinimumNArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := serviceIDPath("/launchpad/", args[0], "/move")
+		if err != nil {
+			return err
+		}
+		request := launchpadRequest{RequestIDs: make([]string, 0, len(args)-1)}
+		for _, raw := range args[1:] {
+			id, err := parseServiceID(raw)
+			if err != nil {
+				return err
+			}
+			request.RequestIDs = append(request.RequestIDs, id)
+		}
+		target, err := parseServiceID(args[0])
+		if err != nil {
+			return err
+		}
+		if cmd.Flags().Changed("target") {
+			if target, err = parseServiceID(launchpadMoveTarget); err != nil {
+				return err
+			}
+		}
+		request.TargetLaunchpadID = &target
+		if cmd.Flags().Changed("before") {
+			before, err := parseServiceID(launchpadMoveBefore)
+			if err != nil {
+				return err
+			}
+			request.BeforeRequestID = &before
+		}
+		return runLaunchpadCommand(cmd, http.MethodPost, path, "moving launchpad entries", "move", request)
 	},
 }
 
@@ -459,6 +506,8 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 		return writeLaunchpadLinkChanged(cmd, response, "linked to")
 	case "unlink":
 		return writeLaunchpadLinkChanged(cmd, response, "unlinked from")
+	case "move":
+		return writeLaunchpadEntriesMoved(cmd, response)
 	default:
 		return fmt.Errorf("unsupported launchpad action %q", action)
 	}
@@ -488,6 +537,23 @@ func writeLaunchpadLinkChanged(cmd *cobra.Command, response []byte, done string)
 		return errors.New("decoding launchpad response")
 	}
 	_, err := fmt.Fprintf(cmd.ErrOrStderr(), "request %s %s launchpad %s successfully\n", result.RequestID, done, result.LaunchpadID)
+	return err
+}
+
+// writeLaunchpadEntriesMoved reports moved entries on stderr.
+func writeLaunchpadEntriesMoved(cmd *cobra.Command, response []byte) error {
+	var result struct {
+		TargetLaunchpadID string   `json:"target_launchpad_id"`
+		RequestIDs        []string `json:"request_ids"`
+	}
+	if err := json.Unmarshal(response, &result); err != nil || result.TargetLaunchpadID == "" {
+		return errors.New("decoding launchpad response")
+	}
+	entries := "entries"
+	if len(result.RequestIDs) == 1 {
+		entries = "entry"
+	}
+	_, err := fmt.Fprintf(cmd.ErrOrStderr(), "%d %s moved to launchpad %s successfully\n", len(result.RequestIDs), entries, result.TargetLaunchpadID)
 	return err
 }
 
