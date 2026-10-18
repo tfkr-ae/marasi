@@ -19,7 +19,7 @@ func TestServiceStatusCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 		project := filepath.Join(canonicalConfigDir, "juice-shop.marasi")
-		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"13.09.2026","instance":"work","project":%q,"proxy_listener":"127.0.0.1:8080"}`, project))
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"13.09.2026","channel":"release","instance":"work","project":%q,"proxy_listener":"127.0.0.1:8080"}`, project))
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
 		if err != nil {
@@ -29,9 +29,25 @@ func TestServiceStatusCommand(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/service/status" || got.RawQuery != "" {
 			t.Fatalf("\nwanted:\nGET /service/status\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
-		want := fmt.Sprintf("status: running\nversion: 13.09.2026\ninstance: work\nproject: %s\nproxy listener: 127.0.0.1:8080\n", project)
+		want := fmt.Sprintf("status: running\nversion: 13.09.2026\nchannel: release\ninstance: work\nproject: %s\nproxy listener: 127.0.0.1:8080\n", project)
 		if stdout != want || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr\ngot:\nstdout %q, stderr %q", want, stdout, stderr)
+		}
+	})
+
+	t.Run("should print an unknown channel for an instance from a build before channels", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		canonicalConfigDir, err := filepath.EvalSymlinks(configDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		project := filepath.Join(canonicalConfigDir, "scratchpad.marasi")
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"17.10.2026","instance":"work","project":%q,"proxy_listener":null}`, project))
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
+		want := fmt.Sprintf("status: running\nversion: 17.10.2026\nchannel: unknown\ninstance: work\nproject: %s\nproxy listener: inactive\n", project)
+		if err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
 	})
 
@@ -42,10 +58,10 @@ func TestServiceStatusCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 		project := filepath.Join(canonicalConfigDir, "scratchpad.marasi")
-		startCannedControlAPI(t, configDir, "work", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","instance":"work","project":%q,"proxy_listener":null}`, project))
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","channel":null,"instance":"work","project":%q,"proxy_listener":null}`, project))
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
-		want := fmt.Sprintf("status: running\nversion: dev\ninstance: work\nproject: %s\nproxy listener: inactive\n", project)
+		want := fmt.Sprintf("status: running\nversion: dev\nchannel: none\ninstance: work\nproject: %s\nproxy listener: inactive\n", project)
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
@@ -116,7 +132,7 @@ func TestServiceStatusCommand(t *testing.T) {
 		if err := os.Symlink(target, alias); err != nil {
 			t.Skipf("creating symlink: %v", err)
 		}
-		body := fmt.Sprintf(`{"status":"running","version":"dev","instance":"work","project":%q,"proxy_listener":null}`, alias)
+		body := fmt.Sprintf(`{"status":"running","version":"dev","channel":null,"instance":"work","project":%q,"proxy_listener":null}`, alias)
 		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 
 		stdout, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
@@ -127,11 +143,13 @@ func TestServiceStatusCommand(t *testing.T) {
 
 	for name, body := range map[string]string{
 		"malformed JSON":         `{`,
-		"missing field":          fmt.Sprintf(`{"status":"running","version":"dev","instance":"work","project":%q}`, filepath.Join(string(filepath.Separator), "work", "scratchpad.marasi")),
-		"wrong status":           fmt.Sprintf(`{"status":"stopped","version":"dev","instance":"work","project":%q,"proxy_listener":null}`, filepath.Join(string(filepath.Separator), "work", "scratchpad.marasi")),
-		"empty field":            fmt.Sprintf(`{"status":"running","version":"","instance":"work","project":%q,"proxy_listener":null}`, filepath.Join(string(filepath.Separator), "work", "scratchpad.marasi")),
-		"non-canonical instance": fmt.Sprintf(`{"status":"running","version":"dev","instance":" work ","project":%q,"proxy_listener":null}`, filepath.Join(string(filepath.Separator), "work", "scratchpad.marasi")),
-		"non-canonical project":  `{"status":"running","version":"dev","instance":"work","project":"scratchpad.marasi","proxy_listener":null}`,
+		"missing field":          fmt.Sprintf(`{"status":"running","version":"dev","channel":null,"instance":"work","project":%q}`, filepath.Join(string(filepath.Separator), "work", "scratchpad.marasi")),
+		"wrong status":           fmt.Sprintf(`{"status":"stopped","version":"dev","channel":null,"instance":"work","project":%q,"proxy_listener":null}`, filepath.Join(string(filepath.Separator), "work", "scratchpad.marasi")),
+		"empty field":            fmt.Sprintf(`{"status":"running","version":"","channel":null,"instance":"work","project":%q,"proxy_listener":null}`, filepath.Join(string(filepath.Separator), "work", "scratchpad.marasi")),
+		"non-canonical instance": fmt.Sprintf(`{"status":"running","version":"dev","channel":null,"instance":" work ","project":%q,"proxy_listener":null}`, filepath.Join(string(filepath.Separator), "work", "scratchpad.marasi")),
+		"non-canonical project":  `{"status":"running","version":"dev","channel":null,"instance":"work","project":"scratchpad.marasi","proxy_listener":null}`,
+		"non-string channel":     fmt.Sprintf(`{"status":"running","version":"dev","channel":42,"instance":"work","project":%q,"proxy_listener":null}`, filepath.Join(string(filepath.Separator), "work", "scratchpad.marasi")),
+		"empty channel":          fmt.Sprintf(`{"status":"running","version":"dev","channel":"","instance":"work","project":%q,"proxy_listener":null}`, filepath.Join(string(filepath.Separator), "work", "scratchpad.marasi")),
 	} {
 		t.Run("should reject "+name+" in human mode and pass it through in JSON mode", func(t *testing.T) {
 			configDir := serviceConfigDir(t)
@@ -189,7 +207,7 @@ func TestServiceStatusCommand(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := fmt.Sprintf("status: running\nversion: dev\ninstance: work\nproject: %s\nproxy listener: %s\n", canonicalProject, listener)
+		want := fmt.Sprintf("status: running\nversion: dev\nchannel: none\ninstance: work\nproject: %s\nproxy listener: %s\n", canonicalProject, listener)
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
 		if err != nil || stdout != want || stderr != "" {
@@ -208,8 +226,8 @@ func TestServiceListCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 		project := filepath.Join(canonicalConfigDir, "scratchpad.marasi")
-		alpha := startCannedControlAPI(t, configDir, "alpha", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","instance":"alpha","project":%q,"proxy_listener":null}`, project))
-		zeta := startCannedControlAPI(t, configDir, "zeta", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"13.09.2026","instance":"zeta","project":%q,"proxy_listener":"127.0.0.1:8080"}`, project))
+		alpha := startCannedControlAPI(t, configDir, "alpha", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","channel":null,"instance":"alpha","project":%q,"proxy_listener":null}`, project))
+		zeta := startCannedControlAPI(t, configDir, "zeta", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"13.09.2026","channel":null,"instance":"zeta","project":%q,"proxy_listener":"127.0.0.1:8080"}`, project))
 		instancesDir := filepath.Join(configDir, "instances")
 		for _, name := range []string{"orphan.lock", "orphan.log"} {
 			if err := os.WriteFile(filepath.Join(instancesDir, name), nil, 0600); err != nil {
@@ -217,8 +235,8 @@ func TestServiceListCommand(t *testing.T) {
 			}
 		}
 
-		alphaStatus := fmt.Sprintf("status: running\nversion: dev\ninstance: alpha\nproject: %s\nproxy listener: inactive\n", project)
-		zetaStatus := fmt.Sprintf("status: running\nversion: 13.09.2026\ninstance: zeta\nproject: %s\nproxy listener: 127.0.0.1:8080\n", project)
+		alphaStatus := fmt.Sprintf("status: running\nversion: dev\nchannel: none\ninstance: alpha\nproject: %s\nproxy listener: inactive\n", project)
+		zetaStatus := fmt.Sprintf("status: running\nversion: 13.09.2026\nchannel: none\ninstance: zeta\nproject: %s\nproxy listener: 127.0.0.1:8080\n", project)
 		want := alphaStatus + "\n" + zetaStatus
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", strings.Repeat("x", 120), "service", "list")
 		if err != nil || stdout != want || stderr != "" {
@@ -260,13 +278,13 @@ func TestServiceListCommand(t *testing.T) {
 			connection.Close()
 		})
 		startCannedControlAPI(t, configDir, "garbage", http.StatusOK, `{"unexpected":true}`)
-		startCannedControlAPI(t, configDir, "running", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","instance":"running","project":%q,"proxy_listener":null}`, project))
+		startCannedControlAPI(t, configDir, "running", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","channel":null,"instance":"running","project":%q,"proxy_listener":null}`, project))
 		if err := os.WriteFile(filepath.Join(configDir, "instances", "stale.sock"), nil, 0600); err != nil {
 			t.Fatal(err)
 		}
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "service", "list")
-		want := fmt.Sprintf("status: unhealthy\ninstance: bad\n\nstatus: unhealthy\ninstance: dropped\n\nstatus: unhealthy\ninstance: garbage\n\nstatus: running\nversion: dev\ninstance: running\nproject: %s\nproxy listener: inactive\n", project)
+		want := fmt.Sprintf("status: unhealthy\ninstance: bad\n\nstatus: unhealthy\ninstance: dropped\n\nstatus: unhealthy\ninstance: garbage\n\nstatus: running\nversion: dev\nchannel: none\ninstance: running\nproject: %s\nproxy listener: inactive\n", project)
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
@@ -283,18 +301,18 @@ func TestServiceListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		startCannedControlAPI(t, configDir, "zeta", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","instance":"zeta","project":%q,"proxy_listener":null}`, project))
+		startCannedControlAPI(t, configDir, "zeta", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","channel":null,"instance":"zeta","project":%q,"proxy_listener":null}`, project))
 		startCannedControlAPIHandler(t, configDir, "alpha", func(w http.ResponseWriter, _ *http.Request) {
 			if err := os.Remove(zetaSocketPath); err != nil {
 				t.Errorf("removing zeta socket: %v", err)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprintf(w, `{"status":"running","version":"dev","instance":"alpha","project":%q,"proxy_listener":null}`, project)
+			fmt.Fprintf(w, `{"status":"running","version":"dev","channel":null,"instance":"alpha","project":%q,"proxy_listener":null}`, project)
 		})
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "service", "list")
-		want := fmt.Sprintf("status: running\nversion: dev\ninstance: alpha\nproject: %s\nproxy listener: inactive\n", project)
+		want := fmt.Sprintf("status: running\nversion: dev\nchannel: none\ninstance: alpha\nproject: %s\nproxy listener: inactive\n", project)
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("wanted stdout %q, empty stderr, nil error; got stdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
@@ -308,8 +326,8 @@ func TestServiceListCommand(t *testing.T) {
 		}
 		project := filepath.Join(canonicalConfigDir, "scratchpad.marasi")
 		startCannedControlAPI(t, configDir, "broken", http.StatusInternalServerError, `{"error":"internal_server_error"}`)
-		startCannedControlAPI(t, configDir, "running", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","instance":"running","project":%q,"proxy_listener":null}`, project))
-		want := fmt.Sprintf("{\"items\":[{\"status\":\"unhealthy\",\"instance\":\"broken\"},{\"status\":\"running\",\"version\":\"dev\",\"instance\":\"running\",\"project\":%q,\"proxy_listener\":null}]}\n", project)
+		startCannedControlAPI(t, configDir, "running", http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","channel":null,"instance":"running","project":%q,"proxy_listener":null}`, project))
+		want := fmt.Sprintf("{\"items\":[{\"status\":\"unhealthy\",\"instance\":\"broken\"},{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"running\",\"project\":%q,\"proxy_listener\":null}]}\n", project)
 		for _, args := range [][]string{
 			{"--json", "--config-dir", configDir, "service", "list"},
 			{"--config-dir", configDir, "service", "list", "--json"},
