@@ -7,6 +7,7 @@ Marasi users start a named detached proxy service for a named project, inspect i
 - Start an instance with `service start`.
 - Inspect version, instance, project, and proxy-listener identity with `service status`.
 - Stop the selected instance with `service stop`.
+- Restart the selected instance on the installed build with `service restart [--force]`.
 - List instances in the config directory with `service list`.
 - Select isolated state with global `--config-dir` and `--instance` flags.
 - Choose the project with `--project-name` or `--project`.
@@ -18,7 +19,7 @@ Build `dist/marasi`, then run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --i
 
 ## Driving it with shell and curl
 
-Run `service start --project-name "$VERIFY_PROJECT" --address 127.0.0.1 --port 0 --json`. Start JSON is only `instance` and `proxy_listener`. Then `service status --json`. Match `instance` to `$VERIFY_INSTANCE`, `status` to `running`, and `version` to the build `VERSION`. Require `project` to be the canonical absolute path of `$VERIFY_CONFIG_DIR/projects/$VERIFY_PROJECT.marasi`. Require `proxy_listener` to contain `127.0.0.1` and an assigned decimal port, and to equal the start value. Run `service list --json` and require one item whose `instance` equals `$VERIFY_INSTANCE` and whose `status` is `running`. Run `service stop --json` and require its `instance` to equal `$VERIFY_INSTANCE` and its `status` to equal `stopped`. A second `service status --json` must exit non-zero with `{"error":"instance $VERIFY_INSTANCE is not running"}`.
+Run `service start --project-name "$VERIFY_PROJECT" --address 127.0.0.1 --port 0 --json`. Start JSON is only `instance` and `proxy_listener`. Then `service status --json`. Match `instance` to `$VERIFY_INSTANCE`, `status` to `running`, and `version` to the build `VERSION`. Require `project` to be the canonical absolute path of `$VERIFY_CONFIG_DIR/projects/$VERIFY_PROJECT.marasi`. Require `proxy_listener` to contain `127.0.0.1` and an assigned decimal port, and to equal the start value. Run `service list --json` and require one item whose `instance` equals `$VERIFY_INSTANCE` and whose `status` is `running`. Run `service restart --json` and require `{"instance":"$VERIFY_INSTANCE","status":"restarted","version":...,"proxy_listener":...}` with the same `proxy_listener`; `service status --json` afterwards reports the same instance, project, and listener. Run `service stop --json` and require its `instance` to equal `$VERIFY_INSTANCE` and its `status` to equal `stopped`. A second `service status --json` must exit non-zero with `{"error":"instance $VERIFY_INSTANCE is not running"}`.
 
 ## Gotchas
 
@@ -31,3 +32,4 @@ Run `service start --project-name "$VERIFY_PROJECT" --address 127.0.0.1 --port 0
 - A project has an exclusive lock. Unique project names avoid colliding with another instance.
 - A parent `go.work` can exclude this worktree. Build with `GOWORK=off`.
 - `service list --json` is `{"items":[...]}`. A running item is that instance's status body. Any other socket that is not a dial failure is `{"status":"unhealthy","instance":"<name>"}`, including a readable error or garbage JSON. Dial failures are omitted. List never starts or stops instances.
+- `service restart` starts the successor from the instance's own executable, symlinks resolved, so it picks up an installed update. It returns 409 `checkpoint_items_held` with an `items` list while items are held; `--force` drops them. A successor that fails or is not ready within 30 s leaves the old instance serving, and the error and `service.restart_failed` event name the successor log, `$VERIFY_CONFIG_DIR/instances/$VERIFY_INSTANCE.log`. Human mode prints a warning on stderr first.

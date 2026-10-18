@@ -192,7 +192,7 @@ func runServiceChild(ctx context.Context, configDir, projectPath, instancePath, 
 	}()
 
 	ready := false
-	err := startServiceReady(serviceCtx, configDir, projectPath, instancePath, address, port, func(proxyListener string) error {
+	err := startServiceInstance(serviceCtx, configDir, projectPath, instancePath, address, port, !noProxyListener, func(proxyListener string) error {
 		if _, err := fmt.Fprintf(os.Stdout, "%c%s\n", startupReady, proxyListener); err != nil {
 			return fmt.Errorf("reporting service startup: %w", err)
 		}
