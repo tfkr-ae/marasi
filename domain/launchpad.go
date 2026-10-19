@@ -104,7 +104,9 @@ type Launchpad struct {
 	EntryCount int
 	// LastStatusCode is the response status code of the newest entry by
 	// capture, whatever its place in entry order. It is nil when the launchpad
-	// has no entries or its newest entry has no response (in flight, cancelled, or failed).
+	// has no entries or its newest entry has no response (in flight,
+	// cancelled, or failed before any answer). A launch that cannot reach its
+	// origin gets the proxy's own 502, so its status is 502.
 	LastStatusCode *int
 }
 
