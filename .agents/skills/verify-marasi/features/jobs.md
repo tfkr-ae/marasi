@@ -14,7 +14,7 @@ Start a service and capture some traffic, then run `dist/marasi --config-dir "$V
 
 ## Driving it with shell and curl
 
-Capture three pairs through the proxy. Retry `jobs list --json` until the `sitemap` item has `"complete":true`. Human `jobs list` prints headerless rows `name  complete|running  done/total`. Run `jobs rebuild sitemap` and require `job sitemap rebuild started` on stderr and a zero exit; with `--json` it prints the job object `{"name":"sitemap","complete":…,"done":…,"total":…}`. Retry `jobs list --json` until `sitemap` is complete again, then require `traffic sitemap` to list the origin with all three pairs. `jobs rebuild nonexistent` exits 1 with `rebuilding job: not_found`.
+Capture three pairs through the proxy. Retry `jobs list --json` until the `sitemap` item has `"complete":true`. Human `jobs list` prints rows `name  complete|running  done/total` between the `NAME  STATE  PROGRESS` column-name lines. Run `jobs rebuild sitemap` and require `job sitemap rebuild started` on stderr and a zero exit; with `--json` it prints the job object `{"name":"sitemap","complete":…,"done":…,"total":…}`. Retry `jobs list --json` until `sitemap` is complete again, then require `traffic sitemap` to list the origin with all three pairs. `jobs rebuild nonexistent` exits 1 with `rebuilding job: not_found`.
 
 ## Gotchas
 
