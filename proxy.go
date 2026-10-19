@@ -777,9 +777,11 @@ func (proxy *Proxy) GetListener(address string, port string) (net.Listener, erro
 	proxy.Logger.Info("Proxy Client Configured", "url", parsedURL.String())
 	parsedURL.User = url.UserPassword("marasi", proxy.clientWorkToken)
 
+	// Compression stays off so launch and Armory requests gain no Accept-Encoding.
 	transport := &http.Transport{
-		Proxy:           http.ProxyURL(parsedURL),
-		TLSClientConfig: proxy.MarasiClientTLSConfig,
+		Proxy:              http.ProxyURL(parsedURL),
+		TLSClientConfig:    proxy.MarasiClientTLSConfig,
+		DisableCompression: true,
 	}
 	proxy.Client.Transport = transport
 	return marasiListener, nil

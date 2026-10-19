@@ -471,8 +471,11 @@ func (proxy *Proxy) recordLaunchDropped(req *http.Request) {
 	proxy.recordLaunchFailure(id, domain.LaunchReasonDropped)
 }
 
-// launchClient returns a client that opens one connection per launch and
-// never reuses it, so the transport cannot retry a launch on a reused connection.
+// launchClient returns a client with a transport of its own, so a launch is
+// always the first request on a new connection and the transport cannot retry
+// it on a reused one. It does not set DisableKeepAlives, which would add
+// Connection: close to the request; runLaunch closes the connection instead.
+// Compression stays off so the request gains no Accept-Encoding.
 func (proxy *Proxy) launchClient() *http.Client {
 	base := proxy.Client
 	if base == nil {
@@ -485,7 +488,7 @@ func (proxy *Proxy) launchClient() *http.Client {
 	}
 	if ok {
 		transport = transport.Clone()
-		transport.DisableKeepAlives = true
+		transport.DisableCompression = true
 		client.Transport = transport
 	}
 	return &client
@@ -493,6 +496,9 @@ func (proxy *Proxy) launchClient() *http.Client {
 
 // runLaunch sends a launch and reports how it ended.
 func (proxy *Proxy) runLaunch(id uuid.UUID, client *http.Client, req *http.Request) {
+	// The launch's transport is its own, so closing its idle connections once
+	// the response is read closes the launch's connection.
+	defer client.CloseIdleConnections()
 	res, err := client.Do(req)
 	if err != nil {
 		log.Printf("launch %s : %v", id, err)
