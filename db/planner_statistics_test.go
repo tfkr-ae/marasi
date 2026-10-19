@@ -39,7 +39,8 @@ func queryPlan(t *testing.T, repo *Repository, query string, args ...any) string
 // status codes, then grown on many hosts and one status code, a sorted page
 // filtered to one sparse host and that status code must read the host
 // index. With the statistics from the open it reads every pair with the
-// status code.
+// status code. Capture only marks the refresh due, since it would hold the
+// database writer; the writer runs it when it goes idle.
 func TestRepository_ReoptimizesAsTheProjectGrows(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "grow.marasi")
@@ -65,9 +66,15 @@ func TestRepository_ReoptimizesAsTheProjectGrows(t *testing.T) {
 		insertTrafficResponse(t, repo, id, 200)
 	}
 
-	plan := queryPlan(t, repo, `SELECT id`+trafficSummarySource+
-		` WHERE host = ? AND status_code = ? ORDER BY method ASC, id ASC LIMIT 51`, "h7.example", 200)
-	if !strings.Contains(plan, "idx_request_host_id") {
+	page := `SELECT id` + trafficSummarySource +
+		` WHERE host = ? AND status_code = ? ORDER BY method ASC, id ASC LIMIT 51`
+	if plan := queryPlan(t, repo, page, "h7.example", 200); strings.Contains(plan, "idx_request_host_id") {
+		t.Fatalf("before the refresh, a sorted page filtered to a sparse host reads\n%s\nwant the statistics from the open, so capture did not refresh them", plan)
+	}
+
+	repo.RefreshStatisticsIfDue()
+
+	if plan := queryPlan(t, repo, page, "h7.example", 200); !strings.Contains(plan, "idx_request_host_id") {
 		t.Errorf("a sorted page filtered to a sparse host reads\n%s\nwant it to use idx_request_host_id", plan)
 	}
 }
