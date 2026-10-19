@@ -47,6 +47,9 @@ type Repository struct {
 	// captured counts the pairs captured in this session, for the periodic
 	// statistics refresh.
 	captured atomic.Int64
+	// statisticsDue is set when captured passes a multiple of
+	// optimizeEveryPairs, until RefreshStatisticsIfDue runs the refresh.
+	statisticsDue atomic.Bool
 	// indexQueue indexes captured pairs in batches (ADR-0026).
 	indexQueue indexQueue
 	// pairNumber is the last pair number issued (ADR-0042).
@@ -208,12 +211,24 @@ func optimize(db *sqlx.DB, pragma string) error {
 }
 
 // pairCaptured counts a captured pair and, every optimizeEveryPairs pairs,
-// refreshes the planner statistics between writes. Statistics taken when a
+// marks the planner statistics due for a refresh. Statistics taken when a
 // project was opened small would otherwise steer list reads for the rest of
-// a long session. A failed refresh leaves the old statistics and must not
-// fail the capture.
+// a long session. The refresh is not run here: capture runs on the proxy's
+// database writer, and a refresh holds it long enough for a WebSocket relay
+// waiting on the writer to miss its close deadline.
 func (repo *Repository) pairCaptured() {
 	if repo.captured.Add(1)%optimizeEveryPairs == 0 {
+		repo.statisticsDue.Store(true)
+	}
+}
+
+// RefreshStatisticsIfDue refreshes the planner statistics when captures
+// have marked them due (ADR-0041). The proxy's database writer calls it when
+// it has been idle for a while, so the refresh does not hold up capture. A
+// failed refresh leaves the old statistics until the project next opens or
+// closes.
+func (repo *Repository) RefreshStatisticsIfDue() {
+	if repo.statisticsDue.CompareAndSwap(true, false) {
 		_ = optimize(repo.dbConn, `PRAGMA optimize`)
 	}
 }

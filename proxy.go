@@ -153,6 +153,7 @@ type Proxy struct {
 	activeListener       net.Listener
 	activeServeDone      chan struct{}
 	dbWriterStarted      atomic.Bool
+	writerIdleDelay      time.Duration // quiet period before the writer refreshes statistics; 0 means dbWriterIdleDelay
 	launchpadWSMu        sync.Mutex
 	launchpadWS          map[io.Closer]struct{}
 	launchMu             sync.Mutex
@@ -591,54 +592,92 @@ func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
 	return proxyResponse, nil
 }
 
+// dbWriterIdleDelay is how long the database writer must go without an item
+// before it refreshes the planner statistics that captures have marked due
+// (ADR-0041). A refresh holds the writer, and a WebSocket relay blocked on a
+// full DBWriteChannel meanwhile can miss its close deadline, so the refresh
+// waits for a pause in traffic.
+const dbWriterIdleDelay = 2 * time.Second
+
+// statisticsRefresher is a traffic repository that refreshes its planner
+// statistics when captures have marked them due.
+type statisticsRefresher interface {
+	RefreshStatisticsIfDue()
+}
+
 // WriteToDB reads from the DBWriteChannel and writes items to their respective repositories.
-// It handles proxy traffic, websocket traffic, and log items.
+// It handles proxy traffic, websocket traffic, and log items. Once the channel has been
+// empty for dbWriterIdleDelay, it refreshes the traffic repository's planner statistics.
 func (proxy *Proxy) WriteToDB() {
-	for proxyItem := range proxy.DBWriteChannel {
-		switch castItem := proxyItem.(type) {
-		case *domain.ProxyRequest:
-			proxy.writeRequest(castItem)
-		case *domain.ProxyResponse:
-			// A launch whose pair collided with an existing row must not write over that row.
-			if proxy.launchIs(castItem.ID, func(entry *launchEntry) bool { return entry.duplicate }) {
-				continue
+	delay := proxy.writerIdleDelay
+	if delay == 0 {
+		delay = dbWriterIdleDelay
+	}
+	idle := time.NewTimer(delay)
+	defer idle.Stop()
+	for {
+		select {
+		case proxyItem, ok := <-proxy.DBWriteChannel:
+			if !ok {
+				return
 			}
-			proxy.writeResponse(castItem)
-		case *domain.WebSocketConnection:
-			err := proxy.WebSocketRepo.InsertConnection(castItem)
-			if err != nil {
-				log.Println(err)
+			proxy.writeItem(proxyItem)
+			idle.Reset(delay)
+		case <-idle.C:
+			// The timer is not reset until the next item, so one idle
+			// period refreshes once.
+			if refresher, ok := proxy.TrafficRepo.(statisticsRefresher); ok {
+				refresher.RefreshStatisticsIfDue()
 			}
-		case *domain.WebSocketConnectionUpdate:
-			err := proxy.WebSocketRepo.UpdateConnection(&castItem.Connection)
-			if err != nil {
-				log.Println(err)
-			}
-		case *domain.WebSocketMessage:
-			err := proxy.WebSocketRepo.InsertMessage(castItem)
-			if err != nil {
-				log.Println(err)
-			}
-		case *domain.Log:
-			err := proxy.LogRepo.InsertLog(castItem)
-			if err != nil {
-				log.Print(err)
-			}
-			if proxy.OnLog != nil {
-				proxy.OnLog(*castItem)
-			}
-		case *webSocketRequestState:
-			// Logged by the waiting caller: a log sent from here could block
-			// this writer on its own full channel.
-			castItem.err = proxy.applyWebSocketRequestState(castItem.requestID, castItem.state)
-			close(castItem.done)
-		case *launchOutcomeWrite:
-			proxy.finishLaunch(castItem.id)
-		case *dbWriteBarrier:
-			close(castItem.done)
-		default:
-			log.Print(castItem)
 		}
+	}
+}
+
+// writeItem writes one DBWriteChannel item to its repository.
+func (proxy *Proxy) writeItem(proxyItem any) {
+	switch castItem := proxyItem.(type) {
+	case *domain.ProxyRequest:
+		proxy.writeRequest(castItem)
+	case *domain.ProxyResponse:
+		// A launch whose pair collided with an existing row must not write over that row.
+		if proxy.launchIs(castItem.ID, func(entry *launchEntry) bool { return entry.duplicate }) {
+			return
+		}
+		proxy.writeResponse(castItem)
+	case *domain.WebSocketConnection:
+		err := proxy.WebSocketRepo.InsertConnection(castItem)
+		if err != nil {
+			log.Println(err)
+		}
+	case *domain.WebSocketConnectionUpdate:
+		err := proxy.WebSocketRepo.UpdateConnection(&castItem.Connection)
+		if err != nil {
+			log.Println(err)
+		}
+	case *domain.WebSocketMessage:
+		err := proxy.WebSocketRepo.InsertMessage(castItem)
+		if err != nil {
+			log.Println(err)
+		}
+	case *domain.Log:
+		err := proxy.LogRepo.InsertLog(castItem)
+		if err != nil {
+			log.Print(err)
+		}
+		if proxy.OnLog != nil {
+			proxy.OnLog(*castItem)
+		}
+	case *webSocketRequestState:
+		// Logged by the waiting caller: a log sent from here could block
+		// this writer on its own full channel.
+		castItem.err = proxy.applyWebSocketRequestState(castItem.requestID, castItem.state)
+		close(castItem.done)
+	case *launchOutcomeWrite:
+		proxy.finishLaunch(castItem.id)
+	case *dbWriteBarrier:
+		close(castItem.done)
+	default:
+		log.Print(castItem)
 	}
 }
 

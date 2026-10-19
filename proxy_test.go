@@ -3364,3 +3364,86 @@ func TestProxy_LaunchWebSocket(t *testing.T) {
 	default:
 	}
 }
+
+// The project's repository is the traffic repository the writer refreshes.
+var _ statisticsRefresher = (*db.Repository)(nil)
+
+// refreshingTrafficRepository records each statistics refresh the database
+// writer asks for.
+type refreshingTrafficRepository struct {
+	domain.TrafficRepository
+	refreshed chan struct{}
+}
+
+func (repo *refreshingTrafficRepository) RefreshStatisticsIfDue() {
+	repo.refreshed <- struct{}{}
+}
+
+func TestProxy_WriteToDBRefreshesStatisticsWhenIdle(t *testing.T) {
+	const idle = 50 * time.Millisecond
+	start := func(t *testing.T) (*Proxy, *refreshingTrafficRepository) {
+		t.Helper()
+		repo := &refreshingTrafficRepository{refreshed: make(chan struct{}, 100)}
+		proxy := &Proxy{
+			TrafficRepo:     repo,
+			DBWriteChannel:  make(chan any, 10),
+			writerIdleDelay: idle,
+		}
+		done := make(chan struct{})
+		go func() {
+			proxy.WriteToDB()
+			close(done)
+		}()
+		t.Cleanup(func() {
+			close(proxy.DBWriteChannel)
+			<-done
+		})
+		return proxy, repo
+	}
+	waitForRefresh := func(t *testing.T, repo *refreshingTrafficRepository) {
+		t.Helper()
+		select {
+		case <-repo.refreshed:
+		case <-time.After(20 * idle):
+			t.Fatal("the idle writer never refreshed the statistics")
+		}
+	}
+	write := func(proxy *Proxy) {
+		barrier := &dbWriteBarrier{done: make(chan struct{})}
+		proxy.DBWriteChannel <- barrier
+		<-barrier.done
+	}
+
+	t.Run("should refresh the statistics once the writer has been idle", func(t *testing.T) {
+		proxy, repo := start(t)
+		write(proxy)
+
+		waitForRefresh(t, repo)
+	})
+
+	t.Run("should not refresh the statistics while writes keep arriving", func(t *testing.T) {
+		proxy, repo := start(t)
+		for i := 0; i < 20; i++ {
+			write(proxy)
+			time.Sleep(idle / 5)
+		}
+
+		select {
+		case <-repo.refreshed:
+			t.Fatal("the writer refreshed the statistics between writes less than its idle delay apart")
+		default:
+		}
+	})
+
+	t.Run("should refresh only once for one idle period", func(t *testing.T) {
+		proxy, repo := start(t)
+		write(proxy)
+		waitForRefresh(t, repo)
+
+		time.Sleep(5 * idle)
+
+		if n := len(repo.refreshed); n != 0 {
+			t.Fatalf("\nwanted:\n1 refresh for one idle period\ngot:\n%d more", n)
+		}
+	})
+}
