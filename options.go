@@ -41,6 +41,9 @@ type RepositoryProvider interface {
 	domain.ReportingRepository
 	domain.WebSocketRepository
 	io.Closer
+	// RefreshStatisticsIfDue refreshes the planner statistics when captures
+	// have marked them due (ADR-0041). The database writer calls it when idle.
+	RefreshStatisticsIfDue()
 }
 
 var (

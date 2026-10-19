@@ -63,8 +63,19 @@ func rejectInstanceStatus(operation string, response instanceResponse, asJSON bo
 	if response.StatusCode == http.StatusOK {
 		return nil
 	}
-	if asJSON || isInvalidRequest(response.StatusCode, response.Body) {
+	if asJSON || explainsRefusal(response) {
 		return controlAPIError(operation, response.Status, response.Body)
 	}
 	return fmt.Errorf("%s: %s", operation, response.Status)
+}
+
+// rejectLaunchpadStatus is rejectInstanceStatus for the launchpad routes,
+// whose refusals carry an error code such as invalid_placement,
+// already_linked or not_found. Human mode shows that code too, as it does for
+// launch_pending, rather than the bare HTTP status.
+func rejectLaunchpadStatus(operation string, response instanceResponse, asJSON bool) error {
+	if code, _ := controlRefusal(response); code != "" && response.StatusCode >= 400 && response.StatusCode < 500 {
+		return controlAPIError(operation, response.Status, response.Body)
+	}
+	return rejectInstanceStatus(operation, response, asJSON)
 }

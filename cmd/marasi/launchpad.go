@@ -30,6 +30,8 @@ var launchpadLaunchDetach bool
 var launchpadGetQuery string
 var launchpadGetExclude []string
 var launchpadGetOrderBy string
+var launchpadMoveBefore string
+var launchpadMoveTarget string
 
 type launchpadRequest struct {
 	Name        *string `json:"name,omitempty"`
@@ -37,6 +39,10 @@ type launchpadRequest struct {
 	RequestID   *string `json:"request_id,omitempty"`
 	Raw         *string `json:"raw,omitempty"`
 	Scheme      *string `json:"scheme,omitempty"`
+
+	RequestIDs        []string `json:"request_ids,omitempty"`
+	TargetLaunchpadID *string  `json:"target_launchpad_id,omitempty"`
+	BeforeRequestID   *string  `json:"before_request_id,omitempty"`
 }
 
 func init() {
@@ -45,7 +51,7 @@ func init() {
 	launchpadCreateCmd.MarkFlagRequired("name")
 	launchpadGetCmd.Flags().StringVarP(&launchpadGetQuery, "query", "q", "", "AIP-160 traffic query that narrows the entries; see marasi traffic list --help")
 	launchpadGetCmd.Flags().StringArrayVar(&launchpadGetExclude, "exclude", nil, "Content type to hide, exact or major/*; repeat for more")
-	launchpadGetCmd.Flags().StringVar(&launchpadGetOrderBy, "order-by", "", "Sort the entries: one field, then optional desc, as in marasi traffic list --help; default oldest first")
+	launchpadGetCmd.Flags().StringVar(&launchpadGetOrderBy, "order-by", "", "Sort the entries: one field, then optional desc, as in marasi traffic list --help; default entry order")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateName, "name", "", "Launchpad name")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateDescription, "description", "", "Launchpad description")
 	launchpadLinkCmd.Flags().StringVar(&launchpadLinkRequest, "request", "", "UUID of the request/response pair")
@@ -54,7 +60,9 @@ func init() {
 	launchpadLaunchCmd.Flags().StringVar(&launchpadLaunchRawFile, "raw-file", "", "Read the raw HTTP request from a file. If omitted, read it from stdin")
 	launchpadLaunchCmd.Flags().BoolVar(&launchpadLaunchDetach, "detach", false, "Print the launch id and pending status, and return without waiting for the launch to finish")
 	launchpadLaunchCmd.MarkFlagRequired("scheme")
-	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadUnlinkCmd, launchpadLaunchCmd, launchpadPendingCmd, launchpadStatusCmd, launchpadCancelCmd)
+	launchpadMoveCmd.Flags().StringVar(&launchpadMoveBefore, "before", "", "UUID of the entry to place the moved entries before. If omitted, they go after the last entry")
+	launchpadMoveCmd.Flags().StringVar(&launchpadMoveTarget, "target", "", "UUID of the launchpad to move the entries to. If omitted, the entries stay in their launchpad")
+	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadUnlinkCmd, launchpadMoveCmd, launchpadLaunchCmd, launchpadPendingCmd, launchpadStatusCmd, launchpadCancelCmd)
 	rootCmd.AddCommand(launchpadCmd)
 }
 
@@ -92,7 +100,8 @@ var launchpadListCmd = &cobra.Command{
 var launchpadGetCmd = &cobra.Command{
 	Use:   "get UUID",
 	Short: "Get one launchpad and its entries",
-	Long: `Get one launchpad and its entries, oldest first.
+	Long: `Get one launchpad and its entries, in entry order. Every entry the
+launchpad gains goes last.
 
 --query (-q) takes the same AIP-160 query as marasi traffic list and keeps
 only the entries that match it. See marasi traffic list --help for the fields.`,
@@ -174,6 +183,43 @@ var launchpadUnlinkCmd = &cobra.Command{
 			return err
 		}
 		return runLaunchpadCommand(cmd, http.MethodDelete, path+requestID, "unlinking launchpad request", "unlink", launchpadRequest{})
+	},
+}
+
+var launchpadMoveCmd = &cobra.Command{
+	Use:   "move UUID REQUEST_UUID...",
+	Short: "Move launchpad entries to a new place",
+	Long:  "Move entries of a launchpad to a new place in its entry order, or to another launchpad with --target. The moved entries go before the --before entry of the target, or after its last entry without it. They keep their entry order relative to each other, whatever the order of the arguments, and a repeated id counts once. Only the moved entries change place. Moved to another launchpad, the entries leave this one; a move never copies.\n\nThe move is refused as a whole, and changes nothing, if a pair is not an entry of the launchpad, if the --before entry is not an entry of the target or is itself moved (invalid_placement), if the target launchpad already holds a pair (already_linked), or if a pair moving to another launchpad is a pending launch (launch_pending).\n\nWith --json the command writes the control API body: {\"source_launchpad_id\",\"target_launchpad_id\",\"request_ids\"}, with the moved pairs in their new entry order.",
+	Args:  cobra.MinimumNArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		source, err := parseServiceID(args[0])
+		if err != nil {
+			return err
+		}
+		path := "/launchpad/" + source + "/move"
+		request := launchpadRequest{RequestIDs: make([]string, 0, len(args)-1)}
+		for _, raw := range args[1:] {
+			id, err := parseServiceID(raw)
+			if err != nil {
+				return err
+			}
+			request.RequestIDs = append(request.RequestIDs, id)
+		}
+		target := source
+		if cmd.Flags().Changed("target") {
+			if target, err = parseServiceID(launchpadMoveTarget); err != nil {
+				return err
+			}
+		}
+		request.TargetLaunchpadID = &target
+		if cmd.Flags().Changed("before") {
+			before, err := parseServiceID(launchpadMoveBefore)
+			if err != nil {
+				return err
+			}
+			request.BeforeRequestID = &before
+		}
+		return runLaunchpadCommand(cmd, http.MethodPost, path, "moving launchpad entries", "move", request)
 	},
 }
 
@@ -321,7 +367,7 @@ func runLaunch(cmd *cobra.Command, path string, body launchpadRequest) error {
 	if err != nil {
 		return err
 	}
-	if err := rejectInstanceStatus(operation, called, jsonOutput); err != nil {
+	if err := rejectLaunchpadStatus(operation, called, jsonOutput); err != nil {
 		return err
 	}
 	var started launchRecord
@@ -435,7 +481,7 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 	if err != nil {
 		return err
 	}
-	if err := rejectInstanceStatus(operation, called, jsonOutput); err != nil {
+	if err := rejectLaunchpadStatus(operation, called, jsonOutput); err != nil {
 		return err
 	}
 	response := called.Body
@@ -458,6 +504,8 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 		return writeLaunchpadLinkChanged(cmd, response, "linked to")
 	case "unlink":
 		return writeLaunchpadLinkChanged(cmd, response, "unlinked from")
+	case "move":
+		return writeLaunchpadEntriesMoved(cmd, response)
 	default:
 		return fmt.Errorf("unsupported launchpad action %q", action)
 	}
@@ -487,6 +535,23 @@ func writeLaunchpadLinkChanged(cmd *cobra.Command, response []byte, done string)
 		return errors.New("decoding launchpad response")
 	}
 	_, err := fmt.Fprintf(cmd.ErrOrStderr(), "request %s %s launchpad %s successfully\n", result.RequestID, done, result.LaunchpadID)
+	return err
+}
+
+// writeLaunchpadEntriesMoved reports moved entries on stderr.
+func writeLaunchpadEntriesMoved(cmd *cobra.Command, response []byte) error {
+	var result struct {
+		TargetLaunchpadID string   `json:"target_launchpad_id"`
+		RequestIDs        []string `json:"request_ids"`
+	}
+	if err := json.Unmarshal(response, &result); err != nil || result.TargetLaunchpadID == "" {
+		return errors.New("decoding launchpad response")
+	}
+	entries := "entries"
+	if len(result.RequestIDs) == 1 {
+		entries = "entry"
+	}
+	_, err := fmt.Fprintf(cmd.ErrOrStderr(), "%d %s moved to launchpad %s successfully\n", len(result.RequestIDs), entries, result.TargetLaunchpadID)
 	return err
 }
 

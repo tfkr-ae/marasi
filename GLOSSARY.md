@@ -117,8 +117,24 @@ _Avoid_: host override, redirect, DNS override, way point
 A named group of request/response pairs, each an ordinary traffic pair linked to the group rather than copied. A launchpad may have no members.
 _Avoid_: Repeater, folder, tag
 
+**Launchpad entry**:
+A request/response pair linked to a launchpad. The same pair can be an entry in several launchpads.
+_Avoid_: item, member row, copy
+
+**Entry order**:
+The order of a launchpad's entries, which changes only when a researcher moves entries. Every entry a launchpad gains goes last.
+_Avoid_: sort order, position, original order
+
+**Move**:
+Taking entries out of one launchpad and putting them at a chosen place in another, or at a new place in the same one, keeping their entry order relative to each other. A move never copies, and is refused if the target already holds one of the pairs, or if any of the pairs is a pending launch and the target is another launchpad.
+_Avoid_: drag, reorder when the entries change launchpad, copy
+
+**Placement**:
+Where a move puts its entries in the target: before a given entry of the target, or after its last entry. A placement before an entry that is not in the target, or that is itself moved, is invalid.
+_Avoid_: anchor, position, drop target
+
 **Launch**:
-Sending a raw request from a launchpad through the proxy. Its request/response pair joins the launchpad, and the launch id is that pair's UUID. A launch is pending until it is completed, cancelled, or failed.
+Sending a raw request from a launchpad through the proxy. Its request/response pair joins the launchpad, and the launch id is that pair's UUID. A launch is pending until it is completed, cancelled, or failed. While a launch is pending, its pair cannot be removed from its launchpad or deleted.
 _Avoid_: replay, repeat, send
 
 **Armory**:
