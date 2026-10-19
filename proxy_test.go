@@ -3380,7 +3380,7 @@ func (repo *refreshingTrafficRepository) RefreshStatisticsIfDue() {
 }
 
 func TestProxy_WriteToDBRefreshesStatisticsWhenIdle(t *testing.T) {
-	const idle = 50 * time.Millisecond
+	const idle = 100 * time.Millisecond
 	start := func(t *testing.T) (*Proxy, *refreshingTrafficRepository) {
 		t.Helper()
 		repo := &refreshingTrafficRepository{refreshed: make(chan struct{}, 100)}
@@ -3425,13 +3425,27 @@ func TestProxy_WriteToDBRefreshesStatisticsWhenIdle(t *testing.T) {
 		proxy, repo := start(t)
 		for i := 0; i < 20; i++ {
 			write(proxy)
-			time.Sleep(idle / 5)
+			time.Sleep(idle / 10)
 		}
 
 		select {
 		case <-repo.refreshed:
 			t.Fatal("the writer refreshed the statistics between writes less than its idle delay apart")
 		default:
+		}
+	})
+
+	t.Run("should refresh the repository it last wrote to, not one swapped in since", func(t *testing.T) {
+		proxy, written := start(t)
+		write(proxy)
+		// A project switch replaces the repository between the writer's
+		// items; the new project's repository is first used by its next item.
+		swapped := &refreshingTrafficRepository{refreshed: make(chan struct{}, 100)}
+		proxy.TrafficRepo = swapped
+
+		waitForRefresh(t, written)
+		if n := len(swapped.refreshed); n != 0 {
+			t.Fatalf("\nwanted:\nno refresh of a repository the writer has not written to\ngot:\n%d", n)
 		}
 	})
 
