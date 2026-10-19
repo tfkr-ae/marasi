@@ -605,6 +605,9 @@ type statisticsRefresher interface {
 	RefreshStatisticsIfDue()
 }
 
+// Every project's repository is a statisticsRefresher.
+var _ statisticsRefresher = RepositoryProvider(nil)
+
 // WriteToDB reads from the DBWriteChannel and writes items to their respective repositories.
 // It handles proxy traffic, websocket traffic, and log items. Once the channel has been
 // empty for dbWriterIdleDelay, it refreshes the traffic repository's planner statistics.
@@ -615,18 +618,24 @@ func (proxy *Proxy) WriteToDB() {
 	}
 	idle := time.NewTimer(delay)
 	defer idle.Stop()
+	// refresher is the traffic repository as of the last item. A project
+	// switch replaces proxy.TrafficRepo once a barrier item is written, so
+	// the writer reads it only before writing an item, and the idle branch
+	// refreshes the repository last written to.
+	var refresher statisticsRefresher
 	for {
 		select {
 		case proxyItem, ok := <-proxy.DBWriteChannel:
 			if !ok {
 				return
 			}
+			refresher, _ = proxy.TrafficRepo.(statisticsRefresher)
 			proxy.writeItem(proxyItem)
 			idle.Reset(delay)
 		case <-idle.C:
 			// The timer is not reset until the next item, so one idle
 			// period refreshes once.
-			if refresher, ok := proxy.TrafficRepo.(statisticsRefresher); ok {
+			if refresher != nil {
 				refresher.RefreshStatisticsIfDue()
 			}
 		}

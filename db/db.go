@@ -80,6 +80,9 @@ func NewProxyRepo(db *sqlx.DB) *Repository {
 // Close terminates the database connection.
 // It is critical to call this to free up database resources.
 func (repo *Repository) Close() error {
+	// Close refreshes the statistics below, so a refresh the writer would
+	// run later is not due, and would find the connection closed.
+	repo.statisticsDue.Store(false)
 	repo.closeIndexQueue()
 	// Fold this session's captures into the pair count, so the next open
 	// does not count them. Both of the fold's updates commit together, so
