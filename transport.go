@@ -29,7 +29,9 @@ func newMarasiTransport(cert *x509.Certificate, dial func(context.Context, strin
 	if dial == nil {
 		dial = (&net.Dialer{}).DialContext
 	}
-	transport := &http.Transport{}
+	// Compression stays off so a request without Accept-Encoding gains none
+	// and the response reaches the client as the origin encoded it.
+	transport := &http.Transport{DisableCompression: true}
 	transport.DialContext = dial
 	transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		tcpConn, err := dial(ctx, network, addr)
@@ -115,6 +117,11 @@ func (m *marasiRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	// response pipeline replaces *res.Request in place. Send a copy so they never share
 	// it, and hand back the original, whose address martian keys its context on.
 	sent := *req
+	// With Close set, the transport writes its own Connection: close unless the
+	// first Connection value already says close. The copy keeps the client's
+	// Connection lines as they are and adds none. The transport still closes the
+	// connection when the first Connection value or the origin's answer says close.
+	sent.Close = false
 	res, err := m.base.RoundTrip(&sent)
 	if res != nil {
 		res.Request = req
