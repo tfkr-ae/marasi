@@ -48,6 +48,15 @@ type launchpadLink struct {
 	RequestID   uuid.UUID `json:"request_id"`
 }
 
+// launchpadEntriesMoved is the POST /launchpad/{id}/move response body and
+// the launchpad.entries_moved event data. RequestIDs are the moved pairs in
+// their new entry order.
+type launchpadEntriesMoved struct {
+	SourceLaunchpadID uuid.UUID   `json:"source_launchpad_id"`
+	TargetLaunchpadID uuid.UUID   `json:"target_launchpad_id"`
+	RequestIDs        []uuid.UUID `json:"request_ids"`
+}
+
 var errInvalidLaunchpadRequest = errors.New("invalid launchpad request")
 
 func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, events *eventBroadcaster) {
@@ -187,12 +196,32 @@ func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, e
 			writeLaunchpadRepositoryError(w, r, err)
 			return
 		}
-		if err := repo.UnlinkRequestFromLaunchpad(requestID, id); err != nil {
+		if err := proxy.UnlinkRequestFromLaunchpad(requestID, id); err != nil {
 			writeLaunchpadRepositoryError(w, r, err)
 			return
 		}
 		response := launchpadLink{LaunchpadID: id, RequestID: requestID}
 		events.publish("launchpad.unlinked", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
+
+	mux.HandleFunc("POST /launchpad/{id}/move", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseLaunchpadID(w, r)
+		if !ok {
+			return
+		}
+		move, err := decodeLaunchpadMove(r, id)
+		if err != nil {
+			writeLaunchpadError(w, r, http.StatusBadRequest, "invalid_launchpad_request")
+			return
+		}
+		moved, err := proxy.MoveLaunchpadEntries(move)
+		if err != nil {
+			writeLaunchpadRepositoryError(w, r, err)
+			return
+		}
+		response := launchpadEntriesMoved{SourceLaunchpadID: move.SourceID, TargetLaunchpadID: move.TargetID, RequestIDs: moved}
+		events.publish("launchpad.entries_moved", response)
 		writeJSON(w, r, http.StatusOK, response)
 	})
 
@@ -326,6 +355,39 @@ func decodeLaunchpadLink(r *http.Request) (uuid.UUID, error) {
 	return requestID, nil
 }
 
+// decodeLaunchpadMove reads a move of entries out of launchpad sourceID. The
+// target defaults to the source and the entry to place them before to none,
+// the end.
+func decodeLaunchpadMove(r *http.Request, sourceID uuid.UUID) (domain.LaunchpadMove, error) {
+	if r.Body == nil {
+		return domain.LaunchpadMove{}, errInvalidLaunchpadRequest
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var body struct {
+		RequestIDs        []uuid.UUID `json:"request_ids"`
+		TargetLaunchpadID *uuid.UUID  `json:"target_launchpad_id"`
+		BeforeRequestID   *uuid.UUID  `json:"before_request_id"`
+	}
+	if err := decoder.Decode(&body); err != nil {
+		return domain.LaunchpadMove{}, errInvalidLaunchpadRequest
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return domain.LaunchpadMove{}, errInvalidLaunchpadRequest
+	}
+	if len(body.RequestIDs) == 0 {
+		return domain.LaunchpadMove{}, errInvalidLaunchpadRequest
+	}
+	move := domain.LaunchpadMove{SourceID: sourceID, TargetID: sourceID, RequestIDs: body.RequestIDs}
+	if body.TargetLaunchpadID != nil {
+		move.TargetID = *body.TargetLaunchpadID
+	}
+	if body.BeforeRequestID != nil {
+		move.BeforeID = *body.BeforeRequestID
+	}
+	return move, nil
+}
+
 func decodeLaunchpadLaunch(r *http.Request) ([]byte, bool, error) {
 	if r.Body == nil {
 		return nil, false, errInvalidLaunchpadRequest
@@ -359,6 +421,11 @@ func writeLaunchpadError(w http.ResponseWriter, r *http.Request, status int, cod
 }
 
 func writeLaunchpadRepositoryError(w http.ResponseWriter, r *http.Request, err error) {
+	var pending *domain.LaunchPendingError
+	if errors.As(err, &pending) {
+		writeLaunchPending(w, r, pending)
+		return
+	}
 	if errors.Is(err, domain.ErrLaunchpadNotFound) {
 		writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
 		return
@@ -369,6 +436,10 @@ func writeLaunchpadRepositoryError(w http.ResponseWriter, r *http.Request, err e
 	}
 	if errors.Is(err, domain.ErrLaunchpadAlreadyLinked) {
 		writeLaunchpadError(w, r, http.StatusConflict, "already_linked")
+		return
+	}
+	if errors.Is(err, domain.ErrInvalidPlacement) {
+		writeLaunchpadError(w, r, http.StatusBadRequest, "invalid_placement")
 		return
 	}
 	writeLaunchpadError(w, r, http.StatusInternalServerError, "internal_server_error")

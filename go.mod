@@ -19,6 +19,7 @@ require (
 	golang.org/x/net v0.42.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20250528174236-200df99c418a
 	modernc.org/sqlite v1.38.2
+	roci.dev/fracdex v0.0.0-20241211175510-82d7df79e312
 )
 
 require (

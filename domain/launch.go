@@ -2,6 +2,8 @@ package domain
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -11,6 +13,29 @@ var ErrLaunchNotFound = errors.New("launch not found")
 
 // ErrLaunchFinished means the launch has already reached a terminal state.
 var ErrLaunchFinished = errors.New("launch finished")
+
+// ErrLaunchPending means an operation was refused because it would remove a
+// pending launch's pair from its launchpad, delete that pair, or delete the
+// launchpad a pending launch was sent from (ADR-0053). It changes nothing;
+// the client retries once the launch is completed, cancelled or failed.
+var ErrLaunchPending = errors.New("launch pending")
+
+// LaunchPendingError is the ErrLaunchPending a refused operation returns.
+// IDs are the pending launches' ids, which are their pairs' UUIDs, in the
+// order the registry sorts them: oldest first.
+type LaunchPendingError struct {
+	IDs []uuid.UUID
+}
+
+func (e *LaunchPendingError) Error() string {
+	ids := make([]string, len(e.IDs))
+	for i, id := range e.IDs {
+		ids[i] = id.String()
+	}
+	return fmt.Sprintf("%v: %s", ErrLaunchPending, strings.Join(ids, ", "))
+}
+
+func (e *LaunchPendingError) Unwrap() error { return ErrLaunchPending }
 
 // LaunchStatus identifies the lifecycle state of a launch.
 type LaunchStatus string

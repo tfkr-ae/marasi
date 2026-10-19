@@ -151,10 +151,42 @@ func (p *launchpadQueryProject) counts(t *testing.T) [3]int {
 	return counts
 }
 
+func TestLaunchpadDetailEntryOrder(t *testing.T) {
+	p := setupLaunchpadQueryProject(t)
+
+	// free and hostilefree were captured before hostile and after it; the
+	// single link and the bulk link both put them after hostile.
+	link := requestLaunchpad(p.server, http.MethodPost, "/launchpad/"+p.launchpads["one"].String()+"/link", `{"request_id":"`+p.ids["free"].String()+`"}`)
+	if link.Code != http.StatusOK {
+		t.Fatalf("\nwanted:\nlinked\ngot:\n%d %s", link.Code, link.Body.String())
+	}
+	bulk := requestControlAPI(p.server, http.MethodPost, "/traffic/bulk/link", fmt.Sprintf(
+		`{"selection":{"ids":[%q,%q]},"launchpad_id":%q}`, p.ids["hostile"], p.ids["orig"], p.launchpads["two"]))
+	if bulk.Code != http.StatusOK {
+		t.Fatalf("\nwanted:\n200\ngot:\n%d %s", bulk.Code, bulk.Body.String())
+	}
+
+	for launchpad, want := range map[string]string{
+		"one": "orig,launched,shared,hostile,free",
+		"two": "shared,other,orig,hostile",
+	} {
+		code, body := p.get("/launchpad/"+p.launchpads[launchpad].String(), "")
+		if code != http.StatusOK {
+			t.Fatalf("\nwanted:\n200\ngot:\n%d %s", code, body)
+		}
+		if got := p.names(t, body); got != want {
+			t.Fatalf("\n%s wanted:\n%s\ngot:\n%s", launchpad, want, got)
+		}
+		if strings.Contains(body, `"position"`) {
+			t.Fatalf("\nwanted:\nno entry order key\ngot:\n%s", body)
+		}
+	}
+}
+
 func TestLaunchpadDetailQuery(t *testing.T) {
 	p := setupLaunchpadQueryProject(t)
 
-	t.Run("should return only the launchpad's entries that match q, oldest first", func(t *testing.T) {
+	t.Run("should return only the launchpad's entries that match q, in entry order", func(t *testing.T) {
 		for _, test := range []struct {
 			launchpad, q, want string
 		}{

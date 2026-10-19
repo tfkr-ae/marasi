@@ -92,7 +92,8 @@ func decodeStrictJSON(body io.Reader, v any) bool {
 // publishes one traffic.changed event with change. apply may return
 // errInvalidBulkRequest for operation fields it rejects. Failures are written as
 // JSON errors and publish nothing: a bad body or selection or query is 400,
-// a missing target is 404. It reports whether the operation ran.
+// a missing target is 404, and a selection holding a pending launch's pair
+// is 409 launch_pending. It reports whether the operation ran.
 func serveBulk(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, events *eventBroadcaster, change bulkChange, body bulkBody, apply func(repo domain.TrafficRepository, sel domain.Selection) (int, error)) bool {
 	sel, err := decodeBulkBody(r, body)
 	if err != nil {
@@ -118,7 +119,10 @@ func serveBulk(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, even
 func writeBulkError(w http.ResponseWriter, r *http.Request, err error) {
 	var queryErr *domain.QueryError
 	var incomplete *domain.SelectionIncompleteError
+	var pending *domain.LaunchPendingError
 	switch {
+	case errors.As(err, &pending):
+		writeLaunchPending(w, r, pending)
 	case errors.As(err, &incomplete):
 		writeJSON(w, r, http.StatusConflict, selectionIncomplete{Error: "selection_incomplete", Message: incomplete.Error(), Jobs: incomplete.Jobs})
 	case errors.Is(err, errInvalidBulkRequest):
@@ -136,6 +140,21 @@ func writeBulkError(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
 	}
+}
+
+// launchPending is the 409 body of an operation refused because it would
+// take a pending launch's pair out of its launchpad, delete that pair, or
+// delete the launchpad a launch is pending from (ADR-0053). RequestIDs are
+// the pending launches' pair ids.
+type launchPending struct {
+	Error      string      `json:"error"`
+	Message    string      `json:"message"`
+	RequestIDs []uuid.UUID `json:"request_ids"`
+}
+
+// writeLaunchPending writes the 409 launch_pending response for err.
+func writeLaunchPending(w http.ResponseWriter, r *http.Request, err *domain.LaunchPendingError) {
+	writeJSON(w, r, http.StatusConflict, launchPending{Error: "launch_pending", Message: err.Error(), RequestIDs: err.IDs})
 }
 
 // selectionIncomplete is the 409 body of a bulk operation that refused a
@@ -234,13 +253,19 @@ func addTrafficBulkRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadc
 	mux.HandleFunc("POST /traffic/bulk/delete", func(w http.ResponseWriter, r *http.Request) {
 		// Deleted pairs leave the sitemap counts, so clients re-read the
 		// nodes they have expanded.
-		if serveBulk(w, r, proxy, events, changeDelete, &bulkSelection{}, domain.TrafficRepository.DeleteTraffic) {
+		deleteTraffic := func(_ domain.TrafficRepository, sel domain.Selection) (int, error) { return proxy.DeleteTraffic(sel) }
+		if serveBulk(w, r, proxy, events, changeDelete, &bulkSelection{}, deleteTraffic) {
 			events.publishSitemapChanged("delete")
 		}
 	})
+	// Delete and unlink go through the proxy, which refuses to take a
+	// pending launch's pair out of its launchpad (ADR-0053).
+	unlinkTraffic := func(_ domain.TrafficRepository, sel domain.Selection, target domain.LinkTarget) (int, error) {
+		return proxy.UnlinkTraffic(sel, target)
+	}
 	for change, run := range map[bulkChange]func(domain.TrafficRepository, domain.Selection, domain.LinkTarget) (int, error){
 		changeLink:   domain.TrafficRepository.LinkTraffic,
-		changeUnlink: domain.TrafficRepository.UnlinkTraffic,
+		changeUnlink: unlinkTraffic,
 	} {
 		mux.HandleFunc("POST /traffic/bulk/"+string(change), func(w http.ResponseWriter, r *http.Request) {
 			var body bulkLinkBody

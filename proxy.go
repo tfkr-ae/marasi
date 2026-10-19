@@ -153,6 +153,7 @@ type Proxy struct {
 	activeListener       net.Listener
 	activeServeDone      chan struct{}
 	dbWriterStarted      atomic.Bool
+	writerIdleDelay      time.Duration // quiet period before the writer refreshes statistics; 0 means dbWriterIdleDelay
 	launchpadWSMu        sync.Mutex
 	launchpadWS          map[io.Closer]struct{}
 	launchMu             sync.Mutex
@@ -591,54 +592,101 @@ func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
 	return proxyResponse, nil
 }
 
+// dbWriterIdleDelay is how long the database writer must go without an item
+// before it refreshes the planner statistics that captures have marked due
+// (ADR-0041). A refresh holds the writer, and a WebSocket relay blocked on a
+// full DBWriteChannel meanwhile can miss its close deadline, so the refresh
+// waits for a pause in traffic.
+const dbWriterIdleDelay = 2 * time.Second
+
+// statisticsRefresher is a traffic repository that refreshes its planner
+// statistics when captures have marked them due.
+type statisticsRefresher interface {
+	RefreshStatisticsIfDue()
+}
+
+// Every project's repository is a statisticsRefresher.
+var _ statisticsRefresher = RepositoryProvider(nil)
+
 // WriteToDB reads from the DBWriteChannel and writes items to their respective repositories.
-// It handles proxy traffic, websocket traffic, and log items.
+// It handles proxy traffic, websocket traffic, and log items. Once the channel has been
+// empty for dbWriterIdleDelay, it refreshes the traffic repository's planner statistics.
 func (proxy *Proxy) WriteToDB() {
-	for proxyItem := range proxy.DBWriteChannel {
-		switch castItem := proxyItem.(type) {
-		case *domain.ProxyRequest:
-			proxy.writeRequest(castItem)
-		case *domain.ProxyResponse:
-			// A launch whose pair collided with an existing row must not write over that row.
-			if proxy.launchIs(castItem.ID, func(entry *launchEntry) bool { return entry.duplicate }) {
-				continue
+	delay := proxy.writerIdleDelay
+	if delay == 0 {
+		delay = dbWriterIdleDelay
+	}
+	idle := time.NewTimer(delay)
+	defer idle.Stop()
+	// refresher is the traffic repository as of the last item. A project
+	// switch replaces proxy.TrafficRepo once a barrier item is written, so
+	// the writer reads it only before writing an item, and the idle branch
+	// refreshes the repository last written to.
+	var refresher statisticsRefresher
+	for {
+		select {
+		case proxyItem, ok := <-proxy.DBWriteChannel:
+			if !ok {
+				return
 			}
-			proxy.writeResponse(castItem)
-		case *domain.WebSocketConnection:
-			err := proxy.WebSocketRepo.InsertConnection(castItem)
-			if err != nil {
-				log.Println(err)
+			refresher, _ = proxy.TrafficRepo.(statisticsRefresher)
+			proxy.writeItem(proxyItem)
+			idle.Reset(delay)
+		case <-idle.C:
+			// The timer is not reset until the next item, so one idle
+			// period refreshes once.
+			if refresher != nil {
+				refresher.RefreshStatisticsIfDue()
 			}
-		case *domain.WebSocketConnectionUpdate:
-			err := proxy.WebSocketRepo.UpdateConnection(&castItem.Connection)
-			if err != nil {
-				log.Println(err)
-			}
-		case *domain.WebSocketMessage:
-			err := proxy.WebSocketRepo.InsertMessage(castItem)
-			if err != nil {
-				log.Println(err)
-			}
-		case *domain.Log:
-			err := proxy.LogRepo.InsertLog(castItem)
-			if err != nil {
-				log.Print(err)
-			}
-			if proxy.OnLog != nil {
-				proxy.OnLog(*castItem)
-			}
-		case *webSocketRequestState:
-			// Logged by the waiting caller: a log sent from here could block
-			// this writer on its own full channel.
-			castItem.err = proxy.applyWebSocketRequestState(castItem.requestID, castItem.state)
-			close(castItem.done)
-		case *launchOutcomeWrite:
-			proxy.finishLaunch(castItem.id)
-		case *dbWriteBarrier:
-			close(castItem.done)
-		default:
-			log.Print(castItem)
 		}
+	}
+}
+
+// writeItem writes one DBWriteChannel item to its repository.
+func (proxy *Proxy) writeItem(proxyItem any) {
+	switch castItem := proxyItem.(type) {
+	case *domain.ProxyRequest:
+		proxy.writeRequest(castItem)
+	case *domain.ProxyResponse:
+		// A launch whose pair collided with an existing row must not write over that row.
+		if proxy.launchIs(castItem.ID, func(entry *launchEntry) bool { return entry.duplicate }) {
+			return
+		}
+		proxy.writeResponse(castItem)
+	case *domain.WebSocketConnection:
+		err := proxy.WebSocketRepo.InsertConnection(castItem)
+		if err != nil {
+			log.Println(err)
+		}
+	case *domain.WebSocketConnectionUpdate:
+		err := proxy.WebSocketRepo.UpdateConnection(&castItem.Connection)
+		if err != nil {
+			log.Println(err)
+		}
+	case *domain.WebSocketMessage:
+		err := proxy.WebSocketRepo.InsertMessage(castItem)
+		if err != nil {
+			log.Println(err)
+		}
+	case *domain.Log:
+		err := proxy.LogRepo.InsertLog(castItem)
+		if err != nil {
+			log.Print(err)
+		}
+		if proxy.OnLog != nil {
+			proxy.OnLog(*castItem)
+		}
+	case *webSocketRequestState:
+		// Logged by the waiting caller: a log sent from here could block
+		// this writer on its own full channel.
+		castItem.err = proxy.applyWebSocketRequestState(castItem.requestID, castItem.state)
+		close(castItem.done)
+	case *launchOutcomeWrite:
+		proxy.finishLaunch(castItem.id)
+	case *dbWriteBarrier:
+		close(castItem.done)
+	default:
+		log.Print(castItem)
 	}
 }
 
@@ -660,8 +708,7 @@ func (proxy *Proxy) writeResponse(response *domain.ProxyResponse) {
 // writeRequest stores a request and links it to its launchpad and Armory run.
 // It runs on the database writer.
 func (proxy *Proxy) writeRequest(request *domain.ProxyRequest) {
-	err := proxy.TrafficRepo.InsertRequest(request)
-	if err != nil {
+	if err := proxy.insertRequestAndLinkLaunch(request); err != nil {
 		log.Println(err)
 		if proxy.launchIs(request.ID, func(entry *launchEntry) bool { return entry.claimed }) {
 			if _, getErr := proxy.TrafficRepo.GetMetadata(request.ID); getErr == nil {
@@ -670,15 +717,6 @@ func (proxy *Proxy) writeRequest(request *domain.ProxyRequest) {
 			}
 		}
 		return
-	}
-
-	if val, ok := request.Metadata["launchpad_id"]; ok {
-		if launchpadID, ok := val.(uuid.UUID); ok {
-			err := proxy.LaunchpadRepo.LinkRequestToLaunchpad(request.ID, launchpadID)
-			if err != nil {
-				log.Printf("linking request to launchpad: %v", err)
-			}
-		}
 	}
 
 	if runID, ok := request.Metadata["armory_run_id"].(uuid.UUID); ok {
@@ -692,6 +730,27 @@ func (proxy *Proxy) writeRequest(request *domain.ProxyRequest) {
 			}
 		}
 	}
+}
+
+// insertRequestAndLinkLaunch stores a request and, for a launch, links it
+// to its launchpad. A launch's pair is written and linked under launchMu, so
+// it cannot join a selection between a guarded operation's pending-launch
+// check and its repository call (ADR-0053). A failed link is logged; a failed
+// insert is returned.
+func (proxy *Proxy) insertRequestAndLinkLaunch(request *domain.ProxyRequest) error {
+	launchpadID, launch := request.Metadata["launchpad_id"].(uuid.UUID)
+	if !launch {
+		return proxy.TrafficRepo.InsertRequest(request)
+	}
+	proxy.launchMu.Lock()
+	defer proxy.launchMu.Unlock()
+	if err := proxy.TrafficRepo.InsertRequest(request); err != nil {
+		return err
+	}
+	if err := proxy.LaunchpadRepo.LinkRequestToLaunchpad(request.ID, launchpadID); err != nil {
+		log.Printf("linking request to launchpad: %v", err)
+	}
+	return nil
 }
 
 func (proxy *Proxy) flushDBWrites() error {
@@ -766,9 +825,11 @@ func (proxy *Proxy) GetListener(address string, port string) (net.Listener, erro
 	proxy.Logger.Info("Proxy Client Configured", "url", parsedURL.String())
 	parsedURL.User = url.UserPassword("marasi", proxy.clientWorkToken)
 
+	// Compression stays off so launch and Armory requests gain no Accept-Encoding.
 	transport := &http.Transport{
-		Proxy:           http.ProxyURL(parsedURL),
-		TLSClientConfig: proxy.MarasiClientTLSConfig,
+		Proxy:              http.ProxyURL(parsedURL),
+		TLSClientConfig:    proxy.MarasiClientTLSConfig,
+		DisableCompression: true,
 	}
 	proxy.Client.Transport = transport
 	return marasiListener, nil
