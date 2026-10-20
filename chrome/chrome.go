@@ -5,6 +5,8 @@
 //   - Configuring the proxy settings with the active address and port
 //   - Bypass certificate errors for the configured certificate
 //   - Load chrome binaries from custom paths
+//   - Quiet Chrome's own background requests with switches and disabled
+//     features, without bypassing or blocking any host (ADR-0056)
 package chrome
 
 import (
@@ -13,7 +15,25 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
+
+// disabledFeatures are the Chrome features turned off in every started Chrome
+// because they send background requests through the proxy. None of them
+// changes how a target site behaves (ADR-0056).
+var disabledFeatures = []string{
+	"NetworkPrediction",
+	"OmniboxUIExperimentMaxAutocompleteMatches",
+	"AimEnabled",                              // AI Mode eligibility (www.google.com/async/folae)
+	"OptimizationHints",                       // optimization guide downloads
+	"NetworkTimeServiceQuerying",              // clock sync (clients2.google.com/time)
+	"Translate",                               // Translate
+	"MediaRouter",                             // media-device discovery
+	"DialMediaRouteProvider",                  // DIAL media-device discovery
+	"AutofillServerCommunication",             // autofill server requests
+	"CertificateTransparencyComponentUpdater", // Certificate Transparency component updates
+	"InterestFeedContentSuggestions",          // feed suggestions
+}
 
 type PathConfig struct {
 	OS   string `mapstructure:"os"`   // OS for the given path
@@ -146,8 +166,9 @@ func (l *Launcher) getChromePath() (string, error) {
 }
 
 // Start launches the Chrome instance with the configured flags and profile directory.
-// It disables numerous background networking, syncing, and updating features to provide
-// a clean, isolated testing environment that routes through the target proxy.
+// It always passes the switches and disabled features that stop Chrome's own
+// background requests without changing how a target site behaves. Only loopback
+// bypasses the proxy; no other host is bypassed or blocked (ADR-0056).
 //
 // Returns:
 //   - error: An error if the configuration directory is missing, the executable is not found,
@@ -171,16 +192,17 @@ func (l *Launcher) Start() error {
 		"--disable-background-networking",
 		"--disable-client-side-phishing-detection",
 		"--disable-default-apps",
-		"--disable-features=NetworkPrediction,OmniboxUIExperimentMaxAutocompleteMatches",
+		"--disable-component-extensions-with-background-pages",
+		"--disable-features=" + strings.Join(disabledFeatures, ","),
 		"--disable-sync",
 		"--metrics-recording-only",
 		"--disable-domain-reliability",
+		"--disable-breakpad",
 		"--no-first-run",
+		"--no-default-browser-check",
+		"--no-service-autorun",
 		"--disable-component-update",
-		"--disable-suggestions-service",
-		"--disable-search-geolocation-disclosure",
-		"--disable-search-engine-choice",
-		"--disable-omnibox-autocomplete-offers",
+		"--disable-search-engine-choice-screen",
 		"--proxy-bypass-list=<-loopback>",
 		"--window-name=Marasi - " + l.profile,
 		"about:blank",
