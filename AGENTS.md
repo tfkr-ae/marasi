@@ -2,6 +2,10 @@
 
 Run Go commands as `GOWORK=off go …`. Agent worktrees can sit inside a checkout whose parent `go.work` excludes this module, and `go` then fails with "main module … does not contain package".
 
+## CLI skill
+
+When a change adds or changes a CLI command, flag, or output, update `skills/marasi/SKILL.md` in the same change. `marasi skill` prints it.
+
 ## Code maps
 
 Maps live in `docs/agents/maps/`. Read the map there before you change or ask about:
