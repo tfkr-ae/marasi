@@ -1,0 +1,7 @@
+# Chrome is quieted with switches, and Compass takes the rest
+
+A Chrome started by `marasi chrome start` still sent Chrome's own background requests through the proxy: GCM registration to `android.clients.google.com`, the Gaia `ListAccounts` check, and AI Mode eligibility on `www.google.com`. The launcher turns off every background request that a Chrome switch or `--disable-features` entry can stop, always and with no opt-out. It never bypasses or blocks a host with `--proxy-bypass-list` or `--host-resolver-rules`. The hosts involved, such as `accounts.google.com` and `www.google.com`, can be real targets, and a launcher-level host rule would hide or break them without the tester knowing. Requests that no switch stops (GCM, `ListAccounts`, the component updater) are left to Compass. Compass's default exclude rules cover them in new projects, and the tester can see and change them.
+
+**Considered options:** bypass the proxy for background-only hosts; resolve those hosts to nothing; add Compass rules from `marasi chrome start`. Rejected because the first two act per host and are invisible in the proxy, and the third ties the scope to how the browser was started.
+
+**Consequences:** the default Compass rules live in the first migration, so a change to them reaches new projects only. Existing projects keep their rules until the tester edits Compass. Each Chrome release can add background callers. The answer is a new switch if one exists, otherwise a Compass rule, and never a host bypass.
