@@ -137,6 +137,10 @@ _Avoid_: anchor, position, drop target
 Sending a raw request from a launchpad through the proxy. Its request/response pair joins the launchpad, and the launch id is that pair's UUID. A launch is pending until it is completed, cancelled, or failed. While a launch is pending, its pair cannot be removed from its launchpad or deleted.
 _Avoid_: replay, repeat, send
 
+**Browser view**:
+Showing a request/response pair's stored response, unchanged, in a browser at the pair's original URL, without contacting the origin. Only that one navigation gets the stored response. Everything the page then loads is ordinary traffic. A browser view never creates a pair.
+_Avoid_: replay, playback, revisit, show response, request in browser
+
 **Armory**:
 The request-template and run capability of a service instance. It is not stored and has no id.
 _Avoid_: Intruder, fuzzer, using Armory as a control API collection or as a synonym for template or run
