@@ -36,7 +36,9 @@ jobs:
   # stop the others.
   autobahn:
     name: autobahn (${{ matrix.run }}, ${{ matrix.mode }})
-    runs-on: ubuntu-latest
+    # Pinned: on ubuntu-26.04 every lenient suite fails "no WebSocket
+    # connection went through the proxy" while the same commit passes here.
+    runs-on: ubuntu-24.04
     # Two suites, each ended by the harness's 75-minute -suite-limit, so
     # the harness reports even when both hang.
     timeout-minutes: 165
