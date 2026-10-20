@@ -251,6 +251,32 @@ HTTPS inspection requires the client to trust Marasi's CA certificate. The
 exported CA certificate contains no private key. All service instances that use
 the same config directory share the CA.
 
+### Marasi's own pages
+
+A client that uses the proxy listener can reach Marasi's own pages at the host
+`marasi`, over HTTP or HTTPS. Marasi answers these requests itself. They are
+never captured, held by Checkpoint, or shown to extensions.
+
+| URL | Answer |
+| --- | --- |
+| `http://marasi/cert` | The CA certificate in DER form, as `marasi-cert.der`. |
+| `http://marasi/view/{uuid}` | A browser view of the pair with that UUID. |
+
+A browser view shows a pair's stored response, unchanged, at the pair's
+original URL, without contacting the origin. `http://marasi/view/{uuid}`
+redirects to the original URL with `Cache-Control: no-store`. The next request
+to that exact URL from the same client address, with any method, gets the
+stored response, including its `Set-Cookie`, HSTS and cache headers. Only that
+one request is served from storage. Everything the page then loads goes to the
+live site and is captured as usual. A browser view expires if its redirect is
+not followed within 10 seconds, and a newer browser view of the same URL from
+the same client address replaces it. Launches and Armory runs never use one.
+
+The URL takes the pair's UUID, not its number. Clients build it themselves;
+there is no control API or CLI call to make first. Marasi answers in plain text
+with 404 when the open project has no pair with that UUID, and with 409 when the
+pair has no response yet or is a WebSocket upgrade.
+
 ### Storage and configuration
 
 The default config directory is `Marasi` under `os.UserConfigDir()`:

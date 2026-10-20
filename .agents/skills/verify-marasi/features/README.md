@@ -29,6 +29,7 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Scope check | `scope check` | [scope check](scope.md) |
 | Proxy logs | `logs`, list pagination with `--limit` and `--cursor` | [proxy logs](logs.md) |
 | CA certificate | `certificate get`, `--format pem` or `der` | [CA certificate](certificate.md) |
+| Browser view and Marasi's own pages | `http://marasi/cert`, `http://marasi/view/{uuid}` through the proxy listener | [browser view](browser-view.md) |
 | Agent skill | `skill` | [agent skill](agent-skill.md) |
 
 Every `traffic bulk` command takes exactly one selection: `--id` (repeatable) or `--ids-file PATH` (`-` reads stdin), or `-q TEXT` with a required `--as-of UUID` and optional repeatable `--exclude`. No selection, both forms, `-q` without `--as-of`, or `--as-of`/`--exclude` with ids fails before any request; prove that by running it against an instance name that is not running and requiring the usage message, not `instance … is not running`. Human mode prints `N pairs <verb>` (`1 pair …`) on stderr; `--json` prints the route's `{"count":n}`. None asks for confirmation.

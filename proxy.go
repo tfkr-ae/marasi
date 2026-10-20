@@ -162,6 +162,7 @@ type Proxy struct {
 	finishedOrder        []uuid.UUID                 // finishedLaunches ids, oldest finish first
 	finishedLaunchLimit  int                         // bound on finishedLaunches; 0 means maxFinishedLaunches
 	newLaunchID          func() (uuid.UUID, error)
+	browserViews         browserViews // pending browser views (ADR-0055)
 
 	TrafficRepo   domain.TrafficRepository   // Repository for traffic data.
 	LaunchpadRepo domain.LaunchpadRepository // Repository for launchpad data.
@@ -348,6 +349,7 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 // first, so their outcomes are written to the project they were launched in.
 func (proxy *Proxy) SetProjectResources(resources ProjectResources) {
 	proxy.InterruptLaunches()
+	proxy.browserViews.clear()
 	proxy.TrafficRepo = resources.Repository
 	proxy.LaunchpadRepo = resources.Repository
 	proxy.ArmoryRepo = resources.Repository
@@ -857,7 +859,7 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 	if err := proxy.flushDBWrites(); err != nil {
 		return err
 	}
-	roundTripper := newMarasiTransport(proxy.Cert, proxy.dialTransport)
+	roundTripper := newMarasiTransport(proxy.dialTransport)
 	proxy.martianProxy.SetRoundTripper(&launchFailureRoundTripper{proxy: proxy, base: roundTripper})
 	proxy.listenerMu.Lock()
 	proxy.activeListener = activeListener

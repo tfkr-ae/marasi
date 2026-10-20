@@ -14,6 +14,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/google/martian"
 	"github.com/google/martian/mitm"
@@ -496,6 +497,18 @@ func WithWordlistManager(manager wordlist.Provider) func(*Proxy) error {
 	}
 }
 
+// WithBrowserViewExpiry sets how long a pending browser view waits for its
+// redirect to be followed. The default is 10 seconds (ADR-0055).
+func WithBrowserViewExpiry(expiry time.Duration) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if expiry <= 0 {
+			return errors.New("browser view expiry must be positive")
+		}
+		proxy.browserViews.expiry = expiry
+		return nil
+	}
+}
+
 // WithWorkAdmission coordinates proxy traffic with service lifecycle changes.
 // The boolean identifies requests made by the proxy's own client, including CONNECT.
 // admit returns the work's release and the generation of the open project it
@@ -564,6 +577,13 @@ func WithBasePipeline() func(*Proxy) error {
 		)
 		proxy.martianProxy.SetResponseModifier(
 			martianResModifierFunc(func(res *http.Response) error {
+				// A request the proxy answered itself is sent as answered,
+				// with no response modifier and no admission.
+				if own, ok := ownResponse(res.Request); ok {
+					own.Request = res.Request
+					*res = *own
+					return nil
+				}
 				// A launch whose client left was cancelled or interrupted. Its
 				// round trip was abandoned, so it has no response to process or store.
 				if _, launch := core.LaunchpadIDFromContext(res.Request.Context()); launch && res.Request.Context().Err() != nil {
@@ -672,12 +692,13 @@ func requestedLaunchID(ctx context.Context) (uuid.UUID, bool) {
 // The default processing order is: waypoint overrides → extensions → interception → database storage.
 // WithDefaultModifierPipeline will apply the default modifier pipelines for Requests & Responses.
 // The processing order is:
-// (Request): Compass -> Waypoint -> Extensions -> Checkpoint -> Database Write
+// (Request): Marasi's own pages -> Compass -> Waypoint -> Extensions -> Checkpoint -> Database Write
 // (Response): Decompress -> Compass -> Extensions -> Checkpoint -> Database Write
 // The base pipeline has already buffered the response body.
 func WithDefaultModifierPipeline() func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		// Request Modifiers
+		proxy.AddRequestModifier(MarasiPagesModifier)
 		proxy.AddRequestModifier(PreventLoopModifier)
 		proxy.AddRequestModifier(SkipConnectRequestModifier)
 		proxy.AddRequestModifier(CompassRequestModifier)
