@@ -379,7 +379,6 @@ func assertQuietChromeArgs(t *testing.T, recorded string) {
 	for _, want := range []string{
 		"--disable-component-extensions-with-background-pages",
 		"--no-default-browser-check",
-		"--no-service-autorun",
 		"--disable-breakpad",
 		"--disable-search-engine-choice-screen",
 		"--proxy-bypass-list=<-loopback>",
@@ -390,6 +389,8 @@ func assertQuietChromeArgs(t *testing.T, recorded string) {
 	}
 
 	for _, unwanted := range []string{
+		"--no-service-autorun",
+		"--disable-client-side-phishing-detection",
 		"--disable-search-engine-choice",
 		"--disable-suggestions-service",
 		"--disable-search-geolocation-disclosure",
