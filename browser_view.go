@@ -20,12 +20,8 @@ import (
 	"github.com/tfkr-ae/marasi/domain"
 )
 
-// marasiHost is the host of Marasi's own pages. marasiCertHost is an alias
-// that serves only the CA certificate, at its root.
-const (
-	marasiHost     = "marasi"
-	marasiCertHost = "marasi.cert"
-)
+// marasiHost is the host of Marasi's own pages.
+const marasiHost = "marasi"
 
 // defaultBrowserViewExpiry is how long a pending browser view waits for the
 // browser to follow its redirect (ADR-0055).
@@ -78,20 +74,14 @@ func (proxy *Proxy) marasiPage(req *http.Request) *http.Response {
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
-	switch strings.ToLower(host) {
-	case marasiCertHost:
-		if req.URL.Path == "" || req.URL.Path == "/" {
-			return proxy.certificatePage(req)
-		}
-	case marasiHost:
-		if req.URL.Path == "/cert" {
-			return proxy.certificatePage(req)
-		}
-		if id, ok := strings.CutPrefix(req.URL.Path, "/view/"); ok {
-			return proxy.browserViewPage(req, id)
-		}
-	default:
+	if !strings.EqualFold(host, marasiHost) {
 		return nil
+	}
+	if req.URL.Path == "/cert" {
+		return proxy.certificatePage(req)
+	}
+	if id, ok := strings.CutPrefix(req.URL.Path, "/view/"); ok {
+		return proxy.browserViewPage(req, id)
 	}
 	return plainTextResponse(req, http.StatusNotFound, "Marasi has no page at "+req.URL.Path)
 }

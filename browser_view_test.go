@@ -275,7 +275,7 @@ func assertServedStored(t *testing.T, res *http.Response, body []byte, stored []
 }
 
 func TestProxy_MarasiPages(t *testing.T) {
-	for _, target := range []string{"http://marasi/cert", "http://marasi.cert", "http://marasi.cert/", "https://marasi/cert"} {
+	for _, target := range []string{"http://marasi/cert", "https://marasi/cert"} {
 		t.Run("should serve the CA certificate at "+target+" without capturing it", func(t *testing.T) {
 			h := startViewHarness(t, viewHarnessConfig{})
 
@@ -326,7 +326,7 @@ func TestProxy_MarasiPages(t *testing.T) {
 		h := startViewHarness(t, viewHarnessConfig{})
 		h.proxy.SetIntercept(true)
 
-		res, _ := get(t, h.client(t, "127.0.0.1"), "http://marasi.cert")
+		res, _ := get(t, h.client(t, "127.0.0.1"), "http://marasi/cert")
 
 		if res.StatusCode != http.StatusOK {
 			t.Errorf("status\nwanted:\n%d\ngot:\n%d", http.StatusOK, res.StatusCode)
