@@ -565,4 +565,114 @@ func TestChromeStartCDP(t *testing.T) {
 		}
 		readFakeChromeArgs(t, argsPath)
 	})
+
+	t.Run("should reuse a live CDP endpoint and open a window without the CDP switch", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("test executable is a shell script")
+		}
+		configDir := t.TempDir()
+		browserPath := "/devtools/browser/7d1c2b9e-3f4a-4c5d-8e6f-0a1b2c3d4e5f"
+		port := startCDPVersionServer(t, browserPath)
+		writeDevToolsActivePort(t, configDir, "pentest", port+"\n"+browserPath+"\n")
+		executable, argsPath := writeCDPFakeChrome(t, configDir, "")
+		module := newModule(t, configDir, executable)
+
+		result, err := module.Start(context.Background(), "pentest", ChromeStartOptions{CDP: true})
+		if err != nil {
+			t.Fatalf("starting Chrome with CDP: %v", err)
+		}
+		want := CDPEndpoint{HTTP: "http://127.0.0.1:" + port, WS: "ws://127.0.0.1:" + port + browserPath, Reused: true}
+		if result.CDP == nil || *result.CDP != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v (cdp %+v)", want, result, result.CDP)
+		}
+		args := readFakeChromeArgs(t, argsPath)
+		if strings.Contains(args, "--remote-debugging-port") {
+			t.Fatalf("\nwanted:\nno CDP switch when reusing a live CDP endpoint\ngot:\n%s", args)
+		}
+	})
+
+	staleCases := []struct {
+		name  string
+		stale func(t *testing.T) string
+	}{
+		{
+			name: "a closed port",
+			stale: func(t *testing.T) string {
+				listener, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatalf("reserving a port: %v", err)
+				}
+				_, port, _ := net.SplitHostPort(listener.Addr().String())
+				listener.Close()
+				return port + "\n/devtools/browser/5a4b3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d\n"
+			},
+		},
+		{
+			name: "a different browser path",
+			stale: func(t *testing.T) string {
+				port := startCDPVersionServer(t, "/devtools/browser/11111111-2222-4333-8444-555555555555")
+				return port + "\n/devtools/browser/66666666-7777-4888-9999-000000000000\n"
+			},
+		},
+	}
+	for _, tc := range staleCases {
+		t.Run("should ignore a DevToolsActivePort pointing at "+tc.name+" and start with a new CDP endpoint", func(t *testing.T) {
+			if runtime.GOOS == "windows" {
+				t.Skip("test executable is a shell script")
+			}
+			configDir := t.TempDir()
+			writeDevToolsActivePort(t, configDir, "pentest", tc.stale(t))
+			browserPath := "/devtools/browser/0b5e1a52-6a43-4b8e-9d6c-1f0e3c5b7a10"
+			port := startCDPVersionServer(t, browserPath)
+			executable, argsPath := writeCDPFakeChrome(t, configDir, port+`\n`+browserPath)
+			module := newModule(t, configDir, executable)
+
+			result, err := module.Start(context.Background(), "pentest", ChromeStartOptions{CDP: true})
+			if err != nil {
+				t.Fatalf("starting Chrome with CDP: %v", err)
+			}
+			want := CDPEndpoint{HTTP: "http://127.0.0.1:" + port, WS: "ws://127.0.0.1:" + port + browserPath, Reused: false}
+			if result.CDP == nil || *result.CDP != want {
+				t.Fatalf("\nwanted:\n%+v\ngot:\n%+v (cdp %+v)", want, result, result.CDP)
+			}
+			args := readFakeChromeArgs(t, argsPath)
+			if !strings.Contains(args, "--remote-debugging-port=0\n") {
+				t.Fatalf("\nwanted:\n--remote-debugging-port=0 among arguments\ngot:\n%s", args)
+			}
+		})
+	}
+
+	t.Run("should not report a CDP endpoint on plain start when the profile has a live one", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("test executable is a shell script")
+		}
+		configDir := t.TempDir()
+		browserPath := "/devtools/browser/7d1c2b9e-3f4a-4c5d-8e6f-0a1b2c3d4e5f"
+		port := startCDPVersionServer(t, browserPath)
+		writeDevToolsActivePort(t, configDir, "pentest", port+"\n"+browserPath+"\n")
+		executable, argsPath := writeCDPFakeChrome(t, configDir, "")
+		module := newModule(t, configDir, executable)
+
+		result, err := module.Start(context.Background(), "pentest", ChromeStartOptions{})
+		if err != nil {
+			t.Fatalf("starting Chrome: %v", err)
+		}
+		if result.Profile != "pentest" || result.CDP != nil {
+			t.Fatalf("\nwanted:\npentest without a CDP endpoint\ngot:\n%+v (cdp %+v)", result, result.CDP)
+		}
+		readFakeChromeArgs(t, argsPath)
+	})
+}
+
+// writeDevToolsActivePort writes a DevToolsActivePort into the chrome
+// profile's user-data-dir, as a running Chrome with CDP does.
+func writeDevToolsActivePort(t *testing.T, configDir, profile, content string) {
+	t.Helper()
+	dir := filepath.Join(configDir, "chrome_profiles", profile)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatalf("creating chrome profile directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "DevToolsActivePort"), []byte(content), 0600); err != nil {
+		t.Fatalf("writing DevToolsActivePort: %v", err)
+	}
 }
