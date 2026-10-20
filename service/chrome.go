@@ -38,8 +38,9 @@ type chromeProfileList struct {
 }
 
 type chromeStartResponse struct {
-	Status  string `json:"status"`
-	Profile string `json:"profile"`
+	Status  string       `json:"status"`
+	Profile string       `json:"profile"`
+	CDP     *CDPEndpoint `json:"cdp,omitempty"`
 }
 
 const (
@@ -152,17 +153,17 @@ func addChromeRoutes(mux *http.ServeMux, chrome *Chrome) {
 		writeJSON(w, r, http.StatusOK, response)
 	})
 	mux.HandleFunc("POST /chrome/start", func(w http.ResponseWriter, r *http.Request) {
-		profile, err := decodeChromeStart(r)
+		profile, options, err := decodeChromeStart(r)
 		if err != nil {
 			writeChromeError(w, r, err)
 			return
 		}
-		result, err := chrome.Start(r.Context(), profile, ChromeStartOptions{})
+		result, err := chrome.Start(r.Context(), profile, options)
 		if err != nil {
 			writeChromeError(w, r, err)
 			return
 		}
-		writeJSON(w, r, http.StatusOK, chromeStartResponse{Status: "started", Profile: result.Profile})
+		writeJSON(w, r, http.StatusOK, chromeStartResponse{Status: "started", Profile: result.Profile, CDP: result.CDP})
 	})
 }
 
@@ -196,19 +197,30 @@ func decodeChromeProfile(r *http.Request) (string, error) {
 	return name, nil
 }
 
-func decodeChromeStart(r *http.Request) (string, error) {
+func decodeChromeStart(r *http.Request) (string, ChromeStartOptions, error) {
 	fields, err := decodeChromeObject(r, true)
-	if err != nil || len(fields) > 1 {
-		return "", ErrInvalidChromeRequest
+	if err != nil {
+		return "", ChromeStartOptions{}, ErrInvalidChromeRequest
 	}
-	if len(fields) == 0 {
-		return "", nil
-	}
+	known := 0
 	var profile string
-	if err := decodeChromeString(fields, "profile", &profile); err != nil || profile == "" {
-		return "", ErrInvalidChromeRequest
+	if _, ok := fields["profile"]; ok {
+		known++
+		if err := decodeChromeString(fields, "profile", &profile); err != nil || profile == "" {
+			return "", ChromeStartOptions{}, ErrInvalidChromeRequest
+		}
 	}
-	return profile, nil
+	var options ChromeStartOptions
+	if raw, ok := fields["cdp"]; ok {
+		known++
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, &options.CDP) != nil {
+			return "", ChromeStartOptions{}, ErrInvalidChromeRequest
+		}
+	}
+	if known != len(fields) {
+		return "", ChromeStartOptions{}, ErrInvalidChromeRequest
+	}
+	return profile, options, nil
 }
 
 func decodeChromeObject(r *http.Request, allowEmpty bool) (map[string]json.RawMessage, error) {
@@ -271,6 +283,14 @@ func chromeProfiles(profiles []string) chromeProfileList {
 }
 
 func writeChromeError(w http.ResponseWriter, r *http.Request, err error) {
+	var withoutCDP *ChromeRunningWithoutCDPError
+	if errors.As(err, &withoutCDP) {
+		writeJSON(w, r, http.StatusConflict, struct {
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}{Error: "chrome_running_without_cdp", Message: withoutCDP.Error()})
+		return
+	}
 	status := http.StatusInternalServerError
 	code := "internal_server_error"
 	switch {
