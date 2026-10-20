@@ -169,6 +169,9 @@ scope:add_rule("-.*\\/complete\\/search.*", "url")
 scope:add_rule("-.*GetAsyncData.*", "url")
 scope:add_rule("-.*\\/optimizationguide.*", "url")
 scope:add_rule("-.*tbn:ANd9Gc.*", "url")
+scope:add_rule("-android\\.clients\\.google\\.com", "host")
+scope:add_rule("-accounts\\.google\\.com\\/ListAccounts", "url")
+scope:add_rule("-.*\\.gvt1\\.com", "host")
 
 function processRequest(request)
   if not scope:matches(request) then
