@@ -1,31 +1,27 @@
 package marasi
 
 import (
-	"bytes"
 	"context"
-	"crypto/x509"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
-	"slices"
 
 	tls "github.com/refraction-networking/utls"
 	utls "github.com/refraction-networking/utls"
 )
 
-// marasiRoundTripper will intercept requests to marasi.cert and serve the CA certificate
-// Other requests will use the base RoundTripper
+// marasiRoundTripper sends requests through the base RoundTripper without
+// adding a User-Agent or Connection header. Marasi's own pages never reach it
+// (see MarasiPagesModifier).
 type marasiRoundTripper struct {
-	cert *x509.Certificate
 	base http.RoundTripper
 }
 
 // newMarasiTransport will create marasi's roundtripper
 // It will define the base transport with the upstream TLSConfig using utls to mimic Chrome,
-// waypoint aware DialContext and marasiRoundTripper to serve the certificate
-func newMarasiTransport(cert *x509.Certificate, dial func(context.Context, string, string) (net.Conn, error)) http.RoundTripper {
+// and waypoint aware DialContext
+func newMarasiTransport(dial func(context.Context, string, string) (net.Conn, error)) http.RoundTripper {
 	if dial == nil {
 		dial = (&net.Dialer{}).DialContext
 	}
@@ -81,34 +77,11 @@ func newMarasiTransport(cert *x509.Certificate, dial func(context.Context, strin
 		return uConn, nil
 	}
 
-	return &marasiRoundTripper{
-		cert: cert,
-		base: transport,
-	}
+	return &marasiRoundTripper{base: transport}
 }
 
-// RoundTrip satisfies http.RoundTrip, it will take the request and check if the URL matches marasi.cert
-// if it does, it will return the certificate in .der format
+// RoundTrip satisfies http.RoundTripper. It sends req through the base transport.
 func (m *marasiRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	urls := []string{"http://marasi.cert/", "http://marasi.cert"}
-	if slices.Contains(urls, req.URL.String()) {
-		body := m.cert.Raw
-		resp := &http.Response{
-			Status:        "200 OK",
-			StatusCode:    http.StatusOK,
-			Proto:         "HTTP/1.1",
-			ProtoMajor:    1,
-			ProtoMinor:    1,
-			Request:       req,
-			Header:        make(http.Header),
-			Body:          io.NopCloser(bytes.NewReader(body)),
-			ContentLength: int64(len(body)),
-		}
-		resp.Header.Set("Content-Type", "application/x-x509-ca-cert")
-		resp.Header.Set("Content-Disposition", "attachment; filename=\"marasi-cert.der\"")
-		return resp, nil
-	}
-
 	if _, ok := req.Header["User-Agent"]; !ok {
 		req.Header.Set("User-Agent", "")
 	}
