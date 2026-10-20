@@ -1,3 +1,7 @@
+## Go commands
+
+Run Go commands as `GOWORK=off go …`. Agent worktrees can sit inside a checkout whose parent `go.work` excludes this module, and `go` then fails with "main module … does not contain package".
+
 ## Agent skills
 
 ### Issue tracker
