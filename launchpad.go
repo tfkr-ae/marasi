@@ -475,7 +475,8 @@ func (proxy *Proxy) recordLaunchDropped(req *http.Request) {
 // always the first request on a new connection and the transport cannot retry
 // it on a reused one. It does not set DisableKeepAlives, which would add
 // Connection: close to the request; runLaunch closes the connection instead.
-// Compression stays off so the request gains no Accept-Encoding.
+// Compression stays off so the request gains no Accept-Encoding. Like
+// proxy.Client, it sends through the proxy's own listener.
 func (proxy *Proxy) launchClient() *http.Client {
 	base := proxy.Client
 	if base == nil {

@@ -688,13 +688,9 @@ func requestedLaunchID(ctx context.Context) (uuid.UUID, bool) {
 	return id, ok
 }
 
-// WithDefaultModifierPipeline will apply the default modifier pipelines
-// The default processing order is: waypoint overrides → extensions → interception → database storage.
-// WithDefaultModifierPipeline will apply the default modifier pipelines for Requests & Responses.
-// The processing order is:
-// (Request): Marasi's own pages -> Compass -> Waypoint -> Extensions -> Checkpoint -> Database Write
-// (Response): Decompress -> Compass -> Extensions -> Checkpoint -> Database Write
-// The base pipeline has already buffered the response body.
+// WithDefaultModifierPipeline adds the default request and response modifiers.
+// They run in the order they are added below. The base pipeline has already
+// buffered the response body.
 func WithDefaultModifierPipeline() func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		// Request Modifiers
