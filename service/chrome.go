@@ -38,13 +38,17 @@ type chromeProfileList struct {
 }
 
 type chromeStartResponse struct {
-	Status  string `json:"status"`
-	Profile string `json:"profile"`
+	Status  string       `json:"status"`
+	Profile string       `json:"profile"`
+	CDP     *CDPEndpoint `json:"cdp,omitempty"`
 }
 
 const (
 	chromeLockPollDelay  = 10 * time.Millisecond
 	chromeConfigLockFile = "marasi_config.lock"
+	// chromeCDPWait bounds how long Start waits for a CDP endpoint to answer.
+	chromeCDPWait      = 5 * time.Second
+	chromeCDPPollDelay = 50 * time.Millisecond
 )
 
 var (
@@ -53,6 +57,7 @@ var (
 	ErrChromeProfileAlreadyExists = errors.New("chrome profile already exists")
 	ErrChromeNotFound             = errors.New("chrome item not found")
 	ErrChromeUnavailable          = errors.New("chrome unavailable")
+	ErrChromeRunningWithoutCDP    = errors.New("chrome profile running without CDP")
 )
 
 // Chrome owns machine Chrome configuration for one service instance.
@@ -62,6 +67,7 @@ type Chrome struct {
 	logWriter  io.Writer
 	events     *eventBroadcaster
 	operations chan struct{}
+	cdpWait    time.Duration
 }
 
 // NewChrome creates the Chrome configuration and launch module for a service instance.
@@ -71,7 +77,7 @@ func NewChrome(proxy *marasi.Proxy, listener interface{ Status() ListenerStatus 
 	}
 	operations := make(chan struct{}, 1)
 	operations <- struct{}{}
-	return &Chrome{proxy: proxy, listener: listener, logWriter: logWriter, operations: operations}
+	return &Chrome{proxy: proxy, listener: listener, logWriter: logWriter, operations: operations, cdpWait: chromeCDPWait}
 }
 
 func addChromeRoutes(mux *http.ServeMux, chrome *Chrome) {
@@ -147,17 +153,17 @@ func addChromeRoutes(mux *http.ServeMux, chrome *Chrome) {
 		writeJSON(w, r, http.StatusOK, response)
 	})
 	mux.HandleFunc("POST /chrome/start", func(w http.ResponseWriter, r *http.Request) {
-		profile, err := decodeChromeStart(r)
+		profile, options, err := decodeChromeStart(r)
 		if err != nil {
 			writeChromeError(w, r, err)
 			return
 		}
-		profile, err = chrome.Start(r.Context(), profile)
+		result, err := chrome.Start(r.Context(), profile, options)
 		if err != nil {
 			writeChromeError(w, r, err)
 			return
 		}
-		writeJSON(w, r, http.StatusOK, chromeStartResponse{Status: "started", Profile: profile})
+		writeJSON(w, r, http.StatusOK, chromeStartResponse{Status: "started", Profile: result.Profile, CDP: result.CDP})
 	})
 }
 
@@ -191,19 +197,30 @@ func decodeChromeProfile(r *http.Request) (string, error) {
 	return name, nil
 }
 
-func decodeChromeStart(r *http.Request) (string, error) {
+func decodeChromeStart(r *http.Request) (string, ChromeStartOptions, error) {
 	fields, err := decodeChromeObject(r, true)
-	if err != nil || len(fields) > 1 {
-		return "", ErrInvalidChromeRequest
+	if err != nil {
+		return "", ChromeStartOptions{}, ErrInvalidChromeRequest
 	}
-	if len(fields) == 0 {
-		return "", nil
-	}
+	known := 0
 	var profile string
-	if err := decodeChromeString(fields, "profile", &profile); err != nil || profile == "" {
-		return "", ErrInvalidChromeRequest
+	if _, ok := fields["profile"]; ok {
+		known++
+		if err := decodeChromeString(fields, "profile", &profile); err != nil || profile == "" {
+			return "", ChromeStartOptions{}, ErrInvalidChromeRequest
+		}
 	}
-	return profile, nil
+	var options ChromeStartOptions
+	if raw, ok := fields["cdp"]; ok {
+		known++
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, &options.CDP) != nil {
+			return "", ChromeStartOptions{}, ErrInvalidChromeRequest
+		}
+	}
+	if known != len(fields) {
+		return "", ChromeStartOptions{}, ErrInvalidChromeRequest
+	}
+	return profile, options, nil
 }
 
 func decodeChromeObject(r *http.Request, allowEmpty bool) (map[string]json.RawMessage, error) {
@@ -266,6 +283,14 @@ func chromeProfiles(profiles []string) chromeProfileList {
 }
 
 func writeChromeError(w http.ResponseWriter, r *http.Request, err error) {
+	var withoutCDP *ChromeRunningWithoutCDPError
+	if errors.As(err, &withoutCDP) {
+		writeJSON(w, r, http.StatusConflict, struct {
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}{Error: "chrome_running_without_cdp", Message: withoutCDP.Error()})
+		return
+	}
 	status := http.StatusInternalServerError
 	code := "internal_server_error"
 	switch {
@@ -397,21 +422,59 @@ func (c *Chrome) RemovePath(ctx context.Context, path marasichrome.PathConfig) (
 	return paths, err
 }
 
-// Start spawns Chrome against the active proxy listener and returns the profile used.
-func (c *Chrome) Start(ctx context.Context, profile string) (string, error) {
-	startedProfile := profile
+// ChromeStartOptions selects how Chrome starts.
+type ChromeStartOptions struct {
+	// CDP starts the chrome profile with a CDP endpoint and reports it.
+	CDP bool
+}
+
+// ChromeStartResult reports the chrome profile started and, only when CDP was
+// requested, its CDP endpoint.
+type ChromeStartResult struct {
+	Profile string
+	CDP     *CDPEndpoint
+}
+
+// CDPEndpoint is the CDP endpoint of a started chrome profile. Reused reports
+// that the endpoint belongs to a Chrome that was already running.
+type CDPEndpoint struct {
+	HTTP   string `json:"http"`
+	WS     string `json:"ws"`
+	Reused bool   `json:"reused"`
+}
+
+// ChromeRunningWithoutCDPError reports that no CDP endpoint appeared after
+// starting a chrome profile with CDP: Chrome handed off to a running chrome
+// profile that has none, or did not start.
+type ChromeRunningWithoutCDPError struct {
+	Profile string
+}
+
+func (e *ChromeRunningWithoutCDPError) Error() string {
+	return fmt.Sprintf("chrome profile %s is running without a CDP endpoint; close it and start it again with --cdp", e.Profile)
+}
+
+func (e *ChromeRunningWithoutCDPError) Is(target error) bool {
+	return target == ErrChromeRunningWithoutCDP
+}
+
+// Start spawns Chrome against the active proxy listener and reports the
+// profile used. With CDP requested it waits for the chrome profile's CDP
+// endpoint to answer and reports it too.
+func (c *Chrome) Start(ctx context.Context, profile string, options ChromeStartOptions) (ChromeStartResult, error) {
+	result := ChromeStartResult{Profile: profile}
 	err := c.withConfig(ctx, func() error {
-		if startedProfile == "" {
-			startedProfile = "default-profile"
+		if result.Profile == "" {
+			result.Profile = "default-profile"
 		} else {
-			name, err := validProfileName(startedProfile)
+			name, err := validProfileName(result.Profile)
 			if err != nil {
 				return err
 			}
-			startedProfile = name
+			result.Profile = name
 		}
-		if startedProfile != "default-profile" {
-			if !slices.Contains(c.proxy.Config.ChromeProfiles, startedProfile) {
+		if result.Profile != "default-profile" {
+			if !slices.Contains(c.proxy.Config.ChromeProfiles, result.Profile) {
 				return ErrChromeNotFound
 			}
 		}
@@ -428,16 +491,52 @@ func (c *Chrome) Start(ctx context.Context, profile string) (string, error) {
 			marasichrome.WithProxy(address, port),
 			marasichrome.WithSPKIHash(c.proxy.SPKIHash),
 			marasichrome.WithConfigDir(c.proxy.ConfigDir),
-			marasichrome.WithProfile(startedProfile),
+			marasichrome.WithProfile(result.Profile),
 			marasichrome.WithCustomPaths(c.proxy.Config.ChromeDirs),
+			marasichrome.WithCDP(options.CDP),
 		)
+		if options.CDP {
+			if err := launcher.RemoveDevToolsActivePort(); err != nil {
+				return err
+			}
+		}
 		if err := launcher.Start(); err != nil {
 			fmt.Fprintf(c.logWriter, "starting Chrome: %v\n", err)
 			return fmt.Errorf("%w: %v", ErrChromeUnavailable, err)
 		}
+		if !options.CDP {
+			return nil
+		}
+		endpoint, err := c.waitForCDPEndpoint(ctx, launcher, result.Profile)
+		if err != nil {
+			return err
+		}
+		result.CDP = &CDPEndpoint{HTTP: endpoint.HTTP, WS: endpoint.WS}
 		return nil
 	})
-	return startedProfile, err
+	return result, err
+}
+
+// waitForCDPEndpoint polls until the started chrome profile's CDP endpoint
+// answers. When none answers within cdpWait, Chrome handed off to a chrome
+// profile already running without CDP, or did not start.
+func (c *Chrome) waitForCDPEndpoint(ctx context.Context, launcher *marasichrome.Launcher, profile string) (marasichrome.CDPEndpoint, error) {
+	deadline := time.Now().Add(c.cdpWait)
+	ticker := time.NewTicker(chromeCDPPollDelay)
+	defer ticker.Stop()
+	for {
+		if endpoint, ok := launcher.LiveCDPEndpoint(ctx); ok {
+			return endpoint, nil
+		}
+		if !time.Now().Before(deadline) {
+			return marasichrome.CDPEndpoint{}, &ChromeRunningWithoutCDPError{Profile: profile}
+		}
+		select {
+		case <-ctx.Done():
+			return marasichrome.CDPEndpoint{}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func validProfileName(name string) (string, error) {
