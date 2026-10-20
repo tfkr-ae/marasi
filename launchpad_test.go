@@ -345,6 +345,26 @@ func TestProxy_LaunchFailure(t *testing.T) {
 		if got := h.launchpadMembers(t); !reflect.DeepEqual(got, []uuid.UUID{id}) {
 			t.Fatalf("\nwanted:\nlaunchpad members [%s]\ngot:\n%v", id, got)
 		}
+
+		// martian answers an unreachable origin with its own 502, and that
+		// response is stored, so the launchpad's newest status is 502, not nil.
+		if err := h.proxy.flushDBWrites(); err != nil {
+			t.Fatalf("flushing database writes: %v", err)
+		}
+		res, err := h.repository.GetResponse(id)
+		if err != nil {
+			t.Fatalf("getting stored response: %v", err)
+		}
+		if res.StatusCode != http.StatusBadGateway {
+			t.Fatalf("\nwanted:\nstored status %d\ngot:\n%d", http.StatusBadGateway, res.StatusCode)
+		}
+		launchpads, err := h.repository.GetLaunchpads()
+		if err != nil {
+			t.Fatalf("getting launchpads: %v", err)
+		}
+		if len(launchpads) != 1 || launchpads[0].LastStatusCode == nil || *launchpads[0].LastStatusCode != http.StatusBadGateway {
+			t.Fatalf("\nwanted:\none launchpad with LastStatusCode %d\ngot:\n%+v", http.StatusBadGateway, launchpads)
+		}
 	})
 
 	t.Run("should fail with duplicate_id without overwriting the existing pair", func(t *testing.T) {
