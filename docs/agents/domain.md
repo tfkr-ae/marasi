@@ -9,19 +9,6 @@ How engineering skills should consume this repo's domain documentation when expl
 
 If these paths do not exist, proceed silently. The `/domain-modeling` skill creates them when terms or decisions get resolved.
 
-## File structure
-
-This is a single-context repo:
-
-```
-/
-├── GLOSSARY.md
-├── docs/adr/
-│   ├── 0001-event-sourced-orders.md
-│   └── 0002-postgres-for-write-model.md
-└── src/
-```
-
 ## Name ADRs by date and slug
 
 Name a new ADR `docs/adr/YYYY-MM-DD-<slug>.md`, dated the day you write it. This overrides the sequential numbering in `/domain-modeling`: parallel worktrees each took the same next number. Refer to an ADR by its path, as a markdown link in docs.
@@ -36,4 +23,4 @@ If the glossary does not define the concept, reconsider whether you are inventin
 
 If your output contradicts an existing ADR, state the conflict instead of silently overriding it:
 
-> _Contradicts ADR-0007 (event-sourced orders), but worth reopening because..._
+> _Contradicts `docs/adr/2026-10-19-the-proxy-adds-no-headers-to-a-request.md`, but worth reopening because..._
