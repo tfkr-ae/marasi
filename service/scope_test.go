@@ -1,9 +1,11 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -365,6 +367,48 @@ func TestScopeCheckCompassEnabled(t *testing.T) {
 			want := `{"in_scope":true,"tested_url":"https://example.com","rule":{"pattern":"example.com","match_type":"host"},"compass_enabled":false}` + "\n"
 			if response.Code != http.StatusOK || response.Body.String() != want {
 				t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestScopeCheckNewProjectCompass(t *testing.T) {
+	lifecycle, proxy, dir := newTestProjectLifecycle(t)
+	path := canonicalProjectPath(t, filepath.Join(dir, "new.marasi"))
+	if err := lifecycle.Open(context.Background(), path); err != nil {
+		t.Fatalf("opening new project: %v", err)
+	}
+	server := newTestServer(proxy, func() {})
+
+	for _, test := range []struct {
+		url     string
+		inScope bool
+	}{
+		{url: "https://android.clients.google.com/c2dm/register3", inScope: false},
+		{url: "https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser", inScope: false},
+		{url: "https://edgedl.me.gvt1.com/edgedl/x", inScope: false},
+		{url: "https://www.gstatic.com/x.js", inScope: false},
+		{url: "https://accounts.google.com/signin/v2/identifier", inScope: true},
+		{url: "https://target.example/login", inScope: true},
+	} {
+		t.Run("should report "+test.url+" in_scope="+strconv.FormatBool(test.inScope), func(t *testing.T) {
+			body, err := json.Marshal(map[string]string{"url": test.url})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/scope/check", strings.NewReader(string(body)))
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+
+			var got struct {
+				InScope        bool `json:"in_scope"`
+				CompassEnabled bool `json:"compass_enabled"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decoding %q: %v", response.Body.String(), err)
+			}
+			if response.Code != http.StatusOK || got.InScope != test.inScope || !got.CompassEnabled {
+				t.Fatalf("\nwanted:\n200 in_scope=%v compass_enabled=true\ngot:\n%d %s", test.inScope, response.Code, response.Body.String())
 			}
 		})
 	}
