@@ -1,6 +1,6 @@
 # Browser view and Marasi's own pages
 
-Users open Marasi's own pages at the host `marasi` through the proxy listener: the CA certificate at `/cert`, and a browser view of a pair at `/view/{uuid}`. A browser view shows a pair's stored response, unchanged, at its original URL, without contacting the origin (ADR-0055).
+Users open Marasi's own pages at the host `marasi` through the proxy listener: the CA certificate at `/cert`, and a browser view of a pair at `/view/{uuid}`. A browser view shows a pair's stored response, unchanged, at its original URL, without contacting the origin ([A browser view serves the stored response once, at its original URL](../../../../docs/adr/2026-10-20-a-browser-view-serves-the-stored-response-once-at-its-original-url.md)).
 
 ## Sub-features
 

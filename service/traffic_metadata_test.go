@@ -107,7 +107,7 @@ func TestTrafficMetadataControlAPI(t *testing.T) {
 		if repo.row.Metadata["highlight"] != "red" || repo.row.Metadata["has_note"] != true {
 			t.Fatalf("\nwanted:\nhighlight red and has_note true\ngot:\n%v", repo.row.Metadata)
 		}
-		// Prettified copies live outside metadata (ADR-0036), so the
+		// Prettified copies live outside metadata (docs/adr/2026-10-14-prettified-bodies-leave-metadata.md), so the
 		// overlay neither stores the client's nor copies the previous ones.
 		if want := map[string]any{"highlight": "red", "has_note": true}; !reflect.DeepEqual(repo.row.Metadata, want) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, repo.row.Metadata)

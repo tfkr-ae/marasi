@@ -46,12 +46,12 @@ const (
 	// = and != against the target's id, and :* for a link to any target.
 	fieldLink
 	// fieldSitemap matches a sitemap node's subtree with =, and its
-	// complement with !=, by node name (ADR-0040).
+	// complement with !=, by node name (docs/adr/2026-10-14-sitemap-is-stored-by-node-and-content-type.md).
 	fieldSitemap
-	// fieldHighlight matches a pair's highlight (ADR-0035): = and != against
+	// fieldHighlight matches a pair's highlight (docs/adr/2026-10-14-highlight-is-a-side-table.md): = and != against
 	// a number from 1 to 8, and :* for any highlight.
 	fieldHighlight
-	// fieldNumber matches a pair's number (ADR-0042) with = != < <= > >=.
+	// fieldNumber matches a pair's number (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md) with = != < <= > >=.
 	fieldNumber
 )
 
@@ -561,7 +561,7 @@ func (t *queryTranslator) textMatch(e *expr.Expr, column string) (string, error)
 
 // bodyColumns is the column filter on every body index match. Body index rows
 // written before the annotation index still hold note and metadata text, which
-// must never match (ADR-0038).
+// must never match (docs/adr/2026-10-14-search-index-splits-annotations-from-bodies.md).
 const bodyColumns = "{request_head request_body response_head response_body}"
 
 // indexSearch selects the ids of pairs whose row in the FTS5 table, the body

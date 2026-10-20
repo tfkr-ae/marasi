@@ -1,5 +1,5 @@
 -- +goose Up
--- Traffic lists sort by any ledger column (ADR-0041). Each sort walks an
+-- Traffic lists sort by any ledger column (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md). Each sort walks an
 -- index on (key, id); host and content_type already have one.
 CREATE INDEX IF NOT EXISTS idx_request_method_id ON request(method, id);
 CREATE INDEX IF NOT EXISTS idx_request_path_id ON request(path, id);

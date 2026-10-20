@@ -10,7 +10,7 @@ import (
 )
 
 // writeJSONBody prints a route's JSON response body as it is, for --json
-// (ADR-0006).
+// (docs/adr/2026-10-06-json-flag-for-agents.md).
 func writeJSONBody(cmd *cobra.Command, body []byte) error {
 	_, err := cmd.OutOrStdout().Write(body)
 	return err
@@ -24,7 +24,7 @@ func newTableWriter(w io.Writer) *tabwriter.Writer {
 
 // listTable writes a list command's human rows as aligned columns, with the
 // column names both above and below the rows so a long list keeps its labels
-// in view. An empty list prints nothing (ADR-0044).
+// in view. An empty list prints nothing (docs/adr/2026-10-17-list-tables-name-their-columns-above-and-below.md).
 type listTable struct {
 	writer  *tabwriter.Writer
 	columns string

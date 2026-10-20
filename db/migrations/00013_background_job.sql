@@ -1,5 +1,5 @@
 -- +goose Up
--- Each background job saves its state here (ADR-0039), so opening a project
+-- Each background job saves its state here (docs/adr/2026-10-14-background-jobs-save-their-state.md), so opening a project
 -- reads whether a job is complete instead of scanning every pair. Rows are
 -- written by the binary's job registry when it opens the project, not by this
 -- migration, so a binary that adds a job needs no migration of its own.

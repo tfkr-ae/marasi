@@ -1,5 +1,5 @@
 -- +goose Up
--- A pair's highlight lives in a side table, not on request (ADR-0035): a
+-- A pair's highlight lives in a side table, not on request (docs/adr/2026-10-14-highlight-is-a-side-table.md): a
 -- request row holds both raw bodies, so a column growing from NULL would make
 -- SQLite rewrite the whole record, and metadata would re-index the pair. A
 -- pair has at most one highlight, from 1 to 8, and loses it when it is

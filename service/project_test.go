@@ -710,7 +710,7 @@ end`, holdURL)
 		releaseBefore()
 		// Lua that starts after the drain must not take a pair number from the
 		// old project once its writes have been flushed, or the number is stored
-		// in the target (ADR-0042).
+		// in the target (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md).
 		type lateWork struct {
 			generation uint64
 			old        bool

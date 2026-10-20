@@ -28,14 +28,14 @@ type TrafficQuery struct {
 	// Pairs with no content type are never hidden.
 	Exclusion []string
 	// OrderBy is an AIP-132 sort on one sortable column, ascending or
-	// descending (ADR-0041). Empty means "requested_at desc".
+	// descending (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md). Empty means "requested_at desc".
 	OrderBy string
 	// Cursor is an opaque token from an earlier TrafficPage. Empty starts at
 	// the first row in display order, or the last one when walking Backward.
 	Cursor string
 	// Direction is the way the read walks from Cursor. The default is Forward.
 	Direction Direction
-	// AsOf bounds the page to pairs with an id at or below it (ADR-0033).
+	// AsOf bounds the page to pairs with an id at or below it (docs/adr/2026-10-14-query-selections-stop-at-as-of.md).
 	// Nil uses the newest pair id at read time; the page reports it so the
 	// client can pass it back on every later page of the same results.
 	AsOf *uuid.UUID
@@ -75,7 +75,7 @@ type TrafficCountQuery struct {
 	AsOf *uuid.UUID
 	// After, when set, bounds the count to pairs with an id above it. Set to
 	// a snapshot's as_of, it counts the matches newer than the snapshot,
-	// whatever the list's sort (ADR-0041).
+	// whatever the list's sort (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md).
 	After *uuid.UUID
 }
 

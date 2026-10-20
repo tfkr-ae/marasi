@@ -8,7 +8,7 @@ import (
 )
 
 // DeleteTraffic deletes every pair in sel, and everything each one owns, in
-// one transaction, and returns the number of pairs deleted (ADR-0034).
+// one transaction, and returns the number of pairs deleted (docs/adr/2026-10-14-deleting-a-pair-deletes-everything-it-owns.md).
 //
 // The contentless search indexes have no foreign key, so their rows go
 // first, by index key; the pairs' sitemap counts are then taken off their
@@ -19,7 +19,7 @@ import (
 // pairs stays until the next rebuild.
 //
 // It does not check for pending launches; clients call the Proxy method of
-// the same name, which refuses a pending launch's pair (ADR-0053).
+// the same name, which refuses a pending launch's pair (docs/adr/2026-10-18-a-pending-launchs-pair-stays-in-its-launchpad.md).
 func (repo *Repository) DeleteTraffic(sel domain.Selection) (int, error) {
 	return repo.bulkInTx(sel, func(tx *sqlx.Tx, selected string, args []any) (int, error) {
 		// The selection is resolved once into temp.deleting, so a query

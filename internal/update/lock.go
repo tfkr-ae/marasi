@@ -16,7 +16,7 @@ import (
 // maxHolderSize bounds the holder name read from a lock file.
 const maxHolderSize = 1 << 10
 
-// Lock is the install lock for one installed build (ADR-0050). It is held
+// Lock is the install lock for one installed build (docs/adr/2026-10-18-service-instances-install-updates.md). It is held
 // across processes until Release.
 type Lock struct {
 	file *os.File

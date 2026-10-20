@@ -142,7 +142,7 @@ func indexAnnotations(tx sqlx.Ext, id uuid.UUID) error {
 // writeTrafficIndexRow replaces the body index row. A plain INSERT over an
 // existing rowid would keep the old text matching, so the row is always
 // replaced whole. Searches no longer read the body index's note and metadata
-// columns (ADR-0038), so they are written NULL, which also drops the note and
+// columns (docs/adr/2026-10-14-search-index-splits-annotations-from-bodies.md), so they are written NULL, which also drops the note and
 // metadata text a row from an older binary held.
 func writeTrafficIndexRow(tx sqlx.Execer, row trafficIndexRow) error {
 	_, err := tx.Exec(`INSERT OR REPLACE INTO traffic_index

@@ -9,7 +9,7 @@ import (
 	"github.com/tfkr-ae/marasi/domain"
 )
 
-// ownedRows are the tables that hold rows belonging to a pair (ADR-0034),
+// ownedRows are the tables that hold rows belonging to a pair (docs/adr/2026-10-14-deleting-a-pair-deletes-everything-it-owns.md),
 // each with a query counting the rows that belong to the pair bound to ?.
 var ownedRows = map[string]string{
 	"request":               `SELECT count(*) FROM request WHERE id = ?`,

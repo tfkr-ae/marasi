@@ -131,7 +131,7 @@ func TestTrafficRepo_SetHighlight_QuerySelectionStopsAtAsOf(t *testing.T) {
 }
 
 // storedRowAndIndex returns the pair's request row, with its rowid, and every block
-// of the search index, as text. Highlighting must leave both alone (ADR-0035).
+// of the search index, as text. Highlighting must leave both alone (docs/adr/2026-10-14-highlight-is-a-side-table.md).
 func storedRowAndIndex(t *testing.T, repo *Repository, id uuid.UUID) string {
 	t.Helper()
 	row := map[string]any{}

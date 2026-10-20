@@ -12,7 +12,7 @@ import (
 var _ domain.StatsRepository = (*Repository)(nil)
 
 // The pair and intercepted counts are kept in dashboard_count (migration
-// 00023, ADR-0043), so reading them does not scan request.
+// 00023, docs/adr/2026-10-16-dashboard-counts-are-kept-as-pairs-are-written.md), so reading them does not scan request.
 
 // pairCount reads the pair count: the pairs counted up to pairs_through and
 // the numbers above it, which foldPairCount has not yet counted.
@@ -131,7 +131,7 @@ func (repo *Repository) CountLaunchpads() (int, error) {
 
 // CountIntercepted returns the total number of intercepted requests, as
 // maintained so far. Until the intercepted_count job is complete it leaves
-// out the pairs the job has not reached (ADR-0039); DashboardCounts reports
+// out the pairs the job has not reached (docs/adr/2026-10-14-background-jobs-save-their-state.md); DashboardCounts reports
 // whether the job is complete. It never scans request.
 func (repo *Repository) CountIntercepted() (int, error) {
 	var count int

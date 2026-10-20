@@ -33,7 +33,7 @@ type eventBroadcaster struct {
 // trafficRequestEvent is the JSON body of a traffic.request SSE event.
 type trafficRequestEvent struct {
 	ID          uuid.UUID      `json:"id"`           // request UUID
-	Number      int64          `json:"number"`       // pair number in capture order (ADR-0042)
+	Number      int64          `json:"number"`       // pair number in capture order (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md)
 	Scheme      string         `json:"scheme"`       // http or https
 	Method      string         `json:"method"`       // HTTP method
 	Host        string         `json:"host"`         // request host

@@ -19,7 +19,7 @@ import (
 // the traffic index job's version, so bumping it re-indexes every pair when a
 // project opens. The first decoder kept the version that body index rows
 // written before decoding already had: pairs indexed before decoding are
-// re-decoded only by an explicit rebuild of the job (ADR-0038).
+// re-decoded only by an explicit rebuild of the job (docs/adr/2026-10-14-search-index-splits-annotations-from-bodies.md).
 const bodyDecoderVersion = 1
 
 // maxDecodedBodySize caps a decoded body, so a small compressed body cannot

@@ -521,7 +521,7 @@ func (c *Chrome) Start(ctx context.Context, profile string, options ChromeStartO
 		return result, err
 	}
 	// Wait for the endpoint only after the config lock is released, so other
-	// chrome operations do not queue behind Chrome's startup (ADR-0013).
+	// chrome operations do not queue behind Chrome's startup (docs/adr/2026-10-06-chrome-config-lock-reread.md).
 	endpoint, err := c.waitForCDPEndpoint(ctx, started, result.Profile)
 	if err != nil {
 		return result, err
@@ -614,7 +614,7 @@ func (c *Chrome) acquireConfigLock(ctx context.Context) (*os.File, error) {
 }
 
 // acquireConfigLock takes the lock every instance holds while it rereads
-// and writes marasi_config.yaml (ADR-0013).
+// and writes marasi_config.yaml (docs/adr/2026-10-06-chrome-config-lock-reread.md).
 func acquireConfigLock(ctx context.Context, configDir string) (*os.File, error) {
 	return acquireFileLock(ctx, filepath.Join(configDir, chromeConfigLockFile), "chrome config")
 }

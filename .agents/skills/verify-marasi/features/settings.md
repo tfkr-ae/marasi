@@ -1,6 +1,6 @@
 # Client settings
 
-Clients store JSON values in the open project under their own client name and a key, such as `marasi-app` and `ledger.exclusion`. Marasi keeps them but never reads their meaning (ADR-0037). The `settings` command manages them over the `/client-settings` routes.
+Clients store JSON values in the open project under their own client name and a key, such as `marasi-app` and `ledger.exclusion`. Marasi keeps them but never reads their meaning ([Client settings are opaque to Marasi](../../../../docs/adr/2026-10-14-client-settings-are-opaque.md)). The `settings` command manages them over the `/client-settings` routes.
 
 ## Sub-features
 

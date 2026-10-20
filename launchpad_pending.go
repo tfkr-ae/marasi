@@ -8,7 +8,7 @@ import (
 	"github.com/tfkr-ae/marasi/domain"
 )
 
-// A pending launch's pair stays in its launchpad (ADR-0053). Only the launch
+// A pending launch's pair stays in its launchpad (docs/adr/2026-10-18-a-pending-launchs-pair-stays-in-its-launchpad.md). Only the launch
 // registry knows that a launch is pending, so the operations that would take
 // the pair out of its launchpad are guarded here rather than in the
 // repositories. Each guarded method holds launchMu across the check and the

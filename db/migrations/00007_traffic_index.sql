@@ -1,6 +1,6 @@
 -- +goose Up
 -- The traffic index holds the searchable text of each request/response pair
--- (ADR-0026). Its rowid is the request row's rowid. The traffic repository
+-- (docs/adr/2026-10-09-traffic-index-builds-in-the-background.md). Its rowid is the request row's rowid. The traffic repository
 -- writes it in the same transaction as the pair. This migration does no
 -- backfill; pairs missing from the index are indexed in the background.
 CREATE VIRTUAL TABLE IF NOT EXISTS traffic_fts USING fts5(
