@@ -213,6 +213,10 @@ _Avoid_: chrome dir, browser path, chrome_dirs
 A named Chrome user-data identity registered in the machine config and shared across projects and service instances that use that config dir. Chrome creates the directory on first start.
 _Avoid_: browser profile, user-data-dir when referring to the Marasi-managed name
 
+**CDP endpoint**:
+The Chrome DevTools Protocol address of a running chrome profile that Marasi started with CDP, which automation tools attach to. A running chrome profile has at most one, and it exists only while that Chrome runs.
+_Avoid_: debugging port, DevTools port, remote debugging URL
+
 **Wordlist**:
 A named payload file that lives in the machine wordlists directory and is identified by its filename. Shared across projects and service instances that use that config dir. It is the file itself, not a pointer to a file elsewhere.
 _Avoid_: dictionary, payload file, word list
