@@ -23,6 +23,9 @@ const devToolsActivePortFile = "DevToolsActivePort"
 // cdpProbeTimeout bounds one /json/version request to a CDP endpoint.
 const cdpProbeTimeout = time.Second
 
+// cdpVersionLimit bounds how many bytes of a /json/version response are read.
+const cdpVersionLimit = 1 << 16
+
 // CDPEndpoint is the CDP endpoint of a running chrome profile.
 type CDPEndpoint struct {
 	HTTP string // http://127.0.0.1:<port>
@@ -30,9 +33,9 @@ type CDPEndpoint struct {
 }
 
 // WithCDP starts Chrome with a CDP endpoint on a port Chrome picks.
-func WithCDP(enabled bool) Option {
+func WithCDP() Option {
 	return func(l *Launcher) {
-		l.cdp = enabled
+		l.cdp = true
 	}
 }
 
@@ -75,7 +78,7 @@ func (l *Launcher) LiveCDPEndpoint(ctx context.Context) (CDPEndpoint, bool) {
 	var version struct {
 		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<16)).Decode(&version); err != nil {
+	if err := json.NewDecoder(io.LimitReader(response.Body, cdpVersionLimit)).Decode(&version); err != nil {
 		return CDPEndpoint{}, false
 	}
 	if !strings.HasSuffix(version.WebSocketDebuggerURL, browserPath) {
