@@ -164,7 +164,8 @@ var chromeStartCmd = &cobra.Command{
 		var result struct {
 			Profile string `json:"profile"`
 			CDP     *struct {
-				HTTP string `json:"http"`
+				HTTP   string `json:"http"`
+				Reused bool   `json:"reused"`
 			} `json:"cdp"`
 		}
 		if err := json.Unmarshal(response, &result); err != nil {
@@ -174,7 +175,11 @@ var chromeStartCmd = &cobra.Command{
 			return err
 		}
 		if result.CDP != nil {
-			_, err = fmt.Fprintf(cmd.ErrOrStderr(), "CDP endpoint %s\n", result.CDP.HTTP)
+			reused := ""
+			if result.CDP.Reused {
+				reused = " (reused)"
+			}
+			_, err = fmt.Fprintf(cmd.ErrOrStderr(), "CDP endpoint %s%s\n", result.CDP.HTTP, reused)
 		}
 		return err
 	},
