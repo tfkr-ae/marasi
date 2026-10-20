@@ -513,7 +513,7 @@ func (c *Chrome) Start(ctx context.Context, profile string, options ChromeStartO
 		if err := launcher.RemoveDevToolsActivePort(); err != nil {
 			return err
 		}
-		launcher = marasichrome.NewLauncher(append(launcherOptions, marasichrome.WithCDP(true))...)
+		launcher = marasichrome.NewLauncher(append(launcherOptions, marasichrome.WithCDP())...)
 		if err := c.launch(launcher); err != nil {
 			return err
 		}

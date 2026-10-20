@@ -33,9 +33,9 @@ type CDPEndpoint struct {
 }
 
 // WithCDP starts Chrome with a CDP endpoint on a port Chrome picks.
-func WithCDP(enabled bool) Option {
+func WithCDP() Option {
 	return func(l *Launcher) {
-		l.cdp = enabled
+		l.cdp = true
 	}
 }
 
