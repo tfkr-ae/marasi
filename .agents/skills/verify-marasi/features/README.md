@@ -34,6 +34,6 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 
 Every `traffic bulk` command takes exactly one selection: `--id` (repeatable) or `--ids-file PATH` (`-` reads stdin), or `-q TEXT` with a required `--as-of UUID` and optional repeatable `--exclude`. No selection, both forms, `-q` without `--as-of`, or `--as-of`/`--exclude` with ids fails before any request; prove that by running it against an instance name that is not running and requiring the usage message, not `instance … is not running`. Human mode prints `N pairs <verb>` (`1 pair …`) on stderr; `--json` prints the route's `{"count":n}`. None asks for confirmation.
 
-Human list tables print their column names on a line above the rows and again below them. An empty list prints nothing (ADR-0044). Skip those two lines when you assert on rows.
+Human list tables print their column names on a line above the rows and again below them. An empty list prints nothing ([List tables name their columns above and below the rows](../../../../docs/adr/2026-10-17-list-tables-name-their-columns-above-and-below.md)). Skip those two lines when you assert on rows.
 
 When a change touches one row, read that feature file and cover every entry point it names. There is no bundled script. A command that inspects or acts on captured traffic is proven only after real client traffic has gone through the proxy.

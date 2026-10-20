@@ -68,7 +68,7 @@ func (cfg *Config) validate() error {
 }
 
 // SetUpdateChannel saves channel as updates.channel. Callers hold the
-// config lock and reread first (ADR-0013).
+// config lock and reread first (docs/adr/2026-10-06-chrome-config-lock-reread.md).
 func (cfg *Config) SetUpdateChannel(channel update.Channel) error {
 	if _, err := update.ParseChannel(string(channel)); err != nil {
 		return err
@@ -206,7 +206,7 @@ func (cfg *Config) ReloadChrome() error {
 
 // ReadConfig reads marasi_config.yaml in configDir into a new Config without
 // touching any loaded one. Callers that share the file with other instances
-// hold the config lock while they read and write (ADR-0013).
+// hold the config lock while they read and write (docs/adr/2026-10-06-chrome-config-lock-reread.md).
 func ReadConfig(configDir string) (*Config, error) {
 	cfg := &Config{ConfigDir: configDir, DesktopOS: runtime.GOOS}
 	config := viper.New()

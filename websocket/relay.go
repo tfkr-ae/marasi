@@ -262,7 +262,7 @@ func (in *inbound) start(frame Frame) error {
 	in.lastProgress = time.Time{}
 
 	// A compressed message is inflated and compressed again for the
-	// receiver (ADR-0028). Without deflate, RSV1 is a protocol violation and
+	// receiver (docs/adr/2026-10-11-proxy-terminates-permessage-deflate-per-leg.md). Without deflate, RSV1 is a protocol violation and
 	// the message goes through unchanged.
 	if frame.Rsv1 && in.c.inflaters != nil {
 		message.Compressed = true
@@ -301,7 +301,7 @@ func (in *inbound) finish(incomplete bool) error {
 }
 
 // failInflate handles a compressed message that cannot be inflated
-// (ADR-0028). The proxy cannot forward it, so it records the message as the
+// (docs/adr/2026-10-11-proxy-terminates-permessage-deflate-per-leg.md). The proxy cannot forward it, so it records the message as the
 // compressed bytes received, with the error, and closes the connection: 1007
 // to the sender, or 1009 when it inflates to over the size limit, and 1001
 // to the receiver.

@@ -52,7 +52,7 @@ func TestCaptureCostDoesNotGrowWithProjectSize(t *testing.T) {
 			}
 		}
 	}
-	// Capture leaves its pairs queued for the search index (ADR-0026). A text
+	// Capture leaves its pairs queued for the search index (docs/adr/2026-10-09-traffic-index-builds-in-the-background.md). A text
 	// search indexes everything queued first, so each window ends with one
 	// and pays for indexing its own pairs.
 	indexed := func() {

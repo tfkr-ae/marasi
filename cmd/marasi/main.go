@@ -13,7 +13,7 @@ var (
 	// "nightly", or "" for a development build.
 	buildChannel = ""
 	// signingPublicKey is the base64 line of the Marasi minisign public key
-	// (ADR-0048) that updates must be signed with, or "" when none is built in.
+	// (docs/adr/2026-10-18-updates-are-signed-with-an-embedded-key.md) that updates must be signed with, or "" when none is built in.
 	signingPublicKey = ""
 )
 

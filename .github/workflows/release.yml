@@ -51,7 +51,7 @@ jobs:
         env:
           VERSION: ${{ github.ref_name }}
           CHANNEL: release
-          # The public half of the Marasi signing key (ADR-0048), the base64
+          # The public half of the Marasi signing key (docs/adr/2026-10-18-updates-are-signed-with-an-embedded-key.md), the base64
           # line of minisign.pub. Installed builds verify updates against it.
           SIGNING_PUBLIC_KEY: ${{ vars.MARASI_SIGNING_PUBLIC_KEY }}
         run: |
@@ -80,7 +80,7 @@ jobs:
         env:
           VERSION: ${{ github.ref_name }}
           CHANNEL: release
-          # The public half of the Marasi signing key (ADR-0048), the base64
+          # The public half of the Marasi signing key (docs/adr/2026-10-18-updates-are-signed-with-an-embedded-key.md), the base64
           # line of minisign.pub. Installed builds verify updates against it.
           SIGNING_PUBLIC_KEY: ${{ vars.MARASI_SIGNING_PUBLIC_KEY }}
         run: |

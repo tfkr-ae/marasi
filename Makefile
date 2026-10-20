@@ -7,7 +7,7 @@ BINDIR  := $(PREFIX)/bin
 TARGETS := darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64 windows-arm64
 VERSION ?= $(shell date -u '+%d.%m.%Y (dev)')
 # CHANNEL (release or nightly) and SIGNING_PUBLIC_KEY (the base64 line of the
-# Marasi minisign public key, ADR-0048) are set by the release and nightly
+# Marasi minisign public key, docs/adr/2026-10-18-updates-are-signed-with-an-embedded-key.md) are set by the release and nightly
 # workflows. Both stay empty for local builds, which are development builds.
 CHANNEL ?=
 SIGNING_PUBLIC_KEY ?=

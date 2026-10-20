@@ -1,12 +1,12 @@
 -- +goose Up
 -- The dashboard's pair and intercepted counts are kept as the project is
--- written, so that reading them does not scan request (ADR-0043).
+-- written, so that reading them does not scan request (docs/adr/2026-10-16-dashboard-counts-are-kept-as-pairs-are-written.md).
 CREATE TABLE IF NOT EXISTS dashboard_count (
     name TEXT PRIMARY KEY,
     value INTEGER NOT NULL
 ) WITHOUT ROWID;
 
--- Every pair has one pair number (ADR-0042), so the pair count follows
+-- Every pair has one pair number (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md), so the pair count follows
 -- pair_number. 'pairs' counts the numbers up to 'pairs_through'; a read adds
 -- the numbers above it, which the repository folds in when it opens and
 -- closes the project. Capture therefore writes nothing more. Deleting a pair

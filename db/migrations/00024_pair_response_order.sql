@@ -1,5 +1,5 @@
 -- +goose Up
--- Responses in the order they were written (ADR-0041). A sorted walk reads
+-- Responses in the order they were written (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md). A sorted walk reads
 -- the highest seq when it starts, and a pair whose response is written
 -- after that is read with the pairs that have no value until the walk ends,
 -- so a backward walk never returns it twice. responded_at cannot order

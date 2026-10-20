@@ -29,7 +29,7 @@ type DashboardCounts struct {
 	// Intercepted is the number of pairs whose metadata has intercepted set
 	// to true. Until Complete[JobInterceptedCount] is true it leaves out
 	// pairs captured before the project kept this count that the job has
-	// not reached yet (ADR-0039).
+	// not reached yet (docs/adr/2026-10-14-background-jobs-save-their-state.md).
 	Intercepted int
 	// Complete reports whether each background job the counts depend on is
 	// complete.

@@ -24,7 +24,7 @@ import (
 const marasiHost = "marasi"
 
 // defaultBrowserViewExpiry is how long a pending browser view waits for the
-// browser to follow its redirect (ADR-0055).
+// browser to follow its redirect (docs/adr/2026-10-20-a-browser-view-serves-the-stored-response-once-at-its-original-url.md).
 const defaultBrowserViewExpiry = 10 * time.Second
 
 // ownResponseKey holds the response the proxy answers a request with itself.
@@ -49,7 +49,7 @@ func ownResponse(req *http.Request) (*http.Response, bool) {
 // MarasiPagesModifier answers requests for Marasi's own pages and requests
 // that use a pending browser view. It runs first in the request pipeline, so
 // neither is ever captured, held by Checkpoint, or seen by an extension
-// (ADR-0055).
+// (docs/adr/2026-10-20-a-browser-view-serves-the-stored-response-once-at-its-original-url.md).
 func MarasiPagesModifier(proxy *Proxy, req *http.Request) error {
 	if req.Method == http.MethodConnect {
 		return nil

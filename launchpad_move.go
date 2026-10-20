@@ -11,7 +11,7 @@ import (
 // domain.LaunchpadRepository's MoveLaunchpadEntries does, and returns the
 // moved pair ids in their new entry order. Clients call this method rather
 // than the repository method. A pending launch's pair can be reordered
-// within its launchpad, but not moved to another one (ADR-0053): then it
+// within its launchpad, but not moved to another one (docs/adr/2026-10-18-a-pending-launchs-pair-stays-in-its-launchpad.md): then it
 // moves nothing and returns a *domain.LaunchPendingError naming the pending
 // launches' pairs. It holds launchMu across the check and the move, as the
 // guards in launchpad_pending.go do.

@@ -15,7 +15,7 @@ import (
 // length, and so a NULL key.
 const lengthKey = "CAST(nullif(length, '') AS INTEGER)"
 
-// sortKey is a ledger column a traffic list can sort by (ADR-0041).
+// sortKey is a ledger column a traffic list can sort by (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md).
 type sortKey struct {
 	// expr is the SQL expression of the key. Empty means the key is id.
 	expr string
@@ -48,7 +48,7 @@ var sortKeys = map[string]sortKey{
 	"length": {expr: lengthKey, integer: true, expression: true,
 		hasValue: lengthKey + " IS NOT NULL", noValue: lengthKey + " IS NULL"},
 	// The pair number's own primary key, not id: under concurrent capture
-	// the two orders can differ (ADR-0042). Every pair has a number, and
+	// the two orders can differ (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md). Every pair has a number, and
 	// requiring one turns the number join into an inner join, so the read
 	// walks pair_number. It must be a comparison: SQLite keeps the join
 	// outer under IS NOT NULL, and then sorts every pair for the first page.

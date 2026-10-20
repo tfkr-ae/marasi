@@ -32,7 +32,7 @@ var ErrPairNotFound = errors.New("request/response pair not found")
 
 // TrafficRepository is the interface that holds all the traffic related repository methods in Marasi
 type TrafficRepository interface {
-	// NextPairNumber takes the next pair number (ADR-0042). The capture
+	// NextPairNumber takes the next pair number (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md). The capture
 	// path stores it on the ProxyRequest before the request event fires.
 	// A number taken for a pair whose insert fails leaves a gap.
 	NextPairNumber() int64
@@ -138,7 +138,7 @@ type TrafficRepository interface {
 	// Pairs with no content type, including in-flight requests, are counted
 	// under ContentType "". The counts come from the stored sitemap's
 	// buckets, or from the pairs themselves while the sitemap job is
-	// incomplete (ADR-0040).
+	// incomplete (docs/adr/2026-10-14-sitemap-is-stored-by-node-and-content-type.md).
 	CountContentTypes() (ContentTypeCounts, error)
 
 	// CountContentTypesContext is CountContentTypes for a read that stops
@@ -155,7 +155,7 @@ type TrafficRepository interface {
 	// UnlinkTraffic removes the links between every pair in sel and target
 	// in one transaction and returns the number of pairs that were linked.
 	// It returns the same errors as LinkTraffic. It does not check for
-	// pending launches; Proxy.UnlinkTraffic does (ADR-0053).
+	// pending launches; Proxy.UnlinkTraffic does (docs/adr/2026-10-18-a-pending-launchs-pair-stays-in-its-launchpad.md).
 	UnlinkTraffic(sel Selection, target LinkTarget) (int, error)
 
 	// SelectionIncludes returns the ids among ids that are pairs in sel, in
@@ -201,10 +201,10 @@ type TrafficRepository interface {
 	// everything each one owns: its note, its launchpad, finding, test case
 	// and Armory links, its WebSocket connection and messages, its proxy
 	// logs, its search index rows, its highlight, its prettified bodies and
-	// its sitemap counts (ADR-0034). It returns the number of pairs deleted.
+	// its sitemap counts (docs/adr/2026-10-14-deleting-a-pair-deletes-everything-it-owns.md). It returns the number of pairs deleted.
 	// Unknown ids in an id selection are ignored; an invalid query selection
 	// returns a *QueryError. It does not check for pending launches;
-	// Proxy.DeleteTraffic does (ADR-0053).
+	// Proxy.DeleteTraffic does (docs/adr/2026-10-18-a-pending-launchs-pair-stays-in-its-launchpad.md).
 	DeleteTraffic(sel Selection) (int, error)
 }
 
@@ -212,7 +212,7 @@ type TrafficRepository interface {
 type ProxyRequest struct {
 	ID uuid.UUID // Unique identifier for the request
 	// Number is the pair's number in its project's capture order, from 1
-	// (ADR-0042). It never changes and is never reused. The capture path
+	// (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md). It never changes and is never reused. The capture path
 	// sets it before the request event fires; 0 means not yet assigned.
 	Number      int64
 	Scheme      string         // URL scheme (http or https)
@@ -254,7 +254,7 @@ type RequestResponseRow struct {
 }
 
 // Prettified holds the prettified copies of a pair's request and response
-// that the proxy stores at capture (ADR-0036). A copy is "" when the proxy
+// that the proxy stores at capture (docs/adr/2026-10-14-prettified-bodies-leave-metadata.md). A copy is "" when the proxy
 // could not prettify that body. Prettified copies are never part of metadata.
 type Prettified struct {
 	Request  string
@@ -265,7 +265,7 @@ type Prettified struct {
 // excluding raw body and prettified data
 type RequestResponseSummary struct {
 	ID          uuid.UUID
-	Number      int64 // the pair's number in capture order (ADR-0042)
+	Number      int64 // the pair's number in capture order (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md)
 	Scheme      string
 	Method      string
 	Host        string

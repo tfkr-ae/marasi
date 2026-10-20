@@ -15,4 +15,4 @@ With `--json`, a successful start writes one CLI-specific JSON object on stdout 
 {"instance":"work","proxy_listener":"127.0.0.1:53142"}
 ```
 
-Start has no control API body to pass through. Traffic `--json` stays an API passthrough per ADR-0002. A failed `start --json` still exits non-zero, writes the error to stderr, and prints no JSON object.
+Start has no control API body to pass through. Traffic `--json` stays an API passthrough per [Human projection and JSON passthrough for traffic CLI](2026-10-06-traffic-cli-output-contract.md). A failed `start --json` still exits non-zero, writes the error to stderr, and prints no JSON object.

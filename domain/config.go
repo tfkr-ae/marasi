@@ -76,7 +76,7 @@ func ValidateClientSettingValue(value json.RawMessage) error {
 }
 
 // ClientSetting is a JSON value that a client stores in a project under its
-// own client name and a key. Marasi keeps it but never reads its meaning (ADR-0037).
+// own client name and a key. Marasi keeps it but never reads its meaning (docs/adr/2026-10-14-client-settings-are-opaque.md).
 type ClientSetting struct {
 	Client    string          `json:"client"`
 	Key       string          `json:"key"`

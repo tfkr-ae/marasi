@@ -12,7 +12,7 @@ import (
 )
 
 // The metadata keys where older binaries stored a pair's prettified copies
-// (ADR-0036).
+// (docs/adr/2026-10-14-prettified-bodies-leave-metadata.md).
 const (
 	prettifiedRequestKey  = "prettified-request"
 	prettifiedResponseKey = "prettified-response"

@@ -72,7 +72,7 @@ func addRoutes(mux *http.ServeMux, projects *ProjectLifecycle, proxy *marasi.Pro
 	addWebSocketRoutes(projectRoutes, mux, projects, proxy)
 	addNoteRoutes(projectRoutes, proxy, events)
 	// Checkpoint items live in memory, not in the open project, and a switch
-	// waits for them, so forwarding or dropping one is not admitted (ADR-0046).
+	// waits for them, so forwarding or dropping one is not admitted (docs/adr/2026-10-17-project-switch-waits-for-held-checkpoint-items.md).
 	addCheckpointRoutes(mux, proxy, events)
 	addLaunchpadRoutes(projectRoutes, mux, proxy, events)
 	addLaunchRoutes(mux, proxy)
@@ -90,7 +90,7 @@ func addRoutes(mux *http.ServeMux, projects *ProjectLifecycle, proxy *marasi.Pro
 }
 
 // addServiceRoutes registers the service status, restart, and stop routes.
-// They are not admitted: a restart releases the project itself (ADR-0051).
+// They are not admitted: a restart releases the project itself (docs/adr/2026-10-18-restart-hands-over-and-rolls-back.md).
 func addServiceRoutes(mux *http.ServeMux, status, restart http.HandlerFunc, stop func()) {
 	var stopOnce sync.Once
 	mux.HandleFunc("/status", status)

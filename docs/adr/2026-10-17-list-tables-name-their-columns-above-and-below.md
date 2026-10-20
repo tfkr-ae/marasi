@@ -4,6 +4,6 @@ A list command's human output is an aligned table with a row of column names bot
 
 Lists whose items are `key: value` blocks, such as `service list`, `armory template list` and `waypoint list`, already name every field and stay as they are. So do one-column lists, such as `chrome profile list`, and log lines from `logs` and `extension logs`.
 
-Scripts read `--json` (ADR-0006, ADR-0007), so the extra lines change no machine contract. Text processing of human output must skip the first and last line.
+Scripts read `--json` ([`--json` on every command, start first](2026-10-06-json-flag-for-agents.md), [Global CLI JSON and human output contract](2026-10-06-cli-output-contract.md)), so the extra lines change no machine contract. Text processing of human output must skip the first and last line.
 
 **Considered options:** a header only; a header and footer only when stdout is a terminal. Rejected because the footer is the part that helps on a long list, and output that changes when piped is harder to predict and to test.

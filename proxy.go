@@ -98,7 +98,7 @@ type Proxy struct {
 	// Its return error is ignored. A blocking callback blocks the intercepted execution.
 	OnIntercept func(item domain.CheckpointItem) error
 	// OnCheckpointAbandoned runs after a Checkpoint item is dropped because its
-	// client left or its WebSocket connection closed (ADR-0030). It is not called for a
+	// client left or its WebSocket connection closed (docs/adr/2026-10-13-checkpoint-hold-ends-when-its-client-leaves.md). It is not called for a
 	// forward or drop that resolved the item first.
 	// Its return error is ignored.
 	OnCheckpointAbandoned func(item domain.CheckpointItem) error
@@ -162,7 +162,7 @@ type Proxy struct {
 	finishedOrder        []uuid.UUID                 // finishedLaunches ids, oldest finish first
 	finishedLaunchLimit  int                         // bound on finishedLaunches; 0 means maxFinishedLaunches
 	newLaunchID          func() (uuid.UUID, error)
-	browserViews         browserViews // pending browser views (ADR-0055)
+	browserViews         browserViews // pending browser views (docs/adr/2026-10-20-a-browser-view-serves-the-stored-response-once-at-its-original-url.md)
 
 	TrafficRepo   domain.TrafficRepository   // Repository for traffic data.
 	LaunchpadRepo domain.LaunchpadRepository // Repository for launchpad data.
@@ -596,7 +596,7 @@ func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
 
 // dbWriterIdleDelay is how long the database writer must go without an item
 // before it refreshes the planner statistics that captures have marked due
-// (ADR-0041). A refresh holds the writer, and a WebSocket relay blocked on a
+// (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md). A refresh holds the writer, and a WebSocket relay blocked on a
 // full DBWriteChannel meanwhile can miss its close deadline, so the refresh
 // waits for a pause in traffic.
 const dbWriterIdleDelay = 2 * time.Second
@@ -693,7 +693,7 @@ func (proxy *Proxy) writeItem(proxyItem any) {
 }
 
 // writeResponse stores a response. The response of a pair deleted while in
-// flight, or while Checkpoint held it, is dropped (ADR-0034): that is not an
+// flight, or while Checkpoint held it, is dropped (docs/adr/2026-10-14-deleting-a-pair-deletes-everything-it-owns.md): that is not an
 // error, so it is logged at debug only.
 func (proxy *Proxy) writeResponse(response *domain.ProxyResponse) {
 	err := proxy.TrafficRepo.InsertResponse(response)
@@ -737,7 +737,7 @@ func (proxy *Proxy) writeRequest(request *domain.ProxyRequest) {
 // insertRequestAndLinkLaunch stores a request and, for a launch, links it
 // to its launchpad. A launch's pair is written and linked under launchMu, so
 // it cannot join a selection between a guarded operation's pending-launch
-// check and its repository call (ADR-0053). A failed link is logged; a failed
+// check and its repository call (docs/adr/2026-10-18-a-pending-launchs-pair-stays-in-its-launchpad.md). A failed link is logged; a failed
 // insert is returned.
 func (proxy *Proxy) insertRequestAndLinkLaunch(request *domain.ProxyRequest) error {
 	launchpadID, launch := request.Metadata["launchpad_id"].(uuid.UUID)

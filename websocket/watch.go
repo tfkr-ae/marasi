@@ -13,7 +13,7 @@ const maxWatchedBytes = 4096
 
 // WatchedStream reports a peer that leaves while nobody is reading it. While Checkpoint
 // holds a message, the relay stops reading its sender, so a sender that leaves is not
-// otherwise noticed until the next write (ADR-0030).
+// otherwise noticed until the next write (docs/adr/2026-10-13-checkpoint-hold-ends-when-its-client-leaves.md).
 //
 // A peer that sent a close frame before its stream ended has started the closing
 // handshake rather than left: closing the connection right after its close frame is

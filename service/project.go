@@ -251,7 +251,7 @@ func (repository *eventLogRepository) startPublishing() {
 
 // waitForHandoff blocks admission until in-flight work finishes, including
 // held Checkpoint items. Checkpoint routes are not admitted, so a held item
-// can still be forwarded or dropped while admission is blocked (ADR-0046).
+// can still be forwarded or dropped while admission is blocked (docs/adr/2026-10-17-project-switch-waits-for-held-checkpoint-items.md).
 func (lifecycle *ProjectLifecycle) waitForHandoff(ctx context.Context, project *openProject) (func(), error) {
 	if lifecycle.armoryBusy(project) {
 		return nil, ErrProjectBusy
@@ -408,7 +408,7 @@ type projectRelease struct {
 
 // release ends launches and Armory runs, waits for admitted work, then
 // flushes, closes, and unlocks the open project so a successor can own it
-// (ADR-0051). dropHeld is called while waiting, so an item held during the
+// (docs/adr/2026-10-18-restart-hands-over-and-rolls-back.md). dropHeld is called while waiting, so an item held during the
 // wait does not keep the project busy; when it fails instead, the release
 // stops and returns its error with nothing released.
 func (lifecycle *ProjectLifecycle) release(ctx context.Context, dropHeld func() error) (projectRelease, error) {
@@ -693,7 +693,7 @@ type projectGate struct {
 	extensionExecutions int
 	// generation counts published open projects. Work records the generation
 	// it was admitted in, and work admitted again in another generation
-	// belongs to a project that is no longer open (ADR-0045).
+	// belongs to a project that is no longer open (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
 	generation uint64
 }
 
