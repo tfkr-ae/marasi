@@ -59,6 +59,10 @@ curl --noproxy '' --proxy "http://$PROXY_LISTENER" --cacert "$CA_FILE" "$TARGET_
 
 Set `CA_FILE` to a session-owned file. Prefer client-specific trust over changing the system trust store.
 
+## Show a stored response in a browser
+
+To let the user see how a captured response renders, give them `http://marasi/view/$REQUEST_ID` to open in a browser that uses the proxy listener. Marasi redirects to the pair's original URL, and the browser's next request there, within 10 seconds, gets the stored response unchanged, without reaching the origin. Everything the page then loads goes to the live site and is captured. The URL takes the pair UUID, not its number. A plain-text 404 means no pair has that UUID in the open project; 409 means the pair has no response yet or is a WebSocket upgrade. A browser view can replace the browser's cookies with the stored `Set-Cookie`. `http://marasi/cert` serves the CA certificate in DER form through the same listener.
+
 `traffic list` returns the newest page of traffic, oldest first within the page, so the newest pair is the last row. Follow `next_cursor` with `--cursor` for older pages, keeping the same query and passing the first page's `as_of` with `--as-of`. Cursors are opaque tokens; `--backward` with `prev_cursor` walks back toward newer pairs. `--exclude 'image/*'` (repeatable) hides content types; pairs with no content type yet always stay. Each pair has a `number`, its `#` in capture order; `-q 'number = 10'` finds one. `--order-by` sorts by one of `requested_at`, `number`, `method`, `host`, `path`, `status_code`, `content_type` or `length`, with optional `desc`, for example `--order-by 'length desc'`; pairs with no response sort last, and every page needs the same `--order-by`. `launchpad get --order-by` sorts entries the same way. In JSON, `request.raw` and `response.raw` are base64. Decode them before inspection or editing.
 
 A capture is complete when `traffic get` returns the matching request and response. A client response alone does not prove that Marasi captured the exchange.
