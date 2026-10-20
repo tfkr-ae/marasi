@@ -259,7 +259,7 @@ never captured, held by Checkpoint, or shown to extensions.
 
 | URL | Answer |
 | --- | --- |
-| `http://marasi/cert` | The CA certificate in DER form, as `marasi-cert.der`. `http://marasi.cert` is an alias. |
+| `http://marasi/cert` | The CA certificate in DER form, as `marasi-cert.der`. |
 | `http://marasi/view/{uuid}` | A browser view of the pair with that UUID. |
 
 A browser view shows a pair's stored response, unchanged, at the pair's
