@@ -62,7 +62,7 @@ func (c Candidate) Asset(name string) (Asset, bool) {
 }
 
 // Signed reports whether the release publishes checksums.txt and its
-// minisign signature. Releases from before ADR-0048 are unsigned.
+// minisign signature. Releases from before docs/adr/2026-10-18-updates-are-signed-with-an-embedded-key.md are unsigned.
 func (c Candidate) Signed() bool {
 	_, sums := c.Asset(checksumsAsset)
 	_, sig := c.Asset(signatureAsset)

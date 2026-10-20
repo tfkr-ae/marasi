@@ -41,7 +41,7 @@ func capturePrettifiedPair(t *testing.T, repo *Repository, request, response str
 	return id
 }
 
-// insertUnmovedPair writes a pair the way a binary from before ADR-0036 does:
+// insertUnmovedPair writes a pair the way a binary from before docs/adr/2026-10-14-prettified-bodies-leave-metadata.md does:
 // its prettified copies in metadata, nothing in pair_prettified.
 func insertUnmovedPair(t *testing.T, repo *Repository, metadata string) uuid.UUID {
 	t.Helper()

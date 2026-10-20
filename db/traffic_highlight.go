@@ -12,7 +12,7 @@ import (
 const highlightJoin = ` LEFT JOIN pair_highlight ON pair_highlight.request_id = request.id`
 
 // SetHighlight gives every pair in sel the highlight h and returns the number
-// of pairs whose highlight changed. It writes only pair_highlight (ADR-0035).
+// of pairs whose highlight changed. It writes only pair_highlight (docs/adr/2026-10-14-highlight-is-a-side-table.md).
 func (repo *Repository) SetHighlight(sel domain.Selection, h int) (int, error) {
 	if h < domain.MinHighlight || h > domain.MaxHighlight {
 		return 0, fmt.Errorf("%w: %d is not from %d to %d", domain.ErrInvalidHighlight, h, domain.MinHighlight, domain.MaxHighlight)

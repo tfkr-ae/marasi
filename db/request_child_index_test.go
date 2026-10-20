@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// ADR-0034: deleting a pair cascades to every table that references it, so
+// docs/adr/2026-10-14-deleting-a-pair-deletes-everything-it-owns.md: deleting a pair cascades to every table that references it, so
 // each of those tables needs an index that leads with the referencing
 // column, or every deleted pair scans the table.
 func TestEveryRequestChildIsIndexedByRequest(t *testing.T) {

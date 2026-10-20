@@ -116,7 +116,7 @@ func (u *Updater) Latest(ctx context.Context, channel Channel) (Candidate, error
 }
 
 // Check returns the update on channel, or nil when the installed build is
-// the newest. An unsigned build is never offered (ADR-0048).
+// the newest. An unsigned build is never offered (docs/adr/2026-10-18-updates-are-signed-with-an-embedded-key.md).
 func (u *Updater) Check(ctx context.Context, channel Channel) (*Candidate, error) {
 	rel, err := u.Latest(ctx, channel)
 	if err != nil {

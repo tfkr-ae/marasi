@@ -26,7 +26,7 @@ import (
 // restartReadyTimeout bounds how long a restart waits for its successor.
 const restartReadyTimeout = 30 * time.Second
 
-// restartWarning names what a restart ends (ADR-0051).
+// restartWarning names what a restart ends (docs/adr/2026-10-18-restart-hands-over-and-rolls-back.md).
 const restartWarning = "warning: a restart ends Armory runs, held Checkpoint items, live WebSocket and HTTP connections, and launches\n"
 
 var restartForce bool

@@ -87,7 +87,7 @@ type UpdateStatus struct {
 	// dir, or nil when there has been none.
 	LastCheck *UpdateCheck
 	// Available is the update on Channel from LastCheck, or nil. It is never
-	// older than the installed build (ADR-0049), and nil once an install has
+	// older than the installed build (docs/adr/2026-10-18-switching-channel-never-downgrades.md), and nil once an install has
 	// replaced the installed build: a restart runs that build instead.
 	Available *update.Candidate
 }
@@ -186,7 +186,7 @@ func (u *Updates) InstallPath() string { return u.executable }
 
 // RestartRequired reports whether the file at InstallPath is no longer the
 // one this instance started from: an install, by any instance or by hand,
-// replaced it (ADR-0050).
+// replaced it (docs/adr/2026-10-18-service-instances-install-updates.md).
 func (u *Updates) RestartRequired() bool {
 	if u.started == nil {
 		return false
@@ -275,7 +275,7 @@ func (u *Updates) Status(ctx context.Context) (UpdateStatus, error) {
 
 // SetChannel saves channel in marasi_config.yaml for every instance on the
 // config dir. It never installs anything, and an older build on the new
-// channel is never offered (ADR-0049). The automatic check runs again so the
+// channel is never offered (docs/adr/2026-10-18-switching-channel-never-downgrades.md). The automatic check runs again so the
 // new channel's last check is current.
 func (u *Updates) SetChannel(ctx context.Context, channel update.Channel) (UpdateStatus, error) {
 	if u.updater == nil {
@@ -399,7 +399,7 @@ func (u *Updates) settings(ctx context.Context) (marasi.UpdatesConfig, error) {
 	return settings, err
 }
 
-// withConfig rereads marasi_config.yaml under the config lock (ADR-0013).
+// withConfig rereads marasi_config.yaml under the config lock (docs/adr/2026-10-06-chrome-config-lock-reread.md).
 func (u *Updates) withConfig(ctx context.Context, operation func(*marasi.Config) error) (resultErr error) {
 	lock, err := acquireConfigLock(ctx, u.configDir)
 	if err != nil {

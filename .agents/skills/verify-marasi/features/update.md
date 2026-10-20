@@ -26,12 +26,12 @@ With no instance running, every `update` command exits 1 with `instance $VERIFY_
 
 ## Gotchas
 
-- The instance does the work, not the CLI (ADR-0050). The executable it replaces is its own, with symlinks resolved, which can differ from the `marasi` on PATH.
+- The instance does the work, not the CLI ([Service instances install updates, and an install outlives its client](../../../../docs/adr/2026-10-18-service-instances-install-updates.md)). The executable it replaces is its own, with symlinks resolved, which can differ from the `marasi` on PATH.
 - `update install` subscribes to events before it posts, so it misses no progress. Human mode writes `installing <version> to <path>`, one line per step and per tenth of the download, and the result to stderr; stdout stays empty. `--json` writes only `update.progress`, `update.installed`, and `update.failed` events for that version.
 - Ctrl-C stops following and exits 0. The install continues on the instance. Human mode prints `stopped following; the install of <version> continues on instance <name>, run marasi update to see it`. Cancel it through `DELETE /update/install` before the install step.
 - A second `update install` on the same instance joins the running install (`following the install of ... already running on instance ...`). One on another instance of the same build gets 409 `update_in_progress` naming the holder.
 - `update.failed` exits 1. Human mode prints `<verb> <version> failed at <step> (<kind>): <message>`, and the release page when there is one. Under `--json` the failed event line is the last output; no `{"error":...}` follows it.
 - `marasi update` shows at most 5 lines of notes, then `... N more lines on the page`. `--json` has the full notes.
-- Switching from nightly to release keeps the nightly until a newer release exists (ADR-0049). Human `update channel release` says so on stderr. `update reinstall --yes` installs the latest release at once.
+- Switching from nightly to release keeps the nightly until a newer release exists ([Switching channel never installs an older build on its own](../../../../docs/adr/2026-10-18-switching-channel-never-downgrades.md)). Human `update channel release` says so on stderr. `update reinstall --yes` installs the latest release at once.
 - `update channel` writes `updates.channel` in `$VERIFY_CONFIG_DIR/marasi_config.yaml`. `updates.auto_check: false` stops the checks on start and every 6 hours. The last check of each channel is shared through `update_check.json` in the config directory.
 - `service status` omits `restart required` for instances from builds older than updates.

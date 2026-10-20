@@ -20,7 +20,7 @@ type clientSettingAddress struct {
 
 var errInvalidClientSettingBody = errors.New("invalid client setting body")
 
-// addClientSettingRoutes registers the client setting store (ADR-0037).
+// addClientSettingRoutes registers the client setting store (docs/adr/2026-10-14-client-settings-are-opaque.md).
 // Values are opaque JSON; Marasi validates only their shape.
 func addClientSettingRoutes(mux routeMux, proxy *marasi.Proxy) {
 	mux.HandleFunc("GET /client-settings/{client}", func(w http.ResponseWriter, r *http.Request) {

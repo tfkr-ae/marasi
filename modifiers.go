@@ -422,7 +422,7 @@ func WriteRequestModifier(proxy *Proxy, req *http.Request) error {
 			return fmt.Errorf("%w : %w", ErrProxyRequest, err)
 		}
 		// The number is taken here, not by the writer, so the request
-		// event already carries it (ADR-0042).
+		// event already carries it (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md).
 		if proxy.TrafficRepo != nil {
 			proxyRequest.Number = proxy.TrafficRepo.NextPairNumber()
 		}
@@ -624,7 +624,7 @@ func WebSocketHandoffModifier(proxy *Proxy, res *http.Response) error {
 				err := proxy.WebSocketInterceptor.Intercept(message, func(snapshot domain.WebSocketMessage) {
 					proxy.noteWebSocketHold(message)
 					// Nothing reads the sender while its message is held, so watch it: a
-					// client or origin that leaves abandons the hold (ADR-0030). The other
+					// client or origin that leaves abandons the hold (docs/adr/2026-10-13-checkpoint-hold-ends-when-its-client-leaves.md). The other
 					// side is still read, so its close ends the connection. A sender that
 					// closes after its close frame has not left (see WatchedStream).
 					//

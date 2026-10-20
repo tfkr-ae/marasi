@@ -9,6 +9,13 @@ on:
       - 'websocket/**'
       - 'websocket*.go'
       - 'internal/autobahn/**'
+      # A relay waits on the database writer's queue, so a slower writer can fail a case.
+      - 'db/**'
+      - 'proxy.go'
+      # The matrix runs these: WebSocket modifiers, Checkpoint holds, extensions.
+      - 'modifiers.go'
+      - 'checkpoint.go'
+      - 'extensions/**'
       - '.github/workflows/autobahn.yml'
       - '.github/scripts/autobahn-monitor.sh'
   workflow_dispatch:

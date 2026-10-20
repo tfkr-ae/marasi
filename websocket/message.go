@@ -12,7 +12,7 @@ import (
 
 // Message is a live WebSocket message flowing through the proxy relay: a whole
 // text or binary message reassembled from its frames, or a single control
-// frame (ADR-0027).
+// frame (docs/adr/2026-10-11-websocket-message-is-the-whole-message.md).
 type Message struct {
 	// ID uniquely identifies the message.
 	ID uuid.UUID

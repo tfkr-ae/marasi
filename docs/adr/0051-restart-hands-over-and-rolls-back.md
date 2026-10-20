@@ -1,7 +1,0 @@
-# A restart hands over to a successor and rolls back if it fails
-
-`POST /service/restart` (`marasi service restart`) lets a client move a service instance onto the installed build without leaving the service API. The instance stops its proxy listener, releases project ownership, and starts a successor from the installed build with the same name, open project, and proxy listener address (none if it was stopped). It then waits for the successor to report ready. If the successor fails or times out, the instance takes back project ownership and the listener, keeps running the old build, and emits `service.restart_failed` with the successor's log path. Clients never end up with no instance.
-
-Only what `service start` can rebuild survives. Held checkpoint items, live WebSocket and HTTP connections, launches, and Armory runs end. A restart is refused with `409` listing held checkpoint items unless the client passes `force`. This differs from a project switch, which waits for them (ADR-0046), because a restart is optional and an indefinite wait is worse for a GUI than a clear refusal. A restart is available at any time, not only after an update.
-
-**Considered options:** no restart in the API, so users run `service stop` then `service start`; restarting without rollback; waiting for held items. Rejected because a service-only GUI could not finish an update, a failed successor would leave no instance and an unowned project, and waiting has no bound.

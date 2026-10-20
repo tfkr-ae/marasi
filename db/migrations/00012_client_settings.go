@@ -18,7 +18,7 @@ func init() {
 }
 
 // legacyExclusionClient and legacyExclusionKey address the content-type
-// exclusion that app.filters held (ADR-0037).
+// exclusion that app.filters held (docs/adr/2026-10-14-client-settings-are-opaque.md).
 const (
 	legacyExclusionClient = "marasi"
 	legacyExclusionKey    = "legacy.content_type_exclusion"

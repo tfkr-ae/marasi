@@ -323,7 +323,7 @@ func parseChecksums(checksums []byte) map[string]string {
 }
 
 // checkTeam requires the new build to be signed by the installed build's
-// Apple team (ADR-0048).
+// Apple team (docs/adr/2026-10-18-updates-are-signed-with-an-embedded-key.md).
 func (u *Updater) checkTeam(ctx context.Context, installed, download string) error {
 	want, err := u.team.TeamID(ctx, installed)
 	if err != nil {

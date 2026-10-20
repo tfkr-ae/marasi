@@ -10,7 +10,7 @@ import (
 )
 
 // Executable is the running executable with symlinks resolved: the
-// installed build an instance replaces (ADR-0050).
+// installed build an instance replaces (docs/adr/2026-10-18-service-instances-install-updates.md).
 func Executable() (string, error) {
 	path, err := os.Executable()
 	if err != nil {

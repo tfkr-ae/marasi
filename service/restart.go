@@ -34,7 +34,7 @@ func (e *RestartError) Unwrap() error { return e.Err }
 // instance name back before it returns, and the error is a *RestartError.
 type SuccessorStart func(ctx context.Context, project string, proxyListener *string) (Successor, error)
 
-// EnableRestart serves POST /service/restart with start (ADR-0051).
+// EnableRestart serves POST /service/restart with start (docs/adr/2026-10-18-restart-hands-over-and-rolls-back.md).
 func (s *Server) EnableRestart(start SuccessorStart) {
 	s.restartMu.Lock()
 	s.restart = start
@@ -77,7 +77,7 @@ func decodeRestart(r *http.Request) (bool, error) {
 }
 
 // serveRestart hands this instance over to a successor, or keeps it running
-// on the old build when the successor fails (ADR-0051).
+// on the old build when the successor fails (docs/adr/2026-10-18-restart-hands-over-and-rolls-back.md).
 func (s *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 	s.restartMu.Lock()
 	start := s.restart

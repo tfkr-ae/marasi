@@ -139,7 +139,7 @@ func resolveProjectOpenPath(cmd *cobra.Command) (string, error) {
 }
 
 func openProject(ctx context.Context, instancePath, instanceName string, asJSON bool, path string, stdout, stderr io.Writer) error {
-	// JSON mode writes nothing to stderr (ADR-0007), so only a human sees waits.
+	// JSON mode writes nothing to stderr (docs/adr/2026-10-06-cli-output-contract.md), so only a human sees waits.
 	if !asJSON {
 		stop := watchProjectWaits(ctx, instancePath, path, stderr)
 		defer stop()

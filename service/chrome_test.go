@@ -332,7 +332,7 @@ func TestChromeLockCancellation(t *testing.T) {
 }
 
 // assertQuietChromeArgs checks the newline-separated arguments a fake Chrome
-// recorded against the quieting rules of ADR-0056.
+// recorded against the quieting rules of docs/adr/2026-10-20-chrome-is-quieted-with-switches-and-compass-takes-the-rest.md.
 func assertQuietChromeArgs(t *testing.T, recorded string) {
 	t.Helper()
 	args := strings.Split(strings.TrimSpace(recorded), "\n")

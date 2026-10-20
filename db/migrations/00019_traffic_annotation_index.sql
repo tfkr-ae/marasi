@@ -1,5 +1,5 @@
 -- +goose Up
--- Notes and metadata have their own small index (ADR-0038), keyed on
+-- Notes and metadata have their own small index (docs/adr/2026-10-14-search-index-splits-annotations-from-bodies.md), keyed on
 -- traffic_index_key like the body index, so that editing a note or metadata
 -- never re-tokenises request and response bodies. Body index rows written
 -- before this migration still hold note and metadata text; searches read the

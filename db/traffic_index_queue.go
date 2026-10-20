@@ -11,7 +11,7 @@ import (
 
 // indexQueueDelay is how long a captured pair may wait in
 // traffic_index_pending before the repository indexes it, when no text query
-// indexes it first (ADR-0026).
+// indexes it first (docs/adr/2026-10-09-traffic-index-builds-in-the-background.md).
 const indexQueueDelay = 250 * time.Millisecond
 
 // indexQueueBatchBytes caps the stored text one indexing transaction takes

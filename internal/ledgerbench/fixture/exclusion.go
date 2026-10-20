@@ -4,7 +4,7 @@ package fixture
 // 00001_db_setup.sql, which marasi-app uses until a tester edits it. The
 // benchmarks call it "the seed exclusion". It is copied here because the
 // project no longer stores the seeded default once client settings replace
-// app.filters (ADR-0037). The excluded stretches use only its types.
+// app.filters (docs/adr/2026-10-14-client-settings-are-opaque.md). The excluded stretches use only its types.
 var SeedExclusion = []string{
 	"audio/aac", "image/apng", "image/avif", "video/x-msvideo", "image/bmp",
 	"audio/midi", "audio/x-midi", "image/gif", "image/vnd.microsoft.icon",

@@ -21,7 +21,7 @@ import (
 // updateNotesLines is how many lines of release notes human output shows.
 const updateNotesLines = 5
 
-// reinstallWarning is the error reinstall gives without --yes (ADR-0049).
+// reinstallWarning is the error reinstall gives without --yes (docs/adr/2026-10-18-switching-channel-never-downgrades.md).
 const reinstallWarning = "reinstalling replaces the installed build with the latest build on its channel, even when that build is older, " +
 	"and projects opened in a newer build may not open in it; rerun with --yes to reinstall"
 
@@ -111,7 +111,7 @@ var updateReinstallCmd = &cobra.Command{
 }
 
 // withStartHint tells the user to start an instance when none is running,
-// since only an instance checks for and installs updates (ADR-0050).
+// since only an instance checks for and installs updates (docs/adr/2026-10-18-service-instances-install-updates.md).
 func withStartHint(err error) error {
 	var notRunning instanceNotRunningError
 	if !errors.As(err, &notRunning) {
@@ -294,7 +294,7 @@ func describeStep(step string, received, total int64, coarse bool) string {
 }
 
 // writeUpdateChannel prints the configured channel. After a switch from a
-// nightly build to release it says the nightly stays (ADR-0049).
+// nightly build to release it says the nightly stays (docs/adr/2026-10-18-switching-channel-never-downgrades.md).
 func writeUpdateChannel(cmd *cobra.Command, body []byte, switchedTo update.Channel) error {
 	if jsonOutput {
 		return writeJSONBody(cmd, body)
@@ -387,7 +387,7 @@ func (s *eventStream) close() {
 
 // followUpdateInstall subscribes to events, starts or joins an install at
 // path, and follows it until it is installed or fails. Ctrl-C only stops
-// following: the install continues on the instance (ADR-0050).
+// following: the install continues on the instance (docs/adr/2026-10-18-service-instances-install-updates.md).
 func followUpdateInstall(cmd *cobra.Command, path string, body []byte, operation, verb string) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

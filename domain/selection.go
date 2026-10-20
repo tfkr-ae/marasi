@@ -21,7 +21,7 @@ var ErrInvalidSelection = errors.New("invalid selection")
 
 // ErrSelectionIncomplete reports a query selection that depends on a
 // background job that has not finished, so it could select pairs the
-// finished job would not (ADR-0033). A bulk operation refuses it and changes
+// finished job would not (docs/adr/2026-10-14-query-selections-stop-at-as-of.md). A bulk operation refuses it and changes
 // nothing; the client retries once the job completes.
 var ErrSelectionIncomplete = errors.New("the selection depends on an unfinished background job")
 
@@ -42,7 +42,7 @@ func (e *SelectionIncompleteError) Error() string {
 func (e *SelectionIncompleteError) Unwrap() error { return ErrSelectionIncomplete }
 
 // Selection is the set of request/response pairs that one bulk operation
-// applies to (ADR-0033). Exactly one of IDs and Query is set.
+// applies to (docs/adr/2026-10-14-query-selections-stop-at-as-of.md). Exactly one of IDs and Query is set.
 type Selection struct {
 	IDs   []uuid.UUID     // listed pair ids, at most MaxSelectionIDs
 	Query *SelectionQuery // every pair matching a query, up to AsOf

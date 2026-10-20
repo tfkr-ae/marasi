@@ -1,6 +1,6 @@
 -- +goose Up
 -- Prettified copies of a pair's request and response leave its metadata
--- (ADR-0036). New pairs store them here at capture. The prettified_move
+-- (docs/adr/2026-10-14-prettified-bodies-leave-metadata.md). New pairs store them here at capture. The prettified_move
 -- background job moves the copies of existing pairs out of metadata, so until
 -- it completes a read looks here first and then in metadata. This migration
 -- moves nothing, so opening a large project stays fast.

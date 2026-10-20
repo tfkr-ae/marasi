@@ -103,7 +103,7 @@ func trafficLibrary(proxy ProxyService) []APIFunction {
 				},
 				"metadata": row.Metadata,
 				"note":     row.Note,
-				// Prettified copies are not metadata (ADR-0036). A copy is
+				// Prettified copies are not metadata (docs/adr/2026-10-14-prettified-bodies-leave-metadata.md). A copy is
 				// "" when the proxy could not prettify that body.
 				"prettified": map[string]any{
 					"request":  row.Prettified.Request,

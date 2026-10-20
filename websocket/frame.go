@@ -61,7 +61,7 @@ type Frame struct {
 	Payload []byte
 
 	// deflate marks an uncompressed payload that the leg compresses for its
-	// peer as it writes the frame, setting RSV1 when it does (ADR-0028).
+	// peer as it writes the frame, setting RSV1 when it does (docs/adr/2026-10-11-proxy-terminates-permessage-deflate-per-leg.md).
 	deflate bool
 }
 

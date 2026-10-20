@@ -1,3 +1,22 @@
+## Go commands
+
+Run Go commands as `GOWORK=off go …`. Agent worktrees can sit inside a checkout whose parent `go.work` excludes this module, and `go` then fails with "main module … does not contain package".
+
+## CLI skill
+
+When a change adds or changes a CLI command, flag, or output, update `skills/marasi/SKILL.md` in the same change. `marasi skill` prints it.
+
+## Release
+
+To cut a release, follow `docs/agents/release.md`.
+
+## Code maps
+
+Maps live in `docs/agents/maps/`. Read the map there before you change or ask about:
+
+- `request-path.md`: how a request moves through the proxy: listener, modifier order, capture, upstream, the headers Marasi adds, or any `http.Client`.
+- `built-in-extensions.md`: the Lua of Compass, Checkpoint or Workshop, which is seeded in a migration rather than kept in `.lua` files.
+
 ## Agent skills
 
 ### Issue tracker
