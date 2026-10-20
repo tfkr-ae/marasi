@@ -20,19 +20,22 @@ import (
 
 // disabledFeatures are the Chrome features turned off in every started Chrome
 // because they send background requests through the proxy. None of them
-// changes how a target site behaves (ADR-0056).
+// changes how a target site behaves (ADR-0056). NetworkPrediction, Translate,
+// DialMediaRouteProvider, CertificateTransparencyComponentUpdater and
+// InterestFeedContentSuggestions are not declared as features at Chromium 155,
+// so Chrome ignores them there.
 var disabledFeatures = []string{
-	"NetworkPrediction",
-	"OmniboxUIExperimentMaxAutocompleteMatches",
-	"AimEnabled",                              // AI Mode eligibility (www.google.com/async/folae)
-	"OptimizationHints",                       // optimization guide downloads
-	"NetworkTimeServiceQuerying",              // clock sync (clients2.google.com/time)
-	"Translate",                               // Translate
-	"MediaRouter",                             // media-device discovery
-	"DialMediaRouteProvider",                  // DIAL media-device discovery
-	"AutofillServerCommunication",             // autofill server requests
-	"CertificateTransparencyComponentUpdater", // Certificate Transparency component updates
-	"InterestFeedContentSuggestions",          // feed suggestions
+	"NetworkPrediction",                         // DNS prefetch and preconnect to predicted hosts
+	"OmniboxUIExperimentMaxAutocompleteMatches", // omnibox autocomplete match-count experiment
+	"AimEnabled",                                // AI Mode eligibility (www.google.com/async/folae)
+	"OptimizationHints",                         // optimization guide downloads (optimizationguide-pa.googleapis.com)
+	"NetworkTimeServiceQuerying",                // clock sync (clients2.google.com/time)
+	"Translate",                                 // page translation and language-list fetches (translate.googleapis.com)
+	"MediaRouter",                               // Cast media-device discovery
+	"DialMediaRouteProvider",                    // DIAL media-device discovery on the local network
+	"AutofillServerCommunication",               // autofill field-type queries (content-autofill.googleapis.com)
+	"CertificateTransparencyComponentUpdater",   // Certificate Transparency log-list downloads
+	"InterestFeedContentSuggestions",            // New Tab Page feed suggestions
 }
 
 type PathConfig struct {
@@ -168,8 +171,10 @@ func (l *Launcher) getChromePath() (string, error) {
 
 // Start launches the Chrome instance with the configured flags and profile directory.
 // It always passes the switches and disabled features that stop Chrome's own
-// background requests without changing how a target site behaves. Only loopback
-// bypasses the proxy; no other host is bypassed or blocked (ADR-0056).
+// background requests without changing how a target site behaves. No host
+// bypasses the proxy or is blocked: --proxy-bypass-list=<-loopback> removes
+// Chrome's implicit loopback bypass, so loopback requests go through the
+// proxy too (ADR-0056).
 //
 // Returns:
 //   - error: An error if the configuration directory is missing, the executable is not found,
@@ -191,7 +196,6 @@ func (l *Launcher) Start() error {
 		fmt.Sprintf("--proxy-server=http://%s", net.JoinHostPort(l.addr, l.port)),
 		fmt.Sprintf("--ignore-certificate-errors-spki-list=%s", l.spkiHash),
 		"--disable-background-networking",
-		"--disable-client-side-phishing-detection",
 		"--disable-default-apps",
 		"--disable-component-extensions-with-background-pages",
 		"--disable-features=" + strings.Join(disabledFeatures, ","),
@@ -201,7 +205,6 @@ func (l *Launcher) Start() error {
 		"--disable-breakpad",
 		"--no-first-run",
 		"--no-default-browser-check",
-		"--no-service-autorun",
 		"--disable-component-update",
 		"--disable-search-engine-choice-screen",
 		"--proxy-bypass-list=<-loopback>",

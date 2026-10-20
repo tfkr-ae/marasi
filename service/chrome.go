@@ -283,17 +283,13 @@ func chromeProfiles(profiles []string) chromeProfileList {
 }
 
 func writeChromeError(w http.ResponseWriter, r *http.Request, err error) {
-	var withoutCDP *ChromeRunningWithoutCDPError
-	if errors.As(err, &withoutCDP) {
-		writeJSON(w, r, http.StatusConflict, struct {
-			Error   string `json:"error"`
-			Message string `json:"message"`
-		}{Error: "chrome_running_without_cdp", Message: withoutCDP.Error()})
-		return
-	}
 	status := http.StatusInternalServerError
 	code := "internal_server_error"
+	message := ""
+	var withoutCDP *ChromeRunningWithoutCDPError
 	switch {
+	case errors.As(err, &withoutCDP):
+		status, code, message = http.StatusConflict, "chrome_running_without_cdp", withoutCDP.Error()
 	case errors.Is(err, ErrInvalidChromeRequest):
 		status, code = http.StatusBadRequest, "invalid_chrome_request"
 	case errors.Is(err, ErrChromeNotFound):
@@ -308,8 +304,9 @@ func writeChromeError(w http.ResponseWriter, r *http.Request, err error) {
 		status, code = http.StatusConflict, "chrome_unavailable"
 	}
 	writeJSON(w, r, status, struct {
-		Error string `json:"error"`
-	}{Error: code})
+		Error   string `json:"error"`
+		Message string `json:"message,omitempty"`
+	}{Error: code, Message: message})
 }
 
 // AddProfile registers a Chrome profile without creating its user-data directory.
@@ -463,6 +460,9 @@ func (e *ChromeRunningWithoutCDPError) Is(target error) bool {
 // endpoint to answer and reports it too.
 func (c *Chrome) Start(ctx context.Context, profile string, options ChromeStartOptions) (ChromeStartResult, error) {
 	result := ChromeStartResult{Profile: profile}
+	// started is the launcher of a Chrome started with CDP whose endpoint is
+	// still to be awaited.
+	var started *marasichrome.Launcher
 	err := c.withConfig(ctx, func() error {
 		if result.Profile == "" {
 			result.Profile = "default-profile"
@@ -504,24 +504,36 @@ func (c *Chrome) Start(ctx context.Context, profile string, options ChromeStartO
 			if err := c.launch(launcher); err != nil {
 				return err
 			}
-			result.CDP = &CDPEndpoint{HTTP: endpoint.HTTP, WS: endpoint.WS, Reused: true}
+			result.CDP = newCDPEndpoint(endpoint, true)
 			return nil
 		}
 		if err := launcher.RemoveDevToolsActivePort(); err != nil {
 			return err
 		}
-		launcher = marasichrome.NewLauncher(append(launcherOptions, marasichrome.WithCDP(true))...)
+		launcher = marasichrome.NewLauncher(append(launcherOptions, marasichrome.WithCDP())...)
 		if err := c.launch(launcher); err != nil {
 			return err
 		}
-		endpoint, err := c.waitForCDPEndpoint(ctx, launcher, result.Profile)
-		if err != nil {
-			return err
-		}
-		result.CDP = &CDPEndpoint{HTTP: endpoint.HTTP, WS: endpoint.WS}
+		started = launcher
 		return nil
 	})
-	return result, err
+	if err != nil || started == nil {
+		return result, err
+	}
+	// Wait for the endpoint only after the config lock is released, so other
+	// chrome operations do not queue behind Chrome's startup (ADR-0013).
+	endpoint, err := c.waitForCDPEndpoint(ctx, started, result.Profile)
+	if err != nil {
+		return result, err
+	}
+	result.CDP = newCDPEndpoint(endpoint, false)
+	return result, nil
+}
+
+// newCDPEndpoint reports a chrome profile's CDP endpoint; reused marks one
+// that belongs to a Chrome that was already running.
+func newCDPEndpoint(endpoint marasichrome.CDPEndpoint, reused bool) *CDPEndpoint {
+	return &CDPEndpoint{HTTP: endpoint.HTTP, WS: endpoint.WS, Reused: reused}
 }
 
 // launch starts Chrome and logs why it could not.
