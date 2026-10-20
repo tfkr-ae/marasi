@@ -120,7 +120,7 @@ type Proxy struct {
 	OnLaunchFinished      func(domain.Launch)
 	Addr                  string                // IP Address of the proxy
 	Port                  string                // Port of the proxy
-	Client                *http.Client          // HTTP Client that is used by the repeater functionality (autoconfigured to use the proxy)
+	Client                *http.Client          // Sends through Marasi's own listener, so launches, Armory and extensions run the full pipeline and are captured
 	Extensions            []*extensions.Runtime // Slice of loaded extensions
 	WordlistManager       wordlist.Provider     // Provider for available wordlists.
 	SPKIHash              string                // SPKI Hash of the current certificate

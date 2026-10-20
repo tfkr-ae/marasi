@@ -21,6 +21,8 @@ type marasiRoundTripper struct {
 // newMarasiTransport will create marasi's roundtripper
 // It will define the base transport with the upstream TLSConfig using utls to mimic Chrome,
 // and waypoint aware DialContext
+// It is the only client that reaches the origin. Every other Marasi client
+// sends through the proxy's own listener (see Proxy.Client).
 func newMarasiTransport(dial func(context.Context, string, string) (net.Conn, error)) http.RoundTripper {
 	if dial == nil {
 		dial = (&net.Dialer{}).DialContext

@@ -2,6 +2,12 @@
 
 Run Go commands as `GOWORK=off go …`. Agent worktrees can sit inside a checkout whose parent `go.work` excludes this module, and `go` then fails with "main module … does not contain package".
 
+## Code maps
+
+Maps live in `docs/agents/maps/`. Read the map there before you change or ask about:
+
+- `request-path.md`: how a request moves through the proxy: listener, modifier order, capture, upstream, the headers Marasi adds, or any `http.Client`.
+
 ## Agent skills
 
 ### Issue tracker
