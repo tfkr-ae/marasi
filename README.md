@@ -84,8 +84,10 @@ strict suite.
 ### Autobahn checks
 
 The Autobahn workflow in GitHub Actions runs the full suite on every pull
-request that changes `websocket/`, `websocket*.go`, `internal/autobahn/`, or
-the workflow, every Monday, and when you start it manually. A job fails on any
+request that changes a path in its `paths` filter, every Monday, and when you
+start it manually. The filter includes `db/` and `proxy.go` because a WebSocket
+relay waits on the database writer's queue: a change that slows the writer can
+fail a case even though it touches no WebSocket code. A job fails on any
 deviation from the committed baseline. On a failure, the job's artifact holds
 the per-case reports, Marasi's log, and a resource log, and the job log shows
 kernel OOM messages.
