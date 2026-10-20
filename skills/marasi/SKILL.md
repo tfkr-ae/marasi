@@ -67,6 +67,22 @@ To let the user see how a captured response renders, give them `http://marasi/vi
 
 A capture is complete when `traffic get` returns the matching request and response. A client response alone does not prove that Marasi captured the exchange.
 
+## Drive a browser with CDP
+
+To automate a browser, attach to the one Marasi starts:
+
+```sh
+marasi --config-dir "$CONFIG_DIR" --instance "$INSTANCE" chrome start --profile "$CHROME_PROFILE" --cdp --json
+```
+
+Set `CHROME_PROFILE` to the chrome profile, or omit `--profile` to use `default-profile`; any other chrome profile must be registered first (`chrome --help`). The JSON holds `profile` and a `cdp` object with `http`, `ws` and `reused`. Pass `cdp.http` to Playwright's `chromium.connectOverCDP` or Puppeteer's `connect({ browserURL })`; use `cdp.ws` for a raw CDP client. `reused: true` means the chrome profile was already running with that CDP endpoint, so it can carry another session's tabs and cookies.
+
+Run the same command again whenever you need the CDP endpoint later: it returns the live CDP endpoint for that chrome profile, marked `reused`, and opens a new window in it.
+
+Error `chrome_running_without_cdp` means the chrome profile is already open without a CDP endpoint, and CDP cannot be turned on in a running Chrome. Ask the user to close that chrome profile, then run `chrome start --cdp` again, or start a different chrome profile with `--cdp`.
+
+Marasi's proxy switches, quiet switches and certificate trust reach Chrome only through `marasi chrome start`. Start every browser you drive with it, never by running Chrome yourself with copied switches.
+
 ## Search traffic
 
 `traffic list -q` takes an AIP-160 query over a fixed set of fields. `traffic list --help` lists the fields and the operators each one accepts. Marasi supports only part of AIP-160:
@@ -106,7 +122,7 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 | Hold, edit, forward, or drop traffic | `checkpoint` | HTTP edits replace the whole raw request or response, not just its body. WebSocket edits replace the payload. Interception can leave clients waiting. |
 | Inspect or inject WebSocket messages | `websocket`, `traffic websocket` | Injection and close require a live connection. Choose direction and opcode explicitly. |
 | Redirect an upstream connection | `waypoint` | Maps an original host:port to an override host:port without changing DNS. |
-| Launch a proxied browser | `chrome` | Register an executable path and profile before launch. |
+| Launch a proxied browser | `chrome` | Register an executable path and profile before launch. To automate it, see [Drive a browser with CDP](#drive-a-browser-with-cdp). |
 | Record methodology and vulnerabilities | `test-case`, `finding` | Link captured request IDs as evidence. |
 | Attach evidence files | `artifact` | Uploads require exactly one of `--finding` or `--test-case`, never both. |
 | Modify traffic with Lua | `extension` | Inspect source and settings before enabling or calling an extension. See [Write Lua extensions](#write-lua-extensions) before changing source. |
