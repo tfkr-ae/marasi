@@ -487,25 +487,32 @@ func (c *Chrome) Start(ctx context.Context, profile string, options ChromeStartO
 		if err != nil {
 			return fmt.Errorf("reading active proxy listener endpoint: %w", err)
 		}
-		launcher := marasichrome.NewLauncher(
+		launcherOptions := []marasichrome.Option{
 			marasichrome.WithProxy(address, port),
 			marasichrome.WithSPKIHash(c.proxy.SPKIHash),
 			marasichrome.WithConfigDir(c.proxy.ConfigDir),
 			marasichrome.WithProfile(result.Profile),
 			marasichrome.WithCustomPaths(c.proxy.Config.ChromeDirs),
-			marasichrome.WithCDP(options.CDP),
-		)
-		if options.CDP {
-			if err := launcher.RemoveDevToolsActivePort(); err != nil {
+		}
+		launcher := marasichrome.NewLauncher(launcherOptions...)
+		if !options.CDP {
+			return c.launch(launcher)
+		}
+		// A chrome profile running with a live CDP endpoint ignores the CDP
+		// switch, so start it without one to open a window and reuse the endpoint.
+		if endpoint, ok := launcher.LiveCDPEndpoint(ctx); ok {
+			if err := c.launch(launcher); err != nil {
 				return err
 			}
-		}
-		if err := launcher.Start(); err != nil {
-			fmt.Fprintf(c.logWriter, "starting Chrome: %v\n", err)
-			return fmt.Errorf("%w: %v", ErrChromeUnavailable, err)
-		}
-		if !options.CDP {
+			result.CDP = &CDPEndpoint{HTTP: endpoint.HTTP, WS: endpoint.WS, Reused: true}
 			return nil
+		}
+		if err := launcher.RemoveDevToolsActivePort(); err != nil {
+			return err
+		}
+		launcher = marasichrome.NewLauncher(append(launcherOptions, marasichrome.WithCDP(true))...)
+		if err := c.launch(launcher); err != nil {
+			return err
 		}
 		endpoint, err := c.waitForCDPEndpoint(ctx, launcher, result.Profile)
 		if err != nil {
@@ -515,6 +522,15 @@ func (c *Chrome) Start(ctx context.Context, profile string, options ChromeStartO
 		return nil
 	})
 	return result, err
+}
+
+// launch starts Chrome and logs why it could not.
+func (c *Chrome) launch(launcher *marasichrome.Launcher) error {
+	if err := launcher.Start(); err != nil {
+		fmt.Fprintf(c.logWriter, "starting Chrome: %v\n", err)
+		return fmt.Errorf("%w: %v", ErrChromeUnavailable, err)
+	}
+	return nil
 }
 
 // waitForCDPEndpoint polls until the started chrome profile's CDP endpoint
