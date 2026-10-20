@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
-	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 )
 
@@ -48,6 +48,7 @@ type Launcher struct {
 	configDir   string
 	profile     string
 	customPaths []PathConfig
+	cdp         bool
 }
 
 type Option func(*Launcher)
@@ -183,7 +184,7 @@ func (l *Launcher) Start() error {
 		return err
 	}
 
-	profileDir := filepath.Join(l.configDir, "chrome_profiles", l.profile)
+	profileDir := l.ProfileDir()
 
 	flags := []string{
 		fmt.Sprintf("--user-data-dir=%s", profileDir),
@@ -206,6 +207,9 @@ func (l *Launcher) Start() error {
 		"--proxy-bypass-list=<-loopback>",
 		"--window-name=Marasi - " + l.profile,
 		"about:blank",
+	}
+	if l.cdp {
+		flags = slices.Insert(flags, len(flags)-1, "--remote-debugging-port=0")
 	}
 
 	cmd := exec.Command(chromePath, flags...)
