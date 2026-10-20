@@ -11,6 +11,7 @@ When a change adds or changes a CLI command, flag, or output, update `skills/mar
 Maps live in `docs/agents/maps/`. Read the map there before you change or ask about:
 
 - `request-path.md`: how a request moves through the proxy: listener, modifier order, capture, upstream, the headers Marasi adds, or any `http.Client`.
+- `built-in-extensions.md`: the Lua of Compass, Checkpoint or Workshop, which is seeded in a migration rather than kept in `.lua` files.
 
 ## Agent skills
 
