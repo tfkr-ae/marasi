@@ -1,5 +1,5 @@
 -- +goose Up
--- Deleting a pair cascades to every table that references it (ADR-0034).
+-- Deleting a pair cascades to every table that references it (docs/adr/2026-10-14-deleting-a-pair-deletes-everything-it-owns.md).
 -- These tables have primary keys that lead with another column, so without
 -- an index on request_id each deleted pair scans them.
 CREATE INDEX IF NOT EXISTS idx_logs_request_id ON logs(request_id);

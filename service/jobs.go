@@ -17,7 +17,7 @@ var ErrNoOpenProject = errors.New("no open project")
 
 // jobBatchBytes caps the stored text one background job batch processes.
 // Batches share the project's single database connection with capture and
-// reads, so they stay small (ADR-0026). The cap is in bytes, not pairs, so
+// reads, so they stay small (docs/adr/2026-10-09-traffic-index-builds-in-the-background.md). The cap is in bytes, not pairs, so
 // large bodies do not hold the connection for seconds; a pair larger than the
 // cap is processed in a batch of its own.
 const jobBatchBytes = 1 << 20
@@ -31,7 +31,7 @@ const jobRetryDelay = time.Second
 const jobProgressInterval = time.Second
 
 // jobRunner is the repository side of a project's background jobs
-// (ADR-0039).
+// (docs/adr/2026-10-14-background-jobs-save-their-state.md).
 type jobRunner interface {
 	ListJobs() ([]db.JobState, error)
 	RunJobBatch(name domain.JobName, maxBytes int) (processed int, remaining bool, err error)

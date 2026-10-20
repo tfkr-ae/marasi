@@ -397,7 +397,7 @@ func controlRefusal(response instanceResponse) (code, message string) {
 // explainsRefusal reports whether a control API refusal tells the user what
 // to fix, so it is shown in human mode too: a 400 with an error code and a
 // message, such as invalid_query or invalid_cursor, or a 409 launch_pending,
-// whose message names the pending pairs (ADR-0053).
+// whose message names the pending pairs (docs/adr/2026-10-18-a-pending-launchs-pair-stays-in-its-launchpad.md).
 func explainsRefusal(response instanceResponse) bool {
 	code, message := controlRefusal(response)
 	switch response.StatusCode {

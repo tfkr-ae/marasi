@@ -4,10 +4,10 @@
 //
 // New takes the build's version, embedded minisign public key, and GitHub
 // base URL, and refuses development builds with ErrDevBuild. Check returns
-// the update on a channel, ordered by IsUpdate (ADR-0009, ADR-0049); Latest
+// the update on a channel, ordered by IsUpdate (docs/adr/2026-10-06-date-release-tags.md, docs/adr/2026-10-18-switching-channel-never-downgrades.md); Latest
 // returns the latest build even when older, for a reinstall.
 //
-// Install runs download, verify, install (ADR-0048, ADR-0050):
+// Install runs download, verify, install (docs/adr/2026-10-18-updates-are-signed-with-an-embedded-key.md, docs/adr/2026-10-18-service-instances-install-updates.md):
 //
 //  1. refuse an unwritable install directory before downloading
 //  2. fetch checksums.txt and checksums.txt.minisig and verify the signature;

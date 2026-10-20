@@ -108,7 +108,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 					Project string         `json:"project"`
 				}{Name: name, Project: path})
 				// Announced for one more release, for clients that do not
-				// read job.complete yet (ADR-0039), once traffic reads
+				// read job.complete yet (docs/adr/2026-10-14-background-jobs-save-their-state.md), once traffic reads
 				// report index.complete true.
 				if searchIndexComplete {
 					events.publish("traffic.index_complete", struct {

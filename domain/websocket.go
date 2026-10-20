@@ -79,7 +79,7 @@ type WebSocketMessageProgress struct {
 }
 
 // WebSocketMessage is a persisted WebSocket message snapshot: a whole text or
-// binary message, or a single ping, pong, or close (ADR-0027).
+// binary message, or a single ping, pong, or close (docs/adr/2026-10-11-websocket-message-is-the-whole-message.md).
 type WebSocketMessage struct {
 	// ID uniquely identifies the message.
 	ID uuid.UUID

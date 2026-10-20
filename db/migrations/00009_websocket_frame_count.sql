@@ -1,4 +1,4 @@
--- A stored WebSocket message is the whole message (ADR-0027), so the
+-- A stored WebSocket message is the whole message (docs/adr/2026-10-11-websocket-message-is-the-whole-message.md), so the
 -- per-frame fin flag no longer describes it. frame_count records how many
 -- frames carried it; rows stored before this were one frame each.
 

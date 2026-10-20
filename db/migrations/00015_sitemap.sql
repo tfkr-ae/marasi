@@ -1,5 +1,5 @@
 -- +goose Up
--- The stored sitemap (ADR-0040). Each node is an origin or one path segment
+-- The stored sitemap (docs/adr/2026-10-14-sitemap-is-stored-by-node-and-content-type.md). Each node is an origin or one path segment
 -- below it, named by its canonical path. sitemap_count holds subtree totals
 -- per content type; the '' bucket holds pairs with no content type, including
 -- in-flight ones. pair_sitemap links each pair to its leaf node. The sitemap

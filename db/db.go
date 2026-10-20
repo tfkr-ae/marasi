@@ -50,9 +50,9 @@ type Repository struct {
 	// statisticsDue is set when captured passes a multiple of
 	// optimizeEveryPairs, until RefreshStatisticsIfDue runs the refresh.
 	statisticsDue atomic.Bool
-	// indexQueue indexes captured pairs in batches (ADR-0026).
+	// indexQueue indexes captured pairs in batches (docs/adr/2026-10-09-traffic-index-builds-in-the-background.md).
 	indexQueue indexQueue
-	// pairNumber is the last pair number issued (ADR-0042).
+	// pairNumber is the last pair number issued (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md).
 	pairNumber atomic.Int64
 	// afterBulkFlush, when set by a test, runs between a bulk operation's
 	// index flush and its transaction.
@@ -60,7 +60,7 @@ type Repository struct {
 }
 
 // optimizeEveryPairs is how many captured pairs pass between refreshes of
-// the planner statistics while a project is open (ADR-0041).
+// the planner statistics while a project is open (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md).
 const optimizeEveryPairs = 1000
 
 // NewProxyRepo initializes a new Repository with the given sqlx.DB database connection.
@@ -89,7 +89,7 @@ func (repo *Repository) Close() error {
 	// a failure leaves them to the next open to count once.
 	_ = repo.inTx(func(tx *sqlx.Tx) error { return foldPairCount(tx) })
 	// Refresh the statistics the planner uses to choose an index
-	// (ADR-0041). A failure here must not keep the project open.
+	// (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md). A failure here must not keep the project open.
 	_, _ = repo.dbConn.Exec(`PRAGMA optimize`)
 	err := repo.dbConn.Close()
 	if err != nil {
@@ -127,7 +127,7 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 	}
 	// modernc.org/sqlite reads only _pragma parameters; it ignores the
 	// _journal, _timeout, and _fk spellings of other drivers.
-	// synchronous NORMAL fsyncs only at WAL checkpoints (ADR-0029).
+	// synchronous NORMAL fsyncs only at WAL checkpoints (docs/adr/2026-10-13-project-commits-fsync-only-at-checkpoints.md).
 	db, err := sqlx.Connect("sqlite", dsn+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 
 	if err != nil {
@@ -197,7 +197,7 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 }
 
 // optimize refreshes the statistics the planner uses to choose between a
-// sort index and a filter's index (ADR-0041) with the PRAGMA optimize
+// sort index and a filter's index (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md) with the PRAGMA optimize
 // statement pragma, which analyses only the tables whose size has changed
 // a lot since their last analysis. analysis_limit keeps each analysis of a
 // large project to a sample; it is set every time because the pool may have
@@ -226,7 +226,7 @@ func (repo *Repository) pairCaptured() {
 }
 
 // RefreshStatisticsIfDue refreshes the planner statistics when captures
-// have marked them due (ADR-0041). The proxy's database writer calls it when
+// have marked them due (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md). The proxy's database writer calls it when
 // it has been idle for a while, so the refresh does not hold up capture. A
 // failed refresh leaves the old statistics until the project next opens or
 // closes.

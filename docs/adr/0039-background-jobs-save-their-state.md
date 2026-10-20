@@ -1,7 +1,0 @@
-# Background jobs save their state
-
-A project records each background job's state in a `background_job` table: whether it is complete, for which rule or decoder version, and how far it has got. The jobs are the traffic index build, the annotation index backfill, the sitemap backfill and the move of prettified bodies. Deriving completeness on each open, as ADR-0026 does, scanned every pair: 1.36 s on a million pairs, against a 300 ms budget for the first rows. ADR-0026 rejected a saved marker because a Marasi binary older than the job writes pairs that the marker cannot see. Current binaries therefore also advance a saved high-water pair id. On open, pairs newer than that mark reset the jobs they affect, and a version change or an explicit rebuild resets one job.
-
-Every traffic read reports the completeness of each job its answer depends on, as `index.complete` does today, and that flag is how a client tells a researcher that results or counts may be incomplete. An in-process client such as marasi-app relies on it alone. `service.ProjectLifecycle` reports progress to the service through an internal hook, and the service turns it into `job.progress` and `job.complete` events for its clients. Jobs are listed at `GET /jobs` and rebuilt with `POST /jobs/{name}/rebuild`. `traffic.index_complete` is still announced for one release.
-
-Supersedes the "saved marker" rejection in ADR-0026; the rest of ADR-0026 stands.

@@ -6,7 +6,7 @@
 //   - Bypass certificate errors for the configured certificate
 //   - Load chrome binaries from custom paths
 //   - Quiet Chrome's own background requests with switches and disabled
-//     features, without bypassing or blocking any host (ADR-0056)
+//     features, without bypassing or blocking any host (docs/adr/2026-10-20-chrome-is-quieted-with-switches-and-compass-takes-the-rest.md)
 package chrome
 
 import (
@@ -20,7 +20,7 @@ import (
 
 // disabledFeatures are the Chrome features turned off in every started Chrome
 // because they send background requests through the proxy. None of them
-// changes how a target site behaves (ADR-0056). NetworkPrediction, Translate,
+// changes how a target site behaves (docs/adr/2026-10-20-chrome-is-quieted-with-switches-and-compass-takes-the-rest.md). NetworkPrediction, Translate,
 // DialMediaRouteProvider, CertificateTransparencyComponentUpdater and
 // InterestFeedContentSuggestions are not declared as features at Chromium 155,
 // so Chrome ignores them there.
@@ -174,7 +174,7 @@ func (l *Launcher) getChromePath() (string, error) {
 // background requests without changing how a target site behaves. No host
 // bypasses the proxy or is blocked: --proxy-bypass-list=<-loopback> removes
 // Chrome's implicit loopback bypass, so loopback requests go through the
-// proxy too (ADR-0056).
+// proxy too (docs/adr/2026-10-20-chrome-is-quieted-with-switches-and-compass-takes-the-rest.md).
 //
 // Returns:
 //   - error: An error if the configuration directory is missing, the executable is not found,

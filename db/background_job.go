@@ -128,7 +128,7 @@ func newestPair(q sqlx.Queryer) (sql.NullString, error) {
 }
 
 // reconcileJobs brings the saved state of every registered job up to date
-// when a project opens (ADR-0039). A job this binary has not run on the
+// when a project opens (docs/adr/2026-10-14-background-jobs-save-their-state.md). A job this binary has not run on the
 // project before starts, complete when there are no pairs. A job whose saved
 // version differs resets and discards its output. A job whose high-water mark
 // is behind the newest pair was skipped by a binary that does not maintain it,

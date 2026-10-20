@@ -22,6 +22,10 @@ This is a single-context repo:
 └── src/
 ```
 
+## Name ADRs by date and slug
+
+Name a new ADR `docs/adr/YYYY-MM-DD-<slug>.md`, dated the day you write it. This overrides the sequential numbering in `/domain-modeling`: parallel worktrees each took the same next number. Refer to an ADR by its path, as a markdown link in docs.
+
 ## Use the glossary's vocabulary
 
 When your output names a domain concept, use the term defined in `GLOSSARY.md`. This applies to issue titles, refactor proposals, hypotheses, and test names. Do not use synonyms that the glossary explicitly avoids.

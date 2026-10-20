@@ -33,10 +33,10 @@ func ParseChannel(s string) (Channel, error) {
 // or installs updates.
 var ErrDevBuild = errors.New("development builds don't check for or install updates")
 
-// dateLayout is the DD.MM.YYYY date that names a build (ADR-0009).
+// dateLayout is the DD.MM.YYYY date that names a build (docs/adr/2026-10-06-date-release-tags.md).
 const dateLayout = "02.01.2006"
 
-// Build is a parsed version string (ADR-0009):
+// Build is a parsed version string (docs/adr/2026-10-06-date-release-tags.md):
 //
 //   - release: "DD.MM.YYYY" or "DD.MM.YYYY-N" for the Nth cut of a day
 //   - nightly: "DD.MM.YYYY (nightly <shortsha>)"
@@ -109,7 +109,7 @@ func Compare(a, b Build) int {
 }
 
 // IsUpdate reports whether candidate, found on channel, is an update for
-// installed: newer by Compare, never older (ADR-0049). On the nightly
+// installed: newer by Compare, never older (docs/adr/2026-10-18-switching-channel-never-downgrades.md). On the nightly
 // channel a nightly of the same date as an installed nightly is also newer
 // when it is from another commit and was published later. When the
 // installed build's publish time is unknown, another commit is enough: only

@@ -13,7 +13,7 @@ import (
 )
 
 // selectionSubquery returns a subquery selecting the id of every pair in sel
-// (ADR-0033), with its arguments. Ids are bound as one JSON array read with
+// (docs/adr/2026-10-14-query-selections-stop-at-as-of.md), with its arguments. Ids are bound as one JSON array read with
 // json_each, so a selection of any size uses a single parameter; ids with no
 // pair are dropped by the join and a repeated id is selected once. A query selection is the translated query,
 // plus the exclusion, plus id <= as_of, and its jobs are the background jobs
@@ -203,7 +203,7 @@ func appendEntries(tx *sqlx.Tx, launchpadID uuid.UUID, selected string, args []a
 // UnlinkTraffic removes the links between every pair in sel and target and
 // returns the number of pairs that were linked.
 // It does not check for pending launches; clients call the Proxy method of
-// the same name, which refuses a pending launch's pair (ADR-0053).
+// the same name, which refuses a pending launch's pair (docs/adr/2026-10-18-a-pending-launchs-pair-stays-in-its-launchpad.md).
 func (repo *Repository) UnlinkTraffic(sel domain.Selection, target domain.LinkTarget) (int, error) {
 	return repo.bulkInTx(sel, func(tx *sqlx.Tx, selected string, args []any) (int, error) {
 		link, err := linkTableFor(tx, target)

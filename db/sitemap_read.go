@@ -33,7 +33,7 @@ type sitemapRow struct {
 // content type is in q.Exclusion. With q.Query it computes the counts
 // exactly from the pairs that match the query and exclusion with an id at
 // or below its as-of bound, grouped by the child their sitemap leaf sits
-// under (ADR-0040). Pairs the sitemap job has not reached are not counted
+// under (docs/adr/2026-10-14-sitemap-is-stored-by-node-and-content-type.md). Pairs the sitemap job has not reached are not counted
 // in either mode. The read stops when ctx ends.
 //
 // An unknown node returns domain.ErrSitemapNodeNotFound, an invalid query or

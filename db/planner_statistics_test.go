@@ -35,7 +35,7 @@ func queryPlan(t *testing.T, repo *Repository, query string, args ...any) string
 }
 
 // A project opened small and grown in one session must not keep the
-// statistics it was opened with (ADR-0041). Opened with one host and many
+// statistics it was opened with (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md). Opened with one host and many
 // status codes, then grown on many hosts and one status code, a sorted page
 // filtered to one sparse host and that status code must read the host
 // index. With the statistics from the open it reads every pair with the

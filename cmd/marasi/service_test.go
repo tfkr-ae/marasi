@@ -2805,7 +2805,7 @@ func TestStartService(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolving other project: %v", err)
 		}
-		// A switch waits for the held item (ADR-0046). Leaving the open
+		// A switch waits for the held item (docs/adr/2026-10-17-project-switch-waits-for-held-checkpoint-items.md). Leaving the open
 		// cancels it and keeps the current project.
 		openClient := service.NewClient(socketPath)
 		openContext, cancelOpen := context.WithTimeout(context.Background(), 300*time.Millisecond)

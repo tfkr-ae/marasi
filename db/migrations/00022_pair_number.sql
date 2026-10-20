@@ -1,7 +1,7 @@
 -- +goose Up
--- Each pair gets a number in its project's capture order (ADR-0042). The
+-- Each pair gets a number in its project's capture order (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md). The
 -- number lives in a side table so that numbering existing pairs writes small
--- rows instead of rewriting every request row with its bodies (ADR-0035). A
+-- rows instead of rewriting every request row with its bodies (docs/adr/2026-10-14-highlight-is-a-side-table.md). A
 -- declared INTEGER PRIMARY KEY survives VACUUM and table rebuilds, and
 -- AUTOINCREMENT never hands out a deleted number again.
 CREATE TABLE IF NOT EXISTS pair_number (

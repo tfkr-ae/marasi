@@ -484,7 +484,7 @@ func (proxy *Proxy) forgetCheckpoint(id uuid.UUID) {
 }
 
 // abandonWebSocketCheckpoint drops the messages held for a connection that closed
-// (ADR-0030) and reports each through OnCheckpointAbandoned. Removal happens under
+// (docs/adr/2026-10-13-checkpoint-hold-ends-when-its-client-leaves.md) and reports each through OnCheckpointAbandoned. Removal happens under
 // the interceptor lock, so a forward or drop that resolved a message first wins.
 func (proxy *Proxy) abandonWebSocketCheckpoint(connectionID uuid.UUID) {
 	var abandoned []domain.WebSocketMessage

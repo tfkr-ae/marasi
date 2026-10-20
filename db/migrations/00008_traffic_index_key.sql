@@ -1,6 +1,6 @@
 -- +goose Up
 -- The traffic index is keyed on traffic_index_key, not on the request row's
--- implicit rowid (ADR-0026). request has a TEXT primary key, so VACUUM or a
+-- implicit rowid (docs/adr/2026-10-09-traffic-index-builds-in-the-background.md). request has a TEXT primary key, so VACUUM or a
 -- migration that rebuilds the table can renumber its rowids, and an index keyed
 -- on them would then match the wrong pairs. An INTEGER PRIMARY KEY keeps its
 -- values, and SQLite assigns them: AUTOINCREMENT never reuses one, so a

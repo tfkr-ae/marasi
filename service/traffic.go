@@ -56,7 +56,7 @@ type trafficList struct {
 	Index      *trafficIndex    `json:"index,omitempty"`
 }
 
-// trafficIndex reports the state of the traffic index (ADR-0026).
+// trafficIndex reports the state of the traffic index (docs/adr/2026-10-09-traffic-index-builds-in-the-background.md).
 type trafficIndex struct {
 	// Complete is false while the background build is still indexing pairs.
 	// Text conditions in a query can miss pairs until it is true.
@@ -176,7 +176,7 @@ type contentTypeCount struct {
 // trafficSummary is one request/response pair in a traffic list page.
 type trafficSummary struct {
 	ID          uuid.UUID      `json:"id"`           // request UUID
-	Number      int64          `json:"number"`       // pair number in capture order (ADR-0042)
+	Number      int64          `json:"number"`       // pair number in capture order (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md)
 	Scheme      string         `json:"scheme"`       // http or https
 	Method      string         `json:"method"`       // HTTP method
 	Host        string         `json:"host"`         // request host
@@ -194,14 +194,14 @@ type trafficSummary struct {
 // trafficDetail is the GET /traffic/{id} response body.
 type trafficDetail struct {
 	ID        uuid.UUID       `json:"id"`        // request UUID
-	Number    int64           `json:"number"`    // pair number in capture order (ADR-0042)
+	Number    int64           `json:"number"`    // pair number in capture order (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md)
 	Note      string          `json:"note"`      // user note, empty if none
 	Metadata  map[string]any  `json:"metadata"`  // combined metadata without prettified bodies
 	Highlight *int            `json:"highlight"` // highlight from 1 to 8; nil if none
 	Request   trafficRequest  `json:"request"`   // captured request
 	Response  trafficResponse `json:"response"`  // captured response; StatusCode is -1 if none yet
 	// Prettified holds the prettified copies the proxy stored at capture
-	// (ADR-0036). They are never part of metadata.
+	// (docs/adr/2026-10-14-prettified-bodies-leave-metadata.md). They are never part of metadata.
 	Prettified trafficPrettified `json:"prettified"`
 }
 
@@ -731,7 +731,7 @@ func prettifiedCopy(copy string) *string {
 }
 
 // overlayMetadata replaces client-owned keys and sets has_note from the notes
-// table (ADR-0017). Prettified copies are not metadata (ADR-0036), so keys of
+// table (docs/adr/2026-10-06-metadata-replace-with-overlay.md). Prettified copies are not metadata (docs/adr/2026-10-14-prettified-bodies-leave-metadata.md), so keys of
 // that name from the client are dropped.
 func overlayMetadata(client map[string]any, hasNote bool) map[string]any {
 	stored := make(map[string]any, len(client)+1)

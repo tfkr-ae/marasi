@@ -147,7 +147,7 @@ func (c *Connection) SetMaxMessageSize(limit int64) {
 }
 
 // SetDeflate makes the proxy the permessage-deflate endpoint on both legs
-// with the negotiated params (ADR-0028). Each direction gets its own
+// with the negotiated params (docs/adr/2026-10-11-proxy-terminates-permessage-deflate-per-leg.md). Each direction gets its own
 // inflater and deflater: the client's parameters govern messages from the
 // client, inflated from the client and deflated toward the upstream, and the
 // server's govern messages from the server. A nil params means no deflate.

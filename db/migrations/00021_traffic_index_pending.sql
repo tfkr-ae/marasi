@@ -1,6 +1,6 @@
 -- +goose Up
 -- Capture no longer writes the search indexes in the pair's own transaction
--- (ADR-0026). It records the pair here instead, and the repository indexes
+-- (docs/adr/2026-10-09-traffic-index-builds-in-the-background.md). It records the pair here instead, and the repository indexes
 -- the recorded pairs in batches, within about a second and before any text
 -- query reads the index. A pair recorded here when the process stops is
 -- indexed by the next binary that opens the project.

@@ -127,7 +127,7 @@ func fromDomainProxyResponse(presp *domain.ProxyResponse) *dbRequestResponse {
 			Valid:  presp.ContentType != "",
 		},
 		// A response with no Content-Length stores 0, so it sorts as 0
-		// (ADR-0041). Only a pair with no response has a NULL length.
+		// (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md). Only a pair with no response has a NULL length.
 		Length: sql.NullString{
 			String: cmp.Or(presp.Length, "0"),
 			Valid:  true,
@@ -165,7 +165,7 @@ func toDomainProxyResponse(dbReqRes *dbRequestResponse) *domain.ProxyResponse {
 		resp.ContentType = dbReqRes.ContentType.String
 	}
 
-	// A pair with no response stores a NULL length (ADR-0041) and reads
+	// A pair with no response stores a NULL length (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md) and reads
 	// as "0", as it did when the column defaulted to '0'.
 	resp.Length = cmp.Or(dbReqRes.Length.String, "0")
 
@@ -225,7 +225,7 @@ func toDomainRequestResponseSummary(dbSummary *dbRequestResponseSummary) *domain
 		reqResSummary.ContentType = dbSummary.ContentType.String
 	}
 
-	// A pair with no response stores a NULL length (ADR-0041) and reads
+	// A pair with no response stores a NULL length (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md) and reads
 	// as "0", as it did when the column defaulted to '0'.
 	reqResSummary.Length = cmp.Or(dbSummary.Length.String, "0")
 
@@ -254,7 +254,7 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 		req.Number = repo.NextPairNumber()
 	}
 	dbRequest := fromDomainProxyRequest(req)
-	// length is NULL until the response arrives (ADR-0041); the column's
+	// length is NULL until the response arrives (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md); the column's
 	// '0' default predates the length sort.
 	query := `INSERT INTO request(id, scheme, method, host, path, request_raw, requested_at, metadata, length)
 			  VALUES(:id, :scheme, :method, :host, :path, :request_raw, :requested_at, :metadata, NULL)`
@@ -332,7 +332,7 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 			return err
 		}
 		// Sorted walks started before this write keep the pair with the
-		// pairs that have no value (ADR-0041).
+		// pairs that have no value (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md).
 		if _, err := tx.Exec(`INSERT INTO pair_response_order (request_id) VALUES (?)`, resp.ID); err != nil {
 			return fmt.Errorf("recording the response order: %w", err)
 		}

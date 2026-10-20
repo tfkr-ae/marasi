@@ -28,7 +28,7 @@ const trafficSummarySource = ` FROM request` + highlightJoin + numberJoin
 // trafficCursorVersion is the version of the cursor token format.
 const trafficCursorVersion = 1
 
-// trafficCursor is the decoded form of an opaque list cursor (ADR-0041). It
+// trafficCursor is the decoded form of an opaque list cursor (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md). It
 // names the sort it was made under, the row's sort key and id, and the phase
 // of the walk: 0 while walking pairs with a sort value, 1 once the walk has
 // reached the pairs with none. Key is null for requested_at, whose key is id,
@@ -424,7 +424,7 @@ type sortSegment struct {
 // as having no value, so a pair that gets its response during the walk stays
 // in the part it was in when the walk started. A backward walk reads the
 // pairs with no value first; without this, such a pair would be read again
-// with the valued pairs (ADR-0041).
+// with the valued pairs (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md).
 func sortSegments(sort trafficSort, backward bool, cursor *trafficCursor, cursorKey any, responses *int64) []sortSegment {
 	walkDesc := sort.desc != backward
 	op, dir := ">", "ASC"

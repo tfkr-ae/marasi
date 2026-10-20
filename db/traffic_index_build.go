@@ -53,7 +53,7 @@ func (e *SkippedPairError) Unwrap() error { return e.Err }
 
 // indexBuildState remembers what this repository already knows about the
 // background traffic index build, so the build does not rescan pairs it has
-// seen. Whether the index is complete is saved in background_job (ADR-0039);
+// seen. Whether the index is complete is saved in background_job (docs/adr/2026-10-14-background-jobs-save-their-state.md);
 // this state is not: a fresh repository rediscovers the missing pairs, and
 // retries the ones it skipped.
 //
@@ -147,7 +147,7 @@ var trafficIndexBuild = indexBuild{
 }
 
 // annotationIndexBuild backfills the annotation index for pairs indexed
-// before it existed (ADR-0038).
+// before it existed (docs/adr/2026-10-14-search-index-splits-annotations-from-bodies.md).
 var annotationIndexBuild = indexBuild{
 	job:     domain.JobAnnotationIndex,
 	docsize: "traffic_annotation_index_docsize",

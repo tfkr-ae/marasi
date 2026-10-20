@@ -10,7 +10,7 @@ import (
 
 // SitemapRulesVersion is the version of the rules SitemapPath follows. A
 // project whose sitemap was built under another version rebuilds it as the
-// sitemap background job (ADR-0040).
+// sitemap background job (docs/adr/2026-10-14-sitemap-is-stored-by-node-and-content-type.md).
 const SitemapRulesVersion = 1
 
 // MaxSitemapPage is the most children one sitemap read returns.
@@ -46,12 +46,12 @@ type SitemapChild struct {
 	HasChildren bool  `json:"has_children"`
 }
 
-// SitemapQuery reads one page of a sitemap node's children (ADR-0040).
+// SitemapQuery reads one page of a sitemap node's children (docs/adr/2026-10-14-sitemap-is-stored-by-node-and-content-type.md).
 //
 // Without Query it reads the stored all-traffic sitemap, leaving out the
 // content types in Exclusion. With Query it is in query mode: it counts
 // exactly the pairs that match Query.Text, are not hidden by
-// Query.Exclusion, and have an id at or below Query.AsOf (ADR-0033). In
+// Query.Exclusion, and have an id at or below Query.AsOf (docs/adr/2026-10-14-query-selections-stop-at-as-of.md). In
 // query mode Exclusion must be empty.
 type SitemapQuery struct {
 	Node      string          // the node's name; "" for the origins
@@ -100,7 +100,7 @@ type SitemapLevelsQuery struct {
 	// Selection, when set, gives each child its Matching and MatchingErrors
 	// counts: the pairs that match Selection.Text, are not hidden by
 	// Selection.Exclusion, and have an id at or below Selection.AsOf
-	// (ADR-0033).
+	// (docs/adr/2026-10-14-query-selections-stop-at-as-of.md).
 	Selection *SelectionQuery
 	// Cursors continue a node's earlier page, keyed by node name. A cursor
 	// belongs to the scope it came from. ListSitemapChildren takes a
@@ -145,7 +145,7 @@ type SitemapLevels struct {
 }
 
 // SitemapPath returns the sitemap nodes from a pair's origin down to its leaf,
-// from the pair's stored scheme, host and path (ADR-0040). Capture, the
+// from the pair's stored scheme, host and path (docs/adr/2026-10-14-sitemap-is-stored-by-node-and-content-type.md). Capture, the
 // sitemap job and tests all use it, so they build the same tree.
 //
 //   - The origin is scheme://host, lowercased, keeping any port.

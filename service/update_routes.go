@@ -60,7 +60,7 @@ type runningInstall struct {
 
 // updateInstaller runs at most one install per instance. Installs run on
 // its own context, not the request's: an install outlives its client
-// (ADR-0050). Across instances the install lock in the config dir keeps it
+// (docs/adr/2026-10-18-service-instances-install-updates.md). Across instances the install lock in the config dir keeps it
 // to one per installed build.
 type updateInstaller struct {
 	ctx       context.Context
@@ -220,7 +220,7 @@ func writeUpdateFailure(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 // writeAlreadyInstalled refuses an install once one, by any instance or by
-// hand, has replaced the installed build (ADR-0050).
+// hand, has replaced the installed build (docs/adr/2026-10-18-service-instances-install-updates.md).
 func writeAlreadyInstalled(w http.ResponseWriter, r *http.Request) {
 	writeUpdateError(w, r, http.StatusConflict, "already_installed", "an update is installed; restart the instance to run it")
 }

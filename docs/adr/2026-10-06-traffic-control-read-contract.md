@@ -4,4 +4,4 @@ The control API lists traffic newest-first with a UUID cursor and a hard limit, 
 
 **Considered options:** unbounded `GetRequestResponseSummary`; offset pagination; JSON strings for raw. Rejected because a live project grows during a read, and a string marshal cannot round-trip binary bodies.
 
-The UUID cursor is superseded by the opaque keyset cursor of ADR-0041, because sorted lists need the sort key in the cursor. Newest-first remains the default order.
+The UUID cursor is superseded by the opaque keyset cursor of [Traffic lists sort by any ledger column](2026-10-14-traffic-lists-sort-by-any-ledger-column.md), because sorted lists need the sort key in the cursor. Newest-first remains the default order.

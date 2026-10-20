@@ -43,7 +43,7 @@ type RepositoryProvider interface {
 	domain.WebSocketRepository
 	io.Closer
 	// RefreshStatisticsIfDue refreshes the planner statistics when captures
-	// have marked them due (ADR-0041). The database writer calls it when idle.
+	// have marked them due (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md). The database writer calls it when idle.
 	RefreshStatisticsIfDue()
 }
 
@@ -498,7 +498,7 @@ func WithWordlistManager(manager wordlist.Provider) func(*Proxy) error {
 }
 
 // WithBrowserViewExpiry sets how long a pending browser view waits for its
-// redirect to be followed. The default is 10 seconds (ADR-0055).
+// redirect to be followed. The default is 10 seconds (docs/adr/2026-10-20-a-browser-view-serves-the-stored-response-once-at-its-original-url.md).
 func WithBrowserViewExpiry(expiry time.Duration) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		if expiry <= 0 {
@@ -514,7 +514,7 @@ func WithBrowserViewExpiry(expiry time.Duration) func(*Proxy) error {
 // admit returns the work's release and the generation of the open project it
 // runs in. A request is admitted for its request-side work and again for its
 // response-side work, and a response admitted in another generation than its
-// request skips every project-bound step (ADR-0045).
+// request skips every project-bound step (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
 func WithWorkAdmission(admit func(context.Context, bool) (func(), uint64, error)) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		if admit == nil {
@@ -555,7 +555,7 @@ func WithBasePipeline() func(*Proxy) error {
 					return err
 				}
 				// The wait on the origin is not project work, so the request
-				// side releases its admission before the round trip (ADR-0045).
+				// side releases its admission before the round trip (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
 				defer release()
 				ctx := context.WithValue(req.Context(), projectAdmissionKey{}, projectAdmission{internal: internal, generation: generation})
 				if internal && launchErr == nil {
@@ -590,7 +590,7 @@ func WithBasePipeline() func(*Proxy) error {
 					return nil
 				}
 				// The body is still the wait on the origin, so it is read
-				// before the response side is admitted (ADR-0045).
+				// before the response side is admitted (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
 				if err := BufferStreamingBodyModifier(proxy, res); err != nil {
 					log.Printf("response pipeline: %v", err)
 					return err
@@ -604,7 +604,7 @@ func WithBasePipeline() func(*Proxy) error {
 					defer release()
 					if generation != admission.generation {
 						// The pair was captured in a project that is no longer
-						// open. It stays response-less there (ADR-0045).
+						// open. It stays response-less there (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
 						return proxy.passStaleResponse(res)
 					}
 					// In place: martian finds its context by the request's address.

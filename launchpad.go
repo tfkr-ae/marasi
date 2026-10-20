@@ -424,7 +424,7 @@ func (proxy *Proxy) isLaunch(req *http.Request) bool {
 
 // compassSkips reports whether Compass marked req out of scope. A launch is
 // deliberate and must appear in its launchpad, so Compass runs on it but its
-// skip decision does not apply (ADR-0031): the mark is cleared and the launch
+// skip decision does not apply (docs/adr/2026-10-13-launches-are-tracked-and-cancellable.md): the mark is cleared and the launch
 // goes on through the pipeline. A Compass drop still applies to a launch.
 func (proxy *Proxy) compassSkips(req *http.Request) bool {
 	if skip, ok := core.SkipFlagFromContext(req.Context()); !ok || !skip {
@@ -569,7 +569,7 @@ func (proxy *Proxy) finishLaunch(id uuid.UUID) {
 
 // storeLaunchedRequest stores the request as launched when the launch ended
 // before the pipeline wrote its pair, so every launch leaves its request in its launchpad.
-// The pair of a pending launch cannot be deleted (ADR-0053), so a pair found
+// The pair of a pending launch cannot be deleted (docs/adr/2026-10-18-a-pending-launchs-pair-stays-in-its-launchpad.md), so a pair found
 // here is the launch's own.
 func (proxy *Proxy) storeLaunchedRequest(entry *launchEntry) {
 	if proxy.TrafficRepo == nil || entry.launched == nil {
