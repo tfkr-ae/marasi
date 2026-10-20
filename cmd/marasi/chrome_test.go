@@ -249,6 +249,25 @@ func TestChromeCommandContract(t *testing.T) {
 		}
 	})
 
+	t.Run("should report a reused CDP endpoint", func(t *testing.T) {
+		reused := `{"status":"started","profile":"pentest","cdp":{"http":"http://127.0.0.1:53211","ws":"ws://127.0.0.1:53211/devtools/browser/0b5e1a52","reused":true}}` + "\n"
+
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "reused-json", http.StatusOK, reused)
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "reused-json", "chrome", "start", "--profile", "pentest", "--cdp", "--json")
+		if err != nil || stdout != reused || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", reused, stdout, stderr, err)
+		}
+
+		configDir = serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "reused-human", http.StatusOK, reused)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "reused-human", "chrome", "start", "--profile", "pentest", "--cdp")
+		want := "chrome started with profile pentest\nCDP endpoint http://127.0.0.1:53211 (reused)\n"
+		if err != nil || stdout != "" || stderr != want {
+			t.Fatalf("\nwanted:\nempty stdout, stderr %q, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+	})
+
 	t.Run("should report a profile running without CDP", func(t *testing.T) {
 		refusal := `{"error":"chrome_running_without_cdp","message":"chrome profile pentest is running without a CDP endpoint; close it and start it again with --cdp"}`
 		want := "starting chrome: chrome_running_without_cdp: chrome profile pentest is running without a CDP endpoint; close it and start it again with --cdp"
