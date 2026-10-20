@@ -463,6 +463,9 @@ func (e *ChromeRunningWithoutCDPError) Is(target error) bool {
 // endpoint to answer and reports it too.
 func (c *Chrome) Start(ctx context.Context, profile string, options ChromeStartOptions) (ChromeStartResult, error) {
 	result := ChromeStartResult{Profile: profile}
+	// started is the launcher of a Chrome started with CDP whose endpoint is
+	// still to be awaited.
+	var started *marasichrome.Launcher
 	err := c.withConfig(ctx, func() error {
 		if result.Profile == "" {
 			result.Profile = "default-profile"
@@ -514,14 +517,20 @@ func (c *Chrome) Start(ctx context.Context, profile string, options ChromeStartO
 		if err := c.launch(launcher); err != nil {
 			return err
 		}
-		endpoint, err := c.waitForCDPEndpoint(ctx, launcher, result.Profile)
-		if err != nil {
-			return err
-		}
-		result.CDP = &CDPEndpoint{HTTP: endpoint.HTTP, WS: endpoint.WS}
+		started = launcher
 		return nil
 	})
-	return result, err
+	if err != nil || started == nil {
+		return result, err
+	}
+	// Wait for the endpoint only after the config lock is released, so other
+	// chrome operations do not queue behind Chrome's startup (ADR-0013).
+	endpoint, err := c.waitForCDPEndpoint(ctx, started, result.Profile)
+	if err != nil {
+		return result, err
+	}
+	result.CDP = &CDPEndpoint{HTTP: endpoint.HTTP, WS: endpoint.WS}
+	return result, nil
 }
 
 // launch starts Chrome and logs why it could not.

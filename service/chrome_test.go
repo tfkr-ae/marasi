@@ -652,6 +652,35 @@ func TestChromeStartCDP(t *testing.T) {
 		readFakeChromeArgs(t, argsPath)
 	})
 
+	t.Run("should release the config lock while waiting for the CDP endpoint", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("test executable is a shell script")
+		}
+		configDir := t.TempDir()
+		executable, argsPath := writeCDPFakeChrome(t, configDir, "")
+		module := newModule(t, configDir, executable)
+		module.cdpWait = 3 * time.Second
+
+		started := make(chan error, 1)
+		go func() {
+			_, err := module.Start(context.Background(), "pentest", ChromeStartOptions{CDP: true})
+			started <- err
+		}()
+		readFakeChromeArgs(t, argsPath)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if _, err := module.Profiles(ctx); err != nil {
+			t.Fatalf("\nwanted:\nprofiles listed while Start waits for the CDP endpoint\ngot:\n%v", err)
+		}
+		if _, err := module.AddProfile(ctx, "second"); err != nil {
+			t.Fatalf("\nwanted:\nprofile added while Start waits for the CDP endpoint\ngot:\n%v", err)
+		}
+		if err := <-started; !errors.Is(err, ErrChromeRunningWithoutCDP) {
+			t.Fatalf("\nwanted:\nchrome profile running without CDP\ngot:\n%v", err)
+		}
+	})
+
 	t.Run("should reuse a live CDP endpoint and open a window without the CDP switch", func(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			t.Skip("test executable is a shell script")
