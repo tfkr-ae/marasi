@@ -5,15 +5,38 @@
 //   - Configuring the proxy settings with the active address and port
 //   - Bypass certificate errors for the configured certificate
 //   - Load chrome binaries from custom paths
+//   - Quiet Chrome's own background requests with switches and disabled
+//     features, without bypassing or blocking any host (ADR-0056)
 package chrome
 
 import (
 	"fmt"
 	"net"
 	"os/exec"
-	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 )
+
+// disabledFeatures are the Chrome features turned off in every started Chrome
+// because they send background requests through the proxy. None of them
+// changes how a target site behaves (ADR-0056). NetworkPrediction, Translate,
+// DialMediaRouteProvider, CertificateTransparencyComponentUpdater and
+// InterestFeedContentSuggestions are not declared as features at Chromium 155,
+// so Chrome ignores them there.
+var disabledFeatures = []string{
+	"NetworkPrediction",                         // DNS prefetch and preconnect to predicted hosts
+	"OmniboxUIExperimentMaxAutocompleteMatches", // omnibox autocomplete match-count experiment
+	"AimEnabled",                                // AI Mode eligibility (www.google.com/async/folae)
+	"OptimizationHints",                         // optimization guide downloads (optimizationguide-pa.googleapis.com)
+	"NetworkTimeServiceQuerying",                // clock sync (clients2.google.com/time)
+	"Translate",                                 // page translation and language-list fetches (translate.googleapis.com)
+	"MediaRouter",                               // Cast media-device discovery
+	"DialMediaRouteProvider",                    // DIAL media-device discovery on the local network
+	"AutofillServerCommunication",               // autofill field-type queries (content-autofill.googleapis.com)
+	"CertificateTransparencyComponentUpdater",   // Certificate Transparency log-list downloads
+	"InterestFeedContentSuggestions",            // New Tab Page feed suggestions
+}
 
 type PathConfig struct {
 	OS   string `mapstructure:"os"`   // OS for the given path
@@ -28,6 +51,7 @@ type Launcher struct {
 	configDir   string
 	profile     string
 	customPaths []PathConfig
+	cdp         bool
 }
 
 type Option func(*Launcher)
@@ -146,8 +170,11 @@ func (l *Launcher) getChromePath() (string, error) {
 }
 
 // Start launches the Chrome instance with the configured flags and profile directory.
-// It disables numerous background networking, syncing, and updating features to provide
-// a clean, isolated testing environment that routes through the target proxy.
+// It always passes the switches and disabled features that stop Chrome's own
+// background requests without changing how a target site behaves. No host
+// bypasses the proxy or is blocked: --proxy-bypass-list=<-loopback> removes
+// Chrome's implicit loopback bypass, so loopback requests go through the
+// proxy too (ADR-0056).
 //
 // Returns:
 //   - error: An error if the configuration directory is missing, the executable is not found,
@@ -162,28 +189,30 @@ func (l *Launcher) Start() error {
 		return err
 	}
 
-	profileDir := filepath.Join(l.configDir, "chrome_profiles", l.profile)
+	profileDir := l.ProfileDir()
 
 	flags := []string{
 		fmt.Sprintf("--user-data-dir=%s", profileDir),
 		fmt.Sprintf("--proxy-server=http://%s", net.JoinHostPort(l.addr, l.port)),
 		fmt.Sprintf("--ignore-certificate-errors-spki-list=%s", l.spkiHash),
 		"--disable-background-networking",
-		"--disable-client-side-phishing-detection",
 		"--disable-default-apps",
-		"--disable-features=NetworkPrediction,OmniboxUIExperimentMaxAutocompleteMatches",
+		"--disable-component-extensions-with-background-pages",
+		"--disable-features=" + strings.Join(disabledFeatures, ","),
 		"--disable-sync",
 		"--metrics-recording-only",
 		"--disable-domain-reliability",
+		"--disable-breakpad",
 		"--no-first-run",
+		"--no-default-browser-check",
 		"--disable-component-update",
-		"--disable-suggestions-service",
-		"--disable-search-geolocation-disclosure",
-		"--disable-search-engine-choice",
-		"--disable-omnibox-autocomplete-offers",
+		"--disable-search-engine-choice-screen",
 		"--proxy-bypass-list=<-loopback>",
 		"--window-name=Marasi - " + l.profile,
 		"about:blank",
+	}
+	if l.cdp {
+		flags = slices.Insert(flags, len(flags)-1, "--remote-debugging-port=0")
 	}
 
 	cmd := exec.Command(chromePath, flags...)

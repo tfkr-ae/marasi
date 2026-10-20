@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -327,6 +331,91 @@ func TestChromeLockCancellation(t *testing.T) {
 	})
 }
 
+// assertQuietChromeArgs checks the newline-separated arguments a fake Chrome
+// recorded against the quieting rules of ADR-0056.
+func assertQuietChromeArgs(t *testing.T, recorded string) {
+	t.Helper()
+	args := strings.Split(strings.TrimSpace(recorded), "\n")
+	has := func(arg string) bool {
+		for _, a := range args {
+			if a == arg {
+				return true
+			}
+		}
+		return false
+	}
+
+	var disableFeatures []string
+	for _, a := range args {
+		if strings.HasPrefix(a, "--disable-features=") {
+			disableFeatures = append(disableFeatures, a)
+		}
+	}
+	if len(disableFeatures) != 1 {
+		t.Fatalf("\nwanted:\none --disable-features argument\ngot:\n%v", disableFeatures)
+	}
+	features := map[string]bool{}
+	for _, f := range strings.Split(strings.TrimPrefix(disableFeatures[0], "--disable-features="), ",") {
+		features[f] = true
+	}
+	for _, want := range []string{
+		"NetworkPrediction",
+		"OmniboxUIExperimentMaxAutocompleteMatches",
+		"AimEnabled",
+		"OptimizationHints",
+		"NetworkTimeServiceQuerying",
+		"Translate",
+		"MediaRouter",
+		"DialMediaRouteProvider",
+		"AutofillServerCommunication",
+		"CertificateTransparencyComponentUpdater",
+		"InterestFeedContentSuggestions",
+	} {
+		if !features[want] {
+			t.Errorf("\nwanted disabled feature:\n%s\ngot:\n%s", want, disableFeatures[0])
+		}
+	}
+
+	for _, want := range []string{
+		"--disable-component-extensions-with-background-pages",
+		"--no-default-browser-check",
+		"--disable-breakpad",
+		"--disable-search-engine-choice-screen",
+		"--proxy-bypass-list=<-loopback>",
+	} {
+		if !has(want) {
+			t.Errorf("\nwanted argument:\n%s\ngot:\n%s", want, recorded)
+		}
+	}
+
+	for _, unwanted := range []string{
+		"--no-service-autorun",
+		"--disable-client-side-phishing-detection",
+		"--disable-search-engine-choice",
+		"--disable-suggestions-service",
+		"--disable-search-geolocation-disclosure",
+		"--disable-omnibox-autocomplete-offers",
+		"--disable-extensions",
+		"--disable-background-timer-throttling",
+		"--disable-backgrounding-occluded-windows",
+		"--disable-renderer-backgrounding",
+		"--disable-popup-blocking",
+		"--use-mock-keychain",
+	} {
+		if has(unwanted) {
+			t.Errorf("\nwanted no argument:\n%s\ngot:\n%s", unwanted, recorded)
+		}
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "--password-store=") || strings.HasPrefix(a, "--host-resolver-rules=") {
+			t.Errorf("\nwanted no argument:\n%s\ngot:\n%s", a, recorded)
+		}
+		if strings.HasPrefix(a, "--proxy-bypass-list=") && a != "--proxy-bypass-list=<-loopback>" {
+			t.Errorf("\nwanted only the loopback proxy bypass\ngot:\n%s", a)
+		}
+	}
+}
+
 func TestChromeStart(t *testing.T) {
 	t.Run("should start the default profile against the active listener endpoint", func(t *testing.T) {
 		if runtime.GOOS == "windows" {
@@ -359,12 +448,12 @@ func TestChromeStart(t *testing.T) {
 			t.Fatalf("adding second executable path: %v", err)
 		}
 
-		profile, err := module.Start(context.Background(), "")
+		result, err := module.Start(context.Background(), "", ChromeStartOptions{})
 		if err != nil {
 			t.Fatalf("starting Chrome: %v", err)
 		}
-		if profile != "default-profile" {
-			t.Fatalf("\nwanted:\ndefault-profile\ngot:\n%s", profile)
+		if result.Profile != "default-profile" || result.CDP != nil {
+			t.Fatalf("\nwanted:\ndefault-profile without a CDP endpoint\ngot:\n%+v", result)
 		}
 
 		wants := []string{
@@ -396,6 +485,10 @@ func TestChromeStart(t *testing.T) {
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
+		assertQuietChromeArgs(t, got)
+		if strings.Contains(got, "--remote-debugging-port") {
+			t.Fatalf("\nwanted:\nno CDP switch without CDP requested\ngot:\n%s", got)
+		}
 		if _, err := os.Stat(secondArgsPath); !os.IsNotExist(err) {
 			t.Fatalf("\nwanted:\nfirst configured executable to start\ngot second executable result:\n%v", err)
 		}
@@ -409,12 +502,12 @@ func TestChromeStart(t *testing.T) {
 		configDir := t.TempDir()
 		proxy := newChromeTestProxy(t, configDir)
 		inactive := NewChrome(proxy, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, io.Discard)
-		if _, err := inactive.Start(context.Background(), " default-profile "); !errors.Is(err, ErrListenerInactive) {
+		if _, err := inactive.Start(context.Background(), " default-profile ", ChromeStartOptions{}); !errors.Is(err, ErrListenerInactive) {
 			t.Fatalf("\nwanted:\nlistener inactive\ngot:\n%v", err)
 		}
 
 		active := NewChrome(proxy, &statusListener{status: activeListenerStatus("127.0.0.1:43210")}, io.Discard)
-		if _, err := active.Start(context.Background(), "missing"); !errors.Is(err, ErrChromeNotFound) {
+		if _, err := active.Start(context.Background(), "missing", ChromeStartOptions{CDP: true}); !errors.Is(err, ErrChromeNotFound) {
 			t.Fatalf("\nwanted:\nchrome profile not found\ngot:\n%v", err)
 		}
 	})
@@ -435,11 +528,266 @@ func TestChromeStart(t *testing.T) {
 			t.Fatalf("adding bad executable: %v", err)
 		}
 
-		if _, err := module.Start(context.Background(), "default-profile"); !errors.Is(err, ErrChromeUnavailable) {
+		if _, err := module.Start(context.Background(), "default-profile", ChromeStartOptions{}); !errors.Is(err, ErrChromeUnavailable) {
 			t.Fatalf("\nwanted:\nchrome unavailable\ngot:\n%v", err)
 		}
 		if !strings.Contains(log.String(), "starting Chrome:") || !strings.Contains(log.String(), "exec format error") {
 			t.Fatalf("\nwanted:\noperating system spawn error in log\ngot:\n%s", log.String())
 		}
 	})
+}
+
+// writeCDPFakeChrome writes a fake Chrome that records its arguments and, when
+// it is given --remote-debugging-port=0 and devToolsActivePort is not empty,
+// writes that content to DevToolsActivePort in its user-data-dir, as Chrome does.
+func writeCDPFakeChrome(t *testing.T, dir, devToolsActivePort string) (executable, argsPath string) {
+	t.Helper()
+	argsPath = filepath.Join(dir, "args")
+	executable = filepath.Join(dir, "chrome")
+	script := "#!/bin/sh\n" +
+		"for arg in \"$@\"; do\n" +
+		"  case \"$arg\" in\n" +
+		"    --user-data-dir=*) profile=\"${arg#--user-data-dir=}\" ;;\n" +
+		"    --remote-debugging-port=0) cdp=1 ;;\n" +
+		"  esac\n" +
+		"done\n" +
+		"if [ -n \"$cdp\" ] && [ -n '" + devToolsActivePort + "' ]; then\n" +
+		"  mkdir -p \"$profile\" && printf '" + devToolsActivePort + "' > \"$profile/DevToolsActivePort\"\n" +
+		"fi\n" +
+		"printf '%s\\n' \"$@\" > \"" + argsPath + ".tmp\" && mv \"" + argsPath + ".tmp\" \"" + argsPath + "\"\n"
+	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
+		t.Fatalf("writing fake Chrome: %v", err)
+	}
+	return executable, argsPath
+}
+
+// startCDPVersionServer answers /json/version as a Chrome CDP endpoint whose
+// browser websocket path is browserPath, and returns its port.
+func startCDPVersionServer(t *testing.T, browserPath string) string {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json/version" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"Browser":"Chrome/155.0.8059.85","webSocketDebuggerUrl":"ws://%s%s"}`, r.Host, browserPath)
+	}))
+	t.Cleanup(server.Close)
+	_, port, err := net.SplitHostPort(server.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("reading test server port: %v", err)
+	}
+	return port
+}
+
+func readFakeChromeArgs(t *testing.T, argsPath string) string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		args, err := os.ReadFile(argsPath)
+		if err == nil {
+			return string(args)
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("reading fake Chrome arguments: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestChromeStartCDP(t *testing.T) {
+	newModule := func(t *testing.T, configDir, executable string) *Chrome {
+		t.Helper()
+		module := NewChrome(newChromeTestProxy(t, configDir), &statusListener{status: activeListenerStatus("127.0.0.1:43210")}, io.Discard)
+		if _, err := module.AddPath(context.Background(), marasichrome.PathConfig{OS: runtime.GOOS, Path: executable}); err != nil {
+			t.Fatalf("adding executable path: %v", err)
+		}
+		if _, err := module.AddProfile(context.Background(), "pentest"); err != nil {
+			t.Fatalf("adding profile: %v", err)
+		}
+		return module
+	}
+
+	t.Run("should start Chrome with a CDP endpoint and report it once it answers", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("test executable is a shell script")
+		}
+		configDir := t.TempDir()
+		browserPath := "/devtools/browser/0b5e1a52-6a43-4b8e-9d6c-1f0e3c5b7a10"
+		port := startCDPVersionServer(t, browserPath)
+		executable, argsPath := writeCDPFakeChrome(t, configDir, port+`\n`+browserPath)
+		module := newModule(t, configDir, executable)
+
+		result, err := module.Start(context.Background(), "pentest", ChromeStartOptions{CDP: true})
+		if err != nil {
+			t.Fatalf("starting Chrome with CDP: %v", err)
+		}
+		want := CDPEndpoint{HTTP: "http://127.0.0.1:" + port, WS: "ws://127.0.0.1:" + port + browserPath, Reused: false}
+		if result.Profile != "pentest" || result.CDP == nil || *result.CDP != want {
+			t.Fatalf("\nwanted:\npentest with %+v\ngot:\n%+v (cdp %+v)", want, result, result.CDP)
+		}
+		args := readFakeChromeArgs(t, argsPath)
+		if !strings.Contains(args, "--remote-debugging-port=0\n") {
+			t.Fatalf("\nwanted:\n--remote-debugging-port=0 among arguments\ngot:\n%s", args)
+		}
+	})
+
+	t.Run("should report a profile running without CDP when no endpoint appears", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("test executable is a shell script")
+		}
+		configDir := t.TempDir()
+		executable, argsPath := writeCDPFakeChrome(t, configDir, "")
+		module := newModule(t, configDir, executable)
+		module.cdpWait = 300 * time.Millisecond
+
+		result, err := module.Start(context.Background(), "pentest", ChromeStartOptions{CDP: true})
+		if !errors.Is(err, ErrChromeRunningWithoutCDP) {
+			t.Fatalf("\nwanted:\nchrome profile running without CDP\ngot:\n%+v, %v", result, err)
+		}
+		if !strings.Contains(err.Error(), "pentest") || !strings.Contains(err.Error(), "--cdp") {
+			t.Fatalf("\nwanted:\nerror naming the profile and --cdp\ngot:\n%v", err)
+		}
+		readFakeChromeArgs(t, argsPath)
+	})
+
+	t.Run("should release the config lock while waiting for the CDP endpoint", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("test executable is a shell script")
+		}
+		configDir := t.TempDir()
+		executable, argsPath := writeCDPFakeChrome(t, configDir, "")
+		module := newModule(t, configDir, executable)
+		module.cdpWait = 3 * time.Second
+
+		started := make(chan error, 1)
+		go func() {
+			_, err := module.Start(context.Background(), "pentest", ChromeStartOptions{CDP: true})
+			started <- err
+		}()
+		readFakeChromeArgs(t, argsPath)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if _, err := module.Profiles(ctx); err != nil {
+			t.Fatalf("\nwanted:\nprofiles listed while Start waits for the CDP endpoint\ngot:\n%v", err)
+		}
+		if _, err := module.AddProfile(ctx, "second"); err != nil {
+			t.Fatalf("\nwanted:\nprofile added while Start waits for the CDP endpoint\ngot:\n%v", err)
+		}
+		if err := <-started; !errors.Is(err, ErrChromeRunningWithoutCDP) {
+			t.Fatalf("\nwanted:\nchrome profile running without CDP\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should reuse a live CDP endpoint and open a window without the CDP switch", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("test executable is a shell script")
+		}
+		configDir := t.TempDir()
+		browserPath := "/devtools/browser/7d1c2b9e-3f4a-4c5d-8e6f-0a1b2c3d4e5f"
+		port := startCDPVersionServer(t, browserPath)
+		writeDevToolsActivePort(t, configDir, "pentest", port+"\n"+browserPath+"\n")
+		executable, argsPath := writeCDPFakeChrome(t, configDir, "")
+		module := newModule(t, configDir, executable)
+
+		result, err := module.Start(context.Background(), "pentest", ChromeStartOptions{CDP: true})
+		if err != nil {
+			t.Fatalf("starting Chrome with CDP: %v", err)
+		}
+		want := CDPEndpoint{HTTP: "http://127.0.0.1:" + port, WS: "ws://127.0.0.1:" + port + browserPath, Reused: true}
+		if result.CDP == nil || *result.CDP != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v (cdp %+v)", want, result, result.CDP)
+		}
+		args := readFakeChromeArgs(t, argsPath)
+		if strings.Contains(args, "--remote-debugging-port") {
+			t.Fatalf("\nwanted:\nno CDP switch when reusing a live CDP endpoint\ngot:\n%s", args)
+		}
+	})
+
+	staleCases := []struct {
+		name  string
+		stale func(t *testing.T) string
+	}{
+		{
+			name: "a closed port",
+			stale: func(t *testing.T) string {
+				listener, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatalf("reserving a port: %v", err)
+				}
+				_, port, _ := net.SplitHostPort(listener.Addr().String())
+				listener.Close()
+				return port + "\n/devtools/browser/5a4b3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d\n"
+			},
+		},
+		{
+			name: "a different browser path",
+			stale: func(t *testing.T) string {
+				port := startCDPVersionServer(t, "/devtools/browser/11111111-2222-4333-8444-555555555555")
+				return port + "\n/devtools/browser/66666666-7777-4888-9999-000000000000\n"
+			},
+		},
+	}
+	for _, tc := range staleCases {
+		t.Run("should ignore a DevToolsActivePort pointing at "+tc.name+" and start with a new CDP endpoint", func(t *testing.T) {
+			if runtime.GOOS == "windows" {
+				t.Skip("test executable is a shell script")
+			}
+			configDir := t.TempDir()
+			writeDevToolsActivePort(t, configDir, "pentest", tc.stale(t))
+			browserPath := "/devtools/browser/0b5e1a52-6a43-4b8e-9d6c-1f0e3c5b7a10"
+			port := startCDPVersionServer(t, browserPath)
+			executable, argsPath := writeCDPFakeChrome(t, configDir, port+`\n`+browserPath)
+			module := newModule(t, configDir, executable)
+
+			result, err := module.Start(context.Background(), "pentest", ChromeStartOptions{CDP: true})
+			if err != nil {
+				t.Fatalf("starting Chrome with CDP: %v", err)
+			}
+			want := CDPEndpoint{HTTP: "http://127.0.0.1:" + port, WS: "ws://127.0.0.1:" + port + browserPath, Reused: false}
+			if result.CDP == nil || *result.CDP != want {
+				t.Fatalf("\nwanted:\n%+v\ngot:\n%+v (cdp %+v)", want, result, result.CDP)
+			}
+			args := readFakeChromeArgs(t, argsPath)
+			if !strings.Contains(args, "--remote-debugging-port=0\n") {
+				t.Fatalf("\nwanted:\n--remote-debugging-port=0 among arguments\ngot:\n%s", args)
+			}
+		})
+	}
+
+	t.Run("should not report a CDP endpoint on plain start when the profile has a live one", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("test executable is a shell script")
+		}
+		configDir := t.TempDir()
+		browserPath := "/devtools/browser/7d1c2b9e-3f4a-4c5d-8e6f-0a1b2c3d4e5f"
+		port := startCDPVersionServer(t, browserPath)
+		writeDevToolsActivePort(t, configDir, "pentest", port+"\n"+browserPath+"\n")
+		executable, argsPath := writeCDPFakeChrome(t, configDir, "")
+		module := newModule(t, configDir, executable)
+
+		result, err := module.Start(context.Background(), "pentest", ChromeStartOptions{})
+		if err != nil {
+			t.Fatalf("starting Chrome: %v", err)
+		}
+		if result.Profile != "pentest" || result.CDP != nil {
+			t.Fatalf("\nwanted:\npentest without a CDP endpoint\ngot:\n%+v (cdp %+v)", result, result.CDP)
+		}
+		readFakeChromeArgs(t, argsPath)
+	})
+}
+
+// writeDevToolsActivePort writes a DevToolsActivePort into the chrome
+// profile's user-data-dir, as a running Chrome with CDP does.
+func writeDevToolsActivePort(t *testing.T, configDir, profile, content string) {
+	t.Helper()
+	dir := filepath.Join(configDir, "chrome_profiles", profile)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatalf("creating chrome profile directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "DevToolsActivePort"), []byte(content), 0600); err != nil {
+		t.Fatalf("writing DevToolsActivePort: %v", err)
+	}
 }

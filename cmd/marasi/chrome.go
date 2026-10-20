@@ -16,6 +16,7 @@ import (
 var chromePathValue string
 var chromePathOS = runtime.GOOS
 var chromeStartProfile string
+var chromeStartCDP bool
 
 type chromePathRequest struct {
 	OS   string `json:"os"`
@@ -27,7 +28,8 @@ type chromeProfileRequest struct {
 }
 
 type chromeStartRequest struct {
-	Profile string `json:"profile"`
+	Profile *string `json:"profile,omitempty"`
+	CDP     bool    `json:"cdp,omitempty"`
 }
 
 func init() {
@@ -40,6 +42,7 @@ func init() {
 	chromePathCmd.AddCommand(chromePathAddCmd, chromePathRemoveCmd, chromePathListCmd)
 	chromeProfileCmd.AddCommand(chromeProfileAddCmd, chromeProfileRemoveCmd, chromeProfileListCmd)
 	chromeStartCmd.Flags().StringVar(&chromeStartProfile, "profile", "", "Chrome profile name to start")
+	chromeStartCmd.Flags().BoolVar(&chromeStartCDP, "cdp", false, "Start with a CDP endpoint and report its HTTP and websocket URLs")
 	chromeCmd.AddCommand(chromePathCmd, chromeProfileCmd, chromeStartCmd)
 	rootCmd.AddCommand(chromeCmd)
 }
@@ -142,13 +145,13 @@ var chromeStartCmd = &cobra.Command{
 	Short: "Start Chrome",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		body := []byte("{}")
+		request := chromeStartRequest{CDP: chromeStartCDP}
 		if cmd.Flags().Changed("profile") {
-			var err error
-			body, err = json.Marshal(chromeStartRequest{Profile: chromeStartProfile})
-			if err != nil {
-				return fmt.Errorf("encoding chrome start request: %w", err)
-			}
+			request.Profile = &chromeStartProfile
+		}
+		body, err := json.Marshal(request)
+		if err != nil {
+			return fmt.Errorf("encoding chrome start request: %w", err)
 		}
 		response, err := runControlRequest(cmd, http.MethodPost, "/chrome/start", "starting chrome", body)
 		if err != nil {
@@ -160,11 +163,24 @@ var chromeStartCmd = &cobra.Command{
 		}
 		var result struct {
 			Profile string `json:"profile"`
+			CDP     *struct {
+				HTTP   string `json:"http"`
+				Reused bool   `json:"reused"`
+			} `json:"cdp"`
 		}
 		if err := json.Unmarshal(response, &result); err != nil {
 			return fmt.Errorf("decoding chrome start response: %w", err)
 		}
-		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "chrome started with profile %s\n", result.Profile)
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "chrome started with profile %s\n", result.Profile); err != nil {
+			return err
+		}
+		if result.CDP != nil {
+			reused := ""
+			if result.CDP.Reused {
+				reused = " (reused)"
+			}
+			_, err = fmt.Fprintf(cmd.ErrOrStderr(), "CDP endpoint %s%s\n", result.CDP.HTTP, reused)
+		}
 		return err
 	},
 }
