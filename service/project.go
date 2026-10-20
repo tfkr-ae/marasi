@@ -215,6 +215,12 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 	return nil
 }
 
+// eventLogRepository is the repository the proxy holds for an open project.
+// It wraps the project's *db.Repository to publish log.added once a log is
+// stored, holding events until startPublishing. It embeds the interface, so
+// only RepositoryProvider methods pass through: a type assertion on it to
+// *db.Repository, or to an interface with any other method, fails. Service
+// code that needs such a method unwraps it, as projectJobRunner does.
 type eventLogRepository struct {
 	marasi.RepositoryProvider
 	mu         sync.Mutex

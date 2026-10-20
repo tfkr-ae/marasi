@@ -30,6 +30,10 @@ import (
 
 // RepositoryProvider defines the interface for a provider of all data repositories
 // used by the proxy. This allows for easy injection of a database implementation.
+// In the service, the proxy holds it wrapped in a log-publishing repository, so a
+// type assertion to *db.Repository or to a wider interface fails silently there,
+// even though it passes in tests that use a bare *db.Repository. Add the method
+// here instead.
 type RepositoryProvider interface {
 	domain.TrafficRepository
 	domain.ExtensionRepository
