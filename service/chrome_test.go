@@ -327,6 +327,90 @@ func TestChromeLockCancellation(t *testing.T) {
 	})
 }
 
+// assertQuietChromeArgs checks the newline-separated arguments a fake Chrome
+// recorded against the quieting rules of ADR-0056.
+func assertQuietChromeArgs(t *testing.T, recorded string) {
+	t.Helper()
+	args := strings.Split(strings.TrimSpace(recorded), "\n")
+	has := func(arg string) bool {
+		for _, a := range args {
+			if a == arg {
+				return true
+			}
+		}
+		return false
+	}
+
+	var disableFeatures []string
+	for _, a := range args {
+		if strings.HasPrefix(a, "--disable-features=") {
+			disableFeatures = append(disableFeatures, a)
+		}
+	}
+	if len(disableFeatures) != 1 {
+		t.Fatalf("\nwanted:\none --disable-features argument\ngot:\n%v", disableFeatures)
+	}
+	features := map[string]bool{}
+	for _, f := range strings.Split(strings.TrimPrefix(disableFeatures[0], "--disable-features="), ",") {
+		features[f] = true
+	}
+	for _, want := range []string{
+		"NetworkPrediction",
+		"OmniboxUIExperimentMaxAutocompleteMatches",
+		"AimEnabled",
+		"OptimizationHints",
+		"NetworkTimeServiceQuerying",
+		"Translate",
+		"MediaRouter",
+		"DialMediaRouteProvider",
+		"AutofillServerCommunication",
+		"CertificateTransparencyComponentUpdater",
+		"InterestFeedContentSuggestions",
+	} {
+		if !features[want] {
+			t.Errorf("\nwanted disabled feature:\n%s\ngot:\n%s", want, disableFeatures[0])
+		}
+	}
+
+	for _, want := range []string{
+		"--disable-component-extensions-with-background-pages",
+		"--no-default-browser-check",
+		"--no-service-autorun",
+		"--disable-breakpad",
+		"--disable-search-engine-choice-screen",
+		"--proxy-bypass-list=<-loopback>",
+	} {
+		if !has(want) {
+			t.Errorf("\nwanted argument:\n%s\ngot:\n%s", want, recorded)
+		}
+	}
+
+	for _, unwanted := range []string{
+		"--disable-search-engine-choice",
+		"--disable-suggestions-service",
+		"--disable-search-geolocation-disclosure",
+		"--disable-omnibox-autocomplete-offers",
+		"--disable-extensions",
+		"--disable-background-timer-throttling",
+		"--disable-backgrounding-occluded-windows",
+		"--disable-renderer-backgrounding",
+		"--disable-popup-blocking",
+		"--use-mock-keychain",
+	} {
+		if has(unwanted) {
+			t.Errorf("\nwanted no argument:\n%s\ngot:\n%s", unwanted, recorded)
+		}
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "--password-store=") || strings.HasPrefix(a, "--host-resolver-rules=") {
+			t.Errorf("\nwanted no argument:\n%s\ngot:\n%s", a, recorded)
+		}
+		if strings.HasPrefix(a, "--proxy-bypass-list=") && a != "--proxy-bypass-list=<-loopback>" {
+			t.Errorf("\nwanted only the loopback proxy bypass\ngot:\n%s", a)
+		}
+	}
+}
+
 func TestChromeStart(t *testing.T) {
 	t.Run("should start the default profile against the active listener endpoint", func(t *testing.T) {
 		if runtime.GOOS == "windows" {
@@ -396,6 +480,7 @@ func TestChromeStart(t *testing.T) {
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
+		assertQuietChromeArgs(t, got)
 		if _, err := os.Stat(secondArgsPath); !os.IsNotExist(err) {
 			t.Fatalf("\nwanted:\nfirst configured executable to start\ngot second executable result:\n%v", err)
 		}
