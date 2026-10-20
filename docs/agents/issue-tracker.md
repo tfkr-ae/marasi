@@ -17,6 +17,10 @@ Create a new file under `.scratch/<feature-slug>/`, creating the directory if ne
 
 Read the file at the referenced path. The user will normally pass the path or issue number directly.
 
+## When a subagent runs in its own worktree
+
+`.scratch/` is gitignored, so a new worktree starts without it. When you hand a ticket to a subagent, give its absolute path in your own checkout (`$(git rev-parse --show-toplevel)/.scratch/…`). The subagent reads and updates that file in place.
+
 ## Wayfinding operations
 
 Used by `/wayfinder`. The map is a file with one child file per ticket.
