@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tfkr-ae/marasi"
 	marasichrome "github.com/tfkr-ae/marasi/chrome"
@@ -142,6 +143,40 @@ func TestChromeStartRoute(t *testing.T) {
 		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/chrome/start", `{"profile":"pentest"}`), http.StatusOK, `{"status":"started","profile":"pentest"}`+"\n")
 		assertChromeError(t, requestChrome(server, http.MethodPost, "/chrome/start", `{"profile":"missing"}`), http.StatusNotFound, "not_found")
 		assertNoChromeEvent(t, subscriber)
+	})
+
+	t.Run("should report the CDP endpoint only when CDP is requested", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("test executable is a shell script")
+		}
+		server := newChromeHTTPServer(t, activeListenerStatus("127.0.0.1:43210"))
+		browserPath := "/devtools/browser/5d1c2b9e-0f7a-4f43-8a52-3e7b9c1d2a64"
+		port := startCDPVersionServer(t, browserPath)
+		executable, _ := writeCDPFakeChrome(t, t.TempDir(), port+`\n`+browserPath)
+		pathBody := `{"os":"` + runtime.GOOS + `","path":"` + executable + `"}`
+		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/chrome/path", pathBody), http.StatusOK, `{"items":[{"os":"`+runtime.GOOS+`","path":"`+executable+`"}]}`+"\n")
+		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/chrome/profile", `{"name":"pentest"}`), http.StatusOK, `{"items":[{"name":"pentest"}]}`+"\n")
+
+		want := `{"status":"started","profile":"pentest","cdp":{"http":"http://127.0.0.1:` + port + `","ws":"ws://127.0.0.1:` + port + browserPath + `","reused":false}}` + "\n"
+		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/chrome/start", `{"profile":"pentest","cdp":true}`), http.StatusOK, want)
+		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/chrome/start", `{"cdp":false}`), http.StatusOK, `{"status":"started","profile":"default-profile"}`+"\n")
+		for _, body := range []string{`{"cdp":null}`, `{"cdp":"true"}`, `{"cdp":1}`, `{"cdp":true,"extra":true}`} {
+			assertChromeError(t, requestChrome(server, http.MethodPost, "/chrome/start", body), http.StatusBadRequest, "invalid_chrome_request")
+		}
+	})
+
+	t.Run("should refuse a CDP start when the profile is running without CDP", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("test executable is a shell script")
+		}
+		server := newChromeHTTPServer(t, activeListenerStatus("127.0.0.1:43210"))
+		server.chrome.cdpWait = 200 * time.Millisecond
+		executable, _ := writeCDPFakeChrome(t, t.TempDir(), "")
+		pathBody := `{"os":"` + runtime.GOOS + `","path":"` + executable + `"}`
+		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/chrome/path", pathBody), http.StatusOK, `{"items":[{"os":"`+runtime.GOOS+`","path":"`+executable+`"}]}`+"\n")
+
+		want := `{"error":"chrome_running_without_cdp","message":"chrome profile default-profile is running without a CDP endpoint; close it and start it again with --cdp"}` + "\n"
+		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/chrome/start", `{"cdp":true}`), http.StatusConflict, want)
 	})
 
 	t.Run("should hide an unavailable executable error and write it to the instance log", func(t *testing.T) {
