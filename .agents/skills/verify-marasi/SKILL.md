@@ -113,6 +113,8 @@ Stop only the instance this run started. Never kill by process name.
 
 Interrupt the `events` subscriber first if it is still attached. Then stop the instance. Then terminate the recorded PIDs for the local origin, WebSocket peer, and client this run started, and remove only `$VERIFY_CONFIG_DIR`. On Unix that is `kill` of those PIDs. On Windows, stop those recorded PIDs. Do not match a process name.
 
+On Unix, after `service stop`, `pgrep -f -- "--config-dir $VERIFY_CONFIG_DIR "` must print nothing. Every service process of this run, including a `service restart` predecessor, carries that flag. A survivor is a product bug: `kill -QUIT` its PID to write a goroutine dump to `$VERIFY_CONFIG_DIR/instances/$VERIFY_INSTANCE.log`, copy that log into the evidence directory before removing `$VERIFY_CONFIG_DIR`, and confirm the PID is gone.
+
 `service stop` removes the socket, not the log. On Windows, removing the config directory can fail while the child still holds the log. Wait until `service status` reports the instance is not running, then remove the directory.
 
 The evidence directory is separate from `$VERIFY_CONFIG_DIR`. Cleanup leaves it intact. Run cleanup after failed attempts too. If the variables no longer identify a run you created, inspect rather than guessing.
