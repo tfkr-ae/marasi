@@ -556,7 +556,13 @@ func WithBasePipeline() func(*Proxy) error {
 				req.Header.Del(launchIDHeader)
 				release, generation, err := proxy.admitWork(req.Context(), internal)
 				if err != nil {
-					return err
+					// Martian sends a request upstream even when a modifier
+					// fails, so a refused request ends its connection instead.
+					conn, _, hijackErr := session.Hijack()
+					if hijackErr != nil {
+						return errors.Join(err, fmt.Errorf("hijacking session : %w", hijackErr))
+					}
+					return errors.Join(err, conn.Close())
 				}
 				// The wait on the origin is not project work, so the request
 				// side releases its admission before the round trip (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
@@ -602,7 +608,8 @@ func WithBasePipeline() func(*Proxy) error {
 				if admission, ok := res.Request.Context().Value(projectAdmissionKey{}).(projectAdmission); ok {
 					release, generation, err := proxy.admitWork(res.Request.Context(), admission.internal)
 					if err != nil {
-						// The client left while a handoff paused admission.
+						// The client left while a handoff paused admission, or
+						// the instance handed its project to a restart's successor.
 						return nil
 					}
 					defer release()
