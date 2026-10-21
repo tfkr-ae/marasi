@@ -1,13 +1,16 @@
 package service
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // restartListener is a proxy listener at 127.0.0.1:8080 that runs onStop
@@ -121,5 +124,52 @@ func TestServiceRestartRefusals(t *testing.T) {
 		}
 		server.dropPendingCheckpoint()
 		drainCheckpointHold(t, holdDone)
+	})
+}
+
+func TestServiceRestartHandover(t *testing.T) {
+	t.Run("should let the old instance exit when a response arrives after the handover", func(t *testing.T) {
+		harness := newHungOriginHarness(t, false)
+		harness.server.EnableRestart(func(context.Context, string, *string) (Successor, error) {
+			return Successor{Version: "21.10.2026"}, nil
+		})
+		client := harness.sendHung(t, "/hung")
+
+		response := requestUpdate(harness.server, http.MethodPost, "/service/restart", "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n200\ngot:\n%d %s", response.Code, response.Body.String())
+		}
+		harness.release()
+		client.SetReadDeadline(time.Now().Add(5 * time.Second))
+		late, err := http.ReadResponse(bufio.NewReader(client), nil)
+		if err != nil {
+			t.Fatalf("reading the late response: %v", err)
+		}
+		body, _ := io.ReadAll(late.Body)
+		if late.StatusCode != http.StatusOK || string(body) != "late answer" {
+			t.Fatalf("\nwanted:\n200 late answer\ngot:\n%d %q", late.StatusCode, body)
+		}
+		host := strings.TrimPrefix(harness.origin.URL, "http://")
+		fmt.Fprintf(client, "GET %s/after HTTP/1.1\r\nHost: %s\r\n\r\n", harness.origin.URL, host)
+		if after, err := http.ReadResponse(bufio.NewReader(client), nil); err == nil {
+			t.Fatalf("\nwanted:\nthe connection closed for a request after the handover\ngot:\n%d", after.StatusCode)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		closed := make(chan error, 1)
+		go func() { closed <- harness.lifecycle.proxy.CloseTransportContext(ctx) }()
+		select {
+		case <-closed:
+		case <-time.After(5 * time.Second):
+			// Let the stuck response through so the test can end.
+			gate := harness.lifecycle.gate
+			gate.mu.Lock()
+			gate.blocked = false
+			gate.signal()
+			gate.mu.Unlock()
+			<-closed
+			t.Fatal("the proxy of the handed-over instance did not close")
+		}
 	})
 }
