@@ -477,6 +477,7 @@ func (lifecycle *ProjectLifecycle) release(ctx context.Context, dropHeld func() 
 	// for the restart fails rather than open a project in an exiting instance.
 	abandon := func() {
 		lifecycle.cancelExecution()
+		lifecycle.gate.close()
 		finish()
 	}
 	released := projectRelease{path: path, reopen: reopen, abandon: abandon}
@@ -693,6 +694,9 @@ type projectGate struct {
 	// sealed refuses all admission, nested Lua work included, from the
 	// moment a handoff sees no project work until it publishes or gives up.
 	sealed bool
+	// closed refuses all admission for good, once the project is abandoned
+	// to a restart's successor and nothing will ever unblock the gate.
+	closed bool
 	active int
 	// extensions counts in-flight extension executions by extension name.
 	extensions          map[string]int
@@ -747,11 +751,19 @@ func (gate *projectGate) snapshot() (int, []string) {
 	return gate.active, names
 }
 
+// errProjectGateClosed refuses work in an instance that handed its project
+// to a restart's successor.
+var errProjectGateClosed = errors.New("project handed over to a restart's successor")
+
 // admit waits until project-bound work may run and returns its release and
 // the generation of the open project it runs in.
 func (gate *projectGate) admit(ctx context.Context, internal bool) (func(), uint64, error) {
 	for {
 		gate.mu.Lock()
+		if gate.closed {
+			gate.mu.Unlock()
+			return nil, 0, errProjectGateClosed
+		}
 		// Only the self-client can finish nested Lua requests during a handoff.
 		if !gate.sealed && (!gate.blocked || internal && gate.extensionExecutions > 0) {
 			gate.active++
@@ -801,6 +813,15 @@ func (gate *projectGate) block(ctx context.Context, idle func() bool) (func(), e
 			gate.mu.Unlock()
 		})
 	}, nil
+}
+
+// close refuses all admission for good, so work waiting to be admitted
+// ends instead of holding up the exit of an instance that handed over.
+func (gate *projectGate) close() {
+	gate.mu.Lock()
+	gate.closed = true
+	gate.signal()
+	gate.mu.Unlock()
 }
 
 // seal waits for project work to finish, then refuses all admission until
