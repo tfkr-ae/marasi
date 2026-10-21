@@ -32,6 +32,6 @@ For a rendered proof, run headless Chrome with `--proxy-server=http://$PROXY_LIS
 - A pending browser view is keyed on the client host and the exact URL. Follow the redirect from the same client address within 10 seconds. A curl run from another address, or after 10 seconds, reaches the origin.
 - It is used once, and opening a newer view of the same URL from the same client replaces it.
 - Launches and Armory runs never use a pending browser view, even from the same machine.
-- `project open` clears every pending browser view.
+- Opening a different project clears every pending browser view. `project open` of the path already open is a no-op and keeps them.
 - Chrome bypasses the proxy for loopback origins unless you pass `--proxy-bypass-list=<-loopback>`.
 - The stored response keeps its `Set-Cookie` and cache headers. Use a fresh browser profile for each run.
