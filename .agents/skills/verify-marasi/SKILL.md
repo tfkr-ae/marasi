@@ -1,6 +1,6 @@
 ---
 name: verify-marasi
-description: Verify Marasi's CLI-driven proxy service when a change needs proof through a real launched instance, service instance listing, a proxied HTTP request, persisted traffic inspection, traffic metadata and note control, event subscription, launchpad replay, test-case control, finding control, artifact control, Checkpoint control, Chrome control, waypoint control, wordlist control, Armory template and run control, extension control, report template and export control, proxy log inspection, CA certificate fetch, browser view of a stored response, project listing, WebSocket connection control, scope check, or the printed agent skill.
+description: Verify Marasi's CLI-driven proxy service when a change needs proof through a real launched instance, service instance listing, a proxied HTTP request, persisted traffic inspection, traffic metadata and note control, event subscription, launchpad replay, test-case control, finding control, artifact control, Checkpoint control, Chrome control, waypoint control, upstream proxy control and routing, wordlist control, Armory template and run control, extension control, report template and export control, proxy log inspection, CA certificate fetch, browser view of a stored response, project listing, WebSocket connection control, scope check, or the printed agent skill.
 ---
 
 # Verify Marasi

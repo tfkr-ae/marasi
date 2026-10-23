@@ -21,6 +21,7 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Checkpoint | `checkpoint list`, `checkpoint get`, `checkpoint forward`, `checkpoint drop`, `checkpoint intercept`, `checkpoint websocket-intercept` | [checkpoint](checkpoint.md) |
 | Chrome | `chrome path add`, `chrome path list`, `chrome path remove`, `chrome profile add`, `chrome profile list`, `chrome profile remove`, `chrome start` | [chrome](chrome.md) |
 | Waypoint | `waypoint list`, `waypoint add`, `waypoint update`, `waypoint remove` | [waypoint](waypoint.md) |
+| Upstream proxy | `upstream list`, `upstream add`, `upstream update`, `upstream remove`, `upstream use`, `upstream use --none`, `upstream check`, the pair's `upstream_proxy` in `traffic get`, `-q 'upstream_proxy = …'` and `traffic.response`, a stopped upstream proxy failing closed with a proxy log | [upstream proxy](upstream-proxy.md) |
 | Wordlist | `wordlist list`, `wordlist preview`, `wordlist add`, `wordlist remove` | [wordlist](wordlist.md) |
 | Armory | `armory template create`, `armory template list`, `armory template get`, `armory template update`, `armory template delete`, `armory run validate`, `armory run create`, `armory run list`, `armory run get`, `armory run start`, `armory run cancel`, `armory run traffic`, `armory run delete` | [armory](armory.md) |
 | Extension | `extension list`, `extension get`, `extension update`, `extension logs`, `extension settings get`, `extension settings set`, `extension call`, `extension enable`, `extension disable`, `extension api` | [extension](extension.md) |
