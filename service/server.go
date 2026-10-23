@@ -30,6 +30,7 @@ type Server struct {
 	listener          ListenerLifecycle
 	projects          *ProjectLifecycle
 	chrome            *Chrome
+	upstreamProxies   *UpstreamProxies
 	version           string
 	updates           *Updates
 	installer         *updateInstaller
@@ -62,6 +63,8 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 	}
 	chrome := NewChrome(proxy, listener, chromeLog)
 	chrome.events = events
+	upstreamProxies := NewUpstreamProxies(proxy.ConfigDir)
+	upstreamProxies.events = events
 	server := &Server{
 		mux:               mux,
 		events:            events,
@@ -70,6 +73,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		listener:          listener,
 		projects:          projects,
 		chrome:            chrome,
+		upstreamProxies:   upstreamProxies,
 		installer:         newUpdateInstaller(),
 		version:           version,
 		instance:          instance,
@@ -135,6 +139,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 	mux.Handle("/project/", http.StripPrefix("/project", projectMux))
 	mux.HandleFunc("/events", server.serveEvents)
 	addUpdateRoutes(mux, server)
+	addUpstreamProxyRoutes(mux, upstreamProxies)
 	return server
 }
 
