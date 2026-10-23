@@ -122,6 +122,7 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 | Hold, edit, forward, or drop traffic | `checkpoint` | HTTP edits replace the whole raw request or response, not just its body. WebSocket edits replace the payload. Interception can leave clients waiting. |
 | Inspect or inject WebSocket messages | `websocket`, `traffic websocket` | Injection and close require a live connection. Choose direction and opcode explicitly. |
 | Redirect an upstream connection | `waypoint` | Maps an original host:port to an override host:port without changing DNS. |
+| Manage the machine's upstream proxies | `upstream` | `list`, `add <name> <url> [--ca <pem-file>]`, `update <name> [--url …] [--ca …\|--no-ca]`, `remove <name>`. The list is shared by every instance on the config directory. The URL is `http`, `https` or `socks5://[user:pass@]host:port`; names follow the client-name pattern. `--ca` copies the PEM into the entry. Output shows `name`, `scheme`, `host`, `port`, `has_credentials` and `has_ca`, never credentials or the PEM. A duplicate `add` is refused with `upstream_proxy_already_exists`, and a missing name is `not_found`. |
 | Launch a proxied browser | `chrome` | Register an executable path and profile before launch. To automate it, see [Drive a browser with CDP](#drive-a-browser-with-cdp). |
 | Record methodology and vulnerabilities | `test-case`, `finding` | Link captured request IDs as evidence. |
 | Attach evidence files | `artifact` | Uploads require exactly one of `--finding` or `--test-case`, never both. |
