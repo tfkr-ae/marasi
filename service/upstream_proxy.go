@@ -135,6 +135,21 @@ func addUpstreamProxyRoutes(mux *http.ServeMux, projectRoutes routeMux, proxies 
 		}
 		writeJSON(w, r, http.StatusOK, upstreamProxyList{Items: items})
 	})
+	mux.HandleFunc("POST /upstream-proxy/{name}/check", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Target *string `json:"target"`
+		}
+		if r.Body == nil || !decodeStrictJSON(r.Body, &body) || body.Target == nil {
+			writeUpstreamProxyError(w, r, errInvalidUpstreamProxyRequest)
+			return
+		}
+		result, err := proxies.Check(r.Context(), r.PathValue("name"), *body.Target)
+		if err != nil {
+			writeUpstreamProxyError(w, r, err)
+			return
+		}
+		writeJSON(w, r, http.StatusOK, result)
+	})
 	mux.HandleFunc("DELETE /upstream-proxy/{name}", func(w http.ResponseWriter, r *http.Request) {
 		if !emptyRequestBody(r) {
 			writeUpstreamProxyError(w, r, errInvalidUpstreamProxyRequest)
@@ -185,6 +200,8 @@ func writeUpstreamProxyError(w http.ResponseWriter, r *http.Request, err error) 
 	case errors.Is(err, marasi.ErrInvalidUpstreamProxy):
 		// The message names the field at fault and never quotes the URL.
 		status, code, message = http.StatusBadRequest, "invalid_upstream_proxy", err.Error()
+	case errors.Is(err, marasi.ErrInvalidUpstreamProxyTarget):
+		status, code, message = http.StatusBadRequest, "invalid_target", err.Error()
 	case errors.Is(err, marasi.ErrUpstreamProxyExists):
 		status, code = http.StatusConflict, "upstream_proxy_already_exists"
 	case errors.Is(err, marasi.ErrUpstreamProxyNotFound):
@@ -252,6 +269,28 @@ func (u *UpstreamProxies) Use(ctx context.Context, name string) error {
 		}{Name: name})
 	}
 	return nil
+}
+
+// UpstreamProxyCheck is the result of POST /upstream-proxy/{name}/check.
+// Outcome is "ok" or the failure, such as "refused", "auth_rejected",
+// "tls_verification" or "timeout".
+type UpstreamProxyCheck struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	Target  string `json:"target"`
+	Outcome string `json:"outcome"`
+	Message string `json:"message"`
+}
+
+// Check makes one test connection to target through the named upstream
+// proxy, selected or not. It publishes nothing, stores nothing and leaves
+// the selection alone.
+func (u *UpstreamProxies) Check(ctx context.Context, name, target string) (UpstreamProxyCheck, error) {
+	result, err := u.proxy.CheckUpstreamProxy(ctx, name, target)
+	if err != nil {
+		return UpstreamProxyCheck{}, err
+	}
+	return UpstreamProxyCheck(result), nil
 }
 
 // selection returns the open project's selection.
