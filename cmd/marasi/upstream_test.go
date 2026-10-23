@@ -17,7 +17,7 @@ func TestUpstreamCommands(t *testing.T) {
 	if err := os.WriteFile(caFile, []byte(upstreamTestPEM), 0600); err != nil {
 		t.Fatalf("writing CA file: %v", err)
 	}
-	listed := `{"items":[{"name":"burp","scheme":"http","host":"127.0.0.1","port":8080,"has_credentials":true,"has_ca":true},{"name":"jump","scheme":"socks5","host":"::1","port":1080,"has_credentials":false,"has_ca":false}]}` + "\n"
+	listed := `{"items":[{"name":"burp","scheme":"http","host":"127.0.0.1","port":8080,"has_credentials":true,"has_ca":true},{"name":"jump","scheme":"socks5","host":"::1","port":1080,"has_credentials":false,"has_ca":false}],"selected":"jump","configured":true}` + "\n"
 
 	for _, test := range []struct {
 		name       string
@@ -29,11 +29,11 @@ func TestUpstreamCommands(t *testing.T) {
 		wantStderr string
 	}{
 		{
-			name:       "should list entries as a table without secrets",
+			name:       "should list entries as a table without secrets, marking the open project's selection",
 			args:       []string{"upstream", "list"},
 			method:     http.MethodGet,
 			path:       "/upstream-proxy",
-			wantStdout: "NAME  SCHEME  HOST       PORT  CREDENTIALS  CA\nburp  http    127.0.0.1  8080  yes          yes\njump  socks5  ::1        1080  no           no\nNAME  SCHEME  HOST       PORT  CREDENTIALS  CA\n",
+			wantStdout: "NAME  SCHEME  HOST       PORT  CREDENTIALS  CA   SELECTED\nburp  http    127.0.0.1  8080  yes          yes  no\njump  socks5  ::1        1080  no           no   yes\nNAME  SCHEME  HOST       PORT  CREDENTIALS  CA   SELECTED\n",
 		},
 		{
 			name:       "should add an entry with a URL",
@@ -149,6 +149,7 @@ func TestUpstreamCommandContract(t *testing.T) {
 			{"upstream", "remove", "burp"},
 			{"upstream", "use", "burp"},
 			{"upstream", "use", "--none"},
+			{"upstream", "check", "burp", "http://target.test"},
 		} {
 			configDir := serviceConfigDir(t)
 			instanceName := "json-" + string(rune('a'+index))
@@ -176,6 +177,8 @@ func TestUpstreamCommandContract(t *testing.T) {
 			{"update missing", []string{"upstream", "update", "burp", "--url", "http://127.0.0.1:8080"}, http.StatusNotFound, `{"error":"not_found"}`, "updating upstream proxy: not_found"},
 			{"remove missing", []string{"upstream", "remove", "burp"}, http.StatusNotFound, `{"error":"not_found"}`, "removing upstream proxy: not_found"},
 			{"use missing", []string{"upstream", "use", "burp"}, http.StatusNotFound, `{"error":"not_found"}`, "selecting upstream proxy: not_found"},
+			{"check missing", []string{"upstream", "check", "burp", "http://target.test"}, http.StatusNotFound, `{"error":"not_found"}`, "checking upstream proxy: not_found"},
+			{"check invalid target", []string{"upstream", "check", "burp", "ftp://target.test"}, http.StatusBadRequest, `{"error":"invalid_target","message":"invalid check target: the target must be an http or https URL with a host"}`, "checking upstream proxy: invalid_target: invalid check target: the target must be an http or https URL with a host"},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				configDir := serviceConfigDir(t)
@@ -223,11 +226,57 @@ func TestUpstreamCommandContract(t *testing.T) {
 			{"upstream", "use"},
 			{"upstream", "use", "burp", "--none"},
 			{"upstream", "use", "burp", "jump"},
+			{"upstream", "check"},
+			{"upstream", "check", "burp"},
+			{"upstream", "check", "burp", "http://a.test", "extra"},
 		} {
 			commandArgs := append([]string{"--config-dir", configDir}, args...)
 			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
 				t.Fatalf("\nwanted:\ninvalid invocation\ngot:\naccepted %v", args)
 			}
+		}
+	})
+
+	t.Run("should flag a selection this machine does not list", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "unlisted", http.StatusOK, `{"items":[{"name":"burp","scheme":"http","host":"127.0.0.1","port":8080,"has_credentials":false,"has_ca":false}],"selected":"client-jump","configured":false}`)
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "unlisted", "upstream", "list")
+		wantStdout := "NAME  SCHEME  HOST       PORT  CREDENTIALS  CA  SELECTED\nburp  http    127.0.0.1  8080  no           no  no\nNAME  SCHEME  HOST       PORT  CREDENTIALS  CA  SELECTED\n"
+		wantStderr := "selected upstream proxy client-jump is not configured on this machine; requests fail\n"
+		if err != nil || stdout != wantStdout || stderr != wantStderr {
+			t.Fatalf("\nwanted:\nstdout %q, stderr %q, nil error\ngot:\nstdout %q, stderr %q, error %v", wantStdout, wantStderr, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should print a check's outcome and message", func(t *testing.T) {
+		for _, test := range []struct {
+			name     string
+			response string
+			want     string
+		}{
+			{
+				name:     "ok",
+				response: `{"name":"burp","address":"http://127.0.0.1:8080","target":"target.test:443","outcome":"ok","message":"upstream proxy \"burp\" (http://127.0.0.1:8080) connected to target.test:443 and verified its certificate"}`,
+				want:     "upstream_proxy: burp (http://127.0.0.1:8080)\ntarget: target.test:443\noutcome: ok\nmessage: upstream proxy \"burp\" (http://127.0.0.1:8080) connected to target.test:443 and verified its certificate\n",
+			},
+			{
+				name:     "auth_rejected",
+				response: `{"name":"burp","address":"http://127.0.0.1:8080","target":"target.test:80","outcome":"auth_rejected","message":"upstream proxy \"burp\" (http://127.0.0.1:8080): rejected the credentials with 407 Proxy Authentication Required"}`,
+				want:     "upstream_proxy: burp (http://127.0.0.1:8080)\ntarget: target.test:80\noutcome: auth_rejected\nmessage: upstream proxy \"burp\" (http://127.0.0.1:8080): rejected the credentials with 407 Proxy Authentication Required\n",
+			},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				configDir := serviceConfigDir(t)
+				sent := startCannedControlAPI(t, configDir, "check", http.StatusOK, test.response)
+				stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "check", "upstream", "check", "burp", "https://target.test/login")
+				if err != nil || stdout != test.want || stderr != "" {
+					t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", test.want, stdout, stderr, err)
+				}
+				wantBody := `{"target":"https://target.test/login"}`
+				if got := sent.snapshot(); got.Method != http.MethodPost || got.Path != "/upstream-proxy/burp/check" || got.Body != wantBody || got.ContentType != requestContentType(wantBody) {
+					t.Fatalf("\nwanted:\nPOST /upstream-proxy/burp/check %s\ngot:\n%s %s %s %s", wantBody, got.Method, got.Path, got.Body, got.ContentType)
+				}
+			})
 		}
 	})
 
