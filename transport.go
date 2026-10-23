@@ -9,6 +9,8 @@ import (
 	"net/http/httptrace"
 	"sync/atomic"
 
+	"github.com/tfkr-ae/marasi/core"
+
 	tls "github.com/refraction-networking/utls"
 	utls "github.com/refraction-networking/utls"
 )
@@ -53,12 +55,18 @@ func newRoutedTransport(resolveRoute, currentRoute func() *Route, dial func(cont
 		route := resolveRoute()
 		conn, err := route.dial(ctx, dial, network, addr)
 		if err != nil {
+			recordTried(ctx, route)
 			return nil, err
 		}
 		return &routedConn{Conn: conn, route: route}, nil
 	}
-	transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+	transport.DialTLSContext = func(ctx context.Context, network, addr string) (_ net.Conn, err error) {
 		route := resolveRoute()
+		defer func() {
+			if err != nil {
+				recordTried(ctx, route)
+			}
+		}()
 		tcpConn, err := route.dial(ctx, dial, network, addr)
 		if err != nil {
 			return nil, err
@@ -151,6 +159,9 @@ func (m *marasiRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	trace := &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
 		if route, ok := connectionRoute(info.Conn); ok {
 			used.Store(route)
+			if record, ok := core.RouteRecordFromContext(req.Context()); ok {
+				record.Connected(route.Snapshot())
+			}
 		}
 	}}
 	sent := *req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
@@ -172,4 +183,13 @@ func (m *marasiRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		}
 	}
 	return res, err
+}
+
+// recordTried records route on the route record of the request whose dial
+// failed, so its pair's snapshot holds the route that was tried. The dial
+// context carries the request's values.
+func recordTried(ctx context.Context, route *Route) {
+	if record, ok := core.RouteRecordFromContext(ctx); ok {
+		record.Tried(route.Snapshot())
+	}
 }

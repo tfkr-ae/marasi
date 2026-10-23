@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // Route says how the transport reaches the origin for a new connection. The
@@ -82,6 +84,12 @@ func (route *Route) rootCAs() (*x509.CertPool, error) {
 		route.roots = pool
 	})
 	return route.roots, route.rootsErr
+}
+
+// Snapshot returns the route as a pair records it: the name and the
+// address without credentials, both empty for a direct route.
+func (route *Route) Snapshot() domain.RouteSnapshot {
+	return domain.RouteSnapshot{Name: route.Name, Address: route.Address()}
 }
 
 // sameRoute reports whether two routes reach the origin the same way.

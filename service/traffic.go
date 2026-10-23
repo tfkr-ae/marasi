@@ -203,6 +203,27 @@ type trafficDetail struct {
 	// Prettified holds the prettified copies the proxy stored at capture
 	// (docs/adr/2026-10-14-prettified-bodies-leave-metadata.md). They are never part of metadata.
 	Prettified trafficPrettified `json:"prettified"`
+	// UpstreamProxy is the route that carried the pair, written with its
+	// response. It is null before the response or for a pair captured
+	// before route snapshots existed.
+	UpstreamProxy *trafficRoute `json:"upstream_proxy"`
+}
+
+// trafficRoute is a pair's route snapshot: the upstream proxy that carried
+// it, or tried to, by name and address without credentials. Direct is an
+// empty name and address. It is read-only and never part of metadata.
+type trafficRoute struct {
+	Name    string `json:"name"`    // upstream proxy name, "" for direct
+	Address string `json:"address"` // scheme://host:port, "" for direct
+}
+
+// trafficRouteFromDomain returns route's JSON shape, or nil when the pair
+// has no snapshot.
+func trafficRouteFromDomain(route *domain.RouteSnapshot) *trafficRoute {
+	if route == nil {
+		return nil
+	}
+	return &trafficRoute{Name: route.Name, Address: route.Address}
 }
 
 // trafficPrettified is the prettified copies of a traffic detail. A copy is
@@ -719,6 +740,7 @@ func trafficDetailFromRow(row *domain.RequestResponseRow) trafficDetail {
 			Request:  prettifiedCopy(row.Prettified.Request),
 			Response: prettifiedCopy(row.Prettified.Response),
 		},
+		UpstreamProxy: trafficRouteFromDomain(row.Route),
 	}
 }
 
