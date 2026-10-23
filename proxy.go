@@ -147,6 +147,8 @@ type Proxy struct {
 	connectionsClosing   bool
 	transportContext     context.Context
 	cancelTransport      context.CancelFunc
+	route                atomic.Pointer[Route]              // the route new connections to the origin use
+	transport            atomic.Pointer[marasiRoundTripper] // the transport the latest Serve built
 	listenerMu           sync.Mutex
 	activeListener       net.Listener
 	activeServeDone      chan struct{}
@@ -335,6 +337,7 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 			return func() {}, 0, nil
 		},
 	}
+	proxy.route.Store(DirectRoute())
 	err := proxy.WithOptions(options...)
 	if err != nil {
 		return nil, err
@@ -857,7 +860,8 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 	if err := proxy.flushDBWrites(); err != nil {
 		return err
 	}
-	roundTripper := newMarasiTransport(proxy.dialTransport)
+	roundTripper := newRoutedTransport(proxy.CurrentRoute, proxy.dialTransport)
+	proxy.transport.Store(roundTripper)
 	proxy.martianProxy.SetRoundTripper(&launchFailureRoundTripper{proxy: proxy, base: roundTripper})
 	proxy.listenerMu.Lock()
 	proxy.activeListener = activeListener
