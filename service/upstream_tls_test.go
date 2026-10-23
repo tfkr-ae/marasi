@@ -1,6 +1,7 @@
 package service
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -102,6 +103,62 @@ func TestUpstreamProxyTLSTrust(t *testing.T) {
 	})
 }
 
+func TestHTTPSUpstreamProxy(t *testing.T) {
+	t.Run("should speak TLS to an HTTPS upstream proxy its entry's CA signed, then CONNECT", func(t *testing.T) {
+		service := newUpstreamService(t, marasi.WithTLS())
+		ca := upstreamtest.NewCA(t, "Corp proxy CA")
+		fake := upstreamtest.NewHTTPS(t, ca, upstreamtest.WithBehaviour(upstreamtest.RejectCredentials), upstreamtest.WithCredentials("alice", "pw"))
+		service.addUpstreamProxyWithCA(t, "corp", fake.URL("https", "alice", "pw"), ca.PEM())
+		service.use(t, "corp")
+
+		response, body := service.get(t, service.origin.URL+"/over-tls")
+		if response.StatusCode != http.StatusOK || body != "origin /over-tls" {
+			t.Fatalf("\nwanted:\n200 origin /over-tls\ngot:\n%d %s", response.StatusCode, body)
+		}
+		tunnels := fake.Tunnels()
+		if len(tunnels) != 1 || tunnels[0].Target != service.originHost() || tunnels[0].Username != "alice" {
+			t.Fatalf("\nwanted:\none CONNECT to %s as alice\ngot:\n%v", service.originHost(), fake.Targets())
+		}
+		if !carried(fake, "GET /over-tls HTTP/1.1\r\n") {
+			t.Fatalf("\nwanted:\n/over-tls through the tunnel\ngot:\n%q", tunnels[0].Sent())
+		}
+	})
+
+	t.Run("should verify an HTTPS origin inside the TLS connection to the upstream proxy", func(t *testing.T) {
+		service := newUpstreamService(t, marasi.WithTLS())
+		ca := upstreamtest.NewCA(t, "Corp proxy CA")
+		origin := newCASignedOrigin(t, ca)
+		fake := upstreamtest.NewHTTPS(t, ca)
+		service.addUpstreamProxyWithCA(t, "corp", fake.URL("https", "", ""), ca.PEM())
+		service.use(t, "corp")
+
+		response, body := service.get(t, origin.URL+"/nested")
+		if response.StatusCode != http.StatusOK || body != "signed origin /nested" {
+			t.Fatalf("\nwanted:\n200 signed origin /nested\ngot:\n%d %s", response.StatusCode, body)
+		}
+		if got := fake.Targets(); len(got) != 1 || got[0] != hostOf(origin.URL) {
+			t.Fatalf("\nwanted:\n[%s]\ngot:\n%v", hostOf(origin.URL), got)
+		}
+	})
+
+	t.Run("should fail closed naming TLS verification when the upstream proxy's certificate is not trusted", func(t *testing.T) {
+		service := newUpstreamService(t, marasi.WithTLS())
+		ca := upstreamtest.NewCA(t, "Corp proxy CA")
+		fake := upstreamtest.NewHTTPS(t, ca)
+		service.addUpstreamProxy(t, "corp", fake.URL("https", "", ""))
+		service.use(t, "corp")
+
+		response, _ := service.get(t, service.origin.URL+"/untrusted-proxy")
+		if response.StatusCode != http.StatusBadGateway {
+			t.Fatalf("\nwanted:\n502\ngot:\n%d", response.StatusCode)
+		}
+		if hits := service.originHits.Load(); hits != 0 || len(fake.Tunnels()) != 0 {
+			t.Fatalf("\nwanted:\nno CONNECT and no origin hit\ngot:\n%v, %d hits", fake.Targets(), hits)
+		}
+		assertTLSVerificationLog(t, service, "/untrusted-proxy", "corp", "https://"+fake.Addr)
+	})
+}
+
 // newCASignedOrigin starts an HTTPS origin whose certificate ca signed.
 func newCASignedOrigin(t *testing.T, ca *upstreamtest.CA) *httptest.Server {
 	t.Helper()
@@ -111,7 +168,12 @@ func newCASignedOrigin(t *testing.T, ca *upstreamtest.CA) *httptest.Server {
 		}
 		_, _ = io.WriteString(w, "signed origin "+r.URL.Path)
 	}))
-	origin.TLS = ca.ServerConfig()
+	// httptest presents its own certificate unless Certificates is set.
+	leaf, err := ca.Leaf("127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin.TLS = &tls.Config{Certificates: []tls.Certificate{*leaf}}
 	origin.StartTLS()
 	t.Cleanup(origin.Close)
 	return origin

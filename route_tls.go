@@ -1,12 +1,42 @@
 package marasi
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"net"
+	"strconv"
 
 	utls "github.com/refraction-networking/utls"
 )
+
+// dialHTTPSConnect opens TLS to the upstream proxy, verified against the
+// system roots plus the entry's CA, and asks it for a tunnel to address
+// with CONNECT as dialHTTPConnect does.
+func (route *Route) dialHTTPSConnect(ctx context.Context, dial dialFunc, network, address string) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, route.timeoutOrDefault())
+	defer cancel()
+	roots, err := route.rootCAs()
+	if err != nil {
+		return nil, route.fail(UpstreamProxyInvalid, err.Error(), err)
+	}
+	conn, err := dial(ctx, network, net.JoinHostPort(route.Host, strconv.Itoa(route.Port)))
+	if err != nil {
+		return nil, route.classify("connecting", err)
+	}
+	tlsConn := tls.Client(conn, &tls.Config{ServerName: route.Host, RootCAs: roots, NextProtos: []string{"http/1.1"}})
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		conn.Close()
+		return nil, route.handshakeFailure("the upstream proxy", contextCause(ctx, err))
+	}
+	tunnel, err := route.connect(ctx, tlsConn, address)
+	if err != nil {
+		tlsConn.Close()
+		return nil, err
+	}
+	return tunnel, nil
+}
 
 // originHandshakeFailure turns a failed TLS handshake with the origin into
 // the route's error, so a proxied connection fails closed with a proxy log.
