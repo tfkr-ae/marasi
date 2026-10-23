@@ -149,6 +149,8 @@ type Proxy struct {
 	cancelTransport      context.CancelFunc
 	route                atomic.Pointer[Route]              // the route new connections to the origin use
 	transport            atomic.Pointer[marasiRoundTripper] // the transport the latest Serve built
+	routes               routeResolver                      // turns the upstream proxy selection into routes
+	routeMu              sync.Mutex                         // serializes route swaps from the resolver
 	listenerMu           sync.Mutex
 	activeListener       net.Listener
 	activeServeDone      chan struct{}
@@ -191,6 +193,9 @@ type ProjectResources struct {
 	Waypoints       map[string]string
 	Armory          ArmoryService
 	ReportGenerator domain.ReportGenerator
+	// UpstreamProxy is the project's upstream proxy selection, or "" for a
+	// direct connection.
+	UpstreamProxy string
 }
 
 type dbWriteBarrier struct {
@@ -369,6 +374,7 @@ func (proxy *Proxy) SetProjectResources(resources ProjectResources) {
 	proxy.waypointMu.Unlock()
 	proxy.Armory = resources.Armory
 	proxy.ReportGenerator = resources.ReportGenerator
+	proxy.SelectUpstreamProxy(resources.UpstreamProxy)
 }
 
 // AddRequestModifier accepts RequestModifierFunc and wraps it in a reqAdapter
@@ -860,7 +866,7 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 	if err := proxy.flushDBWrites(); err != nil {
 		return err
 	}
-	roundTripper := newRoutedTransport(proxy.CurrentRoute, proxy.dialTransport)
+	roundTripper := newRoutedTransport(proxy.resolveRoute, proxy.CurrentRoute, proxy.dialTransport)
 	proxy.transport.Store(roundTripper)
 	proxy.martianProxy.SetRoundTripper(&launchFailureRoundTripper{proxy: proxy, base: roundTripper})
 	proxy.listenerMu.Lock()
