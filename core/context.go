@@ -4,10 +4,12 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/martian"
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // contextKey is a custom type for context keys to avoid collisions.
@@ -38,6 +40,8 @@ const (
 	MartianSessionKey contextKey = "SessionKey"
 	// WebSocketUpstreamKey stores the upgraded upstream WebSocket stream.
 	WebSocketUpstreamKey contextKey = "WebSocketUpstream"
+	// RouteRecordKey is the context key for the request's route record (*RouteRecord)
+	RouteRecordKey contextKey = "RouteRecord"
 )
 
 // ContextWithSession returns a new request with a martian session in the context.
@@ -192,4 +196,55 @@ func WebSocketUpstreamFromContext(
 ) (io.ReadWriteCloser, bool) {
 	upstream, ok := ctx.Value(WebSocketUpstreamKey).(io.ReadWriteCloser)
 	return upstream, ok
+}
+
+// RouteRecord collects the route a request went out on, for the pair's route
+// snapshot. The transport fills it: with the route of the connection that
+// carried the request, or, when no connection could be opened, with the
+// route it tried. It is safe for concurrent use.
+type RouteRecord struct {
+	mu        sync.Mutex
+	route     *domain.RouteSnapshot
+	connected bool
+}
+
+// Connected records the route of a connection the request was sent on. A
+// later connection, such as a retry, replaces it.
+func (record *RouteRecord) Connected(route domain.RouteSnapshot) {
+	record.mu.Lock()
+	defer record.mu.Unlock()
+	record.route, record.connected = &route, true
+}
+
+// Tried records a route whose connection failed. It never replaces a route
+// the request was sent on.
+func (record *RouteRecord) Tried(route domain.RouteSnapshot) {
+	record.mu.Lock()
+	defer record.mu.Unlock()
+	if !record.connected {
+		record.route = &route
+	}
+}
+
+// Snapshot returns a copy of the recorded route, or nil when none is.
+func (record *RouteRecord) Snapshot() *domain.RouteSnapshot {
+	record.mu.Lock()
+	defer record.mu.Unlock()
+	if record.route == nil {
+		return nil
+	}
+	route := *record.route
+	return &route
+}
+
+// ContextWithRouteRecord returns a new request whose context carries record.
+func ContextWithRouteRecord(req *http.Request, record *RouteRecord) *http.Request {
+	ctx := context.WithValue(req.Context(), RouteRecordKey, record)
+	return req.WithContext(ctx)
+}
+
+// RouteRecordFromContext returns the route record from the context if it exists.
+func RouteRecordFromContext(ctx context.Context) (*RouteRecord, bool) {
+	record, ok := ctx.Value(RouteRecordKey).(*RouteRecord)
+	return record, ok
 }
