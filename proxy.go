@@ -587,6 +587,11 @@ func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
 		metadata = make(map[string]any)
 	}
 
+	var route *domain.RouteSnapshot
+	if record, ok := core.RouteRecordFromContext(res.Request.Context()); ok {
+		route = record.Snapshot()
+	}
+
 	proxyResponse := &domain.ProxyResponse{
 		ID:          requestId,
 		Status:      res.Status,
@@ -597,6 +602,7 @@ func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
 		Metadata:    metadata,
 		Prettified:  prettified,
 		RespondedAt: responseTime,
+		Route:       route,
 	}
 	return proxyResponse, nil
 }

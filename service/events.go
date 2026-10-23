@@ -52,6 +52,8 @@ type trafficResponseEvent struct {
 	Length      string         `json:"length"`       // content length
 	Metadata    map[string]any `json:"metadata"`     // response metadata without prettified bodies
 	RespondedAt time.Time      `json:"responded_at"` // when the response arrived
+	// UpstreamProxy is the route that carried the pair, as pair reads show it.
+	UpstreamProxy *trafficRoute `json:"upstream_proxy"`
 }
 
 // newEventBroadcaster returns an empty broadcaster.
@@ -130,13 +132,14 @@ func (b *eventBroadcaster) publishSitemapChanged(reason string) {
 // publishResponse publishes a traffic.response event.
 func (b *eventBroadcaster) publishResponse(response domain.ProxyResponse) {
 	b.publish("traffic.response", trafficResponseEvent{
-		ID:          response.ID,
-		Status:      response.Status,
-		StatusCode:  response.StatusCode,
-		ContentType: response.ContentType,
-		Length:      response.Length,
-		Metadata:    metadataWithoutPrettified(response.Metadata),
-		RespondedAt: response.RespondedAt,
+		ID:            response.ID,
+		Status:        response.Status,
+		StatusCode:    response.StatusCode,
+		ContentType:   response.ContentType,
+		Length:        response.Length,
+		Metadata:      metadataWithoutPrettified(response.Metadata),
+		RespondedAt:   response.RespondedAt,
+		UpstreamProxy: trafficRouteFromDomain(response.Route),
 	})
 }
 
