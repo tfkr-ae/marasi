@@ -1,8 +1,8 @@
 // Package upstreamtest provides fake upstream proxies for tests. Each fake
 // records what it was asked to reach, the credentials it was shown and the
 // bytes it carried, and can refuse, reject credentials or hang. The HTTP
-// CONNECT fake lives here; SOCKS5 and HTTPS fakes sit beside it and share
-// Tunnel, Behaviour and Splice.
+// CONNECT fake lives here; SOCKS5, HTTPS and intercepting fakes sit beside
+// it and share Tunnel, Behaviour and Splice.
 package upstreamtest
 
 import (
@@ -70,6 +70,8 @@ type Proxy struct {
 	behaviour Behaviour
 	username  string
 	password  string
+	// intercept, when set, terminates each tunnel's TLS with leaves it signs.
+	intercept *CA
 	wg        sync.WaitGroup
 
 	mu      sync.Mutex
@@ -96,6 +98,12 @@ func WithCredentials(username, password string) Option {
 // closed when the test ends.
 func NewHTTP(t testing.TB, options ...Option) *Proxy {
 	t.Helper()
+	return start(t, (*Proxy).serveHTTP, options)
+}
+
+// start listens on a loopback port and serves each connection with handle.
+func start(t testing.TB, handle func(*Proxy, net.Conn), options []Option) *Proxy {
+	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listening for the fake upstream proxy: %v", err)
@@ -110,7 +118,7 @@ func NewHTTP(t testing.TB, options ...Option) *Proxy {
 		return proxy
 	}
 	proxy.wg.Add(1)
-	go proxy.serve(proxy.serveHTTP)
+	go proxy.serve(func(conn net.Conn) { handle(proxy, conn) })
 	return proxy
 }
 
@@ -234,6 +242,13 @@ func (proxy *Proxy) serveHTTP(conn net.Conn) {
 	}
 	if !proxy.credentialsAccepted(tunnel) {
 		_, _ = io.WriteString(conn, "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"fake\"\r\nContent-Length: 0\r\n\r\n")
+		return
+	}
+	if proxy.intercept != nil {
+		if _, err := io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+			return
+		}
+		proxy.interceptTunnel(conn, reader, tunnel.Target, tunnel)
 		return
 	}
 	target, err := net.Dial("tcp", tunnel.Target)
