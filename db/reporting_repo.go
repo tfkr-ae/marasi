@@ -783,6 +783,7 @@ func (repo *Repository) GetTestCaseRequests(id uuid.UUID) ([]*domain.RequestResp
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
+			  r.upstream_proxy_name, r.upstream_proxy_address,
 			  r.metadata,
 			  h.highlight, pn.number
 		      FROM request r
@@ -845,6 +846,7 @@ func (repo *Repository) GetFindingRequests(id uuid.UUID) ([]*domain.RequestRespo
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
+			  r.upstream_proxy_name, r.upstream_proxy_address,
 			  r.metadata,
 			  h.highlight, pn.number
 		      FROM request r

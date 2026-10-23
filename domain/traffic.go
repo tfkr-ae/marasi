@@ -294,6 +294,9 @@ type RequestResponseSummary struct {
 	RespondedAt time.Time
 	Note        string
 	Highlight   *int // highlight from 1 to 8, or nil when the pair has none
+	// Route is the route snapshot written with the response, or nil for a
+	// pair with no response or one captured before snapshots existed.
+	Route *RouteSnapshot
 }
 
 // ContentTypeCount is the number of request-response pairs with one response
