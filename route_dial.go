@@ -94,6 +94,8 @@ func (route *Route) dial(ctx context.Context, dial dialFunc, network, address st
 		return route.dialHTTPConnect(ctx, dial, network, address)
 	case UpstreamProxyHTTPS:
 		return route.dialHTTPSConnect(ctx, dial, network, address)
+	case UpstreamProxySOCKS5:
+		return route.dialSOCKS5(ctx, dial, network, address)
 	default:
 		return nil, route.fail(UpstreamProxyInvalid, fmt.Sprintf("the %s scheme is not supported yet", route.Scheme), nil)
 	}

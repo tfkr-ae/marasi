@@ -116,8 +116,8 @@ func (ca *CA) ServerConfig() *tls.Config {
 func NewHTTPS(t testing.TB, ca *CA, options ...Option) *Proxy {
 	t.Helper()
 	config := ca.ServerConfig()
-	return start(t, func(proxy *Proxy, conn net.Conn) {
-		proxy.serveHTTP(tls.Server(conn, config))
+	return start(t, func(proxy *Proxy) func(net.Conn) {
+		return func(conn net.Conn) { proxy.serveHTTP(tls.Server(conn, config)) }
 	}, options)
 }
 
@@ -128,7 +128,7 @@ func NewHTTPS(t testing.TB, ca *CA, options ...Option) *Proxy {
 // decrypted bytes.
 func NewIntercepting(t testing.TB, ca *CA, options ...Option) *Proxy {
 	t.Helper()
-	return start(t, (*Proxy).serveHTTP, append(options, func(proxy *Proxy) { proxy.intercept = ca }))
+	return start(t, func(proxy *Proxy) func(net.Conn) { return proxy.serveHTTP }, append(options, func(proxy *Proxy) { proxy.intercept = ca }))
 }
 
 // interceptTunnel serves an established tunnel from conn to target as an
@@ -145,17 +145,24 @@ func (proxy *Proxy) interceptTunnel(conn net.Conn, reader *bufio.Reader, target 
 		return
 	}
 	// The intercepting proxy, not the test, decides to trust the origin.
-	origin, err := tls.Dial("tcp", target, &tls.Config{ServerName: host, InsecureSkipVerify: true})
+	raw, err := proxy.dialTarget(target)
 	if err != nil {
 		_, _ = io.WriteString(client, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
 		client.Close()
 		return
 	}
-	if !proxy.track(origin) {
-		origin.Close()
+	// Tracked before the handshake so Close can interrupt it.
+	if !proxy.track(raw) {
+		raw.Close()
 		return
 	}
-	defer proxy.untrack(origin)
+	defer proxy.untrack(raw)
+	origin := tls.Client(raw, &tls.Config{ServerName: host, InsecureSkipVerify: true})
+	if err := origin.Handshake(); err != nil {
+		_, _ = io.WriteString(client, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+		client.Close()
+		return
+	}
 	Splice(client, client, origin, tunnel)
 }
 
