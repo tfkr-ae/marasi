@@ -63,7 +63,11 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 	}
 	chrome := NewChrome(proxy, listener, chromeLog)
 	chrome.events = events
-	upstreamProxies := NewUpstreamProxies(proxy.ConfigDir)
+	var configDir string
+	if proxy != nil {
+		configDir = proxy.ConfigDir
+	}
+	upstreamProxies := NewUpstreamProxies(configDir)
 	upstreamProxies.events = events
 	server := &Server{
 		mux:               mux,
