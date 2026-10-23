@@ -29,6 +29,10 @@ The listener through which clients send control API requests to one service inst
 **Proxy listener**:
 The listener through which browsers and other clients send traffic to a service instance for proxying.
 
+**Upstream proxy**:
+A named HTTP, HTTPS, or SOCKS5 proxy, configured for the machine, that the proxy sends traffic through on its way to the origin. A project selects at most one, and with none selected the proxy connects to the origin directly. "Upstream" on its own still means the origin.
+_Avoid_: upstream (except as the `marasi upstream` command group), downstream proxy, proxy chain, outbound proxy
+
 **CA certificate**:
 The public certificate of the authority shared by every service instance that uses one config directory. It is not a private key and not a per-host leaf.
 _Avoid_: certificate, cert, marasi.cert
