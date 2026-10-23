@@ -38,6 +38,11 @@ type Config struct {
 	WebSocketMaxMessageSize int64 `mapstructure:"websocket_max_message_size"`
 	// Updates is the updates section of marasi_config.yaml.
 	Updates UpdatesConfig `mapstructure:"updates"`
+	// UpstreamProxies is the machine's upstream proxy list, the
+	// upstream_proxies section of marasi_config.yaml. Entries are checked
+	// when they are added or updated, not when the file loads, so a bad hand
+	// edit fails only the route that uses it.
+	UpstreamProxies []UpstreamProxyConfig `mapstructure:"upstream_proxies"`
 }
 
 // UpdatesConfig is how the installed build looks for updates.
@@ -229,6 +234,9 @@ func ReadConfig(configDir string) (*Config, error) {
 	}
 	if loaded.ChromeProfiles == nil {
 		loaded.ChromeProfiles = []string{}
+	}
+	if loaded.UpstreamProxies == nil {
+		loaded.UpstreamProxies = []UpstreamProxyConfig{}
 	}
 	return &loaded, nil
 }
