@@ -71,6 +71,34 @@ func TestPairRouteSnapshot(t *testing.T) {
 		wantRoute(t, through, "corp", fmt.Sprintf("http://%s", fake.Addr))
 	})
 
+	t.Run("should list each pair's route in the traffic list as a pair read shows it", func(t *testing.T) {
+		service := newUpstreamService(t)
+		fake := upstreamtest.NewHTTP(t, upstreamtest.WithCredentials("alice", "s3cret"))
+		service.addUpstreamProxy(t, "corp", fake.URL("http", "alice", "s3cret"))
+		service.get(t, service.origin.URL+"/direct?close")
+		service.use(t, "corp")
+		service.get(t, service.origin.URL+"/through")
+		service.route(t, "/direct?close")
+		service.route(t, "/through")
+
+		body := service.mustCall(t, http.MethodGet, "/traffic", "")
+		list := decodeJSON[struct {
+			Items []struct {
+				Path          string     `json:"path"`
+				UpstreamProxy *pairRoute `json:"upstream_proxy"`
+			} `json:"items"`
+		}](t, body)
+		routes := map[string]*pairRoute{}
+		for _, item := range list.Items {
+			routes[item.Path] = item.UpstreamProxy
+		}
+		wantRoute(t, routes["/direct?close"], "", "")
+		wantRoute(t, routes["/through"], "corp", "http://"+fake.Addr)
+		if strings.Contains(body, "s3cret") {
+			t.Fatalf("\nwanted:\nno credentials\ngot:\n%s", body)
+		}
+	})
+
 	t.Run("should record a SOCKS5 upstream proxy's route without its credentials", func(t *testing.T) {
 		service := newUpstreamService(t)
 		fake := socksService(t, service, func(fake *upstreamtest.Proxy) string { return fake.URL("socks5", "alice", "s3cret-pw") },
