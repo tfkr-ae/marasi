@@ -298,6 +298,10 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 		ProxyListener json.RawMessage `json:"proxy_listener"`
 		// RestartRequired is absent from instances older than updates.
 		RestartRequired *bool `json:"restart_required"`
+		// UpstreamProxy and UpstreamProxyConfigured are absent from
+		// instances older than upstream proxies.
+		UpstreamProxy           *string `json:"upstream_proxy"`
+		UpstreamProxyConfigured *bool   `json:"upstream_proxy_configured"`
 	}
 	if err := json.Unmarshal(body, &status); err != nil {
 		return fmt.Errorf("decoding service status: %w", err)
@@ -348,6 +352,16 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 	fmt.Fprintf(&output, "status: %s\nversion: %s\nchannel: %s\ninstance: %s\nproject: %s\nproxy listener: %s\n", *status.Status, *status.Version, channel, *status.Instance, *status.Project, proxyListener)
 	if status.RestartRequired != nil {
 		fmt.Fprintf(&output, "restart required: %s\n", yesNo(*status.RestartRequired))
+	}
+	if status.UpstreamProxy != nil {
+		switch {
+		case *status.UpstreamProxy == "":
+			output.WriteString("upstream proxy: none\n")
+		case status.UpstreamProxyConfigured != nil && !*status.UpstreamProxyConfigured:
+			fmt.Fprintf(&output, "upstream proxy: %s (not configured on this machine; requests fail)\n", *status.UpstreamProxy)
+		default:
+			fmt.Fprintf(&output, "upstream proxy: %s\n", *status.UpstreamProxy)
+		}
 	}
 	if _, err := io.WriteString(stdout, output.String()); err != nil {
 		return fmt.Errorf("writing service status: %w", err)

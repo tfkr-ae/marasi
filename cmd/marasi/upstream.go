@@ -15,6 +15,7 @@ var upstreamAddCA string
 var upstreamUpdateURL string
 var upstreamUpdateCA string
 var upstreamUpdateNoCA bool
+var upstreamUseNone bool
 
 type upstreamAddRequest struct {
 	Name string `json:"name"`
@@ -36,7 +37,8 @@ func init() {
 	upstreamUpdateCmd.Flags().BoolVar(&upstreamUpdateNoCA, "no-ca", false, "Remove the entry's CA")
 	upstreamUpdateCmd.MarkFlagsMutuallyExclusive("ca", "no-ca")
 	upstreamUpdateCmd.MarkFlagsOneRequired("url", "ca", "no-ca")
-	upstreamCmd.AddCommand(upstreamListCmd, upstreamAddCmd, upstreamUpdateCmd, upstreamRemoveCmd)
+	upstreamUseCmd.Flags().BoolVar(&upstreamUseNone, "none", false, "Clear the selection and connect directly")
+	upstreamCmd.AddCommand(upstreamListCmd, upstreamAddCmd, upstreamUpdateCmd, upstreamRemoveCmd, upstreamUseCmd)
 	rootCmd.AddCommand(upstreamCmd)
 }
 
@@ -121,6 +123,36 @@ var upstreamRemoveCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runUpstreamMutation(cmd, http.MethodDelete, "/upstream-proxy/"+url.PathEscape(args[0]), "removing upstream proxy", nil, "upstream proxy "+args[0]+" removed")
+	},
+}
+
+var upstreamUseCmd = &cobra.Command{
+	Use:   "use NAME | --none",
+	Short: "Select the open project's upstream proxy",
+	Long: `Select the upstream proxy all of the open project's traffic to the origin
+leaves through, or --none to connect directly. The project stores the
+selection. Nothing is dialled: a broken upstream proxy shows up as failed
+requests, each with a proxy log. A request never falls back to a direct
+connection, and a project whose selection this machine does not list fails
+every request until you select a listed one or --none.`,
+	Args: func(cmd *cobra.Command, args []string) error {
+		if upstreamUseNone {
+			return cobra.NoArgs(cmd, args)
+		}
+		return cobra.ExactArgs(1)(cmd, args)
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name, confirmation := "", "upstream proxy selection cleared: connecting directly"
+		if !upstreamUseNone {
+			name, confirmation = args[0], "upstream proxy "+args[0]+" selected"
+		}
+		body, err := json.Marshal(struct {
+			Name string `json:"name"`
+		}{Name: name})
+		if err != nil {
+			return fmt.Errorf("encoding upstream proxy selection: %w", err)
+		}
+		return runUpstreamMutation(cmd, http.MethodPut, "/upstream-proxy-selection", "selecting upstream proxy", body, confirmation)
 	},
 }
 

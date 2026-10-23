@@ -90,6 +90,22 @@ func TestUpstreamCommands(t *testing.T) {
 			path:       "/upstream-proxy/burp",
 			wantStderr: "upstream proxy burp removed\n",
 		},
+		{
+			name:       "should select an upstream proxy for the open project",
+			args:       []string{"upstream", "use", "burp"},
+			method:     http.MethodPut,
+			path:       "/upstream-proxy-selection",
+			body:       `{"name":"burp"}`,
+			wantStderr: "upstream proxy burp selected\n",
+		},
+		{
+			name:       "should clear the selection",
+			args:       []string{"upstream", "use", "--none"},
+			method:     http.MethodPut,
+			path:       "/upstream-proxy-selection",
+			body:       `{"name":""}`,
+			wantStderr: "upstream proxy selection cleared: connecting directly\n",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			configDir := serviceConfigDir(t)
@@ -131,6 +147,8 @@ func TestUpstreamCommandContract(t *testing.T) {
 			{"upstream", "update", "burp", "--url", "http://127.0.0.1:8081"},
 			{"upstream", "update", "burp", "--no-ca"},
 			{"upstream", "remove", "burp"},
+			{"upstream", "use", "burp"},
+			{"upstream", "use", "--none"},
 		} {
 			configDir := serviceConfigDir(t)
 			instanceName := "json-" + string(rune('a'+index))
@@ -157,6 +175,7 @@ func TestUpstreamCommandContract(t *testing.T) {
 			{"add invalid", []string{"upstream", "add", "burp", "ftp://127.0.0.1:21"}, http.StatusBadRequest, `{"error":"invalid_upstream_proxy","message":"invalid upstream proxy: the URL scheme must be http, https or socks5"}`, "adding upstream proxy: invalid_upstream_proxy: invalid upstream proxy: the URL scheme must be http, https or socks5"},
 			{"update missing", []string{"upstream", "update", "burp", "--url", "http://127.0.0.1:8080"}, http.StatusNotFound, `{"error":"not_found"}`, "updating upstream proxy: not_found"},
 			{"remove missing", []string{"upstream", "remove", "burp"}, http.StatusNotFound, `{"error":"not_found"}`, "removing upstream proxy: not_found"},
+			{"use missing", []string{"upstream", "use", "burp"}, http.StatusNotFound, `{"error":"not_found"}`, "selecting upstream proxy: not_found"},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				configDir := serviceConfigDir(t)
@@ -201,6 +220,9 @@ func TestUpstreamCommandContract(t *testing.T) {
 			{"upstream", "update", "burp", "--ca", "x.pem", "--no-ca"},
 			{"upstream", "remove"},
 			{"upstream", "remove", "burp", "extra"},
+			{"upstream", "use"},
+			{"upstream", "use", "burp", "--none"},
+			{"upstream", "use", "burp", "jump"},
 		} {
 			commandArgs := append([]string{"--config-dir", configDir}, args...)
 			if _, _, err := runMarasi(binary, commandArgs...); err == nil {

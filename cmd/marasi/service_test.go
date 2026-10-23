@@ -1822,7 +1822,7 @@ func TestStartService(t *testing.T) {
 		}
 
 		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
-		want = fmt.Sprintf("status: running\nversion: %s\nchannel: nightly\ninstance: work\nproject: %s\nproxy listener: %s\nrestart required: no\n", wantVersion, canonicalProject, proxyListener)
+		want = fmt.Sprintf("status: running\nversion: %s\nchannel: nightly\ninstance: work\nproject: %s\nproxy listener: %s\nrestart required: no\nupstream proxy: none\n", wantVersion, canonicalProject, proxyListener)
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}

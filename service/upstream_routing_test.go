@@ -465,6 +465,28 @@ func TestUpstreamProxySelection(t *testing.T) {
 		service.upstreamLogs(t, 0)
 	})
 
+	t.Run("should ignore environment proxy variables", func(t *testing.T) {
+		envProxy := upstreamtest.NewHTTP(t)
+		for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+			t.Setenv(name, envProxy.URL("http", "", ""))
+		}
+		t.Setenv("NO_PROXY", "")
+		t.Setenv("no_proxy", "")
+		service := newUpstreamService(t)
+		selected := upstreamtest.NewHTTP(t)
+		service.addUpstreamProxy(t, "corp", selected.URL("http", "", ""))
+
+		service.get(t, service.origin.URL+"/direct")
+		service.use(t, "corp")
+		service.get(t, service.origin.URL+"/selected?close")
+		if got := envProxy.Targets(); len(got) != 0 {
+			t.Fatalf("\nwanted:\nthe environment proxy unused\ngot:\n%v", got)
+		}
+		if got := selected.Targets(); len(got) != 1 {
+			t.Fatalf("\nwanted:\none tunnel through the selection\ngot:\n%v", got)
+		}
+	})
+
 	t.Run("should refuse to select a name this machine does not list", func(t *testing.T) {
 		service := newUpstreamService(t)
 		code, body := service.call(t, http.MethodPut, "/upstream-proxy-selection", `{"name":"missing"}`)
