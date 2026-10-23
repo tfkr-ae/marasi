@@ -20,7 +20,7 @@ const internalOrigin = "origin.internal"
 
 // socksService is an upstream service routed through a fake SOCKS5 proxy
 // that resolves internalOrigin to the test origin.
-func socksService(t *testing.T, service *upstreamService, rawURL func(*upstreamtest.Proxy) string, options ...upstreamtest.Option) *upstreamtest.Proxy {
+func socksService(t *testing.T, service *upstreamProxyService, rawURL func(*upstreamtest.Proxy) string, options ...upstreamtest.Option) *upstreamtest.Proxy {
 	t.Helper()
 	fake := upstreamtest.NewSOCKS5(t, append([]upstreamtest.Option{upstreamtest.WithHost(internalOrigin, "127.0.0.1")}, options...)...)
 	service.addUpstreamProxy(t, "jump", rawURL(fake))
@@ -29,14 +29,14 @@ func socksService(t *testing.T, service *upstreamService, rawURL func(*upstreamt
 }
 
 // internalHost returns internalOrigin with the test origin's port.
-func (s *upstreamService) internalHost() string {
+func (s *upstreamProxyService) internalHost() string {
 	_, port, _ := net.SplitHostPort(s.originHost())
 	return net.JoinHostPort(internalOrigin, port)
 }
 
 func TestSOCKS5UpstreamProxy(t *testing.T) {
 	t.Run("should send browser traffic through a SOCKS5 upstream proxy that resolves the hostname", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := socksService(t, service, func(fake *upstreamtest.Proxy) string { return fake.URL("socks5", "", "") })
 
 		response, body := service.get(t, "http://"+service.internalHost()+"/through")
@@ -61,7 +61,7 @@ func TestSOCKS5UpstreamProxy(t *testing.T) {
 	})
 
 	t.Run("should authenticate with the entry's username and password", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := socksService(t, service,
 			func(fake *upstreamtest.Proxy) string { return fake.URL("socks5", "alice", "s3cret%3Apw") },
 			upstreamtest.WithBehaviour(upstreamtest.RejectCredentials), upstreamtest.WithCredentials("alice", "s3cret:pw"))
@@ -80,7 +80,7 @@ func TestSOCKS5UpstreamProxy(t *testing.T) {
 	})
 
 	t.Run("should send the hostname and run the TLS handshake inside the connection to an HTTPS origin", func(t *testing.T) {
-		service := newUpstreamService(t, marasi.WithTLS())
+		service := newUpstreamProxyService(t, marasi.WithTLS())
 		origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 		t.Cleanup(origin.Close)
 		fake := socksService(t, service, func(fake *upstreamtest.Proxy) string { return fake.URL("socks5", "", "") })
@@ -100,7 +100,7 @@ func TestSOCKS5UpstreamProxy(t *testing.T) {
 	})
 
 	t.Run("should carry a WebSocket connection to the hostname", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := socksService(t, service, func(fake *upstreamtest.Proxy) string { return fake.URL("socks5", "", "") })
 
 		if status := service.upgradeAt(t, service.internalHost(), "/ws"); status != http.StatusSwitchingProtocols {
@@ -121,7 +121,7 @@ const tlsHandshakeRecord = 0x16
 
 // upgradeAt sends a WebSocket upgrade for path on host through the listener
 // and returns the response status.
-func (s *upstreamService) upgradeAt(t *testing.T, host, path string) int {
+func (s *upstreamProxyService) upgradeAt(t *testing.T, host, path string) int {
 	t.Helper()
 	conn, err := net.Dial("tcp", s.address)
 	if err != nil {
@@ -151,7 +151,7 @@ func TestSOCKS5UpstreamProxyFailsClosed(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run("should fail the request when the SOCKS5 upstream proxy is "+tc.name, func(t *testing.T) {
-			service := newUpstreamService(t)
+			service := newUpstreamProxyService(t)
 			if err := service.proxy.WithOptions(marasi.WithUpstreamProxyTimeout(300 * time.Millisecond)); err != nil {
 				t.Fatal(err)
 			}
@@ -170,7 +170,7 @@ func TestSOCKS5UpstreamProxyFailsClosed(t *testing.T) {
 				t.Fatalf("\nwanted:\nthe origin never reached\ngot:\n%d hits, targets %v", hits, fake.Targets())
 			}
 			id := service.pairID(t, "/blocked")
-			entry := service.upstreamLogs(t, 1)[0]
+			entry := service.upstreamProxyLogs(t, 1)[0]
 			if entry.Level != "ERROR" || entry.RequestID == nil || entry.RequestID.String() != id {
 				t.Fatalf("\nwanted:\nan ERROR log for pair %s\ngot:\n%+v", id, entry)
 			}
@@ -184,13 +184,13 @@ func TestSOCKS5UpstreamProxyFailsClosed(t *testing.T) {
 	}
 
 	t.Run("should fail the request when the SOCKS5 upstream proxy cannot reach the target", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := socksService(t, service, func(fake *upstreamtest.Proxy) string { return fake.URL("socks5", "", "") })
 
 		if response, _ := service.get(t, "http://unknown.internal:1/blocked"); response.StatusCode != http.StatusBadGateway {
 			t.Fatalf("\nwanted:\n502\ngot:\n%d", response.StatusCode)
 		}
-		entry := service.upstreamLogs(t, 1)[0]
+		entry := service.upstreamProxyLogs(t, 1)[0]
 		if entry.Context["cause"] != "rejected" || len(fake.Targets()) != 1 {
 			t.Fatalf("\nwanted:\na rejected log after one request to the proxy\ngot:\n%v, targets %v", entry.Context, fake.Targets())
 		}

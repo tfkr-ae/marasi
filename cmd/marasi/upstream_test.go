@@ -8,13 +8,13 @@ import (
 	"testing"
 )
 
-const upstreamTestPEM = "-----BEGIN CERTIFICATE-----\nMIIBtest\n-----END CERTIFICATE-----\n"
+const upstreamProxyTestPEM = "-----BEGIN CERTIFICATE-----\nMIIBtest\n-----END CERTIFICATE-----\n"
 
 func TestUpstreamCommands(t *testing.T) {
 	binary := buildMarasi(t)
 	caDir := t.TempDir()
 	caFile := filepath.Join(caDir, "burp.pem")
-	if err := os.WriteFile(caFile, []byte(upstreamTestPEM), 0600); err != nil {
+	if err := os.WriteFile(caFile, []byte(upstreamProxyTestPEM), 0600); err != nil {
 		t.Fatalf("writing CA file: %v", err)
 	}
 	listed := `{"items":[{"name":"burp","scheme":"http","host":"127.0.0.1","port":8080,"has_credentials":true,"has_ca":true},{"name":"jump","scheme":"socks5","host":"::1","port":1080,"has_credentials":false,"has_ca":false}],"selected":"jump","configured":true}` + "\n"
@@ -135,7 +135,7 @@ func TestUpstreamCommands(t *testing.T) {
 func TestUpstreamCommandContract(t *testing.T) {
 	binary := buildMarasi(t)
 	caFile := filepath.Join(t.TempDir(), "burp.pem")
-	if err := os.WriteFile(caFile, []byte(upstreamTestPEM), 0600); err != nil {
+	if err := os.WriteFile(caFile, []byte(upstreamProxyTestPEM), 0600); err != nil {
 		t.Fatalf("writing CA file: %v", err)
 	}
 
@@ -180,7 +180,7 @@ func TestUpstreamCommandContract(t *testing.T) {
 			{"check missing", []string{"upstream", "check", "burp", "http://target.test"}, http.StatusNotFound, `{"error":"not_found"}`, "checking upstream proxy: not_found"},
 			{"check invalid target", []string{"upstream", "check", "burp", "ftp://target.test"}, http.StatusBadRequest, `{"error":"invalid_target","message":"invalid check target: the target must be an http or https URL with a host"}`, "checking upstream proxy: invalid_target: invalid check target: the target must be an http or https URL with a host"},
 		} {
-			t.Run(test.name, func(t *testing.T) {
+			t.Run("should report "+test.name, func(t *testing.T) {
 				configDir := serviceConfigDir(t)
 				startCannedControlAPI(t, configDir, "api", test.status, test.response)
 				args := append([]string{"--config-dir", configDir, "--instance", "api", "--json"}, test.args...)
@@ -265,7 +265,7 @@ func TestUpstreamCommandContract(t *testing.T) {
 				want:     "upstream_proxy: burp (http://127.0.0.1:8080)\ntarget: target.test:80\noutcome: auth_rejected\nmessage: upstream proxy \"burp\" (http://127.0.0.1:8080): rejected the credentials with 407 Proxy Authentication Required\n",
 			},
 		} {
-			t.Run(test.name, func(t *testing.T) {
+			t.Run("should print the "+test.name+" outcome", func(t *testing.T) {
 				configDir := serviceConfigDir(t)
 				sent := startCannedControlAPI(t, configDir, "check", http.StatusOK, test.response)
 				stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "check", "upstream", "check", "burp", "https://target.test/login")

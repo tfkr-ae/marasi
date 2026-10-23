@@ -31,7 +31,7 @@ type respondedPair struct {
 
 // route waits until the only pair at path has its response stored and
 // returns the pair's id and route.
-func (s *upstreamService) route(t *testing.T, path string) (string, *pairRoute) {
+func (s *upstreamProxyService) route(t *testing.T, path string) (string, *pairRoute) {
 	t.Helper()
 	id := s.pairID(t, path)
 	deadline := time.Now().Add(10 * time.Second)
@@ -57,7 +57,7 @@ func wantRoute(t *testing.T, got *pairRoute, name, address string) {
 
 func TestPairRouteSnapshot(t *testing.T) {
 	t.Run("should record the upstream proxy that carried a pair, without credentials, and direct as an empty name", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t, upstreamtest.WithCredentials("alice", "s3cret"))
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "alice", "s3cret"))
 
@@ -72,7 +72,7 @@ func TestPairRouteSnapshot(t *testing.T) {
 	})
 
 	t.Run("should list each pair's route in the traffic list as a pair read shows it", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t, upstreamtest.WithCredentials("alice", "s3cret"))
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "alice", "s3cret"))
 		service.get(t, service.origin.URL+"/direct?close")
@@ -100,7 +100,7 @@ func TestPairRouteSnapshot(t *testing.T) {
 	})
 
 	t.Run("should record a SOCKS5 upstream proxy's route without its credentials", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := socksService(t, service, func(fake *upstreamtest.Proxy) string { return fake.URL("socks5", "alice", "s3cret-pw") },
 			upstreamtest.WithCredentials("alice", "s3cret-pw"))
 
@@ -115,7 +115,7 @@ func TestPairRouteSnapshot(t *testing.T) {
 	})
 
 	t.Run("should record the upstream proxy that was tried when connecting through it failed", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t, upstreamtest.WithBehaviour(upstreamtest.RejectCredentials), upstreamtest.WithCredentials("right", "pass"))
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "user", "s3cret-pw"))
 		service.use(t, "corp")
@@ -128,7 +128,7 @@ func TestPairRouteSnapshot(t *testing.T) {
 	})
 
 	t.Run("should record the selected name when this machine does not list it", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
 		service.use(t, "corp")
@@ -140,7 +140,7 @@ func TestPairRouteSnapshot(t *testing.T) {
 	})
 
 	t.Run("should record the new route for a request captured just before use that goes out on a new connection", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
 		captured := make(chan struct{})
@@ -173,7 +173,7 @@ func TestPairRouteSnapshot(t *testing.T) {
 	})
 
 	t.Run("should keep a snapshot when its upstream proxy is renamed, changed or removed", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		first := upstreamtest.NewHTTP(t)
 		second := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", first.URL("http", "", ""))
@@ -191,7 +191,7 @@ func TestPairRouteSnapshot(t *testing.T) {
 			t.Fatal(err)
 		}
 		if listing := service.mustCall(t, http.MethodGet, "/upstream-proxy", ""); !strings.Contains(listing, `"renamed"`) {
-			t.Fatalf("the hand edit did not rename the entry: %s", listing)
+			t.Fatalf("\nwanted:\nthe entry renamed by the hand edit\ngot:\n%s", listing)
 		}
 		service.mustCall(t, http.MethodDelete, "/upstream-proxy/renamed", "")
 
@@ -200,7 +200,7 @@ func TestPairRouteSnapshot(t *testing.T) {
 	})
 
 	t.Run("should keep the route out of metadata so replacing metadata leaves it", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
 		service.use(t, "corp")
@@ -221,7 +221,7 @@ func TestPairRouteSnapshot(t *testing.T) {
 	})
 
 	t.Run("should never store credentials in a snapshot", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t, upstreamtest.WithCredentials("alice", "s3cret-pw"))
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "alice", "s3cret-pw"))
 		service.use(t, "corp")
@@ -241,7 +241,7 @@ func TestPairRouteSnapshot(t *testing.T) {
 
 func TestPairRouteEvents(t *testing.T) {
 	t.Run("should carry upstream_proxy on traffic.response and not on traffic.request", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
 		service.use(t, "corp")
@@ -272,7 +272,7 @@ func TestPairRouteEvents(t *testing.T) {
 
 func TestPairRouteQuery(t *testing.T) {
 	t.Run("should find pairs by upstream proxy name and direct pairs by an empty name", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
 		service.get(t, service.origin.URL+"/plain?close")

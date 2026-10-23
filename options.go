@@ -453,9 +453,7 @@ func WithUpstreamProxyTimeout(timeout time.Duration) func(*Proxy) error {
 		if timeout <= 0 {
 			return fmt.Errorf("upstream proxy timeout must be positive, got %s", timeout)
 		}
-		proxy.routes.mu.Lock()
-		proxy.routes.timeout = timeout
-		proxy.routes.mu.Unlock()
+		proxy.routes.setTimeout(timeout)
 		return nil
 	}
 }
