@@ -46,10 +46,17 @@ type upstreamService struct {
 
 func newUpstreamService(t *testing.T, options ...func(*marasi.Proxy) error) *upstreamService {
 	t.Helper()
-	lifecycle, proxy, configDir := newTestProjectLifecycle(t)
+	return newUpstreamServiceIn(t, t.TempDir(), options...)
+}
+
+// newUpstreamServiceIn is newUpstreamService on configDir, which a second
+// instance in the same test may share. Each instance opens its own project.
+func newUpstreamServiceIn(t *testing.T, configDir string, options ...func(*marasi.Proxy) error) *upstreamService {
+	t.Helper()
+	lifecycle, proxy, _ := newTestProjectLifecycleIn(t, configDir)
 	listener := NewListenerLifecycle(proxy, io.Discard)
 	listener.BindProject(lifecycle)
-	project := canonicalProjectPath(t, filepath.Join(configDir, "project.marasi"))
+	project := canonicalProjectPath(t, filepath.Join(t.TempDir(), "project.marasi"))
 	if err := lifecycle.Open(context.Background(), project); err != nil {
 		t.Fatalf("opening project: %v", err)
 	}
