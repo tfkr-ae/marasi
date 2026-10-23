@@ -44,13 +44,13 @@ type upstreamProxyList struct {
 // project's selection.
 type upstreamProxyListing struct {
 	Items []UpstreamProxy `json:"items"`
-	upstreamProxySelection
+	UpstreamProxySelection
 }
 
-// upstreamProxySelection is the open project's selection as the control API
+// UpstreamProxySelection is the open project's selection as the control API
 // and instance status show it. Selected is "" for none, and Configured is
 // true then.
-type upstreamProxySelection struct {
+type UpstreamProxySelection struct {
 	Selected   string `json:"selected"`
 	Configured bool   `json:"configured"`
 }
@@ -64,6 +64,13 @@ type UpstreamProxies struct {
 	// proxy holds the open project and routes its traffic. It is nil in
 	// tests of the list alone.
 	proxy *marasi.Proxy
+}
+
+// NewUpstreamProxies creates the upstream proxy module for a process that
+// embeds Marasi without a Server. It edits the list in proxy.ConfigDir under
+// the config lock that every instance shares, and publishes no events.
+func NewUpstreamProxies(proxy *marasi.Proxy) *UpstreamProxies {
+	return newUpstreamProxies(proxy.ConfigDir, nil, proxy)
 }
 
 // newUpstreamProxies creates the upstream proxy list module for configDir.
@@ -82,7 +89,7 @@ func addUpstreamProxyRoutes(mux *http.ServeMux, projectRoutes routeMux, proxies 
 			writeUpstreamProxyError(w, r, err)
 			return
 		}
-		writeJSON(w, r, http.StatusOK, upstreamProxyListing{Items: items, upstreamProxySelection: proxies.selection()})
+		writeJSON(w, r, http.StatusOK, upstreamProxyListing{Items: items, UpstreamProxySelection: proxies.Selection()})
 	})
 	projectRoutes.HandleFunc("PUT /upstream-proxy-selection", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -96,7 +103,7 @@ func addUpstreamProxyRoutes(mux *http.ServeMux, projectRoutes routeMux, proxies 
 			writeUpstreamProxyError(w, r, err)
 			return
 		}
-		writeJSON(w, r, http.StatusOK, proxies.selection())
+		writeJSON(w, r, http.StatusOK, proxies.Selection())
 	})
 	mux.HandleFunc("POST /upstream-proxy", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -294,13 +301,13 @@ func (u *UpstreamProxies) Check(ctx context.Context, name, target string) (Upstr
 	return UpstreamProxyCheck(result), nil
 }
 
-// selection returns the open project's selection.
-func (u *UpstreamProxies) selection() upstreamProxySelection {
+// Selection returns the open project's selection.
+func (u *UpstreamProxies) Selection() UpstreamProxySelection {
 	if u.proxy == nil {
-		return upstreamProxySelection{Configured: true}
+		return UpstreamProxySelection{Configured: true}
 	}
 	status := u.proxy.UpstreamProxyStatus()
-	return upstreamProxySelection{Selected: status.Name, Configured: status.Configured}
+	return UpstreamProxySelection{Selected: status.Name, Configured: status.Configured}
 }
 
 // edit runs change under the config lock and publishes event with the new
