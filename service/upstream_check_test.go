@@ -45,6 +45,27 @@ func TestUpstreamProxyCheck(t *testing.T) {
 		}
 	})
 
+	t.Run("should check through a SOCKS5 upstream proxy with the same dial as traffic", func(t *testing.T) {
+		service := newUpstreamService(t)
+		if err := service.proxy.WithOptions(marasi.WithUpstreamProxyTimeout(300 * time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+		good := upstreamtest.NewSOCKS5(t)
+		rejecting := upstreamtest.NewSOCKS5(t, upstreamtest.WithBehaviour(upstreamtest.RejectCredentials), upstreamtest.WithCredentials("right", "pass"))
+		service.addUpstreamProxy(t, "jump", good.URL("socks5", "", ""))
+		service.addUpstreamProxy(t, "locked", rejecting.URL("socks5", "user", "s3cret-pw"))
+
+		if got := service.check(t, "jump", service.origin.URL); got.Outcome != "ok" || got.Address != "socks5://"+good.Addr {
+			t.Fatalf("\nwanted:\nok through socks5://%s\ngot:\n%+v", good.Addr, got)
+		}
+		if targets := good.Targets(); len(targets) != 1 || targets[0] != service.originHost() {
+			t.Fatalf("\nwanted:\n[%s]\ngot:\n%v", service.originHost(), targets)
+		}
+		if got := service.check(t, "locked", service.origin.URL); got.Outcome != "auth_rejected" || strings.Contains(got.Message, "s3cret-pw") {
+			t.Fatalf("\nwanted:\nauth_rejected without credentials\ngot:\n%+v", got)
+		}
+	})
+
 	failures := []struct {
 		name      string
 		behaviour upstreamtest.Behaviour
