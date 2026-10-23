@@ -36,6 +36,12 @@ number, its # in capture order, then its id.
       = and !=, with exact case. A * at the start or end of the value
       matches anything there, for example host = "*.example.com" or
       path = "/api/*".
+  upstream_proxy
+      = and != against the name of the upstream proxy that carried the
+      pair, with exact case, for example upstream_proxy = "burp".
+      upstream_proxy = "" matches pairs sent directly. Pairs with no
+      response yet, or captured before routes were recorded, match
+      neither.
   number
       = != < <= > >= against the pair's number in capture order, for
       example number = 10 or number > 500. Numbers start at 1, never
@@ -432,6 +438,10 @@ func writeTrafficGetHuman(body []byte, stdout io.Writer) error {
 			Raw         []byte `json:"raw"`
 			RespondedAt string `json:"responded_at"`
 		} `json:"response"`
+		UpstreamProxy *struct {
+			Name    string `json:"name"`
+			Address string `json:"address"`
+		} `json:"upstream_proxy"`
 	}
 	if err := json.Unmarshal(body, &detail); err != nil {
 		return fmt.Errorf("decoding traffic: %w", err)
@@ -449,6 +459,15 @@ func writeTrafficGetHuman(body []byte, stdout io.Writer) error {
 	fmt.Fprintf(stdout, "content_type: %s\n", detail.Response.ContentType)
 	fmt.Fprintf(stdout, "length: %s\n", detail.Response.Length)
 	fmt.Fprintf(stdout, "responded_at: %s\n", detail.Response.RespondedAt)
+	// A pair with no response yet, or one captured before route
+	// snapshots, has no route and prints no line.
+	if route := detail.UpstreamProxy; route != nil {
+		if route.Name == "" {
+			fmt.Fprintln(stdout, "upstream_proxy: direct")
+		} else {
+			fmt.Fprintf(stdout, "upstream_proxy: %s (%s)\n", route.Name, route.Address)
+		}
+	}
 	if detail.Note != "" {
 		fmt.Fprintf(stdout, "note: %s\n", detail.Note)
 	}
