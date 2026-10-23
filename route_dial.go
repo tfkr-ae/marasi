@@ -92,6 +92,8 @@ func (route *Route) dial(ctx context.Context, dial dialFunc, network, address st
 		return dial(ctx, network, address)
 	case UpstreamProxyHTTP:
 		return route.dialHTTPConnect(ctx, dial, network, address)
+	case UpstreamProxyHTTPS:
+		return route.dialHTTPSConnect(ctx, dial, network, address)
 	case UpstreamProxySOCKS5:
 		return route.dialSOCKS5(ctx, dial, network, address)
 	default:
