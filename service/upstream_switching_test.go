@@ -208,6 +208,81 @@ func TestUpstreamProxySwitchingInFlight(t *testing.T) {
 			t.Fatalf("\nwanted:\nno request reached the origin\ngot:\n%d hits, first %v", hits, first.Targets())
 		}
 	})
+
+	t.Run("should not hand a request waiting for a connection through the new upstream proxy the direct connection a request in flight frees", func(t *testing.T) {
+		service := newUpstreamService(t)
+		origin := newSwitchOrigin(t)
+		fake := upstreamtest.NewHTTP(t)
+		relay := newHeldRelay(t, fake.Addr)
+		service.addUpstreamProxy(t, "corp", "http://"+relay.addr)
+
+		slow := service.getAsync(t, origin.URL+"/slow")
+		origin.awaitEntered(t)
+		service.use(t, "corp")
+		next := service.getAsync(t, origin.URL+"/next")
+		relay.awaitEntered(t)
+		// /slow finishing frees its direct connection while /next waits for
+		// its dial through corp.
+		origin.release()
+		if got := awaitResult(t, slow); got != "200 OK origin /slow" {
+			t.Fatalf("\nwanted:\n200 OK origin /slow\ngot:\n%s", got)
+		}
+		relay.release()
+
+		if got := awaitResult(t, next); got != "200 OK origin /next" {
+			t.Fatalf("\nwanted:\n200 OK origin /next\ngot:\n%s", got)
+		}
+		if !carried(fake, "GET /next HTTP/1.1\r\n") {
+			t.Fatalf("\nwanted:\n/next through corp\ngot:\n%v", fake.Targets())
+		}
+	})
+
+	t.Run("should send every request that starts after a switch from none through the new upstream proxy under concurrent load", func(t *testing.T) {
+		service := newUpstreamService(t)
+		origin := newSwitchOrigin(t)
+		fake := upstreamtest.NewHTTP(t)
+		service.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
+
+		var switched atomic.Bool
+		var after sync.Map
+		stop := make(chan struct{})
+		var load sync.WaitGroup
+		for worker := range 8 {
+			load.Add(1)
+			go func() {
+				defer load.Done()
+				for i := 0; ; i++ {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					path := fmt.Sprintf("/load-%d-%d", worker, i)
+					if switched.Load() {
+						after.Store(path, true)
+					}
+					if response, err := service.client.Get(origin.URL + path); err == nil {
+						_, _ = io.Copy(io.Discard, response.Body)
+						response.Body.Close()
+					}
+				}
+			}()
+		}
+		time.Sleep(50 * time.Millisecond)
+		service.use(t, "corp")
+		switched.Store(true)
+		time.Sleep(200 * time.Millisecond)
+		close(stop)
+		load.Wait()
+
+		after.Range(func(key, _ any) bool {
+			path := key.(string)
+			if !carried(fake, "GET "+path+" HTTP/1.1\r\n") {
+				t.Errorf("\nwanted:\n%s through corp\ngot:\nsent elsewhere", path)
+			}
+			return true
+		})
+	})
 }
 
 // awaitEntered waits for a dial to reach the relay.

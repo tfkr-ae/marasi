@@ -124,12 +124,12 @@ func (proxy *Proxy) CurrentRoute() *Route {
 	return proxy.route.Load()
 }
 
-// SetRoute makes route the one new connections to the origin use. It closes
-// the transport's idle connections so none opened on the old route is
-// reused. Connections carrying a request keep it until it finishes and are
-// not reused afterwards (see marasiRoundTripper.retireStale). The listener
-// keeps running.
-func (proxy *Proxy) SetRoute(route *Route) {
+// setRoute makes route the one new connections to the origin use. It closes
+// the old route's idle connections at once. Connections carrying a request
+// keep it until it finishes and are never reused afterwards, since the next
+// request takes its connection from the new route's pool (see
+// routedTransport). The listener keeps running.
+func (proxy *Proxy) setRoute(route *Route) {
 	proxy.route.Store(route)
 	if transport := proxy.transport.Load(); transport != nil {
 		transport.CloseIdleConnections()
