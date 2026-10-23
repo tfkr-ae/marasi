@@ -20,8 +20,12 @@ type marasiRoundTripper struct {
 	base http.RoundTripper
 	// transport is base when newRoutedTransport built it, and nil otherwise.
 	transport *http.Transport
-	// currentRoute returns the route new connections use. It is nil when
-	// newRoutedTransport did not build the round tripper.
+	// resolveRoute brings the current route up to date with the selection
+	// and the list, swapping it when what they resolve to changed.
+	// currentRoute returns the route new connections use without resolving
+	// it. Both are nil when newRoutedTransport did not build the round
+	// tripper.
+	resolveRoute func() *Route
 	currentRoute func() *Route
 }
 
@@ -33,11 +37,13 @@ func newMarasiTransport(dial func(context.Context, string, string) (net.Conn, er
 	return newRoutedTransport(always, always, dial)
 }
 
-// newRoutedTransport builds marasi's round tripper. Each new connection asks
-// resolveRoute once how to reach the origin, dials through the route (a
-// tunnel when it is an upstream proxy), and for TLS runs a utls handshake
-// that mimics Chrome inside it. currentRoute reads the route without
-// resolving it again. Waypoints need nothing here: their modifier has
+// newRoutedTransport builds marasi's round tripper. Each request asks
+// resolveRoute how to reach the origin before it takes a connection, and
+// each new connection asks again, dials through the route (a tunnel when it
+// is an upstream proxy), and for TLS runs a utls handshake that mimics
+// Chrome inside it. currentRoute reads the route without resolving it
+// again; a dial that a swap overtook runs again on the new route (see
+// dialOnCurrentRoute). Waypoints need nothing here: their modifier has
 // already rewritten the URL host to the destination, which is the tunnel's
 // target.
 // It is the only client that reaches the origin. Every other Marasi client
@@ -50,15 +56,13 @@ func newRoutedTransport(resolveRoute, currentRoute func() *Route, dial func(cont
 	// and the response reaches the client as the origin encoded it.
 	transport := &http.Transport{DisableCompression: true}
 	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		route := resolveRoute()
-		conn, err := route.dial(ctx, dial, network, addr)
-		if err != nil {
-			return nil, err
-		}
-		return &routedConn{Conn: conn, route: route}, nil
+		return dialOnCurrentRoute(resolveRoute, currentRoute, func(route *Route) (net.Conn, error) {
+			return route.dial(ctx, dial, network, addr)
+		})
 	}
-	transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		route := resolveRoute()
+	// openTLS dials through route and, inside it, runs a utls handshake
+	// that mimics Chrome.
+	openTLS := func(ctx context.Context, network, addr string, route *Route) (net.Conn, error) {
 		tcpConn, err := route.dial(ctx, dial, network, addr)
 		if err != nil {
 			return nil, err
@@ -107,10 +111,38 @@ func newRoutedTransport(resolveRoute, currentRoute func() *Route, dial func(cont
 			return nil, err
 		}
 
-		return &routedConn{Conn: uConn, route: route}, nil
+		return uConn, nil
+	}
+	transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return dialOnCurrentRoute(resolveRoute, currentRoute, func(route *Route) (net.Conn, error) {
+			return openTLS(ctx, network, addr, route)
+		})
 	}
 
-	return &marasiRoundTripper{base: transport, transport: transport, currentRoute: currentRoute}
+	return &marasiRoundTripper{base: transport, transport: transport, resolveRoute: resolveRoute, currentRoute: currentRoute}
+}
+
+// dialOnCurrentRoute opens a connection with open on the resolved route.
+// When the route was swapped while open ran, its result, a connection or an
+// error, belongs to the old route: it is discarded and open runs again on
+// the route now current, so no request is carried on a route already
+// swapped out.
+func dialOnCurrentRoute(resolveRoute, currentRoute func() *Route, open func(*Route) (net.Conn, error)) (net.Conn, error) {
+	route := resolveRoute()
+	for {
+		conn, err := open(route)
+		if current := currentRoute(); current != route {
+			if conn != nil {
+				conn.Close()
+			}
+			route = current
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &routedConn{Conn: conn, route: route}, nil
+	}
 }
 
 // CloseIdleConnections closes the transport's idle connections to the origin.
@@ -134,6 +166,13 @@ func (m *marasiRoundTripper) retireStale(used *Route) {
 func (m *marasiRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if _, ok := req.Header["User-Agent"]; !ok {
 		req.Header.Set("User-Agent", "")
+	}
+	// Resolve before the transport picks a connection: when the selection or
+	// the selected entry changed, even by a hand edit or another instance,
+	// the swap closes the idle connections, so none from the old route is
+	// reused for this request.
+	if m.resolveRoute != nil {
+		m.resolveRoute()
 	}
 
 	// The transport reads the request it sends until the response is done, while the
