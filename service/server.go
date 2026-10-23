@@ -380,7 +380,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxyListener := s.listener.Status().ProxyListener
-	selection := s.upstreamProxies.selection()
+	selection := s.upstreamProxies.Selection()
 	var channel *update.Channel
 	if s.updates != nil && s.updates.BuildChannel() != "" {
 		buildChannel := s.updates.BuildChannel()
