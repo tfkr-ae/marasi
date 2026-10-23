@@ -1,6 +1,7 @@
 package marasi
 
 import (
+	"crypto/x509"
 	"io"
 	"net"
 	"net/url"
@@ -34,6 +35,12 @@ type Route struct {
 	failure *UpstreamProxyError
 	// timeout bounds reaching the upstream proxy and opening the tunnel.
 	timeout time.Duration
+
+	// roots is the system pool plus ca, built on first use so each route
+	// parses its CA once rather than on every dial.
+	rootsOnce sync.Once
+	roots     *x509.CertPool
+	rootsErr  error
 }
 
 // DirectRoute returns a route that connects to the origin directly.
@@ -49,6 +56,32 @@ func (route *Route) Address() string {
 		return ""
 	}
 	return string(route.Scheme) + "://" + net.JoinHostPort(route.Host, strconv.Itoa(route.Port))
+}
+
+// rootCAs returns the pool that verifies certificates reached through the
+// route: nil, meaning the system roots, when the entry has no CA, and the
+// system roots plus the CA otherwise. Verification is never turned off.
+func (route *Route) rootCAs() (*x509.CertPool, error) {
+	if route.ca == "" {
+		return nil, nil
+	}
+	route.rootsOnce.Do(func() {
+		certs, err := ParseUpstreamProxyCA(route.ca)
+		if err != nil {
+			route.rootsErr = err
+			return
+		}
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			// Without system roots the CA alone still verifies what it signed.
+			pool = x509.NewCertPool()
+		}
+		for _, cert := range certs {
+			pool.AddCert(cert)
+		}
+		route.roots = pool
+	})
+	return route.roots, route.rootsErr
 }
 
 // sameRoute reports whether two routes reach the origin the same way.

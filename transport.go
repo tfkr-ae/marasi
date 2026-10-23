@@ -68,8 +68,16 @@ func newRoutedTransport(resolveRoute, currentRoute func() *Route, dial func(cont
 			sniHost = addr
 		}
 
+		roots, err := route.rootCAs()
+		if err != nil {
+			tcpConn.Close()
+			return nil, route.fail(UpstreamProxyInvalid, err.Error(), err)
+		}
+		// Only connections through this route trust its CA. Direct
+		// connections and other routes keep the system roots.
 		uTlsConfig := &utls.Config{
 			ServerName: sniHost,
+			RootCAs:    roots,
 		}
 
 		if transport.TLSClientConfig != nil {
@@ -104,7 +112,7 @@ func newRoutedTransport(resolveRoute, currentRoute func() *Route, dial func(cont
 
 		if err := uConn.HandshakeContext(ctx); err != nil {
 			tcpConn.Close()
-			return nil, err
+			return nil, route.originHandshakeFailure(err)
 		}
 
 		return &routedConn{Conn: uConn, route: route}, nil

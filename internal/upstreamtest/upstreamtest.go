@@ -1,8 +1,8 @@
 // Package upstreamtest provides fake upstream proxies for tests. Each fake
 // records what it was asked to reach, the credentials it was shown and the
 // bytes it carried, and can refuse, reject credentials or hang. The HTTP
-// CONNECT fake lives here; SOCKS5 and HTTPS fakes sit beside it and share
-// Tunnel, Behaviour and Splice.
+// CONNECT fake lives here; SOCKS5, HTTPS and intercepting fakes sit beside
+// it and share Tunnel, Behaviour and Splice.
 package upstreamtest
 
 import (
@@ -77,6 +77,8 @@ type Proxy struct {
 	username  string
 	password  string
 	hosts     map[string]string
+	// intercept, when set, terminates each tunnel's TLS with leaves it signs.
+	intercept *CA
 	wg        sync.WaitGroup
 
 	mu      sync.Mutex
@@ -259,6 +261,13 @@ func (proxy *Proxy) serveHTTP(conn net.Conn) {
 	}
 	if !proxy.credentialsAccepted(tunnel) {
 		_, _ = io.WriteString(conn, "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"fake\"\r\nContent-Length: 0\r\n\r\n")
+		return
+	}
+	if proxy.intercept != nil {
+		if _, err := io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+			return
+		}
+		proxy.interceptTunnel(conn, reader, tunnel.Target, tunnel)
 		return
 	}
 	target, err := proxy.dialTarget(tunnel.Target)
