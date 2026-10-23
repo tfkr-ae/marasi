@@ -8,7 +8,7 @@ How a proxied request travels from the client socket to the origin and back, and
 2. **martian v2.1.0** reads the request and MITMs a `CONNECT`. It then runs every request modifier, then the round trip, then every response modifier. The whole request pipeline has run before anything goes upstream.
 3. **Request side.** `WithBasePipeline` wraps `proxy.Modifiers` for admission, internal-client checks and header stripping. `WithDefaultModifierPipeline` adds the modifiers, which run in the order they are added. `proxy.Modifiers` is a martian `fifo.Group`, so the first error stops the chain, and `ErrSkipPipeline` and `ErrDropped` are how a modifier ends it early.
 4. **Capture.** The request is captured by its write modifier, before the round trip, and the response by its write modifier, after it. Both queue on `DBWriteChannel`, and `(*Proxy).WriteToDB` stores them.
-5. **Upstream.** `launchFailureRoundTripper` wraps `marasiRoundTripper`, built by `newMarasiTransport`.
+5. **Upstream.** `launchFailureRoundTripper` wraps `marasiRoundTripper`, built once per `Serve` by `newRoutedTransport`. Its dial step reads the current `Route` (`Proxy.CurrentRoute`, an atomic pointer) for each new connection, dials through it, then runs the utls handshake for TLS origins. Every connection is a `routedConn` carrying the route that opened it. `Proxy.SetRoute` swaps the route and closes idle connections, and a connection still carrying a request when the route changed is closed once that request finishes (`retireStale`).
 6. **Response side.** `WithBasePipeline` buffers the body and admits project work again before the response modifiers run. A WebSocket upgrade is handed off by the last response modifier.
 
 ## Who reaches the origin
