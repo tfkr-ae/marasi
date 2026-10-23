@@ -38,7 +38,7 @@ func init() {
 	upstreamUpdateCmd.MarkFlagsMutuallyExclusive("ca", "no-ca")
 	upstreamUpdateCmd.MarkFlagsOneRequired("url", "ca", "no-ca")
 	upstreamUseCmd.Flags().BoolVar(&upstreamUseNone, "none", false, "Clear the selection and connect directly")
-	upstreamCmd.AddCommand(upstreamListCmd, upstreamAddCmd, upstreamUpdateCmd, upstreamRemoveCmd, upstreamUseCmd)
+	upstreamCmd.AddCommand(upstreamListCmd, upstreamAddCmd, upstreamUpdateCmd, upstreamRemoveCmd, upstreamUseCmd, upstreamCheckCmd)
 	rootCmd.AddCommand(upstreamCmd)
 }
 
@@ -61,8 +61,56 @@ var upstreamListCmd = &cobra.Command{
 		if jsonOutput {
 			return writeJSONBody(cmd, body)
 		}
-		return writeUpstreamProxies(body, cmd.OutOrStdout())
+		return writeUpstreamProxies(body, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
+}
+
+var upstreamCheckCmd = &cobra.Command{
+	Use:   "check NAME TARGET-URL",
+	Short: "Test an upstream proxy with one connection to a target",
+	Long: `Make one test connection to TARGET-URL (http or https) through the named
+upstream proxy, selected or not, and print the outcome: ok, refused,
+auth_rejected, tls_verification, timeout, or rejected, invalid or failed.
+The connection is dialled as traffic is, and for an https target the
+target's certificate is verified. No request is sent, nothing is stored,
+no event is published and the selection does not change. The command
+succeeds whatever the outcome; read outcome to tell.`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		body, err := json.Marshal(struct {
+			Target string `json:"target"`
+		}{Target: args[1]})
+		if err != nil {
+			return fmt.Errorf("encoding upstream proxy check: %w", err)
+		}
+		response, err := runControlRequest(cmd, http.MethodPost, "/upstream-proxy/"+url.PathEscape(args[0])+"/check", "checking upstream proxy", body)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return writeJSONBody(cmd, response)
+		}
+		return writeUpstreamCheck(response, cmd.OutOrStdout())
+	},
+}
+
+func writeUpstreamCheck(body []byte, stdout io.Writer) error {
+	var response struct {
+		Name    string `json:"name"`
+		Address string `json:"address"`
+		Target  string `json:"target"`
+		Outcome string `json:"outcome"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return fmt.Errorf("decoding upstream proxy check: %w", err)
+	}
+	upstreamProxy := response.Name
+	if response.Address != "" {
+		upstreamProxy += " (" + response.Address + ")"
+	}
+	_, err := fmt.Fprintf(stdout, "upstream_proxy: %s\ntarget: %s\noutcome: %s\nmessage: %s\n", upstreamProxy, response.Target, response.Outcome, response.Message)
+	return err
 }
 
 var upstreamAddCmd = &cobra.Command{
@@ -177,7 +225,9 @@ func runUpstreamMutation(cmd *cobra.Command, method, path, operation string, bod
 	return err
 }
 
-func writeUpstreamProxies(body []byte, stdout io.Writer) error {
+// writeUpstreamProxies prints the list with the open project's selection
+// marked, and warns on stderr when the selection is not in the list.
+func writeUpstreamProxies(body []byte, stdout, stderr io.Writer) error {
 	var response struct {
 		Items []struct {
 			Name           string `json:"name"`
@@ -187,13 +237,22 @@ func writeUpstreamProxies(body []byte, stdout io.Writer) error {
 			HasCredentials bool   `json:"has_credentials"`
 			HasCA          bool   `json:"has_ca"`
 		} `json:"items"`
+		Selected   string `json:"selected"`
+		Configured bool   `json:"configured"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		return fmt.Errorf("decoding upstream proxies: %w", err)
 	}
-	table := newListTable(stdout, "NAME", "SCHEME", "HOST", "PORT", "CREDENTIALS", "CA")
+	table := newListTable(stdout, "NAME", "SCHEME", "HOST", "PORT", "CREDENTIALS", "CA", "SELECTED")
 	for _, item := range response.Items {
-		table.row(item.Name, item.Scheme, item.Host, item.Port, yesNo(item.HasCredentials), yesNo(item.HasCA))
+		table.row(item.Name, item.Scheme, item.Host, item.Port, yesNo(item.HasCredentials), yesNo(item.HasCA), yesNo(item.Name == response.Selected))
 	}
-	return table.flush()
+	if err := table.flush(); err != nil {
+		return err
+	}
+	if response.Selected != "" && !response.Configured {
+		_, err := fmt.Fprintf(stderr, "selected upstream proxy %s is not configured on this machine; requests fail\n", response.Selected)
+		return err
+	}
+	return nil
 }

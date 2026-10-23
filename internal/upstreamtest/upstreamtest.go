@@ -42,6 +42,12 @@ type Tunnel struct {
 	HasCredentials bool
 	// Request is the CONNECT request head, for HTTP fakes.
 	Request *http.Request
+	// AddressType is the SOCKS5 address type of Target (AddressIPv4,
+	// AddressDomain or AddressIPv6), for SOCKS5 fakes.
+	AddressType byte
+	// Methods are the SOCKS5 authentication methods the client offered,
+	// for SOCKS5 fakes.
+	Methods []byte
 
 	mu   sync.Mutex
 	sent []byte
@@ -70,6 +76,7 @@ type Proxy struct {
 	behaviour Behaviour
 	username  string
 	password  string
+	hosts     map[string]string
 	wg        sync.WaitGroup
 
 	mu      sync.Mutex
@@ -92,9 +99,27 @@ func WithCredentials(username, password string) Option {
 	return func(proxy *Proxy) { proxy.username, proxy.password = username, password }
 }
 
+// WithHost makes the fake resolve name to address itself, as an internal
+// DNS name only the upstream proxy can resolve.
+func WithHost(name, address string) Option {
+	return func(proxy *Proxy) {
+		if proxy.hosts == nil {
+			proxy.hosts = map[string]string{}
+		}
+		proxy.hosts[name] = address
+	}
+}
+
 // NewHTTP starts a fake HTTP upstream proxy that answers CONNECT and is
 // closed when the test ends.
 func NewHTTP(t testing.TB, options ...Option) *Proxy {
+	t.Helper()
+	return start(t, func(proxy *Proxy) func(net.Conn) { return proxy.serveHTTP }, options)
+}
+
+// start listens on a loopback port and serves each connection with the
+// handler handle returns, unless the fake refuses.
+func start(t testing.TB, handle func(*Proxy) func(net.Conn), options []Option) *Proxy {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -110,7 +135,7 @@ func NewHTTP(t testing.TB, options ...Option) *Proxy {
 		return proxy
 	}
 	proxy.wg.Add(1)
-	go proxy.serve(proxy.serveHTTP)
+	go proxy.serve(handle(proxy))
 	return proxy
 }
 
@@ -236,7 +261,7 @@ func (proxy *Proxy) serveHTTP(conn net.Conn) {
 		_, _ = io.WriteString(conn, "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"fake\"\r\nContent-Length: 0\r\n\r\n")
 		return
 	}
-	target, err := net.Dial("tcp", tunnel.Target)
+	target, err := proxy.dialTarget(tunnel.Target)
 	if err != nil {
 		_, _ = io.WriteString(conn, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
 		return
@@ -250,6 +275,18 @@ func (proxy *Proxy) serveHTTP(conn net.Conn) {
 		return
 	}
 	Splice(conn, reader, target, tunnel)
+}
+
+// dialTarget connects to target, resolving names given with WithHost.
+func (proxy *Proxy) dialTarget(target string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return nil, err
+	}
+	if address, ok := proxy.hosts[host]; ok {
+		host = address
+	}
+	return net.Dial("tcp", net.JoinHostPort(host, port))
 }
 
 // Splice copies between a client and the tunnel's target until either side
