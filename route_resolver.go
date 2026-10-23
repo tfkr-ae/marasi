@@ -57,6 +57,23 @@ func (resolver *routeResolver) resolve(configDir string) *Route {
 	return resolver.resolveLocked(configDir)
 }
 
+// setTimeout sets how long reaching an upstream proxy and opening a tunnel
+// through it may take.
+func (resolver *routeResolver) setTimeout(timeout time.Duration) {
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+	resolver.timeout = timeout
+}
+
+// resolveEntry returns the route for the entry called name, as if it were
+// selected, without touching the selection or the cached list.
+func (resolver *routeResolver) resolveEntry(configDir, name string) *Route {
+	resolver.mu.Lock()
+	timeout := resolver.timeout
+	resolver.mu.Unlock()
+	return (&routeResolver{selection: name, timeout: timeout}).resolve(configDir)
+}
+
 // status reports the selection and whether this machine's list has it.
 func (resolver *routeResolver) status(configDir string) UpstreamProxyStatus {
 	resolver.mu.Lock()
@@ -65,7 +82,7 @@ func (resolver *routeResolver) status(configDir string) UpstreamProxyStatus {
 		return UpstreamProxyStatus{Configured: true}
 	}
 	resolver.refreshLocked(configDir)
-	_, found := resolver.entryLocked(resolver.selection)
+	found := UpstreamProxyIndex(resolver.entries, resolver.selection) >= 0
 	return UpstreamProxyStatus{Name: resolver.selection, Configured: found}
 }
 
@@ -81,11 +98,12 @@ func (resolver *routeResolver) resolveLocked(configDir string) *Route {
 		route.failure = route.fail(UpstreamProxyInvalid, "marasi_config.yaml cannot be read", resolver.readErr)
 		return route
 	}
-	entry, found := resolver.entryLocked(name)
-	if !found {
+	index := UpstreamProxyIndex(resolver.entries, name)
+	if index < 0 {
 		route.failure = route.fail(UpstreamProxyNotConfigured, "not configured on this machine", nil)
 		return route
 	}
+	entry := resolver.entries[index]
 	parsed, address, err := ParseUpstreamProxyURL(entry.URL)
 	if err != nil {
 		// The error names the field at fault and never quotes the URL.
@@ -101,15 +119,6 @@ func (resolver *routeResolver) resolveLocked(configDir string) *Route {
 		}
 	}
 	return route
-}
-
-func (resolver *routeResolver) entryLocked(name string) (UpstreamProxyConfig, bool) {
-	for _, entry := range resolver.entries {
-		if entry.Name == name {
-			return entry, true
-		}
-	}
-	return UpstreamProxyConfig{}, false
 }
 
 // refreshLocked reads the list again when the file's stamp changed. An
@@ -172,6 +181,6 @@ func (proxy *Proxy) applyRoute(resolved *Route) *Route {
 	if current := proxy.CurrentRoute(); sameRoute(current, resolved) {
 		return current
 	}
-	proxy.SetRoute(resolved)
+	proxy.setRoute(resolved)
 	return resolved
 }

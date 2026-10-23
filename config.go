@@ -238,6 +238,9 @@ func ReadConfig(configDir string) (*Config, error) {
 	if loaded.UpstreamProxies == nil {
 		loaded.UpstreamProxies = []UpstreamProxyConfig{}
 	}
+	if err := restrictConfigWithCredentials(config.ConfigFileUsed(), loaded.UpstreamProxies); err != nil {
+		return nil, err
+	}
 	return &loaded, nil
 }
 

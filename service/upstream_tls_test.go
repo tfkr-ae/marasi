@@ -14,7 +14,7 @@ import (
 )
 
 // addUpstreamProxyWithCA adds an entry that trusts caPEM.
-func (s *upstreamService) addUpstreamProxyWithCA(t *testing.T, name, rawURL, caPEM string) {
+func (s *upstreamProxyService) addUpstreamProxyWithCA(t *testing.T, name, rawURL, caPEM string) {
 	t.Helper()
 	s.mustCall(t, http.MethodPost, "/upstream-proxy", fmt.Sprintf(`{"name":%q,"url":%q,"ca":%q}`, name, rawURL, caPEM))
 }
@@ -32,7 +32,7 @@ func newTLSOrigin(t *testing.T) *httptest.Server {
 
 func TestUpstreamProxyTLSTrust(t *testing.T) {
 	t.Run("should verify origin certificates signed by the CA of the intercepting upstream proxy it is attached to", func(t *testing.T) {
-		service := newUpstreamService(t, marasi.WithTLS())
+		service := newUpstreamProxyService(t, marasi.WithTLS())
 		origin := newTLSOrigin(t)
 		ca := upstreamtest.NewCA(t, "Fake Burp CA")
 		fake := upstreamtest.NewIntercepting(t, ca)
@@ -49,7 +49,7 @@ func TestUpstreamProxyTLSTrust(t *testing.T) {
 	})
 
 	t.Run("should fail closed naming TLS verification when the intercepting upstream proxy's entry has no CA", func(t *testing.T) {
-		service := newUpstreamService(t, marasi.WithTLS())
+		service := newUpstreamProxyService(t, marasi.WithTLS())
 		origin := newTLSOrigin(t)
 		ca := upstreamtest.NewCA(t, "Fake Burp CA")
 		fake := upstreamtest.NewIntercepting(t, ca)
@@ -67,7 +67,7 @@ func TestUpstreamProxyTLSTrust(t *testing.T) {
 	})
 
 	t.Run("should not trust an entry's CA on a direct connection", func(t *testing.T) {
-		service := newUpstreamService(t, marasi.WithTLS())
+		service := newUpstreamProxyService(t, marasi.WithTLS())
 		ca := upstreamtest.NewCA(t, "Fake Burp CA")
 		origin := newCASignedOrigin(t, ca)
 		fake := upstreamtest.NewIntercepting(t, ca)
@@ -87,7 +87,7 @@ func TestUpstreamProxyTLSTrust(t *testing.T) {
 	})
 
 	t.Run("should not trust one entry's CA through another upstream proxy", func(t *testing.T) {
-		service := newUpstreamService(t, marasi.WithTLS())
+		service := newUpstreamProxyService(t, marasi.WithTLS())
 		ca := upstreamtest.NewCA(t, "Fake Burp CA")
 		origin := newCASignedOrigin(t, ca)
 		burp := upstreamtest.NewIntercepting(t, ca)
@@ -105,7 +105,7 @@ func TestUpstreamProxyTLSTrust(t *testing.T) {
 
 func TestHTTPSUpstreamProxy(t *testing.T) {
 	t.Run("should speak TLS to an HTTPS upstream proxy its entry's CA signed, then CONNECT", func(t *testing.T) {
-		service := newUpstreamService(t, marasi.WithTLS())
+		service := newUpstreamProxyService(t, marasi.WithTLS())
 		ca := upstreamtest.NewCA(t, "Corp proxy CA")
 		fake := upstreamtest.NewHTTPS(t, ca, upstreamtest.WithBehaviour(upstreamtest.RejectCredentials), upstreamtest.WithCredentials("alice", "pw"))
 		service.addUpstreamProxyWithCA(t, "corp", fake.URL("https", "alice", "pw"), ca.PEM())
@@ -125,7 +125,7 @@ func TestHTTPSUpstreamProxy(t *testing.T) {
 	})
 
 	t.Run("should verify an HTTPS origin inside the TLS connection to the upstream proxy", func(t *testing.T) {
-		service := newUpstreamService(t, marasi.WithTLS())
+		service := newUpstreamProxyService(t, marasi.WithTLS())
 		ca := upstreamtest.NewCA(t, "Corp proxy CA")
 		origin := newCASignedOrigin(t, ca)
 		fake := upstreamtest.NewHTTPS(t, ca)
@@ -142,7 +142,7 @@ func TestHTTPSUpstreamProxy(t *testing.T) {
 	})
 
 	t.Run("should fail closed naming TLS verification when the upstream proxy's certificate is not trusted", func(t *testing.T) {
-		service := newUpstreamService(t, marasi.WithTLS())
+		service := newUpstreamProxyService(t, marasi.WithTLS())
 		ca := upstreamtest.NewCA(t, "Corp proxy CA")
 		fake := upstreamtest.NewHTTPS(t, ca)
 		service.addUpstreamProxy(t, "corp", fake.URL("https", "", ""))
@@ -181,10 +181,10 @@ func newCASignedOrigin(t *testing.T, ca *upstreamtest.CA) *httptest.Server {
 
 // assertTLSVerificationLog checks the one proxy log for the pair at path
 // names the upstream proxy and TLS verification.
-func assertTLSVerificationLog(t *testing.T, service *upstreamService, path, name, address string) {
+func assertTLSVerificationLog(t *testing.T, service *upstreamProxyService, path, name, address string) {
 	t.Helper()
 	id := service.pairID(t, path)
-	entry := service.upstreamLogs(t, 1)[0]
+	entry := service.upstreamProxyLogs(t, 1)[0]
 	if entry.Level != "ERROR" || entry.RequestID == nil || entry.RequestID.String() != id {
 		t.Fatalf("\nwanted:\nan ERROR log for pair %s\ngot:\n%+v", id, entry)
 	}

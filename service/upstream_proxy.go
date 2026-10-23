@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/internal/filelock"
@@ -67,9 +66,11 @@ type UpstreamProxies struct {
 	proxy *marasi.Proxy
 }
 
-// NewUpstreamProxies creates the upstream proxy list module for configDir.
-func NewUpstreamProxies(configDir string) *UpstreamProxies {
-	return &UpstreamProxies{configDir: configDir}
+// newUpstreamProxies creates the upstream proxy list module for configDir.
+// events receives the list's events, and proxy routes the open project's
+// traffic. Either is nil in tests of the list alone.
+func newUpstreamProxies(configDir string, events *eventBroadcaster, proxy *marasi.Proxy) *UpstreamProxies {
+	return &UpstreamProxies{configDir: configDir, events: events, proxy: proxy}
 }
 
 // addUpstreamProxyRoutes registers the machine list on mux and the
@@ -254,7 +255,7 @@ func (u *UpstreamProxies) Use(ctx context.Context, name string) error {
 	}
 	// The lock keeps a remove from landing between the check and the write.
 	err = u.withConfig(ctx, func(cfg *marasi.Config) error {
-		if name != "" && !slices.ContainsFunc(cfg.UpstreamProxies, func(entry marasi.UpstreamProxyConfig) bool { return entry.Name == name }) {
+		if name != "" && marasi.UpstreamProxyIndex(cfg.UpstreamProxies, name) < 0 {
 			return fmt.Errorf("%w: %s", marasi.ErrUpstreamProxyNotFound, name)
 		}
 		return marasi.StoreUpstreamProxySelection(repository, name)
@@ -275,11 +276,11 @@ func (u *UpstreamProxies) Use(ctx context.Context, name string) error {
 // Outcome is "ok" or the failure, such as "refused", "auth_rejected",
 // "tls_verification" or "timeout".
 type UpstreamProxyCheck struct {
-	Name    string `json:"name"`
-	Address string `json:"address"`
-	Target  string `json:"target"`
-	Outcome string `json:"outcome"`
-	Message string `json:"message"`
+	Name    string                           `json:"name"`
+	Address string                           `json:"address"`
+	Target  string                           `json:"target"`
+	Outcome marasi.UpstreamProxyCheckOutcome `json:"outcome"`
+	Message string                           `json:"message"`
 }
 
 // Check makes one test connection to target through the named upstream
