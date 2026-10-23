@@ -172,6 +172,6 @@ func (proxy *Proxy) applyRoute(resolved *Route) *Route {
 	if current := proxy.CurrentRoute(); sameRoute(current, resolved) {
 		return current
 	}
-	proxy.SetRoute(resolved)
+	proxy.setRoute(resolved)
 	return resolved
 }
