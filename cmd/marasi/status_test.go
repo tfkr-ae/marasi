@@ -91,6 +91,32 @@ func TestServiceStatusCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("should print the open project's upstream proxy and whether this machine lists it", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		canonicalConfigDir, err := filepath.EvalSymlinks(configDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		project := filepath.Join(canonicalConfigDir, "scratchpad.marasi")
+		for index, test := range []struct {
+			fields string
+			want   string
+		}{
+			{fields: `"upstream_proxy":"","upstream_proxy_configured":true`, want: "upstream proxy: none\n"},
+			{fields: `"upstream_proxy":"burp","upstream_proxy_configured":true`, want: "upstream proxy: burp\n"},
+			{fields: `"upstream_proxy":"burp","upstream_proxy_configured":false`, want: "upstream proxy: burp (not configured on this machine; requests fail)\n"},
+		} {
+			instance := fmt.Sprintf("work-%d", index)
+			startCannedControlAPI(t, configDir, instance, http.StatusOK, fmt.Sprintf(`{"status":"running","version":"dev","channel":null,"instance":"work","project":%q,"proxy_listener":null,"restart_required":false,%s}`, project, test.fields))
+
+			stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", instance, "service", "status")
+			want := fmt.Sprintf("status: running\nversion: dev\nchannel: none\ninstance: work\nproject: %s\nproxy listener: inactive\nrestart required: no\n%s", project, test.want)
+			if err != nil || stdout != want || stderr != "" {
+				t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+			}
+		}
+	})
+
 	t.Run("should pass a successful response through byte for byte in JSON mode", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		body := " {\n  \"unexpected\": true\n} "
@@ -231,7 +257,7 @@ func TestServiceStatusCommand(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := fmt.Sprintf("status: running\nversion: dev\nchannel: none\ninstance: work\nproject: %s\nproxy listener: %s\nrestart required: no\n", canonicalProject, listener)
+		want := fmt.Sprintf("status: running\nversion: dev\nchannel: none\ninstance: work\nproject: %s\nproxy listener: %s\nrestart required: no\nupstream proxy: none\n", canonicalProject, listener)
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
 		if err != nil || stdout != want || stderr != "" {
