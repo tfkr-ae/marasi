@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/tfkr-ae/marasi/domain"
 )
@@ -243,6 +244,37 @@ func (cfg *Config) saveUpstreamProxies(proxies []UpstreamProxyConfig) error {
 	}
 	cfg.UpstreamProxies = proxies
 	return nil
+}
+
+// restrictConfigWithCredentials sets the file at path to configFileMode
+// when entries hold credentials and the file is readable by anyone but its
+// owner, as a hand-made or older file can be.
+func restrictConfigWithCredentials(path string, entries []UpstreamProxyConfig) error {
+	if !slices.ContainsFunc(entries, hasCredentials) {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("checking configuration permissions: %w", err)
+	}
+	if info.Mode().Perm()&^configFileMode == 0 {
+		return nil
+	}
+	if err := os.Chmod(path, configFileMode); err != nil {
+		return fmt.Errorf("restricting configuration permissions: %w", err)
+	}
+	return nil
+}
+
+// hasCredentials reports whether entry's URL may hold credentials. A URL
+// that does not parse counts when it has an @, since a hand edit can still
+// hold them.
+func hasCredentials(entry UpstreamProxyConfig) bool {
+	parsed, err := url.Parse(entry.URL)
+	if err != nil {
+		return strings.Contains(entry.URL, "@")
+	}
+	return parsed.User != nil
 }
 
 // writeConfig saves the configuration with configFileMode. The mode is set
