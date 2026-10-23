@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -105,6 +106,9 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 		viperInstance.AddConfigPath(appConfigDir)
 		viperInstance.SetDefault("chrome_dirs", []chrome.PathConfig{})
 		viperInstance.SetDefault("chrome_profiles", []string{})
+		// The file can come to hold upstream proxy credentials, so it is
+		// created owner-only.
+		viperInstance.SetConfigPermissions(configFileMode)
 		err = viperInstance.ReadInConfig()
 		if err != nil {
 			// need to check if the error is config file doesn't exist
@@ -128,6 +132,9 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 		}
 		if err := proxy.Config.validate(); err != nil {
 			return fmt.Errorf("invalid configuration : %w", err)
+		}
+		if err := restrictConfigWithCredentials(filepath.Join(appConfigDir, "marasi_config.yaml"), proxy.Config.UpstreamProxies); err != nil {
+			return err
 		}
 		proxy.Config.viper = viperInstance
 
