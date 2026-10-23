@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/internal/filelock"
@@ -18,6 +20,8 @@ const (
 	upstreamProxyAddedEvent   = "upstream_proxy.added"
 	upstreamProxyUpdatedEvent = "upstream_proxy.updated"
 	upstreamProxyRemovedEvent = "upstream_proxy.removed"
+	// upstreamProxySelectedEvent carries {"name": …}, "" for none.
+	upstreamProxySelectedEvent = "upstream_proxy.selected"
 )
 
 var errInvalidUpstreamProxyRequest = errors.New("invalid upstream proxy request")
@@ -37,11 +41,30 @@ type upstreamProxyList struct {
 	Items []UpstreamProxy `json:"items"`
 }
 
+// upstreamProxyListing is GET /upstream-proxy: the list plus the open
+// project's selection.
+type upstreamProxyListing struct {
+	Items []UpstreamProxy `json:"items"`
+	upstreamProxySelection
+}
+
+// upstreamProxySelection is the open project's selection as the control API
+// and instance status show it. Selected is "" for none, and Configured is
+// true then.
+type upstreamProxySelection struct {
+	Selected   string `json:"selected"`
+	Configured bool   `json:"configured"`
+}
+
 // UpstreamProxies edits the machine's upstream proxy list in
-// marasi_config.yaml for one service instance.
+// marasi_config.yaml for one service instance, and the open project's
+// selection.
 type UpstreamProxies struct {
 	configDir string
 	events    *eventBroadcaster
+	// proxy holds the open project and routes its traffic. It is nil in
+	// tests of the list alone.
+	proxy *marasi.Proxy
 }
 
 // NewUpstreamProxies creates the upstream proxy list module for configDir.
@@ -49,14 +72,30 @@ func NewUpstreamProxies(configDir string) *UpstreamProxies {
 	return &UpstreamProxies{configDir: configDir}
 }
 
-func addUpstreamProxyRoutes(mux *http.ServeMux, proxies *UpstreamProxies) {
+// addUpstreamProxyRoutes registers the machine list on mux and the
+// selection, which writes the open project, on projectRoutes.
+func addUpstreamProxyRoutes(mux *http.ServeMux, projectRoutes routeMux, proxies *UpstreamProxies) {
 	mux.HandleFunc("GET /upstream-proxy", func(w http.ResponseWriter, r *http.Request) {
 		items, err := proxies.List(r.Context())
 		if err != nil {
 			writeUpstreamProxyError(w, r, err)
 			return
 		}
-		writeJSON(w, r, http.StatusOK, upstreamProxyList{Items: items})
+		writeJSON(w, r, http.StatusOK, upstreamProxyListing{Items: items, upstreamProxySelection: proxies.selection()})
+	})
+	projectRoutes.HandleFunc("PUT /upstream-proxy-selection", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Name *string `json:"name"`
+		}
+		if r.Body == nil || !decodeStrictJSON(r.Body, &body) || body.Name == nil {
+			writeUpstreamProxyError(w, r, errInvalidUpstreamProxyRequest)
+			return
+		}
+		if err := proxies.Use(r.Context(), *body.Name); err != nil {
+			writeUpstreamProxyError(w, r, err)
+			return
+		}
+		writeJSON(w, r, http.StatusOK, proxies.selection())
 	})
 	mux.HandleFunc("POST /upstream-proxy", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -186,6 +225,42 @@ func (u *UpstreamProxies) Remove(ctx context.Context, name string) ([]UpstreamPr
 	return u.edit(ctx, upstreamProxyRemovedEvent, func(cfg *marasi.Config) error {
 		return cfg.RemoveUpstreamProxy(name)
 	})
+}
+
+// Use stores name as the open project's selection, or clears it when name
+// is "", and routes new connections by it. It dials nothing. A name missing
+// from this machine's list is not found.
+func (u *UpstreamProxies) Use(ctx context.Context, name string) error {
+	repository, err := u.proxy.GetConfigRepo()
+	if err != nil {
+		return err
+	}
+	// The lock keeps a remove from landing between the check and the write.
+	err = u.withConfig(ctx, func(cfg *marasi.Config) error {
+		if name != "" && !slices.ContainsFunc(cfg.UpstreamProxies, func(entry marasi.UpstreamProxyConfig) bool { return entry.Name == name }) {
+			return fmt.Errorf("%w: %s", marasi.ErrUpstreamProxyNotFound, name)
+		}
+		return marasi.StoreUpstreamProxySelection(repository, name)
+	})
+	if err != nil {
+		return err
+	}
+	u.proxy.SelectUpstreamProxy(name)
+	if u.events != nil {
+		u.events.publish(upstreamProxySelectedEvent, struct {
+			Name string `json:"name"`
+		}{Name: name})
+	}
+	return nil
+}
+
+// selection returns the open project's selection.
+func (u *UpstreamProxies) selection() upstreamProxySelection {
+	if u.proxy == nil {
+		return upstreamProxySelection{Configured: true}
+	}
+	status := u.proxy.UpstreamProxyStatus()
+	return upstreamProxySelection{Selected: status.Name, Configured: status.Configured}
 }
 
 // edit runs change under the config lock and publishes event with the new
