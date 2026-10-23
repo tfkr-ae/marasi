@@ -27,14 +27,14 @@ func TestUpstreamProxyControlRoutes(t *testing.T) {
 		subscriber := server.events.subscribe()
 		defer server.events.unsubscribe(subscriber)
 
-		assertChromeResponse(t, requestChrome(server, http.MethodGet, "/upstream-proxy", ""), http.StatusOK, `{"items":[]}`+"\n")
+		assertChromeResponse(t, requestChrome(server, http.MethodGet, "/upstream-proxy", ""), http.StatusOK, `{"items":[],"selected":"","configured":true}`+"\n")
 		assertNoChromeEvent(t, subscriber)
 
 		body := upstreamProxyBody(t, map[string]any{"name": "burp", "url": "http://alice:s3cret@127.0.0.1:8080", "ca": testUpstreamCAPEM(t)})
 		want := `{"items":[{"name":"burp","scheme":"http","host":"127.0.0.1","port":8080,"has_credentials":true,"has_ca":true}]}`
 		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/upstream-proxy", body), http.StatusOK, want+"\n")
 		assertChromeEvent(t, subscriber, "upstream_proxy.added", want)
-		assertChromeResponse(t, requestChrome(server, http.MethodGet, "/upstream-proxy", ""), http.StatusOK, want+"\n")
+		assertChromeResponse(t, requestChrome(server, http.MethodGet, "/upstream-proxy", ""), http.StatusOK, listing(want))
 		assertNoChromeEvent(t, subscriber)
 	})
 
@@ -54,7 +54,7 @@ func TestUpstreamProxyControlRoutes(t *testing.T) {
 			`{"name":"plain","scheme":"http","host":"proxy.internal","port":3128,"has_credentials":false,"has_ca":false},` +
 			`{"name":"tls","scheme":"https","host":"proxy.example","port":443,"has_credentials":true,"has_ca":false},` +
 			`{"name":"jump","scheme":"socks5","host":"::1","port":1080,"has_credentials":true,"has_ca":false}]}` + "\n"
-		assertChromeResponse(t, requestChrome(server, http.MethodGet, "/upstream-proxy", ""), http.StatusOK, want)
+		assertChromeResponse(t, requestChrome(server, http.MethodGet, "/upstream-proxy", ""), http.StatusOK, listing(strings.TrimSuffix(want, "\n")))
 	})
 
 	t.Run("should refuse invalid names urls and CAs without an event", func(t *testing.T) {
@@ -86,7 +86,7 @@ func TestUpstreamProxyControlRoutes(t *testing.T) {
 			assertUpstreamProxyRefusal(t, requestChrome(server, http.MethodPost, "/upstream-proxy", body), http.StatusBadRequest, "invalid_upstream_proxy")
 		}
 		assertNoChromeEvent(t, subscriber)
-		assertChromeResponse(t, requestChrome(server, http.MethodGet, "/upstream-proxy", ""), http.StatusOK, `{"items":[]}`+"\n")
+		assertChromeResponse(t, requestChrome(server, http.MethodGet, "/upstream-proxy", ""), http.StatusOK, `{"items":[],"selected":"","configured":true}`+"\n")
 	})
 
 	t.Run("should refuse a duplicate name", func(t *testing.T) {
@@ -207,7 +207,7 @@ func TestUpstreamProxyControlRoutes(t *testing.T) {
 			t.Fatalf("writing config: %v", err)
 		}
 		want := `{"items":[{"name":"corp","scheme":"http","host":"proxy.corp","port":3128,"has_credentials":false,"has_ca":false}]}` + "\n"
-		assertChromeResponse(t, requestChrome(server, http.MethodGet, "/upstream-proxy", ""), http.StatusOK, want)
+		assertChromeResponse(t, requestChrome(server, http.MethodGet, "/upstream-proxy", ""), http.StatusOK, listing(strings.TrimSuffix(want, "\n")))
 	})
 }
 
@@ -327,4 +327,10 @@ func testUpstreamCAPEM(t *testing.T) string {
 		t.Fatalf("creating certificate: %v", err)
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+// listing is GET /upstream-proxy's body for list, a {"items":[…]} body, with
+// nothing selected.
+func listing(list string) string {
+	return strings.TrimSuffix(list, "}") + `,"selected":"","configured":true}` + "\n"
 }

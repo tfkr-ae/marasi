@@ -29,16 +29,20 @@ type marasiRoundTripper struct {
 // always direct. See newRoutedTransport.
 func newMarasiTransport(dial func(context.Context, string, string) (net.Conn, error)) http.RoundTripper {
 	direct := DirectRoute()
-	return newRoutedTransport(func() *Route { return direct }, dial)
+	always := func() *Route { return direct }
+	return newRoutedTransport(always, always, dial)
 }
 
 // newRoutedTransport builds marasi's round tripper. Each new connection asks
-// currentRoute how to reach the origin, dials through dial, and for TLS runs a
-// utls handshake that mimics Chrome. Waypoints need nothing here: their
-// modifier has already rewritten the URL host to the destination.
+// resolveRoute once how to reach the origin, dials through the route (a
+// tunnel when it is an upstream proxy), and for TLS runs a utls handshake
+// that mimics Chrome inside it. currentRoute reads the route without
+// resolving it again. Waypoints need nothing here: their modifier has
+// already rewritten the URL host to the destination, which is the tunnel's
+// target.
 // It is the only client that reaches the origin. Every other Marasi client
 // sends through the proxy's own listener (see Proxy.Client).
-func newRoutedTransport(currentRoute func() *Route, dial func(context.Context, string, string) (net.Conn, error)) *marasiRoundTripper {
+func newRoutedTransport(resolveRoute, currentRoute func() *Route, dial func(context.Context, string, string) (net.Conn, error)) *marasiRoundTripper {
 	if dial == nil {
 		dial = (&net.Dialer{}).DialContext
 	}
@@ -46,7 +50,7 @@ func newRoutedTransport(currentRoute func() *Route, dial func(context.Context, s
 	// and the response reaches the client as the origin encoded it.
 	transport := &http.Transport{DisableCompression: true}
 	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		route := currentRoute()
+		route := resolveRoute()
 		conn, err := route.dial(ctx, dial, network, addr)
 		if err != nil {
 			return nil, err
@@ -54,7 +58,7 @@ func newRoutedTransport(currentRoute func() *Route, dial func(context.Context, s
 		return &routedConn{Conn: conn, route: route}, nil
 	}
 	transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		route := currentRoute()
+		route := resolveRoute()
 		tcpConn, err := route.dial(ctx, dial, network, addr)
 		if err != nil {
 			return nil, err
