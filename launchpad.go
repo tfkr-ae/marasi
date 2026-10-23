@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -603,7 +604,8 @@ func (proxy *Proxy) applyLaunchOutcome(launch domain.Launch) error {
 	return proxy.TrafficRepo.UpdateMetadata(metadata, launch.ID)
 }
 
-// launchFailureRoundTripper records upstream round-trip failures of claimed launches.
+// launchFailureRoundTripper records upstream round-trip failures of claimed
+// launches, and writes a proxy log for each request a route could not carry.
 type launchFailureRoundTripper struct {
 	proxy *Proxy
 	base  http.RoundTripper
@@ -616,8 +618,26 @@ func (rt *launchFailureRoundTripper) RoundTrip(req *http.Request) (*http.Respons
 		if id, ok := core.RequestIDFromContext(req.Context()); ok {
 			rt.proxy.recordLaunchFailure(id, domain.LaunchReasonUpstreamError)
 		}
+		var routeErr *UpstreamProxyError
+		if errors.As(err, &routeErr) {
+			rt.proxy.logUpstreamProxyFailure(req, routeErr)
+		}
 	}
 	return res, err
+}
+
+// logUpstreamProxyFailure writes one ERROR proxy log naming req's pair, the
+// upstream proxy and the cause. Nothing in it holds credentials.
+func (proxy *Proxy) logUpstreamProxyFailure(req *http.Request, routeErr *UpstreamProxyError) {
+	message := fmt.Sprintf("%s (request %s %s)", routeErr.Error(), req.Method, req.URL.Redacted())
+	options := append(requestLogOptions(req), core.LogWithContext(map[string]any{
+		"upstream_proxy": routeErr.Name,
+		"address":        routeErr.Address,
+		"cause":          string(routeErr.Failure),
+	}))
+	if err := proxy.WriteLog("ERROR", message, options...); err != nil {
+		log.Printf("writing upstream proxy failure log: %v", err)
+	}
 }
 
 // holdLaunchpadWebSocket keeps a Launchpad WebSocket response body alive and drains it.

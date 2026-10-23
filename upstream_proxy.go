@@ -2,6 +2,7 @@ package marasi
 
 import (
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -62,6 +63,41 @@ type UpstreamProxyAddress struct {
 	Host           string
 	Port           int
 	HasCredentials bool
+}
+
+// UpstreamProxySelectionKey is the client setting under domain.ReservedClient
+// that holds a project's upstream proxy selection as a JSON string. A
+// missing key means none.
+const UpstreamProxySelectionKey = "upstream_proxy.active"
+
+// LoadUpstreamProxySelection reads a project's selection, "" for none.
+func LoadUpstreamProxySelection(repository domain.ConfigRepository) (string, error) {
+	setting, err := repository.GetClientSetting(domain.ReservedClient, UpstreamProxySelectionKey)
+	if errors.Is(err, domain.ErrClientSettingNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var name string
+	if err := json.Unmarshal(setting.Value, &name); err != nil {
+		return "", fmt.Errorf("%w: the selection is not a JSON string", ErrInvalidUpstreamProxy)
+	}
+	return name, nil
+}
+
+// StoreUpstreamProxySelection writes a project's selection, deleting it for
+// none ("").
+func StoreUpstreamProxySelection(repository domain.ConfigRepository, name string) error {
+	if name == "" {
+		return repository.DeleteClientSetting(domain.ReservedClient, UpstreamProxySelectionKey)
+	}
+	value, err := json.Marshal(name)
+	if err != nil {
+		return err
+	}
+	_, err = repository.SetMarasiSetting(UpstreamProxySelectionKey, value)
+	return err
 }
 
 // ValidateUpstreamProxyName checks name against the client-name pattern.

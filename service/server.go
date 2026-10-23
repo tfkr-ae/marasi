@@ -69,6 +69,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 	}
 	upstreamProxies := NewUpstreamProxies(configDir)
 	upstreamProxies.events = events
+	upstreamProxies.proxy = proxy
 	server := &Server{
 		mux:               mux,
 		events:            events,
@@ -143,7 +144,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 	mux.Handle("/project/", http.StripPrefix("/project", projectMux))
 	mux.HandleFunc("/events", server.serveEvents)
 	addUpdateRoutes(mux, server)
-	addUpstreamProxyRoutes(mux, upstreamProxies)
+	addUpstreamProxyRoutes(mux, admittingMux{ServeMux: mux, projects: projects}, upstreamProxies)
 	return server
 }
 
@@ -381,6 +382,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxyListener := s.listener.Status().ProxyListener
+	selection := s.upstreamProxies.selection()
 	var channel *update.Channel
 	if s.updates != nil && s.updates.BuildChannel() != "" {
 		buildChannel := s.updates.BuildChannel()
@@ -394,14 +396,20 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		Project         string          `json:"project"`
 		ProxyListener   *string         `json:"proxy_listener"`
 		RestartRequired bool            `json:"restart_required"`
+		// UpstreamProxy is the open project's selection, "" for none, and
+		// UpstreamProxyConfigured whether this machine lists it.
+		UpstreamProxy           string `json:"upstream_proxy"`
+		UpstreamProxyConfigured bool   `json:"upstream_proxy_configured"`
 	}{
-		Status:          "running",
-		Version:         s.version,
-		Channel:         channel,
-		Instance:        s.instance,
-		Project:         project,
-		ProxyListener:   proxyListener,
-		RestartRequired: s.updates != nil && s.updates.RestartRequired(),
+		Status:                  "running",
+		Version:                 s.version,
+		Channel:                 channel,
+		Instance:                s.instance,
+		Project:                 project,
+		ProxyListener:           proxyListener,
+		RestartRequired:         s.updates != nil && s.updates.RestartRequired(),
+		UpstreamProxy:           selection.Selected,
+		UpstreamProxyConfigured: selection.Configured,
 	})
 }
 

@@ -438,6 +438,21 @@ func WithStatsRepository(repo domain.StatsRepository) func(*Proxy) error {
 	}
 }
 
+// WithUpstreamProxyTimeout bounds how long reaching an upstream proxy and
+// opening a tunnel through it may take before the request fails. The
+// default is DefaultUpstreamProxyTimeout.
+func WithUpstreamProxyTimeout(timeout time.Duration) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if timeout <= 0 {
+			return fmt.Errorf("upstream proxy timeout must be positive, got %s", timeout)
+		}
+		proxy.routes.mu.Lock()
+		proxy.routes.timeout = timeout
+		proxy.routes.mu.Unlock()
+		return nil
+	}
+}
+
 // WithConfigRepository injects the config repository implementation.
 func WithConfigRepository(repo domain.ConfigRepository) func(*Proxy) error {
 	return func(proxy *Proxy) error {

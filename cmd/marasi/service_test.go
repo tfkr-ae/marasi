@@ -1816,7 +1816,7 @@ func TestStartService(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := fmt.Sprintf("{\"status\":\"running\",\"version\":%q,\"channel\":\"nightly\",\"instance\":\"work\",\"project\":%q,\"proxy_listener\":%q,\"restart_required\":false}\n", wantVersion, canonicalProject, proxyListener)
+		want := fmt.Sprintf("{\"status\":\"running\",\"version\":%q,\"channel\":\"nightly\",\"instance\":\"work\",\"project\":%q,\"proxy_listener\":%q,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true}\n", wantVersion, canonicalProject, proxyListener)
 		if got := string(body); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
