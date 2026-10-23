@@ -10,8 +10,9 @@ import (
 
 // routeResolver turns the open project's upstream proxy selection and this
 // machine's list in marasi_config.yaml into a Route. It reads the YAML again
-// only when the file's modification time or size changes, and the proxy
-// asks it once per new connection to the origin.
+// only when the file's modification time or size changes. The proxy asks it
+// before each request takes a connection, so an edit retires idle
+// connections before one is reused, and again for each new connection.
 type routeResolver struct {
 	mu        sync.Mutex
 	selection string
@@ -157,7 +158,7 @@ func (proxy *Proxy) UpstreamProxyStatus() UpstreamProxyStatus {
 	return proxy.routes.status(proxy.ConfigDir)
 }
 
-// resolveRoute returns the route for a new connection, swapping the current
+// resolveRoute returns the route for a request or a new connection, swapping the current
 // route first when the selection or the list changed what it resolves to.
 func (proxy *Proxy) resolveRoute() *Route {
 	return proxy.applyRoute(proxy.routes.resolve(proxy.ConfigDir))
