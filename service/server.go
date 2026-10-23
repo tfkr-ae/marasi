@@ -67,9 +67,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 	if proxy != nil {
 		configDir = proxy.ConfigDir
 	}
-	upstreamProxies := NewUpstreamProxies(configDir)
-	upstreamProxies.events = events
-	upstreamProxies.proxy = proxy
+	upstreamProxies := newUpstreamProxies(configDir, events, proxy)
 	server := &Server{
 		mux:               mux,
 		events:            events,

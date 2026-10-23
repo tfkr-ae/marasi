@@ -2,21 +2,31 @@ package marasi
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
-
-	utls "github.com/refraction-networking/utls"
 )
 
 // ErrInvalidUpstreamProxyTarget reports a check target that is not an http
 // or https URL with a host.
 var ErrInvalidUpstreamProxyTarget = errors.New("invalid check target")
 
+// UpstreamProxyCheckOutcome is how a check went: UpstreamProxyCheckOK, or
+// the UpstreamProxyFailure that stopped it (see checkOutcome).
+type UpstreamProxyCheckOutcome string
+
 // UpstreamProxyCheckOK is the outcome of a check that reached the target.
-const UpstreamProxyCheckOK = "ok"
+const UpstreamProxyCheckOK UpstreamProxyCheckOutcome = "ok"
+
+// checkOutcome is the outcome of a check that failed with failure.
+func checkOutcome(failure UpstreamProxyFailure) UpstreamProxyCheckOutcome {
+	return UpstreamProxyCheckOutcome(failure)
+}
+
+// defaultTargetPorts is the port a check target without one connects to,
+// by scheme.
+var defaultTargetPorts = map[string]string{"http": "80", "https": "443"}
 
 // UpstreamProxyCheck is the result of one test connection through an
 // upstream proxy. It never holds credentials.
@@ -27,8 +37,8 @@ type UpstreamProxyCheck struct {
 	Address string
 	// Target is the host:port the check connected to.
 	Target string
-	// Outcome is UpstreamProxyCheckOK or an UpstreamProxyFailure.
-	Outcome string
+	// Outcome is how the check went.
+	Outcome UpstreamProxyCheckOutcome
 	// Message says what happened in words.
 	Message string
 }
@@ -45,12 +55,7 @@ func (proxy *Proxy) CheckUpstreamProxy(ctx context.Context, name, target string)
 	if err != nil {
 		return UpstreamProxyCheck{}, err
 	}
-	proxy.routes.mu.Lock()
-	timeout := proxy.routes.timeout
-	proxy.routes.mu.Unlock()
-	// A resolver of its own resolves the entry without touching the
-	// selection the proxy routes by.
-	route := (&routeResolver{selection: name, timeout: timeout}).resolve(proxy.ConfigDir)
+	route := proxy.routes.resolveEntry(proxy.ConfigDir, name)
 	if route.failure != nil && route.failure.Failure == UpstreamProxyNotConfigured {
 		return UpstreamProxyCheck{}, fmt.Errorf("%w: %s", ErrUpstreamProxyNotFound, name)
 	}
@@ -67,7 +72,7 @@ func (proxy *Proxy) CheckUpstreamProxy(ctx context.Context, name, target string)
 	conn, err := dial(ctx, "tcp", address)
 	if err != nil {
 		failure := route.checkFailure(contextCause(ctx, err))
-		result.Outcome, result.Message = string(failure.Failure), failure.Error()
+		result.Outcome, result.Message = checkOutcome(failure.Failure), failure.Error()
 		return result, nil
 	}
 	conn.Close()
@@ -88,27 +93,18 @@ func parseCheckTarget(target string) (string, bool, error) {
 	}
 	port := parsed.Port()
 	if port == "" {
-		port = map[string]string{"http": "80", "https": "443"}[parsed.Scheme]
+		port = defaultTargetPorts[parsed.Scheme]
 	}
 	return net.JoinHostPort(parsed.Hostname(), port), parsed.Scheme == "https", nil
 }
 
 // checkFailure classifies an error from dialing the target through the
 // route. A failure to reach the upstream proxy is already classified; one
-// after the tunnel opened comes from the TLS handshake with the origin.
+// after the tunnel opened comes from the TLS handshake with the target.
 func (route *Route) checkFailure(err error) *UpstreamProxyError {
 	var proxyErr *UpstreamProxyError
 	if errors.As(err, &proxyErr) {
 		return proxyErr
 	}
-	var (
-		verification *utls.CertificateVerificationError
-		unknown      x509.UnknownAuthorityError
-		hostname     x509.HostnameError
-		invalid      x509.CertificateInvalidError
-	)
-	if errors.As(err, &verification) || errors.As(err, &unknown) || errors.As(err, &hostname) || errors.As(err, &invalid) {
-		return route.fail(UpstreamProxyTLSVerification, "the target's certificate did not verify: "+err.Error(), err)
-	}
-	return route.classify("the TLS handshake with the target", err)
+	return route.handshakeFailure("the target", err)
 }

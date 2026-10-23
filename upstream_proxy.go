@@ -71,18 +71,22 @@ type UpstreamProxyAddress struct {
 // missing key means none.
 const UpstreamProxySelectionKey = "upstream_proxy.active"
 
-// LoadUpstreamProxySelection reads a project's selection, "" for none.
+// LoadUpstreamProxySelection reads a project's selection, "" for none. A
+// stored value that is not a JSON string is returned as it is, with an
+// error wrapping ErrInvalidUpstreamProxy.
 func LoadUpstreamProxySelection(repository domain.ConfigRepository) (string, error) {
 	setting, err := repository.GetClientSetting(domain.ReservedClient, UpstreamProxySelectionKey)
 	if errors.Is(err, domain.ErrClientSettingNotFound) {
 		return "", nil
 	}
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("reading the upstream proxy selection: %w", err)
 	}
 	var name string
 	if err := json.Unmarshal(setting.Value, &name); err != nil {
-		return "", fmt.Errorf("%w: the selection is not a JSON string", ErrInvalidUpstreamProxy)
+		// No list entry can match a value that is not a name, so routing
+		// by the raw value fails closed.
+		return string(setting.Value), fmt.Errorf("%w: the selection is not a JSON string", ErrInvalidUpstreamProxy)
 	}
 	return name, nil
 }
@@ -91,14 +95,19 @@ func LoadUpstreamProxySelection(repository domain.ConfigRepository) (string, err
 // none ("").
 func StoreUpstreamProxySelection(repository domain.ConfigRepository, name string) error {
 	if name == "" {
-		return repository.DeleteClientSetting(domain.ReservedClient, UpstreamProxySelectionKey)
+		if err := repository.DeleteClientSetting(domain.ReservedClient, UpstreamProxySelectionKey); err != nil {
+			return fmt.Errorf("clearing the upstream proxy selection: %w", err)
+		}
+		return nil
 	}
 	value, err := json.Marshal(name)
 	if err != nil {
-		return err
+		return fmt.Errorf("encoding the upstream proxy selection: %w", err)
 	}
-	_, err = repository.SetMarasiSetting(UpstreamProxySelectionKey, value)
-	return err
+	if _, err := repository.SetMarasiSetting(UpstreamProxySelectionKey, value); err != nil {
+		return fmt.Errorf("storing the upstream proxy selection: %w", err)
+	}
+	return nil
 }
 
 // ValidateUpstreamProxyName checks name against the client-name pattern.
@@ -191,7 +200,7 @@ func (cfg *Config) AddUpstreamProxy(entry UpstreamProxyConfig) error {
 	if err := validateUpstreamProxy(entry); err != nil {
 		return err
 	}
-	if cfg.upstreamProxyIndex(entry.Name) >= 0 {
+	if UpstreamProxyIndex(cfg.UpstreamProxies, entry.Name) >= 0 {
 		return fmt.Errorf("%w: %s", ErrUpstreamProxyExists, entry.Name)
 	}
 	return cfg.saveUpstreamProxies(append(slices.Clone(cfg.UpstreamProxies), entry))
@@ -200,7 +209,7 @@ func (cfg *Config) AddUpstreamProxy(entry UpstreamProxyConfig) error {
 // UpdateUpstreamProxy changes the named entry and saves the configuration.
 // Callers hold the config lock and reread first.
 func (cfg *Config) UpdateUpstreamProxy(name string, update UpstreamProxyUpdate) error {
-	index := cfg.upstreamProxyIndex(name)
+	index := UpstreamProxyIndex(cfg.UpstreamProxies, name)
 	if index < 0 {
 		return fmt.Errorf("%w: %s", ErrUpstreamProxyNotFound, name)
 	}
@@ -220,15 +229,17 @@ func (cfg *Config) UpdateUpstreamProxy(name string, update UpstreamProxyUpdate) 
 // RemoveUpstreamProxy removes the named entry and saves the configuration.
 // Callers hold the config lock and reread first.
 func (cfg *Config) RemoveUpstreamProxy(name string) error {
-	index := cfg.upstreamProxyIndex(name)
+	index := UpstreamProxyIndex(cfg.UpstreamProxies, name)
 	if index < 0 {
 		return fmt.Errorf("%w: %s", ErrUpstreamProxyNotFound, name)
 	}
 	return cfg.saveUpstreamProxies(slices.Delete(slices.Clone(cfg.UpstreamProxies), index, index+1))
 }
 
-func (cfg *Config) upstreamProxyIndex(name string) int {
-	return slices.IndexFunc(cfg.UpstreamProxies, func(entry UpstreamProxyConfig) bool {
+// UpstreamProxyIndex returns the index of the entry called name in
+// entries, or -1 when there is none.
+func UpstreamProxyIndex(entries []UpstreamProxyConfig, name string) int {
+	return slices.IndexFunc(entries, func(entry UpstreamProxyConfig) bool {
 		return entry.Name == name
 	})
 }

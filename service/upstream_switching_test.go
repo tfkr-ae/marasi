@@ -75,8 +75,8 @@ func assertNoUpstreamProxyEvent(t *testing.T, subscriber *eventSubscriber) {
 func TestUpstreamProxySwitchingAcrossInstances(t *testing.T) {
 	t.Run("should apply an update of the selected entry in a second instance on its next request, publishing nothing there", func(t *testing.T) {
 		configDir := t.TempDir()
-		editor := newUpstreamServiceIn(t, configDir)
-		user := newUpstreamServiceIn(t, configDir)
+		editor := newUpstreamProxyServiceIn(t, configDir)
+		user := newUpstreamProxyServiceIn(t, configDir)
 		first := upstreamtest.NewHTTP(t)
 		second := upstreamtest.NewHTTP(t)
 		editor.addUpstreamProxy(t, "corp", first.URL("http", "", ""))
@@ -98,8 +98,8 @@ func TestUpstreamProxySwitchingAcrossInstances(t *testing.T) {
 
 	t.Run("should apply a hand edit of the selected entry's credentials on the next request, on a new connection", func(t *testing.T) {
 		configDir := t.TempDir()
-		editor := newUpstreamServiceIn(t, configDir)
-		user := newUpstreamServiceIn(t, configDir)
+		editor := newUpstreamProxyServiceIn(t, configDir)
+		user := newUpstreamProxyServiceIn(t, configDir)
 		fake := upstreamtest.NewHTTP(t)
 		editor.addUpstreamProxy(t, "corp", fake.URL("http", "alice", "old"))
 		user.use(t, "corp")
@@ -166,7 +166,7 @@ func newHeldRelay(t *testing.T, target string) *heldRelay {
 
 func TestUpstreamProxySwitchingInFlight(t *testing.T) {
 	t.Run("should carry a request whose dial was under way during use on the new route", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		first := upstreamtest.NewHTTP(t)
 		second := upstreamtest.NewHTTP(t)
 		relay := newHeldRelay(t, first.Addr)
@@ -186,7 +186,7 @@ func TestUpstreamProxySwitchingInFlight(t *testing.T) {
 	})
 
 	t.Run("should fail closed a request whose dial was under way when the selected entry was removed", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		first := upstreamtest.NewHTTP(t)
 		relay := newHeldRelay(t, first.Addr)
 		service.addUpstreamProxy(t, "first", "http://"+relay.addr)
@@ -210,7 +210,7 @@ func TestUpstreamProxySwitchingInFlight(t *testing.T) {
 	})
 
 	t.Run("should not hand a request waiting for a connection through the new upstream proxy the direct connection a request in flight frees", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		origin := newSwitchOrigin(t)
 		fake := upstreamtest.NewHTTP(t)
 		relay := newHeldRelay(t, fake.Addr)
@@ -238,7 +238,7 @@ func TestUpstreamProxySwitchingInFlight(t *testing.T) {
 	})
 
 	t.Run("should send every request that starts after a switch from none through the new upstream proxy under concurrent load", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		origin := newSwitchOrigin(t)
 		fake := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
@@ -298,8 +298,8 @@ func (relay *heldRelay) awaitEntered(t *testing.T) {
 func TestUpstreamProxySwitchingRemoval(t *testing.T) {
 	t.Run("should fail closed after the selected entry is removed, never reusing an idle connection or going direct", func(t *testing.T) {
 		configDir := t.TempDir()
-		editor := newUpstreamServiceIn(t, configDir)
-		user := newUpstreamServiceIn(t, configDir)
+		editor := newUpstreamProxyServiceIn(t, configDir)
+		user := newUpstreamProxyServiceIn(t, configDir)
 		fake := upstreamtest.NewHTTP(t)
 		editor.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
 		user.use(t, "corp")
@@ -410,7 +410,7 @@ func (origin *switchOrigin) awaitOpen(t *testing.T, want int64) {
 
 // getAsync sends a GET through the listener from a client of its own, as
 // another browser would, and delivers "<status> <body>" or the error text.
-func (s *upstreamService) getAsync(t *testing.T, target string) <-chan string {
+func (s *upstreamProxyService) getAsync(t *testing.T, target string) <-chan string {
 	transport := s.client.Transport.(*http.Transport).Clone()
 	t.Cleanup(transport.CloseIdleConnections)
 	client := &http.Client{Transport: transport, Timeout: s.client.Timeout}
@@ -442,7 +442,7 @@ func awaitResult(t *testing.T, done <-chan string) string {
 
 // getReusing sends a GET through the listener and returns "<status> <body>"
 // and whether the client reused its connection to the listener.
-func (s *upstreamService) getReusing(t *testing.T, target string) (string, bool) {
+func (s *upstreamProxyService) getReusing(t *testing.T, target string) (string, bool) {
 	t.Helper()
 	var reused atomic.Bool
 	trace := &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) { reused.Store(info.Reused) }}
@@ -460,7 +460,7 @@ func (s *upstreamService) getReusing(t *testing.T, target string) (string, bool)
 }
 
 // listenerAddress returns the proxy listener's address from /service/status.
-func (s *upstreamService) listenerAddress(t *testing.T) string {
+func (s *upstreamProxyService) listenerAddress(t *testing.T) string {
 	t.Helper()
 	status := decodeJSON[struct {
 		ProxyListener *string `json:"proxy_listener"`
@@ -480,7 +480,7 @@ func onlyThrough(t *testing.T, text string, want, other *upstreamtest.Proxy) {
 }
 
 // twoUpstreamProxies lists first and second on service and selects first.
-func twoUpstreamProxies(t *testing.T, service *upstreamService) (first, second *upstreamtest.Proxy) {
+func twoUpstreamProxies(t *testing.T, service *upstreamProxyService) (first, second *upstreamtest.Proxy) {
 	t.Helper()
 	first, second = upstreamtest.NewHTTP(t), upstreamtest.NewHTTP(t)
 	service.addUpstreamProxy(t, "first", first.URL("http", "", ""))
@@ -491,7 +491,7 @@ func twoUpstreamProxies(t *testing.T, service *upstreamService) (first, second *
 
 func TestUpstreamProxySwitchingWithUse(t *testing.T) {
 	t.Run("should let a request in flight through the old upstream proxy finish there and send the next through the new one on a new connection", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		origin := newSwitchOrigin(t)
 		first, second := twoUpstreamProxies(t, service)
 		address := service.listenerAddress(t)
@@ -526,7 +526,7 @@ func TestUpstreamProxySwitchingWithUse(t *testing.T) {
 	})
 
 	t.Run("should close an idle keep-alive connection through the old upstream proxy rather than reuse it", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		origin := newSwitchOrigin(t)
 		first, second := twoUpstreamProxies(t, service)
 		service.get(t, origin.URL+"/one")
@@ -543,7 +543,7 @@ func TestUpstreamProxySwitchingWithUse(t *testing.T) {
 	})
 
 	t.Run("should keep an open WebSocket connection through the old upstream proxy working until it closes", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		origin := newSwitchOrigin(t)
 		first, second := twoUpstreamProxies(t, service)
 		conn, reader := dialWebSocket(t, service.address, origin.URL)
@@ -606,7 +606,7 @@ func echo(t *testing.T, conn net.Conn, reader *bufio.Reader, text string) {
 
 func TestUpstreamProxySwitchingWithProject(t *testing.T) {
 	t.Run("should change the route with the project, dialing nothing and waiting on nothing during the switch", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		origin := newSwitchOrigin(t)
 		first := upstreamtest.NewHTTP(t)
 		second := upstreamtest.NewHTTP(t)

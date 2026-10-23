@@ -90,11 +90,11 @@ succeeds whatever the outcome; read outcome to tell.`,
 		if jsonOutput {
 			return writeJSONBody(cmd, response)
 		}
-		return writeUpstreamCheck(response, cmd.OutOrStdout())
+		return writeUpstreamProxyCheck(response, cmd.OutOrStdout())
 	},
 }
 
-func writeUpstreamCheck(body []byte, stdout io.Writer) error {
+func writeUpstreamProxyCheck(body []byte, stdout io.Writer) error {
 	var response struct {
 		Name    string `json:"name"`
 		Address string `json:"address"`
@@ -122,7 +122,7 @@ var upstreamAddCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		request := upstreamAddRequest{Name: args[0], URL: args[1]}
 		if cmd.Flags().Changed("ca") {
-			ca, err := readUpstreamCA(upstreamAddCA)
+			ca, err := readUpstreamProxyCA(upstreamAddCA)
 			if err != nil {
 				return err
 			}
@@ -132,7 +132,7 @@ var upstreamAddCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("encoding upstream proxy request: %w", err)
 		}
-		return runUpstreamMutation(cmd, http.MethodPost, "/upstream-proxy", "adding upstream proxy", body, "upstream proxy "+args[0]+" added")
+		return runUpstreamProxyMutation(cmd, http.MethodPost, "/upstream-proxy", "adding upstream proxy", body, "upstream proxy "+args[0]+" added")
 	},
 }
 
@@ -146,7 +146,7 @@ var upstreamUpdateCmd = &cobra.Command{
 			request.URL = &upstreamUpdateURL
 		}
 		if cmd.Flags().Changed("ca") {
-			ca, err := readUpstreamCA(upstreamUpdateCA)
+			ca, err := readUpstreamProxyCA(upstreamUpdateCA)
 			if err != nil {
 				return err
 			}
@@ -161,7 +161,7 @@ var upstreamUpdateCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("encoding upstream proxy request: %w", err)
 		}
-		return runUpstreamMutation(cmd, http.MethodPost, "/upstream-proxy/"+url.PathEscape(args[0]), "updating upstream proxy", body, "upstream proxy "+args[0]+" updated")
+		return runUpstreamProxyMutation(cmd, http.MethodPost, "/upstream-proxy/"+url.PathEscape(args[0]), "updating upstream proxy", body, "upstream proxy "+args[0]+" updated")
 	},
 }
 
@@ -170,7 +170,7 @@ var upstreamRemoveCmd = &cobra.Command{
 	Short: "Remove an upstream proxy",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runUpstreamMutation(cmd, http.MethodDelete, "/upstream-proxy/"+url.PathEscape(args[0]), "removing upstream proxy", nil, "upstream proxy "+args[0]+" removed")
+		return runUpstreamProxyMutation(cmd, http.MethodDelete, "/upstream-proxy/"+url.PathEscape(args[0]), "removing upstream proxy", nil, "upstream proxy "+args[0]+" removed")
 	},
 }
 
@@ -200,12 +200,12 @@ every request until you select a listed one or --none.`,
 		if err != nil {
 			return fmt.Errorf("encoding upstream proxy selection: %w", err)
 		}
-		return runUpstreamMutation(cmd, http.MethodPut, "/upstream-proxy-selection", "selecting upstream proxy", body, confirmation)
+		return runUpstreamProxyMutation(cmd, http.MethodPut, "/upstream-proxy-selection", "selecting upstream proxy", body, confirmation)
 	},
 }
 
-// readUpstreamCA reads a CA PEM file once; the instance checks its contents.
-func readUpstreamCA(path string) (string, error) {
+// readUpstreamProxyCA reads a CA PEM file once; the instance checks its contents.
+func readUpstreamProxyCA(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("reading CA file: %w", err)
@@ -213,7 +213,7 @@ func readUpstreamCA(path string) (string, error) {
 	return string(data), nil
 }
 
-func runUpstreamMutation(cmd *cobra.Command, method, path, operation string, body []byte, confirmation string) error {
+func runUpstreamProxyMutation(cmd *cobra.Command, method, path, operation string, body []byte, confirmation string) error {
 	response, err := runControlRequest(cmd, method, path, operation, body)
 	if err != nil {
 		return err

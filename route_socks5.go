@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
-	"time"
 )
 
 // SOCKS5 protocol values from RFC 1928 and RFC 1929.
@@ -26,6 +25,11 @@ const (
 	socks5UserPassSucceeded   byte = 0x00
 	socks5MaxCredentialLength      = 255
 	socks5MaxDomainLength          = 255
+	// socks5OfferedMethods is how many methods the greeting offers: one,
+	// no authentication or username/password, never both.
+	socks5OfferedMethods byte = 1
+	// socks5PortLength is the size of the port that ends an address.
+	socks5PortLength = 2
 )
 
 // socks5Replies names the reply codes of RFC 1928, section 6.
@@ -40,70 +44,46 @@ var socks5Replies = map[byte]string{
 	0x08: "address type not supported",
 }
 
-// dialSOCKS5 opens TCP to the SOCKS5 upstream proxy and asks it to connect
-// to address. A hostname is sent unresolved, so the proxy resolves it:
-// internal-only names work and target names never reach the local resolver.
-func (route *Route) dialSOCKS5(ctx context.Context, dial dialFunc, network, address string) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(ctx, route.timeoutOrDefault())
-	defer cancel()
-	proxyAddress := net.JoinHostPort(route.Host, strconv.Itoa(route.Port))
-	conn, err := dial(ctx, network, proxyAddress)
+// socks5Connect negotiates authentication on conn and asks the SOCKS5
+// upstream proxy to connect to address. A hostname is sent unresolved, so
+// the proxy resolves it: internal-only names work and target names never
+// reach the local resolver.
+func (route *Route) socks5Connect(ctx context.Context, conn net.Conn, address string) (net.Conn, error) {
+	request, err := socks5Request(address)
 	if err != nil {
-		return nil, route.classify("connecting", err)
+		return nil, route.fail(UpstreamProxyInvalid, err.Error(), err)
 	}
-	if err := route.socks5Connect(ctx, conn, address); err != nil {
-		conn.Close()
+	err = route.exchange(ctx, conn, func() error {
+		if err := route.socks5Authenticate(ctx, conn); err != nil {
+			return err
+		}
+		if _, err := conn.Write(request); err != nil {
+			return route.classify("sending the SOCKS5 request", contextCause(ctx, err))
+		}
+		// VER, REP, RSV, ATYP, then the bound address, which is not needed.
+		reply := make([]byte, 4)
+		if _, err := io.ReadFull(conn, reply); err != nil {
+			return route.classify("reading the SOCKS5 reply", contextCause(ctx, err))
+		}
+		if reply[0] != socks5Version {
+			return route.fail(UpstreamProxyFailed, fmt.Sprintf("answered with SOCKS version %d", reply[0]), nil)
+		}
+		if reply[1] != socks5ReplySucceeded {
+			reason, ok := socks5Replies[reply[1]]
+			if !ok {
+				reason = fmt.Sprintf("reply code %d", reply[1])
+			}
+			return route.fail(UpstreamProxyRejected, "refused to connect to "+address+": "+reason, nil)
+		}
+		if err := discardSOCKS5Address(conn, reply[3]); err != nil {
+			return route.classify("reading the SOCKS5 reply", contextCause(ctx, err))
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return conn, nil
-}
-
-// socks5Connect negotiates authentication on conn and asks for a
-// connection to address. It gives up when ctx ends.
-func (route *Route) socks5Connect(ctx context.Context, conn net.Conn, address string) error {
-	request, err := socks5Request(address)
-	if err != nil {
-		return route.fail(UpstreamProxyInvalid, err.Error(), err)
-	}
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
-	}
-	// A cancelled request or a forced transport close interrupts the
-	// exchange too, not only the deadline.
-	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
-	defer stop()
-
-	if err := route.socks5Authenticate(ctx, conn); err != nil {
-		return err
-	}
-	if _, err := conn.Write(request); err != nil {
-		return route.classify("sending the SOCKS5 request", contextCause(ctx, err))
-	}
-	// VER, REP, RSV, ATYP, then the bound address, which is not needed.
-	reply := make([]byte, 4)
-	if _, err := io.ReadFull(conn, reply); err != nil {
-		return route.classify("reading the SOCKS5 reply", contextCause(ctx, err))
-	}
-	if reply[0] != socks5Version {
-		return route.fail(UpstreamProxyFailed, fmt.Sprintf("answered with SOCKS version %d", reply[0]), nil)
-	}
-	if reply[1] != socks5ReplySucceeded {
-		reason, ok := socks5Replies[reply[1]]
-		if !ok {
-			reason = fmt.Sprintf("reply code %d", reply[1])
-		}
-		return route.fail(UpstreamProxyRejected, "refused to connect to "+address+": "+reason, nil)
-	}
-	if err := discardSOCKS5Address(conn, reply[3]); err != nil {
-		return route.classify("reading the SOCKS5 reply", contextCause(ctx, err))
-	}
-	if !stop() {
-		return route.classify("opening the tunnel", contextCause(ctx, ctx.Err()))
-	}
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		return route.classify("opening the tunnel", err)
-	}
-	return nil
 }
 
 // socks5Authenticate offers no authentication, or only username/password
@@ -113,7 +93,7 @@ func (route *Route) socks5Authenticate(ctx context.Context, conn net.Conn) error
 	if route.credentials != nil {
 		method = socks5MethodUserPass
 	}
-	if _, err := conn.Write([]byte{socks5Version, 1, method}); err != nil {
+	if _, err := conn.Write([]byte{socks5Version, socks5OfferedMethods, method}); err != nil {
 		return route.classify("sending the SOCKS5 greeting", contextCause(ctx, err))
 	}
 	chosen := make([]byte, 2)
@@ -202,6 +182,6 @@ func discardSOCKS5Address(conn net.Conn, addressType byte) error {
 	default:
 		return fmt.Errorf("reading a bound address of unknown type %d", addressType)
 	}
-	_, err := io.ReadFull(conn, make([]byte, length+2))
+	_, err := io.ReadFull(conn, make([]byte, length+socks5PortLength))
 	return err
 }
