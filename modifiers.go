@@ -253,6 +253,9 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 
 	*req = *core.ContextWithRequestID(req, uuid)
 	*req = *core.ContextWithMetadata(req, metadata)
+	// The transport records the route the request goes out on, and the
+	// response writes it as the pair's route snapshot.
+	*req = *core.ContextWithRouteRecord(req, &core.RouteRecord{})
 
 	ctx := martian.NewContext(req)
 	session := ctx.Session()
