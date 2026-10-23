@@ -71,6 +71,21 @@ func TestPairRouteSnapshot(t *testing.T) {
 		wantRoute(t, through, "corp", fmt.Sprintf("http://%s", fake.Addr))
 	})
 
+	t.Run("should record a SOCKS5 upstream proxy's route without its credentials", func(t *testing.T) {
+		service := newUpstreamService(t)
+		fake := socksService(t, service, func(fake *upstreamtest.Proxy) string { return fake.URL("socks5", "alice", "s3cret-pw") },
+			upstreamtest.WithCredentials("alice", "s3cret-pw"))
+
+		if response, _ := service.get(t, "http://"+service.internalHost()+"/socks"); response.StatusCode != http.StatusOK {
+			t.Fatalf("\nwanted:\n200\ngot:\n%d", response.StatusCode)
+		}
+		id, route := service.route(t, "/socks")
+		wantRoute(t, route, "jump", "socks5://"+fake.Addr)
+		if body := service.mustCall(t, http.MethodGet, "/traffic/"+id, ""); strings.Contains(body, "s3cret-pw") || strings.Contains(body, "alice") {
+			t.Fatalf("\nwanted:\nno credentials\ngot:\n%s", body)
+		}
+	})
+
 	t.Run("should record the upstream proxy that was tried when connecting through it failed", func(t *testing.T) {
 		service := newUpstreamService(t)
 		fake := upstreamtest.NewHTTP(t, upstreamtest.WithBehaviour(upstreamtest.RejectCredentials), upstreamtest.WithCredentials("right", "pass"))
