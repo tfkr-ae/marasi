@@ -68,6 +68,10 @@ type dbRequestResponseSummary struct {
 	ContentType sql.NullString `db:"content_type"`
 	Length      sql.NullString `db:"length"`
 	RespondedAt sql.NullTime   `db:"responded_at"`
+	// Route snapshot, NULL when the pair has none
+	// (db/migrations/00026_pair_route.sql).
+	UpstreamProxyName    sql.NullString `db:"upstream_proxy_name"`
+	UpstreamProxyAddress sql.NullString `db:"upstream_proxy_address"`
 
 	// Common
 	Metadata  pairMetadata  `db:"metadata"`
@@ -201,7 +205,7 @@ func toDomainRequestResponseRow(dbReqRes *dbRequestResponse) *domain.RequestResp
 		row.Note = dbReqRes.Note.String
 	}
 	row.Highlight = highlightOf(dbReqRes.Highlight)
-	row.Route = routeOf(dbReqRes)
+	row.Route = routeOf(dbReqRes.UpstreamProxyName, dbReqRes.UpstreamProxyAddress)
 
 	return row
 }
@@ -222,11 +226,11 @@ func routeAddress(route *domain.RouteSnapshot) sql.NullString {
 }
 
 // routeOf returns a read route snapshot, or nil when the pair has none.
-func routeOf(row *dbRequestResponse) *domain.RouteSnapshot {
-	if !row.UpstreamProxyName.Valid {
+func routeOf(name, address sql.NullString) *domain.RouteSnapshot {
+	if !name.Valid {
 		return nil
 	}
-	return &domain.RouteSnapshot{Name: row.UpstreamProxyName.String, Address: row.UpstreamProxyAddress.String}
+	return &domain.RouteSnapshot{Name: name.String, Address: address.String}
 }
 
 // toDomainRequestResponseSummary converts a dbRequestResponseSummary into a domain.RequestResponseSummary,
@@ -263,6 +267,7 @@ func toDomainRequestResponseSummary(dbSummary *dbRequestResponseSummary) *domain
 		reqResSummary.RespondedAt = dbSummary.RespondedAt.Time
 	}
 	reqResSummary.Highlight = highlightOf(dbSummary.Highlight)
+	reqResSummary.Route = routeOf(dbSummary.UpstreamProxyName, dbSummary.UpstreamProxyAddress)
 
 	return reqResSummary
 }
@@ -484,6 +489,7 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 	query := `SELECT
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
+			  upstream_proxy_name, upstream_proxy_address,
 			  metadata,
 			  pair_highlight.highlight, pair_number.number
 			  FROM request` + highlightJoin + numberJoin + `
@@ -634,6 +640,7 @@ func (repo *Repository) ListNotes(cursor *uuid.UUID, limit int) ([]*domain.Reque
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
+			  r.upstream_proxy_name, r.upstream_proxy_address,
 			  r.metadata,
 			  n.note, h.highlight, pn.number
 			  FROM request r
@@ -681,6 +688,7 @@ func (repo *Repository) SearchByMetadata(path string, value any) ([]*domain.Requ
 	query := `SELECT
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
+			  upstream_proxy_name, upstream_proxy_address,
 			  metadata,
 			  pair_highlight.highlight, pair_number.number
 			  FROM request` + highlightJoin + numberJoin + `

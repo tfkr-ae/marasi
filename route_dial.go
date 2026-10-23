@@ -87,37 +87,33 @@ func (route *Route) dial(ctx context.Context, dial dialFunc, network, address st
 	if route.failure != nil {
 		return nil, route.failure
 	}
+	var open func(context.Context, net.Conn, string) (net.Conn, error)
 	switch route.Scheme {
 	case "":
 		return dial(ctx, network, address)
 	case UpstreamProxyHTTP:
-		return route.dialHTTPConnect(ctx, dial, network, address)
+		open = route.connect
 	case UpstreamProxyHTTPS:
-		return route.dialHTTPSConnect(ctx, dial, network, address)
+		open = route.connectOverTLS
 	case UpstreamProxySOCKS5:
-		return route.dialSOCKS5(ctx, dial, network, address)
+		open = route.socks5Connect
 	default:
 		return nil, route.fail(UpstreamProxyInvalid, fmt.Sprintf("the %s scheme is not supported yet", route.Scheme), nil)
 	}
+	return route.dialUpstreamProxy(ctx, dial, network, address, open)
 }
 
-// fail builds the route's error for failure.
-func (route *Route) fail(failure UpstreamProxyFailure, detail string, err error) *UpstreamProxyError {
-	return &UpstreamProxyError{Name: route.Name, Address: route.Address(), Failure: failure, Detail: detail, Err: err}
-}
-
-// dialHTTPConnect opens TCP to the upstream proxy and asks it for a tunnel
-// to address with CONNECT. Plain-HTTP origins are tunnelled too, so the
-// origin sees exactly the bytes the transport writes.
-func (route *Route) dialHTTPConnect(ctx context.Context, dial dialFunc, network, address string) (net.Conn, error) {
+// dialUpstreamProxy opens TCP to the upstream proxy and runs open on it to
+// reach address, both within the route's timeout. It closes the connection
+// when open fails.
+func (route *Route) dialUpstreamProxy(ctx context.Context, dial dialFunc, network, address string, open func(context.Context, net.Conn, string) (net.Conn, error)) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, route.timeoutOrDefault())
 	defer cancel()
-	proxyAddress := net.JoinHostPort(route.Host, strconv.Itoa(route.Port))
-	conn, err := dial(ctx, network, proxyAddress)
+	conn, err := dial(ctx, network, net.JoinHostPort(route.Host, strconv.Itoa(route.Port)))
 	if err != nil {
 		return nil, route.classify("connecting", err)
 	}
-	tunnel, err := route.connect(ctx, conn, address)
+	tunnel, err := open(ctx, conn, address)
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -125,49 +121,75 @@ func (route *Route) dialHTTPConnect(ctx context.Context, dial dialFunc, network,
 	return tunnel, nil
 }
 
-// connect asks the upstream proxy on conn for a tunnel to address. It
-// gives up when ctx ends.
-func (route *Route) connect(ctx context.Context, conn net.Conn, address string) (net.Conn, error) {
+// fail builds the route's error for failure.
+func (route *Route) fail(failure UpstreamProxyFailure, detail string, err error) *UpstreamProxyError {
+	return &UpstreamProxyError{Name: route.Name, Address: route.Address(), Failure: failure, Detail: detail, Err: err}
+}
+
+// interruptDeadline is a deadline already past. Setting it makes I/O blocked
+// on a connection return at once.
+var interruptDeadline = time.Unix(1, 0)
+
+// exchange runs talk, the opening exchange with the upstream proxy on conn,
+// bounded by ctx: its deadline applies, and its end interrupts the
+// exchange, so a cancelled request or a forced transport close stops it
+// too. It clears the deadline afterwards so the tunnel carries traffic
+// unbounded.
+func (route *Route) exchange(ctx context.Context, conn net.Conn, talk func() error) error {
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
-	// A cancelled request or a forced transport close interrupts the
-	// exchange too, not only the deadline.
-	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(interruptDeadline) })
 	defer stop()
-
-	request := "CONNECT " + address + " HTTP/1.1\r\nHost: " + address + "\r\n"
-	if route.credentials != nil {
-		password, _ := route.credentials.Password()
-		token := base64.StdEncoding.EncodeToString([]byte(route.credentials.Username() + ":" + password))
-		request += "Proxy-Authorization: Basic " + token + "\r\n"
-	}
-	request += "\r\n"
-	if _, err := conn.Write([]byte(request)); err != nil {
-		return nil, route.classify("sending CONNECT", contextCause(ctx, err))
-	}
-	reader := bufio.NewReader(conn)
-	response, err := http.ReadResponse(reader, &http.Request{Method: http.MethodConnect})
-	if err != nil {
-		return nil, route.classify("reading the CONNECT response", contextCause(ctx, err))
-	}
-	response.Body.Close()
-	switch {
-	case response.StatusCode == http.StatusProxyAuthRequired:
-		return nil, route.fail(UpstreamProxyAuthRejected, "rejected the credentials with "+response.Status, nil)
-	case response.StatusCode < 200 || response.StatusCode > 299:
-		return nil, route.fail(UpstreamProxyRejected, "refused to open a tunnel to "+address+" with "+response.Status, nil)
+	if err := talk(); err != nil {
+		return err
 	}
 	if !stop() {
-		return nil, route.classify("opening the tunnel", contextCause(ctx, ctx.Err()))
+		return route.classify("opening the tunnel", contextCause(ctx, ctx.Err()))
 	}
 	if err := conn.SetDeadline(time.Time{}); err != nil {
-		return nil, route.classify("opening the tunnel", err)
+		return route.classify("opening the tunnel", err)
 	}
-	if reader.Buffered() > 0 {
-		return &bufferedConn{Conn: conn, reader: reader}, nil
+	return nil
+}
+
+// connect asks the HTTP upstream proxy on conn for a tunnel to address with
+// CONNECT. Plain-HTTP origins are tunnelled too, so the origin sees exactly
+// the bytes the transport writes.
+func (route *Route) connect(ctx context.Context, conn net.Conn, address string) (net.Conn, error) {
+	tunnel := conn
+	err := route.exchange(ctx, conn, func() error {
+		request := "CONNECT " + address + " HTTP/1.1\r\nHost: " + address + "\r\n"
+		if route.credentials != nil {
+			password, _ := route.credentials.Password()
+			token := base64.StdEncoding.EncodeToString([]byte(route.credentials.Username() + ":" + password))
+			request += "Proxy-Authorization: Basic " + token + "\r\n"
+		}
+		request += "\r\n"
+		if _, err := conn.Write([]byte(request)); err != nil {
+			return route.classify("sending the CONNECT request", contextCause(ctx, err))
+		}
+		reader := bufio.NewReader(conn)
+		response, err := http.ReadResponse(reader, &http.Request{Method: http.MethodConnect})
+		if err != nil {
+			return route.classify("reading the CONNECT response", contextCause(ctx, err))
+		}
+		response.Body.Close()
+		switch {
+		case response.StatusCode == http.StatusProxyAuthRequired:
+			return route.fail(UpstreamProxyAuthRejected, "rejected the credentials with "+response.Status, nil)
+		case response.StatusCode < 200 || response.StatusCode > 299:
+			return route.fail(UpstreamProxyRejected, "refused to open a tunnel to "+address+" with "+response.Status, nil)
+		}
+		if reader.Buffered() > 0 {
+			tunnel = &bufferedConn{Conn: conn, reader: reader}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return conn, nil
+	return tunnel, nil
 }
 
 // contextCause prefers ctx's error when ctx has ended, since an I/O error

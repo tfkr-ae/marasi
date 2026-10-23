@@ -6,36 +6,23 @@ import (
 	"crypto/x509"
 	"errors"
 	"net"
-	"strconv"
 
 	utls "github.com/refraction-networking/utls"
 )
 
-// dialHTTPSConnect opens TLS to the upstream proxy, verified against the
-// system roots plus the entry's CA, and asks it for a tunnel to address
-// with CONNECT as dialHTTPConnect does.
-func (route *Route) dialHTTPSConnect(ctx context.Context, dial dialFunc, network, address string) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(ctx, route.timeoutOrDefault())
-	defer cancel()
+// connectOverTLS runs TLS with the upstream proxy on conn, verified against
+// the system roots plus the entry's CA, and inside it asks for a tunnel to
+// address with CONNECT as connect does.
+func (route *Route) connectOverTLS(ctx context.Context, conn net.Conn, address string) (net.Conn, error) {
 	roots, err := route.rootCAs()
 	if err != nil {
 		return nil, route.fail(UpstreamProxyInvalid, err.Error(), err)
 	}
-	conn, err := dial(ctx, network, net.JoinHostPort(route.Host, strconv.Itoa(route.Port)))
-	if err != nil {
-		return nil, route.classify("connecting", err)
-	}
 	tlsConn := tls.Client(conn, &tls.Config{ServerName: route.Host, RootCAs: roots, NextProtos: []string{"http/1.1"}})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		conn.Close()
 		return nil, route.handshakeFailure("the upstream proxy", contextCause(ctx, err))
 	}
-	tunnel, err := route.connect(ctx, tlsConn, address)
-	if err != nil {
-		tlsConn.Close()
-		return nil, err
-	}
-	return tunnel, nil
+	return route.connect(ctx, tlsConn, address)
 }
 
 // originHandshakeFailure turns a failed TLS handshake with the origin into
@@ -54,7 +41,7 @@ func (route *Route) handshakeFailure(peer string, err error) *UpstreamProxyError
 	if isCertificateVerificationError(err) {
 		return route.fail(UpstreamProxyTLSVerification, "TLS verification of "+peer+"'s certificate failed: "+err.Error(), err)
 	}
-	return route.classify("TLS handshake with "+peer, err)
+	return route.classify("running the TLS handshake with "+peer, err)
 }
 
 // isCertificateVerificationError reports whether err says a certificate did

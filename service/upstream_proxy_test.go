@@ -30,7 +30,7 @@ func TestUpstreamProxyControlRoutes(t *testing.T) {
 		assertChromeResponse(t, requestChrome(server, http.MethodGet, "/upstream-proxy", ""), http.StatusOK, `{"items":[],"selected":"","configured":true}`+"\n")
 		assertNoChromeEvent(t, subscriber)
 
-		body := upstreamProxyBody(t, map[string]any{"name": "burp", "url": "http://alice:s3cret@127.0.0.1:8080", "ca": testUpstreamCAPEM(t)})
+		body := upstreamProxyBody(t, map[string]any{"name": "burp", "url": "http://alice:s3cret@127.0.0.1:8080", "ca": testUpstreamProxyCAPEM(t)})
 		want := `{"items":[{"name":"burp","scheme":"http","host":"127.0.0.1","port":8080,"has_credentials":true,"has_ca":true}]}`
 		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/upstream-proxy", body), http.StatusOK, want+"\n")
 		assertChromeEvent(t, subscriber, "upstream_proxy.added", want)
@@ -114,7 +114,7 @@ func TestUpstreamProxyControlRoutes(t *testing.T) {
 		assertChromeEvent(t, subscriber, "upstream_proxy.updated", want)
 
 		want = `{"items":[{"name":"burp","scheme":"socks5","host":"jump.example","port":1080,"has_credentials":true,"has_ca":true}]}`
-		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/upstream-proxy/burp", upstreamProxyBody(t, map[string]any{"ca": testUpstreamCAPEM(t)})), http.StatusOK, want+"\n")
+		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/upstream-proxy/burp", upstreamProxyBody(t, map[string]any{"ca": testUpstreamProxyCAPEM(t)})), http.StatusOK, want+"\n")
 		assertChromeEvent(t, subscriber, "upstream_proxy.updated", want)
 
 		want = `{"items":[{"name":"burp","scheme":"socks5","host":"jump.example","port":1080,"has_credentials":true,"has_ca":false}]}`
@@ -144,7 +144,7 @@ func TestUpstreamProxyControlRoutes(t *testing.T) {
 		server := newChromeHTTPServer(t, ListenerStatus{Status: ListenerInactive})
 		subscriber := server.events.subscribe()
 		defer server.events.unsubscribe(subscriber)
-		ca := testUpstreamCAPEM(t)
+		ca := testUpstreamProxyCAPEM(t)
 		var seen strings.Builder
 		for _, request := range []struct{ method, path, body string }{
 			{http.MethodPost, "/upstream-proxy", upstreamProxyBody(t, map[string]any{"name": "burp", "url": "http://alice:hunter2@127.0.0.1:8080", "ca": ca})},
@@ -180,7 +180,7 @@ func TestUpstreamProxyControlRoutes(t *testing.T) {
 		if err := os.Chmod(path, 0644); err != nil {
 			t.Fatalf("loosening config permissions: %v", err)
 		}
-		ca := testUpstreamCAPEM(t)
+		ca := testUpstreamProxyCAPEM(t)
 		requestChrome(server, http.MethodPost, "/upstream-proxy", upstreamProxyBody(t, map[string]any{"name": "burp", "url": "http://alice:hunter2@127.0.0.1:8080", "ca": ca}))
 		info, err := os.Stat(path)
 		if err != nil {
@@ -214,8 +214,8 @@ func TestUpstreamProxyControlRoutes(t *testing.T) {
 func TestUpstreamProxyConfigSharing(t *testing.T) {
 	t.Run("should reread the config so two modules keep each other's changes", func(t *testing.T) {
 		configDir := t.TempDir()
-		first := NewUpstreamProxies(configDir)
-		second := NewUpstreamProxies(configDir)
+		first := newUpstreamProxies(configDir, nil, nil)
+		second := newUpstreamProxies(configDir, nil, nil)
 		newChromeTestProxy(t, configDir)
 
 		if _, err := first.Add(context.Background(), marasi.UpstreamProxyConfig{Name: "one", URL: "http://127.0.0.1:8080"}); err != nil {
@@ -240,7 +240,7 @@ func TestUpstreamProxyConfigSharing(t *testing.T) {
 	t.Run("should serialize overlapping adds from two modules without losing one", func(t *testing.T) {
 		configDir := t.TempDir()
 		newChromeTestProxy(t, configDir)
-		modules := []*UpstreamProxies{NewUpstreamProxies(configDir), NewUpstreamProxies(configDir)}
+		modules := []*UpstreamProxies{newUpstreamProxies(configDir, nil, nil), newUpstreamProxies(configDir, nil, nil)}
 		start := make(chan struct{})
 		errs := make(chan error, 8)
 		for i := range 8 {
@@ -265,14 +265,14 @@ func TestUpstreamProxyConfigSharing(t *testing.T) {
 	t.Run("should keep Chrome paths and upstream proxies when both are edited", func(t *testing.T) {
 		configDir := t.TempDir()
 		chrome := NewChrome(newChromeTestProxy(t, configDir), &statusListener{status: ListenerStatus{Status: ListenerInactive}}, nil)
-		upstream := NewUpstreamProxies(configDir)
-		if _, err := upstream.Add(context.Background(), marasi.UpstreamProxyConfig{Name: "burp", URL: "http://127.0.0.1:8080"}); err != nil {
+		proxies := newUpstreamProxies(configDir, nil, nil)
+		if _, err := proxies.Add(context.Background(), marasi.UpstreamProxyConfig{Name: "burp", URL: "http://127.0.0.1:8080"}); err != nil {
 			t.Fatalf("adding upstream proxy: %v", err)
 		}
 		if _, err := chrome.AddProfile(context.Background(), "pentest"); err != nil {
 			t.Fatalf("adding chrome profile: %v", err)
 		}
-		items, err := upstream.List(context.Background())
+		items, err := proxies.List(context.Background())
 		if err != nil || len(items) != 1 {
 			t.Fatalf("\nwanted:\n[burp]\ngot:\n%+v, %v", items, err)
 		}
@@ -305,9 +305,9 @@ func assertUpstreamProxyRefusal(t *testing.T, response interface {
 	}
 }
 
-// testUpstreamCAPEM returns a self-signed CA certificate standing in for
+// testUpstreamProxyCAPEM returns a self-signed CA certificate standing in for
 // Burp's CA.
-func testUpstreamCAPEM(t *testing.T) string {
+func testUpstreamProxyCAPEM(t *testing.T) string {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -315,7 +315,7 @@ func testUpstreamCAPEM(t *testing.T) string {
 	}
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Test Upstream CA"},
+		Subject:               pkix.Name{CommonName: "Test Upstream Proxy CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(time.Hour),
 		IsCA:                  true,

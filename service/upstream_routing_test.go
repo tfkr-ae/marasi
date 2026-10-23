@@ -28,10 +28,10 @@ import (
 	"github.com/tfkr-ae/marasi/internal/upstreamtest"
 )
 
-// upstreamService is a capturing service wired in production order: a
+// upstreamProxyService is a capturing service wired in production order: a
 // project lifecycle bound to a real listener, a server that shares the
 // listener's events, and a temp config directory for the machine list.
-type upstreamService struct {
+type upstreamProxyService struct {
 	server    *Server
 	lifecycle *ProjectLifecycle
 	proxy     *marasi.Proxy
@@ -44,14 +44,14 @@ type upstreamService struct {
 	originHits atomic.Int64
 }
 
-func newUpstreamService(t *testing.T, options ...func(*marasi.Proxy) error) *upstreamService {
+func newUpstreamProxyService(t *testing.T, options ...func(*marasi.Proxy) error) *upstreamProxyService {
 	t.Helper()
-	return newUpstreamServiceIn(t, t.TempDir(), options...)
+	return newUpstreamProxyServiceIn(t, t.TempDir(), options...)
 }
 
-// newUpstreamServiceIn is newUpstreamService on configDir, which a second
+// newUpstreamProxyServiceIn is newUpstreamProxyService on configDir, which a second
 // instance in the same test may share. Each instance opens its own project.
-func newUpstreamServiceIn(t *testing.T, configDir string, options ...func(*marasi.Proxy) error) *upstreamService {
+func newUpstreamProxyServiceIn(t *testing.T, configDir string, options ...func(*marasi.Proxy) error) *upstreamProxyService {
 	t.Helper()
 	lifecycle, proxy, _ := newTestProjectLifecycleIn(t, configDir)
 	listener := NewListenerLifecycle(proxy, io.Discard)
@@ -76,7 +76,7 @@ func newUpstreamServiceIn(t *testing.T, configDir string, options ...func(*maras
 	); err != nil {
 		t.Fatalf("adding handlers: %v", err)
 	}
-	service := &upstreamService{server: server, lifecycle: lifecycle, proxy: proxy, configDir: configDir, project: project}
+	service := &upstreamProxyService{server: server, lifecycle: lifecycle, proxy: proxy, configDir: configDir, project: project}
 	service.origin = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		service.originHits.Add(1)
 		if r.URL.Query().Has("close") {
@@ -115,14 +115,14 @@ func newUpstreamServiceIn(t *testing.T, configDir string, options ...func(*maras
 }
 
 // call sends a control API request and returns the status and body.
-func (s *upstreamService) call(t *testing.T, method, path, body string) (int, string) {
+func (s *upstreamProxyService) call(t *testing.T, method, path, body string) (int, string) {
 	t.Helper()
 	response := requestControlAPI(s.server, method, path, body)
 	return response.Code, response.Body.String()
 }
 
 // mustCall sends a control API request that has to succeed.
-func (s *upstreamService) mustCall(t *testing.T, method, path, body string) string {
+func (s *upstreamProxyService) mustCall(t *testing.T, method, path, body string) string {
 	t.Helper()
 	code, response := s.call(t, method, path, body)
 	if code != http.StatusOK {
@@ -132,19 +132,19 @@ func (s *upstreamService) mustCall(t *testing.T, method, path, body string) stri
 }
 
 // addUpstreamProxy adds an entry to the machine list.
-func (s *upstreamService) addUpstreamProxy(t *testing.T, name, rawURL string) {
+func (s *upstreamProxyService) addUpstreamProxy(t *testing.T, name, rawURL string) {
 	t.Helper()
 	s.mustCall(t, http.MethodPost, "/upstream-proxy", fmt.Sprintf(`{"name":%q,"url":%q}`, name, rawURL))
 }
 
 // use selects name for the open project, or none when name is "".
-func (s *upstreamService) use(t *testing.T, name string) {
+func (s *upstreamProxyService) use(t *testing.T, name string) {
 	t.Helper()
 	s.mustCall(t, http.MethodPut, "/upstream-proxy-selection", fmt.Sprintf(`{"name":%q}`, name))
 }
 
 // get sends a GET through the listener and returns the status and body.
-func (s *upstreamService) get(t *testing.T, target string) (*http.Response, string) {
+func (s *upstreamProxyService) get(t *testing.T, target string) (*http.Response, string) {
 	t.Helper()
 	response, err := s.client.Get(target)
 	if err != nil {
@@ -158,13 +158,13 @@ func (s *upstreamService) get(t *testing.T, target string) (*http.Response, stri
 	return response, string(body)
 }
 
-func (s *upstreamService) originHost() string {
+func (s *upstreamProxyService) originHost() string {
 	return strings.TrimPrefix(s.origin.URL, "http://")
 }
 
 func TestUpstreamProxyRouting(t *testing.T) {
 	t.Run("should send browser traffic through the selected HTTP upstream proxy", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
 		service.use(t, "corp")
@@ -179,7 +179,7 @@ func TestUpstreamProxyRouting(t *testing.T) {
 	})
 
 	t.Run("should tunnel plain HTTP with CONNECT and Basic credentials, adding nothing to the request", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t, upstreamtest.WithBehaviour(upstreamtest.RejectCredentials), upstreamtest.WithCredentials("alice", "s3cret:pw"))
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "alice", "s3cret%3Apw"))
 		service.use(t, "corp")
@@ -204,7 +204,7 @@ func TestUpstreamProxyRouting(t *testing.T) {
 	})
 
 	t.Run("should run the TLS handshake to an HTTPS origin inside the tunnel", func(t *testing.T) {
-		service := newUpstreamService(t, marasi.WithTLS())
+		service := newUpstreamProxyService(t, marasi.WithTLS())
 		origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 		t.Cleanup(origin.Close)
 		fake := upstreamtest.NewHTTP(t)
@@ -225,7 +225,7 @@ func TestUpstreamProxyRouting(t *testing.T) {
 	})
 
 	t.Run("should ask the upstream proxy for a waypoint's destination", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
 		service.use(t, "corp")
@@ -240,7 +240,7 @@ func TestUpstreamProxyRouting(t *testing.T) {
 	})
 
 	t.Run("should carry a launch, an Armory run, Lua HTTP and a WebSocket connection through it", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
 		service.use(t, "corp")
@@ -314,7 +314,7 @@ func countCarried(fake *upstreamtest.Proxy, text string) int {
 
 // upgrade sends a WebSocket upgrade for path on the origin through the
 // listener and returns the response status.
-func (s *upstreamService) upgrade(t *testing.T, path string) int {
+func (s *upstreamProxyService) upgrade(t *testing.T, path string) int {
 	t.Helper()
 	conn, err := net.Dial("tcp", s.address)
 	if err != nil {
@@ -336,18 +336,18 @@ type serviceStatus struct {
 	UpstreamProxyConfigured *bool   `json:"upstream_proxy_configured"`
 }
 
-func (s *upstreamService) status(t *testing.T) (string, bool) {
+func (s *upstreamProxyService) status(t *testing.T) (string, bool) {
 	t.Helper()
 	status := decodeJSON[serviceStatus](t, s.mustCall(t, http.MethodGet, "/service/status", ""))
 	if status.UpstreamProxy == nil || status.UpstreamProxyConfigured == nil {
-		t.Fatalf("the status lacks upstream_proxy or upstream_proxy_configured: %+v", status)
+		t.Fatalf("\nwanted:\nupstream_proxy and upstream_proxy_configured in the status\ngot:\n%+v", status)
 	}
 	return *status.UpstreamProxy, *status.UpstreamProxyConfigured
 }
 
-// upstreamLogs waits until want proxy logs about upstream proxies are stored
+// upstreamProxyLogs waits until want proxy logs about upstream proxies are stored
 // and returns them, failing if more arrive.
-func (s *upstreamService) upstreamLogs(t *testing.T, want int) []proxyLogResponse {
+func (s *upstreamProxyService) upstreamProxyLogs(t *testing.T, want int) []proxyLogResponse {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -385,7 +385,7 @@ func (s *upstreamService) upstreamLogs(t *testing.T, want int) []proxyLogRespons
 }
 
 // pairID returns the id of the only stored pair whose path is path.
-func (s *upstreamService) pairID(t *testing.T, path string) string {
+func (s *upstreamProxyService) pairID(t *testing.T, path string) string {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -410,7 +410,7 @@ func (s *upstreamService) pairID(t *testing.T, path string) string {
 
 func TestUpstreamProxySelection(t *testing.T) {
 	t.Run("should start a project with no selection and connect directly", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
 
@@ -431,7 +431,7 @@ func TestUpstreamProxySelection(t *testing.T) {
 	})
 
 	t.Run("should store the selection under the reserved client, publish it and dial nothing", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		// Nothing listens here, so any dial would be refused and logged.
 		fake := upstreamtest.NewHTTP(t, upstreamtest.WithBehaviour(upstreamtest.Refuse))
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "user", "secret"))
@@ -469,7 +469,7 @@ func TestUpstreamProxySelection(t *testing.T) {
 		if code, _ := service.call(t, http.MethodGet, "/client-settings/marasi/upstream_proxy.active", ""); code != http.StatusNotFound {
 			t.Fatalf("\nwanted:\nthe selection deleted\ngot:\n%d", code)
 		}
-		service.upstreamLogs(t, 0)
+		service.upstreamProxyLogs(t, 0)
 	})
 
 	t.Run("should ignore environment proxy variables", func(t *testing.T) {
@@ -479,7 +479,7 @@ func TestUpstreamProxySelection(t *testing.T) {
 		}
 		t.Setenv("NO_PROXY", "")
 		t.Setenv("no_proxy", "")
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		selected := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", selected.URL("http", "", ""))
 
@@ -495,7 +495,7 @@ func TestUpstreamProxySelection(t *testing.T) {
 	})
 
 	t.Run("should refuse to select a name this machine does not list", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		code, body := service.call(t, http.MethodPut, "/upstream-proxy-selection", `{"name":"missing"}`)
 		if code != http.StatusNotFound || body != `{"error":"not_found"}`+"\n" {
 			t.Fatalf("\nwanted:\n404 not_found\ngot:\n%d %s", code, body)
@@ -520,7 +520,7 @@ func TestUpstreamProxyFailsClosed(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run("should fail the request when the upstream proxy is "+tc.name, func(t *testing.T) {
-			service := newUpstreamService(t)
+			service := newUpstreamProxyService(t)
 			if err := service.proxy.WithOptions(marasi.WithUpstreamProxyTimeout(300 * time.Millisecond)); err != nil {
 				t.Fatal(err)
 			}
@@ -539,7 +539,7 @@ func TestUpstreamProxyFailsClosed(t *testing.T) {
 				t.Fatalf("\nwanted:\nthe origin never reached\ngot:\n%d hits", hits)
 			}
 			id := service.pairID(t, "/blocked")
-			logs := service.upstreamLogs(t, 1)
+			logs := service.upstreamProxyLogs(t, 1)
 			entry := logs[0]
 			if entry.Level != "ERROR" || entry.RequestID == nil || entry.RequestID.String() != id {
 				t.Fatalf("\nwanted:\nan ERROR log for pair %s\ngot:\n%+v", id, entry)
@@ -554,7 +554,7 @@ func TestUpstreamProxyFailsClosed(t *testing.T) {
 	}
 
 	t.Run("should refuse every request while the selection is missing from this machine's list", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
 		service.use(t, "corp")
@@ -568,7 +568,7 @@ func TestUpstreamProxyFailsClosed(t *testing.T) {
 		if hits := service.originHits.Load(); hits != 0 || len(fake.Targets()) != 0 {
 			t.Fatalf("\nwanted:\nno origin hit and no tunnel\ngot:\n%d hits, %v", hits, fake.Targets())
 		}
-		logs := service.upstreamLogs(t, 2)
+		logs := service.upstreamProxyLogs(t, 2)
 		for _, entry := range logs {
 			if entry.Context["cause"] != "not_configured" || entry.RequestID == nil {
 				t.Fatalf("\nwanted:\nnot_configured logs naming pairs\ngot:\n%+v", entry)
@@ -580,7 +580,7 @@ func TestUpstreamProxyFailsClosed(t *testing.T) {
 	})
 
 	t.Run("should open a project whose selection this machine never listed and keep its traffic readable", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		service.get(t, service.origin.URL+"/before")
 		service.pairID(t, "/before")
 		elsewhere := canonicalProjectPath(t, filepath.Join(t.TempDir(), "elsewhere.marasi"))
@@ -600,11 +600,37 @@ func TestUpstreamProxyFailsClosed(t *testing.T) {
 		if hits := service.originHits.Load(); hits != 1 {
 			t.Fatalf("\nwanted:\nonly /before reached the origin\ngot:\n%d hits", hits)
 		}
-		service.upstreamLogs(t, 1)
+		service.upstreamProxyLogs(t, 1)
+	})
+
+	t.Run("should open a project whose stored selection is not a name and fail its traffic closed", func(t *testing.T) {
+		service := newUpstreamProxyService(t)
+		fake := upstreamtest.NewHTTP(t)
+		service.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
+		broken := canonicalProjectPath(t, filepath.Join(t.TempDir(), "broken.marasi"))
+		seedSelection(t, broken, "corp")
+		database, err := db.New(broken, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.NewProxyRepo(database).SetMarasiSetting(marasi.UpstreamProxySelectionKey, []byte(`{"name":"corp"}`)); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+		service.mustCall(t, http.MethodPost, "/project/open", projectOpenBody(broken))
+
+		if response, _ := service.get(t, service.origin.URL+"/broken"); response.StatusCode != http.StatusBadGateway {
+			t.Fatalf("\nwanted:\n502\ngot:\n%d", response.StatusCode)
+		}
+		if hits := service.originHits.Load(); hits != 0 || len(fake.Targets()) != 0 {
+			t.Fatalf("\nwanted:\nno request sent anywhere\ngot:\n%d hits, %v", hits, fake.Targets())
+		}
 	})
 
 	t.Run("should apply a hand edit of the list on the next connection", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		first := upstreamtest.NewHTTP(t)
 		second := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", first.URL("http", "", ""))

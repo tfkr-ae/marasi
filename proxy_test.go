@@ -2764,11 +2764,7 @@ func testProxyWebSocketIntegration(
 	}
 	serveResult := make(chan error, 1)
 	if secure {
-		roundTripper := newMarasiTransport(nil)
-		marasiTransport := roundTripper.(*marasiRoundTripper)
-		upstreamTransport := marasiTransport.base.(*http.Transport)
-		upstreamTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-		proxy.martianProxy.SetRoundTripper(roundTripper)
+		proxy.martianProxy.SetRoundTripper(newDirectTransport(nil, true))
 		go proxy.WriteToDB()
 		go func() {
 			serveResult <- proxy.martianProxy.Serve(proxyListener)

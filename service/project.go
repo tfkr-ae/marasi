@@ -533,9 +533,9 @@ func (lifecycle *ProjectLifecycle) prepareProject(ctx context.Context, path stri
 	// selection this machine lacks still opens and fails its traffic closed.
 	selection, err := marasi.LoadUpstreamProxySelection(repository)
 	if errors.Is(err, marasi.ErrInvalidUpstreamProxy) {
-		setting, _ := repository.GetClientSetting(domain.ReservedClient, marasi.UpstreamProxySelectionKey)
-		// No list entry can match a value that is not a name, so it fails closed.
-		selection, err = string(setting.Value), nil
+		// The selection is the raw value, which no list entry matches, so
+		// the project opens and its traffic fails closed.
+		err = nil
 	}
 	if err != nil {
 		return fail(fmt.Errorf("loading the upstream proxy selection: %w", err))

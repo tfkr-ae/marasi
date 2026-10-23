@@ -22,14 +22,14 @@ type upstreamProxyCheckResponse struct {
 }
 
 // check runs a check of name against target and returns its result.
-func (s *upstreamService) check(t *testing.T, name, target string) upstreamProxyCheckResponse {
+func (s *upstreamProxyService) check(t *testing.T, name, target string) upstreamProxyCheckResponse {
 	t.Helper()
 	return decodeJSON[upstreamProxyCheckResponse](t, s.mustCall(t, http.MethodPost, "/upstream-proxy/"+name+"/check", fmt.Sprintf(`{"target":%q}`, target)))
 }
 
 func TestUpstreamProxyCheck(t *testing.T) {
 	t.Run("should report ok after opening a tunnel to the target through an entry that is not selected", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
 
@@ -46,7 +46,7 @@ func TestUpstreamProxyCheck(t *testing.T) {
 	})
 
 	t.Run("should check through a SOCKS5 upstream proxy with the same dial as traffic", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		if err := service.proxy.WithOptions(marasi.WithUpstreamProxyTimeout(300 * time.Millisecond)); err != nil {
 			t.Fatal(err)
 		}
@@ -77,7 +77,7 @@ func TestUpstreamProxyCheck(t *testing.T) {
 	}
 	for _, tc := range failures {
 		t.Run("should report "+tc.outcome+" when the upstream proxy "+tc.name+", without a secret, event, pair or log", func(t *testing.T) {
-			service := newUpstreamService(t)
+			service := newUpstreamProxyService(t)
 			if err := service.proxy.WithOptions(marasi.WithUpstreamProxyTimeout(300 * time.Millisecond)); err != nil {
 				t.Fatal(err)
 			}
@@ -98,7 +98,7 @@ func TestUpstreamProxyCheck(t *testing.T) {
 				t.Fatalf("\nwanted:\nthe origin never reached\ngot:\n%d hits", hits)
 			}
 			assertNoChromeEvent(t, subscriber)
-			service.upstreamLogs(t, 0)
+			service.upstreamProxyLogs(t, 0)
 			pairs := decodeJSON[struct {
 				Items []trafficSummary `json:"items"`
 			}](t, service.mustCall(t, http.MethodGet, "/traffic", ""))
@@ -109,7 +109,7 @@ func TestUpstreamProxyCheck(t *testing.T) {
 	}
 
 	t.Run("should report tls_verification when the target's certificate does not verify through the tunnel", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 		t.Cleanup(origin.Close)
 		fake := upstreamtest.NewHTTP(t)
@@ -126,7 +126,7 @@ func TestUpstreamProxyCheck(t *testing.T) {
 	})
 
 	t.Run("should report not found for a name this machine does not list", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		code, body := service.call(t, http.MethodPost, "/upstream-proxy/missing/check", `{"target":"http://example.test"}`)
 		if code != http.StatusNotFound || !strings.Contains(body, `"not_found"`) {
 			t.Fatalf("\nwanted:\n404 not_found\ngot:\n%d %s", code, body)
@@ -134,7 +134,7 @@ func TestUpstreamProxyCheck(t *testing.T) {
 	})
 
 	t.Run("should refuse a target that is not an http or https URL with a host", func(t *testing.T) {
-		service := newUpstreamService(t)
+		service := newUpstreamProxyService(t)
 		fake := upstreamtest.NewHTTP(t)
 		service.addUpstreamProxy(t, "corp", fake.URL("http", "", ""))
 		for _, body := range []string{`{"target":"ftp://example.test"}`, `{"target":"http://"}`, `{"target":"example.test:80"}`, `{"target":"%zz"}`} {

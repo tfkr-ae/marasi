@@ -189,6 +189,9 @@ type trafficSummary struct {
 	RequestedAt time.Time      `json:"requested_at"` // when the request was made
 	RespondedAt *time.Time     `json:"responded_at"` // when the response arrived; nil if none
 	Highlight   *int           `json:"highlight"`    // highlight from 1 to 8; nil if none
+	// UpstreamProxy is the route that carried the pair, as in
+	// trafficDetail.
+	UpstreamProxy *trafficRoute `json:"upstream_proxy"`
 }
 
 // trafficDetail is the GET /traffic/{id} response body.
@@ -685,20 +688,21 @@ func trafficListFromSummaries(items []*domain.RequestResponseSummary, nextCursor
 // trafficSummaryFromDomain maps a repository summary to a list item.
 func trafficSummaryFromDomain(item *domain.RequestResponseSummary) trafficSummary {
 	summary := trafficSummary{
-		ID:          item.ID,
-		Number:      item.Number,
-		Scheme:      item.Scheme,
-		Method:      item.Method,
-		Host:        item.Host,
-		Path:        item.Path,
-		Status:      item.Status,
-		StatusCode:  item.StatusCode,
-		ContentType: item.ContentType,
-		Length:      item.Length,
-		Metadata:    metadataWithoutPrettified(item.Metadata),
-		RequestedAt: item.RequestedAt,
-		RespondedAt: respondedAt(item.RespondedAt),
-		Highlight:   item.Highlight,
+		ID:            item.ID,
+		Number:        item.Number,
+		Scheme:        item.Scheme,
+		Method:        item.Method,
+		Host:          item.Host,
+		Path:          item.Path,
+		Status:        item.Status,
+		StatusCode:    item.StatusCode,
+		ContentType:   item.ContentType,
+		Length:        item.Length,
+		Metadata:      metadataWithoutPrettified(item.Metadata),
+		RequestedAt:   item.RequestedAt,
+		RespondedAt:   respondedAt(item.RespondedAt),
+		Highlight:     item.Highlight,
+		UpstreamProxy: trafficRouteFromDomain(item.Route),
 	}
 	return summary
 }

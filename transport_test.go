@@ -2,9 +2,10 @@ package marasi
 
 import (
 	"bytes"
-	"crypto/tls"
+	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"syscall"
@@ -29,6 +30,16 @@ func (tR *testBaseRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 		}
 	}
 	return tR.response, nil
+}
+
+// newDirectTransport builds marasi's round tripper as Serve does, on a route
+// that is always direct. insecure trusts a self-signed origin.
+func newDirectTransport(dial func(context.Context, string, string) (net.Conn, error), insecure bool) *marasiRoundTripper {
+	direct := DirectRoute()
+	always := func() *Route { return direct }
+	routed := newRoutedTransport(always, always, dial)
+	routed.insecureSkipVerify = insecure
+	return &marasiRoundTripper{base: routed}
 }
 
 func TestMarasiRoundTripper(t *testing.T) {
@@ -97,7 +108,7 @@ func TestMarasiRoundTripper(t *testing.T) {
 }
 
 func TestMarasiTransportDialTLSContext(t *testing.T) {
-	transport := newMarasiTransport(nil)
+	transport := newDirectTransport(nil, true)
 
 	t.Run("request to standard HTTPS server should pass through", func(t *testing.T) {
 		testTLSServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -105,12 +116,6 @@ func TestMarasiTransportDialTLSContext(t *testing.T) {
 			w.Write([]byte("marasi tls"))
 		}))
 		defer testTLSServer.Close()
-
-		if mrt, ok := transport.(*marasiRoundTripper); ok {
-			if ht, ok := mrt.base.(*http.Transport); ok {
-				ht.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-			}
-		}
 
 		testClient := &http.Client{
 			Transport: transport,

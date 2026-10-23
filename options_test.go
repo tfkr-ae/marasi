@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -214,6 +215,73 @@ func TestWithConfigDir_Updates(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConfigFilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes are POSIX")
+	}
+	const withCredentials = "upstream_proxies:\n  - name: corp\n    url: http://alice:s3cret@127.0.0.1:8080\n"
+	write := func(t *testing.T, yaml string, mode os.FileMode) string {
+		t.Helper()
+		configDir := t.TempDir()
+		path := filepath.Join(configDir, "marasi_config.yaml")
+		if err := os.WriteFile(path, []byte(yaml), mode); err != nil {
+			t.Fatalf("writing config: %v", err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatalf("setting config mode: %v", err)
+		}
+		return configDir
+	}
+	mode := func(t *testing.T, configDir string) os.FileMode {
+		t.Helper()
+		info, err := os.Stat(filepath.Join(configDir, "marasi_config.yaml"))
+		if err != nil {
+			t.Fatalf("reading config mode: %v", err)
+		}
+		return info.Mode().Perm()
+	}
+
+	t.Run("should create marasi_config.yaml readable by its owner only", func(t *testing.T) {
+		configDir := t.TempDir()
+		if _, err := New(WithConfigDir(configDir)); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got := mode(t, configDir); got != 0600 {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", os.FileMode(0600), got)
+		}
+	})
+
+	t.Run("should tighten a config holding upstream proxy credentials to owner-only when the proxy loads it", func(t *testing.T) {
+		configDir := write(t, withCredentials, 0644)
+		if _, err := New(WithConfigDir(configDir)); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got := mode(t, configDir); got != 0600 {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", os.FileMode(0600), got)
+		}
+	})
+
+	t.Run("should tighten a config holding upstream proxy credentials to owner-only when it is read again", func(t *testing.T) {
+		configDir := write(t, withCredentials, 0640)
+		if _, err := ReadConfig(configDir); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got := mode(t, configDir); got != 0600 {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", os.FileMode(0600), got)
+		}
+	})
+
+	t.Run("should leave the mode of a config without credentials alone", func(t *testing.T) {
+		configDir := write(t, "upstream_proxies:\n  - name: corp\n    url: http://127.0.0.1:8080\n", 0644)
+		if _, err := ReadConfig(configDir); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got := mode(t, configDir); got != 0644 {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", os.FileMode(0644), got)
+		}
+	})
 }
 
 func TestWithTLS(t *testing.T) {
