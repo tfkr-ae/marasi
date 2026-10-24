@@ -39,6 +39,8 @@ type Provider interface {
 	Open(name string) (Iterator, error)
 	// Add moves source into the managed directory under its basename.
 	Add(source string) error
+	// Upload writes contents into the managed directory as wordlist name.
+	Upload(name string, contents io.Reader) error
 	// Remove deletes a managed wordlist by name.
 	Remove(name string) error
 }
@@ -58,6 +60,8 @@ type Info struct {
 	// Size is the wordlist file size in bytes.
 	Size int64
 }
+
+var _ Provider = (*Manager)(nil)
 
 // Manager discovers and opens wordlists in a configured directory.
 type Manager struct {
@@ -164,6 +168,49 @@ func (m *Manager) Add(source string) error {
 	}
 
 	return copyWordlist(source, destination, info)
+}
+
+// Upload writes contents into the managed directory as wordlist name. It
+// fails with ErrAlreadyExists rather than replace a wordlist, and a failed
+// upload leaves no partial wordlist behind.
+func (m *Manager) Upload(name string, contents io.Reader) (err error) {
+	if !ValidName(name) {
+		return ErrInvalidSource
+	}
+	destination := filepath.Join(m.wordlistDir, name)
+	// Refuse a taken name before reading what may be a large body.
+	if _, err := os.Lstat(destination); err == nil {
+		return ErrAlreadyExists
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("checking wordlist %s : %w", destination, err)
+	}
+	// Stage beside the wordlists directory, on the same file system, so a
+	// partial upload never shows in List.
+	staged, err := os.CreateTemp(filepath.Dir(m.wordlistDir), ".marasi-wordlist-*")
+	if err != nil {
+		return fmt.Errorf("staging wordlist %s : %w", name, err)
+	}
+	defer func() {
+		err = errors.Join(err, os.Remove(staged.Name()))
+	}()
+	if _, err := io.Copy(staged, contents); err != nil {
+		staged.Close()
+		return fmt.Errorf("writing wordlist %s : %w", name, err)
+	}
+	if err := staged.Sync(); err != nil {
+		staged.Close()
+		return fmt.Errorf("syncing wordlist %s : %w", name, err)
+	}
+	if err := staged.Close(); err != nil {
+		return fmt.Errorf("closing wordlist %s : %w", name, err)
+	}
+	// Link creates the name exclusively, so a racing add cannot be replaced.
+	if err := os.Link(staged.Name(), destination); errors.Is(err, os.ErrExist) {
+		return ErrAlreadyExists
+	} else if err != nil {
+		return fmt.Errorf("publishing wordlist %s : %w", name, err)
+	}
+	return nil
 }
 
 // Remove deletes a wordlist by name from the managed directory.

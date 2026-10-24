@@ -59,6 +59,8 @@ marasi --remote "http://$CONTROL_ADDRESS" --token-file "$TOKEN_FILE" traffic lis
 
 `--remote` takes an `http` or `https` URL (`https` for a TLS reverse proxy in front of the address; a path in the URL prefixes every request), and `MARASI_REMOTE` sets it for the shell session; `--remote` wins over `MARASI_REMOTE`. The control token comes from `--token-file PATH` or else `MARASI_TOKEN`. No flag takes the token itself, so it never shows in `ps` or shell history. `--remote` or `MARASI_REMOTE` together with an explicit `--instance` is a usage error, a missing token fails before any request, and `--token-file` without a remote is a usage error. A rejected token fails with `control token rejected by URL: check MARASI_TOKEN or --token-file`, and an address nothing answers at with `no instance answers at URL`. The local socket-path limit does not apply. Commands that only call the control API, `events`, and `service restart` behave and print exactly as they do through the socket, `--json` included. `service start` and `service list` act on this machine and refuse a remote, and `service stop` does not support `--remote` yet.
 
+Over `--remote`, `wordlist add PATH` and `report template add PATH` read `PATH` on this machine, upload its contents under its base name, and delete the local file only after the instance accepts it, so add still moves the file. A refused upload (`wordlist_already_exists`, `report_template_already_exists`, an invalid name such as a hidden template name) or an instance that does not answer leaves the local file in place. The instance publishes `wordlist.added` or `report.template.added` as for a local add. Without a remote, both commands send the path and the instance moves the file itself.
+
 ## Capture and inspect traffic
 
 Set `PROXY_LISTENER` from status, not from the requested port.
@@ -154,9 +156,9 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 | Record methodology and vulnerabilities | `test-case`, `finding` | Link captured request IDs as evidence. |
 | Attach evidence files | `artifact` | Uploads require exactly one of `--finding` or `--test-case`, never both. |
 | Modify traffic with Lua | `extension` | Inspect source and settings before enabling or calling an extension. See [Write Lua extensions](#write-lua-extensions) before changing source. |
-| Manage attack inputs | `wordlist` | `add` moves the source file. Copy it first if the original must remain. |
+| Manage attack inputs | `wordlist` | `add` moves the source file, uploading it over `--remote`. Copy it first if the original must remain. |
 | Automate requests from templates | `armory` | Validate inputs before creating a run. Creation does not start it. Starting sends traffic. |
-| Export assessment evidence | `report` | Template `add` moves the source file. Exports default to draft and include test cases. Select `--output` explicitly. |
+| Export assessment evidence | `report` | Template `add` moves the source file, uploading it over `--remote`. Exports default to draft and include test cases. Select `--output` explicitly. |
 | Watch live activity | `events` | Blocking stream with no replay. `--json` emits one event object per line. |
 | Update Marasi | `update`, `service restart` | Install only when the user asks. A running instance checks and installs: `update` shows the available build and its notes, `update install` streams progress (one event object per line under `--json`) and exits 1 on `update.failed`. Running instances keep their build until `service restart`, which ends Armory runs and launches and refuses while Checkpoint items are held. `update reinstall` can install an older build and needs `--yes`, because newer projects may not open in it. |
 | Diagnose proxy activity | `logs` | Filter traffic separately with `traffic list`; logs are not captured request/response pairs. |
