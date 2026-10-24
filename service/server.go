@@ -142,6 +142,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 	mux.Handle("/listener/", http.StripPrefix("/listener", listenerMux))
 	projectMux := http.NewServeMux()
 	projectMux.HandleFunc("/open", server.serveProjectOpen)
+	projectMux.HandleFunc("/list", server.serveProjectList)
 	mux.Handle("/project/", http.StripPrefix("/project", projectMux))
 	mux.HandleFunc("/events", server.serveEvents)
 	addUpdateRoutes(mux, server)
@@ -306,6 +307,29 @@ func (s *Server) serveProjectOpen(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, http.StatusOK, struct {
 		Project string `json:"project"`
 	}{Project: path})
+}
+
+// serveProjectList lists the named projects in the instance's config dir,
+// with the same rows as the CLI's local project list.
+func (s *Server) serveProjectList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.projects == nil {
+		writeProjectError(w, r, errors.New("project list not configured"))
+		return
+	}
+	items, err := ListProjects(s.projects.configDir)
+	if err != nil {
+		writeJSON(w, r, http.StatusInternalServerError, struct {
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}{Error: "project_list_failed", Message: err.Error()})
+		return
+	}
+	writeJSON(w, r, http.StatusOK, ProjectList{Items: items})
 }
 
 var errInvalidProjectRequest = errors.New("invalid project request")
