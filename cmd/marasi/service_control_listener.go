@@ -93,9 +93,10 @@ func runControlListenerCommand(cmd *cobra.Command, route, operation string, sett
 	if (status.Status == service.ListenerActive) != (status.ControlListener != nil) {
 		return fmt.Errorf("decoding control listener status: %s", response)
 	}
-	if route == "/start" || route == "/update" {
-		// The warning goes to stderr in both output modes, as it does when
-		// service start binds the address.
+	if (route == "/start" || route == "/update") && writesToTerminal(cmd.ErrOrStderr()) {
+		// The warning goes to a terminal's stderr in both output modes, as it
+		// does when service start binds the address. The instance log
+		// carries it either way.
 		if warning := service.ControlAddressWarning(*status.ControlListener); warning != "" {
 			if _, err := fmt.Fprintln(cmd.ErrOrStderr(), warning); err != nil {
 				return fmt.Errorf("writing control listener warning: %w", err)
