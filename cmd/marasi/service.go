@@ -317,6 +317,8 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 		// ControlListener is absent from instances older than the control
 		// listener's network address.
 		ControlListener json.RawMessage `json:"control_listener"`
+		// OS is absent from instances older than remote control.
+		OS *string `json:"os"`
 	}
 	if err := json.Unmarshal(body, &status); err != nil {
 		return fmt.Errorf("decoding service status: %w", err)
@@ -386,6 +388,9 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 			}
 		}
 		fmt.Fprintf(&output, "control listener network address: %s\n", controlListener)
+	}
+	if status.OS != nil {
+		fmt.Fprintf(&output, "os: %s\n", *status.OS)
 	}
 	if _, err := io.WriteString(stdout, output.String()); err != nil {
 		return fmt.Errorf("writing service status: %w", err)

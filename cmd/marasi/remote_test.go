@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -266,18 +267,28 @@ func TestRemoteSelection(t *testing.T) {
 // returns its URL and the requests it received.
 func startCannedRemoteAPI(t *testing.T) (string, *cannedControlRequest) {
 	t.Helper()
+	return startCannedRemoteAPIHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, "{}")
+	})
+}
+
+// startCannedRemoteAPIHandler serves handle at a network address and returns
+// its URL and the requests it received.
+func startCannedRemoteAPIHandler(t *testing.T, handle http.HandlerFunc) (string, *cannedControlRequest) {
+	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := &cannedControlRequest{}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestBody, _ := io.ReadAll(r.Body)
 		got.mu.Lock()
-		got.Method, got.Path = r.Method, r.URL.Path
+		got.Method, got.Path, got.Body = r.Method, r.URL.Path, string(requestBody)
 		got.history = append(got.history, got.controlRequest)
 		got.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, "{}")
+		handle(w, r)
 	})}
 	go server.Serve(listener)
 	t.Cleanup(func() { server.Close() })
@@ -343,6 +354,62 @@ func TestRemoteUsageErrors(t *testing.T) {
 		got := <-requests
 		if got.Host != address || got.URL.Path != "/prefix/traffic" || got.URL.Query().Get("limit") != "5" || got.Header.Get("Authorization") != "Bearer secret" {
 			t.Fatalf("\nwanted:\nHost %s, /prefix/traffic?limit=5, Bearer secret\ngot:\nHost %s, %s?%s, %q", address, got.Host, got.URL.Path, got.URL.RawQuery, got.Header.Get("Authorization"))
+		}
+	})
+}
+
+func TestRemoteChromePathOS(t *testing.T) {
+	binary := buildMarasi(t)
+	// An instance machine whose operating system is not this one, so the
+	// default cannot come from the CLI's own machine.
+	instanceOS := "linux"
+	if runtime.GOOS == "linux" {
+		instanceOS = "windows"
+	}
+	remote, sent := startCannedRemoteAPIHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/service/status" {
+			io.WriteString(w, `{"status":"running","os":"`+instanceOS+`"}`)
+			return
+		}
+		io.WriteString(w, "{}")
+	})
+
+	t.Run("should default --os to the instance's operating system over --remote", func(t *testing.T) {
+		for _, command := range []string{"add", "remove"} {
+			sent.reset()
+			_, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, "--config-dir", t.TempDir(), "--remote", remote, "chrome", "path", command, "--path", "/opt/chrome")
+			if err != nil {
+				t.Fatalf("chrome path %s: %v\n%s", command, err, stderr)
+			}
+			want := `{"os":"` + instanceOS + `","path":"/opt/chrome"}`
+			if got := sent.snapshot(); got.Path != "/chrome/path" || got.Body != want {
+				t.Fatalf("\nwanted:\n/chrome/path %s\ngot:\n%s %s", want, got.Path, got.Body)
+			}
+		}
+	})
+
+	t.Run("should send an explicit --os over --remote without reading the status", func(t *testing.T) {
+		sent.reset()
+		_, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, "--config-dir", t.TempDir(), "--remote", remote, "chrome", "path", "add", "--os", "darwin", "--path", "/opt/chrome")
+		if err != nil {
+			t.Fatalf("chrome path add: %v\n%s", err, stderr)
+		}
+		want := []controlRequest{{Method: http.MethodPost, Path: "/chrome/path", Body: `{"os":"darwin","path":"/opt/chrome"}`}}
+		if got := sent.requests(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
+		}
+	})
+
+	t.Run("should refuse a default --os when the instance reports no operating system", func(t *testing.T) {
+		older, _ := startCannedRemoteAPIHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"status":"running"}`)
+		})
+		want := "the instance does not report its operating system: pass --os"
+		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, "--config-dir", t.TempDir(), "--remote", older, "chrome", "path", "add", "--path", "/opt/chrome")
+		if exitCode(err) != 1 || stdout != "" || stderr != "Error: "+want+"\n" {
+			t.Fatalf("\nwanted:\n%s\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
 		}
 	})
 }
