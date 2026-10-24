@@ -47,7 +47,7 @@ func printEvents(ctx context.Context, target instanceEndpoint, asJSON bool, stdo
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return instanceNotRunningError{name: target.label}
+		return target.unreachable(err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
