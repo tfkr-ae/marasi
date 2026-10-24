@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -451,6 +452,9 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		// ControlListener is the control listener's network address, null
 		// when it has none. The control token is never part of the status.
 		ControlListener *string `json:"control_listener"`
+		// OS is the instance machine's operating system, as runtime.GOOS
+		// names it, so a client on another machine can tag paths for it.
+		OS string `json:"os"`
 	}{
 		Status:                  "running",
 		Version:                 s.version,
@@ -462,6 +466,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		UpstreamProxy:           selection.Selected,
 		UpstreamProxyConfigured: selection.Configured,
 		ControlListener:         s.controlListenerAddress(),
+		OS:                      runtime.GOOS,
 	})
 }
 

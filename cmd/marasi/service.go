@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -123,15 +124,19 @@ var stopCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		// The local stop waits on the instance's lock file, which is on its
-		// instance machine; the remote wait needs its own design.
+		var instanceName string
 		if endpoint.remote() {
-			return errors.New("marasi service stop does not support --remote yet")
+			name, err := stopRemoteService(ctx, endpoint)
+			if err != nil {
+				return err
+			}
+			instanceName = name
+		} else {
+			if err := stopService(ctx, endpoint.path); err != nil {
+				return err
+			}
+			instanceName = endpoint.name()
 		}
-		if err := stopService(ctx, endpoint.path); err != nil {
-			return err
-		}
-		instanceName := endpoint.name()
 		if jsonOutput {
 			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
 				Instance string `json:"instance"`
@@ -156,7 +161,7 @@ var statusCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return getServiceStatus(ctx, endpoint, jsonOutput, cmd.OutOrStdout())
+		return getServiceStatus(ctx, endpoint, jsonOutput, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
@@ -261,7 +266,7 @@ func listServiceInstances(ctx context.Context, configDir string, asJSON bool, st
 }
 
 // getServiceStatus queries and prints the selected service instance's status.
-func getServiceStatus(ctx context.Context, target instanceEndpoint, asJSON bool, stdout io.Writer) error {
+func getServiceStatus(ctx context.Context, target instanceEndpoint, asJSON bool, stdout, stderr io.Writer) error {
 	client := target.client()
 	defer client.Close()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/service/status", nil)
@@ -290,6 +295,9 @@ func getServiceStatus(ctx context.Context, target instanceEndpoint, asJSON bool,
 		}
 		return fmt.Errorf("getting service status: %s", response.Status)
 	}
+	if target.remote() {
+		return writeRemoteServiceStatus(body, asJSON, stdout, stderr)
+	}
 	if asJSON {
 		if _, err := stdout.Write(body); err != nil {
 			return fmt.Errorf("writing service status response: %w", err)
@@ -297,6 +305,54 @@ func getServiceStatus(ctx context.Context, target instanceEndpoint, asJSON bool,
 		return nil
 	}
 	return writeServiceStatusHuman(body, stdout)
+}
+
+// writeRemoteServiceStatus writes a remote instance's status with this CLI's
+// version beside the instance's, and a warning when they differ, since the
+// two machines update separately. Under --json both go in the status object,
+// which keeps stderr empty.
+func writeRemoteServiceStatus(body []byte, asJSON bool, stdout, stderr io.Writer) error {
+	var status map[string]json.RawMessage
+	if err := json.Unmarshal(body, &status); err != nil || status == nil {
+		return errors.New("invalid service status: must be a JSON object")
+	}
+	var instanceVersion string
+	if err := json.Unmarshal(status["version"], &instanceVersion); err != nil || instanceVersion == "" {
+		return errors.New("invalid service status: version must be a non-empty string")
+	}
+	warning := ""
+	if instanceVersion != version {
+		warning = fmt.Sprintf("this marasi is version %s but the instance runs %s", version, instanceVersion)
+	}
+
+	if asJSON {
+		// Append the fields rather than re-encoding the map, so the
+		// instance's own fields keep their order.
+		var extra strings.Builder
+		cliVersion, _ := json.Marshal(version)
+		fmt.Fprintf(&extra, `,"cli_version":%s`, cliVersion)
+		if warning != "" {
+			warningJSON, _ := json.Marshal(warning)
+			fmt.Fprintf(&extra, `,"warning":%s`, warningJSON)
+		}
+		object := bytes.TrimSuffix(bytes.TrimSpace(body), []byte("}"))
+		if _, err := fmt.Fprintf(stdout, "%s%s}\n", object, extra.String()); err != nil {
+			return fmt.Errorf("writing service status response: %w", err)
+		}
+		return nil
+	}
+	if err := writeServiceStatusHuman(body, stdout); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stdout, "cli version: %s\n", version); err != nil {
+		return fmt.Errorf("writing service status: %w", err)
+	}
+	if warning != "" {
+		if _, err := fmt.Fprintf(stderr, "warning: %s\n", warning); err != nil {
+			return fmt.Errorf("writing service status: %w", err)
+		}
+	}
+	return nil
 }
 
 // writeServiceStatusHuman validates and writes the service status projection.
@@ -317,6 +373,8 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 		// ControlListener is absent from instances older than the control
 		// listener's network address.
 		ControlListener json.RawMessage `json:"control_listener"`
+		// OS is absent from instances older than remote control.
+		OS *string `json:"os"`
 	}
 	if err := json.Unmarshal(body, &status); err != nil {
 		return fmt.Errorf("decoding service status: %w", err)
@@ -386,6 +444,9 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 			}
 		}
 		fmt.Fprintf(&output, "control listener network address: %s\n", controlListener)
+	}
+	if status.OS != nil {
+		fmt.Fprintf(&output, "os: %s\n", *status.OS)
 	}
 	if _, err := io.WriteString(stdout, output.String()); err != nil {
 		return fmt.Errorf("writing service status: %w", err)
@@ -621,6 +682,53 @@ func stopService(ctx context.Context, instancePath string) error {
 		wrapError("closing service stop response", closeErr),
 		waitErr,
 	)
+}
+
+// stopRemoteService stops the instance at a network address and returns its
+// name. The instance's lock file is on its own machine, so the wait is for
+// the address to refuse connections instead, bounded by ctx as the local
+// wait on the lock is.
+func stopRemoteService(ctx context.Context, target instanceEndpoint) (string, error) {
+	// The URL does not name the instance, so its status does.
+	response, err := dialInstance(ctx, target, http.MethodGet, "/service/status", "", nil)
+	if err != nil {
+		return "", err
+	}
+	if err := rejectInstanceStatus("getting service status", response, true); err != nil {
+		return "", err
+	}
+	var status struct {
+		Instance string `json:"instance"`
+	}
+	if err := json.Unmarshal(response.Body, &status); err != nil || status.Instance == "" {
+		return "", errors.New("invalid service status: instance must be a non-empty string")
+	}
+
+	response, err = dialInstance(ctx, target, http.MethodPost, "/service/stop", "", nil)
+	var notRunning instanceNotRunningError
+	switch {
+	case errors.As(err, &notRunning):
+		// The instance closed the connection before answering, which a
+		// stopping instance may do; the wait below confirms it is gone.
+	case err != nil:
+		return "", err
+	case response.StatusCode != http.StatusAccepted:
+		return "", controlAPIError("stopping service", response.Status, response.Body)
+	}
+
+	ticker := time.NewTicker(instancePollDelay)
+	defer ticker.Stop()
+	for target.control.Accepts(ctx) {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+		}
+	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	return status.Instance, nil
 }
 
 // waitForInstanceStop polls until lockPath can be locked, or ctx is cancelled.
