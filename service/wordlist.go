@@ -51,7 +51,7 @@ func addWordlistRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBro
 	})
 
 	mux.HandleFunc("POST /wordlist", func(w http.ResponseWriter, r *http.Request) {
-		path, ok := parseWordlistAddRequest(r)
+		path, name, ok := parseAddRequest(r)
 		if !ok {
 			writeWordlistError(w, r, http.StatusBadRequest, "invalid_wordlist_request")
 			return
@@ -61,7 +61,13 @@ func addWordlistRoutes(mux *http.ServeMux, proxy *marasi.Proxy, events *eventBro
 			writeWordlistError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
-		if err := provider.Add(path); err != nil {
+		var err error
+		if name != "" {
+			err = provider.Upload(name, r.Body)
+		} else {
+			err = provider.Add(path)
+		}
+		if err != nil {
 			switch {
 			case errors.Is(err, wordlist.ErrAlreadyExists):
 				writeWordlistError(w, r, http.StatusConflict, "wordlist_already_exists")
@@ -169,10 +175,22 @@ func listWordlists(provider wordlist.Provider) (wordlistList, error) {
 	return wordlistList{Items: items}, nil
 }
 
-func parseWordlistAddRequest(r *http.Request) (string, bool) {
-	query, ok := parseWordlistQuery(r)
-	if !ok || len(query) != 0 {
-		return "", false
+// parseAddRequest reads a wordlist or report template add: a JSON path on
+// this machine to move, or a name in the query with the file's contents as
+// the raw body. Exactly one of path and name is set when ok. The upload
+// serves a client on another machine, whose paths mean nothing here
+// (docs/adr/2026-10-24-the-control-listener-network-address-is-guarded-by-a-token-alone.md).
+func parseAddRequest(r *http.Request) (path, name string, ok bool) {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return "", "", false
+	}
+	if len(query) != 0 {
+		values, ok := query["name"]
+		if !ok || len(query) != 1 || len(values) != 1 || values[0] == "" {
+			return "", "", false
+		}
+		return "", values[0], true
 	}
 	var request struct {
 		Path string `json:"path"`
@@ -180,12 +198,12 @@ func parseWordlistAddRequest(r *http.Request) (string, bool) {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil || request.Path == "" {
-		return "", false
+		return "", "", false
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return "", false
+		return "", "", false
 	}
-	return request.Path, true
+	return request.Path, "", true
 }
 
 func wordlistProvider(proxy *marasi.Proxy) (wordlist.Provider, bool) {
