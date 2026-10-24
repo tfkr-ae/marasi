@@ -693,8 +693,8 @@ func stopService(ctx context.Context, instancePath string) error {
 
 // stopRemoteService stops the instance at a network address and returns its
 // name. The instance's lock file is on its own machine, so the wait is for
-// the address to refuse connections instead, bounded by ctx as the local
-// wait on the lock is.
+// the instance to stop answering at the address instead, bounded by ctx as
+// the local wait on the lock is.
 func stopRemoteService(ctx context.Context, target instanceEndpoint) (string, error) {
 	// The URL does not name the instance, so its status does.
 	response, err := dialInstance(ctx, target, http.MethodGet, "/service/status", "", nil)
@@ -725,17 +725,47 @@ func stopRemoteService(ctx context.Context, target instanceEndpoint) (string, er
 
 	ticker := time.NewTicker(instancePollDelay)
 	defer ticker.Stop()
-	for target.control.Accepts(ctx) {
+	for {
+		gone, err := remoteInstanceGone(ctx, target, status.Instance)
+		if err != nil {
+			return "", err
+		}
+		if gone {
+			return status.Instance, nil
+		}
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
 		case <-ticker.C:
 		}
 	}
-	if ctx.Err() != nil {
-		return "", ctx.Err()
+}
+
+// remoteInstanceGone reports whether the instance named instance no longer
+// answers at target. A refused connection says so, and so does any answer
+// that is not that instance's status: a TLS reverse proxy keeps accepting
+// once the instance behind it exits, and answers 502 instead.
+func remoteInstanceGone(ctx context.Context, target instanceEndpoint, instance string) (bool, error) {
+	response, err := dialInstance(ctx, target, http.MethodGet, "/service/status", "", nil)
+	var notRunning instanceNotRunningError
+	switch {
+	case ctx.Err() != nil:
+		return false, ctx.Err()
+	case errors.As(err, &notRunning), errors.Is(err, service.ErrTokenRejected):
+		return true, nil
+	case err != nil:
+		// A response cut off mid-read is a stopping instance; ask again.
+		return false, nil
+	case response.StatusCode != http.StatusOK:
+		return true, nil
 	}
-	return status.Instance, nil
+	var status struct {
+		Instance string `json:"instance"`
+	}
+	if err := json.Unmarshal(response.Body, &status); err != nil {
+		return true, nil
+	}
+	return status.Instance != instance, nil
 }
 
 // waitForInstanceStop polls until lockPath can be locked, or ctx is cancelled.
