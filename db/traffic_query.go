@@ -123,6 +123,9 @@ var trafficFields = map[string]trafficField{
 	"scheme":       {kind: fieldExactText, column: "scheme"},
 	"path":         {kind: fieldExactText, column: "path"},
 	"content_type": {kind: fieldExactText, column: "content_type", indexed: true},
+	// The route snapshot's upstream proxy name. "" is direct, and a pair
+	// with no snapshot matches neither.
+	"upstream_proxy": {kind: fieldExactText, column: "upstream_proxy_name"},
 	// In-flight pairs store -1. Treat that as no status code.
 	"status_code": {kind: fieldInteger, column: "nullif(status_code, -1)"},
 	// The size sort's expression, so the length index serves it. A pair

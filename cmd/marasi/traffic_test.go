@@ -505,6 +505,31 @@ func TestTrafficGetCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("should print the route that carried the pair after responded_at", func(t *testing.T) {
+		cases := []struct {
+			route string
+			want  string
+		}{
+			{route: `{"name":"corp","address":"http://127.0.0.1:8080"}`, want: "upstream_proxy: corp (http://127.0.0.1:8080)\n"},
+			{route: `{"name":"","address":""}`, want: "upstream_proxy: direct\n"},
+		}
+		for _, tc := range cases {
+			configDir := serviceConfigDir(t)
+			id := "0193802f-f0e7-73d9-a764-06d21e367809"
+			body := `{"id":"0193802f-f0e7-73d9-a764-06d21e367809","number":42,"note":"","metadata":{},"request":{"scheme":"https","method":"GET","host":"example.com","path":"/a","raw":"R0VUIC9hCg==","requested_at":"2026-01-02T03:04:05Z"},"response":{"status":"200 OK","status_code":200,"content_type":"application/json","length":"12","raw":"aGVsbG8K","responded_at":"2026-01-02T03:04:06Z"},"upstream_proxy":` + tc.route + `}`
+			startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+
+			stdout, _, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "traffic", "get", id)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			want := "responded_at: 2026-01-02T03:04:06Z\n" + tc.want + "GET /a\n"
+			if !strings.Contains(stdout, want) {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
+			}
+		}
+	})
+
 	t.Run("should start the response raw on a new line", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		id := "0193802f-f0e7-73d9-a764-06d21e367809"

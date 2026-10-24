@@ -102,6 +102,11 @@ type ConfigRepository interface {
 	// SetClientSetting stores value under client and key, replacing only that key.
 	SetClientSetting(client, key string, value json.RawMessage) (ClientSetting, error)
 
+	// SetMarasiSetting stores value under ReservedClient and key. Only
+	// Marasi's own endpoints call it; SetClientSetting keeps refusing the
+	// reserved client.
+	SetMarasiSetting(key string, value json.RawMessage) (ClientSetting, error)
+
 	// DeleteClientSetting removes the setting under client and key.
 	// Deleting a missing key is not an error.
 	DeleteClientSetting(client, key string) error

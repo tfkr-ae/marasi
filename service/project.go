@@ -529,6 +529,19 @@ func (lifecycle *ProjectLifecycle) prepareProject(ctx context.Context, path stri
 		return fail(err)
 	}
 
+	// A local read: opening a project never waits on the network, and a
+	// selection this machine lacks still opens and fails its traffic closed.
+	selection, err := marasi.LoadUpstreamProxySelection(repository)
+	if errors.Is(err, marasi.ErrInvalidUpstreamProxy) {
+		// The selection is the raw value, which no list entry matches, so
+		// the project opens and its traffic fails closed.
+		err = nil
+	}
+	if err != nil {
+		return fail(fmt.Errorf("loading the upstream proxy selection: %w", err))
+	}
+	resources.UpstreamProxy = selection
+
 	storedExtensions, err := repository.GetExtensions()
 	if err != nil {
 		return fail(fmt.Errorf("loading project extensions: %w", err))

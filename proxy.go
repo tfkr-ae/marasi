@@ -147,6 +147,10 @@ type Proxy struct {
 	connectionsClosing   bool
 	transportContext     context.Context
 	cancelTransport      context.CancelFunc
+	route                atomic.Pointer[Route]           // the route new connections to the origin use
+	transport            atomic.Pointer[routedTransport] // the transport the latest Serve built
+	routes               routeResolver                   // turns the upstream proxy selection into routes
+	routeMu              sync.Mutex                      // serializes route swaps from the resolver
 	listenerMu           sync.Mutex
 	activeListener       net.Listener
 	activeServeDone      chan struct{}
@@ -189,6 +193,9 @@ type ProjectResources struct {
 	Waypoints       map[string]string
 	Armory          ArmoryService
 	ReportGenerator domain.ReportGenerator
+	// UpstreamProxy is the project's upstream proxy selection, or "" for a
+	// direct connection.
+	UpstreamProxy string
 }
 
 type dbWriteBarrier struct {
@@ -335,6 +342,7 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 			return func() {}, 0, nil
 		},
 	}
+	proxy.route.Store(DirectRoute())
 	err := proxy.WithOptions(options...)
 	if err != nil {
 		return nil, err
@@ -366,6 +374,7 @@ func (proxy *Proxy) SetProjectResources(resources ProjectResources) {
 	proxy.waypointMu.Unlock()
 	proxy.Armory = resources.Armory
 	proxy.ReportGenerator = resources.ReportGenerator
+	proxy.SelectUpstreamProxy(resources.UpstreamProxy)
 }
 
 // AddRequestModifier accepts RequestModifierFunc and wraps it in a reqAdapter
@@ -578,6 +587,11 @@ func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
 		metadata = make(map[string]any)
 	}
 
+	var route *domain.RouteSnapshot
+	if record, ok := core.RouteRecordFromContext(res.Request.Context()); ok {
+		route = record.Snapshot()
+	}
+
 	proxyResponse := &domain.ProxyResponse{
 		ID:          requestId,
 		Status:      res.Status,
@@ -588,6 +602,7 @@ func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
 		Metadata:    metadata,
 		Prettified:  prettified,
 		RespondedAt: responseTime,
+		Route:       route,
 	}
 	return proxyResponse, nil
 }
@@ -857,8 +872,9 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 	if err := proxy.flushDBWrites(); err != nil {
 		return err
 	}
-	roundTripper := newMarasiTransport(proxy.dialTransport)
-	proxy.martianProxy.SetRoundTripper(&launchFailureRoundTripper{proxy: proxy, base: roundTripper})
+	routed := newRoutedTransport(proxy.resolveRoute, proxy.CurrentRoute, proxy.dialTransport)
+	proxy.transport.Store(routed)
+	proxy.martianProxy.SetRoundTripper(&launchFailureRoundTripper{proxy: proxy, base: &marasiRoundTripper{base: routed}})
 	proxy.listenerMu.Lock()
 	proxy.activeListener = activeListener
 	serveDone := make(chan struct{})

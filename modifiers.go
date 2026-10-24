@@ -253,6 +253,9 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 
 	*req = *core.ContextWithRequestID(req, uuid)
 	*req = *core.ContextWithMetadata(req, metadata)
+	// The transport records the route the request goes out on, and the
+	// response writes it as the pair's route snapshot.
+	*req = *core.ContextWithRouteRecord(req, &core.RouteRecord{})
 
 	ctx := martian.NewContext(req)
 	session := ctx.Session()
@@ -261,9 +264,9 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 }
 
 // OverrideWaypointsModifier checks if a Waypoint (host override) is defined for this host:port.
-// If a waypoint exists it will write the "original_host" and "override_host" to the metadata.
-// These values are used later in the `DialContext` function. If the metadata is not found
-// the modifier will return `ErrMetadataNotFound`
+// If a waypoint exists it will write the "original_host" and "override_host" to the metadata
+// and rewrite the URL host to the destination, which the transport then dials as is.
+// If the metadata is not found the modifier will return `ErrMetadataNotFound`
 // TODO should allow TLS -> Non TLS override
 func OverrideWaypointsModifier(proxy *Proxy, req *http.Request) error {
 	if metadata, ok := core.MetadataFromContext(req.Context()); ok {

@@ -368,7 +368,7 @@ func TestServiceStatus(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := fmt.Sprintf("{\"status\":\"running\",\"version\":\"13.09.2026\",\"channel\":null,\"instance\":\"work\",\"project\":\"/work/juice-shop.marasi\",\"proxy_listener\":%q,\"restart_required\":false}\n", *status.ProxyListener)
+		want := fmt.Sprintf("{\"status\":\"running\",\"version\":\"13.09.2026\",\"channel\":null,\"instance\":\"work\",\"project\":\"/work/juice-shop.marasi\",\"proxy_listener\":%q,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true}\n", *status.ProxyListener)
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -378,7 +378,7 @@ func TestServiceStatus(t *testing.T) {
 		}
 		response = httptest.NewRecorder()
 		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/service/status", nil))
-		want = "{\"status\":\"running\",\"version\":\"13.09.2026\",\"channel\":null,\"instance\":\"work\",\"project\":\"/work/juice-shop.marasi\",\"proxy_listener\":null,\"restart_required\":false}\n"
+		want = "{\"status\":\"running\",\"version\":\"13.09.2026\",\"channel\":null,\"instance\":\"work\",\"project\":\"/work/juice-shop.marasi\",\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -398,7 +398,7 @@ func TestServiceStatus(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":\"/work/scratchpad.marasi\",\"proxy_listener\":null,\"restart_required\":false}\n"
+		want := "{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":\"/work/scratchpad.marasi\",\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -505,7 +505,7 @@ func TestListenerControl(t *testing.T) {
 		}
 		serviceStatus := httptest.NewRecorder()
 		server.ServeHTTP(serviceStatus, httptest.NewRequest(http.MethodGet, "/service/status", nil))
-		wantServiceStatus := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":\"/work/scratchpad.marasi\",\"proxy_listener\":%q,\"restart_required\":false}\n", startedAddress)
+		wantServiceStatus := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":\"/work/scratchpad.marasi\",\"proxy_listener\":%q,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true}\n", startedAddress)
 		if serviceStatus.Code != http.StatusOK || serviceStatus.Body.String() != wantServiceStatus {
 			t.Fatalf("\nwanted synchronized service status:\n%s\ngot:\n%d %s", wantServiceStatus, serviceStatus.Code, serviceStatus.Body.String())
 		}
@@ -528,7 +528,7 @@ func TestListenerControl(t *testing.T) {
 		}
 		serviceStatus = httptest.NewRecorder()
 		server.ServeHTTP(serviceStatus, httptest.NewRequest(http.MethodGet, "/service/status", nil))
-		wantServiceStatus = "{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":\"/work/scratchpad.marasi\",\"proxy_listener\":null,\"restart_required\":false}\n"
+		wantServiceStatus = "{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":\"/work/scratchpad.marasi\",\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true}\n"
 		if serviceStatus.Code != http.StatusOK || serviceStatus.Body.String() != wantServiceStatus {
 			t.Fatalf("\nwanted synchronized inactive service status:\n%s\ngot:\n%d %s", wantServiceStatus, serviceStatus.Code, serviceStatus.Body.String())
 		}
@@ -758,7 +758,7 @@ func TestLaunchpadControlAPI(t *testing.T) {
 		}
 		server := newTestServer(&marasi.Proxy{LaunchpadRepo: repo}, func() {})
 		response := requestLaunchpad(server, http.MethodGet, "/launchpad/"+id.String(), "")
-		want := `{"id":"` + id.String() + `","name":"Login","description":"Try variants","items":[{"id":"` + older.String() + `","number":0,"scheme":"https","method":"GET","host":"example.com","path":"/seed","status":"N/A","status_code":-1,"content_type":"","length":"0","metadata":{"source":"seed"},"requested_at":"2026-01-02T03:04:05Z","responded_at":null,"highlight":null},{"id":"` + newer.String() + `","number":0,"scheme":"https","method":"POST","host":"example.com","path":"/login","status":"200 OK","status_code":200,"content_type":"text/plain","length":"2","metadata":{},"requested_at":"2026-01-02T03:04:05Z","responded_at":"2026-01-02T03:04:06Z","highlight":null}],"index":{"complete":true}}` + "\n"
+		want := `{"id":"` + id.String() + `","name":"Login","description":"Try variants","items":[{"id":"` + older.String() + `","number":0,"scheme":"https","method":"GET","host":"example.com","path":"/seed","status":"N/A","status_code":-1,"content_type":"","length":"0","metadata":{"source":"seed"},"requested_at":"2026-01-02T03:04:05Z","responded_at":null,"highlight":null,"upstream_proxy":null},{"id":"` + newer.String() + `","number":0,"scheme":"https","method":"POST","host":"example.com","path":"/login","status":"200 OK","status_code":200,"content_type":"text/plain","length":"2","metadata":{},"requested_at":"2026-01-02T03:04:05Z","responded_at":"2026-01-02T03:04:06Z","highlight":null,"upstream_proxy":null}],"index":{"complete":true}}` + "\n"
 		if response.Code != http.StatusOK || response.Body.String() != want {
 			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
 		}
@@ -922,7 +922,7 @@ func TestTrafficGet(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"number\":0,\"note\":\"a note\",\"metadata\":{\"foo\":\"bar\"},\"highlight\":null,\"request\":{\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"raw\":\"/wAB\",\"requested_at\":\"2026-01-02T03:04:05Z\"},\"response\":{\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"raw\":\"gIGC\",\"responded_at\":\"2026-01-02T03:04:06Z\"},\"prettified\":{\"request\":null,\"response\":null}}\n"
+		want := "{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"number\":0,\"note\":\"a note\",\"metadata\":{\"foo\":\"bar\"},\"highlight\":null,\"request\":{\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"raw\":\"/wAB\",\"requested_at\":\"2026-01-02T03:04:05Z\"},\"response\":{\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"raw\":\"gIGC\",\"responded_at\":\"2026-01-02T03:04:06Z\"},\"prettified\":{\"request\":null,\"response\":null},\"upstream_proxy\":null}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -971,7 +971,7 @@ func TestTrafficGet(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"number\":0,\"note\":\"a note\",\"metadata\":{\"foo\":\"bar\"},\"highlight\":null,\"request\":{\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"raw\":\"/wAB\",\"requested_at\":\"2026-01-02T03:04:05Z\"},\"response\":{\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"raw\":\"gIGC\",\"responded_at\":\"2026-01-02T03:04:06Z\"},\"prettified\":{\"request\":\"pretty-req\",\"response\":null}}\n"
+		want := "{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"number\":0,\"note\":\"a note\",\"metadata\":{\"foo\":\"bar\"},\"highlight\":null,\"request\":{\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"raw\":\"/wAB\",\"requested_at\":\"2026-01-02T03:04:05Z\"},\"response\":{\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"raw\":\"gIGC\",\"responded_at\":\"2026-01-02T03:04:06Z\"},\"prettified\":{\"request\":\"pretty-req\",\"response\":null},\"upstream_proxy\":null}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1000,7 +1000,7 @@ func TestTrafficGet(t *testing.T) {
 
 		server.ServeHTTP(response, request)
 
-		want := "{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"number\":0,\"note\":\"\",\"metadata\":{},\"highlight\":null,\"request\":{\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"raw\":\"R0VUIC9h\",\"requested_at\":\"2026-01-02T03:04:05Z\"},\"response\":{\"status\":\"N/A\",\"status_code\":-1,\"content_type\":\"\",\"length\":\"0\",\"raw\":null,\"responded_at\":null},\"prettified\":{\"request\":null,\"response\":null}}\n"
+		want := "{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"number\":0,\"note\":\"\",\"metadata\":{},\"highlight\":null,\"request\":{\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"raw\":\"R0VUIC9h\",\"requested_at\":\"2026-01-02T03:04:05Z\"},\"response\":{\"status\":\"N/A\",\"status_code\":-1,\"content_type\":\"\",\"length\":\"0\",\"raw\":null,\"responded_at\":null},\"prettified\":{\"request\":null,\"response\":null},\"upstream_proxy\":null}\n"
 		if got := response.Body.String(); response.Code != http.StatusOK || got != want {
 			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, got)
 		}
@@ -1087,7 +1087,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"number\":0,\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\",\"highlight\":null}],\"next_cursor\":null,\"prev_cursor\":null,\"as_of\":null,\"index\":{\"complete\":true}}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"number\":0,\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\",\"highlight\":null,\"upstream_proxy\":null}],\"next_cursor\":null,\"prev_cursor\":null,\"as_of\":null,\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1127,7 +1127,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"number\":0,\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\",\"highlight\":null}],\"next_cursor\":null,\"prev_cursor\":null,\"as_of\":null,\"index\":{\"complete\":true}}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"number\":0,\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"application/json\",\"length\":\"12\",\"metadata\":{\"foo\":\"bar\"},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":\"2026-01-02T03:04:06Z\",\"highlight\":null,\"upstream_proxy\":null}],\"next_cursor\":null,\"prev_cursor\":null,\"as_of\":null,\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1161,7 +1161,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"number\":0,\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"N/A\",\"status_code\":-1,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null,\"highlight\":null}],\"next_cursor\":null,\"prev_cursor\":null,\"as_of\":null,\"index\":{\"complete\":true}}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"number\":0,\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"status\":\"N/A\",\"status_code\":-1,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null,\"highlight\":null,\"upstream_proxy\":null}],\"next_cursor\":null,\"prev_cursor\":null,\"as_of\":null,\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -1190,7 +1190,7 @@ func TestTrafficList(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"number\":0,\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null,\"highlight\":null},{\"id\":\"01938032-1b17-7243-b035-e6a9f4645904\",\"number\":0,\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:06Z\",\"responded_at\":null,\"highlight\":null}],\"next_cursor\":\"older-token\",\"prev_cursor\":null,\"as_of\":null,\"index\":{\"complete\":true}}\n"
+		want := "{\"items\":[{\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"number\":0,\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:05Z\",\"responded_at\":null,\"highlight\":null,\"upstream_proxy\":null},{\"id\":\"01938032-1b17-7243-b035-e6a9f4645904\",\"number\":0,\"scheme\":\"\",\"method\":\"\",\"host\":\"\",\"path\":\"\",\"status\":\"\",\"status_code\":0,\"content_type\":\"\",\"length\":\"0\",\"metadata\":{},\"requested_at\":\"2026-01-02T03:04:06Z\",\"responded_at\":null,\"highlight\":null,\"upstream_proxy\":null}],\"next_cursor\":\"older-token\",\"prev_cursor\":null,\"as_of\":null,\"index\":{\"complete\":true}}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}

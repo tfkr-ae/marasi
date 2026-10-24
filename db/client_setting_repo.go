@@ -84,6 +84,18 @@ func (repo *Repository) SetClientSetting(client, key string, value json.RawMessa
 	if client == domain.ReservedClient {
 		return domain.ClientSetting{}, fmt.Errorf("%w: %s", domain.ErrReservedClient, client)
 	}
+	return repo.upsertClientSetting(client, key, value)
+}
+
+// SetMarasiSetting implements the domain.ConfigRepository interface.
+func (repo *Repository) SetMarasiSetting(key string, value json.RawMessage) (domain.ClientSetting, error) {
+	if err := domain.ValidateClientSettingAddress(domain.ReservedClient, key); err != nil {
+		return domain.ClientSetting{}, err
+	}
+	return repo.upsertClientSetting(domain.ReservedClient, key, value)
+}
+
+func (repo *Repository) upsertClientSetting(client, key string, value json.RawMessage) (domain.ClientSetting, error) {
 	if err := domain.ValidateClientSettingValue(value); err != nil {
 		return domain.ClientSetting{}, err
 	}
