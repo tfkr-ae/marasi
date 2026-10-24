@@ -45,6 +45,9 @@ type Server struct {
 	restartMu  sync.Mutex
 	restart    SuccessorStart
 	restarting bool
+	// control is the control listener's network address, nil until
+	// EnableControlAddress.
+	control *ControlAddress
 }
 
 // NewServer creates a control API server for proxy.
@@ -398,6 +401,9 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		// UpstreamProxyConfigured whether this machine lists it.
 		UpstreamProxy           string `json:"upstream_proxy"`
 		UpstreamProxyConfigured bool   `json:"upstream_proxy_configured"`
+		// ControlListener is the control listener's network address, null
+		// when it has none. The control token is never part of the status.
+		ControlListener *string `json:"control_listener"`
 	}{
 		Status:                  "running",
 		Version:                 s.version,
@@ -408,6 +414,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		RestartRequired:         s.updates != nil && s.updates.RestartRequired(),
 		UpstreamProxy:           selection.Selected,
 		UpstreamProxyConfigured: selection.Configured,
+		ControlListener:         s.controlListenerAddress(),
 	})
 }
 

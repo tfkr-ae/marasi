@@ -1816,13 +1816,13 @@ func TestStartService(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := fmt.Sprintf("{\"status\":\"running\",\"version\":%q,\"channel\":\"nightly\",\"instance\":\"work\",\"project\":%q,\"proxy_listener\":%q,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true}\n", wantVersion, canonicalProject, proxyListener)
+		want := fmt.Sprintf("{\"status\":\"running\",\"version\":%q,\"channel\":\"nightly\",\"instance\":\"work\",\"project\":%q,\"proxy_listener\":%q,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null}\n", wantVersion, canonicalProject, proxyListener)
 		if got := string(body); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
 
 		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
-		want = fmt.Sprintf("status: running\nversion: %s\nchannel: nightly\ninstance: work\nproject: %s\nproxy listener: %s\nrestart required: no\nupstream proxy: none\n", wantVersion, canonicalProject, proxyListener)
+		want = fmt.Sprintf("status: running\nversion: %s\nchannel: nightly\ninstance: work\nproject: %s\nproxy listener: %s\nrestart required: no\nupstream proxy: none\ncontrol listener network address: none\n", wantVersion, canonicalProject, proxyListener)
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
