@@ -173,7 +173,7 @@ func TestRemoteSelection(t *testing.T) {
 		}
 	})
 
-	t.Run("should refuse service start, service list, and for now service stop with --remote", func(t *testing.T) {
+	t.Run("should refuse service start and service list with --remote", func(t *testing.T) {
 		for _, test := range []struct {
 			env  []string
 			args []string
@@ -182,7 +182,6 @@ func TestRemoteSelection(t *testing.T) {
 			{args: []string{"--remote", instance.url, "service", "start"}, want: "marasi service start acts on this machine and does not accept --remote"},
 			{args: []string{"--remote", instance.url, "service", "list"}, want: "marasi service list acts on this machine and does not accept --remote"},
 			{env: []string{"MARASI_REMOTE=" + instance.url}, args: []string{"service", "list"}, want: "marasi service list acts on this machine and does not accept MARASI_REMOTE"},
-			{args: []string{"--remote", instance.url, "service", "stop"}, want: "marasi service stop does not support --remote yet"},
 		} {
 			env := append([]string{"MARASI_TOKEN=" + instance.token}, test.env...)
 			args := append([]string{"--config-dir", instance.cliDir}, test.args...)
@@ -355,6 +354,43 @@ func TestRemoteUsageErrors(t *testing.T) {
 		got := <-requests
 		if got.Host != address || got.URL.Path != "/prefix/traffic" || got.URL.Query().Get("limit") != "5" || got.Header.Get("Authorization") != "Bearer secret" {
 			t.Fatalf("\nwanted:\nHost %s, /prefix/traffic?limit=5, Bearer secret\ngot:\nHost %s, %s?%s, %q", address, got.Host, got.URL.Path, got.URL.RawQuery, got.Header.Get("Authorization"))
+		}
+	})
+}
+
+func TestRemoteStop(t *testing.T) {
+	binary := buildMarasi(t)
+
+	t.Run("should stop the instance and return once its network address refuses connections", func(t *testing.T) {
+		instance := startRemoteInstance(t, binary)
+		address := strings.TrimPrefix(instance.url, "http://")
+
+		stdout, stderr, err := instance.remote("service", "stop")
+		if want := "instance work stopped successfully\n"; err != nil || stdout != "" || stderr != want {
+			t.Fatalf("\nwanted:\nstderr %q\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
+		}
+		if conn, err := net.Dial("tcp", address); err == nil {
+			conn.Close()
+			t.Fatalf("\nwanted:\n%s refuses connections\ngot:\na connection", address)
+		}
+		want := "Error: instance work is not running\n"
+		if _, stderr, err := instance.local("service", "status"); exitCode(err) != 1 || !strings.HasSuffix(stderr, want) {
+			t.Fatalf("\nwanted:\n%q\ngot:\nstderr %q error %v", want, stderr, err)
+		}
+	})
+
+	t.Run("should print the stopped instance as JSON", func(t *testing.T) {
+		instance := startRemoteInstance(t, binary)
+		stdout, stderr, err := instance.remote("service", "stop", "--json")
+		if want := `{"instance":"work","status":"stopped"}` + "\n"; err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\n%s\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should say no instance answers when nothing listens at the remote URL", func(t *testing.T) {
+		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, "--config-dir", t.TempDir(), "--remote", "http://127.0.0.1:1", "service", "stop")
+		if want := "Error: no instance answers at http://127.0.0.1:1\n"; exitCode(err) != 1 || stdout != "" || stderr != want {
+			t.Fatalf("\nwanted:\n%q\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
 		}
 	})
 }

@@ -124,15 +124,19 @@ var stopCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		// The local stop waits on the instance's lock file, which is on its
-		// instance machine; the remote wait needs its own design.
+		var instanceName string
 		if endpoint.remote() {
-			return errors.New("marasi service stop does not support --remote yet")
+			name, err := stopRemoteService(ctx, endpoint)
+			if err != nil {
+				return err
+			}
+			instanceName = name
+		} else {
+			if err := stopService(ctx, endpoint.path); err != nil {
+				return err
+			}
+			instanceName = endpoint.name()
 		}
-		if err := stopService(ctx, endpoint.path); err != nil {
-			return err
-		}
-		instanceName := endpoint.name()
 		if jsonOutput {
 			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
 				Instance string `json:"instance"`
@@ -678,6 +682,53 @@ func stopService(ctx context.Context, instancePath string) error {
 		wrapError("closing service stop response", closeErr),
 		waitErr,
 	)
+}
+
+// stopRemoteService stops the instance at a network address and returns its
+// name. The instance's lock file is on its own machine, so the wait is for
+// the address to refuse connections instead, bounded by ctx as the local
+// wait on the lock is.
+func stopRemoteService(ctx context.Context, target instanceEndpoint) (string, error) {
+	// The URL does not name the instance, so its status does.
+	response, err := dialInstance(ctx, target, http.MethodGet, "/service/status", "", nil)
+	if err != nil {
+		return "", err
+	}
+	if err := rejectInstanceStatus("getting service status", response, true); err != nil {
+		return "", err
+	}
+	var status struct {
+		Instance string `json:"instance"`
+	}
+	if err := json.Unmarshal(response.Body, &status); err != nil || status.Instance == "" {
+		return "", errors.New("invalid service status: instance must be a non-empty string")
+	}
+
+	response, err = dialInstance(ctx, target, http.MethodPost, "/service/stop", "", nil)
+	var notRunning instanceNotRunningError
+	switch {
+	case errors.As(err, &notRunning):
+		// The instance closed the connection before answering, which a
+		// stopping instance may do; the wait below confirms it is gone.
+	case err != nil:
+		return "", err
+	case response.StatusCode != http.StatusAccepted:
+		return "", controlAPIError("stopping service", response.Status, response.Body)
+	}
+
+	ticker := time.NewTicker(instancePollDelay)
+	defer ticker.Stop()
+	for target.control.Accepts(ctx) {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+		}
+	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	return status.Instance, nil
 }
 
 // waitForInstanceStop polls until lockPath can be locked, or ctx is cancelled.
