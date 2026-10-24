@@ -29,6 +29,9 @@ type ControlToken struct {
 	secure func(path string) error
 	mu     sync.Mutex
 	value  []byte
+	// generation counts rotations, so a connection can tell whether the
+	// token it authenticated with is still the current one.
+	generation uint64
 }
 
 // NewControlToken returns the control token kept at path. secure is applied
@@ -54,14 +57,52 @@ func (t *ControlToken) Value() (string, error) {
 	return string(t.value), nil
 }
 
-// matches reports whether presented is the control token. The comparison
-// takes the same time wherever the first difference is.
-func (t *ControlToken) matches(presented string) bool {
-	value, err := t.Value()
+// Rotate replaces the control token with a new random one, writing its file
+// atomically before the old token stops matching, and returns the new one.
+// A failed write keeps the old token.
+func (t *ControlToken) Rotate() (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	value, err := generateControlToken()
 	if err != nil {
-		return false
+		return "", err
 	}
-	return subtle.ConstantTimeCompare([]byte(presented), []byte(value)) == 1
+	if err := t.write(value); err != nil {
+		return "", err
+	}
+	t.value = []byte(value)
+	t.generation++
+	return value, nil
+}
+
+// matches reports whether presented is the control token, and the
+// generation of the token it matched. The comparison takes the same time
+// wherever the first difference is.
+func (t *ControlToken) matches(presented string) (uint64, bool) {
+	// Value loads the token on first use; the comparison then reads the
+	// value and its generation together, so a rotation cannot fall between.
+	if _, err := t.Value(); err != nil {
+		return 0, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.generation, subtle.ConstantTimeCompare([]byte(presented), t.value) == 1
+}
+
+// currentGeneration returns how many times the token has been rotated.
+func (t *ControlToken) currentGeneration() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.generation
+}
+
+// generateControlToken returns controlTokenBytes random bytes as hex.
+func generateControlToken() (string, error) {
+	random := make([]byte, controlTokenBytes)
+	if _, err := rand.Read(random); err != nil {
+		return "", fmt.Errorf("generating control token: %w", err)
+	}
+	return hex.EncodeToString(random), nil
 }
 
 func (t *ControlToken) load() ([]byte, error) {
@@ -76,11 +117,10 @@ func (t *ControlToken) load() ([]byte, error) {
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("reading control token %s: %w", t.path, err)
 	}
-	random := make([]byte, controlTokenBytes)
-	if _, err := rand.Read(random); err != nil {
-		return nil, fmt.Errorf("generating control token: %w", err)
+	value, err := generateControlToken()
+	if err != nil {
+		return nil, err
 	}
-	value := hex.EncodeToString(random)
 	if err := t.write(value); err != nil {
 		return nil, err
 	}
