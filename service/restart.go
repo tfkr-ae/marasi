@@ -178,10 +178,10 @@ func (s *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 func (s *Server) rollBackRestart(w http.ResponseWriter, r *http.Request, ctx context.Context, release projectRelease, proxyListener *string, cause error) {
 	var rollbackErr error
 	if release.reopen != nil {
-		rollbackErr = wrapRestartError("reopening project", release.reopen(ctx))
+		rollbackErr = wrapError("reopening project", release.reopen(ctx))
 	}
 	if proxyListener != nil && s.listener.Status().ProxyListener == nil {
-		rollbackErr = errors.Join(rollbackErr, wrapRestartError("restarting proxy listener", startListenerAt(ctx, s.listener, *proxyListener)))
+		rollbackErr = errors.Join(rollbackErr, wrapError("restarting proxy listener", startListenerAt(ctx, s.listener, *proxyListener)))
 	}
 	var held *heldItemsError
 	if errors.As(cause, &held) {
@@ -238,7 +238,7 @@ func writeHeldItems(w http.ResponseWriter, r *http.Request, held *heldItemsError
 	}{Error: "checkpoint_items_held", Message: held.Error(), Items: held.items})
 }
 
-func wrapRestartError(action string, err error) error {
+func wrapError(action string, err error) error {
 	if err == nil {
 		return nil
 	}

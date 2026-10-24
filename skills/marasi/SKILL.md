@@ -33,6 +33,16 @@ marasi --config-dir "$CONFIG_DIR" --instance "$INSTANCE" service status --json
 
 Set `PROJECT` to the chosen project name. `--project-name` selects `<config-dir>/projects/<name>.marasi`. Use `--project /absolute/path/project.marasi` instead for a file elsewhere. These selectors are mutually exclusive. `--port 0` assigns a free port. Start launches a detached service with its listener already running.
 
+To let a client that cannot open the socket, such as a GUI in a webview or a client on another machine, reach the control API, start the instance with a network address for its control listener:
+
+```sh
+marasi --config-dir "$CONFIG_DIR" --instance "$INSTANCE" service start \
+  --project-name "$PROJECT" --port 0 --control-address 127.0.0.1:0 --json
+marasi --config-dir "$CONFIG_DIR" --instance "$INSTANCE" service control token
+```
+
+`--control-address HOST:PORT` serves the same control API over plain HTTP at that address; port `0` picks a free port. Read the bound address from `control_listener` in `service start --json` or `service status --json` (`null` when there is none; `control listener network address:` in human output). Every request to the address must send the instance's control token as `Authorization: Bearer TOKEN`; a missing or wrong token gets 401 `unauthorized`, and a token in the query string is never accepted. The socket never asks for the token. Marasi generates the token, 32 random bytes as 64 hex characters, in the owner-only file `<config-dir>/instances/<instance>.token` and reuses it on later starts. `service control token` prints it (`--json`: `token`) and works only through the socket: its route `GET /service/control-listener/token` returns 403 `socket_only` on the network address. Status, list, events, and logs never show the token; do not print it where the user did not ask for it. A non-loopback address writes a warning on stderr and in the instance log, because the address has no TLS. An address already in use fails the start.
+
 Proceed only when status reports `running`, the intended instance and project, and a non-empty `proxy_listener`. To switch projects on a selected instance, use `project open --name NAME` or `project open --path PATH`, then confirm the new project with `service status`.
 
 ## Capture and inspect traffic
