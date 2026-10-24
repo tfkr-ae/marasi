@@ -19,6 +19,9 @@ const controlRetireTimeout = 5 * time.Second
 // decides where it ends up.
 var errControlAddressHandedOver = errors.New("control listener network address is handed over to a restart")
 
+// errControlAddressClosed refuses a start once the instance is stopping.
+var errControlAddressClosed = errors.New("the instance is stopping")
+
 // Update moves the network address to settings. The new address is bound
 // before the old one closes, so a failed bind leaves the old one serving.
 // Moving to the address already bound changes nothing.
