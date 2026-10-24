@@ -77,8 +77,14 @@ func (c *ControlAddress) retire(ctx context.Context, run *controlAddressRun) {
 	if err := run.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 		fmt.Fprintf(c.logWriter, "closing control listener network address: %v\n", err)
 	}
-	trigger := contextConn(ctx)
-	run.conns.closeWhere(func(conn net.Conn) bool { return conn != trigger })
+	trigger, _ := ctx.Value(networkConnKey{}).(*networkConn)
+	c.connsMu.Lock()
+	for _, tracked := range c.conns {
+		if tracked.run == run && tracked != trigger {
+			_ = tracked.conn.Close()
+		}
+	}
+	c.connsMu.Unlock()
 	c.retiring.Add(1)
 	go func() {
 		defer c.retiring.Done()
@@ -94,13 +100,13 @@ func (c *ControlAddress) retire(ctx context.Context, run *controlAddressRun) {
 // closesConnection reports whether the network address that r arrived on is
 // no longer the active one, so r's connection must close after its response.
 func (c *ControlAddress) closesConnection(r *http.Request) bool {
-	if requestArrival(r) != arrivedOnNetworkAddress {
+	tracked, ok := r.Context().Value(networkConnKey{}).(*networkConn)
+	if !ok {
 		return false
 	}
-	conn := contextConn(r.Context())
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.run == nil || !c.run.conns.contains(conn)
+	return tracked.run != c.run
 }
 
 func activeControlListenerStatus(run *controlAddressRun) ControlListenerStatus {
