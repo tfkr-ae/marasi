@@ -141,12 +141,11 @@ func launchServiceChild(command *exec.Cmd) (io.WriteCloser, <-chan childStartup,
 // here because the detached child's stderr is discarded.
 func writeStartOutput(stdout, stderr io.Writer, asJSON bool, instanceName string, startup childStartup) error {
 	var controlListener *string
+	warning := ""
 	if startup.controlListener != "" {
 		controlListener = &startup.controlListener
-		if warning := service.ControlAddressWarning(startup.controlListener); warning != "" {
-			if _, err := fmt.Fprintln(stderr, warning); err != nil {
-				return fmt.Errorf("writing service startup: %w", err)
-			}
+		if line := service.ControlAddressWarning(startup.controlListener); line != "" {
+			warning = line + "\n"
 		}
 	}
 	if asJSON {
@@ -158,6 +157,9 @@ func writeStartOutput(stdout, stderr io.Writer, asJSON bool, instanceName string
 		if err != nil {
 			return fmt.Errorf("encoding service startup: %w", err)
 		}
+		if _, err := io.WriteString(stderr, warning); err != nil {
+			return fmt.Errorf("writing service startup: %w", err)
+		}
 		if _, err := fmt.Fprintf(stdout, "%s\n", payload); err != nil {
 			return fmt.Errorf("writing service startup: %w", err)
 		}
@@ -165,7 +167,7 @@ func writeStartOutput(stdout, stderr io.Writer, asJSON bool, instanceName string
 	}
 	// The proxy listener line stays last: scripts read the rest of stderr
 	// after it as the proxy listener address.
-	output := fmt.Sprintf("instance %s started\n", instanceName)
+	output := fmt.Sprintf("instance %s started\n%s", instanceName, warning)
 	if controlListener != nil {
 		output += fmt.Sprintf("control listener network address started on %s\n", *controlListener)
 	}
