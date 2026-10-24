@@ -29,6 +29,7 @@ type ControlAddress struct {
 	events    *eventBroadcaster
 	mu        sync.Mutex
 	run       *controlAddressRun
+	closed    bool // Shutdown ran, so Start must not bind again
 	// retiring counts runs that Stop or Update closed and that are still
 	// finishing the request that closed them.
 	retiring sync.WaitGroup
@@ -248,6 +249,9 @@ func (c *ControlAddress) setStatus(status ControlListenerStatus) {
 func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings) (ControlListenerStatus, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return ControlListenerStatus{}, listenerFailure{kind: ErrListenerUnavailable, err: errControlAddressClosed}
+	}
 	if c.run != nil {
 		return ControlListenerStatus{}, ErrListenerAlreadyActive
 	}
@@ -273,13 +277,17 @@ func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings) (
 // flight get until ctx ends to finish, and are then cut off.
 func (c *ControlAddress) Shutdown(ctx context.Context) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	defer c.retiring.Wait()
-	if c.run == nil {
-		return nil
-	}
 	run := c.run
 	c.run = nil
+	c.closed = true
+	c.mu.Unlock()
+	// Wait with mu released, since a request in flight may need it to finish
+	// (CODING_STANDARDS.md, "Release before waiting"). With run gone and
+	// closed set, nothing adds to retiring any more.
+	defer c.retiring.Wait()
+	if run == nil {
+		return nil
+	}
 	c.setStatus(ControlListenerStatus{Status: ListenerInactive})
 	shutdownErr := run.server.Shutdown(ctx)
 	var closeErr error
@@ -343,8 +351,16 @@ func (c *ControlAddress) resumeAfterHandover(ctx context.Context) error {
 		c.setStatus(ControlListenerStatus{Status: ListenerInactive})
 		// Shut down in the background: the request that asked for the
 		// restart may be in flight on this server and must still get its
-		// response.
-		go func() { _ = run.server.Shutdown(context.WithoutCancel(ctx)) }()
+		// response. Shutdown waits for it through retiring.
+		c.retiring.Add(1)
+		go func() {
+			defer c.retiring.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), controlRetireTimeout)
+			defer cancel()
+			if err := run.server.Shutdown(shutdownCtx); err != nil {
+				_ = run.server.Close()
+			}
+		}()
 		return listenerFailure{kind: ErrListenerUnavailable, err: err}
 	}
 	<-run.served
