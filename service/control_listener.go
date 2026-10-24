@@ -14,6 +14,11 @@ import (
 // request that closed it to write its response before cutting it off.
 const controlRetireTimeout = 5 * time.Second
 
+// errControlAddressHandedOver refuses a move or stop while a restart has
+// handed the network address to a successor: the successor or a rollback
+// decides where it ends up.
+var errControlAddressHandedOver = errors.New("control listener network address is handed over to a restart")
+
 // Update moves the network address to settings. The new address is bound
 // before the old one closes, so a failed bind leaves the old one serving.
 // Moving to the address already bound changes nothing.
@@ -22,6 +27,9 @@ func (c *ControlAddress) Update(ctx context.Context, settings ListenerSettings) 
 	defer c.mu.Unlock()
 	if c.run == nil {
 		return ControlListenerStatus{}, ErrListenerInactive
+	}
+	if c.run.suspended {
+		return ControlListenerStatus{}, errControlAddressHandedOver
 	}
 	endpoint, err := listenerEndpoint(settings)
 	if err != nil {
@@ -49,6 +57,9 @@ func (c *ControlAddress) Stop(ctx context.Context) (ControlListenerStatus, error
 	defer c.mu.Unlock()
 	if c.run == nil {
 		return ControlListenerStatus{}, ErrListenerInactive
+	}
+	if c.run.suspended {
+		return ControlListenerStatus{}, errControlAddressHandedOver
 	}
 	c.retire(ctx, c.run)
 	c.run = nil
@@ -151,6 +162,10 @@ func (s *Server) writeControlListenerResult(w http.ResponseWriter, r *http.Reque
 // writeControlListenerError writes the proxy listener routes' error codes. A
 // failed bind also carries the reason, such as an address already in use.
 func writeControlListenerError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, errControlAddressHandedOver) {
+		writeJSON(w, r, http.StatusConflict, controlRefusalBody{Error: "restart_in_progress", Message: "the instance is restarting"})
+		return
+	}
 	if errors.Is(err, ErrListenerUnavailable) {
 		writeJSON(w, r, http.StatusConflict, controlRefusalBody{Error: "listener_unavailable", Message: err.Error()})
 		return
