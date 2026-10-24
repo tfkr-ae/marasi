@@ -11,9 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"slices"
-	"strings"
 	"syscall"
 	"time"
 
@@ -38,24 +35,17 @@ var projectCmd = &cobra.Command{
 	Short: "List projects and open one in an instance",
 }
 
-type projectListItem struct {
-	Name    string `json:"name"`
-	Project string `json:"project"`
-}
-
 var projectListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List named projects",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		items, err := listProjects(configDir)
+		items, err := listProjects(cmd)
 		if err != nil {
 			return err
 		}
 		if jsonOutput {
-			return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
-				Items []projectListItem `json:"items"`
-			}{Items: items})
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(service.ProjectList{Items: items})
 		}
 		table := newListTable(cmd.OutOrStdout(), "NAME", "PROJECT")
 		for _, item := range items {
@@ -68,42 +58,22 @@ var projectListCmd = &cobra.Command{
 	},
 }
 
-func listProjects(configDir string) ([]projectListItem, error) {
-	projectsDir := filepath.Join(configDir, "projects")
-	entries, err := os.ReadDir(projectsDir)
-	if errors.Is(err, os.ErrNotExist) {
-		return []projectListItem{}, nil
+// listProjects lists the named projects on the instance machine over
+// --remote, and in this machine's config dir otherwise, which needs no
+// running instance.
+func listProjects(cmd *cobra.Command) ([]service.ProjectListItem, error) {
+	if !endpoint.remote() {
+		return service.ListProjects(configDir)
 	}
+	body, err := runControlRequest(cmd, http.MethodGet, "/project/list", "listing projects", nil)
 	if err != nil {
-		return nil, fmt.Errorf("reading projects directory %s: %w", projectsDir, err)
+		return nil, err
 	}
-
-	items := make([]projectListItem, 0, len(entries))
-	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), ".marasi") {
-			continue
-		}
-		path := filepath.Join(projectsDir, entry.Name())
-		info, err := os.Stat(path)
-		if err != nil {
-			return nil, fmt.Errorf("checking project %s: %w", path, err)
-		}
-		if !info.Mode().IsRegular() {
-			continue
-		}
-		canonicalPath, err := service.ResolveProjectPath(path)
-		if err != nil {
-			return nil, fmt.Errorf("resolving project %s: %w", path, err)
-		}
-		items = append(items, projectListItem{
-			Name:    strings.TrimSuffix(entry.Name(), ".marasi"),
-			Project: canonicalPath,
-		})
+	var list service.ProjectList
+	if err := json.Unmarshal(body, &list); err != nil || list.Items == nil {
+		return nil, errors.New("invalid project list response: items must be an array")
 	}
-	slices.SortFunc(items, func(left, right projectListItem) int {
-		return strings.Compare(left.Name, right.Name)
-	})
-	return items, nil
+	return list.Items, nil
 }
 
 var projectOpenCmd = &cobra.Command{
