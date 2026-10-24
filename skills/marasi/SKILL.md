@@ -43,6 +43,18 @@ marasi --config-dir "$CONFIG_DIR" --instance "$INSTANCE" service control token
 
 `--control-address HOST:PORT` serves the same control API over plain HTTP at that address; port `0` picks a free port. Read the bound address from `control_listener` in `service start --json` or `service status --json` (`null` when there is none; `control listener network address:` in human output). Every request to the address must send the instance's control token as `Authorization: Bearer TOKEN`; a missing or wrong token gets 401 `unauthorized`, and a token in the query string is never accepted. The socket never asks for the token. Marasi generates the token, 32 random bytes as 64 hex characters, in the owner-only file `<config-dir>/instances/<instance>.token` and reuses it on later starts. `service control token` prints it (`--json`: `token`) and works only through the socket: its route `GET /service/control-listener/token` returns 403 `socket_only` on the network address. Status, list, events, and logs never show the token; do not print it where the user did not ask for it. A non-loopback address writes a warning on stderr and in the instance log, because the address has no TLS. An address already in use fails the start.
 
+### Drive an instance on another machine
+
+To drive an instance whose control listener has a network address, point the CLI at that address with `--remote URL` instead of `--instance`:
+
+```sh
+export MARASI_TOKEN="$CONTROL_TOKEN"
+marasi --remote "http://$CONTROL_ADDRESS" service status --json
+marasi --remote "http://$CONTROL_ADDRESS" --token-file "$TOKEN_FILE" traffic list --json
+```
+
+`--remote` takes an `http` or `https` URL (`https` for a TLS reverse proxy in front of the address; a path in the URL prefixes every request), and `MARASI_REMOTE` sets it for the shell session; `--remote` wins over `MARASI_REMOTE`. The control token comes from `--token-file PATH` or else `MARASI_TOKEN`. No flag takes the token itself, so it never shows in `ps` or shell history. `--remote` or `MARASI_REMOTE` together with an explicit `--instance` is a usage error, a missing token fails before any request, and `--token-file` without a remote is a usage error. A rejected token fails with `control token rejected by URL: check MARASI_TOKEN or --token-file`, and an address nothing answers at with `no instance answers at URL`. The local socket-path limit does not apply. Commands that only call the control API, `events`, and `service restart` behave and print exactly as they do through the socket, `--json` included. `service start` and `service list` act on this machine and refuse a remote, and `service stop` does not support `--remote` yet.
+
 Proceed only when status reports `running`, the intended instance and project, and a non-empty `proxy_listener`. To switch projects on a selected instance, use `project open --name NAME` or `project open --path PATH`, then confirm the new project with `service status`.
 
 ## Capture and inspect traffic

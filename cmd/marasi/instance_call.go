@@ -9,12 +9,16 @@ import (
 )
 
 // instanceNotRunningError reports that no instance answers on the named
-// instance's control socket.
+// instance's control socket, or at the remote URL in name.
 type instanceNotRunningError struct {
-	name string
+	name   string
+	remote bool
 }
 
 func (e instanceNotRunningError) Error() string {
+	if e.remote {
+		return fmt.Sprintf("no instance answers at %s", e.name)
+	}
 	return fmt.Sprintf("instance %s is not running", e.name)
 }
 
@@ -48,7 +52,7 @@ func dialInstance(ctx context.Context, target instanceEndpoint, method, path, co
 		if ctx.Err() != nil {
 			return instanceResponse{}, ctx.Err()
 		}
-		return instanceResponse{}, instanceNotRunningError{name: target.label}
+		return instanceResponse{}, target.unreachable(err)
 	}
 	responseBody, readErr := io.ReadAll(response.Body)
 	closeErr := response.Body.Close()
