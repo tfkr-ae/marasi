@@ -522,9 +522,9 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 		return shutdownErr
 	}
 	listenerLifecycle.BindProject(projects)
-	if filepath.Clean(filepath.Dir(projectPath)) == filepath.Join(filepath.Clean(configDir), "projects") {
-		if err := os.MkdirAll(filepath.Dir(projectPath), 0700); err != nil {
-			return fmt.Errorf("creating projects dir: %w", err)
+	if filepath.Clean(filepath.Dir(projectPath)) == service.ProjectsDir(filepath.Clean(configDir)) {
+		if err := service.CreateProjectsDir(configDir); err != nil {
+			return err
 		}
 	}
 	if err := projects.Open(ctx, projectPath); err != nil {
@@ -875,29 +875,7 @@ func resolveProjectPath(path string) (string, error) { return service.ResolvePro
 
 // resolveNamedProjectPath returns a named project under configDir/projects.
 func resolveNamedProjectPath(configDir, name string) (string, error) {
-	name = strings.TrimSpace(name)
-	name = strings.TrimSuffix(name, ".marasi")
-	if name == "" {
-		return "", errors.New("invalid project name: cannot be empty")
-	}
-	if strings.HasSuffix(name, ".marasi") {
-		return "", errors.New("invalid project name: only one .marasi suffix is allowed")
-	}
-	if !filepath.IsLocal(name) {
-		return "", errors.New("invalid project name: absolute paths and parent directory references are not allowed")
-	}
-	if name == "." || strings.ContainsAny(name, `/\`) {
-		return "", errors.New("invalid project name: path separators are not allowed")
-	}
-	if filepath.Base(name) != name {
-		return "", errors.New("invalid project name: subdirectories not allowed")
-	}
-
-	projectsDir := filepath.Join(configDir, "projects")
-	if err := os.MkdirAll(projectsDir, 0755); err != nil {
-		return "", fmt.Errorf("creating projects dir: %w", err)
-	}
-	return resolveProjectPath(filepath.Join(projectsDir, name+".marasi"))
+	return service.ResolveNamedProjectPath(configDir, name)
 }
 
 // claimInstance locks lockPath and listens on socketPath.

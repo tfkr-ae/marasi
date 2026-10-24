@@ -65,6 +65,10 @@ The instance and the CLI run on different machines, so read their output as the 
 - `service status` reports the instance machine's operating system (`os:`; `os` in `--json`). Over a remote, `chrome path add` and `chrome path remove` default `--os` to it, so a path is tagged for the machine that runs Chrome. Pass `--os` to override.
 - Over a remote, `service status` adds this CLI's version (`cli version:`; `cli_version` in `--json`) beside the instance's `version`. When they differ it prints `warning: this marasi is version X but the instance runs Y` on stderr, or puts that text in the `warning` field under `--json`. Commands still run; update the older side if a command or field is missing. No other command checks versions.
 
+Over `--remote`, `wordlist add PATH` and `report template add PATH` read `PATH` on this machine, upload its contents under its base name, and delete the local file only after the instance accepts it, so add still moves the file. A refused upload (`wordlist_already_exists`, `report_template_already_exists`, an invalid name such as a hidden template name) or an instance that does not answer leaves the local file in place. The instance publishes `wordlist.added` or `report.template.added` as for a local add. Without a remote, both commands send the path and the instance moves the file itself.
+
+Over `--remote`, project paths and names refer to the instance machine. `project list` lists the instance's `<config-dir>/projects`, with the same rows and `--json` shape as a local list there. `project open --path PATH` sends `PATH` unchanged, so it must be an absolute path on the instance machine; a relative path is refused with `invalid_project_request`. `project open --name NAME` is resolved in the instance's config directory, which creates its projects directory if needed; nothing is created on this machine. Without a remote, `project list` reads this machine's config directory and needs no running instance.
+
 ## Capture and inspect traffic
 
 Set `PROXY_LISTENER` from status, not from the requested port.
@@ -143,7 +147,7 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 | Task | Command group | Guidance |
 | --- | --- | --- |
 | Change listener address or pause capture | `listener` | `start` and `update` require both `--address` and `--port`. Stopping the listener leaves the service running. |
-| Find named project files | `project list` | Lists projects under the selected config directory. |
+| Find named project files | `project list` | Lists projects under the selected config directory, or with `--remote` under the instance machine's. |
 | Annotate captured traffic | `notes`, `traffic metadata` | Metadata updates replace the JSON rather than merge it. |
 | Change or delete many pairs | `traffic bulk` | `highlight`, `link`, `unlink`, `metadata set`/`clear`, `note append`/`clear`, `delete`. Select with `--id` (repeatable) or `--ids-file` (`-` for stdin), or `-q` with the list page's `--as-of`. Bulk metadata sets one dotted key and leaves the rest. Nothing asks for confirmation, and `delete` also removes notes, links, and logs. |
 | Count, map, or check traffic | `traffic count`, `traffic types`, `traffic sitemap`, `traffic validate` | `count --after <as_of>` counts pairs captured since a page. `sitemap --node <name>` lists a node's children; repeat `--node` to read several levels in one call, with matching counts under `-q`. `validate` exits 1 with the error position for a bad query, exclusion, or sort. |
@@ -160,9 +164,9 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 | Record methodology and vulnerabilities | `test-case`, `finding` | Link captured request IDs as evidence. |
 | Attach evidence files | `artifact` | Uploads require exactly one of `--finding` or `--test-case`, never both. |
 | Modify traffic with Lua | `extension` | Inspect source and settings before enabling or calling an extension. See [Write Lua extensions](#write-lua-extensions) before changing source. |
-| Manage attack inputs | `wordlist` | `add` moves the source file. Copy it first if the original must remain. |
+| Manage attack inputs | `wordlist` | `add` moves the source file, uploading it over `--remote`. Copy it first if the original must remain. |
 | Automate requests from templates | `armory` | Validate inputs before creating a run. Creation does not start it. Starting sends traffic. |
-| Export assessment evidence | `report` | Template `add` moves the source file. Exports default to draft and include test cases. Select `--output` explicitly. |
+| Export assessment evidence | `report` | Template `add` moves the source file, uploading it over `--remote`. Exports default to draft and include test cases. Select `--output` explicitly. |
 | Watch live activity | `events` | Blocking stream with no replay. `--json` emits one event object per line. |
 | Update Marasi | `update`, `service restart` | Install only when the user asks. A running instance checks and installs: `update` shows the available build and its notes, `update install` streams progress (one event object per line under `--json`) and exits 1 on `update.failed`. Running instances keep their build until `service restart`, which ends Armory runs and launches and refuses while Checkpoint items are held. `update reinstall` can install an older build and needs `--yes`, because newer projects may not open in it. |
 | Diagnose proxy activity | `logs` | Filter traffic separately with `traffic list`; logs are not captured request/response pairs. |

@@ -82,20 +82,14 @@ var reportTemplateListCmd = &cobra.Command{
 var reportTemplateAddCmd = &cobra.Command{
 	Use:   "add PATH",
 	Short: "Add a report template",
-	Long:  "Add a report template. The source file is moved into the templates directory.",
+	Long:  "Add a report template. The source file is moved into the templates directory. Over --remote its contents are uploaded and the local file is deleted once the instance accepts them.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path, err := filepath.Abs(args[0])
 		if err != nil {
 			return fmt.Errorf("resolving report template path: %w", err)
 		}
-		requestBody, err := json.Marshal(struct {
-			Path string `json:"path"`
-		}{Path: path})
-		if err != nil {
-			return fmt.Errorf("encoding report template add request: %w", err)
-		}
-		body, err := runControlRequest(cmd, http.MethodPost, "/report/template", "adding report template", requestBody)
+		body, err := runAddRequest(cmd, "/report/template", path, "adding report template")
 		if err != nil {
 			return err
 		}
