@@ -42,7 +42,7 @@ func init() {
 var restartCmd = &cobra.Command{
 	Use:   "restart",
 	Short: "Restart a service instance on the installed build",
-	Long: "Restart a service instance on the installed build. The successor keeps the instance name, open project, and proxy listener address. " +
+	Long: "Restart a service instance on the installed build. The successor keeps the instance name, open project, proxy listener address, and control listener network address with its control token. " +
 		"If it does not become ready, the instance keeps running on its current build. " +
 		"A restart ends Armory runs, held Checkpoint items, live WebSocket and HTTP connections, and launches, and is refused while Checkpoint items are held unless --force is given.",
 	Args: cobra.NoArgs,
@@ -296,7 +296,7 @@ type successorStarter struct {
 // waits for it to report ready. On failure it takes the name back. The
 // Server never cancels ctx: a restart finishes once begun, so only
 // readyTimeout bounds the wait.
-func (s successorStarter) start(ctx context.Context, project string, proxyListener *string) (service.Successor, error) {
+func (s successorStarter) start(ctx context.Context, handover service.Handover) (service.Successor, error) {
 	logPath := s.instancePath + ".log"
 	fail := func(err error) (service.Successor, error) {
 		return service.Successor{}, &service.RestartError{Log: logPath, Err: errors.Join(err, wrapError("reclaiming instance", s.claim.reclaim()))}
@@ -310,17 +310,20 @@ func (s successorStarter) start(ctx context.Context, project string, proxyListen
 		"--config-dir", s.configDir,
 		"--instance", instanceName,
 		"service", "start",
-		"--project", project,
+		"--project", handover.Project,
 		"--service-child",
 	}
-	if proxyListener != nil {
-		host, port, err := net.SplitHostPort(*proxyListener)
+	if handover.ProxyListener != nil {
+		host, port, err := net.SplitHostPort(*handover.ProxyListener)
 		if err != nil {
-			return service.Successor{}, &service.RestartError{Log: logPath, Err: fmt.Errorf("reading proxy listener %q: %w", *proxyListener, err)}
+			return service.Successor{}, &service.RestartError{Log: logPath, Err: fmt.Errorf("reading proxy listener %q: %w", *handover.ProxyListener, err)}
 		}
 		args = append(args, "--address", host, "--port", port)
 	} else {
 		args = append(args, "--no-proxy-listener")
+	}
+	if handover.ControlListener != nil {
+		args = append(args, "--control-address", *handover.ControlListener)
 	}
 	logFile, err := openInstanceLog(logPath)
 	if err != nil {

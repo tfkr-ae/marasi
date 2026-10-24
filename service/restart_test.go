@@ -69,7 +69,7 @@ func newRestartServer(t *testing.T, listener *restartListener) (*Server, *Projec
 	}
 	server := NewServer(lifecycle.proxy, listener, lifecycle, func() {}, "01.10.2026", "work", current)
 	t.Cleanup(server.Close)
-	server.EnableRestart(func(context.Context, string, *string) (Successor, error) {
+	server.EnableRestart(func(context.Context, Handover) (Successor, error) {
 		t.Error("a successor started")
 		return Successor{}, &RestartError{Err: context.Canceled}
 	})
@@ -130,7 +130,7 @@ func TestServiceRestartRefusals(t *testing.T) {
 func TestServiceRestartHandover(t *testing.T) {
 	t.Run("should let the old instance exit when a response arrives after the handover", func(t *testing.T) {
 		harness := newHungOriginHarness(t, false)
-		harness.server.EnableRestart(func(context.Context, string, *string) (Successor, error) {
+		harness.server.EnableRestart(func(context.Context, Handover) (Successor, error) {
 			return Successor{Version: "21.10.2026"}, nil
 		})
 		client := harness.sendHung(t, "/hung")

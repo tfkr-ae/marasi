@@ -34,9 +34,10 @@ type ControlAddress struct {
 
 // controlAddressRun is one bound network address and the server on it.
 type controlAddressRun struct {
-	listener net.Listener
-	server   *http.Server
-	served   chan error
+	listener  net.Listener
+	server    *http.Server
+	served    chan error
+	suspended bool // listener closed for a restart handover
 }
 
 // arrival says which way a control request reached the control listener.
@@ -183,6 +184,63 @@ func (c *ControlAddress) Shutdown(ctx context.Context) error {
 		wrapError("closing control listener network address", closeErr),
 		wrapError("serving control listener network address", serveErr),
 	)
+}
+
+// suspendForHandover stops accepting on the network address, freeing it for
+// a successor to bind, and returns the address it was on, or nil when it is
+// inactive. Connections already accepted keep being served, so a restart
+// requested over the network address still gets its response
+// (docs/adr/2026-10-18-restart-hands-over-and-rolls-back.md).
+func (c *ControlAddress) suspendForHandover() (*string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.run == nil || c.run.suspended {
+		return nil, nil
+	}
+	run := c.run
+	address := run.listener.Addr().String()
+	closeErr := run.listener.Close()
+	// Serve returns once its listener closes, without touching the
+	// connections it accepted.
+	serveErr := <-run.served
+	run.served <- nil
+	run.suspended = true
+	if errors.Is(serveErr, net.ErrClosed) {
+		serveErr = nil
+	}
+	return &address, errors.Join(
+		wrapError("closing control listener network address", closeErr),
+		wrapError("serving control listener network address", serveErr),
+	)
+}
+
+// resumeAfterHandover accepts on the network address again after a failed
+// handover, at the address it was suspended on. If that address cannot be
+// bound, the network address becomes inactive.
+func (c *ControlAddress) resumeAfterHandover(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.run == nil || !c.run.suspended {
+		return nil
+	}
+	run := c.run
+	endpoint := run.listener.Addr().String()
+	listener, err := (&net.ListenConfig{}).Listen(ctx, controlAddressNetwork(endpoint), endpoint)
+	if err != nil {
+		fmt.Fprintf(c.logWriter, "binding control listener network address on %s: %v\n", endpoint, err)
+		c.run = nil
+		c.setStatus(ControlListenerStatus{Status: ListenerInactive})
+		// Shut down in the background: the request that asked for the
+		// restart may be in flight on this server and must still get its
+		// response.
+		go func() { _ = run.server.Shutdown(context.WithoutCancel(ctx)) }()
+		return listenerFailure{kind: ErrListenerUnavailable, err: err}
+	}
+	<-run.served
+	run.listener = listener
+	run.suspended = false
+	go func() { run.served <- run.server.Serve(listener) }()
+	return nil
 }
 
 // bind listens on endpoint and starts serving the control API there.
