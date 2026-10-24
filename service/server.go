@@ -291,7 +291,7 @@ func (s *Server) serveProjectOpen(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	path, err := decodeProjectOpen(r)
+	path, name, err := decodeProjectOpen(r)
 	if err != nil {
 		writeProjectError(w, r, err)
 		return
@@ -299,6 +299,14 @@ func (s *Server) serveProjectOpen(w http.ResponseWriter, r *http.Request) {
 	if s.projects == nil {
 		writeProjectError(w, r, errors.New("project open not configured"))
 		return
+	}
+	if name != "" {
+		// A name means a project in this instance's config dir, so a remote
+		// CLI gets the same project a local one on this machine would.
+		if path, err = ResolveNamedProjectPath(s.projects.configDir, name); err != nil {
+			writeProjectError(w, r, err)
+			return
+		}
 	}
 	if err := s.projects.Open(r.Context(), path); err != nil {
 		writeProjectError(w, r, err)
@@ -334,41 +342,56 @@ func (s *Server) serveProjectList(w http.ResponseWriter, r *http.Request) {
 
 var errInvalidProjectRequest = errors.New("invalid project request")
 
-func decodeProjectOpen(r *http.Request) (string, error) {
+// decodeProjectOpen decodes a project open request, which holds exactly one
+// of an absolute "path", returned canonical, or a project "name", returned
+// cleaned for the caller to resolve in the instance's config dir.
+func decodeProjectOpen(r *http.Request) (path, name string, err error) {
 	if r.Body == nil {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
 	}
 	decoder := json.NewDecoder(r.Body)
 	var fields map[string]json.RawMessage
 	if err := decoder.Decode(&fields); err != nil {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
 	}
 	if fields == nil {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
+	}
+	if len(fields) != 1 {
+		return "", "", errInvalidProjectRequest
+	}
+	if raw, ok := fields["name"]; ok {
+		if err := json.Unmarshal(raw, &name); err != nil {
+			return "", "", errInvalidProjectRequest
+		}
+		name, err := CleanProjectName(name)
+		if err != nil {
+			return "", "", errInvalidProjectRequest
+		}
+		return "", name, nil
 	}
 	raw, ok := fields["path"]
-	if !ok || len(fields) != 1 {
-		return "", errInvalidProjectRequest
+	if !ok {
+		return "", "", errInvalidProjectRequest
 	}
-	var path string
 	if err := json.Unmarshal(raw, &path); err != nil || path == "" {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
 	}
 	if !filepath.IsAbs(path) || !strings.HasSuffix(path, ".marasi") {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
 	}
 	parent, err := os.Stat(filepath.Dir(path))
 	if err != nil || !parent.IsDir() {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
 	}
 	canonical, err := ResolveProjectPath(path)
 	if err != nil {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
 	}
-	return canonical, nil
+	return canonical, "", nil
 }
 
 func writeProjectError(w http.ResponseWriter, r *http.Request, err error) {

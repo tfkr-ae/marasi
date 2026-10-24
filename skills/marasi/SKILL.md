@@ -59,6 +59,8 @@ marasi --remote "http://$CONTROL_ADDRESS" --token-file "$TOKEN_FILE" traffic lis
 
 `--remote` takes an `http` or `https` URL (`https` for a TLS reverse proxy in front of the address; a path in the URL prefixes every request), and `MARASI_REMOTE` sets it for the shell session; `--remote` wins over `MARASI_REMOTE`. The control token comes from `--token-file PATH` or else `MARASI_TOKEN`. No flag takes the token itself, so it never shows in `ps` or shell history. `--remote` or `MARASI_REMOTE` together with an explicit `--instance` is a usage error, a missing token fails before any request, and `--token-file` without a remote is a usage error. A rejected token fails with `control token rejected by URL: check MARASI_TOKEN or --token-file`, and an address nothing answers at with `no instance answers at URL`. The local socket-path limit does not apply. Commands that only call the control API, `events`, and `service restart` behave and print exactly as they do through the socket, `--json` included. `service start` and `service list` act on this machine and refuse a remote, and `service stop` does not support `--remote` yet.
 
+Over `--remote`, project paths and names refer to the instance machine. `project list` lists the instance's `<config-dir>/projects`, with the same rows and `--json` shape as a local list there. `project open --path PATH` sends `PATH` unchanged, so it must be an absolute path on the instance machine; a relative path is refused with `invalid_project_request`. `project open --name NAME` is resolved in the instance's config directory, which creates its projects directory if needed; nothing is created on this machine. Without a remote, `project list` reads this machine's config directory and needs no running instance.
+
 ## Capture and inspect traffic
 
 Set `PROXY_LISTENER` from status, not from the requested port.
@@ -137,7 +139,7 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 | Task | Command group | Guidance |
 | --- | --- | --- |
 | Change listener address or pause capture | `listener` | `start` and `update` require both `--address` and `--port`. Stopping the listener leaves the service running. |
-| Find named project files | `project list` | Lists projects under the selected config directory. |
+| Find named project files | `project list` | Lists projects under the selected config directory, or with `--remote` under the instance machine's. |
 | Annotate captured traffic | `notes`, `traffic metadata` | Metadata updates replace the JSON rather than merge it. |
 | Change or delete many pairs | `traffic bulk` | `highlight`, `link`, `unlink`, `metadata set`/`clear`, `note append`/`clear`, `delete`. Select with `--id` (repeatable) or `--ids-file` (`-` for stdin), or `-q` with the list page's `--as-of`. Bulk metadata sets one dotted key and leaves the rest. Nothing asks for confirmation, and `delete` also removes notes, links, and logs. |
 | Count, map, or check traffic | `traffic count`, `traffic types`, `traffic sitemap`, `traffic validate` | `count --after <as_of>` counts pairs captured since a page. `sitemap --node <name>` lists a node's children; repeat `--node` to read several levels in one call, with matching counts under `-q`. `validate` exits 1 with the error position for a bad query, exclusion, or sort. |
