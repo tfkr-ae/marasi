@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -32,6 +33,7 @@ var requestedProjectPath string
 var projectPath string
 var proxyAddress string
 var proxyPort decimalPort
+var controlAddress string
 
 // decimalPort is a pflag.Value for a TCP port parsed in base 10.
 type decimalPort uint16
@@ -84,6 +86,7 @@ func init() {
 	startCmd.Flags().StringVar(&proxyAddress, "address", "127.0.0.1", "Proxy listener host or IP, without a port")
 	proxyPort = 8080
 	startCmd.Flags().Var(&proxyPort, "port", "Proxy listener TCP port")
+	startCmd.Flags().StringVar(&controlAddress, "control-address", "", "Also serve the control API at this network address, HOST:PORT, guarded by the control token. Port 0 picks a free port")
 	serviceCmd.AddCommand(startCmd, stopCmd, statusCmd, listServiceInstancesCmd)
 	rootCmd.AddCommand(serviceCmd)
 }
@@ -101,10 +104,24 @@ var startCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		if serviceChild {
-			return runServiceChild(ctx, configDir, projectPath, instancePath, proxyAddress, uint16(proxyPort))
+		if controlAddress != "" {
+			if _, err := parseControlAddress(controlAddress); err != nil {
+				return err
+			}
 		}
-		return startServiceProcess(ctx, configDir, projectPath, instancePath, proxyAddress, uint16(proxyPort), cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput)
+		options := serviceOptions{
+			configDir:      configDir,
+			projectPath:    projectPath,
+			instancePath:   instancePath,
+			proxyAddress:   proxyAddress,
+			proxyPort:      uint16(proxyPort),
+			proxyListener:  !noProxyListener,
+			controlAddress: controlAddress,
+		}
+		if serviceChild {
+			return runServiceChild(ctx, options)
+		}
+		return startServiceProcess(ctx, options, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput)
 	},
 }
 
@@ -116,10 +133,19 @@ var stopCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		if err := stopService(ctx, instancePath); err != nil {
-			return err
+		var instanceName string
+		if endpoint.remote() {
+			name, err := stopRemoteService(ctx, endpoint)
+			if err != nil {
+				return err
+			}
+			instanceName = name
+		} else {
+			if err := stopService(ctx, endpoint.path); err != nil {
+				return err
+			}
+			instanceName = endpoint.name()
 		}
-		instanceName := filepath.Base(instancePath)
 		if jsonOutput {
 			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
 				Instance string `json:"instance"`
@@ -144,7 +170,7 @@ var statusCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return getServiceStatus(ctx, instancePath, filepath.Base(instancePath), jsonOutput, cmd.OutOrStdout())
+		return getServiceStatus(ctx, endpoint, jsonOutput, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
@@ -177,7 +203,7 @@ func listServiceInstances(ctx context.Context, configDir string, asJSON bool, st
 	items := make([]json.RawMessage, 0, len(names))
 	var human strings.Builder
 	for _, name := range names {
-		client := service.NewClient(filepath.Join(instancesDir, name+".sock"))
+		client := localInstanceEndpoint(name, filepath.Join(instancesDir, name)).client()
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/service/status", nil)
 		if err != nil {
 			client.Close()
@@ -249,8 +275,8 @@ func listServiceInstances(ctx context.Context, configDir string, asJSON bool, st
 }
 
 // getServiceStatus queries and prints the selected service instance's status.
-func getServiceStatus(ctx context.Context, instancePath, instanceName string, asJSON bool, stdout io.Writer) error {
-	client := service.NewClient(instancePath + ".sock")
+func getServiceStatus(ctx context.Context, target instanceEndpoint, asJSON bool, stdout, stderr io.Writer) error {
+	client := target.client()
 	defer client.Close()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/service/status", nil)
 	if err != nil {
@@ -261,7 +287,7 @@ func getServiceStatus(ctx context.Context, instancePath, instanceName string, as
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return fmt.Errorf("instance %s is not running", instanceName)
+		return target.unreachable(err)
 	}
 
 	body, readErr := io.ReadAll(response.Body)
@@ -278,6 +304,9 @@ func getServiceStatus(ctx context.Context, instancePath, instanceName string, as
 		}
 		return fmt.Errorf("getting service status: %s", response.Status)
 	}
+	if target.remote() {
+		return writeRemoteServiceStatus(body, asJSON, stdout, stderr)
+	}
 	if asJSON {
 		if _, err := stdout.Write(body); err != nil {
 			return fmt.Errorf("writing service status response: %w", err)
@@ -285,6 +314,54 @@ func getServiceStatus(ctx context.Context, instancePath, instanceName string, as
 		return nil
 	}
 	return writeServiceStatusHuman(body, stdout)
+}
+
+// writeRemoteServiceStatus writes a remote instance's status with this CLI's
+// version beside the instance's, and a warning when they differ, since the
+// two machines update separately. Under --json both go in the status object,
+// which keeps stderr empty.
+func writeRemoteServiceStatus(body []byte, asJSON bool, stdout, stderr io.Writer) error {
+	var status map[string]json.RawMessage
+	if err := json.Unmarshal(body, &status); err != nil || status == nil {
+		return errors.New("invalid service status: must be a JSON object")
+	}
+	var instanceVersion string
+	if err := json.Unmarshal(status["version"], &instanceVersion); err != nil || instanceVersion == "" {
+		return errors.New("invalid service status: version must be a non-empty string")
+	}
+	warning := ""
+	if instanceVersion != version {
+		warning = fmt.Sprintf("this marasi is version %s but the instance runs %s", version, instanceVersion)
+	}
+
+	if asJSON {
+		// Append the fields rather than re-encoding the map, so the
+		// instance's own fields keep their order.
+		var extra strings.Builder
+		cliVersion, _ := json.Marshal(version)
+		fmt.Fprintf(&extra, `,"cli_version":%s`, cliVersion)
+		if warning != "" {
+			warningJSON, _ := json.Marshal(warning)
+			fmt.Fprintf(&extra, `,"warning":%s`, warningJSON)
+		}
+		object := bytes.TrimSuffix(bytes.TrimSpace(body), []byte("}"))
+		if _, err := fmt.Fprintf(stdout, "%s%s}\n", object, extra.String()); err != nil {
+			return fmt.Errorf("writing service status response: %w", err)
+		}
+		return nil
+	}
+	if err := writeServiceStatusHuman(body, stdout); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stdout, "cli version: %s\n", version); err != nil {
+		return fmt.Errorf("writing service status: %w", err)
+	}
+	if warning != "" {
+		if _, err := fmt.Fprintf(stderr, "warning: %s\n", warning); err != nil {
+			return fmt.Errorf("writing service status: %w", err)
+		}
+	}
+	return nil
 }
 
 // writeServiceStatusHuman validates and writes the service status projection.
@@ -302,6 +379,11 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 		// instances older than upstream proxies.
 		UpstreamProxy           *string `json:"upstream_proxy"`
 		UpstreamProxyConfigured *bool   `json:"upstream_proxy_configured"`
+		// ControlListener is absent from instances older than the control
+		// listener's network address.
+		ControlListener json.RawMessage `json:"control_listener"`
+		// OS is absent from instances older than remote control.
+		OS *string `json:"os"`
 	}
 	if err := json.Unmarshal(body, &status); err != nil {
 		return fmt.Errorf("decoding service status: %w", err)
@@ -363,6 +445,18 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 			fmt.Fprintf(&output, "upstream proxy: %s\n", *status.UpstreamProxy)
 		}
 	}
+	if status.ControlListener != nil {
+		controlListener := "none"
+		if string(status.ControlListener) != "null" {
+			if err := json.Unmarshal(status.ControlListener, &controlListener); err != nil || controlListener == "" {
+				return errors.New("invalid service status: control_listener must be a non-empty string or null")
+			}
+		}
+		fmt.Fprintf(&output, "control listener network address: %s\n", controlListener)
+	}
+	if status.OS != nil {
+		fmt.Fprintf(&output, "os: %s\n", *status.OS)
+	}
 	if _, err := io.WriteString(stdout, output.String()); err != nil {
 		return fmt.Errorf("writing service status: %w", err)
 	}
@@ -379,15 +473,38 @@ func startService(ctx context.Context, configDir, projectPath, instancePath, add
 
 // startServiceReady starts a proxy instance and calls ready with the proxy listener address.
 func startServiceReady(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, ready func(string) error) (resultErr error) {
-	return startServiceInstance(ctx, configDir, projectPath, instancePath, address, port, true, ready)
+	options := serviceOptions{configDir: configDir, projectPath: projectPath, instancePath: instancePath, proxyAddress: address, proxyPort: port, proxyListener: true}
+	return startServiceInstance(ctx, options, func(started serviceStarted) error {
+		return ready(started.proxyListener)
+	})
 }
 
-// startServiceInstance starts a proxy instance and calls ready with the proxy
-// listener address, or "" when startListener is false.
-func startServiceInstance(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, startListener bool, ready func(string) error) (resultErr error) {
-	socketPath := instancePath + ".sock"
-	lockPath := instancePath + ".lock"
-	logFile, err := openInstanceLog(instancePath + ".log")
+// serviceStarted is what a started instance is listening on.
+type serviceStarted struct {
+	proxyListener   string // proxy listener address, "" when none
+	controlListener string // control listener network address, "" when none
+}
+
+// serviceOptions is what a service instance starts with.
+type serviceOptions struct {
+	configDir      string
+	projectPath    string
+	instancePath   string
+	proxyAddress   string // proxy listener host
+	proxyPort      uint16 // proxy listener port; 0 picks a free one
+	proxyListener  bool   // start the proxy listener
+	controlAddress string // control listener network address as HOST:PORT, "" for none
+}
+
+// startServiceInstance starts a proxy instance and calls ready with what it
+// listens on. The proxy listener is started only when options.proxyListener
+// is true, and the control listener's network address only when
+// options.controlAddress is not empty.
+func startServiceInstance(ctx context.Context, options serviceOptions, ready func(serviceStarted) error) (resultErr error) {
+	local := localInstanceEndpoint(filepath.Base(options.instancePath), options.instancePath)
+	socketPath := local.socketPath()
+	lockPath := local.lockPath()
+	logFile, err := openInstanceLog(options.instancePath + ".log")
 	if err != nil {
 		return err
 	}
@@ -396,16 +513,28 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 	}()
 	logger := slog.New(slog.NewTextHandler(logFile, nil))
 
-	proxy, err := marasi.New(marasi.WithLogger(logger), marasi.WithConfigDir(configDir))
+	proxy, err := marasi.New(marasi.WithLogger(logger), marasi.WithConfigDir(options.configDir))
 	if err != nil {
 		return fmt.Errorf("starting proxy with config dir: %w", err)
 	}
 
-	wordlists, err := wordlist.NewManager(configDir)
+	wordlists, err := wordlist.NewManager(options.configDir)
 	if err != nil {
 		return fmt.Errorf("creating wordlist manager : %w", err)
 	}
 
+	// The network address closes last, after the project and the instance
+	// claim are released, because a remote service stop waits for it to stop
+	// answering and must return only once the instance is gone.
+	var controlNetwork *service.ControlAddress
+	defer func() {
+		if controlNetwork == nil {
+			return
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		resultErr = errors.Join(resultErr, controlNetwork.Shutdown(shutdownCtx))
+	}()
 	closeProxy := func() error { return nil }
 	closeProject := func() error { return nil }
 	releaseClaim := func() error { return nil }
@@ -413,7 +542,7 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 		resultErr = errors.Join(resultErr, cleanupService(closeProxy, closeProject, releaseClaim))
 	}()
 
-	projects := service.NewProjectLifecycle(proxy, configDir, wordlists, logger)
+	projects := service.NewProjectLifecycle(proxy, options.configDir, wordlists, logger)
 	listenerLifecycle := service.NewListenerLifecycle(proxy, logFile)
 	var shutdownOnce sync.Once
 	var shutdownErr error
@@ -426,12 +555,12 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 		return shutdownErr
 	}
 	listenerLifecycle.BindProject(projects)
-	if filepath.Clean(filepath.Dir(projectPath)) == filepath.Join(filepath.Clean(configDir), "projects") {
-		if err := os.MkdirAll(filepath.Dir(projectPath), 0700); err != nil {
-			return fmt.Errorf("creating projects dir: %w", err)
+	if filepath.Clean(filepath.Dir(options.projectPath)) == service.ProjectsDir(filepath.Clean(options.configDir)) {
+		if err := service.CreateProjectsDir(options.configDir); err != nil {
+			return err
 		}
 	}
-	if err := projects.Open(ctx, projectPath); err != nil {
+	if err := projects.Open(ctx, options.projectPath); err != nil {
 		return fmt.Errorf("opening project: %w", err)
 	}
 	closeProject = projects.Shutdown
@@ -453,7 +582,7 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 
 	serviceCtx, stopService := context.WithCancel(ctx)
 	defer stopService()
-	instanceName := filepath.Base(instancePath)
+	instanceName := filepath.Base(options.instancePath)
 	serviceServer := service.NewServer(proxy, listenerLifecycle, projects, stopService, version, instanceName, projects.Path())
 	updates, err := service.NewUpdates(service.UpdatesConfig{
 		ConfigDir:    proxy.ConfigDir,
@@ -492,15 +621,28 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 		return fmt.Errorf("installing traffic event handlers: %w", handlerErr)
 	}
 
-	serviceServer.EnableRestart(successorStarter{claim: claim, configDir: configDir, instancePath: instancePath, readyTimeout: restartReadyTimeout}.start)
+	serviceServer.EnableRestart(successorStarter{claim: claim, configDir: options.configDir, instancePath: options.instancePath, readyTimeout: restartReadyTimeout}.start)
 
-	proxyListener := ""
-	if startListener {
-		listenerStatus, err := listenerLifecycle.Start(serviceCtx, service.ListenerSettings{Address: &address, Port: &port})
+	controlNetwork = serviceServer.EnableControlAddress(service.NewControlToken(options.instancePath+".token", secureInstanceFile), logFile)
+
+	var started serviceStarted
+	if options.proxyListener {
+		listenerStatus, err := listenerLifecycle.Start(serviceCtx, service.ListenerSettings{Address: &options.proxyAddress, Port: &options.proxyPort})
 		if err != nil {
-			return fmt.Errorf("binding proxy listener on address %s port %d: %w", address, port, err)
+			return fmt.Errorf("binding proxy listener on address %s port %d: %w", options.proxyAddress, options.proxyPort, err)
 		}
-		proxyListener = *listenerStatus.ProxyListener
+		started.proxyListener = *listenerStatus.ProxyListener
+	}
+	if options.controlAddress != "" {
+		settings, err := parseControlAddress(options.controlAddress)
+		if err != nil {
+			return err
+		}
+		controlStatus, err := controlNetwork.Start(serviceCtx, settings)
+		if err != nil {
+			return fmt.Errorf("binding control listener network address on %s: %w", options.controlAddress, err)
+		}
+		started.controlListener = *controlStatus.ControlListener
 	}
 
 	server := &http.Server{Handler: serviceServer}
@@ -517,14 +659,15 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 		<-updatesDone
 	}()
 	return serveControlAPIReady(serviceCtx, server, claim.listener, shutdownTimeout, func() error {
-		return ready(proxyListener)
+		return ready(started)
 	})
 }
 
 // stopService stops the instance at instancePath. A missing socket and lock is success.
 func stopService(ctx context.Context, instancePath string) error {
-	socketPath := instancePath + ".sock"
-	lockPath := instancePath + ".lock"
+	target := localInstanceEndpoint(filepath.Base(instancePath), instancePath)
+	socketPath := target.socketPath()
+	lockPath := target.lockPath()
 	if _, err := os.Stat(socketPath); errors.Is(err, os.ErrNotExist) {
 		if _, lockErr := os.Stat(lockPath); errors.Is(lockErr, os.ErrNotExist) {
 			return nil
@@ -536,7 +679,7 @@ func stopService(ctx context.Context, instancePath string) error {
 		return fmt.Errorf("checking instance socket %s: %w", socketPath, err)
 	}
 
-	client := service.NewClient(socketPath)
+	client := target.client()
 	defer client.Close()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://marasi/service/stop", nil)
 	if err != nil {
@@ -567,6 +710,83 @@ func stopService(ctx context.Context, instancePath string) error {
 		wrapError("closing service stop response", closeErr),
 		waitErr,
 	)
+}
+
+// stopRemoteService stops the instance at a network address and returns its
+// name. The instance's lock file is on its own machine, so the wait is for
+// the instance to stop answering at the address instead, bounded by ctx as
+// the local wait on the lock is.
+func stopRemoteService(ctx context.Context, target instanceEndpoint) (string, error) {
+	// The URL does not name the instance, so its status does.
+	response, err := dialInstance(ctx, target, http.MethodGet, "/service/status", "", nil)
+	if err != nil {
+		return "", err
+	}
+	if err := rejectInstanceStatus("getting service status", response, true); err != nil {
+		return "", err
+	}
+	var status struct {
+		Instance string `json:"instance"`
+	}
+	if err := json.Unmarshal(response.Body, &status); err != nil || status.Instance == "" {
+		return "", errors.New("invalid service status: instance must be a non-empty string")
+	}
+
+	response, err = dialInstance(ctx, target, http.MethodPost, "/service/stop", "", nil)
+	var notRunning instanceNotRunningError
+	switch {
+	case errors.As(err, &notRunning):
+		// The instance closed the connection before answering, which a
+		// stopping instance may do; the wait below confirms it is gone.
+	case err != nil:
+		return "", err
+	case response.StatusCode != http.StatusAccepted:
+		return "", controlAPIError("stopping service", response.Status, response.Body)
+	}
+
+	ticker := time.NewTicker(instancePollDelay)
+	defer ticker.Stop()
+	for {
+		gone, err := remoteInstanceGone(ctx, target, status.Instance)
+		if err != nil {
+			return "", err
+		}
+		if gone {
+			return status.Instance, nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// remoteInstanceGone reports whether the instance named instance no longer
+// answers at target. A refused connection says so, and so does any answer
+// that is not that instance's status: a TLS reverse proxy keeps accepting
+// once the instance behind it exits, and answers 502 instead.
+func remoteInstanceGone(ctx context.Context, target instanceEndpoint, instance string) (bool, error) {
+	response, err := dialInstance(ctx, target, http.MethodGet, "/service/status", "", nil)
+	var notRunning instanceNotRunningError
+	switch {
+	case ctx.Err() != nil:
+		return false, ctx.Err()
+	case errors.As(err, &notRunning), errors.Is(err, service.ErrTokenRejected):
+		return true, nil
+	case err != nil:
+		// A response cut off mid-read is a stopping instance; ask again.
+		return false, nil
+	case response.StatusCode != http.StatusOK:
+		return true, nil
+	}
+	var status struct {
+		Instance string `json:"instance"`
+	}
+	if err := json.Unmarshal(response.Body, &status); err != nil {
+		return true, nil
+	}
+	return status.Instance != instance, nil
 }
 
 // waitForInstanceStop polls until lockPath can be locked, or ctx is cancelled.
@@ -713,29 +933,7 @@ func resolveProjectPath(path string) (string, error) { return service.ResolvePro
 
 // resolveNamedProjectPath returns a named project under configDir/projects.
 func resolveNamedProjectPath(configDir, name string) (string, error) {
-	name = strings.TrimSpace(name)
-	name = strings.TrimSuffix(name, ".marasi")
-	if name == "" {
-		return "", errors.New("invalid project name: cannot be empty")
-	}
-	if strings.HasSuffix(name, ".marasi") {
-		return "", errors.New("invalid project name: only one .marasi suffix is allowed")
-	}
-	if !filepath.IsLocal(name) {
-		return "", errors.New("invalid project name: absolute paths and parent directory references are not allowed")
-	}
-	if name == "." || strings.ContainsAny(name, `/\`) {
-		return "", errors.New("invalid project name: path separators are not allowed")
-	}
-	if filepath.Base(name) != name {
-		return "", errors.New("invalid project name: subdirectories not allowed")
-	}
-
-	projectsDir := filepath.Join(configDir, "projects")
-	if err := os.MkdirAll(projectsDir, 0755); err != nil {
-		return "", fmt.Errorf("creating projects dir: %w", err)
-	}
-	return resolveProjectPath(filepath.Join(projectsDir, name+".marasi"))
+	return service.ResolveNamedProjectPath(configDir, name)
 }
 
 // claimInstance locks lockPath and listens on socketPath.

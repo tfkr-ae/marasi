@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,8 @@ func (provider *stubWordlistProvider) List() ([]wordlist.Info, error) {
 }
 
 func (provider *stubWordlistProvider) Add(string) error { return os.ErrNotExist }
+
+func (provider *stubWordlistProvider) Upload(string, io.Reader) error { return os.ErrNotExist }
 
 func (provider *stubWordlistProvider) Remove(string) error { return os.ErrNotExist }
 

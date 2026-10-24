@@ -11,9 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"slices"
-	"strings"
 	"syscall"
 	"time"
 
@@ -38,24 +35,17 @@ var projectCmd = &cobra.Command{
 	Short: "List projects and open one in an instance",
 }
 
-type projectListItem struct {
-	Name    string `json:"name"`
-	Project string `json:"project"`
-}
-
 var projectListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List named projects",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		items, err := listProjects(configDir)
+		items, err := listProjects(cmd)
 		if err != nil {
 			return err
 		}
 		if jsonOutput {
-			return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
-				Items []projectListItem `json:"items"`
-			}{Items: items})
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(service.ProjectList{Items: items})
 		}
 		table := newListTable(cmd.OutOrStdout(), "NAME", "PROJECT")
 		for _, item := range items {
@@ -68,42 +58,22 @@ var projectListCmd = &cobra.Command{
 	},
 }
 
-func listProjects(configDir string) ([]projectListItem, error) {
-	projectsDir := filepath.Join(configDir, "projects")
-	entries, err := os.ReadDir(projectsDir)
-	if errors.Is(err, os.ErrNotExist) {
-		return []projectListItem{}, nil
+// listProjects lists the named projects on the instance machine over
+// --remote, and in this machine's config dir otherwise, which needs no
+// running instance.
+func listProjects(cmd *cobra.Command) ([]service.ProjectListItem, error) {
+	if !endpoint.remote() {
+		return service.ListProjects(configDir)
 	}
+	body, err := runControlRequest(cmd, http.MethodGet, "/project/list", "listing projects", nil)
 	if err != nil {
-		return nil, fmt.Errorf("reading projects directory %s: %w", projectsDir, err)
+		return nil, err
 	}
-
-	items := make([]projectListItem, 0, len(entries))
-	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), ".marasi") {
-			continue
-		}
-		path := filepath.Join(projectsDir, entry.Name())
-		info, err := os.Stat(path)
-		if err != nil {
-			return nil, fmt.Errorf("checking project %s: %w", path, err)
-		}
-		if !info.Mode().IsRegular() {
-			continue
-		}
-		canonicalPath, err := service.ResolveProjectPath(path)
-		if err != nil {
-			return nil, fmt.Errorf("resolving project %s: %w", path, err)
-		}
-		items = append(items, projectListItem{
-			Name:    strings.TrimSuffix(entry.Name(), ".marasi"),
-			Project: canonicalPath,
-		})
+	var list service.ProjectList
+	if err := json.Unmarshal(body, &list); err != nil || list.Items == nil {
+		return nil, errors.New("invalid project list response: items must be an array")
 	}
-	slices.SortFunc(items, func(left, right projectListItem) int {
-		return strings.Compare(left.Name, right.Name)
-	})
-	return items, nil
+	return list.Items, nil
 }
 
 var projectOpenCmd = &cobra.Command{
@@ -115,42 +85,69 @@ var projectOpenCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		path, err := resolveProjectOpenPath(cmd)
+		request, err := resolveProjectOpenRequest(cmd)
 		if err != nil {
 			return err
 		}
-		return openProject(ctx, instancePath, instance, jsonOutput, path, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		return openProject(ctx, endpoint, jsonOutput, request, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
-func resolveProjectOpenPath(cmd *cobra.Command) (string, error) {
+// projectOpenRequest is the body of POST /project/open: exactly one of a
+// project file path or a project name.
+type projectOpenRequest struct {
+	Path string `json:"path,omitempty"`
+	Name string `json:"name,omitempty"`
+}
+
+// resolveProjectOpenRequest resolves --path or --name into the request to
+// send. Locally the CLI resolves both to a canonical path. Over --remote
+// both name something on the instance machine, so --path goes unchanged and
+// --name goes as a name for the instance to resolve in its own config dir.
+func resolveProjectOpenRequest(cmd *cobra.Command) (projectOpenRequest, error) {
 	if cmd.Flags().Changed("path") {
+		if endpoint.remote() {
+			return projectOpenRequest{Path: projectOpenPath}, nil
+		}
 		path, err := resolveProjectPath(projectOpenPath)
 		if err != nil {
-			return "", fmt.Errorf("%s: %w", projectOpenPath, err)
+			return projectOpenRequest{}, fmt.Errorf("%s: %w", projectOpenPath, err)
 		}
-		return path, nil
+		return projectOpenRequest{Path: path}, nil
+	}
+	if endpoint.remote() {
+		// Checked here too so a bad name fails with the rule it broke, not
+		// with the instance's bare invalid_project_request.
+		name, err := service.CleanProjectName(projectOpenName)
+		if err != nil {
+			return projectOpenRequest{}, fmt.Errorf("%s: %w", projectOpenName, err)
+		}
+		return projectOpenRequest{Name: name}, nil
 	}
 	path, err := resolveNamedProjectPath(configDir, projectOpenName)
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", projectOpenName, err)
+		return projectOpenRequest{}, fmt.Errorf("%s: %w", projectOpenName, err)
 	}
-	return path, nil
+	return projectOpenRequest{Path: path}, nil
 }
 
-func openProject(ctx context.Context, instancePath, instanceName string, asJSON bool, path string, stdout, stderr io.Writer) error {
+func openProject(ctx context.Context, target instanceEndpoint, asJSON bool, request projectOpenRequest, stdout, stderr io.Writer) error {
 	// JSON mode writes nothing to stderr (docs/adr/2026-10-06-cli-output-contract.md), so only a human sees waits.
 	if !asJSON {
-		stop := watchProjectWaits(ctx, instancePath, path, stderr)
+		// Over --remote the CLI does not know the canonical path the instance
+		// will open, so it prints every wait reported while it opens.
+		waitTarget := request.Path
+		if target.remote() {
+			waitTarget = ""
+		}
+		stop := watchProjectWaits(ctx, target, waitTarget, stderr)
 		defer stop()
 	}
-	body, err := json.Marshal(struct {
-		Path string `json:"path"`
-	}{Path: path})
+	body, err := json.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("encoding project open request: %w", err)
 	}
-	response, err := dialInstance(ctx, instancePath+".sock", instanceName, http.MethodPost, "/project/open", "application/json", bytes.NewReader(body))
+	response, err := dialInstance(ctx, target, http.MethodPost, "/project/open", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -190,13 +187,13 @@ func writeProjectOpenHuman(body []byte, stdout io.Writer) error {
 // events subscription before it opens without reporting waits.
 const projectWaitConnectTimeout = 2 * time.Second
 
-// watchProjectWaits prints each project.waiting event for target to stderr
-// until the returned stop is called. It returns once the subscription is
+// watchProjectWaits prints each project.waiting event for target, or every
+// one when target is empty, to stderr until the returned stop is called. It returns once the subscription is
 // connected, or has failed, so no wait is missed. A failed subscription is
 // not an error: the open itself reports an instance that is not running.
-func watchProjectWaits(ctx context.Context, instancePath, target string, stderr io.Writer) func() {
+func watchProjectWaits(ctx context.Context, source instanceEndpoint, target string, stderr io.Writer) func() {
 	ctx, cancel := context.WithCancel(ctx)
-	client := service.NewClient(instancePath + ".sock")
+	client := source.client()
 	connected, finished := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(finished)
@@ -238,13 +235,14 @@ func watchProjectWaits(ctx context.Context, instancePath, target string, stderr 
 	}
 }
 
-// writeProjectWaits prints one line per wait in a project.waiting event for target.
+// writeProjectWaits prints one line per wait in a project.waiting event for
+// target, or in any project.waiting event when target is empty.
 func writeProjectWaits(stderr io.Writer, target, data string) {
 	var event struct {
 		Project    string                `json:"project"`
 		WaitingFor []service.ProjectWait `json:"waiting_for"`
 	}
-	if err := json.Unmarshal([]byte(data), &event); err != nil || event.Project != target {
+	if err := json.Unmarshal([]byte(data), &event); err != nil || (target != "" && event.Project != target) {
 		return
 	}
 	for _, wait := range event.WaitingFor {

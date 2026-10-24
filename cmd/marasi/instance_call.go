@@ -6,17 +6,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-
-	"github.com/tfkr-ae/marasi/service"
 )
 
 // instanceNotRunningError reports that no instance answers on the named
-// instance's control socket.
+// instance's control socket, or at the remote URL in name.
 type instanceNotRunningError struct {
-	name string
+	name   string
+	remote bool
 }
 
 func (e instanceNotRunningError) Error() string {
+	if e.remote {
+		return fmt.Sprintf("no instance answers at %s", e.name)
+	}
 	return fmt.Sprintf("instance %s is not running", e.name)
 }
 
@@ -26,12 +28,13 @@ type instanceResponse struct {
 	Body       []byte
 }
 
-// callInstance dials this process's instance socket and reads one control response.
+// callInstance calls this process's instance and reads one control response.
 func callInstance(ctx context.Context, method, path, contentType string, body io.Reader) (instanceResponse, error) {
-	return dialInstance(ctx, instancePath+".sock", instance, method, path, contentType, body)
+	return dialInstance(ctx, endpoint, method, path, contentType, body)
 }
 
-func dialInstance(ctx context.Context, socketPath, instanceName, method, path, contentType string, body io.Reader) (instanceResponse, error) {
+// dialInstance calls the instance at target and reads one control response.
+func dialInstance(ctx context.Context, target instanceEndpoint, method, path, contentType string, body io.Reader) (instanceResponse, error) {
 	request, err := http.NewRequestWithContext(ctx, method, "http://marasi"+path, body)
 	if err != nil {
 		return instanceResponse{}, fmt.Errorf("creating control request: %w", err)
@@ -42,14 +45,14 @@ func dialInstance(ctx context.Context, socketPath, instanceName, method, path, c
 		}
 		request.Header.Set("Content-Type", contentType)
 	}
-	client := service.NewClient(socketPath)
+	client := target.client()
 	defer client.Close()
 	response, err := client.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
 			return instanceResponse{}, ctx.Err()
 		}
-		return instanceResponse{}, instanceNotRunningError{name: instanceName}
+		return instanceResponse{}, target.unreachable(err)
 	}
 	responseBody, readErr := io.ReadAll(response.Body)
 	closeErr := response.Body.Close()

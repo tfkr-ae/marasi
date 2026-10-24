@@ -27,12 +27,20 @@ type RestartError struct {
 func (e *RestartError) Error() string { return e.Err.Error() }
 func (e *RestartError) Unwrap() error { return e.Err }
 
+// Handover is what a restart hands to its successor besides the instance name.
+type Handover struct {
+	Project         string  // project the successor opens
+	ProxyListener   *string // proxy listener address to bind, none when nil
+	ControlListener *string // control listener network address to bind, none when nil
+}
+
 // SuccessorStart hands the instance name to a successor started from the
-// installed build, with project open and proxyListener bound (none when nil),
-// and waits for it to report ready. The Server has already stopped the proxy
-// listener and released the project. On failure SuccessorStart has taken the
-// instance name back before it returns, and the error is a *RestartError.
-type SuccessorStart func(ctx context.Context, project string, proxyListener *string) (Successor, error)
+// installed build, with handover's project open and its listeners bound, and
+// waits for it to report ready. The Server has already stopped the proxy
+// listener, stopped accepting on the network address, and released the
+// project. On failure SuccessorStart has taken the instance name back before
+// it returns, and the error is a *RestartError.
+type SuccessorStart func(ctx context.Context, handover Handover) (Successor, error)
 
 // EnableRestart serves POST /service/restart with start (docs/adr/2026-10-18-restart-hands-over-and-rolls-back.md).
 func (s *Server) EnableRestart(start SuccessorStart) {
@@ -153,9 +161,15 @@ func (s *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 	if stepErr == nil {
 		release, stepErr = s.projects.release(ctx, dropHeld)
 	}
+	// The successor gets the address actually bound, so an instance started
+	// on port 0 keeps the port its clients already use.
+	var controlListener *string
+	if stepErr == nil && s.control != nil {
+		controlListener, stepErr = s.control.suspendForHandover()
+	}
 	var successor Successor
 	if stepErr == nil {
-		successor, stepErr = start(ctx, release.path, proxyListener)
+		successor, stepErr = start(ctx, Handover{Project: release.path, ProxyListener: proxyListener, ControlListener: controlListener})
 	}
 	if stepErr != nil {
 		s.rollBackRestart(w, r, ctx, release, proxyListener, stepErr)
@@ -178,10 +192,13 @@ func (s *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 func (s *Server) rollBackRestart(w http.ResponseWriter, r *http.Request, ctx context.Context, release projectRelease, proxyListener *string, cause error) {
 	var rollbackErr error
 	if release.reopen != nil {
-		rollbackErr = wrapRestartError("reopening project", release.reopen(ctx))
+		rollbackErr = wrapError("reopening project", release.reopen(ctx))
 	}
 	if proxyListener != nil && s.listener.Status().ProxyListener == nil {
-		rollbackErr = errors.Join(rollbackErr, wrapRestartError("restarting proxy listener", startListenerAt(ctx, s.listener, *proxyListener)))
+		rollbackErr = errors.Join(rollbackErr, wrapError("restarting proxy listener", startListenerAt(ctx, s.listener, *proxyListener)))
+	}
+	if s.control != nil {
+		rollbackErr = errors.Join(rollbackErr, wrapError("taking back control listener network address", s.control.resumeAfterHandover(ctx)))
 	}
 	var held *heldItemsError
 	if errors.As(cause, &held) {
@@ -238,7 +255,7 @@ func writeHeldItems(w http.ResponseWriter, r *http.Request, held *heldItemsError
 	}{Error: "checkpoint_items_held", Message: held.Error(), Items: held.items})
 }
 
-func wrapRestartError(action string, err error) error {
+func wrapError(action string, err error) error {
 	if err == nil {
 		return nil
 	}

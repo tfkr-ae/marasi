@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,9 @@ type Server struct {
 	restartMu  sync.Mutex
 	restart    SuccessorStart
 	restarting bool
+	// control is the control listener's network address, nil until
+	// EnableControlAddress.
+	control *ControlAddress
 }
 
 // NewServer creates a control API server for proxy.
@@ -139,6 +143,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 	mux.Handle("/listener/", http.StripPrefix("/listener", listenerMux))
 	projectMux := http.NewServeMux()
 	projectMux.HandleFunc("/open", server.serveProjectOpen)
+	projectMux.HandleFunc("/list", server.serveProjectList)
 	mux.Handle("/project/", http.StripPrefix("/project", projectMux))
 	mux.HandleFunc("/events", server.serveEvents)
 	addUpdateRoutes(mux, server)
@@ -287,7 +292,7 @@ func (s *Server) serveProjectOpen(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	path, err := decodeProjectOpen(r)
+	path, name, err := decodeProjectOpen(r)
 	if err != nil {
 		writeProjectError(w, r, err)
 		return
@@ -295,6 +300,14 @@ func (s *Server) serveProjectOpen(w http.ResponseWriter, r *http.Request) {
 	if s.projects == nil {
 		writeProjectError(w, r, errors.New("project open not configured"))
 		return
+	}
+	if name != "" {
+		// A name means a project in this instance's config dir, so a remote
+		// CLI gets the same project a local one on the instance machine would.
+		if path, err = ResolveNamedProjectPath(s.projects.configDir, name); err != nil {
+			writeProjectError(w, r, err)
+			return
+		}
 	}
 	if err := s.projects.Open(r.Context(), path); err != nil {
 		writeProjectError(w, r, err)
@@ -305,43 +318,78 @@ func (s *Server) serveProjectOpen(w http.ResponseWriter, r *http.Request) {
 	}{Project: path})
 }
 
+// serveProjectList lists the named projects in the instance's config dir,
+// with the same rows as the CLI's local project list.
+func (s *Server) serveProjectList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.projects == nil {
+		writeProjectError(w, r, errors.New("project list not configured"))
+		return
+	}
+	items, err := ListProjects(s.projects.configDir)
+	if err != nil {
+		writeJSON(w, r, http.StatusInternalServerError, controlRefusalBody{Error: "project_list_failed", Message: err.Error()})
+		return
+	}
+	writeJSON(w, r, http.StatusOK, ProjectList{Items: items})
+}
+
 var errInvalidProjectRequest = errors.New("invalid project request")
 
-func decodeProjectOpen(r *http.Request) (string, error) {
+// decodeProjectOpen decodes a project open request, which holds exactly one
+// of an absolute "path", returned canonical, or a project "name", returned
+// cleaned for the caller to resolve in the instance's config dir.
+func decodeProjectOpen(r *http.Request) (path, name string, err error) {
 	if r.Body == nil {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
 	}
 	decoder := json.NewDecoder(r.Body)
 	var fields map[string]json.RawMessage
 	if err := decoder.Decode(&fields); err != nil {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
 	}
 	if fields == nil {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
+	}
+	if len(fields) != 1 {
+		return "", "", errInvalidProjectRequest
+	}
+	if raw, ok := fields["name"]; ok {
+		if err := json.Unmarshal(raw, &name); err != nil {
+			return "", "", errInvalidProjectRequest
+		}
+		name, err := CleanProjectName(name)
+		if err != nil {
+			return "", "", errInvalidProjectRequest
+		}
+		return "", name, nil
 	}
 	raw, ok := fields["path"]
-	if !ok || len(fields) != 1 {
-		return "", errInvalidProjectRequest
+	if !ok {
+		return "", "", errInvalidProjectRequest
 	}
-	var path string
 	if err := json.Unmarshal(raw, &path); err != nil || path == "" {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
 	}
 	if !filepath.IsAbs(path) || !strings.HasSuffix(path, ".marasi") {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
 	}
 	parent, err := os.Stat(filepath.Dir(path))
 	if err != nil || !parent.IsDir() {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
 	}
 	canonical, err := ResolveProjectPath(path)
 	if err != nil {
-		return "", errInvalidProjectRequest
+		return "", "", errInvalidProjectRequest
 	}
-	return canonical, nil
+	return canonical, "", nil
 }
 
 func writeProjectError(w http.ResponseWriter, r *http.Request, err error) {
@@ -398,6 +446,12 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		// UpstreamProxyConfigured whether this machine lists it.
 		UpstreamProxy           string `json:"upstream_proxy"`
 		UpstreamProxyConfigured bool   `json:"upstream_proxy_configured"`
+		// ControlListener is the control listener's network address, null
+		// when it has none. The control token is never part of the status.
+		ControlListener *string `json:"control_listener"`
+		// OS is the instance machine's operating system, as runtime.GOOS
+		// names it, so a client on another machine can tag paths for it.
+		OS string `json:"os"`
 	}{
 		Status:                  "running",
 		Version:                 s.version,
@@ -408,6 +462,8 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		RestartRequired:         s.updates != nil && s.updates.RestartRequired(),
 		UpstreamProxy:           selection.Selected,
 		UpstreamProxyConfigured: selection.Configured,
+		ControlListener:         s.controlListenerAddress(),
+		OS:                      runtime.GOOS,
 	})
 }
 

@@ -13,7 +13,6 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"github.com/tfkr-ae/marasi/service"
 )
 
 func init() {
@@ -29,15 +28,15 @@ var eventsCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return printEvents(ctx, instancePath, instance, jsonOutput, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		return printEvents(ctx, endpoint, jsonOutput, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
 var streamConnected bool
 
 // printEvents subscribes to the instance and prints named events until the connection closes.
-func printEvents(ctx context.Context, instancePath, instanceName string, asJSON bool, stdout, stderr io.Writer) error {
-	client := service.NewClient(instancePath + ".sock")
+func printEvents(ctx context.Context, target instanceEndpoint, asJSON bool, stdout, stderr io.Writer) error {
+	client := target.client()
 	defer client.Close()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/events", nil)
 	if err != nil {
@@ -48,7 +47,7 @@ func printEvents(ctx context.Context, instancePath, instanceName string, asJSON 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return instanceNotRunningError{name: instanceName}
+		return target.unreachable(err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -87,7 +86,7 @@ func printEvents(ctx context.Context, instancePath, instanceName string, asJSON 
 	if err != io.EOF {
 		return fmt.Errorf("reading events: %w", err)
 	}
-	return fmt.Errorf("instance %s closed the event subscription before connecting", instanceName)
+	return fmt.Errorf("instance %s closed the event subscription before connecting", target.label)
 }
 
 // eventFrame is one named event from GET /events.

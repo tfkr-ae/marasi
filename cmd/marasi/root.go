@@ -20,6 +20,8 @@ var configDir string
 var instance string
 var instancePath string
 var jsonOutput bool
+var remoteURL string
+var tokenFile string
 
 const unixSocketPathLimit = 104
 
@@ -123,6 +125,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&configDir, "config-dir", defaultConfigDir(), "Marasi config directory")
 	rootCmd.PersistentFlags().StringVar(&instance, "instance", "default", "Service instance name")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Print command output as JSON")
+	rootCmd.PersistentFlags().StringVar(&remoteURL, "remote", "", "Control listener network address URL of a service instance, such as http://host:port (default $"+remoteVariable+")")
+	rootCmd.PersistentFlags().StringVar(&tokenFile, "token-file", "", "File holding the control token for --remote (default $"+tokenVariable+")")
 }
 
 // showSubcommandHelp prints command help when a group command is run with no subcommand.
@@ -159,7 +163,8 @@ func subcommandChoice(cmd *cobra.Command) string {
 	}
 }
 
-// prepareInstancePath resolves --config-dir and --instance into instancePath.
+// prepareInstancePath resolves --config-dir and --instance, or --remote, into
+// endpoint and instancePath.
 func prepareInstancePath(cmd *cobra.Command, _ []string) error {
 	if cmd == skillCmd || cmd == extensionAPICmd {
 		return nil
@@ -167,15 +172,43 @@ func prepareInstancePath(cmd *cobra.Command, _ []string) error {
 	if configDir == "" {
 		return fmt.Errorf("config dir is empty")
 	}
-	if cmd == listServiceInstancesCmd || cmd == projectListCmd {
+	remote, remoteSource := remoteURL, "--remote"
+	if !cmd.Flags().Changed("remote") {
+		remote, remoteSource = os.Getenv(remoteVariable), remoteVariable
+	}
+	if remote == "" {
+		if cmd.Flags().Changed("token-file") {
+			return errors.New("--token-file needs --remote or " + remoteVariable)
+		}
+	} else {
+		// Both commands act on this machine, so with a remote they would
+		// start or list instances somewhere the operator did not point.
+		if cmd == startCmd || cmd == listServiceInstancesCmd {
+			return fmt.Errorf("%s acts on this machine and does not accept %s", cmd.CommandPath(), remoteSource)
+		}
+		if cmd.Flags().Changed("instance") {
+			return fmt.Errorf("%s and --instance cannot be used together: the remote URL already names one instance", remoteSource)
+		}
+	}
+	if cmd == listServiceInstancesCmd || (cmd == projectListCmd && remote == "") {
+		return nil
+	}
+	if remote != "" {
+		resolved, err := resolveRemoteEndpoint(remote, tokenFile)
+		if err != nil {
+			return err
+		}
+		endpoint = resolved
+		instancePath = ""
 		return nil
 	}
 
-	path, err := resolveInstancePath(configDir, instance)
+	resolved, err := resolveInstanceEndpoint(configDir, instance)
 	if err != nil {
 		return err
 	}
-	instancePath = path
+	endpoint = resolved
+	instancePath = resolved.path
 	return nil
 }
 

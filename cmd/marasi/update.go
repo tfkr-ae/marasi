@@ -114,7 +114,7 @@ var updateReinstallCmd = &cobra.Command{
 // since only an instance checks for and installs updates (docs/adr/2026-10-18-service-instances-install-updates.md).
 func withStartHint(err error) error {
 	var notRunning instanceNotRunningError
-	if !errors.As(err, &notRunning) {
+	if !errors.As(err, &notRunning) || notRunning.remote {
 		return err
 	}
 	start := "marasi service start"
@@ -327,8 +327,8 @@ type eventStream struct {
 
 // subscribeEvents connects to the instance's events and returns once the
 // subscription is connected, so no later event is missed.
-func subscribeEvents(ctx context.Context, socketPath, instanceName string) (*eventStream, error) {
-	client := service.NewClient(socketPath)
+func subscribeEvents(ctx context.Context, target instanceEndpoint) (*eventStream, error) {
+	client := target.client()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/events", nil)
 	if err != nil {
 		client.Close()
@@ -340,7 +340,7 @@ func subscribeEvents(ctx context.Context, socketPath, instanceName string) (*eve
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, instanceNotRunningError{name: instanceName}
+		return nil, target.unreachable(err)
 	}
 	if response.StatusCode != http.StatusOK {
 		response.Body.Close()
@@ -360,7 +360,7 @@ func subscribeEvents(ctx context.Context, socketPath, instanceName string) (*eve
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, fmt.Errorf("instance %s closed the event subscription before connecting", instanceName)
+		return nil, fmt.Errorf("instance %s closed the event subscription before connecting", target.label)
 	}
 	stream := &eventStream{frames: make(chan eventFrame, 256), body: response.Body, client: client}
 	go stream.read(reader)
@@ -393,7 +393,7 @@ func followUpdateInstall(cmd *cobra.Command, path string, body []byte, operation
 	defer cancel()
 	stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
 
-	stream, err := subscribeEvents(ctx, instancePath+".sock", instance)
+	stream, err := subscribeEvents(ctx, endpoint)
 	if err != nil {
 		return withStartHint(err)
 	}
