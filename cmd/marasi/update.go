@@ -114,7 +114,7 @@ var updateReinstallCmd = &cobra.Command{
 // since only an instance checks for and installs updates (docs/adr/2026-10-18-service-instances-install-updates.md).
 func withStartHint(err error) error {
 	var notRunning instanceNotRunningError
-	if !errors.As(err, &notRunning) {
+	if !errors.As(err, &notRunning) || notRunning.remote {
 		return err
 	}
 	start := "marasi service start"
@@ -340,7 +340,7 @@ func subscribeEvents(ctx context.Context, target instanceEndpoint) (*eventStream
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, instanceNotRunningError{name: target.label}
+		return nil, target.unreachable(err)
 	}
 	if response.StatusCode != http.StatusOK {
 		response.Body.Close()
