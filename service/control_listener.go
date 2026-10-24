@@ -19,6 +19,9 @@ const controlRetireTimeout = 5 * time.Second
 // decides where it ends up.
 var errControlAddressHandedOver = errors.New("control listener network address is handed over to a restart")
 
+// errControlAddressClosed refuses a start once the instance is stopping.
+var errControlAddressClosed = errors.New("the instance is stopping")
+
 // Update moves the network address to settings. The new address is bound
 // before the old one closes, so a failed bind leaves the old one serving.
 // Moving to the address already bound changes nothing.
@@ -165,8 +168,10 @@ func (s *Server) writeControlListenerResult(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, r, http.StatusOK, status)
 }
 
-// writeControlListenerError writes the proxy listener routes' error codes. A
-// failed bind also carries the reason, such as an address already in use.
+// writeControlListenerError writes a control listener lifecycle failure
+// with the error codes the proxy listener routes use, plus
+// restart_in_progress. A failed bind also carries the reason, such as an
+// address already in use.
 func writeControlListenerError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, errControlAddressHandedOver) {
 		writeJSON(w, r, http.StatusConflict, controlRefusalBody{Error: "restart_in_progress", Message: "the instance is restarting"})

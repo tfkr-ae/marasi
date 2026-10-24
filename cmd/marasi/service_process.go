@@ -37,7 +37,7 @@ func init() {
 }
 
 // startServiceProcess starts a detached child and waits until it reports ready or fails.
-func startServiceProcess(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, controlAddress string, stdout, stderr io.Writer, asJSON bool) error {
+func startServiceProcess(ctx context.Context, options serviceOptions, stdout, stderr io.Writer, asJSON bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -45,18 +45,18 @@ func startServiceProcess(ctx context.Context, configDir, projectPath, instancePa
 	if err != nil {
 		return fmt.Errorf("opening service executable: %w", err)
 	}
-	instanceName := filepath.Base(instancePath)
+	instanceName := filepath.Base(options.instancePath)
 	args := []string{
-		"--config-dir", configDir,
+		"--config-dir", options.configDir,
 		"--instance", instanceName,
 		"service", "start",
-		"--project", projectPath,
-		"--address", address,
-		"--port", strconv.FormatUint(uint64(port), 10),
+		"--project", options.projectPath,
+		"--address", options.proxyAddress,
+		"--port", strconv.FormatUint(uint64(options.proxyPort), 10),
 		"--service-child",
 	}
-	if controlAddress != "" {
-		args = append(args, "--control-address", controlAddress)
+	if options.controlAddress != "" {
+		args = append(args, "--control-address", options.controlAddress)
 	}
 	command := exec.Command(executable, args...)
 	configureDetachedProcess(command)
@@ -137,14 +137,15 @@ func launchServiceChild(command *exec.Cmd) (io.WriteCloser, <-chan childStartup,
 }
 
 // writeStartOutput writes the start result in JSON or human form. A control
-// listener network address beyond loopback adds a warning on stderr, written
-// here because the detached child's stderr is discarded.
+// listener network address beyond loopback adds a warning on stderr when it
+// is a terminal, written here because the detached child's stderr is
+// discarded. The instance log carries the warning either way.
 func writeStartOutput(stdout, stderr io.Writer, asJSON bool, instanceName string, startup childStartup) error {
 	var controlListener *string
 	warning := ""
 	if startup.controlListener != "" {
 		controlListener = &startup.controlListener
-		if line := service.ControlAddressWarning(startup.controlListener); line != "" {
+		if line := service.ControlAddressWarning(startup.controlListener); line != "" && writesToTerminal(stderr) {
 			warning = line + "\n"
 		}
 	}
@@ -215,7 +216,7 @@ func stopChild(input io.WriteCloser, processResult <-chan error) {
 }
 
 // runServiceChild runs the in-process service and reports ready or error on stdout.
-func runServiceChild(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, controlAddress string) error {
+func runServiceChild(ctx context.Context, options serviceOptions) error {
 	serviceCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
@@ -226,7 +227,7 @@ func runServiceChild(ctx context.Context, configDir, projectPath, instancePath, 
 	}()
 
 	ready := false
-	err := startServiceInstance(serviceCtx, configDir, projectPath, instancePath, address, port, !noProxyListener, controlAddress, func(started serviceStarted) error {
+	err := startServiceInstance(serviceCtx, options, func(started serviceStarted) error {
 		if _, err := fmt.Fprintf(os.Stdout, "%c%s\n%s\n", startupReady, started.proxyListener, started.controlListener); err != nil {
 			return fmt.Errorf("reporting service startup: %w", err)
 		}

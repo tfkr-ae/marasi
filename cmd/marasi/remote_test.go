@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -376,6 +377,49 @@ func TestRemoteStop(t *testing.T) {
 		want := "Error: instance work is not running\n"
 		if _, stderr, err := instance.local("service", "status"); exitCode(err) != 1 || !strings.HasSuffix(stderr, want) {
 			t.Fatalf("\nwanted:\n%q\ngot:\nstderr %q error %v", want, stderr, err)
+		}
+	})
+
+	t.Run("should return once the instance has released its lock", func(t *testing.T) {
+		instance := startRemoteInstance(t, binary)
+		if _, stderr, err := instance.remote("service", "stop"); err != nil {
+			t.Fatalf("service stop: %v\n%s", err, stderr)
+		}
+		lock, err := acquireInstanceLock(filepath.Join(instance.configDir, "instances", "work.lock"))
+		if err != nil {
+			t.Fatalf("\nwanted:\nthe instance lock free\ngot:\n%v", err)
+		}
+		lock.Close()
+	})
+
+	t.Run("should return when a reverse proxy in front of the instance answers 502", func(t *testing.T) {
+		var stopped atomic.Bool
+		remote, _ := startCannedRemoteAPIHandler(t, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case stopped.Load():
+				w.WriteHeader(http.StatusBadGateway)
+			case r.URL.Path == "/service/stop":
+				stopped.Store(true)
+				w.WriteHeader(http.StatusAccepted)
+			default:
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, `{"status":"running","instance":"work"}`)
+			}
+		})
+		done := make(chan struct{})
+		var stdout, stderr string
+		var err error
+		go func() {
+			defer close(done)
+			stdout, stderr, err = runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, "--config-dir", t.TempDir(), "--remote", remote, "service", "stop")
+		}()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("\nwanted:\nservice stop returns\ngot:\nstill waiting after 10s")
+		}
+		if want := "instance work stopped successfully\n"; err != nil || stdout != "" || stderr != want {
+			t.Fatalf("\nwanted:\nstderr %q\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
 		}
 	})
 

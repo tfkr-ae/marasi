@@ -29,6 +29,7 @@ type ControlAddress struct {
 	events    *eventBroadcaster
 	mu        sync.Mutex
 	run       *controlAddressRun
+	closed    bool // Shutdown ran, so Start must not bind again
 	// retiring counts runs that Stop or Update closed and that are still
 	// finishing the request that closed them.
 	retiring sync.WaitGroup
@@ -114,21 +115,11 @@ func (s *Server) EnableControlAddress(token *ControlToken, logWriter io.Writer) 
 // serveControlToken returns the control token, only to a request that
 // arrived on the socket, so a stolen token cannot read itself back.
 func (s *Server) serveControlToken(w http.ResponseWriter, r *http.Request) {
-	if requestArrival(r) == arrivedOnNetworkAddress {
-		writeJSON(w, r, http.StatusForbidden, controlRefusalBody{Error: "socket_only", Message: "the control token is available only through the socket"})
+	if refuseOnNetworkAddress(w, r, "the control token is available only through the socket") {
 		return
 	}
 	value, err := s.control.token.Value()
-	if err != nil {
-		fmt.Fprintf(s.control.logWriter, "reading control token: %v\n", err)
-		writeJSON(w, r, http.StatusInternalServerError, struct {
-			Error string `json:"error"`
-		}{Error: "internal_server_error"})
-		return
-	}
-	writeJSON(w, r, http.StatusOK, struct {
-		Token string `json:"token"`
-	}{Token: value})
+	s.writeControlToken(w, r, "reading control token", value, err)
 }
 
 // serveControlTokenRotate replaces the control token and returns the new
@@ -137,19 +128,37 @@ func (s *Server) serveControlToken(w http.ResponseWriter, r *http.Request) {
 // old token are dropped, and control_listener.token_rotated tells socket
 // clients to read the new token, without carrying it.
 func (s *Server) serveControlTokenRotate(w http.ResponseWriter, r *http.Request) {
-	if requestArrival(r) == arrivedOnNetworkAddress {
-		writeJSON(w, r, http.StatusForbidden, controlRefusalBody{Error: "socket_only", Message: "the control token can be rotated only through the socket"})
+	if refuseOnNetworkAddress(w, r, "the control token can be rotated only through the socket") {
 		return
 	}
 	value, err := s.control.RotateToken()
+	if err == nil {
+		s.events.publish("control_listener.token_rotated", struct{}{})
+	}
+	s.writeControlToken(w, r, "rotating control token", value, err)
+}
+
+// refuseOnNetworkAddress answers 403 socket_only with message, and reports
+// true, when r arrived on the network address.
+func refuseOnNetworkAddress(w http.ResponseWriter, r *http.Request, message string) bool {
+	if requestArrival(r) != arrivedOnNetworkAddress {
+		return false
+	}
+	writeJSON(w, r, http.StatusForbidden, controlRefusalBody{Error: "socket_only", Message: message})
+	return true
+}
+
+// writeControlToken answers with the control token value, or, when err is
+// set, logs err under operation and answers internal_server_error without
+// its detail.
+func (s *Server) writeControlToken(w http.ResponseWriter, r *http.Request, operation, value string, err error) {
 	if err != nil {
-		fmt.Fprintf(s.control.logWriter, "rotating control token: %v\n", err)
+		fmt.Fprintf(s.control.logWriter, "%s: %v\n", operation, err)
 		writeJSON(w, r, http.StatusInternalServerError, struct {
 			Error string `json:"error"`
 		}{Error: "internal_server_error"})
 		return
 	}
-	s.events.publish("control_listener.token_rotated", struct{}{})
 	writeJSON(w, r, http.StatusOK, struct {
 		Token string `json:"token"`
 	}{Token: value})
@@ -248,6 +257,9 @@ func (c *ControlAddress) setStatus(status ControlListenerStatus) {
 func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings) (ControlListenerStatus, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return ControlListenerStatus{}, listenerFailure{kind: ErrListenerUnavailable, err: errControlAddressClosed}
+	}
 	if c.run != nil {
 		return ControlListenerStatus{}, ErrListenerAlreadyActive
 	}
@@ -273,13 +285,17 @@ func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings) (
 // flight get until ctx ends to finish, and are then cut off.
 func (c *ControlAddress) Shutdown(ctx context.Context) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	defer c.retiring.Wait()
-	if c.run == nil {
-		return nil
-	}
 	run := c.run
 	c.run = nil
+	c.closed = true
+	c.mu.Unlock()
+	// Wait with mu released, since a request in flight may need it to finish
+	// (CODING_STANDARDS.md, "Release before waiting"). With run gone and
+	// closed set, nothing adds to retiring any more.
+	defer c.retiring.Wait()
+	if run == nil {
+		return nil
+	}
 	c.setStatus(ControlListenerStatus{Status: ListenerInactive})
 	shutdownErr := run.server.Shutdown(ctx)
 	var closeErr error
@@ -343,8 +359,16 @@ func (c *ControlAddress) resumeAfterHandover(ctx context.Context) error {
 		c.setStatus(ControlListenerStatus{Status: ListenerInactive})
 		// Shut down in the background: the request that asked for the
 		// restart may be in flight on this server and must still get its
-		// response.
-		go func() { _ = run.server.Shutdown(context.WithoutCancel(ctx)) }()
+		// response. Shutdown waits for it through retiring.
+		c.retiring.Add(1)
+		go func() {
+			defer c.retiring.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), controlRetireTimeout)
+			defer cancel()
+			if err := run.server.Shutdown(shutdownCtx); err != nil {
+				_ = run.server.Close()
+			}
+		}()
 		return listenerFailure{kind: ErrListenerUnavailable, err: err}
 	}
 	<-run.served
@@ -406,7 +430,7 @@ const defaultHTTPPort = "80"
 
 // requireBoundHost refuses a request whose Host header does not name bound,
 // the address the network address listens on, so a hostile page whose name
-// was rebound to this machine cannot reach the instance. On a wildcard
+// was rebound to the instance machine cannot reach the instance. On a wildcard
 // address any Host naming the bound port is accepted, because the operator
 // chose every interface. On loopback, localhost is accepted too: a rebound
 // name never arrives as localhost.
