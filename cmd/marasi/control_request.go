@@ -22,13 +22,19 @@ func runControlRequest(cmd *cobra.Command, method, path, operation string, body 
 // runControlRequestStatus is runControlRequest for a route whose success
 // status is wantStatus rather than 200.
 func runControlRequestStatus(cmd *cobra.Command, method, path, operation string, body []byte, wantStatus int) ([]byte, error) {
-	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 	var requestBody io.Reader
 	if body != nil {
 		requestBody = bytes.NewReader(body)
 	}
-	response, err := callInstance(ctx, method, path, "application/json", requestBody)
+	return sendControlRequest(cmd, method, path, operation, "application/json", requestBody, wantStatus)
+}
+
+// sendControlRequest is runControlRequestStatus for a body of any content
+// type, streamed from body rather than held in memory.
+func sendControlRequest(cmd *cobra.Command, method, path, operation, contentType string, body io.Reader, wantStatus int) ([]byte, error) {
+	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	response, err := callInstance(ctx, method, path, contentType, body)
 	if err != nil {
 		return nil, err
 	}
