@@ -265,9 +265,9 @@ func writeCheckpointGet(body []byte, stdout io.Writer, terminal bool) error {
 	return err
 }
 
-// writesToTerminal reports whether stdout is a terminal rather than a pipe or file.
-func writesToTerminal(stdout io.Writer) bool {
-	file, ok := stdout.(*os.File)
+// writesToTerminal reports whether w is a terminal rather than a pipe or file.
+func writesToTerminal(w io.Writer) bool {
+	file, ok := w.(*os.File)
 	if !ok {
 		return false
 	}

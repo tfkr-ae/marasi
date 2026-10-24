@@ -197,13 +197,15 @@ func TestControlAddress(t *testing.T) {
 		}
 	})
 
-	t.Run("should warn on stderr and in the instance log when the address is beyond loopback", func(t *testing.T) {
+	// The tests run without a terminal, so stderr carries no warning; the
+	// warning goes to stderr only when it is a terminal.
+	t.Run("should warn in the instance log, and not on a stderr that is no terminal, when the address is beyond loopback", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		stderr := startControlAddressInstance(t, binary, configDir, "work", "0.0.0.0:0")
 		address := *controlAddressOf(t, binary, configDir, "work")
 		warning := "warning: control listener network address " + address + " is reachable beyond loopback and serves plain HTTP without TLS; protect it with an SSH tunnel, a VPN, or a TLS reverse proxy\n"
-		if strings.Count(stderr, warning) != 1 || !strings.HasPrefix(stderr, "instance work started\n"+warning) {
-			t.Fatalf("\nwanted:\none warning line after the instance line\ngot:\n%s", stderr)
+		if strings.Contains(stderr, "warning") || !strings.HasPrefix(stderr, "instance work started\ncontrol listener network address started on ") {
+			t.Fatalf("\nwanted:\nno warning line on stderr\ngot:\n%s", stderr)
 		}
 		log, err := os.ReadFile(filepath.Join(configDir, "instances", "work.log"))
 		if err != nil || strings.Count(string(log), warning) != 1 {

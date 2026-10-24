@@ -199,7 +199,9 @@ func TestServiceControlListener(t *testing.T) {
 		}
 	})
 
-	t.Run("should warn on stderr and in the instance log when start or update binds beyond loopback", func(t *testing.T) {
+	// The tests run without a terminal, so stderr carries no warning; the
+	// warning goes to stderr only when it is a terminal.
+	t.Run("should warn in the instance log, and not on a stderr that is no terminal, when start or update binds beyond loopback", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startNamedInstance(t, binary, configDir, "work", "--project-name", "work")
 		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
@@ -210,19 +212,18 @@ func TestServiceControlListener(t *testing.T) {
 		}
 		stdout, stderr := runServiceControl(t, binary, configDir, "work", "update", "--address", "0.0.0.0", "--port", "0", "--json")
 		address := *controlAddressOf(t, binary, configDir, "work")
-		warning := "warning: control listener network address " + address + " is reachable beyond loopback and serves plain HTTP without TLS; protect it with an SSH tunnel, a VPN, or a TLS reverse proxy\n"
-		if stderr != warning || !strings.Contains(stdout, `"control_listener":"`+address+`"`) {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s%s", warning, stderr, stdout)
+		if stderr != "" || !strings.Contains(stdout, `"control_listener":"`+address+`"`) {
+			t.Fatalf("\nwanted:\nno stderr\ngot:\n%s%s", stderr, stdout)
 		}
 		runServiceControl(t, binary, configDir, "work", "stop")
 		_, stderr = runServiceControl(t, binary, configDir, "work", "start", "--address", "0.0.0.0", "--port", "0")
 		address = *controlAddressOf(t, binary, configDir, "work")
-		warning = "warning: control listener network address " + address + " is reachable beyond loopback and serves plain HTTP without TLS; protect it with an SSH tunnel, a VPN, or a TLS reverse proxy\n"
-		if stderr != warning+"control listener network address started on "+address+"\n" {
-			t.Fatalf("\nwanted:\nthe warning then the started line\ngot:\n%s", stderr)
+		if want := "control listener network address started on " + address + "\n"; stderr != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stderr)
 		}
 		log, err := os.ReadFile(filepath.Join(configDir, "instances", "work.log"))
-		if err != nil || strings.Count(string(log), "is reachable beyond loopback") != 2 {
+		warning := "warning: control listener network address " + address + " is reachable beyond loopback and serves plain HTTP without TLS; protect it with an SSH tunnel, a VPN, or a TLS reverse proxy\n"
+		if err != nil || strings.Count(string(log), "is reachable beyond loopback") != 2 || !strings.Contains(string(log), warning) {
 			t.Fatalf("\nwanted:\ntwo warning lines in the instance log\ngot:\n%s %v", log, err)
 		}
 	})
