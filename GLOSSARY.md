@@ -24,7 +24,16 @@ The exclusive claim held by one service instance while it controls an open proje
 _Avoid_: Project lock when referring to the domain rule rather than its filesystem implementation.
 
 **Control listener**:
-The listener through which clients send control API requests to one service instance.
+The listener through which clients send control API requests to one service instance. It is always reachable at the instance's socket and can also be reachable at one network address. Both serve the same control API, except that only the socket reads or rotates the control token.
+_Avoid_: control socket or control port as names for the listener itself.
+
+**Instance machine**:
+The machine a service instance runs on. Paths a client sends to the instance, and the machine config, wordlists, report templates, and Chrome paths the instance uses, are on its instance machine, not on the client's machine.
+_Avoid_: server, remote host, this machine when a client may be on another machine.
+
+**Control token**:
+The secret a client presents with every request it sends to a control listener's network address. One per service instance. It stays the same across restarts until it is rotated. The socket does not ask for it.
+_Avoid_: API key, password, session
 
 **Proxy listener**:
 The listener through which browsers and other clients send traffic to a service instance for proxying.
@@ -210,7 +219,7 @@ A named live notification emitted by a service instance at the moment something 
 _Avoid_: Stream, message, log.
 
 **Chrome path**:
-A configured Chrome or Chromium executable location on this machine, tagged with an operating system.
+A configured Chrome or Chromium executable location on the instance machine, tagged with an operating system.
 _Avoid_: chrome dir, browser path, chrome_dirs
 
 **Chrome profile**:
@@ -236,7 +245,7 @@ _Avoid_: Armory template, predefined test case, template
 ### Updates
 
 **Installed build**:
-The Marasi executable on this machine that the CLI runs and that every service instance started from it runs.
+The Marasi executable on one machine that the CLI there runs and that every service instance started from it runs. An update through a service instance replaces the installed build on its instance machine.
 _Avoid_: binary, install, app
 
 **Channel**:
