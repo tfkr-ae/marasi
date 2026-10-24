@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/tfkr-ae/marasi/internal/stagedfile"
 )
 
 var (
@@ -39,6 +41,8 @@ type Provider interface {
 	Open(name string) (Iterator, error)
 	// Add moves source into the managed directory under its basename.
 	Add(source string) error
+	// Upload writes contents into the managed directory as wordlist name.
+	Upload(name string, contents io.Reader) error
 	// Remove deletes a managed wordlist by name.
 	Remove(name string) error
 }
@@ -58,6 +62,8 @@ type Info struct {
 	// Size is the wordlist file size in bytes.
 	Size int64
 }
+
+var _ Provider = (*Manager)(nil)
 
 // Manager discovers and opens wordlists in a configured directory.
 type Manager struct {
@@ -164,6 +170,25 @@ func (m *Manager) Add(source string) error {
 	}
 
 	return copyWordlist(source, destination, info)
+}
+
+// Upload writes contents into the managed directory as wordlist name. It
+// fails with ErrAlreadyExists rather than replace a wordlist, and a failed
+// upload leaves no partial wordlist behind.
+func (m *Manager) Upload(name string, contents io.Reader) error {
+	if !ValidName(name) {
+		return ErrInvalidSource
+	}
+	// Stage beside the wordlists directory, on the same file system, so a
+	// partial upload never shows in List.
+	err := stagedfile.Publish(filepath.Dir(m.wordlistDir), ".marasi-wordlist-*", filepath.Join(m.wordlistDir, name), contents)
+	if errors.Is(err, stagedfile.ErrExists) {
+		return ErrAlreadyExists
+	}
+	if err != nil {
+		return fmt.Errorf("uploading wordlist %s: %w", name, err)
+	}
+	return nil
 }
 
 // Remove deletes a wordlist by name from the managed directory.

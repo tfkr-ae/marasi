@@ -39,6 +39,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/internal/stagedfile"
 )
 
 //go:embed default_template.md
@@ -197,7 +198,7 @@ func (g *Generator) AddTemplate(source string) (err error) {
 	}
 	source = filepath.Clean(source)
 	name := filepath.Base(source)
-	if !filepath.IsLocal(name) || filepath.Base(name) != name || strings.HasPrefix(name, ".") || strings.ContainsRune(name, 0) {
+	if !validAddedTemplateName(name) {
 		return ErrInvalidTemplateSource
 	}
 
@@ -339,6 +340,30 @@ func (g *Generator) AddTemplate(source string) (err error) {
 		return fmt.Errorf("removing staged report template %s: %w", staged, err)
 	}
 	sourceStaged = false
+	return nil
+}
+
+// validAddedTemplateName reports whether a template may be added as name:
+// one local filename that is not hidden, since the templates directory
+// stages its own files under hidden names and lists none of them.
+func validAddedTemplateName(name string) bool {
+	return filepath.IsLocal(name) && filepath.Base(name) == name && !strings.HasPrefix(name, ".") && !strings.ContainsRune(name, 0)
+}
+
+// UploadTemplate writes contents into the templates directory as template
+// name. It fails with ErrTemplateAlreadyExists rather than replace a
+// template, and a failed upload leaves no partial template behind.
+func (g *Generator) UploadTemplate(name string, contents io.Reader) error {
+	if !validAddedTemplateName(name) {
+		return ErrInvalidTemplateSource
+	}
+	err := stagedfile.Publish(g.templatesDir, ".marasi-report-*", filepath.Join(g.templatesDir, name), contents)
+	if errors.Is(err, stagedfile.ErrExists) {
+		return ErrTemplateAlreadyExists
+	}
+	if err != nil {
+		return fmt.Errorf("uploading report template %s: %w", name, err)
+	}
 	return nil
 }
 

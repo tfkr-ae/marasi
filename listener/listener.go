@@ -39,34 +39,106 @@ func NewTrackedConnection(conn net.Conn, onClose func()) net.Conn {
 	return &connWrapper{Conn: conn, Reader: conn, onClose: onClose}
 }
 
-// ProtocolMuxListener wraps net.Listener and inspects the incoming connection to determine the protocol
+// ProtocolMuxListener wraps net.Listener and inspects the incoming connection to determine the protocol.
+// Each connection is inspected on its own goroutine, so a client that connects
+// and sends nothing does not hold up the connections accepted after it.
 type ProtocolMuxListener struct {
 	net.Listener
 	TLSConfig *tls.Config
 	// WrapConn wraps each accepted connection before protocol inspection and TLS.
 	// When non-nil, it must return a non-nil connection.
 	WrapConn func(net.Conn) net.Conn
+
+	startOnce sync.Once
+	closeOnce sync.Once
+	// inspected carries each inspected connection, or the error that refused it, to Accept.
+	inspected chan acceptResult
+	// closed is closed by Close, and stops the accept loop and pending inspections.
+	closed chan struct{}
+	// stopped is closed when the accept loop ends; stopErr is why.
+	stopped chan struct{}
+	stopErr error
+}
+
+type acceptResult struct {
+	conn net.Conn
+	err  error
 }
 
 func NewProtocolMuxListener(listener net.Listener, tlsConfig *tls.Config) *ProtocolMuxListener {
 	return &ProtocolMuxListener{
 		Listener:  listener,
 		TLSConfig: tlsConfig,
+		inspected: make(chan acceptResult),
+		closed:    make(chan struct{}),
+		stopped:   make(chan struct{}),
 	}
 }
 
+// Accept returns the next inspected connection, or the error that refused one.
+// Once the underlying listener fails for good, every call returns that error.
 func (l *ProtocolMuxListener) Accept() (net.Conn, error) {
-	rawConnection, err := l.Listener.Accept()
-	if err != nil {
-		return nil, fmt.Errorf("accepting connection: %w", err)
+	l.startOnce.Do(func() { go l.acceptLoop() })
+	select {
+	case result := <-l.inspected:
+		return result.conn, result.err
+	case <-l.stopped:
+		return nil, l.stopErr
 	}
-	if l.WrapConn != nil {
-		rawConnection = l.WrapConn(rawConnection)
-	}
+}
 
+// Close stops accepting, and closes connections still being inspected.
+func (l *ProtocolMuxListener) Close() error {
+	l.closeOnce.Do(func() { close(l.closed) })
+	return l.Listener.Close()
+}
+
+func (l *ProtocolMuxListener) acceptLoop() {
+	for {
+		rawConnection, err := l.Listener.Accept()
+		if err != nil {
+			err = fmt.Errorf("accepting connection: %w", err)
+			if errors.Is(err, net.ErrClosed) {
+				l.stopErr = err
+				close(l.stopped)
+				return
+			}
+			if !l.deliver(acceptResult{err: err}) {
+				return
+			}
+			continue
+		}
+		if l.WrapConn != nil {
+			rawConnection = l.WrapConn(rawConnection)
+		}
+		go func() {
+			conn, err := l.inspect(rawConnection)
+			if !l.deliver(acceptResult{conn: conn, err: err}) && conn != nil {
+				conn.Close()
+			}
+		}()
+	}
+}
+
+// deliver hands result to Accept, and reports false when the listener closed
+// or stopped accepting first.
+func (l *ProtocolMuxListener) deliver(result acceptResult) bool {
+	select {
+	case l.inspected <- result:
+		return true
+	case <-l.closed:
+		return false
+	case <-l.stopped:
+		return false
+	}
+}
+
+// inspect peeks at a new connection's first bytes and completes the TLS
+// handshake when the client speaks TLS.
+func (l *ProtocolMuxListener) inspect(rawConnection net.Conn) (net.Conn, error) {
 	bufferedReader := bufio.NewReader(rawConnection)
 
-	err = rawConnection.SetReadDeadline(time.Now().Add(10 * time.Second))
+	err := rawConnection.SetReadDeadline(time.Now().Add(10 * time.Second))
 	if err != nil {
 		rawConnection.Close()
 		return nil, fmt.Errorf("setting read deadline for peak: %w", err)
