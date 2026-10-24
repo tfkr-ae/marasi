@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // startControlAddressInstance starts name with its control listener also
@@ -287,6 +289,166 @@ func TestControlAddress(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(configDir, "instances", "work.token")); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("\nwanted:\nno control token file\ngot:\n%v", err)
+		}
+	})
+}
+
+// openNetworkConn dials the network address, writes request when it is not
+// empty, and reads until the bytes received contain until.
+func openNetworkConn(t *testing.T, address, request, until string) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", address)
+	if err != nil {
+		t.Fatalf("dialing the network address: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	if request == "" {
+		return conn
+	}
+	if _, err := conn.Write([]byte(request)); err != nil {
+		t.Fatalf("writing to the network address: %v", err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var received []byte
+	buffer := make([]byte, 4096)
+	for !strings.Contains(string(received), until) {
+		n, err := conn.Read(buffer)
+		received = append(received, buffer[:n]...)
+		if err != nil {
+			t.Fatalf("\nwanted:\n%q\ngot:\n%q %v", until, received, err)
+		}
+	}
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	return conn
+}
+
+// readUntilClosed discards what conn sends until the peer closes it, and
+// fails if that takes longer than five seconds.
+func readUntilClosed(conn net.Conn) error {
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return err
+	}
+	buffer := make([]byte, 4096)
+	for {
+		_, err := conn.Read(buffer)
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return err
+		}
+		if err != nil {
+			return nil
+		}
+	}
+}
+
+// readResponseHead returns the status line of the next response on conn.
+func readResponseHead(t *testing.T, conn net.Conn) string {
+	t.Helper()
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		t.Fatalf("reading a response on the network address: %v", err)
+	}
+	return line
+}
+
+func TestControlTokenRotate(t *testing.T) {
+	binary := buildMarasi(t)
+
+	t.Run("should replace the token so the old one gets 401 and the new one works", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
+		address := *controlAddressOf(t, binary, configDir, "work")
+		oldToken := controlTokenOf(t, binary, configDir, "work")
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "control", "token", "--rotate")
+		if err != nil {
+			t.Fatalf("rotating the control token: %v\n%s", err, stderr)
+		}
+		newToken := strings.TrimSuffix(stdout, "\n")
+		if len(newToken) != 64 || newToken == oldToken || stdout != newToken+"\n" || stderr != "" {
+			t.Fatalf("\nwanted:\na new 64 character token on stdout\ngot:\n%q %q", stdout, stderr)
+		}
+		if read := controlTokenOf(t, binary, configDir, "work"); read != newToken {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", newToken, read)
+		}
+		content, err := os.ReadFile(filepath.Join(configDir, "instances", "work.token"))
+		if err != nil || string(content) != newToken+"\n" {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%q %v", newToken, content, err)
+		}
+		if status, _, body := networkRequest(t, http.MethodGet, address, "/service/status", "Bearer "+oldToken); status != http.StatusUnauthorized {
+			t.Fatalf("\nwanted:\n401 with the old token\ngot:\n%d %s", status, body)
+		}
+		if status, _, body := networkRequest(t, http.MethodGet, address, "/service/status", "Bearer "+newToken); status != http.StatusOK {
+			t.Fatalf("\nwanted:\n200 with the new token\ngot:\n%d %s", status, body)
+		}
+
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "control", "token", "--rotate", "--json")
+		var rotated struct {
+			Token string `json:"token"`
+		}
+		if err != nil || json.Unmarshal([]byte(stdout), &rotated) != nil || len(rotated.Token) != 64 || rotated.Token == newToken {
+			t.Fatalf("\nwanted:\n{\"token\":...} with a new token\ngot:\n%q %q %v", stdout, stderr, err)
+		}
+	})
+
+	t.Run("should drop connections and event streams that used the old token and publish token_rotated without it", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
+		address := *controlAddressOf(t, binary, configDir, "work")
+		oldToken := controlTokenOf(t, binary, configDir, "work")
+		_, socketEvents, closeSocketEvents := connectInstanceEvents(t, filepath.Join(configDir, "instances", "work.sock"))
+		defer closeSocketEvents()
+
+		stream := openNetworkConn(t, address, "GET /events HTTP/1.1\r\nHost: "+address+"\r\nAuthorization: Bearer "+oldToken+"\r\n\r\n", ": connected")
+		keepAlive := openNetworkConn(t, address, "GET /service/status HTTP/1.1\r\nHost: "+address+"\r\nAuthorization: Bearer "+oldToken+"\r\n\r\n", "\"status\":\"running\"")
+		idle := openNetworkConn(t, address, "", "")
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "control", "token", "--rotate")
+		if err != nil {
+			t.Fatalf("rotating the control token: %v\n%s", err, stderr)
+		}
+		newToken := strings.TrimSuffix(stdout, "\n")
+
+		_, data := readEventNamed(t, socketEvents, "control_listener.token_rotated")
+		if data != "{}" || strings.Contains(data, newToken) {
+			t.Fatalf("\nwanted:\ncontrol_listener.token_rotated with {}\ngot:\n%s", data)
+		}
+		for name, conn := range map[string]net.Conn{"the event stream": stream, "the keep-alive connection": keepAlive} {
+			if err := readUntilClosed(conn); err != nil {
+				t.Fatalf("\nwanted:\n%s closed after rotation\ngot:\n%v", name, err)
+			}
+		}
+		if _, err := idle.Write([]byte("GET /service/status HTTP/1.1\r\nHost: " + address + "\r\nAuthorization: Bearer " + newToken + "\r\n\r\n")); err != nil {
+			t.Fatalf("\nwanted:\na connection that never authenticated kept open\ngot:\n%v", err)
+		}
+		if got := readResponseHead(t, idle); !strings.HasPrefix(got, "HTTP/1.1 200 ") {
+			t.Fatalf("\nwanted:\n200 with the new token on the unauthenticated connection\ngot:\n%s", got)
+		}
+	})
+
+	t.Run("should refuse rotation on the network address and keep the token", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
+		address := *controlAddressOf(t, binary, configDir, "work")
+		token := controlTokenOf(t, binary, configDir, "work")
+
+		status, _, body := networkRequest(t, http.MethodPost, address, "/service/control-listener/token/rotate", "Bearer "+token)
+		wantForbidden := "{\"error\":\"socket_only\",\"message\":\"the control token can be rotated only through the socket\"}\n"
+		if status != http.StatusForbidden || body != wantForbidden {
+			t.Fatalf("\nwanted:\n403 %s\ngot:\n%d %s", wantForbidden, status, body)
+		}
+		if read := controlTokenOf(t, binary, configDir, "work"); read != token {
+			t.Fatalf("\nwanted:\nthe token unchanged %s\ngot:\n%s", token, read)
+		}
+		if status, _, body := networkRequest(t, http.MethodGet, address, "/service/status", "Bearer "+token); status != http.StatusOK {
+			t.Fatalf("\nwanted:\n200 with the unchanged token\ngot:\n%d %s", status, body)
 		}
 	})
 }

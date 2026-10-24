@@ -30,7 +30,21 @@ type ControlAddress struct {
 	run       *controlAddressRun
 	statusMu  sync.RWMutex
 	status    ControlListenerStatus
+	// connsMu guards conns, every open connection on the network address
+	// with the control token generation it last authenticated with.
+	connsMu sync.Mutex
+	conns   map[net.Conn]*networkConn
 }
+
+// networkConn is one open connection on the network address. authenticated
+// is false until a request on it presents the control token.
+type networkConn struct {
+	conn          net.Conn
+	authenticated bool
+	generation    uint64
+}
+
+type networkConnKey struct{}
 
 // controlAddressRun is one bound network address and the server on it.
 type controlAddressRun struct {
@@ -76,10 +90,12 @@ func (s *Server) EnableControlAddress(token *ControlToken, logWriter io.Writer) 
 		token:     token,
 		logWriter: logWriter,
 		status:    ControlListenerStatus{Status: ListenerInactive},
+		conns:     map[net.Conn]*networkConn{},
 	}
 	s.control = control
 	controlMux := http.NewServeMux()
 	controlMux.HandleFunc("GET /token", s.serveControlToken)
+	controlMux.HandleFunc("POST /token/rotate", s.serveControlTokenRotate)
 	s.mux.Handle("/service/control-listener/", http.StripPrefix("/service/control-listener", controlMux))
 	return control
 }
@@ -102,6 +118,90 @@ func (s *Server) serveControlToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, http.StatusOK, struct {
 		Token string `json:"token"`
 	}{Token: value})
+}
+
+// serveControlTokenRotate replaces the control token and returns the new
+// one, only to a request that arrived on the socket, so a stolen token
+// cannot lock the owner out. Connections and event streams that used the
+// old token are dropped, and control_listener.token_rotated tells socket
+// clients to read the new token, without carrying it.
+func (s *Server) serveControlTokenRotate(w http.ResponseWriter, r *http.Request) {
+	if requestArrival(r) == arrivedOnNetworkAddress {
+		writeJSON(w, r, http.StatusForbidden, controlRefusalBody{Error: "socket_only", Message: "the control token can be rotated only through the socket"})
+		return
+	}
+	value, err := s.control.RotateToken()
+	if err != nil {
+		fmt.Fprintf(s.control.logWriter, "rotating control token: %v\n", err)
+		writeJSON(w, r, http.StatusInternalServerError, struct {
+			Error string `json:"error"`
+		}{Error: "internal_server_error"})
+		return
+	}
+	s.events.publish("control_listener.token_rotated", struct{}{})
+	writeJSON(w, r, http.StatusOK, struct {
+		Token string `json:"token"`
+	}{Token: value})
+}
+
+// RotateToken replaces the control token and closes every connection on the
+// network address that authenticated with an older one, which also ends its
+// event streams. The new token is returned.
+func (c *ControlAddress) RotateToken() (string, error) {
+	value, err := c.token.Rotate()
+	if err != nil {
+		return "", err
+	}
+	generation := c.token.currentGeneration()
+	c.connsMu.Lock()
+	defer c.connsMu.Unlock()
+	for _, tracked := range c.conns {
+		if tracked.authenticated && tracked.generation < generation {
+			_ = tracked.conn.Close()
+		}
+	}
+	return value, nil
+}
+
+// trackConn records a new connection on the network address and returns
+// its context, which carries the arrival mark and the tracked connection.
+func (c *ControlAddress) trackConn(ctx context.Context, conn net.Conn) context.Context {
+	tracked := &networkConn{conn: conn}
+	c.connsMu.Lock()
+	c.conns[conn] = tracked
+	c.connsMu.Unlock()
+	ctx = context.WithValue(ctx, arrivalKey{}, arrivedOnNetworkAddress)
+	return context.WithValue(ctx, networkConnKey{}, tracked)
+}
+
+// forgetConn stops tracking a connection once the server is done with it.
+func (c *ControlAddress) forgetConn(conn net.Conn, state http.ConnState) {
+	if state != http.StateClosed && state != http.StateHijacked {
+		return
+	}
+	c.connsMu.Lock()
+	delete(c.conns, conn)
+	c.connsMu.Unlock()
+}
+
+// authenticateConn records that r's connection presented the token of
+// generation. It reports false, and closes the connection, when the token
+// was rotated after the comparison, so a request cannot slip past a
+// rotation's sweep.
+func (c *ControlAddress) authenticateConn(r *http.Request, generation uint64) bool {
+	tracked, ok := r.Context().Value(networkConnKey{}).(*networkConn)
+	if !ok {
+		return true
+	}
+	c.connsMu.Lock()
+	defer c.connsMu.Unlock()
+	tracked.authenticated = true
+	tracked.generation = generation
+	if generation != c.token.currentGeneration() {
+		_ = tracked.conn.Close()
+		return false
+	}
+	return true
 }
 
 // controlListenerAddress returns the network address of the control
@@ -199,10 +299,10 @@ func (c *ControlAddress) bind(ctx context.Context, endpoint string) (*controlAdd
 	server := &http.Server{
 		Handler: c.networkHandler(),
 		// Every request on this server is marked as arriving on the
-		// network address, so socket-only routes can refuse it.
-		ConnContext: func(ctx context.Context, _ net.Conn) context.Context {
-			return context.WithValue(ctx, arrivalKey{}, arrivedOnNetworkAddress)
-		},
+		// network address, so socket-only routes can refuse it, and every
+		// connection is tracked, so a token rotation can drop it.
+		ConnContext: c.trackConn,
+		ConnState:   c.forgetConn,
 	}
 	run := &controlAddressRun{listener: listener, server: server, served: make(chan error, 1)}
 	go func() { run.served <- server.Serve(listener) }()
@@ -235,9 +335,17 @@ func (c *ControlAddress) networkHandler() http.Handler {
 func (c *ControlAddress) requireControlToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		presented, ok := bearerToken(r.Header.Get("Authorization"))
-		if !ok || !c.token.matches(presented) {
+		var generation uint64
+		var matched bool
+		if ok {
+			generation, matched = c.token.matches(presented)
+		}
+		if !matched {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeJSON(w, r, http.StatusUnauthorized, controlRefusalBody{Error: "unauthorized", Message: "send the control token as Authorization: Bearer"})
+			return
+		}
+		if !c.authenticateConn(r, generation) {
 			return
 		}
 		next.ServeHTTP(w, r)
