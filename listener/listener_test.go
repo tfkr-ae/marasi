@@ -285,6 +285,73 @@ func TestProtocolMuxListener(t *testing.T) {
 	})
 }
 
+func TestProtocolMuxListenerSilentClient(t *testing.T) {
+	newMux := func(t *testing.T) (*ProtocolMuxListener, string) {
+		t.Helper()
+		serverTLSConfig, _ := generateTestTLSConfig(t)
+		baseListener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mux := NewProtocolMuxListener(baseListener, serverTLSConfig)
+		t.Cleanup(func() { _ = mux.Close() })
+		return mux, baseListener.Addr().String()
+	}
+
+	t.Run("should accept a connection that sends while an earlier one stays silent", func(t *testing.T) {
+		mux, address := newMux(t)
+		silent, err := net.Dial("tcp", address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer silent.Close()
+		// Let the silent connection reach the listener first.
+		time.Sleep(100 * time.Millisecond)
+		talking, err := net.Dial("tcp", address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer talking.Close()
+		if _, err := talking.Write([]byte("GET / HTTP/1.1\r\n")); err != nil {
+			t.Fatal(err)
+		}
+
+		accepted := make(chan error, 1)
+		go func() {
+			conn, err := mux.Accept()
+			if err == nil {
+				conn.Close()
+			}
+			accepted <- err
+		}()
+		select {
+		case err := <-accepted:
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("\nwanted:\nthe talking connection accepted at once\ngot:\nAccept blocked behind the silent connection")
+		}
+	})
+
+	t.Run("should return net.ErrClosed from Accept once closed", func(t *testing.T) {
+		mux, address := newMux(t)
+		silent, err := net.Dial("tcp", address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer silent.Close()
+		if err := mux.Close(); err != nil {
+			t.Fatal(err)
+		}
+		for range 2 {
+			if _, err := mux.Accept(); !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", net.ErrClosed, err)
+			}
+		}
+	})
+}
+
 // mockListener allows custom methos to be implemented for test cases
 type mockListener struct {
 	accept func() (net.Conn, error)

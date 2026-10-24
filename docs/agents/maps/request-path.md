@@ -6,7 +6,7 @@ In this map, bare "upstream" means the origin, as in `GLOSSARY.md`. An **upstrea
 
 ## Order
 
-1. **Listener.** `(*Proxy).GetListener` and `(*Proxy).Serve` stack the listener wrappers. The raw socket is watched beneath protocol inspection and TLS, so a client that leaves is noticed while martian is not reading.
+1. **Listener.** `(*Proxy).GetListener` and `(*Proxy).Serve` stack the listener wrappers. The raw socket is watched beneath protocol inspection and TLS, so a client that leaves is noticed while martian is not reading. `ProtocolMuxListener` inspects each new connection on its own goroutine, so a client that connects and sends nothing never delays the connections behind it.
 2. **martian v2.1.0** reads the request and MITMs a `CONNECT`. It then runs every request modifier, then the round trip, then every response modifier. The whole request pipeline has run before anything goes upstream.
 3. **Request side.** `WithBasePipeline` wraps `proxy.Modifiers` for admission, internal-client checks and header stripping. `WithDefaultModifierPipeline` adds the modifiers, which run in the order they are added. `proxy.Modifiers` is a martian `fifo.Group`, so the first error stops the chain, and `ErrSkipPipeline` and `ErrDropped` are how a modifier ends it early.
 4. **Capture.** The request is captured by its write modifier, before the round trip, and the response by its write modifier, after it. Both queue on `DBWriteChannel`, and `(*Proxy).WriteToDB` stores them.
