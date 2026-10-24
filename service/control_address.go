@@ -26,10 +26,14 @@ type ControlAddress struct {
 	api       http.Handler
 	token     *ControlToken
 	logWriter io.Writer
+	events    *eventBroadcaster
 	mu        sync.Mutex
 	run       *controlAddressRun
-	statusMu  sync.RWMutex
-	status    ControlListenerStatus
+	// retiring counts runs that Stop or Update closed and that are still
+	// finishing the request that closed them.
+	retiring sync.WaitGroup
+	statusMu sync.RWMutex
+	status   ControlListenerStatus
 	// connsMu guards conns, every open connection on the network address
 	// with the control token generation it last authenticated with.
 	connsMu sync.Mutex
@@ -40,6 +44,7 @@ type ControlAddress struct {
 // is false until a request on it presents the control token.
 type networkConn struct {
 	conn          net.Conn
+	run           *controlAddressRun
 	authenticated bool
 	generation    uint64
 }
@@ -90,6 +95,7 @@ func (s *Server) EnableControlAddress(token *ControlToken, logWriter io.Writer) 
 		api:       s,
 		token:     token,
 		logWriter: logWriter,
+		events:    s.events,
 		status:    ControlListenerStatus{Status: ListenerInactive},
 		conns:     map[net.Conn]*networkConn{},
 	}
@@ -97,6 +103,10 @@ func (s *Server) EnableControlAddress(token *ControlToken, logWriter io.Writer) 
 	controlMux := http.NewServeMux()
 	controlMux.HandleFunc("GET /token", s.serveControlToken)
 	controlMux.HandleFunc("POST /token/rotate", s.serveControlTokenRotate)
+	controlMux.HandleFunc("GET /status", s.serveControlListenerStatus)
+	controlMux.HandleFunc("POST /start", s.serveControlListenerStart)
+	controlMux.HandleFunc("POST /update", s.serveControlListenerUpdate)
+	controlMux.HandleFunc("POST /stop", s.serveControlListenerStop)
 	s.mux.Handle("/service/control-listener/", http.StripPrefix("/service/control-listener", controlMux))
 	return control
 }
@@ -166,8 +176,8 @@ func (c *ControlAddress) RotateToken() (string, error) {
 
 // trackConn records a new connection on the network address and returns
 // its context, which carries the arrival mark and the tracked connection.
-func (c *ControlAddress) trackConn(ctx context.Context, conn net.Conn) context.Context {
-	tracked := &networkConn{conn: conn}
+func (c *ControlAddress) trackConn(ctx context.Context, conn net.Conn, run *controlAddressRun) context.Context {
+	tracked := &networkConn{conn: conn, run: run}
 	c.connsMu.Lock()
 	c.conns[conn] = tracked
 	c.connsMu.Unlock()
@@ -253,9 +263,9 @@ func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings) (
 		return ControlListenerStatus{}, err
 	}
 	c.run = run
-	address := run.listener.Addr().String()
-	status := ControlListenerStatus{Status: ListenerActive, ControlListener: &address}
+	status := activeControlListenerStatus(run)
 	c.setStatus(status)
+	c.events.publish("control_listener.started", status)
 	return status, nil
 }
 
@@ -264,6 +274,7 @@ func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings) (
 func (c *ControlAddress) Shutdown(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	defer c.retiring.Wait()
 	if c.run == nil {
 		return nil
 	}
@@ -358,11 +369,14 @@ func (c *ControlAddress) bind(ctx context.Context, endpoint string) (*controlAdd
 		Handler: c.networkHandler(address),
 		// Every request on this server is marked as arriving on the
 		// network address, so socket-only routes can refuse it, and every
-		// connection is tracked, so a token rotation can drop it.
-		ConnContext: c.trackConn,
-		ConnState:   c.forgetConn,
+		// connection is tracked with its run, so a token rotation can drop
+		// it and so can a Stop or Update that closes its run.
+		ConnState: c.forgetConn,
 	}
 	run := &controlAddressRun{listener: listener, server: server, served: make(chan error, 1)}
+	server.ConnContext = func(ctx context.Context, conn net.Conn) context.Context {
+		return c.trackConn(ctx, conn, run)
+	}
 	go func() { run.served <- server.Serve(listener) }()
 	return run, nil
 }
