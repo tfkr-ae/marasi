@@ -39,6 +39,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/internal/stagedfile"
 )
 
 //go:embed default_template.md
@@ -352,39 +353,16 @@ func validAddedTemplateName(name string) bool {
 // UploadTemplate writes contents into the templates directory as template
 // name. It fails with ErrTemplateAlreadyExists rather than replace a
 // template, and a failed upload leaves no partial template behind.
-func (g *Generator) UploadTemplate(name string, contents io.Reader) (err error) {
+func (g *Generator) UploadTemplate(name string, contents io.Reader) error {
 	if !validAddedTemplateName(name) {
 		return ErrInvalidTemplateSource
 	}
-	destination := filepath.Join(g.templatesDir, name)
-	if _, err := os.Lstat(destination); err == nil {
+	err := stagedfile.Publish(g.templatesDir, ".marasi-report-*", filepath.Join(g.templatesDir, name), contents)
+	if errors.Is(err, stagedfile.ErrExists) {
 		return ErrTemplateAlreadyExists
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("checking report template %s: %w", destination, err)
 	}
-	staged, err := os.CreateTemp(g.templatesDir, ".marasi-report-*")
 	if err != nil {
-		return fmt.Errorf("staging report template %s: %w", name, err)
-	}
-	defer func() {
-		err = errors.Join(err, os.Remove(staged.Name()))
-	}()
-	if _, err := io.Copy(staged, contents); err != nil {
-		staged.Close()
-		return fmt.Errorf("writing report template %s: %w", name, err)
-	}
-	if err := staged.Sync(); err != nil {
-		staged.Close()
-		return fmt.Errorf("syncing report template %s: %w", name, err)
-	}
-	if err := staged.Close(); err != nil {
-		return fmt.Errorf("closing report template %s: %w", name, err)
-	}
-	// Link creates the name exclusively, so a racing add cannot be replaced.
-	if err := os.Link(staged.Name(), destination); errors.Is(err, os.ErrExist) {
-		return ErrTemplateAlreadyExists
-	} else if err != nil {
-		return fmt.Errorf("publishing report template %s: %w", destination, err)
+		return fmt.Errorf("uploading report template %s: %w", name, err)
 	}
 	return nil
 }
