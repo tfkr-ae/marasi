@@ -187,7 +187,7 @@ func (c *ControlAddress) Shutdown(ctx context.Context) error {
 
 // bind listens on endpoint and starts serving the control API there.
 func (c *ControlAddress) bind(ctx context.Context, endpoint string) (*controlAddressRun, error) {
-	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", endpoint)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, controlAddressNetwork(endpoint), endpoint)
 	if err != nil {
 		fmt.Fprintf(c.logWriter, "binding control listener network address on %s: %v\n", endpoint, err)
 		return nil, listenerFailure{kind: ErrListenerUnavailable, err: err}
@@ -207,6 +207,18 @@ func (c *ControlAddress) bind(ctx context.Context, endpoint string) (*controlAdd
 	run := &controlAddressRun{listener: listener, server: server, served: make(chan error, 1)}
 	go func() { run.served <- server.Serve(listener) }()
 	return run, nil
+}
+
+// controlAddressNetwork keeps an IPv4 host on IPv4, so 0.0.0.0 binds every
+// IPv4 interface and is reported as asked rather than as [::].
+func controlAddressNetwork(endpoint string) string {
+	host, _, err := net.SplitHostPort(endpoint)
+	if err == nil {
+		if ip := net.ParseIP(host); ip != nil && ip.To4() != nil {
+			return "tcp4"
+		}
+	}
+	return "tcp"
 }
 
 // networkHandler is the control API as the network address serves it. The
