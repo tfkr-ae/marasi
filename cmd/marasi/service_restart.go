@@ -366,7 +366,7 @@ func (s successorStarter) start(ctx context.Context, project string, proxyListen
 	}
 	statusCtx, cancel := context.WithTimeout(ctx, s.readyTimeout)
 	defer cancel()
-	response, err := dialInstance(statusCtx, s.claim.socketPath, instanceName, http.MethodGet, "/service/status", "", nil)
+	response, err := dialInstance(statusCtx, localInstanceEndpoint(instanceName, s.instancePath), http.MethodGet, "/service/status", "", nil)
 	if err == nil && response.StatusCode == http.StatusOK {
 		var status struct {
 			Version string `json:"version"`

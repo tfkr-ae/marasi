@@ -158,7 +158,7 @@ var trafficListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return listTraffic(ctx, instancePath, instance, jsonOutput, query, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		return listTraffic(ctx, endpoint, jsonOutput, query, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
@@ -170,7 +170,7 @@ var trafficGetCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return getTraffic(ctx, instancePath, instance, jsonOutput, args[0], cmd.OutOrStdout())
+		return getTraffic(ctx, endpoint, jsonOutput, args[0], cmd.OutOrStdout())
 	},
 }
 
@@ -258,8 +258,8 @@ func trafficListQuery() (string, error) {
 }
 
 // listTraffic prints one page of traffic for the instance.
-func listTraffic(ctx context.Context, instancePath, instanceName string, asJSON bool, query string, stdout, stderr io.Writer) error {
-	response, err := dialInstance(ctx, instancePath+".sock", instanceName, http.MethodGet, "/traffic?"+query, "", nil)
+func listTraffic(ctx context.Context, target instanceEndpoint, asJSON bool, query string, stdout, stderr io.Writer) error {
+	response, err := dialInstance(ctx, target, http.MethodGet, "/traffic?"+query, "", nil)
 	if err != nil {
 		return err
 	}
@@ -337,12 +337,12 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 }
 
 // getTraffic prints one request/response pair.
-func getTraffic(ctx context.Context, instancePath, instanceName string, asJSON bool, id string, stdout io.Writer) error {
+func getTraffic(ctx context.Context, target instanceEndpoint, asJSON bool, id string, stdout io.Writer) error {
 	id, err := parseServiceID(id)
 	if err != nil {
 		return err
 	}
-	response, err := dialInstance(ctx, instancePath+".sock", instanceName, http.MethodGet, "/traffic/"+id, "", nil)
+	response, err := dialInstance(ctx, target, http.MethodGet, "/traffic/"+id, "", nil)
 	if err != nil {
 		return err
 	}

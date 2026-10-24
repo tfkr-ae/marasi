@@ -119,7 +119,7 @@ var projectOpenCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return openProject(ctx, instancePath, instance, jsonOutput, path, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		return openProject(ctx, endpoint, jsonOutput, path, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
@@ -138,10 +138,10 @@ func resolveProjectOpenPath(cmd *cobra.Command) (string, error) {
 	return path, nil
 }
 
-func openProject(ctx context.Context, instancePath, instanceName string, asJSON bool, path string, stdout, stderr io.Writer) error {
+func openProject(ctx context.Context, target instanceEndpoint, asJSON bool, path string, stdout, stderr io.Writer) error {
 	// JSON mode writes nothing to stderr (docs/adr/2026-10-06-cli-output-contract.md), so only a human sees waits.
 	if !asJSON {
-		stop := watchProjectWaits(ctx, instancePath, path, stderr)
+		stop := watchProjectWaits(ctx, target, path, stderr)
 		defer stop()
 	}
 	body, err := json.Marshal(struct {
@@ -150,7 +150,7 @@ func openProject(ctx context.Context, instancePath, instanceName string, asJSON 
 	if err != nil {
 		return fmt.Errorf("encoding project open request: %w", err)
 	}
-	response, err := dialInstance(ctx, instancePath+".sock", instanceName, http.MethodPost, "/project/open", "application/json", bytes.NewReader(body))
+	response, err := dialInstance(ctx, target, http.MethodPost, "/project/open", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -194,9 +194,9 @@ const projectWaitConnectTimeout = 2 * time.Second
 // until the returned stop is called. It returns once the subscription is
 // connected, or has failed, so no wait is missed. A failed subscription is
 // not an error: the open itself reports an instance that is not running.
-func watchProjectWaits(ctx context.Context, instancePath, target string, stderr io.Writer) func() {
+func watchProjectWaits(ctx context.Context, source instanceEndpoint, target string, stderr io.Writer) func() {
 	ctx, cancel := context.WithCancel(ctx)
-	client := service.NewClient(instancePath + ".sock")
+	client := source.client()
 	connected, finished := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(finished)
