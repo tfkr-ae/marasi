@@ -85,38 +85,65 @@ var projectOpenCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		path, err := resolveProjectOpenPath(cmd)
+		request, err := resolveProjectOpenRequest(cmd)
 		if err != nil {
 			return err
 		}
-		return openProject(ctx, endpoint, jsonOutput, path, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		return openProject(ctx, endpoint, jsonOutput, request, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
-func resolveProjectOpenPath(cmd *cobra.Command) (string, error) {
+// projectOpenRequest is the body of POST /project/open: exactly one of a
+// project file path or a project name.
+type projectOpenRequest struct {
+	Path string `json:"path,omitempty"`
+	Name string `json:"name,omitempty"`
+}
+
+// resolveProjectOpenRequest resolves --path or --name into the request to
+// send. Locally the CLI resolves both to a canonical path. Over --remote
+// both name something on the instance machine, so --path goes unchanged and
+// --name goes as a name for the instance to resolve in its own config dir.
+func resolveProjectOpenRequest(cmd *cobra.Command) (projectOpenRequest, error) {
 	if cmd.Flags().Changed("path") {
+		if endpoint.remote() {
+			return projectOpenRequest{Path: projectOpenPath}, nil
+		}
 		path, err := resolveProjectPath(projectOpenPath)
 		if err != nil {
-			return "", fmt.Errorf("%s: %w", projectOpenPath, err)
+			return projectOpenRequest{}, fmt.Errorf("%s: %w", projectOpenPath, err)
 		}
-		return path, nil
+		return projectOpenRequest{Path: path}, nil
+	}
+	if endpoint.remote() {
+		// Checked here too so a bad name fails with the rule it broke, not
+		// with the instance's bare invalid_project_request.
+		name, err := service.CleanProjectName(projectOpenName)
+		if err != nil {
+			return projectOpenRequest{}, fmt.Errorf("%s: %w", projectOpenName, err)
+		}
+		return projectOpenRequest{Name: name}, nil
 	}
 	path, err := resolveNamedProjectPath(configDir, projectOpenName)
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", projectOpenName, err)
+		return projectOpenRequest{}, fmt.Errorf("%s: %w", projectOpenName, err)
 	}
-	return path, nil
+	return projectOpenRequest{Path: path}, nil
 }
 
-func openProject(ctx context.Context, target instanceEndpoint, asJSON bool, path string, stdout, stderr io.Writer) error {
+func openProject(ctx context.Context, target instanceEndpoint, asJSON bool, request projectOpenRequest, stdout, stderr io.Writer) error {
 	// JSON mode writes nothing to stderr (docs/adr/2026-10-06-cli-output-contract.md), so only a human sees waits.
 	if !asJSON {
-		stop := watchProjectWaits(ctx, target, path, stderr)
+		// Over --remote the CLI does not know the canonical path the instance
+		// will open, so it prints every wait reported while it opens.
+		waitTarget := request.Path
+		if target.remote() {
+			waitTarget = ""
+		}
+		stop := watchProjectWaits(ctx, target, waitTarget, stderr)
 		defer stop()
 	}
-	body, err := json.Marshal(struct {
-		Path string `json:"path"`
-	}{Path: path})
+	body, err := json.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("encoding project open request: %w", err)
 	}
@@ -160,8 +187,8 @@ func writeProjectOpenHuman(body []byte, stdout io.Writer) error {
 // events subscription before it opens without reporting waits.
 const projectWaitConnectTimeout = 2 * time.Second
 
-// watchProjectWaits prints each project.waiting event for target to stderr
-// until the returned stop is called. It returns once the subscription is
+// watchProjectWaits prints each project.waiting event for target, or every
+// one when target is empty, to stderr until the returned stop is called. It returns once the subscription is
 // connected, or has failed, so no wait is missed. A failed subscription is
 // not an error: the open itself reports an instance that is not running.
 func watchProjectWaits(ctx context.Context, source instanceEndpoint, target string, stderr io.Writer) func() {
@@ -208,13 +235,14 @@ func watchProjectWaits(ctx context.Context, source instanceEndpoint, target stri
 	}
 }
 
-// writeProjectWaits prints one line per wait in a project.waiting event for target.
+// writeProjectWaits prints one line per wait in a project.waiting event for
+// target, or in any project.waiting event when target is empty.
 func writeProjectWaits(stderr io.Writer, target, data string) {
 	var event struct {
 		Project    string                `json:"project"`
 		WaitingFor []service.ProjectWait `json:"waiting_for"`
 	}
-	if err := json.Unmarshal([]byte(data), &event); err != nil || event.Project != target {
+	if err := json.Unmarshal([]byte(data), &event); err != nil || (target != "" && event.Project != target) {
 		return
 	}
 	for _, wait := range event.WaitingFor {
