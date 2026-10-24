@@ -123,6 +123,11 @@ var stopCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
+		// The local stop waits on the instance's lock file, which is on its
+		// instance machine; the remote wait needs its own design.
+		if endpoint.remote() {
+			return errors.New("marasi service stop does not support --remote yet")
+		}
 		if err := stopService(ctx, endpoint.path); err != nil {
 			return err
 		}
@@ -268,7 +273,7 @@ func getServiceStatus(ctx context.Context, target instanceEndpoint, asJSON bool,
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return fmt.Errorf("instance %s is not running", target.name())
+		return target.unreachable(err)
 	}
 
 	body, readErr := io.ReadAll(response.Body)
