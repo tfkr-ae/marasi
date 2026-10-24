@@ -30,6 +30,7 @@ type Server struct {
 	listener          ListenerLifecycle
 	projects          *ProjectLifecycle
 	chrome            *Chrome
+	upstreamProxies   *UpstreamProxies
 	version           string
 	updates           *Updates
 	installer         *updateInstaller
@@ -62,6 +63,11 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 	}
 	chrome := NewChrome(proxy, listener, chromeLog)
 	chrome.events = events
+	var configDir string
+	if proxy != nil {
+		configDir = proxy.ConfigDir
+	}
+	upstreamProxies := newUpstreamProxies(configDir, events, proxy)
 	server := &Server{
 		mux:               mux,
 		events:            events,
@@ -70,6 +76,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		listener:          listener,
 		projects:          projects,
 		chrome:            chrome,
+		upstreamProxies:   upstreamProxies,
 		installer:         newUpdateInstaller(),
 		version:           version,
 		instance:          instance,
@@ -135,6 +142,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 	mux.Handle("/project/", http.StripPrefix("/project", projectMux))
 	mux.HandleFunc("/events", server.serveEvents)
 	addUpdateRoutes(mux, server)
+	addUpstreamProxyRoutes(mux, admittingMux{ServeMux: mux, projects: projects}, upstreamProxies)
 	return server
 }
 
@@ -372,6 +380,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxyListener := s.listener.Status().ProxyListener
+	selection := s.upstreamProxies.Selection()
 	var channel *update.Channel
 	if s.updates != nil && s.updates.BuildChannel() != "" {
 		buildChannel := s.updates.BuildChannel()
@@ -385,14 +394,20 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		Project         string          `json:"project"`
 		ProxyListener   *string         `json:"proxy_listener"`
 		RestartRequired bool            `json:"restart_required"`
+		// UpstreamProxy is the open project's selection, "" for none, and
+		// UpstreamProxyConfigured whether this machine lists it.
+		UpstreamProxy           string `json:"upstream_proxy"`
+		UpstreamProxyConfigured bool   `json:"upstream_proxy_configured"`
 	}{
-		Status:          "running",
-		Version:         s.version,
-		Channel:         channel,
-		Instance:        s.instance,
-		Project:         project,
-		ProxyListener:   proxyListener,
-		RestartRequired: s.updates != nil && s.updates.RestartRequired(),
+		Status:                  "running",
+		Version:                 s.version,
+		Channel:                 channel,
+		Instance:                s.instance,
+		Project:                 project,
+		ProxyListener:           proxyListener,
+		RestartRequired:         s.updates != nil && s.updates.RestartRequired(),
+		UpstreamProxy:           selection.Selected,
+		UpstreamProxyConfigured: selection.Configured,
 	})
 }
 

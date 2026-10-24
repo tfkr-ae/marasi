@@ -240,6 +240,18 @@ type ProxyResponse struct {
 	Metadata    map[string]any // Additional metadata and extension data
 	Prettified  string         // Prettified copy of Raw, or "" when the body could not be prettified
 	RespondedAt time.Time      // Timestamp when response was received
+	// Route is the route that carried the request, or the one tried when
+	// the round trip failed reaching it. It is nil when unknown.
+	Route *RouteSnapshot
+}
+
+// RouteSnapshot records how a pair reached its origin: the upstream proxy's
+// name and its address as scheme://host:port without credentials, or an
+// empty name and address for a direct connection. It is a copy, so a later
+// rename or removal of the upstream proxy leaves it unchanged.
+type RouteSnapshot struct {
+	Name    string // upstream proxy name, or "" for direct
+	Address string // scheme://host:port, or "" for direct
 }
 
 // RequestResponseRow represents a complete request-response pair with associated metadata,
@@ -251,6 +263,9 @@ type RequestResponseRow struct {
 	Note       string         // Note contents
 	Highlight  *int           // Highlight from 1 to 8, or nil when the pair has none
 	Prettified Prettified     // Prettified copies of the request and response
+	// Route is the route snapshot written with the response, or nil for a
+	// pair with no response or one captured before snapshots existed.
+	Route *RouteSnapshot
 }
 
 // Prettified holds the prettified copies of a pair's request and response
@@ -279,6 +294,9 @@ type RequestResponseSummary struct {
 	RespondedAt time.Time
 	Note        string
 	Highlight   *int // highlight from 1 to 8, or nil when the pair has none
+	// Route is the route snapshot written with the response, or nil for a
+	// pair with no response or one captured before snapshots existed.
+	Route *RouteSnapshot
 }
 
 // ContentTypeCount is the number of request-response pairs with one response

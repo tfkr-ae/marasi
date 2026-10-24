@@ -42,7 +42,13 @@ func (busyArmory) Shutdown()                           {}
 
 func newTestProjectLifecycle(t *testing.T, extensionOptions ...func(*extensions.Runtime) error) (*ProjectLifecycle, *marasi.Proxy, string) {
 	t.Helper()
-	configDir := t.TempDir()
+	return newTestProjectLifecycleIn(t, t.TempDir(), extensionOptions...)
+}
+
+// newTestProjectLifecycleIn is newTestProjectLifecycle on configDir, which
+// another instance in the same test may share.
+func newTestProjectLifecycleIn(t *testing.T, configDir string, extensionOptions ...func(*extensions.Runtime) error) (*ProjectLifecycle, *marasi.Proxy, string) {
+	t.Helper()
 	manager, err := wordlist.NewManager(configDir)
 	if err != nil {
 		t.Fatalf("creating wordlist manager: %v", err)

@@ -37,6 +37,10 @@ type dbRequestResponse struct {
 	ContentType sql.NullString `db:"content_type"`
 	Length      sql.NullString `db:"length"`
 	RespondedAt sql.NullTime   `db:"responded_at"`
+	// Route snapshot, NULL when the pair has none
+	// (db/migrations/00026_pair_route.sql).
+	UpstreamProxyName    sql.NullString `db:"upstream_proxy_name"`
+	UpstreamProxyAddress sql.NullString `db:"upstream_proxy_address"`
 
 	// Common
 	Metadata  pairMetadata   `db:"metadata"`
@@ -64,6 +68,10 @@ type dbRequestResponseSummary struct {
 	ContentType sql.NullString `db:"content_type"`
 	Length      sql.NullString `db:"length"`
 	RespondedAt sql.NullTime   `db:"responded_at"`
+	// Route snapshot, NULL when the pair has none
+	// (db/migrations/00026_pair_route.sql).
+	UpstreamProxyName    sql.NullString `db:"upstream_proxy_name"`
+	UpstreamProxyAddress sql.NullString `db:"upstream_proxy_address"`
 
 	// Common
 	Metadata  pairMetadata  `db:"metadata"`
@@ -136,7 +144,9 @@ func fromDomainProxyResponse(presp *domain.ProxyResponse) *dbRequestResponse {
 			Time:  presp.RespondedAt,
 			Valid: !presp.RespondedAt.IsZero(),
 		},
-		Metadata: pairMetadata(presp.Metadata),
+		Metadata:             pairMetadata(presp.Metadata),
+		UpstreamProxyName:    routeName(presp.Route),
+		UpstreamProxyAddress: routeAddress(presp.Route),
 		dbPrettified: dbPrettified{Response: sql.NullString{
 			String: prettifiedCopy(presp.Prettified, presp.Metadata, prettifiedResponseKey),
 		}},
@@ -195,8 +205,32 @@ func toDomainRequestResponseRow(dbReqRes *dbRequestResponse) *domain.RequestResp
 		row.Note = dbReqRes.Note.String
 	}
 	row.Highlight = highlightOf(dbReqRes.Highlight)
+	row.Route = routeOf(dbReqRes.UpstreamProxyName, dbReqRes.UpstreamProxyAddress)
 
 	return row
+}
+
+// routeName and routeAddress store a route snapshot, NULL when route is nil.
+func routeName(route *domain.RouteSnapshot) sql.NullString {
+	if route == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: route.Name, Valid: true}
+}
+
+func routeAddress(route *domain.RouteSnapshot) sql.NullString {
+	if route == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: route.Address, Valid: true}
+}
+
+// routeOf returns a read route snapshot, or nil when the pair has none.
+func routeOf(name, address sql.NullString) *domain.RouteSnapshot {
+	if !name.Valid {
+		return nil
+	}
+	return &domain.RouteSnapshot{Name: name.String, Address: address.String}
 }
 
 // toDomainRequestResponseSummary converts a dbRequestResponseSummary into a domain.RequestResponseSummary,
@@ -233,6 +267,7 @@ func toDomainRequestResponseSummary(dbSummary *dbRequestResponseSummary) *domain
 		reqResSummary.RespondedAt = dbSummary.RespondedAt.Time
 	}
 	reqResSummary.Highlight = highlightOf(dbSummary.Highlight)
+	reqResSummary.Route = routeOf(dbSummary.UpstreamProxyName, dbSummary.UpstreamProxyAddress)
 
 	return reqResSummary
 }
@@ -305,6 +340,8 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 				content_type = :content_type,
 				length = :length,
 				responded_at = :responded_at,
+				upstream_proxy_name = :upstream_proxy_name,
+				upstream_proxy_address = :upstream_proxy_address,
 				metadata = json_patch(coalesce(metadata, '{}'), :metadata)
 			  WHERE id = :id`
 	err := repo.inTx(func(tx *sqlx.Tx) error {
@@ -381,6 +418,7 @@ func (repo *Repository) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResp
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.request_raw, r.requested_at,
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
+			  r.upstream_proxy_name, r.upstream_proxy_address,
 			  r.metadata, n.note, h.highlight, pn.number, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
@@ -407,6 +445,7 @@ func (repo *Repository) GetRequestResponseRows(ids []uuid.UUID) ([]*domain.Reque
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.request_raw, r.requested_at,
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
+			  r.upstream_proxy_name, r.upstream_proxy_address,
 			  r.metadata, n.note, h.highlight, pn.number, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
@@ -450,6 +489,7 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 	query := `SELECT
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
+			  upstream_proxy_name, upstream_proxy_address,
 			  metadata,
 			  pair_highlight.highlight, pair_number.number
 			  FROM request` + highlightJoin + numberJoin + `
@@ -600,6 +640,7 @@ func (repo *Repository) ListNotes(cursor *uuid.UUID, limit int) ([]*domain.Reque
 	query := `SELECT
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
+			  r.upstream_proxy_name, r.upstream_proxy_address,
 			  r.metadata,
 			  n.note, h.highlight, pn.number
 			  FROM request r
@@ -647,6 +688,7 @@ func (repo *Repository) SearchByMetadata(path string, value any) ([]*domain.Requ
 	query := `SELECT
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
+			  upstream_proxy_name, upstream_proxy_address,
 			  metadata,
 			  pair_highlight.highlight, pair_number.number
 			  FROM request` + highlightJoin + numberJoin + `
