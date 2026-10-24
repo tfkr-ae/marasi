@@ -74,6 +74,29 @@ func (e Endpoint) dial(ctx context.Context) (net.Conn, error) {
 	return (&net.Dialer{}).DialContext(ctx, "unix", e.socketPath)
 }
 
+// Accepts reports whether the endpoint accepts a connection now: its socket,
+// or the host and port of its network address. A stopped instance's endpoint
+// refuses, so a caller polls it to learn when the instance is gone.
+func (e Endpoint) Accepts(ctx context.Context) bool {
+	network, address := "unix", e.socketPath
+	if e.remote != nil {
+		port := e.remote.Port()
+		if port == "" {
+			port = "80"
+			if e.remote.Scheme == "https" {
+				port = "443"
+			}
+		}
+		network, address = "tcp", net.JoinHostPort(e.remote.Hostname(), port)
+	}
+	conn, err := (&net.Dialer{}).DialContext(ctx, network, address)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
 // remoteTransport sends each request to a network address: it rewrites the
 // http://marasi URL to the address, so the Host header names the address the
 // instance checks against, and adds the bearer token.

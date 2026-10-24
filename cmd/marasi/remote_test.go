@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -87,10 +88,10 @@ func TestRemote(t *testing.T) {
 	binary := buildMarasi(t)
 	instance := startRemoteInstance(t, binary)
 
+	// service status adds the CLI's version over --remote; see
+	// TestRemoteVersionWarning.
 	t.Run("should give the same output over --remote as over the socket", func(t *testing.T) {
 		for _, args := range [][]string{
-			{"service", "status"},
-			{"service", "status", "--json"},
 			{"traffic", "list"},
 			{"traffic", "list", "--json"},
 			{"listener", "status", "--json"},
@@ -110,10 +111,11 @@ func TestRemote(t *testing.T) {
 func TestRemoteSelection(t *testing.T) {
 	binary := buildMarasi(t)
 	instance := startRemoteInstance(t, binary)
-	wantStatus, _, err := instance.local("service", "status", "--json")
+	localStatus, _, err := instance.local("service", "status", "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantStatus := strings.TrimSuffix(localStatus, "}\n") + `,"cli_version":"dev"}` + "\n"
 	tokenPath := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(tokenPath, []byte(instance.token+"\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -171,7 +173,7 @@ func TestRemoteSelection(t *testing.T) {
 		}
 	})
 
-	t.Run("should refuse service start, service list, and for now service stop with --remote", func(t *testing.T) {
+	t.Run("should refuse service start and service list with --remote", func(t *testing.T) {
 		for _, test := range []struct {
 			env  []string
 			args []string
@@ -180,7 +182,6 @@ func TestRemoteSelection(t *testing.T) {
 			{args: []string{"--remote", instance.url, "service", "start"}, want: "marasi service start acts on this machine and does not accept --remote"},
 			{args: []string{"--remote", instance.url, "service", "list"}, want: "marasi service list acts on this machine and does not accept --remote"},
 			{env: []string{"MARASI_REMOTE=" + instance.url}, args: []string{"service", "list"}, want: "marasi service list acts on this machine and does not accept MARASI_REMOTE"},
-			{args: []string{"--remote", instance.url, "service", "stop"}, want: "marasi service stop does not support --remote yet"},
 		} {
 			env := append([]string{"MARASI_TOKEN=" + instance.token}, test.env...)
 			args := append([]string{"--config-dir", instance.cliDir}, test.args...)
@@ -266,18 +267,28 @@ func TestRemoteSelection(t *testing.T) {
 // returns its URL and the requests it received.
 func startCannedRemoteAPI(t *testing.T) (string, *cannedControlRequest) {
 	t.Helper()
+	return startCannedRemoteAPIHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, "{}")
+	})
+}
+
+// startCannedRemoteAPIHandler serves handle at a network address and returns
+// its URL and the requests it received.
+func startCannedRemoteAPIHandler(t *testing.T, handle http.HandlerFunc) (string, *cannedControlRequest) {
+	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := &cannedControlRequest{}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestBody, _ := io.ReadAll(r.Body)
 		got.mu.Lock()
-		got.Method, got.Path = r.Method, r.URL.Path
+		got.Method, got.Path, got.Body = r.Method, r.URL.Path, string(requestBody)
 		got.history = append(got.history, got.controlRequest)
 		got.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, "{}")
+		handle(w, r)
 	})}
 	go server.Serve(listener)
 	t.Cleanup(func() { server.Close() })
@@ -343,6 +354,143 @@ func TestRemoteUsageErrors(t *testing.T) {
 		got := <-requests
 		if got.Host != address || got.URL.Path != "/prefix/traffic" || got.URL.Query().Get("limit") != "5" || got.Header.Get("Authorization") != "Bearer secret" {
 			t.Fatalf("\nwanted:\nHost %s, /prefix/traffic?limit=5, Bearer secret\ngot:\nHost %s, %s?%s, %q", address, got.Host, got.URL.Path, got.URL.RawQuery, got.Header.Get("Authorization"))
+		}
+	})
+}
+
+func TestRemoteStop(t *testing.T) {
+	binary := buildMarasi(t)
+
+	t.Run("should stop the instance and return once its network address refuses connections", func(t *testing.T) {
+		instance := startRemoteInstance(t, binary)
+		address := strings.TrimPrefix(instance.url, "http://")
+
+		stdout, stderr, err := instance.remote("service", "stop")
+		if want := "instance work stopped successfully\n"; err != nil || stdout != "" || stderr != want {
+			t.Fatalf("\nwanted:\nstderr %q\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
+		}
+		if conn, err := net.Dial("tcp", address); err == nil {
+			conn.Close()
+			t.Fatalf("\nwanted:\n%s refuses connections\ngot:\na connection", address)
+		}
+		want := "Error: instance work is not running\n"
+		if _, stderr, err := instance.local("service", "status"); exitCode(err) != 1 || !strings.HasSuffix(stderr, want) {
+			t.Fatalf("\nwanted:\n%q\ngot:\nstderr %q error %v", want, stderr, err)
+		}
+	})
+
+	t.Run("should print the stopped instance as JSON", func(t *testing.T) {
+		instance := startRemoteInstance(t, binary)
+		stdout, stderr, err := instance.remote("service", "stop", "--json")
+		if want := `{"instance":"work","status":"stopped"}` + "\n"; err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\n%s\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should say no instance answers when nothing listens at the remote URL", func(t *testing.T) {
+		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, "--config-dir", t.TempDir(), "--remote", "http://127.0.0.1:1", "service", "stop")
+		if want := "Error: no instance answers at http://127.0.0.1:1\n"; exitCode(err) != 1 || stdout != "" || stderr != want {
+			t.Fatalf("\nwanted:\n%q\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
+		}
+	})
+}
+
+func TestRemoteVersionWarning(t *testing.T) {
+	instance := startRemoteInstance(t, buildMarasiVersion(t, "old-build"))
+	cli := buildMarasiVersion(t, "new-build")
+	localStatus, _, err := instance.local("service", "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	localJSON, _, err := instance.local("service", "status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := func(binary string, args ...string) (string, string, error) {
+		return runMarasiEnv(binary, []string{"MARASI_TOKEN=" + instance.token}, append([]string{"--config-dir", instance.cliDir, "--remote", instance.url, "service", "status"}, args...)...)
+	}
+
+	t.Run("should show both versions and warn on stderr when they differ", func(t *testing.T) {
+		stdout, stderr, err := remote(cli)
+		wantOut := localStatus + "cli version: new-build\n"
+		wantErr := "warning: this marasi is version new-build but the instance runs old-build\n"
+		if err != nil || stdout != wantOut || stderr != wantErr {
+			t.Fatalf("\nwanted:\nstdout %q stderr %q\ngot:\nstdout %q stderr %q error %v", wantOut, wantErr, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should put both versions and the warning in the --json body when they differ", func(t *testing.T) {
+		stdout, stderr, err := remote(cli, "--json")
+		want := strings.TrimSuffix(localJSON, "}\n") + `,"cli_version":"new-build","warning":"this marasi is version new-build but the instance runs old-build"}` + "\n"
+		if err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\n%s\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should show both versions and no warning when they match", func(t *testing.T) {
+		stdout, stderr, err := remote(instance.binary)
+		if want := localStatus + "cli version: old-build\n"; err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\n%q\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
+		}
+		stdout, stderr, err = remote(instance.binary, "--json")
+		if want := strings.TrimSuffix(localJSON, "}\n") + `,"cli_version":"old-build"}` + "\n"; err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\n%s\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
+		}
+	})
+}
+
+func TestRemoteChromePathOS(t *testing.T) {
+	binary := buildMarasi(t)
+	// An instance machine whose operating system is not this one, so the
+	// default cannot come from the CLI's own machine.
+	instanceOS := "linux"
+	if runtime.GOOS == "linux" {
+		instanceOS = "windows"
+	}
+	remote, sent := startCannedRemoteAPIHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/service/status" {
+			io.WriteString(w, `{"status":"running","os":"`+instanceOS+`"}`)
+			return
+		}
+		io.WriteString(w, "{}")
+	})
+
+	t.Run("should default --os to the instance's operating system over --remote", func(t *testing.T) {
+		for _, command := range []string{"add", "remove"} {
+			sent.reset()
+			_, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, "--config-dir", t.TempDir(), "--remote", remote, "chrome", "path", command, "--path", "/opt/chrome")
+			if err != nil {
+				t.Fatalf("chrome path %s: %v\n%s", command, err, stderr)
+			}
+			want := `{"os":"` + instanceOS + `","path":"/opt/chrome"}`
+			if got := sent.snapshot(); got.Path != "/chrome/path" || got.Body != want {
+				t.Fatalf("\nwanted:\n/chrome/path %s\ngot:\n%s %s", want, got.Path, got.Body)
+			}
+		}
+	})
+
+	t.Run("should send an explicit --os over --remote without reading the status", func(t *testing.T) {
+		sent.reset()
+		_, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, "--config-dir", t.TempDir(), "--remote", remote, "chrome", "path", "add", "--os", "darwin", "--path", "/opt/chrome")
+		if err != nil {
+			t.Fatalf("chrome path add: %v\n%s", err, stderr)
+		}
+		want := []controlRequest{{Method: http.MethodPost, Path: "/chrome/path", Body: `{"os":"darwin","path":"/opt/chrome"}`}}
+		if got := sent.requests(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
+		}
+	})
+
+	t.Run("should refuse a default --os when the instance reports no operating system", func(t *testing.T) {
+		older, _ := startCannedRemoteAPIHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"status":"running"}`)
+		})
+		want := "the instance does not report its operating system: pass --os"
+		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, "--config-dir", t.TempDir(), "--remote", older, "chrome", "path", "add", "--path", "/opt/chrome")
+		if exitCode(err) != 1 || stdout != "" || stderr != "Error: "+want+"\n" {
+			t.Fatalf("\nwanted:\n%s\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
 		}
 	})
 }
