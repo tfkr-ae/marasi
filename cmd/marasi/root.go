@@ -190,7 +190,7 @@ func prepareInstancePath(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("%s and --instance cannot be used together: the remote URL already names one instance", remoteSource)
 		}
 	}
-	if cmd == listServiceInstancesCmd || cmd == projectListCmd {
+	if cmd == listServiceInstancesCmd || (cmd == projectListCmd && remote == "") {
 		return nil
 	}
 	if remote != "" {
