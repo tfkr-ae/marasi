@@ -12,10 +12,13 @@ import (
 // projectSuffix ends every project file name.
 const projectSuffix = ".marasi"
 
-// projectsDirMode keeps the projects directory owner-only, since project
-// files hold captured traffic and credentials. Startup and a named open
-// create it the same way.
+// projectsDirMode keeps the projects directory owner-only when startup
+// creates it, since project files hold captured traffic and credentials.
 const projectsDirMode = 0700
+
+// namedOpenProjectsDirMode is the mode a named project open has always
+// created a missing projects directory with.
+const namedOpenProjectsDirMode = 0755
 
 // ProjectsDir is the directory under configDir that holds named projects.
 func ProjectsDir(configDir string) string {
@@ -114,8 +117,8 @@ func ResolveNamedProjectPath(configDir, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := CreateProjectsDir(configDir); err != nil {
-		return "", err
+	if err := os.MkdirAll(ProjectsDir(configDir), namedOpenProjectsDirMode); err != nil {
+		return "", fmt.Errorf("creating projects dir: %w", err)
 	}
 	return ResolveProjectPath(filepath.Join(ProjectsDir(configDir), name+projectSuffix))
 }
