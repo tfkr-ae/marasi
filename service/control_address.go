@@ -197,7 +197,7 @@ func (c *ControlAddress) bind(ctx context.Context, endpoint string) (*controlAdd
 		fmt.Fprintln(c.logWriter, warning)
 	}
 	server := &http.Server{
-		Handler: c.networkHandler(),
+		Handler: c.networkHandler(address),
 		// Every request on this server is marked as arriving on the
 		// network address, so socket-only routes can refuse it.
 		ConnContext: func(ctx context.Context, _ net.Conn) context.Context {
@@ -225,8 +225,77 @@ func controlAddressNetwork(endpoint string) string {
 // socket serves c.api with none of these checks. Each check runs before the
 // next: CORS and the Host check belong in front of the control token, so a
 // preflight and a rebound name are answered before authentication.
-func (c *ControlAddress) networkHandler() http.Handler {
-	return c.requireControlToken(c.api)
+func (c *ControlAddress) networkHandler(bound string) http.Handler {
+	return allowAnyOrigin(requireBoundHost(bound, c.requireControlToken(c.api)))
+}
+
+// defaultHTTPPort is the port a Host header without one names.
+const defaultHTTPPort = "80"
+
+// requireBoundHost refuses a request whose Host header does not name bound,
+// the address the network address listens on, so a hostile page whose name
+// was rebound to this machine cannot reach the instance. On a wildcard
+// address any Host naming the bound port is accepted, because the operator
+// chose every interface. On loopback, localhost is accepted too: a rebound
+// name never arrives as localhost.
+func requireBoundHost(bound string, next http.Handler) http.Handler {
+	boundHost, boundPort, _ := net.SplitHostPort(bound)
+	boundIP := net.ParseIP(boundHost)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, port, err := net.SplitHostPort(r.Host)
+		if err != nil {
+			host, port = r.Host, defaultHTTPPort
+		}
+		if port != boundPort || !hostNamesBound(host, boundIP) {
+			writeJSON(w, r, http.StatusMisdirectedRequest, controlRefusalBody{Error: "host_mismatch", Message: "the Host header does not name the control listener network address"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// hostNamesBound reports whether host, from a Host header without its port,
+// names the bound IP address.
+func hostNamesBound(host string, bound net.IP) bool {
+	if bound == nil {
+		return false
+	}
+	if bound.IsUnspecified() {
+		return true
+	}
+	if bound.IsLoopback() && strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.Equal(bound)
+}
+
+// The CORS preflight answer: the methods the control API uses, and the
+// request headers an authenticated JSON call sends.
+const (
+	controlAllowedMethods = "GET, POST, PUT, DELETE"
+	controlAllowedHeaders = "Authorization, Content-Type"
+)
+
+// allowAnyOrigin lets a page from any origin call the network address,
+// because the control token alone decides access. It echoes the request
+// Origin and never allows credentials, so a browser attaches nothing
+// ambient to a request. A preflight is answered here, without the token,
+// because a browser never sends one on a preflight.
+func allowAnyOrigin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Origin")
+		if origin := r.Header.Get("Origin"); origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
+			w.Header().Set("Access-Control-Allow-Methods", controlAllowedMethods)
+			w.Header().Set("Access-Control-Allow-Headers", controlAllowedHeaders)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requireControlToken refuses a request that does not carry the control
