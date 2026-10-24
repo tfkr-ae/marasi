@@ -230,5 +230,72 @@ func TestServiceRestart(t *testing.T) {
 		if status := readInstanceStatus(t, socketPath); status.ProxyListener != nil {
 			t.Fatalf("wanted the successor with no proxy listener, got %+v", status)
 		}
+		if address := controlAddressOf(t, binary, configDir, "work"); address != nil {
+			t.Fatalf("\nwanted:\nthe successor with no control listener network address\ngot:\n%s", *address)
+		}
+	})
+
+	t.Run("should hand the network address and its port 0 binding to the successor when restarted over it", func(t *testing.T) {
+		binary := buildMarasiVersion(t, "old-build")
+		next := buildMarasiVersion(t, "new-build")
+		configDir := serviceConfigDir(t)
+		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
+		address := *controlAddressOf(t, binary, configDir, "work")
+		token := controlTokenOf(t, binary, configDir, "work")
+		installBuild(t, next, binary)
+
+		status, _, body := networkRequest(t, http.MethodPost, address, "/service/restart", "Bearer "+token)
+		var result struct {
+			Status  string `json:"status"`
+			Version string `json:"version"`
+		}
+		if err := json.Unmarshal([]byte(body), &result); err != nil || status != http.StatusOK || result.Status != "restarted" || result.Version != "new-build" {
+			t.Fatalf("\nwanted:\n200 restarted on new-build\ngot:\n%d %s", status, body)
+		}
+
+		if got := controlAddressOf(t, binary, configDir, "work"); got == nil || *got != address {
+			t.Fatalf("\nwanted:\nthe successor at %s\ngot:\n%v", address, got)
+		}
+		status, _, body = networkRequest(t, http.MethodGet, address, "/service/status", "Bearer "+token)
+		var after restartedStatus
+		if err := json.Unmarshal([]byte(body), &after); err != nil || status != http.StatusOK || after.Version != "new-build" {
+			t.Fatalf("\nwanted:\n200 from new-build at %s with the same token\ngot:\n%d %s", address, status, body)
+		}
+	})
+
+	t.Run("should take the network address back with the same token when the successor exits at start", func(t *testing.T) {
+		binary := buildMarasiVersion(t, "old-build")
+		cli := filepath.Join(t.TempDir(), "marasi")
+		contents, err := os.ReadFile(binary)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(cli, contents, 0700); err != nil {
+			t.Fatal(err)
+		}
+		configDir := serviceConfigDir(t)
+		t.Cleanup(func() { runMarasi(cli, "--config-dir", configDir, "--instance", "work", "service", "stop") })
+		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
+		address := *controlAddressOf(t, cli, configDir, "work")
+		token := controlTokenOf(t, cli, configDir, "work")
+		broken := filepath.Join(t.TempDir(), "broken")
+		if err := os.WriteFile(broken, []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		installBuild(t, broken, binary)
+
+		status, _, body := networkRequest(t, http.MethodPost, address, "/service/restart", "Bearer "+token)
+		if status != http.StatusInternalServerError || !strings.Contains(body, `"error":"restart_failed"`) {
+			t.Fatalf("\nwanted:\n500 restart_failed\ngot:\n%d %s", status, body)
+		}
+
+		if got := controlAddressOf(t, cli, configDir, "work"); got == nil || *got != address {
+			t.Fatalf("\nwanted:\nthe old build back at %s\ngot:\n%v", address, got)
+		}
+		status, _, body = networkRequest(t, http.MethodGet, address, "/service/status", "Bearer "+token)
+		var after restartedStatus
+		if err := json.Unmarshal([]byte(body), &after); err != nil || status != http.StatusOK || after.Version != "old-build" {
+			t.Fatalf("\nwanted:\n200 from old-build at %s with the same token\ngot:\n%d %s", address, status, body)
+		}
 	})
 }

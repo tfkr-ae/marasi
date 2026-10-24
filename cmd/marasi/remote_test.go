@@ -370,9 +370,9 @@ func TestRemoteRestart(t *testing.T) {
 		if err := json.Unmarshal([]byte(stdout), &result); err != nil || result.Instance != "work" || result.Status != "restarted" || result.Version != "new-build" {
 			t.Fatalf("\nwanted:\nwork restarted on new-build\ngot:\n%s %v", stdout, err)
 		}
-		after := readInstanceStatus(t, filepath.Join(instance.configDir, "instances", "work.sock"))
-		if after.Version != "new-build" {
-			t.Fatalf("\nwanted:\nnew-build\ngot:\n%+v", after)
+		stdout, stderr, err = instance.remote("--json", "service", "status")
+		if err != nil || !strings.Contains(stdout, `"version":"new-build"`) {
+			t.Fatalf("\nwanted:\nnew-build at the same address and token\ngot:\nstdout %q stderr %q error %v", stdout, stderr, err)
 		}
 	})
 }
