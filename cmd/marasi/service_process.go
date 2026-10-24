@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/tfkr-ae/marasi/service"
 )
 
 const (
@@ -24,8 +26,9 @@ var serviceChild bool
 
 // childStartup is the child's first message to its parent.
 type childStartup struct {
-	proxyListener string // address the proxy is listening on
-	err           error  // startup failure, if any
+	proxyListener   string // address the proxy is listening on
+	controlListener string // control listener network address, "" when none
+	err             error  // startup failure, if any
 }
 
 func init() {
@@ -34,7 +37,7 @@ func init() {
 }
 
 // startServiceProcess starts a detached child and waits until it reports ready or fails.
-func startServiceProcess(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, stdout, stderr io.Writer, asJSON bool) error {
+func startServiceProcess(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, controlAddress string, stdout, stderr io.Writer, asJSON bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -43,7 +46,7 @@ func startServiceProcess(ctx context.Context, configDir, projectPath, instancePa
 		return fmt.Errorf("opening service executable: %w", err)
 	}
 	instanceName := filepath.Base(instancePath)
-	command := exec.Command(executable,
+	args := []string{
 		"--config-dir", configDir,
 		"--instance", instanceName,
 		"service", "start",
@@ -51,7 +54,11 @@ func startServiceProcess(ctx context.Context, configDir, projectPath, instancePa
 		"--address", address,
 		"--port", strconv.FormatUint(uint64(port), 10),
 		"--service-child",
-	)
+	}
+	if controlAddress != "" {
+		args = append(args, "--control-address", controlAddress)
+	}
+	command := exec.Command(executable, args...)
 	configureDetachedProcess(command)
 	discard, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 	if err != nil {
@@ -74,7 +81,7 @@ func startServiceProcess(ctx context.Context, configDir, projectPath, instancePa
 			stopChild(childInput, processResult)
 			return err
 		}
-		if err := writeStartOutput(stdout, stderr, asJSON, instanceName, startup.proxyListener); err != nil {
+		if err := writeStartOutput(stdout, stderr, asJSON, instanceName, startup); err != nil {
 			stopChild(childInput, processResult)
 			return err
 		}
@@ -129,13 +136,25 @@ func launchServiceChild(command *exec.Cmd) (io.WriteCloser, <-chan childStartup,
 	return childInput, startupResult, processResult, nil
 }
 
-// writeStartOutput writes the start result in JSON or human form.
-func writeStartOutput(stdout, stderr io.Writer, asJSON bool, instanceName, proxyListener string) error {
+// writeStartOutput writes the start result in JSON or human form. A control
+// listener network address beyond loopback adds a warning on stderr, written
+// here because the detached child's stderr is discarded.
+func writeStartOutput(stdout, stderr io.Writer, asJSON bool, instanceName string, startup childStartup) error {
+	var controlListener *string
+	if startup.controlListener != "" {
+		controlListener = &startup.controlListener
+		if warning := service.ControlAddressWarning(startup.controlListener); warning != "" {
+			if _, err := fmt.Fprintln(stderr, warning); err != nil {
+				return fmt.Errorf("writing service startup: %w", err)
+			}
+		}
+	}
 	if asJSON {
 		payload, err := json.Marshal(struct {
-			Instance      string `json:"instance"`
-			ProxyListener string `json:"proxy_listener"`
-		}{Instance: instanceName, ProxyListener: proxyListener})
+			Instance        string  `json:"instance"`
+			ProxyListener   string  `json:"proxy_listener"`
+			ControlListener *string `json:"control_listener"`
+		}{Instance: instanceName, ProxyListener: startup.proxyListener, ControlListener: controlListener})
 		if err != nil {
 			return fmt.Errorf("encoding service startup: %w", err)
 		}
@@ -144,7 +163,14 @@ func writeStartOutput(stdout, stderr io.Writer, asJSON bool, instanceName, proxy
 		}
 		return nil
 	}
-	if _, err := fmt.Fprintf(stderr, "instance %s started\nproxy listener started on %s\n", instanceName, proxyListener); err != nil {
+	// The proxy listener line stays last: scripts read the rest of stderr
+	// after it as the proxy listener address.
+	output := fmt.Sprintf("instance %s started\n", instanceName)
+	if controlListener != nil {
+		output += fmt.Sprintf("control listener network address started on %s\n", *controlListener)
+	}
+	output += fmt.Sprintf("proxy listener started on %s\n", startup.proxyListener)
+	if _, err := io.WriteString(stderr, output); err != nil {
 		return fmt.Errorf("writing service startup: %w", err)
 	}
 	return nil
@@ -162,7 +188,13 @@ func readChildStartup(reader *bufio.Reader) childStartup {
 		if err != nil {
 			return childStartup{err: fmt.Errorf("reading service child startup: %w", err)}
 		}
-		return childStartup{proxyListener: strings.TrimSuffix(proxyListener, "\n")}
+		// A child from a build older than the control listener's network
+		// address ends its startup after the proxy listener line.
+		controlListener, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return childStartup{err: fmt.Errorf("reading service child startup: %w", err)}
+		}
+		return childStartup{proxyListener: strings.TrimSuffix(proxyListener, "\n"), controlListener: strings.TrimSuffix(controlListener, "\n")}
 	case startupError:
 		message, err := io.ReadAll(reader)
 		if err != nil {
@@ -181,7 +213,7 @@ func stopChild(input io.WriteCloser, processResult <-chan error) {
 }
 
 // runServiceChild runs the in-process service and reports ready or error on stdout.
-func runServiceChild(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16) error {
+func runServiceChild(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, controlAddress string) error {
 	serviceCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
@@ -192,8 +224,8 @@ func runServiceChild(ctx context.Context, configDir, projectPath, instancePath, 
 	}()
 
 	ready := false
-	err := startServiceInstance(serviceCtx, configDir, projectPath, instancePath, address, port, !noProxyListener, func(proxyListener string) error {
-		if _, err := fmt.Fprintf(os.Stdout, "%c%s\n", startupReady, proxyListener); err != nil {
+	err := startServiceInstance(serviceCtx, configDir, projectPath, instancePath, address, port, !noProxyListener, controlAddress, func(started serviceStarted) error {
+		if _, err := fmt.Fprintf(os.Stdout, "%c%s\n%s\n", startupReady, started.proxyListener, started.controlListener); err != nil {
 			return fmt.Errorf("reporting service startup: %w", err)
 		}
 		ready = true
