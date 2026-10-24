@@ -12,6 +12,7 @@ import (
 )
 
 func init() {
+	serviceControlTokenCmd.Flags().Bool("rotate", false, "replace the control token, drop connections that used the old one, and print the new one")
 	serviceControlCmd.AddCommand(serviceControlTokenCmd)
 	serviceCmd.AddCommand(serviceControlCmd)
 }
@@ -24,10 +25,18 @@ var serviceControlCmd = &cobra.Command{
 var serviceControlTokenCmd = &cobra.Command{
 	Use:   "token",
 	Short: "Print the control token",
-	Long:  "Print the control token that every request to the control listener's network address must send as Authorization: Bearer. Only the socket returns it, and Marasi generates it on first use.",
+	Long:  "Print the control token that every request to the control listener's network address must send as Authorization: Bearer. Only the socket returns it, and Marasi generates it on first use. With --rotate, replace it first: the old token stops working at once, and connections and event streams that used it are dropped.",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		body, err := runControlRequestStatus(cmd, http.MethodGet, "/service/control-listener/token", "reading control token", nil, http.StatusOK)
+		rotate, err := cmd.Flags().GetBool("rotate")
+		if err != nil {
+			return err
+		}
+		method, path, operation := http.MethodGet, "/service/control-listener/token", "reading control token"
+		if rotate {
+			method, path, operation = http.MethodPost, "/service/control-listener/token/rotate", "rotating control token"
+		}
+		body, err := runControlRequestStatus(cmd, method, path, operation, nil, http.StatusOK)
 		if err != nil {
 			return withStartHint(err)
 		}
