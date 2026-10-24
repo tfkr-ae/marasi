@@ -32,6 +32,7 @@ var requestedProjectPath string
 var projectPath string
 var proxyAddress string
 var proxyPort decimalPort
+var controlAddress string
 
 // decimalPort is a pflag.Value for a TCP port parsed in base 10.
 type decimalPort uint16
@@ -84,6 +85,7 @@ func init() {
 	startCmd.Flags().StringVar(&proxyAddress, "address", "127.0.0.1", "Proxy listener host or IP, without a port")
 	proxyPort = 8080
 	startCmd.Flags().Var(&proxyPort, "port", "Proxy listener TCP port")
+	startCmd.Flags().StringVar(&controlAddress, "control-address", "", "Also serve the control API at this network address, HOST:PORT, guarded by the control token. Port 0 picks a free port")
 	serviceCmd.AddCommand(startCmd, stopCmd, statusCmd, listServiceInstancesCmd)
 	rootCmd.AddCommand(serviceCmd)
 }
@@ -101,10 +103,15 @@ var startCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		if serviceChild {
-			return runServiceChild(ctx, configDir, projectPath, instancePath, proxyAddress, uint16(proxyPort))
+		if controlAddress != "" {
+			if _, err := parseControlAddress(controlAddress); err != nil {
+				return err
+			}
 		}
-		return startServiceProcess(ctx, configDir, projectPath, instancePath, proxyAddress, uint16(proxyPort), cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput)
+		if serviceChild {
+			return runServiceChild(ctx, configDir, projectPath, instancePath, proxyAddress, uint16(proxyPort), controlAddress)
+		}
+		return startServiceProcess(ctx, configDir, projectPath, instancePath, proxyAddress, uint16(proxyPort), controlAddress, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput)
 	},
 }
 
@@ -302,6 +309,9 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 		// instances older than upstream proxies.
 		UpstreamProxy           *string `json:"upstream_proxy"`
 		UpstreamProxyConfigured *bool   `json:"upstream_proxy_configured"`
+		// ControlListener is absent from instances older than the control
+		// listener's network address.
+		ControlListener json.RawMessage `json:"control_listener"`
 	}
 	if err := json.Unmarshal(body, &status); err != nil {
 		return fmt.Errorf("decoding service status: %w", err)
@@ -363,6 +373,15 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 			fmt.Fprintf(&output, "upstream proxy: %s\n", *status.UpstreamProxy)
 		}
 	}
+	if status.ControlListener != nil {
+		controlListener := "none"
+		if string(status.ControlListener) != "null" {
+			if err := json.Unmarshal(status.ControlListener, &controlListener); err != nil || controlListener == "" {
+				return errors.New("invalid service status: control_listener must be a non-empty string or null")
+			}
+		}
+		fmt.Fprintf(&output, "control listener network address: %s\n", controlListener)
+	}
 	if _, err := io.WriteString(stdout, output.String()); err != nil {
 		return fmt.Errorf("writing service status: %w", err)
 	}
@@ -379,12 +398,22 @@ func startService(ctx context.Context, configDir, projectPath, instancePath, add
 
 // startServiceReady starts a proxy instance and calls ready with the proxy listener address.
 func startServiceReady(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, ready func(string) error) (resultErr error) {
-	return startServiceInstance(ctx, configDir, projectPath, instancePath, address, port, true, ready)
+	return startServiceInstance(ctx, configDir, projectPath, instancePath, address, port, true, "", func(started serviceStarted) error {
+		return ready(started.proxyListener)
+	})
 }
 
-// startServiceInstance starts a proxy instance and calls ready with the proxy
-// listener address, or "" when startListener is false.
-func startServiceInstance(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, startListener bool, ready func(string) error) (resultErr error) {
+// serviceStarted is what a started instance is listening on.
+type serviceStarted struct {
+	proxyListener   string // proxy listener address, "" when none
+	controlListener string // control listener network address, "" when none
+}
+
+// startServiceInstance starts a proxy instance and calls ready with what it
+// listens on. The proxy listener is started only when startListener is true,
+// and the control listener's network address only when controlAddress, a
+// HOST:PORT, is not empty.
+func startServiceInstance(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, startListener bool, controlAddress string, ready func(serviceStarted) error) (resultErr error) {
 	local := localInstanceEndpoint(filepath.Base(instancePath), instancePath)
 	socketPath := local.socketPath()
 	lockPath := local.lockPath()
@@ -495,13 +524,31 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 
 	serviceServer.EnableRestart(successorStarter{claim: claim, configDir: configDir, instancePath: instancePath, readyTimeout: restartReadyTimeout}.start)
 
-	proxyListener := ""
+	controlNetwork := serviceServer.EnableControlAddress(service.NewControlToken(instancePath+".token", secureInstanceFile), logFile)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		resultErr = errors.Join(resultErr, controlNetwork.Shutdown(shutdownCtx))
+	}()
+
+	var started serviceStarted
 	if startListener {
 		listenerStatus, err := listenerLifecycle.Start(serviceCtx, service.ListenerSettings{Address: &address, Port: &port})
 		if err != nil {
 			return fmt.Errorf("binding proxy listener on address %s port %d: %w", address, port, err)
 		}
-		proxyListener = *listenerStatus.ProxyListener
+		started.proxyListener = *listenerStatus.ProxyListener
+	}
+	if controlAddress != "" {
+		settings, err := parseControlAddress(controlAddress)
+		if err != nil {
+			return err
+		}
+		controlStatus, err := controlNetwork.Start(serviceCtx, settings)
+		if err != nil {
+			return fmt.Errorf("binding control listener network address on %s: %w", controlAddress, err)
+		}
+		started.controlListener = *controlStatus.ControlListener
 	}
 
 	server := &http.Server{Handler: serviceServer}
@@ -518,7 +565,7 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 		<-updatesDone
 	}()
 	return serveControlAPIReady(serviceCtx, server, claim.listener, shutdownTimeout, func() error {
-		return ready(proxyListener)
+		return ready(started)
 	})
 }
 
