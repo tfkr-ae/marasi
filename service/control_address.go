@@ -38,10 +38,11 @@ type ControlAddress struct {
 
 // controlAddressRun is one bound network address and the server on it.
 type controlAddressRun struct {
-	listener net.Listener
-	server   *http.Server
-	served   chan error
-	conns    *connTracker
+	listener  net.Listener
+	server    *http.Server
+	served    chan error
+	conns     *connTracker
+	suspended bool // listener closed for a restart handover
 }
 
 // arrival says which way a control request reached the control listener.
@@ -196,6 +197,63 @@ func (c *ControlAddress) Shutdown(ctx context.Context) error {
 	)
 }
 
+// suspendForHandover stops accepting on the network address, freeing it for
+// a successor to bind, and returns the address it was on, or nil when it is
+// inactive. Connections already accepted keep being served, so a restart
+// requested over the network address still gets its response
+// (docs/adr/2026-10-18-restart-hands-over-and-rolls-back.md).
+func (c *ControlAddress) suspendForHandover() (*string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.run == nil || c.run.suspended {
+		return nil, nil
+	}
+	run := c.run
+	address := run.listener.Addr().String()
+	closeErr := run.listener.Close()
+	// Serve returns once its listener closes, without touching the
+	// connections it accepted.
+	serveErr := <-run.served
+	run.served <- nil
+	run.suspended = true
+	if errors.Is(serveErr, net.ErrClosed) {
+		serveErr = nil
+	}
+	return &address, errors.Join(
+		wrapError("closing control listener network address", closeErr),
+		wrapError("serving control listener network address", serveErr),
+	)
+}
+
+// resumeAfterHandover accepts on the network address again after a failed
+// handover, at the address it was suspended on. If that address cannot be
+// bound, the network address becomes inactive.
+func (c *ControlAddress) resumeAfterHandover(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.run == nil || !c.run.suspended {
+		return nil
+	}
+	run := c.run
+	endpoint := run.listener.Addr().String()
+	listener, err := (&net.ListenConfig{}).Listen(ctx, controlAddressNetwork(endpoint), endpoint)
+	if err != nil {
+		fmt.Fprintf(c.logWriter, "binding control listener network address on %s: %v\n", endpoint, err)
+		c.run = nil
+		c.setStatus(ControlListenerStatus{Status: ListenerInactive})
+		// Shut down in the background: the request that asked for the
+		// restart may be in flight on this server and must still get its
+		// response.
+		go func() { _ = run.server.Shutdown(context.WithoutCancel(ctx)) }()
+		return listenerFailure{kind: ErrListenerUnavailable, err: err}
+	}
+	<-run.served
+	run.listener = listener
+	run.suspended = false
+	go func() { run.served <- run.server.Serve(listener) }()
+	return nil
+}
+
 // bind listens on endpoint and starts serving the control API there.
 func (c *ControlAddress) bind(ctx context.Context, endpoint string) (*controlAddressRun, error) {
 	listener, err := (&net.ListenConfig{}).Listen(ctx, controlAddressNetwork(endpoint), endpoint)
@@ -209,7 +267,7 @@ func (c *ControlAddress) bind(ctx context.Context, endpoint string) (*controlAdd
 	}
 	conns := newConnTracker()
 	server := &http.Server{
-		Handler: c.networkHandler(),
+		Handler: c.networkHandler(address),
 		// Every request on this server is marked as arriving on the
 		// network address, so socket-only routes can refuse it, and
 		// carries its connection, so a request that closes this address
@@ -241,8 +299,77 @@ func controlAddressNetwork(endpoint string) string {
 // socket serves c.api with none of these checks. Each check runs before the
 // next: CORS and the Host check belong in front of the control token, so a
 // preflight and a rebound name are answered before authentication.
-func (c *ControlAddress) networkHandler() http.Handler {
-	return c.requireControlToken(c.api)
+func (c *ControlAddress) networkHandler(bound string) http.Handler {
+	return allowAnyOrigin(requireBoundHost(bound, c.requireControlToken(c.api)))
+}
+
+// defaultHTTPPort is the port a Host header without one names.
+const defaultHTTPPort = "80"
+
+// requireBoundHost refuses a request whose Host header does not name bound,
+// the address the network address listens on, so a hostile page whose name
+// was rebound to this machine cannot reach the instance. On a wildcard
+// address any Host naming the bound port is accepted, because the operator
+// chose every interface. On loopback, localhost is accepted too: a rebound
+// name never arrives as localhost.
+func requireBoundHost(bound string, next http.Handler) http.Handler {
+	boundHost, boundPort, _ := net.SplitHostPort(bound)
+	boundIP := net.ParseIP(boundHost)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, port, err := net.SplitHostPort(r.Host)
+		if err != nil {
+			host, port = r.Host, defaultHTTPPort
+		}
+		if port != boundPort || !hostNamesBound(host, boundIP) {
+			writeJSON(w, r, http.StatusMisdirectedRequest, controlRefusalBody{Error: "host_mismatch", Message: "the Host header does not name the control listener network address"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// hostNamesBound reports whether host, from a Host header without its port,
+// names the bound IP address.
+func hostNamesBound(host string, bound net.IP) bool {
+	if bound == nil {
+		return false
+	}
+	if bound.IsUnspecified() {
+		return true
+	}
+	if bound.IsLoopback() && strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.Equal(bound)
+}
+
+// The CORS preflight answer: the methods the control API uses, and the
+// request headers an authenticated JSON call sends.
+const (
+	controlAllowedMethods = "GET, POST, PUT, DELETE"
+	controlAllowedHeaders = "Authorization, Content-Type"
+)
+
+// allowAnyOrigin lets a page from any origin call the network address,
+// because the control token alone decides access. It echoes the request
+// Origin and never allows credentials, so a browser attaches nothing
+// ambient to a request. A preflight is answered here, without the token,
+// because a browser never sends one on a preflight.
+func allowAnyOrigin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Origin")
+		if origin := r.Header.Get("Origin"); origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
+			w.Header().Set("Access-Control-Allow-Methods", controlAllowedMethods)
+			w.Header().Set("Access-Control-Allow-Headers", controlAllowedHeaders)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requireControlToken refuses a request that does not carry the control
