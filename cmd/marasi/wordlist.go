@@ -71,20 +71,14 @@ var wordlistListCmd = &cobra.Command{
 var wordlistAddCmd = &cobra.Command{
 	Use:   "add PATH",
 	Short: "Add a wordlist",
-	Long:  "Add a wordlist. The source file is moved into the wordlists directory.",
+	Long:  "Add a wordlist. The source file is moved into the wordlists directory. Over --remote its contents are uploaded and the local file is deleted once the instance accepts them.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path, err := filepath.Abs(args[0])
 		if err != nil {
 			return fmt.Errorf("resolving wordlist path: %w", err)
 		}
-		requestBody, err := json.Marshal(struct {
-			Path string `json:"path"`
-		}{Path: path})
-		if err != nil {
-			return fmt.Errorf("encoding wordlist add request: %w", err)
-		}
-		response, err := runControlRequest(cmd, http.MethodPost, "/wordlist", "adding wordlist", requestBody)
+		response, err := runAddRequest(cmd, "/wordlist", path, "adding wordlist")
 		if err != nil {
 			return err
 		}

@@ -44,21 +44,8 @@ func addReportRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 	})
 
 	mux.HandleFunc("POST /report/template", func(w http.ResponseWriter, r *http.Request) {
-		query, err := url.ParseQuery(r.URL.RawQuery)
-		var request struct {
-			Path string `json:"path"`
-		}
-		if err != nil || len(query) != 0 {
-			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_report_template_request"})
-			return
-		}
-		decoder := json.NewDecoder(r.Body)
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil || request.Path == "" {
-			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_report_template_request"})
-			return
-		}
-		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		path, name, ok := parseAddRequest(r)
+		if !ok {
 			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_report_template_request"})
 			return
 		}
@@ -67,7 +54,13 @@ func addReportRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		if err := generator.AddTemplate(request.Path); err != nil {
+		var err error
+		if name != "" {
+			err = generator.UploadTemplate(name, r.Body)
+		} else {
+			err = generator.AddTemplate(path)
+		}
+		if err != nil {
 			switch {
 			case errors.Is(err, report.ErrTemplateAlreadyExists):
 				writeJSON(w, r, http.StatusConflict, map[string]string{"error": "report_template_already_exists"})
