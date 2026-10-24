@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -34,10 +35,10 @@ type chromeStartRequest struct {
 
 func init() {
 	chromePathAddCmd.Flags().StringVar(&chromePathValue, "path", "", "Path to the Chrome executable. Required")
-	chromePathAddCmd.Flags().StringVar(&chromePathOS, "os", runtime.GOOS, "Operating system: darwin, linux, or windows")
+	chromePathAddCmd.Flags().StringVar(&chromePathOS, "os", runtime.GOOS, "Operating system: darwin, linux, or windows. Over --remote the default is the instance machine's")
 	chromePathAddCmd.MarkFlagRequired("path")
 	chromePathRemoveCmd.Flags().StringVar(&chromePathValue, "path", "", "Path to the Chrome executable. Required")
-	chromePathRemoveCmd.Flags().StringVar(&chromePathOS, "os", runtime.GOOS, "Operating system: darwin, linux, or windows")
+	chromePathRemoveCmd.Flags().StringVar(&chromePathOS, "os", runtime.GOOS, "Operating system: darwin, linux, or windows. Over --remote the default is the instance machine's")
 	chromePathRemoveCmd.MarkFlagRequired("path")
 	chromePathCmd.AddCommand(chromePathAddCmd, chromePathRemoveCmd, chromePathListCmd)
 	chromeProfileCmd.AddCommand(chromeProfileAddCmd, chromeProfileRemoveCmd, chromeProfileListCmd)
@@ -186,11 +187,38 @@ var chromeStartCmd = &cobra.Command{
 }
 
 func runChromePathCommand(cmd *cobra.Command, method, operation, confirmation string) error {
-	body, err := json.Marshal(chromePathRequest{OS: chromePathOS, Path: chromePathValue})
+	pathOS := chromePathOS
+	// A remote instance runs Chrome on its own machine, so the path is
+	// tagged with that machine's operating system unless --os says otherwise.
+	if endpoint.remote() && !cmd.Flags().Changed("os") {
+		var err error
+		if pathOS, err = instanceOS(cmd); err != nil {
+			return err
+		}
+	}
+	body, err := json.Marshal(chromePathRequest{OS: pathOS, Path: chromePathValue})
 	if err != nil {
 		return fmt.Errorf("encoding chrome path request: %w", err)
 	}
 	return runChromeMutation(cmd, method, "/chrome/path", operation, body, confirmation)
+}
+
+// instanceOS reads the instance machine's operating system from its status.
+func instanceOS(cmd *cobra.Command) (string, error) {
+	body, err := runControlRequest(cmd, http.MethodGet, "/service/status", "getting service status", nil)
+	if err != nil {
+		return "", err
+	}
+	var status struct {
+		OS string `json:"os"`
+	}
+	if err := json.Unmarshal(body, &status); err != nil {
+		return "", fmt.Errorf("decoding service status: %w", err)
+	}
+	if status.OS == "" {
+		return "", errors.New("the instance does not report its operating system: pass --os")
+	}
+	return status.OS, nil
 }
 
 func runChromeMutation(cmd *cobra.Command, method, path, operation string, body []byte, confirmation string) error {
