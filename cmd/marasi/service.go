@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -156,7 +157,7 @@ var statusCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return getServiceStatus(ctx, endpoint, jsonOutput, cmd.OutOrStdout())
+		return getServiceStatus(ctx, endpoint, jsonOutput, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
@@ -261,7 +262,7 @@ func listServiceInstances(ctx context.Context, configDir string, asJSON bool, st
 }
 
 // getServiceStatus queries and prints the selected service instance's status.
-func getServiceStatus(ctx context.Context, target instanceEndpoint, asJSON bool, stdout io.Writer) error {
+func getServiceStatus(ctx context.Context, target instanceEndpoint, asJSON bool, stdout, stderr io.Writer) error {
 	client := target.client()
 	defer client.Close()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/service/status", nil)
@@ -290,6 +291,9 @@ func getServiceStatus(ctx context.Context, target instanceEndpoint, asJSON bool,
 		}
 		return fmt.Errorf("getting service status: %s", response.Status)
 	}
+	if target.remote() {
+		return writeRemoteServiceStatus(body, asJSON, stdout, stderr)
+	}
 	if asJSON {
 		if _, err := stdout.Write(body); err != nil {
 			return fmt.Errorf("writing service status response: %w", err)
@@ -297,6 +301,54 @@ func getServiceStatus(ctx context.Context, target instanceEndpoint, asJSON bool,
 		return nil
 	}
 	return writeServiceStatusHuman(body, stdout)
+}
+
+// writeRemoteServiceStatus writes a remote instance's status with this CLI's
+// version beside the instance's, and a warning when they differ, since the
+// two machines update separately. Under --json both go in the status object,
+// which keeps stderr empty.
+func writeRemoteServiceStatus(body []byte, asJSON bool, stdout, stderr io.Writer) error {
+	var status map[string]json.RawMessage
+	if err := json.Unmarshal(body, &status); err != nil || status == nil {
+		return errors.New("invalid service status: must be a JSON object")
+	}
+	var instanceVersion string
+	if err := json.Unmarshal(status["version"], &instanceVersion); err != nil || instanceVersion == "" {
+		return errors.New("invalid service status: version must be a non-empty string")
+	}
+	warning := ""
+	if instanceVersion != version {
+		warning = fmt.Sprintf("this marasi is version %s but the instance runs %s", version, instanceVersion)
+	}
+
+	if asJSON {
+		// Append the fields rather than re-encoding the map, so the
+		// instance's own fields keep their order.
+		var extra strings.Builder
+		cliVersion, _ := json.Marshal(version)
+		fmt.Fprintf(&extra, `,"cli_version":%s`, cliVersion)
+		if warning != "" {
+			warningJSON, _ := json.Marshal(warning)
+			fmt.Fprintf(&extra, `,"warning":%s`, warningJSON)
+		}
+		object := bytes.TrimSuffix(bytes.TrimSpace(body), []byte("}"))
+		if _, err := fmt.Fprintf(stdout, "%s%s}\n", object, extra.String()); err != nil {
+			return fmt.Errorf("writing service status response: %w", err)
+		}
+		return nil
+	}
+	if err := writeServiceStatusHuman(body, stdout); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stdout, "cli version: %s\n", version); err != nil {
+		return fmt.Errorf("writing service status: %w", err)
+	}
+	if warning != "" {
+		if _, err := fmt.Fprintf(stderr, "warning: %s\n", warning); err != nil {
+			return fmt.Errorf("writing service status: %w", err)
+		}
+	}
+	return nil
 }
 
 // writeServiceStatusHuman validates and writes the service status projection.

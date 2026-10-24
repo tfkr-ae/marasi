@@ -88,10 +88,10 @@ func TestRemote(t *testing.T) {
 	binary := buildMarasi(t)
 	instance := startRemoteInstance(t, binary)
 
+	// service status adds the CLI's version over --remote; see
+	// TestRemoteVersionWarning.
 	t.Run("should give the same output over --remote as over the socket", func(t *testing.T) {
 		for _, args := range [][]string{
-			{"service", "status"},
-			{"service", "status", "--json"},
 			{"traffic", "list"},
 			{"traffic", "list", "--json"},
 			{"listener", "status", "--json"},
@@ -111,10 +111,11 @@ func TestRemote(t *testing.T) {
 func TestRemoteSelection(t *testing.T) {
 	binary := buildMarasi(t)
 	instance := startRemoteInstance(t, binary)
-	wantStatus, _, err := instance.local("service", "status", "--json")
+	localStatus, _, err := instance.local("service", "status", "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantStatus := strings.TrimSuffix(localStatus, "}\n") + `,"cli_version":"dev"}` + "\n"
 	tokenPath := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(tokenPath, []byte(instance.token+"\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -354,6 +355,50 @@ func TestRemoteUsageErrors(t *testing.T) {
 		got := <-requests
 		if got.Host != address || got.URL.Path != "/prefix/traffic" || got.URL.Query().Get("limit") != "5" || got.Header.Get("Authorization") != "Bearer secret" {
 			t.Fatalf("\nwanted:\nHost %s, /prefix/traffic?limit=5, Bearer secret\ngot:\nHost %s, %s?%s, %q", address, got.Host, got.URL.Path, got.URL.RawQuery, got.Header.Get("Authorization"))
+		}
+	})
+}
+
+func TestRemoteVersionWarning(t *testing.T) {
+	instance := startRemoteInstance(t, buildMarasiVersion(t, "old-build"))
+	cli := buildMarasiVersion(t, "new-build")
+	localStatus, _, err := instance.local("service", "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	localJSON, _, err := instance.local("service", "status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := func(binary string, args ...string) (string, string, error) {
+		return runMarasiEnv(binary, []string{"MARASI_TOKEN=" + instance.token}, append([]string{"--config-dir", instance.cliDir, "--remote", instance.url, "service", "status"}, args...)...)
+	}
+
+	t.Run("should show both versions and warn on stderr when they differ", func(t *testing.T) {
+		stdout, stderr, err := remote(cli)
+		wantOut := localStatus + "cli version: new-build\n"
+		wantErr := "warning: this marasi is version new-build but the instance runs old-build\n"
+		if err != nil || stdout != wantOut || stderr != wantErr {
+			t.Fatalf("\nwanted:\nstdout %q stderr %q\ngot:\nstdout %q stderr %q error %v", wantOut, wantErr, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should put both versions and the warning in the --json body when they differ", func(t *testing.T) {
+		stdout, stderr, err := remote(cli, "--json")
+		want := strings.TrimSuffix(localJSON, "}\n") + `,"cli_version":"new-build","warning":"this marasi is version new-build but the instance runs old-build"}` + "\n"
+		if err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\n%s\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should show both versions and no warning when they match", func(t *testing.T) {
+		stdout, stderr, err := remote(instance.binary)
+		if want := localStatus + "cli version: old-build\n"; err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\n%q\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
+		}
+		stdout, stderr, err = remote(instance.binary, "--json")
+		if want := strings.TrimSuffix(localJSON, "}\n") + `,"cli_version":"old-build"}` + "\n"; err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\n%s\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
 		}
 	})
 }
