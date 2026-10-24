@@ -116,10 +116,10 @@ var stopCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		if err := stopService(ctx, instancePath); err != nil {
+		if err := stopService(ctx, endpoint.path); err != nil {
 			return err
 		}
-		instanceName := filepath.Base(instancePath)
+		instanceName := endpoint.name()
 		if jsonOutput {
 			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
 				Instance string `json:"instance"`
@@ -144,7 +144,7 @@ var statusCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return getServiceStatus(ctx, instancePath, filepath.Base(instancePath), jsonOutput, cmd.OutOrStdout())
+		return getServiceStatus(ctx, endpoint, jsonOutput, cmd.OutOrStdout())
 	},
 }
 
@@ -177,7 +177,7 @@ func listServiceInstances(ctx context.Context, configDir string, asJSON bool, st
 	items := make([]json.RawMessage, 0, len(names))
 	var human strings.Builder
 	for _, name := range names {
-		client := service.NewClient(filepath.Join(instancesDir, name+".sock"))
+		client := localInstanceEndpoint(name, filepath.Join(instancesDir, name)).client()
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/service/status", nil)
 		if err != nil {
 			client.Close()
@@ -249,8 +249,8 @@ func listServiceInstances(ctx context.Context, configDir string, asJSON bool, st
 }
 
 // getServiceStatus queries and prints the selected service instance's status.
-func getServiceStatus(ctx context.Context, instancePath, instanceName string, asJSON bool, stdout io.Writer) error {
-	client := service.NewClient(instancePath + ".sock")
+func getServiceStatus(ctx context.Context, target instanceEndpoint, asJSON bool, stdout io.Writer) error {
+	client := target.client()
 	defer client.Close()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/service/status", nil)
 	if err != nil {
@@ -261,7 +261,7 @@ func getServiceStatus(ctx context.Context, instancePath, instanceName string, as
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return fmt.Errorf("instance %s is not running", instanceName)
+		return fmt.Errorf("instance %s is not running", target.name())
 	}
 
 	body, readErr := io.ReadAll(response.Body)
@@ -385,8 +385,9 @@ func startServiceReady(ctx context.Context, configDir, projectPath, instancePath
 // startServiceInstance starts a proxy instance and calls ready with the proxy
 // listener address, or "" when startListener is false.
 func startServiceInstance(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, startListener bool, ready func(string) error) (resultErr error) {
-	socketPath := instancePath + ".sock"
-	lockPath := instancePath + ".lock"
+	local := localInstanceEndpoint(filepath.Base(instancePath), instancePath)
+	socketPath := local.socketPath()
+	lockPath := local.lockPath()
 	logFile, err := openInstanceLog(instancePath + ".log")
 	if err != nil {
 		return err
@@ -523,8 +524,9 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 
 // stopService stops the instance at instancePath. A missing socket and lock is success.
 func stopService(ctx context.Context, instancePath string) error {
-	socketPath := instancePath + ".sock"
-	lockPath := instancePath + ".lock"
+	target := localInstanceEndpoint(filepath.Base(instancePath), instancePath)
+	socketPath := target.socketPath()
+	lockPath := target.lockPath()
 	if _, err := os.Stat(socketPath); errors.Is(err, os.ErrNotExist) {
 		if _, lockErr := os.Stat(lockPath); errors.Is(lockErr, os.ErrNotExist) {
 			return nil
@@ -536,7 +538,7 @@ func stopService(ctx context.Context, instancePath string) error {
 		return fmt.Errorf("checking instance socket %s: %w", socketPath, err)
 	}
 
-	client := service.NewClient(socketPath)
+	client := target.client()
 	defer client.Close()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://marasi/service/stop", nil)
 	if err != nil {

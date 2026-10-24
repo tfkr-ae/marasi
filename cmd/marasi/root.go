@@ -159,7 +159,8 @@ func subcommandChoice(cmd *cobra.Command) string {
 	}
 }
 
-// prepareInstancePath resolves --config-dir and --instance into instancePath.
+// prepareInstancePath resolves --config-dir and --instance into endpoint and
+// instancePath.
 func prepareInstancePath(cmd *cobra.Command, _ []string) error {
 	if cmd == skillCmd || cmd == extensionAPICmd {
 		return nil
@@ -171,11 +172,12 @@ func prepareInstancePath(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	path, err := resolveInstancePath(configDir, instance)
+	resolved, err := resolveInstanceEndpoint(configDir, instance)
 	if err != nil {
 		return err
 	}
-	instancePath = path
+	endpoint = resolved
+	instancePath = resolved.path
 	return nil
 }
 

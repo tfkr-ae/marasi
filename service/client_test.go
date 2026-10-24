@@ -51,4 +51,45 @@ func TestClient(t *testing.T) {
 			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusTemporaryRedirect, response.StatusCode)
 		}
 	})
+
+	t.Run("should call the control API at a socket endpoint", func(t *testing.T) {
+		baseDir := ""
+		if runtime.GOOS != "windows" {
+			baseDir = "/tmp"
+		}
+		dir, err := os.MkdirTemp(baseDir, "marasi-client-")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer os.RemoveAll(dir)
+		socketPath := filepath.Join(dir, "work.sock")
+		listener, err := net.Listen("unix", socketPath)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/service/status" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		})}
+		go server.Serve(listener)
+		defer server.Close()
+		client := NewEndpointClient(SocketEndpoint(socketPath))
+		defer client.Close()
+		request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://marasi/service/status", nil)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusOK, response.StatusCode)
+		}
+	})
 }
