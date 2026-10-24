@@ -26,10 +26,14 @@ type ControlAddress struct {
 	api       http.Handler
 	token     *ControlToken
 	logWriter io.Writer
+	events    *eventBroadcaster
 	mu        sync.Mutex
 	run       *controlAddressRun
-	statusMu  sync.RWMutex
-	status    ControlListenerStatus
+	// retiring counts runs that Stop or Update closed and that are still
+	// finishing the request that closed them.
+	retiring sync.WaitGroup
+	statusMu sync.RWMutex
+	status   ControlListenerStatus
 }
 
 // controlAddressRun is one bound network address and the server on it.
@@ -37,6 +41,7 @@ type controlAddressRun struct {
 	listener net.Listener
 	server   *http.Server
 	served   chan error
+	conns    *connTracker
 }
 
 // arrival says which way a control request reached the control listener.
@@ -75,11 +80,16 @@ func (s *Server) EnableControlAddress(token *ControlToken, logWriter io.Writer) 
 		api:       s,
 		token:     token,
 		logWriter: logWriter,
+		events:    s.events,
 		status:    ControlListenerStatus{Status: ListenerInactive},
 	}
 	s.control = control
 	controlMux := http.NewServeMux()
 	controlMux.HandleFunc("GET /token", s.serveControlToken)
+	controlMux.HandleFunc("GET /status", s.serveControlListenerStatus)
+	controlMux.HandleFunc("POST /start", s.serveControlListenerStart)
+	controlMux.HandleFunc("POST /update", s.serveControlListenerUpdate)
+	controlMux.HandleFunc("POST /stop", s.serveControlListenerStop)
 	s.mux.Handle("/service/control-listener/", http.StripPrefix("/service/control-listener", controlMux))
 	return control
 }
@@ -152,9 +162,9 @@ func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings) (
 		return ControlListenerStatus{}, err
 	}
 	c.run = run
-	address := run.listener.Addr().String()
-	status := ControlListenerStatus{Status: ListenerActive, ControlListener: &address}
+	status := activeControlListenerStatus(run)
 	c.setStatus(status)
+	c.events.publish("control_listener.started", status)
 	return status, nil
 }
 
@@ -163,6 +173,7 @@ func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings) (
 func (c *ControlAddress) Shutdown(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	defer c.retiring.Wait()
 	if c.run == nil {
 		return nil
 	}
@@ -196,15 +207,20 @@ func (c *ControlAddress) bind(ctx context.Context, endpoint string) (*controlAdd
 	if warning := ControlAddressWarning(address); warning != "" {
 		fmt.Fprintln(c.logWriter, warning)
 	}
+	conns := newConnTracker()
 	server := &http.Server{
 		Handler: c.networkHandler(),
 		// Every request on this server is marked as arriving on the
-		// network address, so socket-only routes can refuse it.
-		ConnContext: func(ctx context.Context, _ net.Conn) context.Context {
-			return context.WithValue(ctx, arrivalKey{}, arrivedOnNetworkAddress)
+		// network address, so socket-only routes can refuse it, and
+		// carries its connection, so a request that closes this address
+		// can keep its own connection until its response is written.
+		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
+			ctx = context.WithValue(ctx, arrivalKey{}, arrivedOnNetworkAddress)
+			return context.WithValue(ctx, connKey{}, conn)
 		},
+		ConnState: conns.track,
 	}
-	run := &controlAddressRun{listener: listener, server: server, served: make(chan error, 1)}
+	run := &controlAddressRun{listener: listener, server: server, served: make(chan error, 1), conns: conns}
 	go func() { run.served <- server.Serve(listener) }()
 	return run, nil
 }
