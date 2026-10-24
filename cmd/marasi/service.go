@@ -109,10 +109,19 @@ var startCmd = &cobra.Command{
 				return err
 			}
 		}
-		if serviceChild {
-			return runServiceChild(ctx, configDir, projectPath, instancePath, proxyAddress, uint16(proxyPort), controlAddress)
+		options := serviceOptions{
+			configDir:      configDir,
+			projectPath:    projectPath,
+			instancePath:   instancePath,
+			proxyAddress:   proxyAddress,
+			proxyPort:      uint16(proxyPort),
+			proxyListener:  !noProxyListener,
+			controlAddress: controlAddress,
 		}
-		return startServiceProcess(ctx, configDir, projectPath, instancePath, proxyAddress, uint16(proxyPort), controlAddress, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput)
+		if serviceChild {
+			return runServiceChild(ctx, options)
+		}
+		return startServiceProcess(ctx, options, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput)
 	},
 }
 
@@ -464,7 +473,8 @@ func startService(ctx context.Context, configDir, projectPath, instancePath, add
 
 // startServiceReady starts a proxy instance and calls ready with the proxy listener address.
 func startServiceReady(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, ready func(string) error) (resultErr error) {
-	return startServiceInstance(ctx, configDir, projectPath, instancePath, address, port, true, "", func(started serviceStarted) error {
+	options := serviceOptions{configDir: configDir, projectPath: projectPath, instancePath: instancePath, proxyAddress: address, proxyPort: port, proxyListener: true}
+	return startServiceInstance(ctx, options, func(started serviceStarted) error {
 		return ready(started.proxyListener)
 	})
 }
@@ -475,15 +485,26 @@ type serviceStarted struct {
 	controlListener string // control listener network address, "" when none
 }
 
+// serviceOptions is what a service instance starts with.
+type serviceOptions struct {
+	configDir      string
+	projectPath    string
+	instancePath   string
+	proxyAddress   string // proxy listener host
+	proxyPort      uint16 // proxy listener port; 0 picks a free one
+	proxyListener  bool   // start the proxy listener
+	controlAddress string // control listener network address as HOST:PORT, "" for none
+}
+
 // startServiceInstance starts a proxy instance and calls ready with what it
-// listens on. The proxy listener is started only when startListener is true,
-// and the control listener's network address only when controlAddress, a
-// HOST:PORT, is not empty.
-func startServiceInstance(ctx context.Context, configDir, projectPath, instancePath, address string, port uint16, startListener bool, controlAddress string, ready func(serviceStarted) error) (resultErr error) {
-	local := localInstanceEndpoint(filepath.Base(instancePath), instancePath)
+// listens on. The proxy listener is started only when options.proxyListener
+// is true, and the control listener's network address only when
+// options.controlAddress is not empty.
+func startServiceInstance(ctx context.Context, options serviceOptions, ready func(serviceStarted) error) (resultErr error) {
+	local := localInstanceEndpoint(filepath.Base(options.instancePath), options.instancePath)
 	socketPath := local.socketPath()
 	lockPath := local.lockPath()
-	logFile, err := openInstanceLog(instancePath + ".log")
+	logFile, err := openInstanceLog(options.instancePath + ".log")
 	if err != nil {
 		return err
 	}
@@ -492,12 +513,12 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 	}()
 	logger := slog.New(slog.NewTextHandler(logFile, nil))
 
-	proxy, err := marasi.New(marasi.WithLogger(logger), marasi.WithConfigDir(configDir))
+	proxy, err := marasi.New(marasi.WithLogger(logger), marasi.WithConfigDir(options.configDir))
 	if err != nil {
 		return fmt.Errorf("starting proxy with config dir: %w", err)
 	}
 
-	wordlists, err := wordlist.NewManager(configDir)
+	wordlists, err := wordlist.NewManager(options.configDir)
 	if err != nil {
 		return fmt.Errorf("creating wordlist manager : %w", err)
 	}
@@ -521,7 +542,7 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 		resultErr = errors.Join(resultErr, cleanupService(closeProxy, closeProject, releaseClaim))
 	}()
 
-	projects := service.NewProjectLifecycle(proxy, configDir, wordlists, logger)
+	projects := service.NewProjectLifecycle(proxy, options.configDir, wordlists, logger)
 	listenerLifecycle := service.NewListenerLifecycle(proxy, logFile)
 	var shutdownOnce sync.Once
 	var shutdownErr error
@@ -534,12 +555,12 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 		return shutdownErr
 	}
 	listenerLifecycle.BindProject(projects)
-	if filepath.Clean(filepath.Dir(projectPath)) == service.ProjectsDir(filepath.Clean(configDir)) {
-		if err := service.CreateProjectsDir(configDir); err != nil {
+	if filepath.Clean(filepath.Dir(options.projectPath)) == service.ProjectsDir(filepath.Clean(options.configDir)) {
+		if err := service.CreateProjectsDir(options.configDir); err != nil {
 			return err
 		}
 	}
-	if err := projects.Open(ctx, projectPath); err != nil {
+	if err := projects.Open(ctx, options.projectPath); err != nil {
 		return fmt.Errorf("opening project: %w", err)
 	}
 	closeProject = projects.Shutdown
@@ -561,7 +582,7 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 
 	serviceCtx, stopService := context.WithCancel(ctx)
 	defer stopService()
-	instanceName := filepath.Base(instancePath)
+	instanceName := filepath.Base(options.instancePath)
 	serviceServer := service.NewServer(proxy, listenerLifecycle, projects, stopService, version, instanceName, projects.Path())
 	updates, err := service.NewUpdates(service.UpdatesConfig{
 		ConfigDir:    proxy.ConfigDir,
@@ -600,26 +621,26 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 		return fmt.Errorf("installing traffic event handlers: %w", handlerErr)
 	}
 
-	serviceServer.EnableRestart(successorStarter{claim: claim, configDir: configDir, instancePath: instancePath, readyTimeout: restartReadyTimeout}.start)
+	serviceServer.EnableRestart(successorStarter{claim: claim, configDir: options.configDir, instancePath: options.instancePath, readyTimeout: restartReadyTimeout}.start)
 
-	controlNetwork = serviceServer.EnableControlAddress(service.NewControlToken(instancePath+".token", secureInstanceFile), logFile)
+	controlNetwork = serviceServer.EnableControlAddress(service.NewControlToken(options.instancePath+".token", secureInstanceFile), logFile)
 
 	var started serviceStarted
-	if startListener {
-		listenerStatus, err := listenerLifecycle.Start(serviceCtx, service.ListenerSettings{Address: &address, Port: &port})
+	if options.proxyListener {
+		listenerStatus, err := listenerLifecycle.Start(serviceCtx, service.ListenerSettings{Address: &options.proxyAddress, Port: &options.proxyPort})
 		if err != nil {
-			return fmt.Errorf("binding proxy listener on address %s port %d: %w", address, port, err)
+			return fmt.Errorf("binding proxy listener on address %s port %d: %w", options.proxyAddress, options.proxyPort, err)
 		}
 		started.proxyListener = *listenerStatus.ProxyListener
 	}
-	if controlAddress != "" {
-		settings, err := parseControlAddress(controlAddress)
+	if options.controlAddress != "" {
+		settings, err := parseControlAddress(options.controlAddress)
 		if err != nil {
 			return err
 		}
 		controlStatus, err := controlNetwork.Start(serviceCtx, settings)
 		if err != nil {
-			return fmt.Errorf("binding control listener network address on %s: %w", controlAddress, err)
+			return fmt.Errorf("binding control listener network address on %s: %w", options.controlAddress, err)
 		}
 		started.controlListener = *controlStatus.ControlListener
 	}
