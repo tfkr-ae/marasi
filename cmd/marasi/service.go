@@ -502,6 +502,18 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 		return fmt.Errorf("creating wordlist manager : %w", err)
 	}
 
+	// The network address closes last, after the project and the instance
+	// claim are released, because a remote service stop waits for it to stop
+	// answering and must return only once the instance is gone.
+	var controlNetwork *service.ControlAddress
+	defer func() {
+		if controlNetwork == nil {
+			return
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		resultErr = errors.Join(resultErr, controlNetwork.Shutdown(shutdownCtx))
+	}()
 	closeProxy := func() error { return nil }
 	closeProject := func() error { return nil }
 	releaseClaim := func() error { return nil }
@@ -590,12 +602,7 @@ func startServiceInstance(ctx context.Context, configDir, projectPath, instanceP
 
 	serviceServer.EnableRestart(successorStarter{claim: claim, configDir: configDir, instancePath: instancePath, readyTimeout: restartReadyTimeout}.start)
 
-	controlNetwork := serviceServer.EnableControlAddress(service.NewControlToken(instancePath+".token", secureInstanceFile), logFile)
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		resultErr = errors.Join(resultErr, controlNetwork.Shutdown(shutdownCtx))
-	}()
+	controlNetwork = serviceServer.EnableControlAddress(service.NewControlToken(instancePath+".token", secureInstanceFile), logFile)
 
 	var started serviceStarted
 	if startListener {
