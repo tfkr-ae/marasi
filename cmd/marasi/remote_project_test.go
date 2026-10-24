@@ -123,7 +123,7 @@ func TestRemoteProjects(t *testing.T) {
 	})
 
 	// Last, since it moves the instance's projects directory aside.
-	t.Run("should create a missing projects directory on the instance machine owner-only", func(t *testing.T) {
+	t.Run("should create a missing projects directory on the instance machine as a local named open does", func(t *testing.T) {
 		moved := projectsDir + ".moved"
 		if err := os.Rename(projectsDir, moved); err != nil {
 			t.Fatal(err)
@@ -132,8 +132,8 @@ func TestRemoteProjects(t *testing.T) {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v: %s", err, stderr)
 		}
 		info, err := os.Stat(projectsDir)
-		if err != nil || info.Mode().Perm() != 0700 {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v %v", os.FileMode(0700), info, err)
+		if err != nil || info.Mode().Perm() != 0755 {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v %v", os.FileMode(0755), info, err)
 		}
 		// Close gamma before its directory goes, so the instance stops cleanly.
 		if _, stderr, err := instance.remote("project", "open", "--path", filepath.Join(moved, "alpha.marasi"), "--json"); err != nil {
