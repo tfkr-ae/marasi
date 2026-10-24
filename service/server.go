@@ -303,7 +303,7 @@ func (s *Server) serveProjectOpen(w http.ResponseWriter, r *http.Request) {
 	}
 	if name != "" {
 		// A name means a project in this instance's config dir, so a remote
-		// CLI gets the same project a local one on this machine would.
+		// CLI gets the same project a local one on the instance machine would.
 		if path, err = ResolveNamedProjectPath(s.projects.configDir, name); err != nil {
 			writeProjectError(w, r, err)
 			return
@@ -332,10 +332,7 @@ func (s *Server) serveProjectList(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := ListProjects(s.projects.configDir)
 	if err != nil {
-		writeJSON(w, r, http.StatusInternalServerError, struct {
-			Error   string `json:"error"`
-			Message string `json:"message"`
-		}{Error: "project_list_failed", Message: err.Error()})
+		writeJSON(w, r, http.StatusInternalServerError, controlRefusalBody{Error: "project_list_failed", Message: err.Error()})
 		return
 	}
 	writeJSON(w, r, http.StatusOK, ProjectList{Items: items})
