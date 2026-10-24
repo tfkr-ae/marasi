@@ -137,14 +137,15 @@ func launchServiceChild(command *exec.Cmd) (io.WriteCloser, <-chan childStartup,
 }
 
 // writeStartOutput writes the start result in JSON or human form. A control
-// listener network address beyond loopback adds a warning on stderr, written
-// here because the detached child's stderr is discarded.
+// listener network address beyond loopback adds a warning on stderr when it
+// is a terminal, written here because the detached child's stderr is
+// discarded. The instance log carries the warning either way.
 func writeStartOutput(stdout, stderr io.Writer, asJSON bool, instanceName string, startup childStartup) error {
 	var controlListener *string
 	warning := ""
 	if startup.controlListener != "" {
 		controlListener = &startup.controlListener
-		if line := service.ControlAddressWarning(startup.controlListener); line != "" {
+		if line := service.ControlAddressWarning(startup.controlListener); line != "" && writesToTerminal(stderr) {
 			warning = line + "\n"
 		}
 	}
