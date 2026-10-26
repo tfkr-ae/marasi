@@ -1,11 +1,12 @@
 # Marasi verification feature map
 
-The primary surface is the `marasi` CLI. It controls a detached proxy service through a per-instance Unix-domain socket, including on Windows. Launch, doctor, isolate, and cleanup are in [SKILL.md](../SKILL.md). The control API and Go library are secondary surfaces and do not replace CLI proof for these features.
+The primary surface is the `marasi` CLI. It controls a detached proxy service through a per-instance Unix-domain socket, including on Windows, or through an optional token-guarded control listener network address with `--remote`. Launch, doctor, isolate, and cleanup are in [SKILL.md](../SKILL.md). The control API and Go library are secondary surfaces and do not replace CLI proof for these features.
 
 | Feature | User entry points | Proof file |
 | --- | --- | --- |
 | Service lifecycle | `service start`, `service status`, `service stop`, `service list`, `service restart` | [service lifecycle](service-lifecycle.md) |
 | Update | `update`, `update check`, `update channel`, `update install`, `update reinstall` | [update](update.md) |
+| Control listener network address and remote | `service start --control-address`, `service control start`, `service control status`, `service control update`, `service control stop`, `service control token [--rotate]`, `--remote`/`MARASI_REMOTE` with `--token-file`/`MARASI_TOKEN` for any instance command, including remote `service status`, `service restart`, `service stop`, `events`, `project list`, `project open`, `wordlist add` and `report template add` | [control listener](control-listener.md) |
 | Proxy listener control | `listener status`, `listener address`, `listener stop`, `listener start`, `listener update` | [proxy listener control](proxy-listener-control.md) |
 | HTTP traffic capture | Configure a client with `proxy_listener`, then make HTTP or HTTPS requests | [HTTP traffic capture](http-traffic-capture.md) |
 | Captured traffic inspection | `traffic list`, list queries (`-q`) and pagination, `traffic get`, `traffic metadata get`, `traffic metadata update`, `traffic count`, `traffic types`, `traffic sitemap` (one level, or several with `--node`/`--scope`), `traffic validate`, `traffic bulk metadata set`, `traffic bulk metadata clear`, `traffic bulk delete` | [captured traffic inspection](captured-traffic-inspection.md) |

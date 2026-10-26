@@ -1,11 +1,11 @@
 ---
 name: verify-marasi
-description: Verify Marasi's CLI-driven proxy service when a change needs proof through a real launched instance, service instance listing, a proxied HTTP request, persisted traffic inspection, traffic metadata and note control, event subscription, launchpad replay, test-case control, finding control, artifact control, Checkpoint control, Chrome control, waypoint control, upstream proxy control and routing, wordlist control, Armory template and run control, extension control, report template and export control, proxy log inspection, CA certificate fetch, browser view of a stored response, project listing, WebSocket connection control, scope check, or the printed agent skill.
+description: Verify Marasi's CLI-driven proxy service when a change needs proof through a real launched instance, service instance listing, the control listener network address and `--remote` control, a proxied HTTP request, persisted traffic inspection, traffic metadata and note control, event subscription, launchpad replay, test-case control, finding control, artifact control, Checkpoint control, Chrome control, waypoint control, upstream proxy control and routing, wordlist control, Armory template and run control, extension control, report template and export control, proxy log inspection, CA certificate fetch, browser view of a stored response, project listing, WebSocket connection control, scope check, or the printed agent skill.
 ---
 
 # Verify Marasi
 
-Marasi's primary user surface is the `marasi` CLI. It launches a detached HTTP/HTTPS proxy and talks to that process over a Unix-domain socket on every OS, including Windows. The HTTP control API and Go library are secondary. Drive with the `marasi` commands in this file and in `features/`. Do not wrap them.
+Marasi's primary user surface is the `marasi` CLI. It launches a detached HTTP/HTTPS proxy and talks to that process over a Unix-domain socket on every OS, including Windows. An instance can also serve the same control API at a token-guarded network address, which `--remote` drives; see [control listener](features/control-listener.md). The HTTP control API and Go library are secondary. Drive with the `marasi` commands in this file and in `features/`. Do not wrap them.
 
 ## Isolate
 
@@ -46,7 +46,7 @@ GOWORK=off make build VERSION="verify-${VERIFY_RUN_ID}"
 
 Windows scratch directory: create a short absolute directory yourself, for example under `C:\mv`, and set `VERIFY_CONFIG_DIR`, `VERIFY_INSTANCE`, and `VERIFY_PROJECT` to unique values. Do not use `/tmp` or a path that makes the socket longer than 104 bytes. `%TEMP%` is often too long.
 
-The start command exits after its detached child is ready. Readiness is a zero exit code and JSON `{"instance":"<VERIFY_INSTANCE>","proxy_listener":"127.0.0.1:<port>"}`. `instance` is the `--instance` flag, not the version and not the project name. The port is the OS-assigned port, not `0`.
+The start command exits after its detached child is ready. Readiness is a zero exit code and JSON `{"instance":"<VERIFY_INSTANCE>","proxy_listener":"127.0.0.1:<port>","control_listener":null}`. `control_listener` is `null` because Launch does not pass `--control-address`. `instance` is the `--instance` flag, not the version and not the project name. The port is the OS-assigned port, not `0`.
 
 Unix detach is a new session. Windows detach is a new process group with `DETACHED_PROCESS`. Both wait on the same stdin handshake. A Windows detached child does not receive console Ctrl+C. Stop it with `service stop`.
 
