@@ -30,7 +30,7 @@ CDP with real Chrome: register `/Applications/Google Chrome.app/Contents/MacOS/G
 
 ## Gotchas
 
-- `--path` is required on path add/remove. `--os` defaults to this machine and must be `darwin`, `linux`, or `windows`.
+- `--path` is required on path add/remove. `--os` must be `darwin`, `linux`, or `windows`. It defaults to this machine. Over `--remote` it defaults to the instance machine's `os` from `service status`, because Chrome runs on that machine. To prove it, run `chrome path add --path "$STUB" --json` over `--remote` without `--os` and require the stub's item `os` to equal `service status --json`'s `os`. With `--os windows` the item keeps `windows`. `chrome path remove` over `--remote` without `--os` removes the instance-OS entry.
 - Duplicate path or profile returns a conflict. Removing a missing path or profile returns not found.
 - `chrome profile remove` also deletes `$VERIFY_CONFIG_DIR/chrome_profiles/<name>` and everything under it.
 - `chrome start` with no `--profile` uses `default-profile` even if that name is not registered. Any other `--profile` must already exist.
