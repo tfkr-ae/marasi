@@ -92,6 +92,17 @@ type TrafficRepository interface {
 	// ends.
 	CountTrafficContext(ctx context.Context, q TrafficCountQuery) (TrafficCount, error)
 
+	// CountTrafficByField counts the pairs that match q by the value of
+	// q.Field, exactly, with the completeness of each background job the
+	// answer depends on. Pairs with no value are counted under "". A field
+	// not in CountFields wraps ErrInvalidCountField; an invalid query or
+	// exclusion returns a *QueryError.
+	CountTrafficByField(q TrafficFieldCountQuery) (TrafficFieldCounts, error)
+
+	// CountTrafficByFieldContext is CountTrafficByField for a count that
+	// stops when ctx ends.
+	CountTrafficByFieldContext(ctx context.Context, q TrafficFieldCountQuery) (TrafficFieldCounts, error)
+
 	// ListSitemapChildren returns one page of the children of the sitemap
 	// node q.Node, or of the origins when it is empty, by pair count,
 	// highest first, over all traffic or, in query mode, over q.Query. The

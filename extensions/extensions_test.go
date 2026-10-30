@@ -167,6 +167,14 @@ func (m *mockTrafficRepo) CountTraffic(q domain.TrafficCountQuery) (domain.Traff
 	return domain.TrafficCount{Count: len(m.summaryData), Complete: map[domain.JobName]bool{domain.JobTrafficIndex: true}}, nil
 }
 
+func (m *mockTrafficRepo) CountTrafficByFieldContext(_ context.Context, q domain.TrafficFieldCountQuery) (domain.TrafficFieldCounts, error) {
+	return m.CountTrafficByField(q)
+}
+
+func (m *mockTrafficRepo) CountTrafficByField(domain.TrafficFieldCountQuery) (domain.TrafficFieldCounts, error) {
+	return domain.TrafficFieldCounts{Counts: []*domain.TrafficFieldCount{}}, nil
+}
+
 func (m *mockTrafficRepo) ListSitemapChildren(context.Context, domain.SitemapQuery) (domain.SitemapPage, error) {
 	return domain.SitemapPage{}, errors.New("not implemented")
 }
