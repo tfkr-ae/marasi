@@ -89,3 +89,44 @@ type TrafficCount struct {
 	// whether the job had finished. See TrafficPage.Complete.
 	Complete map[JobName]bool
 }
+
+// ErrInvalidCountField reports a count by field for a field it cannot count
+// by. The fields are the ones in CountFields.
+var ErrInvalidCountField = errors.New("invalid count field")
+
+// CountFields are the fields CountTrafficByField counts by.
+var CountFields = []string{"length", "status_code"}
+
+// TrafficFieldCountQuery describes the pairs a count by field counts, and
+// the field it counts them by.
+type TrafficFieldCountQuery struct {
+	// Text is an AIP-160 traffic query. Empty matches every pair.
+	Text string
+	// Exclusion hides pairs with these content types (see NormalizeExclusion).
+	// Pairs with no content type are never hidden.
+	Exclusion []string
+	// AsOf, when set, bounds the count to pairs with an id at or below it.
+	AsOf *uuid.UUID
+	// Field is the field to count by, one of CountFields.
+	Field string
+}
+
+// TrafficFieldCount is the number of matching pairs with one value of the
+// counted field.
+type TrafficFieldCount struct {
+	// Value is the field's value as a query writes it, such as "404", or ""
+	// for pairs with no value, such as pairs with no response yet.
+	Value string
+	Count int
+}
+
+// TrafficFieldCounts is the result of a count by field.
+type TrafficFieldCounts struct {
+	// Counts holds every distinct value with its exact count, by count
+	// descending and then by value ascending, with "" last among equal
+	// counts. The counts add up to the number of matching pairs.
+	Counts []*TrafficFieldCount
+	// Complete reports, for each background job the answer depends on,
+	// whether the job had finished. See TrafficPage.Complete.
+	Complete map[JobName]bool
+}
