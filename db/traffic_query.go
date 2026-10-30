@@ -100,6 +100,15 @@ const numberIs = "request.id IN (SELECT request_id FROM pair_number WHERE number
 // anyHighlight is true for a pair with a highlight.
 const anyHighlight = "request.id IN (SELECT request_id FROM pair_highlight)"
 
+// armoryRunPath is the JSON path metadataPath gives metadata.armory_run_id.
+const armoryRunPath = `$."armory_run_id"`
+
+// armoryRunKey is a pair's armory_run_id metadata, NULL when it has none or
+// its metadata is malformed. The run index and the equality on
+// metadata.armory_run_id use this exact expression, so SQLite matches the
+// index.
+const armoryRunKey = `CASE WHEN json_valid(metadata) THEN json_extract(metadata, '` + armoryRunPath + `') END`
+
 // minTextTermLength is the shortest text term the trigram index can find.
 // Shorter terms would silently match nothing, so they are rejected.
 const minTextTermLength = 3
@@ -428,7 +437,8 @@ func (t *queryTranslator) allIndexDriven(branches []*expr.Expr) bool {
 
 // indexDriven reports whether an index can find the pairs that match e
 // without checking every pair: a text term, a link, note or highlight, a number, a requested_at
-// lower bound, an equality on an indexed field, or an AND with one of these.
+// lower bound, an equality on an indexed field or on metadata.armory_run_id,
+// or an AND with one of these.
 // An invalid e reports false; translating it reports the error.
 func (t *queryTranslator) indexDriven(e *expr.Expr) bool {
 	call := e.GetCallExpr()
@@ -453,12 +463,19 @@ func (t *queryTranslator) indexDriven(e *expr.Expr) bool {
 		if !ok || len(args) != 2 {
 			return false
 		}
-		name, _, err := t.fieldName(args[0])
+		name, path, err := t.fieldName(args[0])
 		if err != nil {
 			return false
 		}
 		field := trafficFields[name]
 		switch {
+		case field.kind == fieldMetadata:
+			jsonPath, err := t.metadataPath(args[0], path)
+			if err != nil {
+				return false
+			}
+			_, run := armoryRunText(jsonPath, args[1])
+			return run && op == "="
 		case field.kind == fieldLink, field.kind == fieldSitemap, field.kind == fieldHighlight:
 			return op == "="
 		case field.kind == fieldNumber:
@@ -715,6 +732,12 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 		if err != nil {
 			return "", err
 		}
+		if run, ok := armoryRunText(jsonPath, rhs); ok {
+			// The same match as metadataEquals for a string, through the
+			// run index.
+			t.bind(run)
+			return negate(op, "("+armoryRunKey+" = ? AND json_type(metadata, '"+armoryRunPath+"') = 'text')"), nil
+		}
 		cond, err := t.metadataEquals(rhs, jsonPath)
 		if err != nil {
 			return "", err
@@ -905,6 +928,24 @@ func (t *queryTranslator) metadataEquals(rhs *expr.Expr, path string) (string, e
 	}
 	t.bind(path, path, value)
 	return "(json_type(" + column + ", ?) IN " + jsonTypes + " AND json_extract(" + column + ", ?) = ?)", nil
+}
+
+// armoryRunText returns the string a comparison of the metadata key at path
+// with rhs looks for, when path is armory_run_id and metadataEquals would
+// compare it as a string.
+func armoryRunText(path string, rhs *expr.Expr) (string, bool) {
+	if path != armoryRunPath {
+		return "", false
+	}
+	if constant, ok := rhs.GetConstExpr().GetConstantKind().(*expr.Constant_StringValue); ok {
+		return constant.StringValue, true
+	}
+	switch name := rhs.GetIdentExpr().GetName(); name {
+	case "", "true", "false", "null":
+		return "", false
+	default:
+		return name, true
+	}
 }
 
 // requestedAtIDSlack is how much older than its requested_at a pair's id may
