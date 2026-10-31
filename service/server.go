@@ -49,6 +49,8 @@ type Server struct {
 	// control is the control listener's network address, nil until
 	// EnableControlAddress.
 	control *ControlAddress
+	// interfaces reads the instance machine's network interfaces.
+	interfaces func() ([]hostInterface, error)
 }
 
 // NewServer creates a control API server for proxy.
@@ -85,6 +87,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		version:           version,
 		instance:          instance,
 		project:           project,
+		interfaces:        readHostInterfaces,
 	}
 	if projects != nil {
 		projects.opened = func(path string) {
@@ -140,6 +143,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 	listenerMux.HandleFunc("/start", server.serveListenerStart)
 	listenerMux.HandleFunc("/stop", server.serveListenerStop)
 	listenerMux.HandleFunc("/update", server.serveListenerUpdate)
+	listenerMux.HandleFunc("/interfaces", server.serveListenerInterfaces)
 	mux.Handle("/listener/", http.StripPrefix("/listener", listenerMux))
 	projectMux := http.NewServeMux()
 	projectMux.HandleFunc("/open", server.serveProjectOpen)

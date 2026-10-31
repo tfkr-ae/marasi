@@ -76,6 +76,22 @@ func TestListenerCommand(t *testing.T) {
 			path:       "/listener/status",
 			wantStdout: "[::1]:53142\n",
 		},
+		{
+			name:       "should list the instance machine's interfaces as a table",
+			args:       []string{"listener", "interfaces"},
+			response:   `{"items":[{"address":"127.0.0.1","family":"ipv4","interface":"lo"},{"address":"fe80::2%wlan0","family":"ipv6","interface":"wlan0"}]}` + "\n",
+			method:     http.MethodGet,
+			path:       "/listener/interfaces",
+			wantStdout: "ADDRESS        FAMILY  INTERFACE\n127.0.0.1      ipv4    lo\nfe80::2%wlan0  ipv6    wlan0\nADDRESS        FAMILY  INTERFACE\n",
+		},
+		{
+			name:       "should print the interfaces response unchanged in JSON mode",
+			args:       []string{"listener", "interfaces", "--json"},
+			response:   `{"items":[{"address":"127.0.0.1","family":"ipv4","interface":"lo"}]}` + "\n",
+			method:     http.MethodGet,
+			path:       "/listener/interfaces",
+			wantStdout: `{"items":[{"address":"127.0.0.1","family":"ipv4","interface":"lo"}]}` + "\n",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			configDir := serviceConfigDir(t)
