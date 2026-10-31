@@ -7,7 +7,7 @@ scope: {{.Metadata.Scope}}
 draft: {{.Metadata.IsDraft}}
 start: {{.Metadata.Start.Format "2006-01-02"}}
 end: {{.Metadata.End.Format "2006-01-02"}}
-created: {{.Metadata.CreatedAt.Local.Format "2006-01-02 15:04:05"}}
+created: {{.Metadata.CreatedAt.Format "2006-01-02 15:04:05"}}
 ---
 
 # Executive Summary

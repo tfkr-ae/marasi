@@ -26,6 +26,8 @@ var (
 	reportExportDraft            bool
 	reportExportTruncate         int
 	reportExportIncludeTestCases bool
+	reportExportCreatedAt        string
+	reportExportCustomProperties string
 	reportExportOutput           string
 )
 
@@ -41,6 +43,8 @@ func init() {
 	reportExportCmd.Flags().BoolVar(&reportExportDraft, "draft", true, "Mark the report as a draft")
 	reportExportCmd.Flags().IntVar(&reportExportTruncate, "truncate", 0, "Maximum body length in bytes. 0 does not truncate")
 	reportExportCmd.Flags().BoolVar(&reportExportIncludeTestCases, "include-test-cases", true, "Include test cases in the report")
+	reportExportCmd.Flags().StringVar(&reportExportCreatedAt, "created-at", "", "Creation time written into the report (RFC3339). Its offset is kept. If omitted, the instance stamps the export time in its machine's zone")
+	reportExportCmd.Flags().StringVar(&reportExportCustomProperties, "custom-properties", "", "JSON object passed to the template as .Metadata.CustomProperties. --include-test-cases overrides its include_test_cases key")
 	reportExportCmd.Flags().StringVar(&reportExportOutput, "output", "", "File to write. If omitted, uses the title with the template extension, or the template file name when the title is empty")
 	reportExportCmd.MarkFlagRequired("start")
 	reportExportCmd.MarkFlagRequired("end")
@@ -155,22 +159,39 @@ var reportExportCmd = &cobra.Command{
 		if reportExportTruncate < 0 {
 			return errors.New("truncate length must not be negative")
 		}
+		var createdAt *string
+		if cmd.Flags().Changed("created-at") {
+			if _, err := time.Parse(time.RFC3339, reportExportCreatedAt); err != nil {
+				return fmt.Errorf("invalid created at %q", reportExportCreatedAt)
+			}
+			createdAt = &reportExportCreatedAt
+		}
+		var customProperties json.RawMessage
+		if cmd.Flags().Changed("custom-properties") {
+			var properties map[string]any
+			if err := json.Unmarshal([]byte(reportExportCustomProperties), &properties); err != nil || properties == nil {
+				return errors.New("custom properties must be a JSON object")
+			}
+			customProperties = json.RawMessage(reportExportCustomProperties)
+		}
 		output, err := reportExportPath(reportExportTitle, args[0], reportExportOutput)
 		if err != nil {
 			return err
 		}
 		requestBody, err := json.Marshal(struct {
-			Template         string `json:"template"`
-			Title            string `json:"title"`
-			Client           string `json:"client"`
-			Type             string `json:"type"`
-			Scope            string `json:"scope"`
-			Assessor         string `json:"assessor"`
-			Start            string `json:"start"`
-			End              string `json:"end"`
-			IsDraft          bool   `json:"is_draft"`
-			TruncateLength   int    `json:"truncate_length"`
-			IncludeTestCases bool   `json:"include_test_cases"`
+			Template         string          `json:"template"`
+			Title            string          `json:"title"`
+			Client           string          `json:"client"`
+			Type             string          `json:"type"`
+			Scope            string          `json:"scope"`
+			Assessor         string          `json:"assessor"`
+			Start            string          `json:"start"`
+			End              string          `json:"end"`
+			IsDraft          bool            `json:"is_draft"`
+			TruncateLength   int             `json:"truncate_length"`
+			IncludeTestCases bool            `json:"include_test_cases"`
+			CreatedAt        *string         `json:"created_at,omitempty"`
+			CustomProperties json.RawMessage `json:"custom_properties,omitempty"`
 		}{
 			Template:         args[0],
 			Title:            reportExportTitle,
@@ -183,6 +204,8 @@ var reportExportCmd = &cobra.Command{
 			IsDraft:          reportExportDraft,
 			TruncateLength:   reportExportTruncate,
 			IncludeTestCases: reportExportIncludeTestCases,
+			CreatedAt:        createdAt,
+			CustomProperties: customProperties,
 		})
 		if err != nil {
 			return fmt.Errorf("encoding report export request: %w", err)
