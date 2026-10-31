@@ -86,9 +86,6 @@ func (repo *Repository) CountTrafficByFieldContext(ctx context.Context, q domain
 	if err := repo.indexReadyFor(match); err != nil {
 		return domain.TrafficFieldCounts{}, err
 	}
-	if q.AsOf != nil {
-		match.add(`id <= ?`, *q.AsOf)
-	}
 
 	var rows []struct {
 		Value sql.NullInt64 `db:"value"`
@@ -102,6 +99,15 @@ func (repo *Repository) CountTrafficByFieldContext(ctx context.Context, q domain
 		}
 		result.Complete = complete
 
+		result.AsOf = q.AsOf
+		if result.AsOf == nil {
+			newest, err := newestPairID(ctx, tx)
+			if err != nil || newest == nil {
+				return err
+			}
+			result.AsOf = newest
+		}
+		match.add(`id <= ?`, *result.AsOf)
 		return tx.SelectContext(ctx, &rows, trafficFieldCountSQL(match, key), match.args...)
 	})
 	if err != nil {
