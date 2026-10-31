@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1270,4 +1271,107 @@ func mustPort(t *testing.T, value string) int {
 		t.Fatalf("parsing port: %v", err)
 	}
 	return port
+}
+
+func TestListenerInterfaces(t *testing.T) {
+	newServer := func(interfaces func() ([]hostInterface, error)) *Server {
+		server := NewServer(nil, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, nil, func() {}, "dev", "default", "scratchpad")
+		server.interfaces = interfaces
+		return server
+	}
+	ipNet := func(cidr string) net.Addr {
+		ip, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", cidr, err)
+		}
+		network.IP = ip
+		return network
+	}
+
+	t.Run("should list IPv4 first, then by interface and address, loopback included", func(t *testing.T) {
+		server := newServer(func() ([]hostInterface, error) {
+			return []hostInterface{
+				{name: "wlan0", addrs: []net.Addr{ipNet("fe80::2/64"), ipNet("192.168.1.20/24"), ipNet("192.168.1.3/24")}},
+				{name: "lo", addrs: []net.Addr{ipNet("::1/128"), ipNet("127.0.0.1/8")}},
+				{name: "eth0", addrs: []net.Addr{&net.IPAddr{IP: net.ParseIP("2001:db8::1")}, ipNet("10.0.0.5/8")}},
+			}, nil
+		})
+
+		response := requestListener(t, server, http.MethodGet, "/listener/interfaces", "")
+
+		want := `{"items":[` +
+			`{"address":"10.0.0.5","family":"ipv4","interface":"eth0"},` +
+			`{"address":"127.0.0.1","family":"ipv4","interface":"lo"},` +
+			`{"address":"192.168.1.3","family":"ipv4","interface":"wlan0"},` +
+			`{"address":"192.168.1.20","family":"ipv4","interface":"wlan0"},` +
+			`{"address":"2001:db8::1","family":"ipv6","interface":"eth0"},` +
+			`{"address":"::1","family":"ipv6","interface":"lo"},` +
+			`{"address":"fe80::2%wlan0","family":"ipv6","interface":"wlan0"}]}` + "\n"
+		if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/json" || response.Body.String() != want {
+			t.Fatalf("\nwanted:\n200 application/json %s\ngot:\n%d %s %s", want, response.Code, response.Header().Get("Content-Type"), response.Body.String())
+		}
+	})
+
+	t.Run("should list an IPv4-mapped address as IPv4", func(t *testing.T) {
+		server := newServer(func() ([]hostInterface, error) {
+			return []hostInterface{{name: "eth0", addrs: []net.Addr{&net.IPNet{IP: net.ParseIP("10.0.0.5"), Mask: net.CIDRMask(8, 32)}}}}, nil
+		})
+
+		response := requestListener(t, server, http.MethodGet, "/listener/interfaces", "")
+
+		want := `{"items":[{"address":"10.0.0.5","family":"ipv4","interface":"eth0"}]}` + "\n"
+		if response.Code != http.StatusOK || response.Body.String() != want {
+			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("should return an empty list when the machine has no addresses", func(t *testing.T) {
+		server := newServer(func() ([]hostInterface, error) { return nil, nil })
+
+		response := requestListener(t, server, http.MethodGet, "/listener/interfaces", "")
+
+		if want := "{\"items\":[]}\n"; response.Code != http.StatusOK || response.Body.String() != want {
+			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("should fail with internal_server_error when the interfaces cannot be read", func(t *testing.T) {
+		server := newServer(func() ([]hostInterface, error) { return nil, errors.New("route socket closed") })
+
+		response := requestListener(t, server, http.MethodGet, "/listener/interfaces", "")
+
+		assertListenerError(t, response, http.StatusInternalServerError, "internal_server_error")
+	})
+
+	t.Run("should allow only GET", func(t *testing.T) {
+		server := newServer(func() ([]hostInterface, error) { return nil, nil })
+
+		response := requestListener(t, server, http.MethodPost, "/listener/interfaces", "")
+
+		if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodGet {
+			t.Fatalf("\nwanted:\n405 Allow GET\ngot:\n%d Allow %s", response.Code, response.Header().Get("Allow"))
+		}
+	})
+
+	t.Run("should read this machine's interfaces by default, loopback included", func(t *testing.T) {
+		server := NewServer(nil, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, nil, func() {}, "dev", "default", "scratchpad")
+
+		response := requestListener(t, server, http.MethodGet, "/listener/interfaces", "")
+
+		var body struct {
+			Items []ListenerInterface `json:"items"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decoding interfaces: %v", err)
+		}
+		loopback := false
+		for _, item := range body.Items {
+			if item.Address == "127.0.0.1" || item.Address == "::1" {
+				loopback = true
+			}
+		}
+		if response.Code != http.StatusOK || !loopback {
+			t.Fatalf("\nwanted:\n200 with a loopback address\ngot:\n%d %s", response.Code, response.Body.String())
+		}
+	})
 }

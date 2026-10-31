@@ -68,6 +68,7 @@ A browser GUI can call the network address from any origin: the instance echoes 
 The instance and the CLI run on different machines, so read their output as the instance machine sees it:
 
 - Printed addresses, such as the proxy listener and the CDP endpoint from `chrome start --cdp`, are the instance machine's. A loopback address there is not reachable from the CLI's machine.
+- `listener interfaces` lists the instance machine's addresses, loopback included, to choose a `listener start` or `listener update` `--address` from (`--json`: `items` of `address`, `family` `ipv4` or `ipv6`, `interface`; IPv4 first, then by interface and address). A link-local IPv6 address carries its zone, such as `fe80::1%eth0`.
 - `service status` reports the instance machine's operating system (`os:`; `os` in `--json`). Over a remote, `chrome path add` and `chrome path remove` default `--os` to it, so a path is tagged for the machine that runs Chrome. Pass `--os` to override.
 - Over a remote, `service status` adds this CLI's version (`cli version:`; `cli_version` in `--json`) beside the instance's `version`. When they differ it prints `warning: this marasi is version X but the instance runs Y` on stderr, or puts that text in the `warning` field under `--json`. Commands still run; update the older side if a command or field is missing. No other command checks versions.
 
@@ -153,7 +154,7 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 | Task | Command group | Guidance |
 | --- | --- | --- |
 | Expose, move, or close the control API's network address | `service control` | `start` and `update` require both `--address` and `--port`. The socket keeps working whatever the network address does. See [Select the instance and project](#select-the-instance-and-project). |
-| Change listener address or pause capture | `listener` | `start` and `update` require both `--address` and `--port`. Stopping the listener leaves the service running. |
+| Change listener address or pause capture | `listener` | `start` and `update` require both `--address` and `--port`; `interfaces` lists the addresses the instance machine can bind. Stopping the listener leaves the service running. |
 | Find named project files | `project list` | Lists projects under the selected config directory, or with `--remote` under the instance machine's. |
 | Annotate captured traffic | `notes`, `traffic metadata` | Metadata updates replace the JSON rather than merge it. |
 | Change or delete many pairs | `traffic bulk` | `highlight`, `link`, `unlink`, `metadata set`/`clear`, `note append`/`clear`, `delete`. Select with `--id` (repeatable) or `--ids-file` (`-` for stdin), or `-q` with the list page's `--as-of`. Bulk metadata sets one dotted key and leaves the rest. Nothing asks for confirmation, and `delete` also removes notes, links, and logs. |
