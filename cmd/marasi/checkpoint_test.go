@@ -25,11 +25,11 @@ func TestCheckpointCommands(t *testing.T) {
 	wsID := "01938032-1b17-7243-b035-e6a9f4645904"
 	httpDump := []byte("GET /a HTTP/1.1\r\nHost: example.com\r\n\r\n")
 	wsPayload := []byte("hello")
-	httpItem := `{"id":"` + httpID + `","type":"request","raw":"` + base64.StdEncoding.EncodeToString(httpDump) + `"}` + "\n"
-	wsItem := `{"id":"` + wsID + `","type":"websocket","payload":"` + base64.StdEncoding.EncodeToString(wsPayload) + `","opcode":1,"direction":"client","connection_id":"0193802f-f0e7-73d9-a764-06d21e36780a","request_id":"0193802f-f0e7-73d9-a764-06d21e36780b"}` + "\n"
-	listBody := `{"items":[{"id":"` + httpID + `","type":"request","raw":"` + base64.StdEncoding.EncodeToString(httpDump) + `"},{"id":"` + wsID + `","type":"websocket","payload":"` + base64.StdEncoding.EncodeToString(wsPayload) + `","opcode":1,"direction":"client","connection_id":"0193802f-f0e7-73d9-a764-06d21e36780a","request_id":"0193802f-f0e7-73d9-a764-06d21e36780b"}],"intercept":true,"websocket_intercept":false}` + "\n"
+	httpItem := `{"id":"` + httpID + `","type":"request","raw":"` + base64.StdEncoding.EncodeToString(httpDump) + `","intercepted_at":"2026-10-31T09:00:00Z"}` + "\n"
+	wsItem := `{"id":"` + wsID + `","type":"websocket","payload":"` + base64.StdEncoding.EncodeToString(wsPayload) + `","opcode":1,"direction":"client","connection_id":"0193802f-f0e7-73d9-a764-06d21e36780a","request_id":"0193802f-f0e7-73d9-a764-06d21e36780b","intercepted_at":"2026-10-31T09:01:30.5Z"}` + "\n"
+	listBody := `{"items":[{"id":"` + httpID + `","type":"request","raw":"` + base64.StdEncoding.EncodeToString(httpDump) + `","intercepted_at":"2026-10-31T09:00:00Z"},{"id":"` + wsID + `","type":"websocket","payload":"` + base64.StdEncoding.EncodeToString(wsPayload) + `","opcode":1,"direction":"client","connection_id":"0193802f-f0e7-73d9-a764-06d21e36780a","request_id":"0193802f-f0e7-73d9-a764-06d21e36780b","intercepted_at":"2026-10-31T09:01:30.5Z"}],"intercept":true,"websocket_intercept":false}` + "\n"
 
-	t.Run("should list checkpoint items in an id type table", func(t *testing.T) {
+	t.Run("should list checkpoint items in an id type intercepted at table", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		sent := startCannedControlAPI(t, configDir, "list", http.StatusOK, listBody)
 
@@ -41,8 +41,8 @@ func TestCheckpointCommands(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/checkpoint" || got.RawQuery != "" || got.Body != "" {
 			t.Fatalf("\nwanted:\nGET /checkpoint empty body\ngot:\n%s %s?%s body %q", got.Method, got.Path, got.RawQuery, got.Body)
 		}
-		header := "ID                                    TYPE\n"
-		wantStdout := header + httpID + "  request\n" + wsID + "  websocket\n" + header
+		header := "ID                                    TYPE       INTERCEPTED AT\n"
+		wantStdout := header + httpID + "  request    2026-10-31T09:00:00Z\n" + wsID + "  websocket  2026-10-31T09:01:30.5Z\n" + header
 		if stdout != wantStdout || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr\ngot:\nstdout %q, stderr %q", wantStdout, stdout, stderr)
 		}
@@ -62,8 +62,8 @@ func TestCheckpointCommands(t *testing.T) {
 		sent := startCannedControlAPI(t, configDir, "kind-http", http.StatusOK, listBody)
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "kind-http", "checkpoint", "list", "--kind", "http")
 		got := sent.snapshot()
-		header := "ID                                    TYPE\n"
-		if err != nil || stdout != header+httpID+"  request\n"+wsID+"  websocket\n"+header || stderr != "" || got.Method != http.MethodGet || got.Path != "/checkpoint" || got.RawQuery != "kind=http" {
+		header := "ID                                    TYPE       INTERCEPTED AT\n"
+		if err != nil || stdout != header+httpID+"  request    2026-10-31T09:00:00Z\n"+wsID+"  websocket  2026-10-31T09:01:30.5Z\n"+header || stderr != "" || got.Method != http.MethodGet || got.Path != "/checkpoint" || got.RawQuery != "kind=http" {
 			t.Fatalf("\nwanted:\nGET /checkpoint?kind=http\ngot:\n%s %s?%s, stdout %q, stderr %q, error %v", got.Method, got.Path, got.RawQuery, stdout, stderr, err)
 		}
 
@@ -418,8 +418,10 @@ func TestCheckpointCommandLifecycle(t *testing.T) {
 	id := waitForCheckpointID(t, binary, configDir, "request")
 
 	stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "checkpoint", "list")
-	header := "ID                                    TYPE\n"
-	if err != nil || stdout != header+id+"  request\n"+header || stderr != "" {
+	header := "ID                                    TYPE     INTERCEPTED AT\n"
+	rows := strings.TrimSuffix(strings.TrimPrefix(stdout, header), header)
+	heldAt, found := strings.CutPrefix(rows, id+"  request  ")
+	if _, parseErr := time.Parse(time.RFC3339, strings.TrimSuffix(heldAt, "\n")); err != nil || !found || parseErr != nil || stderr != "" {
 		t.Fatalf("list held request: stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
 
@@ -594,7 +596,7 @@ func waitForCheckpointID(t *testing.T, binary, configDir, wantType string) strin
 			if len(lines) >= 3 {
 				for _, line := range lines[1 : len(lines)-1] {
 					fields := strings.Fields(line)
-					if len(fields) == 2 && fields[1] == wantType {
+					if len(fields) == 3 && fields[1] == wantType {
 						return fields[0]
 					}
 				}

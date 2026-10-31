@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
@@ -14,19 +15,21 @@ import (
 )
 
 type checkpointHTTPItem struct {
-	ID   uuid.UUID `json:"id"`
-	Type string    `json:"type"`
-	Raw  []byte    `json:"raw"`
+	ID            uuid.UUID `json:"id"`
+	Type          string    `json:"type"`
+	Raw           []byte    `json:"raw"`
+	InterceptedAt time.Time `json:"intercepted_at"`
 }
 
 type checkpointWebSocketItem struct {
-	ID           uuid.UUID `json:"id"`
-	Type         string    `json:"type"`
-	Payload      []byte    `json:"payload"`
-	Opcode       int       `json:"opcode"`
-	Direction    string    `json:"direction"`
-	ConnectionID uuid.UUID `json:"connection_id"`
-	RequestID    uuid.UUID `json:"request_id"`
+	ID            uuid.UUID `json:"id"`
+	Type          string    `json:"type"`
+	Payload       []byte    `json:"payload"`
+	Opcode        int       `json:"opcode"`
+	Direction     string    `json:"direction"`
+	ConnectionID  uuid.UUID `json:"connection_id"`
+	RequestID     uuid.UUID `json:"request_id"`
+	InterceptedAt time.Time `json:"intercepted_at"`
 }
 
 type checkpointList struct {
@@ -186,31 +189,34 @@ func getCheckpointList(proxy *marasi.Proxy, kind string) checkpointList {
 func checkpointItemFromDomain(item domain.CheckpointItem) any {
 	if item.Type == domain.CheckpointTypeWebSocket {
 		return checkpointWebSocketItem{
-			ID:           item.ID,
-			Type:         item.Type,
-			Payload:      item.Payload,
-			Opcode:       item.Opcode,
-			Direction:    item.Direction,
-			ConnectionID: item.ConnectionID,
-			RequestID:    item.RequestID,
+			ID:            item.ID,
+			Type:          item.Type,
+			Payload:       item.Payload,
+			Opcode:        item.Opcode,
+			Direction:     item.Direction,
+			ConnectionID:  item.ConnectionID,
+			RequestID:     item.RequestID,
+			InterceptedAt: item.InterceptedAt,
 		}
 	}
 	return checkpointHTTPItem{
-		ID:   item.ID,
-		Type: item.Type,
-		Raw:  item.Raw,
+		ID:            item.ID,
+		Type:          item.Type,
+		Raw:           item.Raw,
+		InterceptedAt: item.InterceptedAt,
 	}
 }
 
 func checkpointItemFromWebSocket(message domain.WebSocketMessage) domain.CheckpointItem {
 	return domain.CheckpointItem{
-		ID:           message.ID,
-		Type:         domain.CheckpointTypeWebSocket,
-		Payload:      message.Payload,
-		Opcode:       message.Opcode,
-		Direction:    message.Direction,
-		ConnectionID: message.ConnectionID,
-		RequestID:    message.RequestID,
+		ID:            message.ID,
+		Type:          domain.CheckpointTypeWebSocket,
+		Payload:       message.Payload,
+		Opcode:        message.Opcode,
+		Direction:     message.Direction,
+		ConnectionID:  message.ConnectionID,
+		RequestID:     message.RequestID,
+		InterceptedAt: message.CreatedAt,
 	}
 }
 

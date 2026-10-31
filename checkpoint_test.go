@@ -165,6 +165,91 @@ func TestCheckpointPending(t *testing.T) {
 		}
 	})
 
+	t.Run("should stamp each item with the time of its own hold", func(t *testing.T) {
+		proxy := newTestProxy(t, testExtensions["checkpoint"])
+		proxy.SetIntercept(true)
+		requestAt := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+		responseAt := requestAt.Add(90 * time.Second)
+		holdTimes := []time.Time{requestAt, responseAt}
+		proxy.checkpoint.now = func() time.Time {
+			next := holdTimes[0]
+			holdTimes = holdTimes[1:]
+			return next
+		}
+		var notified []domain.CheckpointItem
+		proxy.OnIntercept = func(item domain.CheckpointItem) error {
+			notified = append(notified, item)
+			return nil
+		}
+
+		req, reqID, requestDone := startRequestHold(t, proxy)
+		items := waitForCheckpoint(t, proxy, 1)
+		if !items[0].InterceptedAt.Equal(requestAt) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", requestAt, items[0].InterceptedAt)
+		}
+		if item, _ := proxy.GetCheckpoint(reqID); !item.InterceptedAt.Equal(requestAt) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", requestAt, item.InterceptedAt)
+		}
+		if err := proxy.ForwardCheckpoint(reqID, CheckpointForward{InterceptResponse: true}); err != nil {
+			t.Fatalf("forwarding request: %v", err)
+		}
+		if err := receiveHoldResult(t, requestDone); err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+
+		res := &http.Response{Header: make(http.Header), Request: req}
+		responseDone := make(chan error, 1)
+		go func() {
+			responseDone <- CheckpointResponseModifier(proxy, res)
+		}()
+		items = waitForCheckpoint(t, proxy, 1)
+		if items[0].ID != reqID || items[0].Type != domain.CheckpointTypeResponse {
+			t.Fatalf("wanted response %s\ngot: %s %s", reqID, items[0].Type, items[0].ID)
+		}
+		if !items[0].InterceptedAt.Equal(responseAt) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", responseAt, items[0].InterceptedAt)
+		}
+
+		messageID, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("creating message id: %v", err)
+		}
+		messageAt := responseAt.Add(time.Minute)
+		message := &marasiws.Message{
+			ID:           messageID,
+			ConnectionID: uuid.New(),
+			Opcode:       marasiws.OpText, Payload: []byte("held"),
+			CreatedAt: messageAt,
+		}
+		wsDone := make(chan error, 1)
+		go func() {
+			proxy.noteWebSocketHold(message)
+			wsDone <- proxy.WebSocketInterceptor.Intercept(message, nil)
+		}()
+		items = waitForCheckpoint(t, proxy, 2)
+		if !items[1].InterceptedAt.Equal(messageAt) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", messageAt, items[1].InterceptedAt)
+		}
+
+		removed := proxy.DropAllCheckpoint()
+		got := map[uuid.UUID]time.Time{}
+		for _, item := range removed {
+			got[item.ID] = item.InterceptedAt
+		}
+		if !got[reqID].Equal(responseAt) || !got[messageID].Equal(messageAt) {
+			t.Fatalf("\nwanted:\n%v %v\ngot:\n%v", responseAt, messageAt, got)
+		}
+		if err := receiveHoldResult(t, responseDone); !errors.Is(err, ErrDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+		}
+		if err := receiveHoldResult(t, wsDone); err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+		if len(notified) != 2 || !notified[0].InterceptedAt.Equal(requestAt) || !notified[1].InterceptedAt.Equal(responseAt) {
+			t.Fatalf("\nwanted:\n%v %v\ngot:\n%v", requestAt, responseAt, notified)
+		}
+	})
+
 	t.Run("should reject intercept_response on a response item", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])
 		proxy.SetIntercept(true)
