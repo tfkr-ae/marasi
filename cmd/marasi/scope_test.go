@@ -67,7 +67,7 @@ func TestScopeCheckCommand(t *testing.T) {
 			t.Fatalf("\nwanted:\nhelp before dialing\ngot:\nstdout %q, stderr %q, error %v, requests %#v", stdout, stderr, err, sent.requests())
 		}
 		stdout, stderr, err = runMarasi(binary, "--json", "--config-dir", configDir, "--instance", "work", "scope")
-		assertJSONCommandError(t, stdout, stderr, err, "marasi scope: choose check")
+		assertJSONCommandError(t, stdout, stderr, err, "marasi scope: choose check or list")
 		if len(sent.requests()) != 0 {
 			t.Fatalf("\nwanted:\nno requests\ngot:\n%#v", sent.requests())
 		}
@@ -116,5 +116,75 @@ func TestScopeCheckCommand(t *testing.T) {
 		if err != nil || stderr != "" || !strings.Contains(stdout, "Check whether a URL is in scope") || !strings.Contains(stdout, "Usage:") {
 			t.Fatalf("\nwanted:\nreadable scope check help\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
 		}
+	})
+}
+
+func TestScopeListCommand(t *testing.T) {
+	binary := buildMarasi(t)
+	body := `{"default_allow":true,"include":[{"pattern":"alpha\\.example","match_type":"host"},{"pattern":"alpha\\.example","match_type":"url"}],"exclude":[{"pattern":".*\\.gstatic\\.com","match_type":"host"}]}` + "\n"
+
+	t.Run("should get the rule list and print the default policy and a rule table", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "scope", "list")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		request := sent.snapshot()
+		if request.Method != http.MethodGet || request.Path != "/scope" || request.Body != "" {
+			t.Fatalf("\nwanted:\nGET /scope with no body\ngot:\n%s %s with body %q", request.Method, request.Path, request.Body)
+		}
+		want := "default_allow: true\n" +
+			"RULE     MATCH TYPE  PATTERN\n" +
+			"include  host        alpha\\.example\n" +
+			"include  url         alpha\\.example\n" +
+			"exclude  host        .*\\.gstatic\\.com\n" +
+			"RULE     MATCH TYPE  PATTERN\n"
+		if stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr\ngot:\nstdout %q, stderr %q", want, stdout, stderr)
+		}
+	})
+
+	t.Run("should print only the default policy when there are no rules", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "default", http.StatusOK, `{"default_allow":false,"include":[],"exclude":[]}`+"\n")
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "scope", "list")
+		want := "default_allow: false\n"
+		if err != nil || stdout != want || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should pass the response through unchanged in JSON mode", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "scope", "list", "--json")
+		if err != nil || stdout != body || stderr != "" {
+			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", body, stdout, stderr, err)
+		}
+	})
+
+	t.Run("should reject positional arguments before dialing", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
+		stdout, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "scope", "list", "extra")
+		if err == nil || stdout != "" || len(sent.requests()) != 0 {
+			t.Fatalf("\nwanted:\ninvalid invocation before dialing\ngot:\nstdout %q, error %v, requests %#v", stdout, err, sent.requests())
+		}
+	})
+
+	t.Run("should report API errors in human and JSON modes", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusNotFound, `{"error":"not_found"}`)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "scope", "list")
+		if err == nil || stdout != "" || !strings.Contains(stderr, "listing scope rules: not_found") {
+			t.Fatalf("\nwanted:\nAPI error on stderr\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		stdout, stderr, err = runMarasi(binary, "--json", "--config-dir", configDir, "--instance", "work", "scope", "list")
+		assertJSONCommandError(t, stdout, stderr, err, "listing scope rules: not_found")
 	})
 }

@@ -171,6 +171,7 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 | Record methodology and vulnerabilities | `test-case`, `finding` | Link captured request IDs as evidence. |
 | Attach evidence files | `artifact` | Uploads require exactly one of `--finding` or `--test-case`, never both. |
 | Modify traffic with Lua | `extension` | Inspect source and settings before enabling or calling an extension. See [Write Lua extensions](#write-lua-extensions) before changing source. |
+| Read the scope or test a URL against it | `scope` | `list` prints the live `default_allow` and the include and exclude rules, each sorted by pattern then match type (`--json`: `default_allow`, `include` and `exclude` arrays of `pattern` and `match_type`). `check <url>` says whether one URL is in scope and names the matching rule; it sends no traffic. Neither changes rules, and there is no `scope add`: rules change only through Lua `marasi:scope()`. Both answer the rules even when Compass is disabled. |
 | Manage attack inputs | `wordlist` | `add` moves the source file, uploading it over `--remote`. Copy it first if the original must remain. |
 | Automate requests from templates | `armory` | Validate inputs before creating a run. Creation does not start it. Starting sends traffic. |
 | Export assessment evidence | `report` | Template `add` moves the source file, uploading it over `--remote`. Exports default to draft and include test cases. Select `--output` explicitly. |
