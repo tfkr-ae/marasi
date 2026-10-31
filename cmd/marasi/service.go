@@ -615,6 +615,7 @@ func startServiceInstance(ctx context.Context, options serviceOptions, ready fun
 		marasi.WithWebSocketProgressHandler(serviceServer.HandleWebSocketProgress),
 		marasi.WithWebSocketCloseHandler(serviceServer.HandleWebSocketClose),
 		marasi.WithWebSocketInterceptHandler(serviceServer.HandleWebSocketIntercept),
+		marasi.WithWebSocketHandshakeEndedHandler(serviceServer.HandleWebSocketHandshakeEnded),
 		marasi.WithLaunchStartedHandler(serviceServer.HandleLaunchStarted),
 		marasi.WithLaunchFinishedHandler(serviceServer.HandleLaunchFinished),
 	); handlerErr != nil {

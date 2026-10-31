@@ -425,6 +425,18 @@ func (s *Server) HandleWebSocketClose(connection domain.WebSocketConnection) err
 	return nil
 }
 
+// webSocketHandshakeEndedEvent announces an upgrade that will not open.
+type webSocketHandshakeEndedEvent struct {
+	RequestID uuid.UUID `json:"request_id"`
+	State     string    `json:"state"` // failed or dropped
+}
+
+// HandleWebSocketHandshakeEnded publishes websocket.handshake_ended after a
+// failed or dropped upgrade's websocket.state is stored.
+func (s *Server) HandleWebSocketHandshakeEnded(requestID uuid.UUID, state string) {
+	s.events.publish("websocket.handshake_ended", webSocketHandshakeEndedEvent{RequestID: requestID, State: state})
+}
+
 // HandleWebSocketProgress publishes a message whose frames are still arriving.
 func (s *Server) HandleWebSocketProgress(progress domain.WebSocketMessageProgress) error {
 	s.events.publish("websocket.progress", webSocketProgressResponse{

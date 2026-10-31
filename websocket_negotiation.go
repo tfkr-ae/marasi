@@ -76,7 +76,7 @@ var ErrWebSocketHandshakeFailed = errors.New("websocket handshake failed")
 func failWebSocketHandshake(proxy *Proxy, res *http.Response, cause error) error {
 	_ = proxy.WriteLog("ERROR", fmt.Sprintf("WebSocket handshake failed: %v", cause), requestLogOptions(res.Request)...)
 	if requestID, ok := core.RequestIDFromContext(res.Request.Context()); ok {
-		proxy.updateWebSocketRequestState(requestID, "failed")
+		proxy.endWebSocketHandshake(requestID, "failed")
 	}
 	return fmt.Errorf("%w: %w: %w", ErrDropped, ErrWebSocketHandshakeFailed, cause)
 }

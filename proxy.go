@@ -112,6 +112,9 @@ type Proxy struct {
 	OnWebSocketClose func(domain.WebSocketConnection) error
 	// OnWebSocketIntercept is called when a WebSocket message is paused for inspection.
 	OnWebSocketIntercept func(domain.WebSocketMessage) error
+	// OnWebSocketHandshakeEnded is called with websocket.state failed or
+	// dropped for an upgrade that will not open, once that state is stored.
+	OnWebSocketHandshakeEnded func(requestID uuid.UUID, state string)
 	// OnLaunchStarted is called once a launch is accepted, before it is sent.
 	OnLaunchStarted func(domain.Launch)
 	// OnLaunchFinished is called once per launch when it reaches a terminal state.

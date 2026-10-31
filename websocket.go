@@ -226,7 +226,7 @@ func (proxy *Proxy) runWebSocketSessionWithRelease(connection *marasiws.Connecti
 		_ = proxy.OnWebSocketClose(closedRecord)
 	}
 
-	proxy.updateWebSocketRequestState(connection.RequestID, closedRecord.State)
+	_ = proxy.updateWebSocketRequestState(connection.RequestID, closedRecord.State)
 	proxy.DBWriteChannel <- &domain.WebSocketConnectionUpdate{
 		Connection: closedRecord,
 	}
@@ -242,7 +242,19 @@ func (proxy *Proxy) markDroppedWebSocketHandshake(res *http.Response, err error)
 		return
 	}
 	if requestID, ok := core.RequestIDFromContext(res.Request.Context()); ok {
-		proxy.updateWebSocketRequestState(requestID, "dropped")
+		proxy.endWebSocketHandshake(requestID, "dropped")
+	}
+}
+
+// endWebSocketHandshake stores websocket.state failed or dropped on an upgrade
+// that will not open, then announces it, so a client reading the pair on the
+// announcement sees the new state.
+func (proxy *Proxy) endWebSocketHandshake(requestID uuid.UUID, state string) {
+	if err := proxy.updateWebSocketRequestState(requestID, state); err != nil {
+		return
+	}
+	if proxy.OnWebSocketHandshakeEnded != nil {
+		proxy.OnWebSocketHandshakeEnded(requestID, state)
 	}
 }
 
@@ -258,10 +270,11 @@ type webSocketRequestState struct {
 
 // updateWebSocketRequestState merges websocket.state into the request metadata
 // row. The row is inserted by the DB writer, so the change goes through the
-// same queue and lands after it. It returns once the change is stored.
-func (proxy *Proxy) updateWebSocketRequestState(requestID uuid.UUID, state string) {
+// same queue and lands after it. It returns once the change is stored, with
+// the error it has already written as a proxy log.
+func (proxy *Proxy) updateWebSocketRequestState(requestID uuid.UUID, state string) error {
 	if proxy.TrafficRepo == nil {
-		return
+		return nil
 	}
 
 	var err error
@@ -276,6 +289,7 @@ func (proxy *Proxy) updateWebSocketRequestState(requestID uuid.UUID, state strin
 	if err != nil {
 		_ = proxy.WriteLog("ERROR", err.Error())
 	}
+	return err
 }
 
 // applyWebSocketRequestState writes websocket.state into the request metadata row.
