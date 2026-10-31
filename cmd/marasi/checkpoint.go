@@ -228,16 +228,17 @@ func readCheckpointForwardBytes(cmd *cobra.Command) ([]byte, bool, error) {
 func writeCheckpointList(body []byte, stdout io.Writer) error {
 	var response struct {
 		Items []struct {
-			ID   string `json:"id"`
-			Type string `json:"type"`
+			ID            string `json:"id"`
+			Type          string `json:"type"`
+			InterceptedAt string `json:"intercepted_at"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		return fmt.Errorf("decoding checkpoint list: %w", err)
 	}
-	table := newListTable(stdout, "ID", "TYPE")
+	table := newListTable(stdout, "ID", "TYPE", "INTERCEPTED AT")
 	for _, item := range response.Items {
-		table.row(item.ID, item.Type)
+		table.row(item.ID, item.Type, item.InterceptedAt)
 	}
 	return table.flush()
 }

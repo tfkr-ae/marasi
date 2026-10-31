@@ -1,6 +1,10 @@
 package domain
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 const (
 	// CheckpointTypeRequest is a held HTTP request.
@@ -29,4 +33,7 @@ type CheckpointItem struct {
 	ConnectionID uuid.UUID
 	// RequestID is the HTTP upgrade request that opened the WebSocket connection.
 	RequestID uuid.UUID
+	// InterceptedAt is when Checkpoint held the item. A held response has its
+	// own time, though it shares its request's id.
+	InterceptedAt time.Time
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -49,8 +50,8 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		firstRaw := dumpCheckpointRequest(t, firstReq)
 		secondRaw := dumpCheckpointRequest(t, secondReq)
 		want := fmt.Sprintf(
-			`{"items":[{"id":"%s","type":"request","raw":"%s"},{"id":"%s","type":"request","raw":"%s"}],"intercept":true,"websocket_intercept":false}`+"\n",
-			firstID, firstRaw, secondID, secondRaw,
+			`{"items":[{"id":"%s","type":"request","raw":"%s","intercepted_at":"%s"},{"id":"%s","type":"request","raw":"%s","intercepted_at":"%s"}],"intercept":true,"websocket_intercept":false}`+"\n",
+			firstID, firstRaw, checkpointHeldAt(t, proxy, firstID), secondID, secondRaw, checkpointHeldAt(t, proxy, secondID),
 		)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint", ""), http.StatusOK, want)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint?extra=1", ""), http.StatusOK, want)
@@ -72,11 +73,11 @@ func TestCheckpointControlRoutes(t *testing.T) {
 
 		raw := dumpCheckpointRequest(t, req)
 		httpBody := fmt.Sprintf(
-			`{"items":[{"id":"%s","type":"request","raw":"%s"}],"intercept":true,"websocket_intercept":false}`+"\n",
-			reqID, raw,
+			`{"items":[{"id":"%s","type":"request","raw":"%s","intercepted_at":"%s"}],"intercept":true,"websocket_intercept":false}`+"\n",
+			reqID, raw, checkpointHeldAt(t, proxy, reqID),
 		)
 		wsBody := fmt.Sprintf(
-			`{"items":[{"id":"%s","type":"websocket","payload":"%s","opcode":1,"direction":"client","connection_id":"%s","request_id":"%s"}],"intercept":true,"websocket_intercept":false}`+"\n",
+			`{"items":[{"id":"%s","type":"websocket","payload":"%s","opcode":1,"direction":"client","connection_id":"%s","request_id":"%s","intercepted_at":"`+checkpointMessageHeldAt+`"}],"intercept":true,"websocket_intercept":false}`+"\n",
 			messageID, base64.StdEncoding.EncodeToString([]byte("held")), uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809"), uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a"),
 		)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint?kind=http", ""), http.StatusOK, httpBody)
@@ -94,7 +95,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 			drainCheckpointHold(t, done)
 		})
 
-		want := fmt.Sprintf(`{"id":"%s","type":"request","raw":"%s"}`+"\n", reqID, dumpCheckpointRequest(t, req))
+		want := fmt.Sprintf(`{"id":"%s","type":"request","raw":"%s","intercepted_at":"%s"}`+"\n", reqID, dumpCheckpointRequest(t, req), checkpointHeldAt(t, proxy, reqID))
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint/"+reqID.String(), ""), http.StatusOK, want)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint/not-a-uuid", ""), http.StatusBadRequest, `{"error":"bad_request"}`+"\n")
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint/0193802f-f0e7-73d9-a764-06d21e367809", ""), http.StatusNotFound, `{"error":"not_found"}`+"\n")
@@ -132,8 +133,8 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		drainCheckpointHeld(t, subscriber)
 
 		wantRemaining := fmt.Sprintf(
-			`{"items":[{"id":"%s","type":"request","raw":"%s"}],"intercept":true,"websocket_intercept":false}`+"\n",
-			secondID, dumpCheckpointRequest(t, secondReq),
+			`{"items":[{"id":"%s","type":"request","raw":"%s","intercepted_at":"%s"}],"intercept":true,"websocket_intercept":false}`+"\n",
+			secondID, dumpCheckpointRequest(t, secondReq), checkpointHeldAt(t, proxy, secondID),
 		)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+firstID.String()+"/drop", ""), http.StatusOK, wantRemaining)
 		if err := receiveCheckpointHold(t, firstDone); !errors.Is(err, marasi.ErrDropped) {
@@ -260,6 +261,44 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		assertNoCheckpointEvent(t, subscriber)
 	})
 
+	t.Run("should report intercepted_at as the RFC 3339 time of each hold", func(t *testing.T) {
+		server, proxy := newCheckpointServer(t)
+		proxy.SetIntercept(true)
+		before := time.Now()
+		_, reqID, reqDone := startCheckpointHTTPHold(t, proxy)
+		waitForCheckpointItems(t, proxy, 1)
+		after := time.Now()
+		messageID, messageDone := startCheckpointWebSocketHold(t, proxy)
+		waitForCheckpointItems(t, proxy, 2)
+		t.Cleanup(func() {
+			_ = proxy.DropCheckpoint(reqID)
+			_ = proxy.DropCheckpoint(messageID)
+			drainCheckpointHold(t, reqDone)
+			drainCheckpointHold(t, messageDone)
+		})
+
+		var list struct {
+			Items []struct {
+				ID            uuid.UUID `json:"id"`
+				InterceptedAt string    `json:"intercepted_at"`
+			} `json:"items"`
+		}
+		response := requestControlAPI(server, http.MethodGet, "/checkpoint", "")
+		if err := json.Unmarshal(response.Body.Bytes(), &list); err != nil {
+			t.Fatalf("decoding checkpoint list: %v", err)
+		}
+		if len(list.Items) != 2 || list.Items[0].ID != reqID || list.Items[1].ID != messageID {
+			t.Fatalf("\nwanted:\n%s %s\ngot:\n%s", reqID, messageID, response.Body)
+		}
+		heldAt, err := time.Parse(time.RFC3339, list.Items[0].InterceptedAt)
+		if err != nil || heldAt.Before(before) || heldAt.After(after) {
+			t.Fatalf("\nwanted:\nRFC 3339 time between %s and %s\ngot:\n%q (%v)", before, after, list.Items[0].InterceptedAt, err)
+		}
+		if list.Items[1].InterceptedAt != checkpointMessageHeldAt {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", checkpointMessageHeldAt, list.Items[1].InterceptedAt)
+		}
+	})
+
 	t.Run("should publish held as the get-by-id object", func(t *testing.T) {
 		server, proxy := newCheckpointServer(t)
 		subscriber := server.events.subscribe()
@@ -273,7 +312,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 			drainCheckpointHold(t, done)
 		})
 
-		want := fmt.Sprintf(`{"id":"%s","type":"request","raw":"%s"}`, reqID, dumpCheckpointRequest(t, req))
+		want := fmt.Sprintf(`{"id":"%s","type":"request","raw":"%s","intercepted_at":"%s"}`, reqID, dumpCheckpointRequest(t, req), checkpointHeldAt(t, proxy, reqID))
 		waitCheckpointEvent(t, subscriber, "checkpoint.held", want)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint/"+reqID.String(), ""), http.StatusOK, want+"\n")
 		assertNoCheckpointEvent(t, subscriber)
@@ -291,7 +330,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		})
 
 		want := fmt.Sprintf(
-			`{"id":"%s","type":"websocket","payload":"%s","opcode":1,"direction":"client","connection_id":"%s","request_id":"%s"}`,
+			`{"id":"%s","type":"websocket","payload":"%s","opcode":1,"direction":"client","connection_id":"%s","request_id":"%s","intercepted_at":"`+checkpointMessageHeldAt+`"}`,
 			messageID, base64.StdEncoding.EncodeToString([]byte("held")),
 			uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809"),
 			uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a"),
@@ -421,8 +460,8 @@ func TestCheckpointEventFrames(t *testing.T) {
 	req, reqID, done := startCheckpointHTTPHold(t, proxy)
 	waitForCheckpointItems(t, proxy, 1)
 	wantHeld := fmt.Sprintf(
-		"event: checkpoint.held\ndata: {\"id\":\"%s\",\"type\":\"request\",\"raw\":\"%s\"}\n\n",
-		reqID, dumpCheckpointRequest(t, req),
+		"event: checkpoint.held\ndata: {\"id\":\"%s\",\"type\":\"request\",\"raw\":\"%s\",\"intercepted_at\":\"%s\"}\n\n",
+		reqID, dumpCheckpointRequest(t, req), checkpointHeldAt(t, proxy, reqID),
 	)
 	if got := readEventFrame(t, reader); got != wantHeld {
 		t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantHeld, got)
@@ -575,6 +614,9 @@ func startCheckpointHTTPResponseHold(t *testing.T, proxy *marasi.Proxy) (uuid.UU
 	return reqID, done
 }
 
+// checkpointMessageHeldAt is the intercepted_at of the message startCheckpointWebSocketHold holds.
+const checkpointMessageHeldAt = "2026-10-31T09:00:00Z"
+
 func startCheckpointWebSocketHold(t *testing.T, proxy *marasi.Proxy) (uuid.UUID, <-chan error) {
 	t.Helper()
 	messageID := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780b")
@@ -584,6 +626,7 @@ func startCheckpointWebSocketHold(t *testing.T, proxy *marasi.Proxy) (uuid.UUID,
 		RequestID:    uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a"),
 		Direction:    marasiws.DirectionFromClient,
 		Opcode:       marasiws.OpText, Payload: []byte("held"),
+		CreatedAt: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC),
 	}
 	done := make(chan error, 1)
 	go func() {
@@ -626,6 +669,16 @@ func drainCheckpointHold(t *testing.T, result <-chan error) {
 	case <-result:
 	case <-time.After(2 * time.Second):
 	}
+}
+
+// checkpointHeldAt returns the held HTTP item's hold time as the control API writes it.
+func checkpointHeldAt(t *testing.T, proxy *marasi.Proxy, id uuid.UUID) string {
+	t.Helper()
+	item, ok := proxy.GetCheckpoint(id)
+	if !ok {
+		t.Fatalf("checkpoint item %s missing", id)
+	}
+	return item.InterceptedAt.Format(time.RFC3339Nano)
 }
 
 func dumpCheckpointRequest(t *testing.T, req *http.Request) string {

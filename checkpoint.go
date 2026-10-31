@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
@@ -60,6 +61,8 @@ type checkpointState struct {
 	order       []uuid.UUID
 	wsConn      map[uuid.UUID]uuid.UUID
 	holdStarted chan struct{}
+	// now stamps each HTTP hold; tests replace it to pin the time.
+	now func() time.Time
 }
 
 func newCheckpointState() *checkpointState {
@@ -67,6 +70,7 @@ func newCheckpointState() *checkpointState {
 		http:        make(map[uuid.UUID]*pendingHTTP),
 		wsConn:      make(map[uuid.UUID]uuid.UUID),
 		holdStarted: make(chan struct{}),
+		now:         time.Now,
 	}
 }
 
@@ -90,6 +94,9 @@ func checkpointItemFromWebSocket(message domain.WebSocketMessage) domain.Checkpo
 		Direction:    message.Direction,
 		ConnectionID: message.ConnectionID,
 		RequestID:    message.RequestID,
+		// A message is held at most once, right after the proxy reads it and
+		// runs its hooks, so the time the proxy observed it stands for its hold.
+		InterceptedAt: message.CreatedAt,
 	}
 }
 
@@ -272,6 +279,7 @@ func (proxy *Proxy) holdHTTP(item domain.CheckpointItem, req *http.Request, res 
 		proxy.checkpoint = newCheckpointState()
 	}
 
+	item.InterceptedAt = proxy.checkpoint.now()
 	pending := &pendingHTTP{
 		item: item,
 		req:  req,
