@@ -1,14 +1,17 @@
 package service
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/compass"
 )
 
 type scopeCheckRequest struct {
@@ -16,20 +19,39 @@ type scopeCheckRequest struct {
 }
 
 type scopeCheckResponse struct {
-	InScope        bool            `json:"in_scope"`
-	TestedURL      string          `json:"tested_url"`
-	Rule           *scopeCheckRule `json:"rule"`
-	CompassEnabled bool            `json:"compass_enabled"`
+	InScope        bool       `json:"in_scope"`
+	TestedURL      string     `json:"tested_url"`
+	Rule           *scopeRule `json:"rule"`
+	CompassEnabled bool       `json:"compass_enabled"`
 }
 
-type scopeCheckRule struct {
+type scopeRule struct {
 	Pattern   string `json:"pattern"`
 	MatchType string `json:"match_type"`
+}
+
+type scopeListResponse struct {
+	DefaultAllow bool        `json:"default_allow"`
+	Include      []scopeRule `json:"include"`
+	Exclude      []scopeRule `json:"exclude"`
 }
 
 var errInvalidScopeRequest = errors.New("invalid scope request")
 
 func addScopeRoutes(mux routeMux, proxy *marasi.Proxy) {
+	mux.HandleFunc("GET /scope", func(w http.ResponseWriter, r *http.Request) {
+		if proxy == nil || proxy.Scope == nil {
+			writeScopeCheckError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		includeRules, excludeRules, defaultAllow := proxy.Scope.Snapshot()
+		writeJSON(w, r, http.StatusOK, scopeListResponse{
+			DefaultAllow: defaultAllow,
+			Include:      sortedScopeRules(includeRules),
+			Exclude:      sortedScopeRules(excludeRules),
+		})
+	})
+
 	mux.HandleFunc("POST /scope/check", func(w http.ResponseWriter, r *http.Request) {
 		urlInput, err := decodeScopeCheckRequest(r)
 		if err != nil {
@@ -50,9 +72,9 @@ func addScopeRoutes(mux routeMux, proxy *marasi.Proxy) {
 
 		request := &http.Request{URL: parsedURL, Host: parsedURL.Host}
 		inScope, matchedRule := proxy.Scope.MatchesWithRule(request)
-		var rule *scopeCheckRule
+		var rule *scopeRule
 		if matchedRule != nil {
-			rule = &scopeCheckRule{
+			rule = &scopeRule{
 				Pattern:   matchedRule.Pattern.String(),
 				MatchType: matchedRule.MatchType,
 			}
@@ -70,6 +92,19 @@ func addScopeRoutes(mux routeMux, proxy *marasi.Proxy) {
 			CompassEnabled: compassEnabled,
 		})
 	})
+}
+
+// sortedScopeRules orders rules by pattern then match type, because the scope
+// keeps them in maps (CODING_STANDARDS "Deterministic output").
+func sortedScopeRules(rules map[string]compass.Rule) []scopeRule {
+	sorted := make([]scopeRule, 0, len(rules))
+	for _, rule := range rules {
+		sorted = append(sorted, scopeRule{Pattern: rule.Pattern.String(), MatchType: rule.MatchType})
+	}
+	slices.SortFunc(sorted, func(a, b scopeRule) int {
+		return cmp.Or(strings.Compare(a.Pattern, b.Pattern), strings.Compare(a.MatchType, b.MatchType))
+	})
+	return sorted
 }
 
 func decodeScopeCheckRequest(r *http.Request) (string, error) {
