@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 // projectSuffix ends every project file name.
@@ -33,10 +34,12 @@ func CreateProjectsDir(configDir string) error {
 	return nil
 }
 
-// ProjectListItem is one named project: its name and canonical path.
+// ProjectListItem is one named project: its name, canonical path, and the
+// project file's modification time in UTC.
 type ProjectListItem struct {
-	Name    string `json:"name"`
-	Project string `json:"project"`
+	Name       string    `json:"name"`
+	Project    string    `json:"project"`
+	ModifiedAt time.Time `json:"modified_at"`
 }
 
 // ProjectList is the body of the project list: the CLI's --json output and
@@ -47,8 +50,9 @@ type ProjectList struct {
 
 // ListProjects lists the named projects in configDir's projects directory,
 // sorted by name. It follows symlinks, so two symlinks to one file are two
-// items (docs/adr/2026-10-06-project-list-follows-symlinks.md), and skips
-// directories. A missing projects directory is an empty list.
+// items (docs/adr/2026-10-06-project-list-follows-symlinks.md), each with
+// its target's modification time, and skips directories. A missing projects
+// directory is an empty list.
 func ListProjects(configDir string) ([]ProjectListItem, error) {
 	projectsDir := ProjectsDir(configDir)
 	entries, err := os.ReadDir(projectsDir)
@@ -77,8 +81,9 @@ func ListProjects(configDir string) ([]ProjectListItem, error) {
 			return nil, fmt.Errorf("resolving project %s: %w", path, err)
 		}
 		items = append(items, ProjectListItem{
-			Name:    strings.TrimSuffix(entry.Name(), projectSuffix),
-			Project: canonicalPath,
+			Name:       strings.TrimSuffix(entry.Name(), projectSuffix),
+			Project:    canonicalPath,
+			ModifiedAt: info.ModTime().UTC(),
 		})
 	}
 	slices.SortFunc(items, func(left, right ProjectListItem) int {
