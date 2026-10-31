@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -295,6 +296,30 @@ func TestServiceEvents(t *testing.T) {
 			}
 		case <-time.After(time.Second):
 			t.Fatal("\nwanted:\nhandlers to return while the subscriber is not reading\ngot:\nblocked publication")
+		}
+	})
+}
+
+func TestProjectOpenEvents(t *testing.T) {
+	t.Run("should frame project open progress for event clients", func(t *testing.T) {
+		server, lifecycle, _, _ := newProjectOpenServer(t)
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		response, reader := connectEventStream(t, httpServer.URL)
+		defer response.Body.Close()
+
+		lifecycle.opening("/projects/next.marasi")
+		lifecycle.upgrading("/projects/next.marasi", db.MigrationStep{Migration: "00026_pair_route.sql", Applied: 1, Total: 2})
+		lifecycle.openingFailed("/projects/next.marasi", errors.New("applying migration: disk full"))
+
+		for _, want := range []string{
+			"event: project.opening\ndata: {\"project\":\"/projects/next.marasi\"}\n\n",
+			"event: project.upgrading\ndata: {\"project\":\"/projects/next.marasi\",\"migration\":\"00026_pair_route.sql\",\"applied\":1,\"total\":2}\n\n",
+			"event: project.opening_failed\ndata: {\"project\":\"/projects/next.marasi\",\"error\":\"applying migration: disk full\"}\n\n",
+		} {
+			if got := readEventFrame(t, reader); got != want {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+			}
 		}
 	})
 }

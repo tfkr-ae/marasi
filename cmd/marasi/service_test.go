@@ -3183,7 +3183,8 @@ func readControlEventSkippingLogs(t *testing.T, reader *bufio.Reader, want strin
 		if name == want {
 			return name, data
 		}
-		if name != "log.added" {
+		// A switch announces its progress, and a cancelled one its failure.
+		if name != "log.added" && !strings.HasPrefix(name, "project.opening") && name != "project.upgrading" {
 			t.Fatalf("wanted %s event, got %s %s", want, name, data)
 		}
 	}

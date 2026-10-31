@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -634,10 +635,16 @@ func TestProjectEvents(t *testing.T) {
 					return
 				}
 				frame += line
-				if line == "\n" {
-					events <- frame
-					return
+				if line != "\n" {
+					continue
 				}
+				// Announced before the target is prepared; the next subtest checks them.
+				if strings.HasPrefix(frame, "event: project.opening\n") || strings.HasPrefix(frame, "event: project.upgrading\n") {
+					frame = ""
+					continue
+				}
+				events <- frame
+				return
 			}
 		}()
 		result := make(chan *httptest.ResponseRecorder, 1)
@@ -688,6 +695,153 @@ func TestProjectEvents(t *testing.T) {
 			t.Fatalf("\nwanted:\ntraffic.request after project.opened\ngot:\n%s", got)
 		}
 	})
+
+	t.Run("should announce a switch, each migration, its waits, then project.opened", func(t *testing.T) {
+		server, lifecycle, dir, _ := newProjectOpenServer(t)
+		lifecycle.waitReportDelay = 10 * time.Millisecond
+		target := canonicalProjectPath(t, filepath.Join(dir, "upgraded.marasi"))
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		stream, reader := connectEventStream(t, httpServer.URL)
+		defer stream.Body.Close()
+
+		release, err := lifecycle.Admit(context.Background())
+		if err != nil {
+			t.Fatalf("admitting work: %v", err)
+		}
+		result := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			result <- requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(target))
+		}()
+
+		wantOpening := fmt.Sprintf("event: project.opening\ndata: {\"project\":%q}\n\n", target)
+		if got := readEventFrame(t, reader); got != wantOpening {
+			release()
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantOpening, got)
+		}
+		migrations := projectMigrationNames(t)
+		for index, migration := range migrations {
+			want := fmt.Sprintf("event: project.upgrading\ndata: {\"project\":%q,\"migration\":%q,\"applied\":%d,\"total\":%d}\n\n", target, migration, index+1, len(migrations))
+			if got := readEventFrame(t, reader); got != want {
+				release()
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+			}
+		}
+		wantWaiting := fmt.Sprintf("event: project.waiting\ndata: {\"project\":%q,\"waiting_for\":[{\"kind\":\"work\",\"count\":1}]}\n\n", target)
+		if got := readEventFrame(t, reader); got != wantWaiting {
+			release()
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantWaiting, got)
+		}
+		release()
+		wantOpened := fmt.Sprintf("event: project.opened\ndata: {\"project\":%q}\n\n", target)
+		if got := readEventFrame(t, reader); got != wantOpened {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantOpened, got)
+		}
+		if response := <-result; response.Code != http.StatusOK {
+			t.Fatalf("opening target: %d %s", response.Code, response.Body.String())
+		}
+
+		// The previous project is up to date, so switching back upgrades nothing.
+		response := requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(filepath.Join(dir, "current.marasi")))
+		if response.Code != http.StatusOK {
+			t.Fatalf("switching back: %d %s", response.Code, response.Body.String())
+		}
+		current := canonicalProjectPath(t, filepath.Join(dir, "current.marasi"))
+		for _, want := range []string{
+			fmt.Sprintf("event: project.opening\ndata: {\"project\":%q}\n\n", current),
+			fmt.Sprintf("event: project.opened\ndata: {\"project\":%q}\n\n", current),
+		} {
+			if got := readEventFrame(t, reader); got != want {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+			}
+		}
+	})
+
+	t.Run("should publish project.opening_failed when a switch fails", func(t *testing.T) {
+		server, _, dir, _ := newProjectOpenServer(t)
+		owned := canonicalProjectPath(t, filepath.Join(dir, "owned.marasi"))
+		held, err := acquireProjectOwnership(owned)
+		if err != nil {
+			t.Fatalf("holding target ownership: %v", err)
+		}
+		defer held()
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		stream, reader := connectEventStream(t, httpServer.URL)
+		defer stream.Body.Close()
+
+		response := requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(owned))
+		assertProjectError(t, response, http.StatusConflict, "project_already_open")
+		for _, want := range []string{
+			fmt.Sprintf("event: project.opening\ndata: {\"project\":%q}\n\n", owned),
+			fmt.Sprintf("event: project.opening_failed\ndata: {\"project\":%q,\"error\":%q}\n\n", owned, "project already open: "+owned),
+		} {
+			if got := readEventFrame(t, reader); got != want {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+			}
+		}
+	})
+
+	t.Run("should not publish project.opening_failed when only the old project's cleanup fails", func(t *testing.T) {
+		server, lifecycle, dir, _ := newProjectOpenServer(t)
+		target := canonicalProjectPath(t, filepath.Join(dir, "cleanup.marasi"))
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		stream, reader := connectEventStream(t, httpServer.URL)
+		defer stream.Body.Close()
+
+		realUnlock := lifecycle.open.unlock
+		lifecycle.open.unlock = func() error {
+			return errors.Join(realUnlock(), errors.New("release failed"))
+		}
+		response := requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(target))
+		assertProjectError(t, response, http.StatusInternalServerError, "project_cleanup_failed")
+		// Every event of the open is queued before it returns, so the
+		// marker comes after any project.opening_failed.
+		server.events.publish("test.marker", struct{}{})
+		var got []string
+		for {
+			frame := readEventFrame(t, reader)
+			if frame == "event: test.marker\ndata: {}\n\n" {
+				break
+			}
+			if !strings.HasPrefix(frame, "event: project.upgrading\n") {
+				got = append(got, frame)
+			}
+		}
+		want := []string{
+			fmt.Sprintf("event: project.opening\ndata: {\"project\":%q}\n\n", target),
+			fmt.Sprintf("event: project.opened\ndata: {\"project\":%q}\n\n", target),
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", strings.Join(want, ""), strings.Join(got, ""))
+		}
+	})
+}
+
+// isProjectOpenProgress reports whether name announces a switch still in
+// progress, which tests about other events skip.
+func isProjectOpenProgress(name string) bool {
+	return name == "project.opening" || name == "project.upgrading"
+}
+
+// projectMigrationNames lists the migration files db.New applies, in order.
+func projectMigrationNames(t *testing.T) []string {
+	t.Helper()
+	var names []string
+	for _, pattern := range []string{"0*_*.sql", "0*_*.go"} {
+		matches, err := filepath.Glob(filepath.Join("..", "db", "migrations", pattern))
+		if err != nil {
+			t.Fatalf("listing migrations: %v", err)
+		}
+		for _, match := range matches {
+			if !strings.HasSuffix(match, "_test.go") {
+				names = append(names, filepath.Base(match))
+			}
+		}
+	}
+	slices.Sort(names)
+	return names
 }
 
 func TestProjectOpenHTTPServer(t *testing.T) {
