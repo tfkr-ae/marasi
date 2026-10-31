@@ -15,6 +15,7 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Events | `events`, `traffic bulk highlight` | [events](events.md) |
 | Launchpad | `launchpad create`, `launchpad list`, `launchpad get`, `launchpad update`, `launchpad link`, `launchpad unlink`, `launchpad move`, `launchpad launch`, `launchpad pending`, `launchpad status`, `launchpad cancel`, `traffic bulk link`, `traffic bulk unlink` | [launchpad](launchpad.md) |
 | Background jobs | `jobs list`, `jobs rebuild` | [jobs](jobs.md) |
+| Dashboard counts | `dashboard` | [dashboard](dashboard.md) |
 | Client settings | `settings list`, `settings get`, `settings set`, `settings delete` | [settings](settings.md) |
 | Test case | `test-case create`, `test-case list`, `test-case get`, `test-case list-requests`, `test-case update`, `test-case delete`, `test-case link`, `test-case unlink`, `test-case checklist` | [test case](test-case.md) |
 | Finding | `finding create`, `finding list`, `finding get`, `finding list-requests`, `finding update`, `finding delete`, `finding link`, `finding unlink` | [finding](finding.md) |
