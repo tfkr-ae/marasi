@@ -190,7 +190,7 @@ marasi extension api req
 
 Call library functions and object methods with `:`, for example `marasi.strings:upper(s)` and `request:method()`. A call with `.` passes the wrong arguments. The sandbox has no `string`, `io`, or `os` library. `drop()` stops a request, response, or message from being sent on. A Lua error in a hook is logged and the item continues. A hook interrupted by a project switch, service stop, or client disconnect drops the item.
 
-Replace the source with `extension update`, which runs it at once, then check `extension logs` and the affected traffic.
+Replace the source with `extension update`, which runs it at once, then check `extension logs` and the affected traffic. While an extension is enabled, `events` also shows each print line as `extension.log`, and each `marasi.gui:render` and `marasi.gui:update` call as `extension.gui.rendered` and `extension.gui.updated`.
 
 ## Verify and finish
 

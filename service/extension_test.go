@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -1351,4 +1352,87 @@ type extensionLuaHold struct {
 	entered chan struct{}
 	release chan struct{}
 	nested  chan struct{}
+}
+
+func TestExtensionGUIEvents(t *testing.T) {
+	t.Run("should announce render and update on /events", func(t *testing.T) {
+		_, runtime, reader := openExtensionEventInstance(t)
+
+		err := runtime.ExecuteLua(`assert(marasi.gui.type == "marasi-service")
+marasi.gui:render("main", {title = "Scan", items = {"a", "b"}})
+marasi.gui:update("progress", 42)`)
+		if err != nil {
+			t.Fatalf("running gui calls: %v", err)
+		}
+
+		id := runtime.Data.ID.String()
+		for _, want := range []serviceEvent{
+			{name: "extension.gui.rendered", data: []byte(`{"id":"` + id + `","name":"workshop","target":"main","schema":{"items":["a","b"],"title":"Scan"}}`)},
+			{name: "extension.gui.updated", data: []byte(`{"id":"` + id + `","name":"workshop","key":"progress","value":42}`)},
+		} {
+			got := nextHTTPServiceEvent(t, reader)
+			if got.name != want.name || string(got.data) != string(want.data) {
+				t.Fatalf("\nwanted:\n%s %s\ngot:\n%s %s", want.name, want.data, got.name, got.data)
+			}
+		}
+	})
+
+	t.Run("should announce nothing while the extension is disabled", func(t *testing.T) {
+		proxy, runtime, reader := openExtensionEventInstance(t)
+		repo, err := proxy.GetExtensionRepo()
+		if err != nil {
+			t.Fatalf("getting extension repo: %v", err)
+		}
+
+		if err := runtime.SetEnabled(repo, false); err != nil {
+			t.Fatalf("disabling workshop: %v", err)
+		}
+		err = runtime.ExecuteLua(`marasi.gui:render("toast", {message = "hidden"})
+marasi.gui:update("hidden", true)
+print("hidden")`)
+		if err != nil {
+			t.Fatalf("running disabled gui calls: %v", err)
+		}
+		if err := runtime.SetEnabled(repo, true); err != nil {
+			t.Fatalf("enabling workshop: %v", err)
+		}
+		if err := runtime.ExecuteLua(`marasi.gui:update("shown", true)`); err != nil {
+			t.Fatalf("running enabled gui call: %v", err)
+		}
+
+		// Events arrive in publish order, so the first one is the first call
+		// made after the extension was enabled again.
+		want := `{"id":"` + runtime.Data.ID.String() + `","name":"workshop","key":"shown","value":true}`
+		got := nextHTTPServiceEvent(t, reader)
+		if got.name != "extension.gui.updated" || string(got.data) != want {
+			t.Fatalf("\nwanted:\nextension.gui.updated %s\ngot:\n%s %s", want, got.name, got.data)
+		}
+	})
+}
+
+// openExtensionEventInstance opens a project wired the way cmd/marasi wires a
+// service instance: extensions get the listener lifecycle's ExtensionEvents.
+// It returns the proxy, the project's workshop runtime and a reader on /events.
+func openExtensionEventInstance(t *testing.T) (*marasi.Proxy, *extensions.Runtime, *bufio.Reader) {
+	t.Helper()
+	var listener *listenerLifecycle
+	lifecycle, proxy, dir := newTestProjectLifecycle(t, func(runtime *extensions.Runtime) error {
+		return listener.ExtensionEvents(runtime)
+	})
+	listener = NewListenerLifecycle(proxy, io.Discard)
+	t.Cleanup(func() { _ = listener.Shutdown() })
+	listener.BindProject(lifecycle)
+	project := canonicalProjectPath(t, filepath.Join(dir, "extension-events.marasi"))
+	if err := lifecycle.Open(t.Context(), project); err != nil {
+		t.Fatalf("opening project: %v", err)
+	}
+	server := NewServer(proxy, listener, lifecycle, func() {}, "test-version", "test-instance", project)
+	reader := connectServiceEvents(t, server)
+	for _, runtime := range proxy.Extensions {
+		if runtime.Data.Name == "workshop" {
+			return proxy, runtime, reader
+		}
+	}
+	t.Fatal("workshop extension was not loaded")
+	return nil, nil, nil
 }

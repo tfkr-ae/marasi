@@ -7,6 +7,7 @@ Users subscribe to a running instance and print live named events until the stre
 - Subscribe with `events`.
 - Print `traffic.request` and `traffic.response` for proxied exchanges.
 - Print listener, project, launchpad, test-case, finding, artifact, note, metadata, checkpoint, Chrome path/profile, waypoint, wordlist, Armory template/run, extension, WebSocket, report-template, and log (`log.added`) events from those CLI operations.
+- Print `extension.log`, `extension.gui.rendered`, and `extension.gui.updated` when an enabled extension's Lua prints or calls `marasi.gui`; see [extension](extension.md).
 - Print `traffic.changed` for each `traffic bulk` command, and `sitemap.changed` after `traffic bulk delete` and `jobs rebuild sitemap`.
 - Choose human-readable or `--json` output.
 
@@ -39,3 +40,4 @@ Start `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANC
 - `DELETE /launchpad/{id}/link/{request_id}` publishes `launchpad.unlinked` with `{"launchpad_id","request_id"}`, the same shape as `launchpad.linked`.
 - `POST /launchpad/{id}/move` (`launchpad move`) publishes one `launchpad.entries_moved` with `{"source_launchpad_id","target_launchpad_id","request_ids"}`, the moved pair ids in their new entry order, and nothing when the move is refused. Clients re-read the pads it names.
 - Report template event names are `report.template.added`, `report.template.removed`, and `report.template.restored`. Export does not publish an event.
+- Extension Lua publishes `extension.log` with `{"id","name","time","text"}` for each print line, `extension.gui.rendered` with `{"id","name","target","schema"}` for `marasi.gui:render`, and `extension.gui.updated` with `{"id","name","key","value"}` for `marasi.gui:update`, in call order. A disabled extension publishes none of them.

@@ -11,7 +11,9 @@ import (
 // TestReferenceMatchesLiveState walks the Lua state an extension runs in and
 // compares every name it finds with Reference, in both directions.
 func TestReferenceMatchesLiveState(t *testing.T) {
-	ext, _ := setupTestExtension(t, "")
+	// marasi.gui is an embedder's option rather than part of registerAPI, so
+	// the live state gets it the way a service instance does.
+	ext, _ := setupTestExtension(t, "", WithGUI(GUI{Type: ServiceGUIType, Render: func(string, any) {}, Update: func(string, any) {}}))
 	l := ext.LuaState
 	ref := Reference()
 

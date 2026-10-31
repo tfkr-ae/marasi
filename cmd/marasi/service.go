@@ -542,8 +542,8 @@ func startServiceInstance(ctx context.Context, options serviceOptions, ready fun
 		resultErr = errors.Join(resultErr, cleanupService(closeProxy, closeProject, releaseClaim))
 	}()
 
-	projects := service.NewProjectLifecycle(proxy, options.configDir, wordlists, logger)
 	listenerLifecycle := service.NewListenerLifecycle(proxy, logFile)
+	projects := service.NewProjectLifecycle(proxy, options.configDir, wordlists, logger, listenerLifecycle.ExtensionEvents)
 	var shutdownOnce sync.Once
 	var shutdownErr error
 	closeProxy = func() error {
