@@ -116,7 +116,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		if err := receiveCheckpointHold(t, done); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
-		assertCheckpointEvent(t, subscriber, "checkpoint.forwarded", fmt.Sprintf(`{"id":"%s","type":"request"}`, reqID))
+		assertCheckpointEvent(t, subscriber, "checkpoint.forwarded", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"forwarded"}`, reqID))
 	})
 
 	t.Run("should drop an item and ignore a second resolve", func(t *testing.T) {
@@ -139,12 +139,12 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		if err := receiveCheckpointHold(t, firstDone); !errors.Is(err, marasi.ErrDropped) {
 			t.Fatalf("wanted: %v\ngot: %v", marasi.ErrDropped, err)
 		}
-		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request"}`, firstID))
+		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"dropped"}`, firstID))
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+secondID.String()+"/drop", `{}`), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false}`+"\n")
 		if err := receiveCheckpointHold(t, secondDone); !errors.Is(err, marasi.ErrDropped) {
 			t.Fatalf("wanted: %v\ngot: %v", marasi.ErrDropped, err)
 		}
-		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request"}`, secondID))
+		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"dropped"}`, secondID))
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+secondID.String()+"/drop", ""), http.StatusNotFound, `{"error":"not_found"}`+"\n")
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+secondID.String()+"/forward", `{}`), http.StatusNotFound, `{"error":"not_found"}`+"\n")
 		assertNoCheckpointEvent(t, subscriber)
@@ -165,7 +165,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		if err := receiveCheckpointHold(t, done); !errors.Is(err, marasi.ErrDropped) {
 			t.Fatalf("wanted: %v\ngot: %v", marasi.ErrDropped, err)
 		}
-		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request"}`, reqID))
+		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"abandoned"}`, reqID))
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint", ""), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false}`+"\n")
 		assertNoCheckpointEvent(t, subscriber)
 	})
@@ -213,7 +213,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		if err := receiveCheckpointHold(t, done); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
-		assertCheckpointEvent(t, subscriber, "checkpoint.forwarded", fmt.Sprintf(`{"id":"%s","type":"request"}`, reqID))
+		assertCheckpointEvent(t, subscriber, "checkpoint.forwarded", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"forwarded"}`, reqID))
 	})
 
 	t.Run("should reject intercept_response on a response item", func(t *testing.T) {
@@ -314,7 +314,23 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		if err := receiveCheckpointHold(t, done); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
-		assertCheckpointEvent(t, subscriber, "checkpoint.forwarded", fmt.Sprintf(`{"id":"%s","type":"websocket"}`, messageID))
+		assertCheckpointEvent(t, subscriber, "checkpoint.forwarded", fmt.Sprintf(`{"id":"%s","type":"websocket","request_id":"%s","reason":"forwarded"}`, messageID, uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a")))
+	})
+
+	t.Run("should publish a websocket drop with its request_id", func(t *testing.T) {
+		server, proxy := newCheckpointServer(t)
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+		messageID, done := startCheckpointWebSocketHold(t, proxy)
+		waitForCheckpointItems(t, proxy, 1)
+		drainCheckpointHeld(t, subscriber)
+
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+messageID.String()+"/drop", ""), http.StatusOK, `{"items":[],"intercept":false,"websocket_intercept":false}`+"\n")
+		drainCheckpointHold(t, done)
+		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(
+			`{"id":"%s","type":"websocket","request_id":"%s","reason":"dropped"}`,
+			messageID, uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a"),
+		))
 	})
 
 	t.Run("should reject intercept_response on a websocket item", func(t *testing.T) {
@@ -353,7 +369,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		if err := receiveCheckpointHold(t, done); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
-		assertCheckpointEvent(t, subscriber, "checkpoint.forwarded", fmt.Sprintf(`{"id":"%s","type":"request"}`, reqID))
+		assertCheckpointEvent(t, subscriber, "checkpoint.forwarded", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"forwarded"}`, reqID))
 	})
 
 	t.Run("should set intercept without waiting on the project write gate", func(t *testing.T) {
@@ -402,8 +418,8 @@ func TestCheckpointServiceStop(t *testing.T) {
 		if err := receiveCheckpointHold(t, messageDone); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
-		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request"}`, reqID))
-		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"websocket"}`, messageID))
+		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"shutdown"}`, reqID))
+		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"websocket","request_id":"%s","reason":"shutdown"}`, messageID, uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a")))
 		if proxy.HasPendingCheckpoint() {
 			t.Fatal("wanted no pending checkpoint items after stop")
 		}
@@ -430,7 +446,7 @@ func TestCheckpointEventFrames(t *testing.T) {
 
 	response := sendCheckpointRequest(t, http.MethodPost, httpServer.URL+"/checkpoint/"+reqID.String()+"/forward", `{}`)
 	response.Body.Close()
-	wantForwarded := fmt.Sprintf("event: checkpoint.forwarded\ndata: {\"id\":\"%s\",\"type\":\"request\"}\n\n", reqID)
+	wantForwarded := fmt.Sprintf("event: checkpoint.forwarded\ndata: {\"id\":\"%s\",\"type\":\"request\",\"request_id\":null,\"reason\":\"forwarded\"}\n\n", reqID)
 	if got := readEventFrame(t, reader); got != wantForwarded {
 		t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantForwarded, got)
 	}
@@ -445,7 +461,7 @@ func TestCheckpointEventFrames(t *testing.T) {
 	}
 	response = sendCheckpointRequest(t, http.MethodPost, httpServer.URL+"/checkpoint/"+dropID.String()+"/drop", "")
 	response.Body.Close()
-	wantDropped := fmt.Sprintf("event: checkpoint.dropped\ndata: {\"id\":\"%s\",\"type\":\"request\"}\n\n", dropID)
+	wantDropped := fmt.Sprintf("event: checkpoint.dropped\ndata: {\"id\":\"%s\",\"type\":\"request\",\"request_id\":null,\"reason\":\"dropped\"}\n\n", dropID)
 	if got := readEventFrame(t, reader); got != wantDropped {
 		t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantDropped, got)
 	}

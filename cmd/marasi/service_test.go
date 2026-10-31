@@ -2830,7 +2830,7 @@ func TestStartService(t *testing.T) {
 			stopErr <- stopService(context.Background(), instancePath)
 		}()
 		eventName, eventData = readControlEventSkippingLogs(t, reader, "checkpoint.dropped")
-		wantDropped := fmt.Sprintf(`{"id":"%s","type":"request"}`, held.ID)
+		wantDropped := fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"shutdown"}`, held.ID)
 		if eventName != "checkpoint.dropped" || eventData != wantDropped {
 			t.Fatalf("\nwanted:\ncheckpoint.dropped %s\ngot:\n%s %s", wantDropped, eventName, eventData)
 		}
