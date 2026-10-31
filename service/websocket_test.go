@@ -108,6 +108,108 @@ func TestWebSocketConnectionControlRoutesAndEvents(t *testing.T) {
 	assertWebSocketControlResponse(t, control.URL+"/traffic/"+opened.RequestID.String()+"/websocket", http.StatusOK, closedBody)
 }
 
+func TestWebSocketHandshakeEndedEvent(t *testing.T) {
+	t.Run("should publish failed when the upstream accepts what the proxy cannot honour", func(t *testing.T) {
+		control, originURL, proxyAddress, _, _ := newWebSocketControlFixture(t)
+		stream, events := connectEventStream(t, control.URL)
+		defer stream.Body.Close()
+
+		// The fixture origin accepts client_max_window_bits=10, above the offered 9.
+		connection, _ := upgradeWebSocketThroughProxy(t, proxyAddress, originURL, "permessage-deflate; client_max_window_bits=9")
+		defer connection.Close()
+
+		assertWebSocketHandshakeEnded(t, control.URL, events, "failed")
+	})
+
+	t.Run("should publish dropped when Checkpoint drops the upgrade response", func(t *testing.T) {
+		control, originURL, proxyAddress, proxy, _ := newWebSocketControlFixture(t)
+		stream, events := connectEventStream(t, control.URL)
+		defer stream.Body.Close()
+		proxy.SetIntercept(true)
+
+		connection, _ := upgradeWebSocketThroughProxy(t, proxyAddress, originURL)
+		defer connection.Close()
+		requestItem := waitForCheckpointItem(t, control.URL, "request")
+		postWebSocketControl(t, control.URL+"/checkpoint/"+requestItem.String()+"/forward", `{}`)
+		responseItem := waitForCheckpointItem(t, control.URL, "response")
+		postWebSocketControl(t, control.URL+"/checkpoint/"+responseItem.String()+"/drop", `{}`)
+
+		assertWebSocketHandshakeEnded(t, control.URL, events, "dropped")
+	})
+}
+
+// assertWebSocketHandshakeEnded reads websocket.handshake_ended and requires
+// GET /traffic/{request_id} to show its state as soon as the event arrives.
+func assertWebSocketHandshakeEnded(t *testing.T, controlURL string, events *bufio.Reader, state string) {
+	t.Helper()
+	data := readWebSocketEventData(t, events, "websocket.handshake_ended")
+	var ended struct {
+		RequestID uuid.UUID `json:"request_id"`
+		State     string    `json:"state"`
+	}
+	if err := json.Unmarshal([]byte(data), &ended); err != nil {
+		t.Fatalf("decoding websocket.handshake_ended: %v", err)
+	}
+	if want := fmt.Sprintf(`{"request_id":%q,"state":%q}`, ended.RequestID, state); data != want {
+		t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, data)
+	}
+
+	response, err := http.Get(controlURL + "/traffic/" + ended.RequestID.String())
+	if err != nil {
+		t.Fatalf("getting traffic: %v", err)
+	}
+	defer response.Body.Close()
+	var pair struct {
+		Metadata map[string]any `json:"metadata"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&pair); err != nil {
+		t.Fatalf("decoding traffic: %v", err)
+	}
+	if got := pair.Metadata["websocket.state"]; got != state {
+		t.Fatalf("\nwanted websocket.state:\n%s\ngot:\n%v", state, got)
+	}
+}
+
+// waitForCheckpointItem returns the ID of the first held Checkpoint item of itemType.
+func waitForCheckpointItem(t *testing.T, controlURL, itemType string) uuid.UUID {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		response, err := http.Get(controlURL + "/checkpoint")
+		if err == nil {
+			var list struct {
+				Items []struct {
+					ID   uuid.UUID `json:"id"`
+					Type string    `json:"type"`
+				} `json:"items"`
+			}
+			decodeErr := json.NewDecoder(response.Body).Decode(&list)
+			response.Body.Close()
+			for _, item := range list.Items {
+				if decodeErr == nil && item.Type == itemType {
+					return item.ID
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for a held %s Checkpoint item", itemType)
+	return uuid.Nil
+}
+
+func postWebSocketControl(t *testing.T, endpoint, body string) {
+	t.Helper()
+	response, err := http.Post(endpoint, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("posting %s: %v", endpoint, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		got, _ := io.ReadAll(response.Body)
+		t.Fatalf("\nwanted:\n%d from %s\ngot:\n%d %s", http.StatusOK, endpoint, response.StatusCode, got)
+	}
+}
+
 func TestWebSocketConnectionNegotiatedExtensions(t *testing.T) {
 	control, originURL, proxyAddress, _, _ := newWebSocketControlFixture(t)
 	stream, events := connectEventStream(t, control.URL)
@@ -1013,6 +1115,7 @@ func newWebSocketControlFixture(t *testing.T, upstreamFrames ...chan marasiws.Fr
 		marasi.WithWebSocketProgressHandler(server.HandleWebSocketProgress),
 		marasi.WithWebSocketCloseHandler(server.HandleWebSocketClose),
 		marasi.WithWebSocketInterceptHandler(server.HandleWebSocketIntercept),
+		marasi.WithWebSocketHandshakeEndedHandler(server.HandleWebSocketHandshakeEnded),
 	); err != nil {
 		_ = proxy.Close()
 		t.Fatalf("installing service handlers: %v", err)

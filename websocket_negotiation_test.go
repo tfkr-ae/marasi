@@ -401,6 +401,89 @@ func TestProxy_WebSocketDeflateNegotiation(t *testing.T) {
 			t.Fatalf("\nwanted:\nwebsocket.state dropped on the upgrade request\ngot:\n%v", result.requestState)
 		}
 	})
+
+	// handshakeEnd is one call of the handshake ended handler, with the
+	// websocket.state stored on the request when it ran.
+	type handshakeEnd struct {
+		state  string
+		stored any
+	}
+	announceHandshakeEnd := func(ends chan<- handshakeEnd) func(*Proxy) {
+		return func(proxy *Proxy) {
+			proxy.TrafficRepo = slowRequestInsertRepo{TrafficRepository: proxy.TrafficRepo, delay: 200 * time.Millisecond}
+			if err := proxy.WithOptions(WithWebSocketHandshakeEndedHandler(func(requestID uuid.UUID, state string) {
+				var stored any
+				if metadata, err := proxy.TrafficRepo.GetMetadata(requestID); err == nil {
+					stored = metadata["websocket.state"]
+				}
+				ends <- handshakeEnd{state: state, stored: stored}
+			})); err != nil {
+				t.Fatalf("installing handshake ended handler: %v", err)
+			}
+		}
+	}
+
+	receiveHandshakeEnd := func(t *testing.T, ends <-chan handshakeEnd) handshakeEnd {
+		t.Helper()
+		select {
+		case end := <-ends:
+			return end
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for the handshake ended handler")
+			return handshakeEnd{}
+		}
+	}
+
+	t.Run("should announce a failed handshake once its state is stored", func(t *testing.T) {
+		ends := make(chan handshakeEnd, 2)
+		negotiateThroughProxy(t,
+			[]string{"permessage-deflate"},
+			[]string{"permessage-deflate; client_max_window_bits=10"},
+			"",
+			announceHandshakeEnd(ends),
+		)
+
+		want := handshakeEnd{state: "failed", stored: "failed"}
+		if got := receiveHandshakeEnd(t, ends); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		select {
+		case extra := <-ends:
+			t.Fatalf("\nwanted:\none handshake ended call\ngot another:\n%+v", extra)
+		default:
+		}
+	})
+
+	t.Run("should announce a dropped handshake once its state is stored", func(t *testing.T) {
+		ends := make(chan handshakeEnd, 2)
+		negotiateThroughProxy(t,
+			nil,
+			nil,
+			"function processResponse(res)\n\tres:drop()\nend\n",
+			announceHandshakeEnd(ends),
+		)
+
+		want := handshakeEnd{state: "dropped", stored: "dropped"}
+		if got := receiveHandshakeEnd(t, ends); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		select {
+		case extra := <-ends:
+			t.Fatalf("\nwanted:\none handshake ended call\ngot another:\n%+v", extra)
+		default:
+		}
+	})
+
+	t.Run("should not announce a handshake that opens", func(t *testing.T) {
+		ends := make(chan handshakeEnd, 2)
+		negotiateThroughProxy(t, nil, nil, "", announceHandshakeEnd(ends))
+
+		select {
+		case end := <-ends:
+			t.Fatalf("\nwanted:\nno handshake ended call\ngot:\n%+v", end)
+		default:
+		}
+	})
 }
 
 func TestFailWebSocketHandshake(t *testing.T) {
