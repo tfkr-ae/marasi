@@ -13,7 +13,7 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Notes | `notes set`, `notes get`, `notes list`, list pagination, `notes clear`, `traffic bulk note append`, `traffic bulk note clear` | [notes](notes.md) |
 | Project open | `project open --name`, `project open --path`, `project switch`, `project list` | [project open](project-open.md) |
 | Events | `events`, `traffic bulk highlight` | [events](events.md) |
-| Launchpad | `launchpad create`, `launchpad list`, `launchpad get`, `launchpad update`, `launchpad link`, `launchpad unlink`, `launchpad move`, `launchpad launch`, `launchpad pending`, `launchpad status`, `launchpad cancel`, `traffic bulk link`, `traffic bulk unlink` | [launchpad](launchpad.md) |
+| Launchpad | `launchpad create`, `launchpad list`, `launchpad get`, `launchpad update`, `launchpad delete`, `launchpad link`, `launchpad unlink`, `launchpad move`, `launchpad launch`, `launchpad pending`, `launchpad status`, `launchpad cancel`, `traffic bulk link`, `traffic bulk unlink` | [launchpad](launchpad.md) |
 | Background jobs | `jobs list`, `jobs rebuild` | [jobs](jobs.md) |
 | Dashboard counts | `dashboard` | [dashboard](dashboard.md) |
 | Client settings | `settings list`, `settings get`, `settings set`, `settings delete` | [settings](settings.md) |

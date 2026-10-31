@@ -62,7 +62,7 @@ func init() {
 	launchpadLaunchCmd.MarkFlagRequired("scheme")
 	launchpadMoveCmd.Flags().StringVar(&launchpadMoveBefore, "before", "", "UUID of the entry to place the moved entries before. If omitted, they go after the last entry")
 	launchpadMoveCmd.Flags().StringVar(&launchpadMoveTarget, "target", "", "UUID of the launchpad to move the entries to. If omitted, the entries stay in their launchpad")
-	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadLinkCmd, launchpadUnlinkCmd, launchpadMoveCmd, launchpadLaunchCmd, launchpadPendingCmd, launchpadStatusCmd, launchpadCancelCmd)
+	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadDeleteCmd, launchpadLinkCmd, launchpadUnlinkCmd, launchpadMoveCmd, launchpadLaunchCmd, launchpadPendingCmd, launchpadStatusCmd, launchpadCancelCmd)
 	rootCmd.AddCommand(launchpadCmd)
 }
 
@@ -152,6 +152,20 @@ var launchpadUpdateCmd = &cobra.Command{
 			return err
 		}
 		return runLaunchpadCommand(cmd, http.MethodPost, path, "updating launchpad", "update", request)
+	},
+}
+
+var launchpadDeleteCmd = &cobra.Command{
+	Use:   "delete UUID",
+	Short: "Delete a launchpad",
+	Long:  "Delete a launchpad. Its entries stay in the traffic list, and a launched pair keeps its metadata.launchpad_id. The delete is refused while a launch from the launchpad is pending (launch_pending).\n\nWith --json the command writes the control API body: {\"id\"}.",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := serviceIDPath("/launchpad/", args[0], "")
+		if err != nil {
+			return err
+		}
+		return runLaunchpadCommand(cmd, http.MethodDelete, path, "deleting launchpad", "delete", launchpadRequest{})
 	},
 }
 
@@ -500,6 +514,8 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 		return writeLaunchpadChanged(cmd, response, "created")
 	case "update":
 		return writeLaunchpadChanged(cmd, response, "updated")
+	case "delete":
+		return writeLaunchpadChanged(cmd, response, "deleted")
 	case "link":
 		return writeLaunchpadLinkChanged(cmd, response, "linked to")
 	case "unlink":
@@ -511,7 +527,7 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 	}
 }
 
-// writeLaunchpadChanged reports a created or updated launchpad on stderr.
+// writeLaunchpadChanged reports a created, updated or deleted launchpad on stderr.
 // done is the past tense of the action, such as "created".
 func writeLaunchpadChanged(cmd *cobra.Command, response []byte, done string) error {
 	var result struct {
