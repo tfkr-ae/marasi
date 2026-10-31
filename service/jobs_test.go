@@ -99,6 +99,9 @@ func eventsUntil(subscriber *eventSubscriber, last string, wait time.Duration) [
 	for {
 		select {
 		case event := <-subscriber.events:
+			if isProjectOpenProgress(event.name) {
+				continue
+			}
 			names = append(names, event.name+" "+string(event.data))
 			if event.name == last {
 				return names

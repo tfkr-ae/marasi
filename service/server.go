@@ -87,6 +87,25 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		project:           project,
 	}
 	if projects != nil {
+		projects.opening = func(path string) {
+			events.publish("project.opening", struct {
+				Project string `json:"project"`
+			}{Project: path})
+		}
+		projects.upgrading = func(path string, step db.MigrationStep) {
+			events.publish("project.upgrading", struct {
+				Project   string `json:"project"`
+				Migration string `json:"migration"`
+				Applied   int    `json:"applied"`
+				Total     int    `json:"total"`
+			}{Project: path, Migration: step.Migration, Applied: step.Applied, Total: step.Total})
+		}
+		projects.openingFailed = func(path string, err error) {
+			events.publish("project.opening_failed", struct {
+				Project string `json:"project"`
+				Error   string `json:"error"`
+			}{Project: path, Error: err.Error()})
+		}
 		projects.opened = func(path string) {
 			events.publish("project.opened", struct {
 				Project string `json:"project"`

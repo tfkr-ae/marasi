@@ -98,13 +98,44 @@ func (repo *Repository) Close() error {
 	return nil
 }
 
+// MigrationStep is one migration New has applied to a project database.
+type MigrationStep struct {
+	// Migration is the migration's file name, such as 00001_init.sql.
+	Migration string
+	// Applied counts the migrations applied so far by this New, this one
+	// included, out of Total pending when it started.
+	Applied int
+	Total   int
+}
+
+// Option configures New.
+type Option func(*newSettings)
+
+type newSettings struct {
+	migrationProgress func(MigrationStep)
+}
+
+// WithMigrationProgress makes New report each migration it applies to
+// progress, in order. Progress runs on its own goroutine, so it never holds a
+// migration back. New returns once every step has been reported, so progress
+// must return.
+func WithMigrationProgress(progress func(MigrationStep)) Option {
+	return func(settings *newSettings) {
+		settings.migrationProgress = progress
+	}
+}
+
 // New establishes a new connection to a SQLite database file and applies all pending migrations.
 // It configures the connection for optimal performance and data integrity by enabling WAL mode and foreign keys.
 //
 // The `name` parameter should be the file path for the SQLite database.
 //
 // It returns a ready-to-use sqlx.DB connection pool or an error if the connection or migrations fail.
-func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
+func New(name string, logger *slog.Logger, options ...Option) (*sqlx.DB, error) {
+	var settings newSettings
+	for _, option := range options {
+		option(&settings)
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -150,35 +181,16 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 		return nil, fmt.Errorf("creating migrations fs: %w", err)
 	}
 
-	migrateMu.Lock()
-	defer migrateMu.Unlock()
-
-	provider, err := goose.NewProvider(
-		goose.DialectSQLite3,
-		db.DB,
-		migrationsFS,
-		goose.WithVerbose(true),
-		goose.WithSlog(logger),
-	)
-
+	reporter := &migrationReporter{progress: settings.migrationProgress}
+	applied, err := migrate(db, migrationsFS, logger, reporter)
+	reporter.finish()
 	if err != nil {
-		dbLogger.Error("Failed to initialize migration provider", "error", err)
-		return nil, fmt.Errorf("creating goose provider : %w", err)
-	}
-
-	res, err := provider.Up(context.Background())
-
-	if err != nil {
+		db.Close()
 		dbLogger.Error("Failed to apply migrations", "error", err)
-		return nil, fmt.Errorf("applying migration : %w", err)
+		return nil, err
 	}
-	if len(res) > 0 {
-		names := make([]string, len(res))
-
-		for i, res := range res {
-			names[i] = res.Source.Path
-		}
-		dbLogger.Info("Migrations completed", "count", len(res), "applied", names)
+	if len(applied) > 0 {
+		dbLogger.Info("Migrations completed", "count", len(applied), "applied", applied)
 	} else {
 		dbLogger.Info("Migrations up to date", "count", 0)
 	}
@@ -194,6 +206,84 @@ func New(name string, logger *slog.Logger) (*sqlx.DB, error) {
 		return nil, fmt.Errorf("optimizing the database: %w", err)
 	}
 	return db, nil
+}
+
+// migrate applies the pending migrations one at a time, reporting each, and
+// returns the names of those it applied.
+func migrate(db *sqlx.DB, migrationsFS fs.FS, logger *slog.Logger, reporter *migrationReporter) ([]string, error) {
+	migrateMu.Lock()
+	defer migrateMu.Unlock()
+
+	provider, err := goose.NewProvider(
+		goose.DialectSQLite3,
+		db.DB,
+		migrationsFS,
+		goose.WithVerbose(true),
+		goose.WithSlog(logger),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("creating goose provider: %w", err)
+	}
+	ctx := context.Background()
+	statuses, err := provider.Status(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading migration status: %w", err)
+	}
+	total := 0
+	for _, status := range statuses {
+		if status.State == goose.StatePending {
+			total++
+		}
+	}
+	reporter.start(total)
+	applied := make([]string, 0, total)
+	for len(applied) < total {
+		result, err := provider.UpByOne(ctx)
+		if err != nil {
+			return applied, fmt.Errorf("applying migration: %w", err)
+		}
+		applied = append(applied, result.Source.Path)
+		reporter.report(MigrationStep{Migration: result.Source.Path, Applied: len(applied), Total: total})
+	}
+	return applied, nil
+}
+
+// migrationReporter hands migration steps to a progress callback on its own
+// goroutine. Its queue holds every pending step, so reporting one never waits
+// on the callback.
+type migrationReporter struct {
+	progress func(MigrationStep)
+	steps    chan MigrationStep
+	done     chan struct{}
+}
+
+func (reporter *migrationReporter) start(total int) {
+	if reporter.progress == nil || total == 0 {
+		return
+	}
+	reporter.steps = make(chan MigrationStep, total)
+	reporter.done = make(chan struct{})
+	go func() {
+		defer close(reporter.done)
+		for step := range reporter.steps {
+			reporter.progress(step)
+		}
+	}()
+}
+
+func (reporter *migrationReporter) report(step MigrationStep) {
+	if reporter.steps != nil {
+		reporter.steps <- step
+	}
+}
+
+// finish waits until every reported step has reached the callback, so a
+// caller of New sees all of them before New returns.
+func (reporter *migrationReporter) finish() {
+	if reporter.steps != nil {
+		close(reporter.steps)
+		<-reporter.done
+	}
 }
 
 // optimize refreshes the statistics the planner uses to choose between a

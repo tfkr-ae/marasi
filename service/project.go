@@ -66,7 +66,12 @@ type ProjectLifecycle struct {
 	prepare          func(context.Context, string) (marasi.ProjectResources, error)
 	lock             func(string) (func() error, error)
 	flushOpenProject func() error
-	opened           func(string)
+	// opening, upgrading and openingFailed announce a switch from its start:
+	// every opening ends in opened or openingFailed.
+	opening       func(target string)
+	upgrading     func(target string, step db.MigrationStep)
+	openingFailed func(target string, err error)
+	opened        func(string)
 	// waiting receives what a switch to the target project is still waiting
 	// for. waitReportDelay is how long a switch waits before it reports.
 	waiting          func(target string, waits []ProjectWait)
@@ -120,7 +125,7 @@ func (lifecycle *ProjectLifecycle) Path() string {
 }
 
 // Open prepares target before publishing it as the open project.
-func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) error {
+func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stop := context.AfterFunc(lifecycle.executionContext, cancel)
@@ -135,6 +140,15 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) erro
 	if lifecycle.Path() == path {
 		return nil
 	}
+	if lifecycle.opening != nil {
+		lifecycle.opening(path)
+	}
+	defer func() {
+		// A cleanup failure comes after the target was published as opened.
+		if err != nil && !errors.Is(err, ErrProjectCleanup) && lifecycle.openingFailed != nil {
+			lifecycle.openingFailed(path, err)
+		}
+	}()
 
 	existed := true
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
@@ -500,7 +514,11 @@ func (lifecycle *ProjectLifecycle) setOpen(project *openProject) {
 }
 
 func (lifecycle *ProjectLifecycle) prepareProject(ctx context.Context, path string) (marasi.ProjectResources, error) {
-	connection, err := db.New(path, lifecycle.logger)
+	connection, err := db.New(path, lifecycle.logger, db.WithMigrationProgress(func(step db.MigrationStep) {
+		if lifecycle.upgrading != nil {
+			lifecycle.upgrading(path, step)
+		}
+	}))
 	if err != nil {
 		return marasi.ProjectResources{}, fmt.Errorf("opening project: %w", err)
 	}

@@ -257,6 +257,9 @@ func connectServiceEvents(t *testing.T, server *Server) *bufio.Reader {
 func nextHTTPServiceEvent(t *testing.T, reader *bufio.Reader) serviceEvent {
 	t.Helper()
 	frame := readEventFrame(t, reader)
+	for strings.HasPrefix(frame, "event: project.opening\n") || strings.HasPrefix(frame, "event: project.upgrading\n") {
+		frame = readEventFrame(t, reader)
+	}
 	nameLine, rest, ok := strings.Cut(frame, "\n")
 	if !ok || !strings.HasPrefix(nameLine, "event: ") {
 		t.Fatalf("invalid service event frame %q", frame)

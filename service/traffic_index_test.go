@@ -232,16 +232,24 @@ func listIndexComplete(t *testing.T, server *Server) bool {
 // nextEvent returns the next event published to subscriber, or "" when none
 // arrives within wait.
 func nextEvent(subscriber *eventSubscriber, wait time.Duration) string {
-	select {
-	case event := <-subscriber.events:
-		return fmt.Sprintf("%s %s", event.name, event.data)
-	default:
-	}
-	select {
-	case event := <-subscriber.events:
-		return fmt.Sprintf("%s %s", event.name, event.data)
-	case <-time.After(wait):
-		return ""
+	timeout := time.After(wait)
+	for {
+		select {
+		case event := <-subscriber.events:
+			if !isProjectOpenProgress(event.name) {
+				return fmt.Sprintf("%s %s", event.name, event.data)
+			}
+			continue
+		default:
+		}
+		select {
+		case event := <-subscriber.events:
+			if !isProjectOpenProgress(event.name) {
+				return fmt.Sprintf("%s %s", event.name, event.data)
+			}
+		case <-timeout:
+			return ""
+		}
 	}
 }
 
