@@ -509,6 +509,65 @@ func TestProjectOpen(t *testing.T) {
 	})
 }
 
+func TestProjectOpenInterruptedArmoryRun(t *testing.T) {
+	t.Run("should cancel a run left in progress and refuse start and cancel", func(t *testing.T) {
+		server, _, dir, _ := newProjectOpenServer(t)
+		target := canonicalProjectPath(t, filepath.Join(dir, "crashed.marasi"))
+		runID := interruptedArmoryRunInProject(t, target)
+
+		before := time.Now()
+		response := requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(target))
+		if response.Code != http.StatusOK {
+			t.Fatalf("opening project: %d %s", response.Code, response.Body.String())
+		}
+
+		got := requestControlAPI(server, http.MethodGet, "/armory/run/"+runID.String(), "")
+		var run struct {
+			Status     domain.ArmoryRunStatus `json:"status"`
+			FinishedAt *time.Time             `json:"finished_at"`
+		}
+		if err := json.Unmarshal(got.Body.Bytes(), &run); err != nil {
+			t.Fatalf("decoding run: %v; %s", err, got.Body.String())
+		}
+		if got.Code != http.StatusOK || run.Status != domain.ArmoryRunCancelled || run.FinishedAt == nil || run.FinishedAt.Before(before.Truncate(time.Second)) {
+			t.Fatalf("\nwanted:\n200 cancelled, finished after %v\ngot:\n%d %s", before, got.Code, got.Body.String())
+		}
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/armory/run/"+runID.String()+"/start", ""), http.StatusConflict, "{\"error\":\"not_a_draft\"}\n")
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/armory/run/"+runID.String()+"/cancel", ""), http.StatusConflict, "{\"error\":\"run_not_active\"}\n")
+	})
+}
+
+// interruptedArmoryRunInProject stores a run in path as an instance that
+// stopped mid-run leaves it: in progress, with no finish time.
+func interruptedArmoryRunInProject(t *testing.T, path string) uuid.UUID {
+	t.Helper()
+	connection, err := db.New(path, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("opening %s: %v", path, err)
+	}
+	repository := db.NewProxyRepo(connection)
+	defer repository.Close()
+	template := &domain.ArmoryTemplate{ID: uuid.Must(uuid.NewV7()), Name: "Interrupted", RawTemplate: "GET / HTTP/1.1\r\nHost: marasi.app\r\n\r\n"}
+	if err := repository.CreateArmoryTemplate(template); err != nil {
+		t.Fatalf("creating armory template: %v", err)
+	}
+	startedAt := time.Now().Add(-time.Minute)
+	run := &domain.ArmoryRun{
+		ID:               uuid.Must(uuid.NewV7()),
+		TemplateID:       template.ID,
+		TemplateSnapshot: template.RawTemplate,
+		Wordlists:        []string{},
+		Status:           domain.ArmoryRunInProgress,
+		AttackType:       domain.ArmoryAttackHarpoon,
+		MaxConcurrent:    1,
+		StartedAt:        &startedAt,
+	}
+	if err := repository.CreateArmoryRun(run); err != nil {
+		t.Fatalf("creating armory run: %v", err)
+	}
+	return run.ID
+}
+
 func launchpadNamesInProject(t *testing.T, path string) []string {
 	t.Helper()
 	connection, err := db.New(path, slog.New(slog.NewTextHandler(io.Discard, nil)))

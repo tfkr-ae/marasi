@@ -55,7 +55,8 @@ const (
 	ArmoryRunCompleted ArmoryRunStatus = "complete"
 	// ArmoryRunFailed indicates that a run stopped because of an error.
 	ArmoryRunFailed ArmoryRunStatus = "failed"
-	// ArmoryRunCancelled indicates that a user stopped a run.
+	// ArmoryRunCancelled indicates that a user stopped a run, or that the
+	// instance running it stopped mid-run.
 	ArmoryRunCancelled ArmoryRunStatus = "cancelled"
 )
 
@@ -129,6 +130,9 @@ type ArmoryRepository interface {
 	UpdateArmoryRun(run *ArmoryRun) error
 	// DeleteArmoryRun deletes an Armory run by ID.
 	DeleteArmoryRun(id uuid.UUID) error
+	// CancelInterruptedArmoryRuns marks every in-progress run cancelled and
+	// finished now. Call it only while no run executes in this project.
+	CancelInterruptedArmoryRuns() error
 
 	// GetArmoryEntries returns all request links for a run.
 	GetArmoryEntries(runID uuid.UUID) ([]*ArmoryEntry, error)

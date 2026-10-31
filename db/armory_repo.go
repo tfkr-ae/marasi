@@ -258,6 +258,17 @@ func (repo *Repository) DeleteArmoryRun(id uuid.UUID) error {
 	return nil
 }
 
+// CancelInterruptedArmoryRuns marks every in-progress Armory run cancelled,
+// finished now, in one statement. A run is in progress on open only when the
+// instance that ran it stopped mid-run, and neither start nor cancel accepts it.
+func (repo *Repository) CancelInterruptedArmoryRuns() error {
+	query := `UPDATE armory_run SET status = ?, finished_at = ? WHERE status = ?`
+	if _, err := repo.dbConn.Exec(query, domain.ArmoryRunCancelled, time.Now(), domain.ArmoryRunInProgress); err != nil {
+		return fmt.Errorf("cancelling interrupted armory runs: %w", err)
+	}
+	return nil
+}
+
 // GetArmoryEntries returns all request links for an Armory run.
 func (repo *Repository) GetArmoryEntries(runID uuid.UUID) ([]*domain.ArmoryEntry, error) {
 	entries := make([]dbArmoryEntry, 0)

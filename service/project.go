@@ -575,6 +575,12 @@ func (lifecycle *ProjectLifecycle) prepareProject(ctx context.Context, path stri
 	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
+	// No run of this project executes yet: the lock is held and the Armory
+	// manager is not created, so an in-progress run outlived an instance that
+	// stopped mid-run.
+	if err := repository.CancelInterruptedArmoryRuns(); err != nil {
+		return fail(err)
+	}
 	armoryManager, err := armory.NewManager(repository, lifecycle.wordlists, lifecycle.proxy.SendArmoryRequest)
 	if err != nil {
 		return fail(fmt.Errorf("preparing armory manager: %w", err))
