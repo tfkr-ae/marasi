@@ -239,6 +239,38 @@ func TestServiceEvents(t *testing.T) {
 		}
 	})
 
+	t.Run("should publish an abandoned checkpoint item with its request_id and reason", func(t *testing.T) {
+		server := newTestServer(nil, func() {})
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		response, reader := connectEventStream(t, httpServer.URL)
+		defer response.Body.Close()
+
+		if err := server.HandleCheckpointAbandoned(domain.CheckpointItem{
+			ID:   uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809"),
+			Type: domain.CheckpointTypeResponse,
+		}); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := server.HandleCheckpointAbandoned(domain.CheckpointItem{
+			ID:           uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780b"),
+			Type:         domain.CheckpointTypeWebSocket,
+			ConnectionID: uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780c"),
+			RequestID:    uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a"),
+		}); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		wantHTTP := "event: checkpoint.dropped\ndata: {\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"type\":\"response\",\"request_id\":null,\"reason\":\"abandoned\"}\n\n"
+		if got := readEventFrame(t, reader); got != wantHTTP {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantHTTP, got)
+		}
+		wantWebSocket := "event: checkpoint.dropped\ndata: {\"id\":\"0193802f-f0e7-73d9-a764-06d21e36780b\",\"type\":\"websocket\",\"request_id\":\"0193802f-f0e7-73d9-a764-06d21e36780a\",\"reason\":\"abandoned\"}\n\n"
+		if got := readEventFrame(t, reader); got != wantWebSocket {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantWebSocket, got)
+		}
+	})
+
 	t.Run("should return nil from handlers when a subscriber queue fills", func(t *testing.T) {
 		server := newTestServer(nil, func() {})
 		httpServer := httptest.NewServer(server)

@@ -38,10 +38,26 @@ type checkpointList struct {
 	WebsocketIntercept bool  `json:"websocket_intercept"`
 }
 
+// checkpointResolvedEvent is the data of checkpoint.forwarded and checkpoint.dropped.
+// RequestID is the upgrade request of a WebSocket item and null for an HTTP item.
 type checkpointResolvedEvent struct {
-	ID   uuid.UUID `json:"id"`
-	Type string    `json:"type"`
+	ID        uuid.UUID            `json:"id"`
+	Type      string               `json:"type"`
+	RequestID *uuid.UUID           `json:"request_id"`
+	Reason    checkpointResolution `json:"reason"`
 }
+
+// checkpointResolution says how a Checkpoint item left Checkpoint, so a client
+// can tell a user's drop from a hold whose client left
+// (docs/adr/2026-10-13-checkpoint-hold-ends-when-its-client-leaves.md).
+type checkpointResolution string
+
+const (
+	checkpointForwarded checkpointResolution = "forwarded"
+	checkpointDropped   checkpointResolution = "dropped"
+	checkpointAbandoned checkpointResolution = "abandoned"
+	checkpointShutdown  checkpointResolution = "shutdown"
+)
 
 type checkpointFlags struct {
 	Intercept          bool `json:"intercept"`
@@ -92,7 +108,7 @@ func addCheckpointRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadca
 			writeCheckpointForwardError(w, r, err)
 			return
 		}
-		events.publish("checkpoint.forwarded", checkpointResolvedEvent{ID: id, Type: item.Type})
+		events.publish("checkpoint.forwarded", checkpointResolvedEventFromDomain(item, checkpointForwarded))
 		writeJSON(w, r, http.StatusOK, getCheckpointList(proxy, ""))
 	})
 
@@ -118,7 +134,7 @@ func addCheckpointRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadca
 			writeCheckpointError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		events.publish("checkpoint.dropped", checkpointResolvedEvent{ID: id, Type: item.Type})
+		events.publish("checkpoint.dropped", checkpointResolvedEventFromDomain(item, checkpointDropped))
 		writeJSON(w, r, http.StatusOK, getCheckpointList(proxy, ""))
 	})
 
@@ -205,6 +221,14 @@ func checkpointItemFromDomain(item domain.CheckpointItem) any {
 		Raw:           item.Raw,
 		InterceptedAt: item.InterceptedAt,
 	}
+}
+
+func checkpointResolvedEventFromDomain(item domain.CheckpointItem, reason checkpointResolution) checkpointResolvedEvent {
+	event := checkpointResolvedEvent{ID: item.ID, Type: item.Type, Reason: reason}
+	if item.Type == domain.CheckpointTypeWebSocket {
+		event.RequestID = &item.RequestID
+	}
+	return event
 }
 
 func checkpointItemFromWebSocket(message domain.WebSocketMessage) domain.CheckpointItem {

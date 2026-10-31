@@ -519,11 +519,11 @@ func (s *Server) HandleIntercept(item domain.CheckpointItem) error {
 	return nil
 }
 
-// HandleCheckpointAbandoned publishes checkpoint.dropped after a Checkpoint item is
-// dropped because its client left or its WebSocket connection closed. The payload
-// matches a user drop. It always returns nil.
+// HandleCheckpointAbandoned publishes checkpoint.dropped with reason abandoned after
+// a Checkpoint item is dropped because its client left or its WebSocket connection
+// closed. It always returns nil.
 func (s *Server) HandleCheckpointAbandoned(item domain.CheckpointItem) error {
-	s.events.publish("checkpoint.dropped", checkpointResolvedEvent{ID: item.ID, Type: item.Type})
+	s.events.publish("checkpoint.dropped", checkpointResolvedEventFromDomain(item, checkpointAbandoned))
 	return nil
 }
 
@@ -539,7 +539,7 @@ func (s *Server) dropPendingCheckpoint() {
 		return
 	}
 	for _, item := range s.proxy.DropAllCheckpoint() {
-		s.events.publish("checkpoint.dropped", checkpointResolvedEvent{ID: item.ID, Type: item.Type})
+		s.events.publish("checkpoint.dropped", checkpointResolvedEventFromDomain(item, checkpointShutdown))
 	}
 }
 
