@@ -90,7 +90,7 @@ func TestFindingConcurrentControlEdits(t *testing.T) {
 	server, repo, path := newReportingSQLiteControl(t, "finding")
 	repo.remaining.Store(2)
 	done := make(chan *httptest.ResponseRecorder, 2)
-	for _, body := range []string{`{"title":"changed-title"}`, `{"writeup":"changed-writeup","severity":"high","cvss_vector":"vector","cvss_score":7.5,"treatment_plan":"remediate"}`} {
+	for _, body := range []string{`{"title":"changed-title"}`, `{"writeup":"changed-writeup","severity":"high","cvss_vector":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N","cvss_score":7.5,"treatment_plan":"remediate"}`} {
 		go func() {
 			w := httptest.NewRecorder()
 			server.ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader(body)))
@@ -112,7 +112,7 @@ func TestFindingConcurrentControlEdits(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if w.Code != http.StatusOK || got.Title != "changed-title" || got.WriteUp != "changed-writeup" || got.Severity != "High" || got.CVSSVector != "vector" || got.CVSSScore != 7.5 || got.TreatmentPlan != "remediate" {
+	if w.Code != http.StatusOK || got.Title != "changed-title" || got.WriteUp != "changed-writeup" || got.Severity != "High" || got.CVSSVector != "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N" || got.CVSSScore != 7.5 || got.TreatmentPlan != "remediate" {
 		t.Fatalf("concurrent edits lost: %d %s", w.Code, w.Body)
 	}
 }
@@ -133,7 +133,7 @@ func TestFindingSQLiteControlNullableAssociation(t *testing.T) {
 		body   string
 		linked bool
 	}{
-		{fmt.Sprintf(`{"test_case_id":%q,"severity":"High","cvss_vector":"vector","cvss_score":7.5,"writeup":"writeup","treatment_plan":"plan"}`, parent.ID), true},
+		{fmt.Sprintf(`{"test_case_id":%q,"severity":"High","cvss_vector":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N","cvss_score":7.5,"writeup":"writeup","treatment_plan":"plan"}`, parent.ID), true},
 		{`{}`, true},
 		{`{"title":"renamed"}`, true},
 		{`{"test_case_id":null,"severity":"","cvss_vector":"","cvss_score":0,"writeup":"","treatment_plan":""}`, false},
@@ -533,6 +533,84 @@ func TestFindingControlAPI(t *testing.T) {
 			server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 			if path == "/finding/not-a-uuid" && response.Code != http.StatusBadRequest || path != "/finding/not-a-uuid" && response.Code != http.StatusNotFound {
 				t.Fatalf("GET %s returned %d %s", path, response.Code, response.Body.String())
+			}
+		}
+	})
+}
+
+func TestFindingCVSS(t *testing.T) {
+	send := func(t *testing.T, server *Server, method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return w
+	}
+	stored := func(t *testing.T, server *Server, path string) (string, float64) {
+		t.Helper()
+		var got findingResponse
+		if err := json.Unmarshal(send(t, server, "GET", path, "").Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got.CVSSVector, got.CVSSScore
+	}
+	const prefixed = "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"
+
+	t.Run("should store a vector without the prefix with the prefix and its score", func(t *testing.T) {
+		server, _, _ := newReportingSQLiteControl(t, "finding")
+		w := send(t, server, "POST", "/finding", `{"title":"t","cvss_vector":"AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"}`)
+		var got findingResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || got.CVSSVector != prefixed || got.CVSSScore != 4.3 {
+			t.Fatalf("\nwanted:\n200 %s 4.3\ngot:\n%d %s", prefixed, w.Code, w.Body)
+		}
+	})
+
+	t.Run("should accept a sent score that matches the vector", func(t *testing.T) {
+		server, _, _ := newReportingSQLiteControl(t, "finding")
+		w := send(t, server, "POST", "/finding", `{"title":"t","cvss_vector":"`+prefixed+`","cvss_score":4.3}`)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"cvss_score":4.3`) {
+			t.Fatalf("\nwanted:\n200 with cvss_score 4.3\ngot:\n%d %s", w.Code, w.Body)
+		}
+	})
+
+	t.Run("should refuse an invalid vector or a contradicting score on create and write nothing", func(t *testing.T) {
+		server, _, _ := newReportingSQLiteControl(t, "finding")
+		for _, tc := range []struct{ body, want string }{
+			{`{"title":"t","cvss_vector":"AV:X/foo"}`, `{"error":"invalid_cvss_vector","message":"cvss_vector \"AV:X/foo\" is not a CVSS 3.1 base vector: \"foo\" is not a metric; write each as NAME:VALUE, as in AV:N"}`},
+			{`{"title":"t","cvss_vector":"` + prefixed + `","cvss_score":9.8}`, `{"error":"invalid_cvss_score","message":"cvss_score 9.8 does not match 4.3, the score of ` + prefixed + `; omit cvss_score to have it worked out"}`},
+			{`{"title":"t","cvss_score":5}`, `{"error":"invalid_cvss_score","message":"cvss_score 5 needs a cvss_vector; an unscored finding has cvss_score 0"}`},
+		} {
+			assertControlAPIResponse(t, send(t, server, "POST", "/finding", tc.body), http.StatusBadRequest, tc.want+"\n")
+		}
+		list := send(t, server, "GET", "/finding", "")
+		if strings.Count(list.Body.String(), `"id"`) != 1 {
+			t.Fatalf("\nwanted:\nonly the setup finding\ngot:\n%s", list.Body)
+		}
+	})
+
+	t.Run("should normalize, refuse and clear vectors on update", func(t *testing.T) {
+		server, _, path := newReportingSQLiteControl(t, "finding")
+		for _, tc := range []struct {
+			body       string
+			status     int
+			wantVector string
+			wantScore  float64
+		}{
+			{`{"cvss_vector":"` + prefixed + `"}`, http.StatusOK, prefixed, 4.3},
+			{`{"cvss_vector":"AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}`, http.StatusOK, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", 9.8},
+			// A score alone is checked against the stored vector.
+			{`{"cvss_score":9.8}`, http.StatusOK, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", 9.8},
+			{`{"cvss_score":4.3}`, http.StatusBadRequest, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", 9.8},
+			{`{"cvss_vector":"AV:X/foo"}`, http.StatusBadRequest, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", 9.8},
+			// Clearing the vector clears the score.
+			{`{"cvss_vector":""}`, http.StatusOK, "", 0},
+			{`{"title":"untouched cvss"}`, http.StatusOK, "", 0},
+		} {
+			w := send(t, server, "POST", path, tc.body)
+			if w.Code != tc.status {
+				t.Fatalf("\nwanted:\n%d for %s\ngot:\n%d %s", tc.status, tc.body, w.Code, w.Body)
+			}
+			if vector, score := stored(t, server, path); vector != tc.wantVector || score != tc.wantScore {
+				t.Fatalf("\nwanted:\nstored %q %v after %s\ngot:\n%q %v", tc.wantVector, tc.wantScore, tc.body, vector, score)
 			}
 		}
 	})
