@@ -217,9 +217,9 @@ func addReportRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 				Assessor:         export.assessor,
 				Start:            export.start,
 				End:              export.end,
-				CreatedAt:        time.Now().UTC(),
+				CreatedAt:        export.createdAt,
 				TruncateLength:   export.truncateLength,
-				CustomProperties: map[string]any{},
+				CustomProperties: export.customProperties,
 			},
 			TestCases: testCases,
 			Findings:  findings,
@@ -237,18 +237,29 @@ func addReportRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 	})
 }
 
+// reportExportRequest is the body of POST /report.
+//
+// CreatedAt is an RFC3339 time. Its offset is kept, so a template prints it in
+// the client's zone rather than the instance machine's. Without it, the export
+// time is stamped in the instance machine's zone.
+//
+// CustomProperties reaches the template as .Metadata.CustomProperties. When it
+// holds include_test_cases, that key is set to the top-level IncludeTestCases
+// (default true), which also decides whether test cases are listed.
 type reportExportRequest struct {
-	Template         string `json:"template"`
-	Title            string `json:"title"`
-	Client           string `json:"client"`
-	Type             string `json:"type"`
-	Scope            string `json:"scope"`
-	Assessor         string `json:"assessor"`
-	Start            string `json:"start"`
-	End              string `json:"end"`
-	IsDraft          *bool  `json:"is_draft"`
-	TruncateLength   *int   `json:"truncate_length"`
-	IncludeTestCases *bool  `json:"include_test_cases"`
+	Template         string         `json:"template"`
+	Title            string         `json:"title"`
+	Client           string         `json:"client"`
+	Type             string         `json:"type"`
+	Scope            string         `json:"scope"`
+	Assessor         string         `json:"assessor"`
+	Start            string         `json:"start"`
+	End              string         `json:"end"`
+	IsDraft          *bool          `json:"is_draft"`
+	TruncateLength   *int           `json:"truncate_length"`
+	IncludeTestCases *bool          `json:"include_test_cases"`
+	CreatedAt        *string        `json:"created_at"`
+	CustomProperties map[string]any `json:"custom_properties"`
 }
 
 type parsedReportExport struct {
@@ -263,6 +274,8 @@ type parsedReportExport struct {
 	isDraft          bool
 	truncateLength   int
 	includeTestCases bool
+	createdAt        time.Time
+	customProperties map[string]any
 }
 
 func (request reportExportRequest) parsed() (parsedReportExport, error) {
@@ -292,6 +305,20 @@ func (request reportExportRequest) parsed() (parsedReportExport, error) {
 	if request.IncludeTestCases != nil {
 		includeTestCases = *request.IncludeTestCases
 	}
+	createdAt := time.Now()
+	if request.CreatedAt != nil {
+		createdAt, err = time.Parse(time.RFC3339, *request.CreatedAt)
+		if err != nil {
+			return parsedReportExport{}, err
+		}
+	}
+	customProperties := map[string]any{}
+	for key, value := range request.CustomProperties {
+		customProperties[key] = value
+	}
+	if _, ok := customProperties[includeTestCasesProperty]; ok {
+		customProperties[includeTestCasesProperty] = includeTestCases
+	}
 	return parsedReportExport{
 		template:         request.Template,
 		title:            request.Title,
@@ -304,8 +331,15 @@ func (request reportExportRequest) parsed() (parsedReportExport, error) {
 		isDraft:          isDraft,
 		truncateLength:   truncateLength,
 		includeTestCases: includeTestCases,
+		createdAt:        createdAt,
+		customProperties: customProperties,
 	}, nil
 }
+
+// includeTestCasesProperty is the custom property v1 templates read. The
+// top-level include_test_cases overrides it so the template and the listed
+// test cases agree.
+const includeTestCasesProperty = "include_test_cases"
 
 func reportDate(value string) (time.Time, error) {
 	parsed, err := time.Parse("2006-01-02", value)

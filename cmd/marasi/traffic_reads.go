@@ -8,9 +8,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 const (
@@ -30,6 +33,7 @@ var (
 
 	trafficCountFilter *trafficQueryFlags
 	trafficCountAfter  string
+	trafficCountBy     string
 
 	trafficValidateQuery   string
 	trafficValidateExclude []string
@@ -47,6 +51,7 @@ func init() {
 
 	trafficCountFilter = addTrafficQueryFlags(trafficCountCmd, false)
 	trafficCountCmd.Flags().StringVar(&trafficCountAfter, "after", "", "Count only pairs with an id above this UUID, such as a page's as_of")
+	trafficCountCmd.Flags().StringVar(&trafficCountBy, "by", "", "Count the pairs per value of a field: "+strings.Join(domain.CountFields, " or "))
 
 	flags = trafficValidateCmd.Flags()
 	flags.StringVarP(&trafficValidateQuery, "query", "q", "", "AIP-160 query to check; see traffic list --help")
@@ -121,14 +126,24 @@ past the service's cap prints with a trailing +.
 
 --as-of counts only pairs at or below an id; --after counts only pairs
 above one. Pass a traffic list page's as_of with --after to count the
-matches captured since that page.`,
+matches captured since that page.
+
+--by status_code or --by length counts the matching pairs per value of
+that field, most pairs first, with no cap. A pair with no value yet, such
+as one with no response, counts under -. stderr shows the as_of the counts
+stop at; pass it back with --as-of to count the same pairs again. --by does
+not take --after.`,
 	Example: `  marasi traffic count -q 'status_code >= 500'
-  marasi traffic count --after "$AS_OF"`,
+  marasi traffic count --after "$AS_OF"
+  marasi traffic count --by status_code -q 'metadata.armory_run_id = "'"$RUN"'"'`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		query := url.Values{}
 		if err := trafficCountFilter.addTo(cmd, query); err != nil {
 			return err
+		}
+		if cmd.Flags().Changed("by") {
+			return runTrafficCountByField(cmd, query)
 		}
 		if cmd.Flags().Changed("after") {
 			if trafficCountAfter == "" {
@@ -175,6 +190,63 @@ matches captured since that page.`,
 		}
 		return nil
 	},
+}
+
+// runTrafficCountByField runs traffic count --by: it counts the pairs that
+// match query per value of the --by field.
+func runTrafficCountByField(cmd *cobra.Command, query url.Values) error {
+	if !slices.Contains(domain.CountFields, trafficCountBy) {
+		return fmt.Errorf("--by must be %s", strings.Join(domain.CountFields, " or "))
+	}
+	if cmd.Flags().Changed("after") {
+		return errors.New("--by does not take --after; pass --as-of")
+	}
+	query.Set("field", trafficCountBy)
+	body, err := runControlRequest(cmd, http.MethodGet, "/traffic/count/by-field?"+query.Encode(), "counting traffic by "+trafficCountBy, nil)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		return writeJSONBody(cmd, body)
+	}
+	var counts struct {
+		Items []struct {
+			Value string `json:"value"`
+			Count int    `json:"count"`
+		} `json:"items"`
+		AsOf  *string `json:"as_of"`
+		Index struct {
+			Complete bool `json:"complete"`
+		} `json:"index"`
+		Sitemap *struct {
+			Complete bool `json:"complete"`
+		} `json:"sitemap"`
+	}
+	if err := json.Unmarshal(body, &counts); err != nil {
+		return fmt.Errorf("decoding traffic counts: %w", err)
+	}
+	table := newListTable(cmd.OutOrStdout(), strings.ToUpper(strings.ReplaceAll(trafficCountBy, "_", " ")), "PAIRS")
+	for _, item := range counts.Items {
+		value := item.Value
+		if value == "" {
+			value = "-"
+		}
+		table.row(value, item.Count)
+	}
+	if err := table.flush(); err != nil {
+		return err
+	}
+	stderr := cmd.ErrOrStderr()
+	if counts.AsOf != nil {
+		fmt.Fprintf(stderr, "as_of=%s\n", *counts.AsOf)
+	}
+	if counts.Sitemap != nil && !counts.Sitemap.Complete {
+		fmt.Fprintln(stderr, sitemapBuildingNotice)
+	}
+	if !counts.Index.Complete {
+		fmt.Fprintln(stderr, indexBuildingNotice)
+	}
+	return nil
 }
 
 var trafficTypesCmd = &cobra.Command{

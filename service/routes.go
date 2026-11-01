@@ -68,6 +68,7 @@ func addRoutes(mux *http.ServeMux, projects *ProjectLifecycle, proxy *marasi.Pro
 	addCertificateRoutes(mux, proxy)
 	addTrafficRoutes(projectRoutes, proxy, events)
 	addTrafficBulkRoutes(projectRoutes, proxy, events)
+	addDashboardRoutes(projectRoutes, proxy)
 	addLogRoutes(projectRoutes, proxy)
 	addWebSocketRoutes(projectRoutes, mux, projects, proxy)
 	addNoteRoutes(projectRoutes, proxy, events)

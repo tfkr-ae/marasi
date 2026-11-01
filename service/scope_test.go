@@ -413,3 +413,83 @@ func TestScopeCheckNewProjectCompass(t *testing.T) {
 		})
 	}
 }
+
+func TestScopeList(t *testing.T) {
+	t.Run("should list includes and excludes sorted by pattern then match type with the default policy", func(t *testing.T) {
+		scope := compass.NewScope(true)
+		for _, rule := range []struct {
+			pattern   string
+			matchType string
+			exclude   bool
+		}{
+			{pattern: `zeta\.example`, matchType: "url"},
+			{pattern: `alpha\.example`, matchType: "url"},
+			{pattern: `alpha\.example`, matchType: "host"},
+			{pattern: `mid\.example`, matchType: "host"},
+			{pattern: `.*\.gstatic\.com`, matchType: "host", exclude: true},
+			{pattern: `accounts\.google\.com\/ListAccounts`, matchType: "url", exclude: true},
+			{pattern: `-android\.clients\.google\.com`, matchType: "host", exclude: true},
+		} {
+			if err := scope.AddRule(rule.pattern, rule.matchType, rule.exclude); err != nil {
+				t.Fatal(err)
+			}
+		}
+		server := newTestServer(&marasi.Proxy{Scope: scope}, func() {})
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		want := `{"default_allow":true,` +
+			`"include":[{"pattern":"alpha\\.example","match_type":"host"},{"pattern":"alpha\\.example","match_type":"url"},{"pattern":"mid\\.example","match_type":"host"},{"pattern":"zeta\\.example","match_type":"url"}],` +
+			`"exclude":[{"pattern":".*\\.gstatic\\.com","match_type":"host"},{"pattern":"accounts\\.google\\.com\\/ListAccounts","match_type":"url"},{"pattern":"android\\.clients\\.google\\.com","match_type":"host"}]}` + "\n"
+		// The rules live in maps, so repeat the read to catch an order that
+		// follows map iteration.
+		for i := 0; i < 50; i++ {
+			request := httptest.NewRequest(http.MethodGet, "/scope", nil)
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			if response.Code != http.StatusOK || response.Body.String() != want {
+				t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
+			}
+			if got := response.Header().Get("Content-Type"); got != "application/json" {
+				t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
+			}
+		}
+		select {
+		case event := <-subscriber.events:
+			t.Fatalf("\nwanted:\nno event\ngot:\n%s", event.name)
+		default:
+		}
+	})
+
+	t.Run("should list empty arrays rather than null when the scope has no rules", func(t *testing.T) {
+		server := newTestServer(&marasi.Proxy{Scope: compass.NewScope(false)}, func() {})
+		request := httptest.NewRequest(http.MethodGet, "/scope", nil)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		want := `{"default_allow":false,"include":[],"exclude":[]}` + "\n"
+		if response.Code != http.StatusOK || response.Body.String() != want {
+			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("should fail with not_found when there is no scope", func(t *testing.T) {
+		server := newTestServer(&marasi.Proxy{}, func() {})
+		request := httptest.NewRequest(http.MethodGet, "/scope", nil)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		want := `{"error":"not_found"}` + "\n"
+		if response.Code != http.StatusNotFound || response.Body.String() != want {
+			t.Fatalf("\nwanted:\n404 %s\ngot:\n%d %s", want, response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("should return method not allowed for a write to the rule list", func(t *testing.T) {
+		server := newTestServer(&marasi.Proxy{Scope: compass.NewScope(false)}, func() {})
+		request := httptest.NewRequest(http.MethodPost, "/scope", strings.NewReader(`{}`))
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d", http.StatusMethodNotAllowed, response.Code)
+		}
+	})
+}

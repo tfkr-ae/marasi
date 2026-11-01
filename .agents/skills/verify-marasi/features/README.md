@@ -7,14 +7,15 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Service lifecycle | `service start`, `service status`, `service stop`, `service list`, `service restart` | [service lifecycle](service-lifecycle.md) |
 | Update | `update`, `update check`, `update channel`, `update install`, `update reinstall` | [update](update.md) |
 | Control listener network address and remote | `service start --control-address`, `service control start`, `service control status`, `service control update`, `service control stop`, `service control token [--rotate]`, `--remote`/`MARASI_REMOTE` with `--token-file`/`MARASI_TOKEN` for any instance command, including remote `service status`, `service restart`, `service stop`, `events`, `project list`, `project open`, `wordlist add` and `report template add` | [control listener](control-listener.md) |
-| Proxy listener control | `listener status`, `listener address`, `listener stop`, `listener start`, `listener update` | [proxy listener control](proxy-listener-control.md) |
+| Proxy listener control | `listener status`, `listener address`, `listener stop`, `listener start`, `listener update`, `listener interfaces` | [proxy listener control](proxy-listener-control.md) |
 | HTTP traffic capture | Configure a client with `proxy_listener`, then make HTTP or HTTPS requests | [HTTP traffic capture](http-traffic-capture.md) |
 | Captured traffic inspection | `traffic list`, list queries (`-q`) and pagination, `traffic get`, `traffic metadata get`, `traffic metadata update`, `traffic count`, `traffic types`, `traffic sitemap` (one level, or several with `--node`/`--scope`), `traffic validate`, `traffic bulk metadata set`, `traffic bulk metadata clear`, `traffic bulk delete` | [captured traffic inspection](captured-traffic-inspection.md) |
 | Notes | `notes set`, `notes get`, `notes list`, list pagination, `notes clear`, `traffic bulk note append`, `traffic bulk note clear` | [notes](notes.md) |
 | Project open | `project open --name`, `project open --path`, `project switch`, `project list` | [project open](project-open.md) |
 | Events | `events`, `traffic bulk highlight` | [events](events.md) |
-| Launchpad | `launchpad create`, `launchpad list`, `launchpad get`, `launchpad update`, `launchpad link`, `launchpad unlink`, `launchpad move`, `launchpad launch`, `launchpad pending`, `launchpad status`, `launchpad cancel`, `traffic bulk link`, `traffic bulk unlink` | [launchpad](launchpad.md) |
+| Launchpad | `launchpad create`, `launchpad list`, `launchpad get`, `launchpad update`, `launchpad delete`, `launchpad link`, `launchpad unlink`, `launchpad move`, `launchpad launch`, `launchpad pending`, `launchpad status`, `launchpad cancel`, `traffic bulk link`, `traffic bulk unlink` | [launchpad](launchpad.md) |
 | Background jobs | `jobs list`, `jobs rebuild` | [jobs](jobs.md) |
+| Dashboard counts | `dashboard` | [dashboard](dashboard.md) |
 | Client settings | `settings list`, `settings get`, `settings set`, `settings delete` | [settings](settings.md) |
 | Test case | `test-case create`, `test-case list`, `test-case get`, `test-case list-requests`, `test-case update`, `test-case delete`, `test-case link`, `test-case unlink`, `test-case checklist` | [test case](test-case.md) |
 | Finding | `finding create`, `finding list`, `finding get`, `finding list-requests`, `finding update`, `finding delete`, `finding link`, `finding unlink` | [finding](finding.md) |
@@ -28,7 +29,7 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Extension | `extension list`, `extension get`, `extension update`, `extension logs`, `extension settings get`, `extension settings set`, `extension call`, `extension enable`, `extension disable`, `extension api` | [extension](extension.md) |
 | Report | `report template list`, `report template add`, `report template remove`, `report template restore`, `report export` | [report](report.md) |
 | WebSocket | `websocket list`, `websocket get`, `websocket messages`, `traffic websocket`, `websocket inject`, `websocket close` | [websocket](websocket.md) |
-| Scope check | `scope check` | [scope check](scope.md) |
+| Scope check | `scope check`, `scope list` | [scope check](scope.md) |
 | Proxy logs | `logs`, list pagination with `--limit` and `--cursor` | [proxy logs](logs.md) |
 | CA certificate | `certificate get`, `--format pem` or `der` | [CA certificate](certificate.md) |
 | Browser view and Marasi's own pages | `http://marasi/cert`, `http://marasi/view/{uuid}` through the proxy listener | [browser view](browser-view.md) |

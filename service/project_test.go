@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -958,6 +959,54 @@ end`, holdURL)
 			}
 		default:
 			t.Fatal("\nwanted:\nstartup called the embedded function\ngot:\nno call")
+		}
+	})
+}
+
+func TestListProjects(t *testing.T) {
+	t.Run("should carry each project's modification time and a symlink's target's", func(t *testing.T) {
+		configDir := t.TempDir()
+		projectsDir := ProjectsDir(configDir)
+		if err := CreateProjectsDir(configDir); err != nil {
+			t.Fatal(err)
+		}
+		inside := filepath.Join(projectsDir, "inside.marasi")
+		target := filepath.Join(t.TempDir(), "target.marasi")
+		for _, path := range []string{inside, target} {
+			if err := os.WriteFile(path, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		insideTime := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+		targetTime := time.Date(2025, 6, 7, 8, 9, 10, 0, time.UTC)
+		if err := os.Chtimes(inside, insideTime, insideTime); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(target, targetTime, targetTime); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(projectsDir, "alias.marasi")); err != nil {
+			t.Skipf("creating symlink: %v", err)
+		}
+
+		items, err := ListProjects(configDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []ProjectListItem{
+			{Name: "alias", Project: canonicalProjectPath(t, target), ModifiedAt: targetTime},
+			{Name: "inside", Project: canonicalProjectPath(t, inside), ModifiedAt: insideTime},
+		}
+		if !slices.Equal(items, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, items)
+		}
+
+		body, err := json.Marshal(items[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wantJSON := fmt.Sprintf(`{"name":"alias","project":%q,"modified_at":"2025-06-07T08:09:10Z"}`, canonicalProjectPath(t, target)); string(body) != wantJSON {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantJSON, body)
 		}
 	})
 }

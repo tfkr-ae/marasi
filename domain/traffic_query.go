@@ -126,6 +126,10 @@ type TrafficFieldCounts struct {
 	// descending and then by value ascending, with "" last among equal
 	// counts. The counts add up to the number of matching pairs.
 	Counts []*TrafficFieldCount
+	// AsOf is the newest pair id the count could include: the query's AsOf,
+	// or the newest pair at read time when it is nil. It is nil when there
+	// is no pair.
+	AsOf *uuid.UUID
 	// Complete reports, for each background job the answer depends on,
 	// whether the job had finished. See TrafficPage.Complete.
 	Complete map[JobName]bool

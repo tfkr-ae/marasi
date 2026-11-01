@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"github.com/tfkr-ae/marasi/service"
 )
 
 var listenerStartAddress string
@@ -32,7 +33,7 @@ func init() {
 	listenerUpdateCmd.Flags().StringVar(&listenerUpdateAddress, "address", "", "Host or IP, without a port")
 	listenerUpdateCmd.Flags().Var(&listenerUpdatePort, "port", "TCP port")
 	listenerCmd.AddCommand(listenerStartCmd, listenerStopCmd, listenerUpdateCmd, listenerStatusCmd)
-	listenerCmd.AddCommand(listenerAddressCmd)
+	listenerCmd.AddCommand(listenerAddressCmd, listenerInterfacesCmd)
 	rootCmd.AddCommand(listenerCmd)
 }
 
@@ -91,6 +92,35 @@ var listenerAddressCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return runListenerCommand(cmd, http.MethodGet, "/listener/status", "getting proxy listener address", "address", listenerRequest{})
+	},
+}
+
+var listenerInterfacesCmd = &cobra.Command{
+	Use:   "interfaces",
+	Short: "List the instance machine's addresses the proxy listener can bind",
+	Long: `List the IP addresses of the network interfaces on the machine the
+instance runs on, loopback included: IPv4 first, then by interface and
+address. On a remote instance these are not the CLI machine's addresses.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		body, err := runControlRequest(cmd, http.MethodGet, "/listener/interfaces", "listing proxy listener interfaces", nil)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return writeJSONBody(cmd, body)
+		}
+		var list struct {
+			Items []service.ListenerInterface `json:"items"`
+		}
+		if err := json.Unmarshal(body, &list); err != nil {
+			return fmt.Errorf("decoding proxy listener interfaces: %w", err)
+		}
+		table := newListTable(cmd.OutOrStdout(), "ADDRESS", "FAMILY", "INTERFACE")
+		for _, item := range list.Items {
+			table.row(item.Address, item.Family, item.Interface)
+		}
+		return table.flush()
 	},
 }
 

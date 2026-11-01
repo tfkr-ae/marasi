@@ -48,6 +48,24 @@ type trafficCount struct {
 	Sitemap *jobCompleteness `json:"sitemap,omitempty"`
 }
 
+// trafficFieldCounts is the GET /traffic/count/by-field response body.
+// Items hold every value of the field, uncapped, most pairs first; a pair
+// with no value counts under "". AsOf is the newest pair id the counts could
+// include, null when there is no pair.
+type trafficFieldCounts struct {
+	Items []trafficFieldCount `json:"items"`
+	AsOf  *uuid.UUID          `json:"as_of"`
+	Index trafficIndex        `json:"index"`
+	// Sitemap is set when the query has a sitemap condition.
+	Sitemap *jobCompleteness `json:"sitemap,omitempty"`
+}
+
+// trafficFieldCount is one value of the counted field and its pairs.
+type trafficFieldCount struct {
+	Value string `json:"value"`
+	Count int    `json:"count"`
+}
+
 // trafficList is the body of a traffic list paged by UUID, such as an
 // Armory run's traffic.
 type trafficList struct {
@@ -429,6 +447,46 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			Sitemap: sitemapCompleteness(count.Complete),
 		})
 	})
+	// GET /traffic/count/by-field reads as_of in the same transaction as the
+	// counts when the request omits it, so a client can pass the bound back
+	// and count the same pairs again (docs/adr/2026-10-14-query-selections-stop-at-as-of.md).
+	mux.HandleFunc("GET /traffic/count/by-field", func(w http.ResponseWriter, r *http.Request) {
+		query, ok := parseTrafficFieldCountQuery(r)
+		if !ok {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
+		repo, err := proxy.GetTrafficRepo()
+		if err != nil {
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		counts, err := repo.CountTrafficByFieldContext(r.Context(), query)
+		var queryErr *domain.QueryError
+		switch {
+		case r.Context().Err() != nil:
+			return // the client went away; nobody reads the answer
+		case errors.Is(err, domain.ErrInvalidCountField):
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_count_field", Message: err.Error()})
+			return
+		case errors.As(err, &queryErr):
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
+			return
+		case err != nil:
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+			return
+		}
+		body := trafficFieldCounts{
+			Items:   make([]trafficFieldCount, len(counts.Counts)),
+			AsOf:    counts.AsOf,
+			Index:   trafficIndex{Complete: searchComplete(counts.Complete)},
+			Sitemap: sitemapCompleteness(counts.Complete),
+		}
+		for i, count := range counts.Counts {
+			body.Items[i] = trafficFieldCount{Value: count.Value, Count: count.Count}
+		}
+		writeJSON(w, r, http.StatusOK, body)
+	})
 	// GET /traffic/query checks q and exclude without running them, so it
 	// needs no open project. It returns 204, or the invalid_query body
 	// GET /traffic would return.
@@ -672,6 +730,22 @@ func parseTrafficCountQuery(r *http.Request) (domain.TrafficCountQuery, bool) {
 			return domain.TrafficCountQuery{}, false
 		}
 		*bound = &id
+	}
+	return q, true
+}
+
+// parseTrafficFieldCountQuery reads field, q, exclude and as_of from a
+// GET /traffic/count/by-field request. It reports false for a malformed
+// as_of; the repository checks the field.
+func parseTrafficFieldCountQuery(r *http.Request) (domain.TrafficFieldCountQuery, bool) {
+	query := r.URL.Query()
+	q := domain.TrafficFieldCountQuery{Text: query.Get("q"), Exclusion: query["exclude"], Field: query.Get("field")}
+	if raw := query.Get("as_of"); raw != "" {
+		asOf, err := uuid.Parse(raw)
+		if err != nil {
+			return domain.TrafficFieldCountQuery{}, false
+		}
+		q.AsOf = &asOf
 	}
 	return q, true
 }

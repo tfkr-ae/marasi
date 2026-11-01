@@ -47,9 +47,9 @@ var projectListCmd = &cobra.Command{
 		if jsonOutput {
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(service.ProjectList{Items: items})
 		}
-		table := newListTable(cmd.OutOrStdout(), "NAME", "PROJECT")
+		table := newListTable(cmd.OutOrStdout(), "NAME", "MODIFIED", "PROJECT")
 		for _, item := range items {
-			table.row(item.Name, item.Project)
+			table.row(item.Name, item.ModifiedAt.Format(time.RFC3339), item.Project)
 		}
 		if err := table.flush(); err != nil {
 			return fmt.Errorf("writing project list: %w", err)

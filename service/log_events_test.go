@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -257,6 +258,9 @@ func connectServiceEvents(t *testing.T, server *Server) *bufio.Reader {
 func nextHTTPServiceEvent(t *testing.T, reader *bufio.Reader) serviceEvent {
 	t.Helper()
 	frame := readEventFrame(t, reader)
+	for strings.HasPrefix(frame, "event: project.opening\n") || strings.HasPrefix(frame, "event: project.upgrading\n") {
+		frame = readEventFrame(t, reader)
+	}
 	nameLine, rest, ok := strings.Cut(frame, "\n")
 	if !ok || !strings.HasPrefix(nameLine, "event: ") {
 		t.Fatalf("invalid service event frame %q", frame)
@@ -317,4 +321,31 @@ func assertProxyLogEventMatchesListItem(t *testing.T, eventData []byte, item pro
 	if !bytes.Equal(eventData, listItem) {
 		t.Fatalf("event payload %s did not match list item %s", eventData, listItem)
 	}
+}
+
+func TestExtensionLogEvents(t *testing.T) {
+	t.Run("should announce each print line on /events as it is printed", func(t *testing.T) {
+		_, runtime, reader := openExtensionEventInstance(t)
+
+		if err := runtime.ExecuteLua(`print("first", 1)
+print("second")`); err != nil {
+			t.Fatalf("printing: %v", err)
+		}
+
+		logs := runtime.LogSnapshot()
+		if len(logs) != 2 {
+			t.Fatalf("\nwanted:\n2 print lines\ngot:\n%+v", logs)
+		}
+		for _, entry := range logs {
+			want := map[string]any{"id": runtime.Data.ID.String(), "name": "workshop", "time": entry.Time.Format(time.RFC3339Nano), "text": entry.Text}
+			event := nextHTTPServiceEvent(t, reader)
+			var got map[string]any
+			if err := json.Unmarshal(event.data, &got); err != nil {
+				t.Fatalf("decoding %s: %v", event.name, err)
+			}
+			if event.name != "extension.log" || !reflect.DeepEqual(got, want) {
+				t.Fatalf("\nwanted:\nextension.log %v\ngot:\n%s %v", want, event.name, got)
+			}
+		}
+	})
 }

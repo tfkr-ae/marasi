@@ -312,6 +312,18 @@ func WithWebSocketCloseHandler(handler func(domain.WebSocketConnection) error) f
 	}
 }
 
+// WithWebSocketHandshakeEndedHandler sets OnWebSocketHandshakeEnded, called
+// once an upgrade that failed or was dropped has its websocket.state stored.
+func WithWebSocketHandshakeEndedHandler(handler func(requestID uuid.UUID, state string)) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnWebSocketHandshakeEnded != nil {
+			return errors.New("proxy already has a websocket handshake ended handler defined")
+		}
+		proxy.OnWebSocketHandshakeEnded = handler
+		return nil
+	}
+}
+
 // WithWebSocketInterceptHandler takes a handler function that will be executed when a WebSocket message is intercepted.
 func WithWebSocketInterceptHandler(handler func(domain.WebSocketMessage) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {

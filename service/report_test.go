@@ -401,8 +401,9 @@ func TestReportExportRendersOpenProject(t *testing.T) {
 	got := response.Body.String()
 	createdLine := reportExportField(t, got, "created")
 	stamped, err := time.Parse("2006-01-02T15:04:05Z07:00", createdLine)
-	if err != nil || stamped.Location() != time.UTC || stamped.Before(before) || stamped.After(time.Now().UTC().Add(time.Second)) {
-		t.Fatalf("created_at %q is not an export-time UTC stamp: %v", createdLine, err)
+	_, wantOffset := time.Now().Zone()
+	if _, gotOffset := stamped.Zone(); err != nil || gotOffset != wantOffset || stamped.Before(before) || stamped.After(time.Now().UTC().Add(time.Second)) {
+		t.Fatalf("created_at %q is not an export-time stamp in the instance machine's zone: %v", createdLine, err)
 	}
 	want := "title=Quarterly\nclient=Acme\ntype=Web\ndraft=false\nscope=api.acme.test\nassessor=Ada\nstart=2026-01-02T00:00:00Z\nend=2026-01-16T00:00:00Z\ncreated=" + createdLine + "\ntruncate=50\ncustom={}\nfindings=XSS:unassigned;SQLi:linked;\ncasetitles=Auth;\n"
 	if !strings.HasPrefix(got, want) {
@@ -456,6 +457,102 @@ func TestReportExportPayloadDefaultsAndEmptyLogbook(t *testing.T) {
 	}
 }
 
+func TestReportExportCreatedAtAndCustomProperties(t *testing.T) {
+	server, templates, _ := newReportExportServer(t, &stubExportReporting{
+		findings:  []*domain.Finding{{Title: "XSS"}},
+		testCases: []*domain.TestCase{{Title: "Auth"}},
+	})
+
+	t.Run("should keep the offset of created_at", func(t *testing.T) {
+		response := requestControlAPI(server, http.MethodPost, "/report", `{"template":"fixture.md","start":"2026-03-01","end":"2026-03-02","created_at":"2026-03-04T09:15:30+05:45"}`)
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d %s", http.StatusOK, response.Code, response.Body.String())
+		}
+		if got := reportExportField(t, response.Body.String(), "created"); got != "2026-03-04T09:15:30+05:45" {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", "2026-03-04T09:15:30+05:45", got)
+		}
+	})
+
+	// The default template reads each test case's rows through the generator's
+	// repository, so it renders an empty logbook here.
+	emptyServer, _, _ := newReportExportServer(t, &stubExportReporting{findings: []*domain.Finding{}, testCases: []*domain.TestCase{}})
+
+	t.Run("should print created_at in its own zone with the default template", func(t *testing.T) {
+		for _, createdAt := range []string{"2026-03-04T09:15:30+05:45", "2026-03-04T09:15:30-09:30", "2026-03-04T09:15:30.123Z"} {
+			response := requestControlAPI(emptyServer, http.MethodPost, "/report", `{"template":"default_template.md","start":"2026-03-01","end":"2026-03-02","created_at":"`+createdAt+`"}`)
+			if response.Code != http.StatusOK {
+				t.Fatalf("\nwanted:\n%d\ngot:\n%d %s", http.StatusOK, response.Code, response.Body.String())
+			}
+			if got := defaultTemplateCreated(t, response.Body.String()); got != "2026-03-04 09:15:30" {
+				t.Fatalf("created_at %s\nwanted:\n%v\ngot:\n%v", createdAt, "2026-03-04 09:15:30", got)
+			}
+		}
+	})
+
+	t.Run("should print the export time in the instance machine's zone with the default template when created_at is absent", func(t *testing.T) {
+		before := time.Now().Add(-time.Second)
+		response := requestControlAPI(emptyServer, http.MethodPost, "/report", `{"template":"default_template.md","start":"2026-03-01","end":"2026-03-02"}`)
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d %s", http.StatusOK, response.Code, response.Body.String())
+		}
+		line := defaultTemplateCreated(t, response.Body.String())
+		stamped, err := time.ParseInLocation("2006-01-02 15:04:05", line, time.Local)
+		if err != nil || stamped.Before(before.Truncate(time.Second)) || stamped.After(time.Now().Add(time.Second)) {
+			t.Fatalf("\nwanted:\nexport time in the local zone near %v\ngot:\n%q %v", before, line, err)
+		}
+	})
+
+	t.Run("should pass custom_properties through to the template", func(t *testing.T) {
+		response := requestControlAPI(server, http.MethodPost, "/report", `{"template":"fixture.md","start":"2026-03-01","end":"2026-03-02","custom_properties":{"engagement":"Q1","retest":true,"tags":["web"]}}`)
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d %s", http.StatusOK, response.Code, response.Body.String())
+		}
+		want := "custom={\n  \"engagement\": \"Q1\",\n  \"retest\": true,\n  \"tags\": [\n    \"web\"\n  ]\n}\n"
+		if !strings.Contains(response.Body.String(), want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, response.Body.String())
+		}
+	})
+
+	t.Run("should render null custom_properties as empty", func(t *testing.T) {
+		response := requestControlAPI(server, http.MethodPost, "/report", `{"template":"fixture.md","start":"2026-03-01","end":"2026-03-02","custom_properties":null}`)
+		if response.Code != http.StatusOK || reportExportField(t, response.Body.String(), "custom") != "{}" {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%d %s", "custom={}", response.Code, response.Body.String())
+		}
+	})
+
+	if err := os.WriteFile(filepath.Join(templates, "include.md"), []byte("include={{.Metadata.CustomProperties.include_test_cases}}\ncases={{len .TestCases}}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{"should list no test cases when include_test_cases is false and custom_properties says true", `"include_test_cases":false,"custom_properties":{"include_test_cases":true}`, "include=false\ncases=0\n"},
+		{"should list test cases when include_test_cases is true and custom_properties says false", `"include_test_cases":true,"custom_properties":{"include_test_cases":false}`, "include=true\ncases=1\n"},
+		{"should list test cases when include_test_cases is omitted and custom_properties says false", `"custom_properties":{"include_test_cases":false}`, "include=true\ncases=1\n"},
+		{"should list test cases when include_test_cases is omitted and custom_properties holds another value", `"custom_properties":{"include_test_cases":"no"}`, "include=true\ncases=1\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := requestControlAPI(server, http.MethodPost, "/report", `{"template":"include.md","start":"2026-03-01","end":"2026-03-02",`+tc.body+`}`)
+			if response.Code != http.StatusOK || response.Body.String() != tc.want {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%d %v", tc.want, response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func defaultTemplateCreated(t *testing.T, rendered string) string {
+	t.Helper()
+	for _, line := range strings.Split(rendered, "\n") {
+		if created, ok := strings.CutPrefix(line, "created: "); ok {
+			return created
+		}
+	}
+	t.Fatalf("rendered default template missing created:\n%s", rendered)
+	return ""
+}
+
 func TestReportExportRejectsInvalidRequests(t *testing.T) {
 	server, _, _ := newReportExportServer(t, &stubExportReporting{})
 	for _, body := range []string{
@@ -471,8 +568,12 @@ func TestReportExportRejectsInvalidRequests(t *testing.T) {
 		`{"template":"../secret.md","start":"2026-01-02","end":"2026-01-16"}`,
 		`{"template":"nested/a.md","start":"2026-01-02","end":"2026-01-16"}`,
 		`{"template":"fixture.md","start":"2026-01-02","end":"2026-01-16","truncate_length":-1}`,
-		`{"template":"fixture.md","start":"2026-01-02","end":"2026-01-16","created_at":"2026-01-02T00:00:00Z"}`,
-		`{"template":"fixture.md","start":"2026-01-02","end":"2026-01-16","custom_properties":{}}`,
+		`{"template":"fixture.md","start":"2026-01-02","end":"2026-01-16","created_at":"2026-01-02"}`,
+		`{"template":"fixture.md","start":"2026-01-02","end":"2026-01-16","created_at":"2026-01-02 00:00:00Z"}`,
+		`{"template":"fixture.md","start":"2026-01-02","end":"2026-01-16","created_at":""}`,
+		`{"template":"fixture.md","start":"2026-01-02","end":"2026-01-16","created_at":1767312000}`,
+		`{"template":"fixture.md","start":"2026-01-02","end":"2026-01-16","custom_properties":[]}`,
+		`{"template":"fixture.md","start":"2026-01-02","end":"2026-01-16","custom_properties":"engagement"}`,
 		`{"template":"fixture.md","start":"2026-01-02","end":"2026-01-16","test_case_id":"01938032-1b17-7243-b035-e6a9f4645904"}`,
 		`{"template":"fixture.md","start":"2026-01-02","end":"2026-01-16"}{}`,
 		`{"template":"fixture.md","start":"2026-01-02","end":"2026-01-16","is_draft":"yes"}`,

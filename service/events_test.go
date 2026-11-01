@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -239,6 +240,38 @@ func TestServiceEvents(t *testing.T) {
 		}
 	})
 
+	t.Run("should publish an abandoned checkpoint item with its request_id and reason", func(t *testing.T) {
+		server := newTestServer(nil, func() {})
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		response, reader := connectEventStream(t, httpServer.URL)
+		defer response.Body.Close()
+
+		if err := server.HandleCheckpointAbandoned(domain.CheckpointItem{
+			ID:   uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809"),
+			Type: domain.CheckpointTypeResponse,
+		}); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := server.HandleCheckpointAbandoned(domain.CheckpointItem{
+			ID:           uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780b"),
+			Type:         domain.CheckpointTypeWebSocket,
+			ConnectionID: uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780c"),
+			RequestID:    uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a"),
+		}); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		wantHTTP := "event: checkpoint.dropped\ndata: {\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"type\":\"response\",\"request_id\":null,\"reason\":\"abandoned\"}\n\n"
+		if got := readEventFrame(t, reader); got != wantHTTP {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantHTTP, got)
+		}
+		wantWebSocket := "event: checkpoint.dropped\ndata: {\"id\":\"0193802f-f0e7-73d9-a764-06d21e36780b\",\"type\":\"websocket\",\"request_id\":\"0193802f-f0e7-73d9-a764-06d21e36780a\",\"reason\":\"abandoned\"}\n\n"
+		if got := readEventFrame(t, reader); got != wantWebSocket {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantWebSocket, got)
+		}
+	})
+
 	t.Run("should return nil from handlers when a subscriber queue fills", func(t *testing.T) {
 		server := newTestServer(nil, func() {})
 		httpServer := httptest.NewServer(server)
@@ -263,6 +296,30 @@ func TestServiceEvents(t *testing.T) {
 			}
 		case <-time.After(time.Second):
 			t.Fatal("\nwanted:\nhandlers to return while the subscriber is not reading\ngot:\nblocked publication")
+		}
+	})
+}
+
+func TestProjectOpenEvents(t *testing.T) {
+	t.Run("should frame project open progress for event clients", func(t *testing.T) {
+		server, lifecycle, _, _ := newProjectOpenServer(t)
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		response, reader := connectEventStream(t, httpServer.URL)
+		defer response.Body.Close()
+
+		lifecycle.opening("/projects/next.marasi")
+		lifecycle.upgrading("/projects/next.marasi", db.MigrationStep{Migration: "00026_pair_route.sql", Applied: 1, Total: 2})
+		lifecycle.openingFailed("/projects/next.marasi", errors.New("applying migration: disk full"))
+
+		for _, want := range []string{
+			"event: project.opening\ndata: {\"project\":\"/projects/next.marasi\"}\n\n",
+			"event: project.upgrading\ndata: {\"project\":\"/projects/next.marasi\",\"migration\":\"00026_pair_route.sql\",\"applied\":1,\"total\":2}\n\n",
+			"event: project.opening_failed\ndata: {\"project\":\"/projects/next.marasi\",\"error\":\"applying migration: disk full\"}\n\n",
+		} {
+			if got := readEventFrame(t, reader); got != want {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+			}
 		}
 	})
 }

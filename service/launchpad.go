@@ -282,6 +282,33 @@ func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, e
 		events.publish("launchpad.updated", response)
 		writeJSON(w, r, http.StatusOK, response)
 	})
+
+	mux.HandleFunc("DELETE /launchpad/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseLaunchpadID(w, r)
+		if !ok {
+			return
+		}
+		repo, err := proxy.GetLaunchpadRepo()
+		if err != nil {
+			writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		// The repository's delete has no not-found sentinel, so the 404 comes
+		// from this read, as on the link routes.
+		if _, err := repo.GetLaunchpad(id); err != nil {
+			writeLaunchpadRepositoryError(w, r, err)
+			return
+		}
+		if err := proxy.DeleteLaunchpad(id); err != nil {
+			writeLaunchpadRepositoryError(w, r, err)
+			return
+		}
+		response := struct {
+			ID uuid.UUID `json:"id"`
+		}{ID: id}
+		events.publish("launchpad.deleted", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
 }
 
 func launchpadSummaryFromDomain(launchpad *domain.Launchpad) launchpadSummary {

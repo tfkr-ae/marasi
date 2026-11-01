@@ -310,8 +310,16 @@ func TestProjectListCommand(t *testing.T) {
 		if err := os.Mkdir(projectsDir, 0700); err != nil {
 			t.Fatal(err)
 		}
+		modified := map[string]time.Time{
+			"zeta":  time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+			"alpha": time.Date(2025, 6, 7, 8, 9, 10, 0, time.UTC),
+		}
 		for _, name := range []string{"zeta", "alpha"} {
-			if err := os.WriteFile(filepath.Join(projectsDir, name+".marasi"), []byte(name), 0600); err != nil {
+			path := filepath.Join(projectsDir, name+".marasi")
+			if err := os.WriteFile(path, []byte(name), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chtimes(path, modified[name], modified[name]); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -331,12 +339,12 @@ func TestProjectListCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "../ignored", "project", "list")
-		want := fmt.Sprintf("NAME   PROJECT\nalpha  %s\nzeta   %s\nNAME   PROJECT\n", alpha, zeta)
+		want := fmt.Sprintf("NAME   MODIFIED              PROJECT\nalpha  2025-06-07T08:09:10Z  %s\nzeta   2026-01-02T03:04:05Z  %s\nNAME   MODIFIED              PROJECT\n", alpha, zeta)
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("wanted stdout %q, empty stderr, and nil error; got stdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
 		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "project", "list", "--json")
-		wantJSON := fmt.Sprintf("{\"items\":[{\"name\":\"alpha\",\"project\":%q},{\"name\":\"zeta\",\"project\":%q}]}\n", alpha, zeta)
+		wantJSON := fmt.Sprintf("{\"items\":[{\"name\":\"alpha\",\"project\":%q,\"modified_at\":\"2025-06-07T08:09:10Z\"},{\"name\":\"zeta\",\"project\":%q,\"modified_at\":\"2026-01-02T03:04:05Z\"}]}\n", alpha, zeta)
 		if err != nil || stdout != wantJSON || stderr != "" {
 			t.Fatalf("wanted stdout %q, empty stderr, and nil error; got stdout %q, stderr %q, error %v", wantJSON, stdout, stderr, err)
 		}
@@ -367,7 +375,7 @@ func TestProjectListCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("should list symlink names with canonical paths and retain duplicate targets", func(t *testing.T) {
+	t.Run("should list symlink names with canonical paths and their targets' times and retain duplicate targets", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		projectsDir := filepath.Join(configDir, "projects")
 		if err := os.Mkdir(projectsDir, 0700); err != nil {
@@ -379,6 +387,14 @@ func TestProjectListCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(projectsDir, "inside.marasi"), []byte("inside"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		targetTime := time.Date(2025, 6, 7, 8, 9, 10, 0, time.UTC)
+		insideTime := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+		if err := os.Chtimes(target, targetTime, targetTime); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(filepath.Join(projectsDir, "inside.marasi"), insideTime, insideTime); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Mkdir(filepath.Join(projectsDir, "folder.marasi"), 0700); err != nil {
@@ -406,12 +422,12 @@ func TestProjectListCommand(t *testing.T) {
 		}
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "project", "list")
-		want := fmt.Sprintf("NAME        PROJECT\nalias       %s\nalias-copy  %s\ninside      %s\nNAME        PROJECT\n", canonicalTarget, canonicalTarget, inside)
+		want := fmt.Sprintf("NAME        MODIFIED              PROJECT\nalias       2025-06-07T08:09:10Z  %s\nalias-copy  2025-06-07T08:09:10Z  %s\ninside      2026-01-02T03:04:05Z  %s\nNAME        MODIFIED              PROJECT\n", canonicalTarget, canonicalTarget, inside)
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("wanted stdout %q, empty stderr, and nil error; got stdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
 		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "project", "list", "--json")
-		wantJSON := fmt.Sprintf("{\"items\":[{\"name\":\"alias\",\"project\":%q},{\"name\":\"alias-copy\",\"project\":%q},{\"name\":\"inside\",\"project\":%q}]}\n", canonicalTarget, canonicalTarget, inside)
+		wantJSON := fmt.Sprintf("{\"items\":[{\"name\":\"alias\",\"project\":%q,\"modified_at\":\"2025-06-07T08:09:10Z\"},{\"name\":\"alias-copy\",\"project\":%q,\"modified_at\":\"2025-06-07T08:09:10Z\"},{\"name\":\"inside\",\"project\":%q,\"modified_at\":\"2026-01-02T03:04:05Z\"}]}\n", canonicalTarget, canonicalTarget, inside)
 		if err != nil || stdout != wantJSON || stderr != "" {
 			t.Fatalf("wanted stdout %q, empty stderr, and nil error; got stdout %q, stderr %q, error %v", wantJSON, stdout, stderr, err)
 		}

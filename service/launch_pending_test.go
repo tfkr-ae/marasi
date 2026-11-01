@@ -57,6 +57,7 @@ func TestControlAPIRefusesPendingLaunch(t *testing.T) {
 			{http.MethodPost, "/traffic/bulk/unlink", selection + `,"launchpad_id":"` + launchpadID.String() + `"}`},
 			{http.MethodDelete, "/launchpad/" + launchpadID.String() + "/link/" + id.String(), ""},
 			{http.MethodPost, "/launchpad/" + launchpadID.String() + "/move", move},
+			{http.MethodDelete, "/launchpad/" + launchpadID.String(), ""},
 		} {
 			response := requestControlAPI(server, call.method, call.path, call.body)
 			assertControlAPIResponse(t, response, http.StatusConflict, refused)
@@ -80,5 +81,7 @@ func TestControlAPIRefusesPendingLaunch(t *testing.T) {
 		assertControlAPIResponse(t, response, http.StatusOK, `{"launchpad_id":"`+targetID.String()+`","request_id":"`+id.String()+`"}`+"\n")
 		response = requestControlAPI(server, http.MethodPost, "/traffic/bulk/delete", selection+`}`)
 		assertControlAPIResponse(t, response, http.StatusOK, `{"count":2}`+"\n")
+		response = requestControlAPI(server, http.MethodDelete, "/launchpad/"+launchpadID.String(), "")
+		assertControlAPIResponse(t, response, http.StatusOK, `{"id":"`+launchpadID.String()+`"}`+"\n")
 	})
 }

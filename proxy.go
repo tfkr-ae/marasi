@@ -64,6 +64,8 @@ var (
 	ErrArmoryRepoNotFound = errors.New("armory repo not found")
 	// ErrConfigRepoNotFound is returned when the config repository is not found.
 	ErrConfigRepoNotFound = errors.New("config repo not found")
+	// ErrStatsRepoNotFound is returned when the stats repository is not found.
+	ErrStatsRepoNotFound = errors.New("stats repo not found")
 	// ErrArmoryNotFound is returned when the Armory service is not found.
 	ErrArmoryNotFound = errors.New("armory service not found")
 	// ErrWordlistManagerNotSet is returned when the wordlist manager is not set.
@@ -112,6 +114,9 @@ type Proxy struct {
 	OnWebSocketClose func(domain.WebSocketConnection) error
 	// OnWebSocketIntercept is called when a WebSocket message is paused for inspection.
 	OnWebSocketIntercept func(domain.WebSocketMessage) error
+	// OnWebSocketHandshakeEnded is called with websocket.state failed or
+	// dropped for an upgrade that will not open, once that state is stored.
+	OnWebSocketHandshakeEnded func(requestID uuid.UUID, state string)
 	// OnLaunchStarted is called once a launch is accepted, before it is sent.
 	OnLaunchStarted func(domain.Launch)
 	// OnLaunchFinished is called once per launch when it reaches a terminal state.
@@ -297,6 +302,15 @@ func (proxy *Proxy) GetConfigRepo() (domain.ConfigRepository, error) {
 		return nil, ErrConfigRepoNotFound
 	}
 	return proxy.ConfigRepo, nil
+}
+
+// GetStatsRepo returns the stats repository, which holds the dashboard counts.
+// It returns an error if the repository is not set.
+func (proxy *Proxy) GetStatsRepo() (domain.StatsRepository, error) {
+	if proxy.StatsRepo == nil {
+		return nil, ErrStatsRepoNotFound
+	}
+	return proxy.StatsRepo, nil
 }
 
 // GetArmory returns the Armory service.

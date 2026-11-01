@@ -84,6 +84,8 @@ var Reference = sync.OnceValue(func() APIReference {
 	// in a runtime that never runs Lua.
 	extension := &Runtime{Data: &domain.Extension{}, LuaState: lua.NewState(), reference: &ref}
 	registerAPI(extension, nil)
+	// A service instance adds marasi.gui as an option, so record it the same way.
+	_ = WithGUI(GUI{Type: ServiceGUIType})(extension)
 
 	bare := lua.NewState()
 	openStandardLibraries(bare)

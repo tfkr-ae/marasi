@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -509,6 +510,65 @@ func TestProjectOpen(t *testing.T) {
 	})
 }
 
+func TestProjectOpenInterruptedArmoryRun(t *testing.T) {
+	t.Run("should cancel a run left in progress and refuse start and cancel", func(t *testing.T) {
+		server, _, dir, _ := newProjectOpenServer(t)
+		target := canonicalProjectPath(t, filepath.Join(dir, "crashed.marasi"))
+		runID := interruptedArmoryRunInProject(t, target)
+
+		before := time.Now()
+		response := requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(target))
+		if response.Code != http.StatusOK {
+			t.Fatalf("opening project: %d %s", response.Code, response.Body.String())
+		}
+
+		got := requestControlAPI(server, http.MethodGet, "/armory/run/"+runID.String(), "")
+		var run struct {
+			Status     domain.ArmoryRunStatus `json:"status"`
+			FinishedAt *time.Time             `json:"finished_at"`
+		}
+		if err := json.Unmarshal(got.Body.Bytes(), &run); err != nil {
+			t.Fatalf("decoding run: %v; %s", err, got.Body.String())
+		}
+		if got.Code != http.StatusOK || run.Status != domain.ArmoryRunCancelled || run.FinishedAt == nil || run.FinishedAt.Before(before.Truncate(time.Second)) {
+			t.Fatalf("\nwanted:\n200 cancelled, finished after %v\ngot:\n%d %s", before, got.Code, got.Body.String())
+		}
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/armory/run/"+runID.String()+"/start", ""), http.StatusConflict, "{\"error\":\"not_a_draft\"}\n")
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/armory/run/"+runID.String()+"/cancel", ""), http.StatusConflict, "{\"error\":\"run_not_active\"}\n")
+	})
+}
+
+// interruptedArmoryRunInProject stores a run in path as an instance that
+// stopped mid-run leaves it: in progress, with no finish time.
+func interruptedArmoryRunInProject(t *testing.T, path string) uuid.UUID {
+	t.Helper()
+	connection, err := db.New(path, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("opening %s: %v", path, err)
+	}
+	repository := db.NewProxyRepo(connection)
+	defer repository.Close()
+	template := &domain.ArmoryTemplate{ID: uuid.Must(uuid.NewV7()), Name: "Interrupted", RawTemplate: "GET / HTTP/1.1\r\nHost: marasi.app\r\n\r\n"}
+	if err := repository.CreateArmoryTemplate(template); err != nil {
+		t.Fatalf("creating armory template: %v", err)
+	}
+	startedAt := time.Now().Add(-time.Minute)
+	run := &domain.ArmoryRun{
+		ID:               uuid.Must(uuid.NewV7()),
+		TemplateID:       template.ID,
+		TemplateSnapshot: template.RawTemplate,
+		Wordlists:        []string{},
+		Status:           domain.ArmoryRunInProgress,
+		AttackType:       domain.ArmoryAttackHarpoon,
+		MaxConcurrent:    1,
+		StartedAt:        &startedAt,
+	}
+	if err := repository.CreateArmoryRun(run); err != nil {
+		t.Fatalf("creating armory run: %v", err)
+	}
+	return run.ID
+}
+
 func launchpadNamesInProject(t *testing.T, path string) []string {
 	t.Helper()
 	connection, err := db.New(path, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -575,10 +635,16 @@ func TestProjectEvents(t *testing.T) {
 					return
 				}
 				frame += line
-				if line == "\n" {
-					events <- frame
-					return
+				if line != "\n" {
+					continue
 				}
+				// Announced before the target is prepared; the next subtest checks them.
+				if strings.HasPrefix(frame, "event: project.opening\n") || strings.HasPrefix(frame, "event: project.upgrading\n") {
+					frame = ""
+					continue
+				}
+				events <- frame
+				return
 			}
 		}()
 		result := make(chan *httptest.ResponseRecorder, 1)
@@ -629,6 +695,153 @@ func TestProjectEvents(t *testing.T) {
 			t.Fatalf("\nwanted:\ntraffic.request after project.opened\ngot:\n%s", got)
 		}
 	})
+
+	t.Run("should announce a switch, each migration, its waits, then project.opened", func(t *testing.T) {
+		server, lifecycle, dir, _ := newProjectOpenServer(t)
+		lifecycle.waitReportDelay = 10 * time.Millisecond
+		target := canonicalProjectPath(t, filepath.Join(dir, "upgraded.marasi"))
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		stream, reader := connectEventStream(t, httpServer.URL)
+		defer stream.Body.Close()
+
+		release, err := lifecycle.Admit(context.Background())
+		if err != nil {
+			t.Fatalf("admitting work: %v", err)
+		}
+		result := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			result <- requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(target))
+		}()
+
+		wantOpening := fmt.Sprintf("event: project.opening\ndata: {\"project\":%q}\n\n", target)
+		if got := readEventFrame(t, reader); got != wantOpening {
+			release()
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantOpening, got)
+		}
+		migrations := projectMigrationNames(t)
+		for index, migration := range migrations {
+			want := fmt.Sprintf("event: project.upgrading\ndata: {\"project\":%q,\"migration\":%q,\"applied\":%d,\"total\":%d}\n\n", target, migration, index+1, len(migrations))
+			if got := readEventFrame(t, reader); got != want {
+				release()
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+			}
+		}
+		wantWaiting := fmt.Sprintf("event: project.waiting\ndata: {\"project\":%q,\"waiting_for\":[{\"kind\":\"work\",\"count\":1}]}\n\n", target)
+		if got := readEventFrame(t, reader); got != wantWaiting {
+			release()
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantWaiting, got)
+		}
+		release()
+		wantOpened := fmt.Sprintf("event: project.opened\ndata: {\"project\":%q}\n\n", target)
+		if got := readEventFrame(t, reader); got != wantOpened {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantOpened, got)
+		}
+		if response := <-result; response.Code != http.StatusOK {
+			t.Fatalf("opening target: %d %s", response.Code, response.Body.String())
+		}
+
+		// The previous project is up to date, so switching back upgrades nothing.
+		response := requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(filepath.Join(dir, "current.marasi")))
+		if response.Code != http.StatusOK {
+			t.Fatalf("switching back: %d %s", response.Code, response.Body.String())
+		}
+		current := canonicalProjectPath(t, filepath.Join(dir, "current.marasi"))
+		for _, want := range []string{
+			fmt.Sprintf("event: project.opening\ndata: {\"project\":%q}\n\n", current),
+			fmt.Sprintf("event: project.opened\ndata: {\"project\":%q}\n\n", current),
+		} {
+			if got := readEventFrame(t, reader); got != want {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+			}
+		}
+	})
+
+	t.Run("should publish project.opening_failed when a switch fails", func(t *testing.T) {
+		server, _, dir, _ := newProjectOpenServer(t)
+		owned := canonicalProjectPath(t, filepath.Join(dir, "owned.marasi"))
+		held, err := acquireProjectOwnership(owned)
+		if err != nil {
+			t.Fatalf("holding target ownership: %v", err)
+		}
+		defer held()
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		stream, reader := connectEventStream(t, httpServer.URL)
+		defer stream.Body.Close()
+
+		response := requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(owned))
+		assertProjectError(t, response, http.StatusConflict, "project_already_open")
+		for _, want := range []string{
+			fmt.Sprintf("event: project.opening\ndata: {\"project\":%q}\n\n", owned),
+			fmt.Sprintf("event: project.opening_failed\ndata: {\"project\":%q,\"error\":%q}\n\n", owned, "project already open: "+owned),
+		} {
+			if got := readEventFrame(t, reader); got != want {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+			}
+		}
+	})
+
+	t.Run("should not publish project.opening_failed when only the old project's cleanup fails", func(t *testing.T) {
+		server, lifecycle, dir, _ := newProjectOpenServer(t)
+		target := canonicalProjectPath(t, filepath.Join(dir, "cleanup.marasi"))
+		httpServer := httptest.NewServer(server)
+		defer httpServer.Close()
+		stream, reader := connectEventStream(t, httpServer.URL)
+		defer stream.Body.Close()
+
+		realUnlock := lifecycle.open.unlock
+		lifecycle.open.unlock = func() error {
+			return errors.Join(realUnlock(), errors.New("release failed"))
+		}
+		response := requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(target))
+		assertProjectError(t, response, http.StatusInternalServerError, "project_cleanup_failed")
+		// Every event of the open is queued before it returns, so the
+		// marker comes after any project.opening_failed.
+		server.events.publish("test.marker", struct{}{})
+		var got []string
+		for {
+			frame := readEventFrame(t, reader)
+			if frame == "event: test.marker\ndata: {}\n\n" {
+				break
+			}
+			if !strings.HasPrefix(frame, "event: project.upgrading\n") {
+				got = append(got, frame)
+			}
+		}
+		want := []string{
+			fmt.Sprintf("event: project.opening\ndata: {\"project\":%q}\n\n", target),
+			fmt.Sprintf("event: project.opened\ndata: {\"project\":%q}\n\n", target),
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", strings.Join(want, ""), strings.Join(got, ""))
+		}
+	})
+}
+
+// isProjectOpenProgress reports whether name announces a switch still in
+// progress, which tests about other events skip.
+func isProjectOpenProgress(name string) bool {
+	return name == "project.opening" || name == "project.upgrading"
+}
+
+// projectMigrationNames lists the migration files db.New applies, in order.
+func projectMigrationNames(t *testing.T) []string {
+	t.Helper()
+	var names []string
+	for _, pattern := range []string{"0*_*.sql", "0*_*.go"} {
+		matches, err := filepath.Glob(filepath.Join("..", "db", "migrations", pattern))
+		if err != nil {
+			t.Fatalf("listing migrations: %v", err)
+		}
+		for _, match := range matches {
+			if !strings.HasSuffix(match, "_test.go") {
+				names = append(names, filepath.Base(match))
+			}
+		}
+	}
+	slices.Sort(names)
+	return names
 }
 
 func TestProjectOpenHTTPServer(t *testing.T) {

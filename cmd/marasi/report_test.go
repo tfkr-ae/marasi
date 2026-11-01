@@ -153,12 +153,12 @@ func TestReportExportCommand(t *testing.T) {
 	dir := t.TempDir()
 	sent := startCannedControlAPI(t, configDir, "report-export", http.StatusOK, "rendered report")
 
-	stdout, stderr, err := runMarasiInDir(binary, dir, "--config-dir", configDir, "--instance", "report-export", "report", "export", "custom.md", "--title", "Assessment", "--client", "Acme", "--type", "Web", "--scope", "api.example", "--assessor", "Ada", "--start", "2026-01-02", "--end", "2026-01-16", "--draft=false", "--truncate", "40", "--include-test-cases=false", "--output", "out.md")
+	stdout, stderr, err := runMarasiInDir(binary, dir, "--config-dir", configDir, "--instance", "report-export", "report", "export", "custom.md", "--title", "Assessment", "--client", "Acme", "--type", "Web", "--scope", "api.example", "--assessor", "Ada", "--start", "2026-01-02", "--end", "2026-01-16", "--draft=false", "--truncate", "40", "--include-test-cases=false", "--created-at", "2026-01-16T17:30:00.5+04:00", "--custom-properties", `{"engagement": "Q1", "retest": true}`, "--output", "out.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	request := sent.snapshot()
-	wantBody := `{"template":"custom.md","title":"Assessment","client":"Acme","type":"Web","scope":"api.example","assessor":"Ada","start":"2026-01-02","end":"2026-01-16","is_draft":false,"truncate_length":40,"include_test_cases":false}`
+	wantBody := `{"template":"custom.md","title":"Assessment","client":"Acme","type":"Web","scope":"api.example","assessor":"Ada","start":"2026-01-02","end":"2026-01-16","is_draft":false,"truncate_length":40,"include_test_cases":false,"created_at":"2026-01-16T17:30:00.5+04:00","custom_properties":{"engagement":"Q1","retest":true}}`
 	abs, err := filepath.Abs(filepath.Join(dir, "out.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -296,6 +296,12 @@ func TestReportExportCommandFailures(t *testing.T) {
 		{"report", "export", "custom.md", "--start", "2026-01-02", "--end", "2026-13-01"},
 		{"report", "export", "custom.md", "--start", "2026-01-02", "--end", "2026-01-16", "--truncate", "-1"},
 		{"report", "export", "custom.md", "--title", "nested/name", "--start", "2026-01-02", "--end", "2026-01-16"},
+		{"report", "export", "custom.md", "--start", "2026-01-02", "--end", "2026-01-16", "--created-at", "2026-01-16"},
+		{"report", "export", "custom.md", "--start", "2026-01-02", "--end", "2026-01-16", "--created-at", "2026-01-16 17:30:00"},
+		{"report", "export", "custom.md", "--start", "2026-01-02", "--end", "2026-01-16", "--created-at", ""},
+		{"report", "export", "custom.md", "--start", "2026-01-02", "--end", "2026-01-16", "--custom-properties", "[1]"},
+		{"report", "export", "custom.md", "--start", "2026-01-02", "--end", "2026-01-16", "--custom-properties", "null"},
+		{"report", "export", "custom.md", "--start", "2026-01-02", "--end", "2026-01-16", "--custom-properties", "{"},
 	} {
 		sent.reset()
 		command := append([]string{"--config-dir", configDir, "--instance", "report-export-fail"}, args...)

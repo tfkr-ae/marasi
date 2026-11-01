@@ -271,6 +271,21 @@ type sortedRow struct {
 	phase   int
 }
 
+// newestPairID returns the id of the newest pair, the bound a read without
+// as_of uses (docs/adr/2026-10-14-query-selections-stop-at-as-of.md), or nil
+// when there is no pair.
+func newestPairID(ctx context.Context, tx *sqlx.Tx) (*uuid.UUID, error) {
+	var newest uuid.UUID
+	err := tx.GetContext(ctx, &newest, `SELECT id FROM request ORDER BY id DESC LIMIT 1`)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &newest, nil
+}
+
 // ListTraffic returns one page of the pairs that match q, in display order
 // under q.OrderBy. The page is bounded by q.AsOf, or by the newest pair id at
 // read time when it is nil. An invalid query, exclusion or sort returns a
@@ -322,15 +337,11 @@ func (repo *Repository) ListTrafficContext(ctx context.Context, q domain.Traffic
 
 		page.AsOf = q.AsOf
 		if page.AsOf == nil {
-			var newest uuid.UUID
-			err := tx.GetContext(ctx, &newest, `SELECT id FROM request ORDER BY id DESC LIMIT 1`)
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil
-			}
-			if err != nil {
+			newest, err := newestPairID(ctx, tx)
+			if err != nil || newest == nil {
 				return err
 			}
-			page.AsOf = &newest
+			page.AsOf = newest
 		}
 		match.add(`id <= ?`, *page.AsOf)
 		if cursor == nil && sort.phased() {

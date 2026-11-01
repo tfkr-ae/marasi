@@ -158,6 +158,38 @@ func TestTrafficRepo_CountTrafficByField(t *testing.T) {
 		}
 	})
 
+	t.Run("should bound a count without as_of by the newest pair and return that bound", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		insertTrafficResponse(t, repo, insertTraffic(t, repo, "GET", "target.example", "/"), 200)
+		newest := insertTraffic(t, repo, "GET", "target.example", "/")
+
+		got, err := repo.CountTrafficByField(domain.TrafficFieldCountQuery{Field: "status_code"})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got.AsOf == nil || *got.AsOf != newest {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%v", newest, got.AsOf)
+		}
+
+		asOf := uuid.Must(uuid.NewV7())
+		got, err = repo.CountTrafficByField(domain.TrafficFieldCountQuery{AsOf: &asOf, Field: "status_code"})
+		if err != nil || got.AsOf == nil || *got.AsOf != asOf {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%v, %v", asOf, got.AsOf, err)
+		}
+	})
+
+	t.Run("should return no as_of when the project has no pairs", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		got, err := repo.CountTrafficByField(domain.TrafficFieldCountQuery{Field: "length"})
+		if err != nil || got.AsOf != nil || got.Counts == nil || len(got.Counts) != 0 {
+			t.Fatalf("\nwanted:\nno as_of and no counts\ngot:\n%v, %+v, %v", got.AsOf, got.Counts, err)
+		}
+	})
+
 	t.Run("should count only pairs at or below as_of that survive the exclusion", func(t *testing.T) {
 		repo, teardown := setupTestDB(t)
 		defer teardown()

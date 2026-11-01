@@ -49,6 +49,8 @@ type Server struct {
 	// control is the control listener's network address, nil until
 	// EnableControlAddress.
 	control *ControlAddress
+	// interfaces reads the instance machine's network interfaces.
+	interfaces func() ([]hostInterface, error)
 }
 
 // NewServer creates a control API server for proxy.
@@ -85,8 +87,28 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		version:           version,
 		instance:          instance,
 		project:           project,
+		interfaces:        readHostInterfaces,
 	}
 	if projects != nil {
+		projects.opening = func(path string) {
+			events.publish("project.opening", struct {
+				Project string `json:"project"`
+			}{Project: path})
+		}
+		projects.upgrading = func(path string, step db.MigrationStep) {
+			events.publish("project.upgrading", struct {
+				Project   string `json:"project"`
+				Migration string `json:"migration"`
+				Applied   int    `json:"applied"`
+				Total     int    `json:"total"`
+			}{Project: path, Migration: step.Migration, Applied: step.Applied, Total: step.Total})
+		}
+		projects.openingFailed = func(path string, err error) {
+			events.publish("project.opening_failed", struct {
+				Project string `json:"project"`
+				Error   string `json:"error"`
+			}{Project: path, Error: err.Error()})
+		}
 		projects.opened = func(path string) {
 			events.publish("project.opened", struct {
 				Project string `json:"project"`
@@ -140,6 +162,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 	listenerMux.HandleFunc("/start", server.serveListenerStart)
 	listenerMux.HandleFunc("/stop", server.serveListenerStop)
 	listenerMux.HandleFunc("/update", server.serveListenerUpdate)
+	listenerMux.HandleFunc("/interfaces", server.serveListenerInterfaces)
 	mux.Handle("/listener/", http.StripPrefix("/listener", listenerMux))
 	projectMux := http.NewServeMux()
 	projectMux.HandleFunc("/open", server.serveProjectOpen)
@@ -515,11 +538,11 @@ func (s *Server) HandleIntercept(item domain.CheckpointItem) error {
 	return nil
 }
 
-// HandleCheckpointAbandoned publishes checkpoint.dropped after a Checkpoint item is
-// dropped because its client left or its WebSocket connection closed. The payload
-// matches a user drop. It always returns nil.
+// HandleCheckpointAbandoned publishes checkpoint.dropped with reason abandoned after
+// a Checkpoint item is dropped because its client left or its WebSocket connection
+// closed. It always returns nil.
 func (s *Server) HandleCheckpointAbandoned(item domain.CheckpointItem) error {
-	s.events.publish("checkpoint.dropped", checkpointResolvedEvent{ID: item.ID, Type: item.Type})
+	s.events.publish("checkpoint.dropped", checkpointResolvedEventFromDomain(item, checkpointAbandoned))
 	return nil
 }
 
@@ -535,7 +558,7 @@ func (s *Server) dropPendingCheckpoint() {
 		return
 	}
 	for _, item := range s.proxy.DropAllCheckpoint() {
-		s.events.publish("checkpoint.dropped", checkpointResolvedEvent{ID: item.ID, Type: item.Type})
+		s.events.publish("checkpoint.dropped", checkpointResolvedEventFromDomain(item, checkpointShutdown))
 	}
 }
 

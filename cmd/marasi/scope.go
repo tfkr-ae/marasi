@@ -10,13 +10,13 @@ import (
 )
 
 func init() {
-	scopeCmd.AddCommand(scopeCheckCmd)
+	scopeCmd.AddCommand(scopeCheckCmd, scopeListCmd)
 	rootCmd.AddCommand(scopeCmd)
 }
 
 var scopeCmd = &cobra.Command{
 	Use:   "scope",
-	Short: "Check whether a URL is in scope",
+	Short: "List scope rules or check whether a URL is in scope",
 	Args:  cobra.NoArgs,
 	RunE:  showSubcommandHelp,
 }
@@ -43,6 +43,48 @@ var scopeCheckCmd = &cobra.Command{
 		}
 		return writeScopeCheckHuman(response, cmd.OutOrStdout())
 	},
+}
+
+var scopeListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List the scope rules and default policy",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		response, err := runControlRequest(cmd, http.MethodGet, "/scope", "listing scope rules", nil)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return writeJSONBody(cmd, response)
+		}
+		return writeScopeListHuman(response, cmd.OutOrStdout())
+	},
+}
+
+func writeScopeListHuman(body []byte, stdout io.Writer) error {
+	type rule struct {
+		Pattern   string `json:"pattern"`
+		MatchType string `json:"match_type"`
+	}
+	var response struct {
+		DefaultAllow bool   `json:"default_allow"`
+		Include      []rule `json:"include"`
+		Exclude      []rule `json:"exclude"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return fmt.Errorf("decoding scope list response: %w", err)
+	}
+	if _, err := fmt.Fprintf(stdout, "default_allow: %t\n", response.DefaultAllow); err != nil {
+		return err
+	}
+	table := newListTable(stdout, "RULE", "MATCH TYPE", "PATTERN")
+	for _, rule := range response.Include {
+		table.row("include", rule.MatchType, rule.Pattern)
+	}
+	for _, rule := range response.Exclude {
+		table.row("exclude", rule.MatchType, rule.Pattern)
+	}
+	return table.flush()
 }
 
 func writeScopeCheckHuman(body []byte, stdout io.Writer) error {

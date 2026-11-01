@@ -184,6 +184,63 @@ func TestArmoryRepo_Runs(t *testing.T) {
 	}
 }
 
+func TestArmoryRepo_CancelInterruptedRuns(t *testing.T) {
+	t.Run("should cancel every in-progress run and leave the others", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		startedAt := time.Now().UTC().Truncate(time.Millisecond).Add(-time.Minute)
+		interrupted := make([]*domain.ArmoryRun, 0, 2)
+		for _, name := range []string{"First", "Second"} {
+			run := armoryTestRun(t, repo, armoryTestTemplate(t, repo, name))
+			run.Status = domain.ArmoryRunInProgress
+			run.StartedAt = &startedAt
+			if err := repo.UpdateArmoryRun(run); err != nil {
+				t.Fatalf("starting armory run: %v", err)
+			}
+			interrupted = append(interrupted, run)
+		}
+		template := armoryTestTemplate(t, repo, "Other")
+		draft := armoryTestRun(t, repo, template)
+		complete := armoryTestRun(t, repo, template)
+		finishedAt := startedAt.Add(time.Second)
+		complete.Status = domain.ArmoryRunCompleted
+		complete.StartedAt = &startedAt
+		complete.FinishedAt = &finishedAt
+		if err := repo.UpdateArmoryRun(complete); err != nil {
+			t.Fatalf("completing armory run: %v", err)
+		}
+
+		before := time.Now()
+		if err := repo.CancelInterruptedArmoryRuns(); err != nil {
+			t.Fatalf("cancelling interrupted armory runs: %v", err)
+		}
+		after := time.Now()
+
+		for _, run := range interrupted {
+			got, err := repo.GetArmoryRun(run.ID)
+			if err != nil {
+				t.Fatalf("getting armory run: %v", err)
+			}
+			if got.Status != domain.ArmoryRunCancelled || got.FinishedAt == nil || got.FinishedAt.Before(before.Truncate(time.Millisecond)) || got.FinishedAt.After(after) {
+				t.Fatalf("\nwanted:\ncancelled, finished between %v and %v\ngot:\n%s, finished %v", before, after, got.Status, got.FinishedAt)
+			}
+			if got.StartedAt == nil || !got.StartedAt.Equal(startedAt) {
+				t.Fatalf("\nwanted:\nstarted %v\ngot:\n%v", startedAt, got.StartedAt)
+			}
+		}
+		for _, want := range []*domain.ArmoryRun{draft, complete} {
+			got, err := repo.GetArmoryRun(want.ID)
+			if err != nil {
+				t.Fatalf("getting armory run: %v", err)
+			}
+			if !reflect.DeepEqual(want, got) {
+				t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+			}
+		}
+	})
+}
+
 func TestArmoryRepo_RunForeignKey(t *testing.T) {
 	t.Parallel()
 	repo, teardown := setupTestDB(t)
