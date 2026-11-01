@@ -503,22 +503,35 @@ func TestArmoryRunControlAPI(t *testing.T) {
 		}
 	})
 
-	t.Run("should reject invalid create and validate bodies", func(t *testing.T) {
+	t.Run("should reject invalid create and validate bodies with the reason", func(t *testing.T) {
 		repo := &stubArmoryRepository{templates: map[uuid.UUID]*domain.ArmoryTemplate{templateID: {ID: templateID, RawTemplate: rawTemplate}}}
-		armoryService := &stubArmoryService{repo: repo, validate: func(*domain.ArmoryRun) error { return errors.New("invalid run") }}
+		armoryService := &stubArmoryService{repo: repo, validate: func(*domain.ArmoryRun) error { return errors.New("harpoon requires exactly one wordlist") }}
 		server := newTestServer(&marasi.Proxy{Armory: armoryService}, func() {})
-		for _, body := range []string{
-			`{}`,
-			fmt.Sprintf(`{"template_id":%q,"attack_type":"harpoon"}`, templateID),
-			fmt.Sprintf(`{"template_id":%q,"attack_type":"harpoon","wordlists":null}`, templateID),
-			fmt.Sprintf(`{"template_id":%q,"attack_type":"harpoon","wordlists":["words.txt"],"max_concurrent":0}`, templateID),
-			fmt.Sprintf(`{"template_id":%q,"attack_type":"harpoon","wordlists":["words.txt"],"max_concurrent":101}`, templateID),
-			fmt.Sprintf(`{"template_id":%q,"attack_type":"harpoon","wordlists":["words.txt"],"extra":true}`, templateID),
+		for _, tc := range []struct {
+			path    string
+			body    string
+			message string
+		}{
+			{"/armory/run", `[]`, "the body must be one JSON object"},
+			{"/armory/run", `{}`, "template_id is required"},
+			{"/armory/run", fmt.Sprintf(`{"template_id":%q,"attack_type":"harpoon"}`, templateID), "wordlists is required"},
+			{"/armory/run", fmt.Sprintf(`{"template_id":%q,"wordlists":["words.txt"]}`, templateID), "attack_type is required"},
+			{"/armory/run", fmt.Sprintf(`{"template_id":%q,"attack_type":"harpoon","wordlists":null}`, templateID), "wordlists must not be null"},
+			{"/armory/run", fmt.Sprintf(`{"template_id":%q,"attack_type":"sniper","wordlists":["words.txt"]}`, templateID), `attack_type \"sniper\" is not harpoon, broadside, tandem or maelstrom`},
+			{"/armory/run", fmt.Sprintf(`{"template_id":%q,"attack_type":"harpoon","wordlists":["words.txt"],"max_concurrent":0}`, templateID), "max_concurrent must be a whole number from 1 to 100"},
+			{"/armory/run", fmt.Sprintf(`{"template_id":%q,"attack_type":"harpoon","wordlists":["words.txt"],"max_concurrent":101}`, templateID), "max_concurrent must be a whole number from 1 to 100"},
+			{"/armory/run", fmt.Sprintf(`{"template_id":%q,"attack_type":"harpoon","wordlists":["words.txt"],"extra":true}`, templateID), `unknown field \"extra\"`},
+			{"/armory/run", fmt.Sprintf(`{"template_id":%q,"raw_template":"x","attack_type":"harpoon","wordlists":["words.txt"]}`, templateID), "raw_template is not accepted here; send template_id"},
+			// Several problems: the first in field-name order is named, whatever the map order.
+			{"/armory/run", fmt.Sprintf(`{"template_id":%q,"wordlists":1,"attack_type":1}`, templateID), "attack_type must be a string"},
+			{"/armory/run", fmt.Sprintf(`{"template_id":%q,"attack_type":"harpoon","wordlists":["words.txt"]}`, templateID), "harpoon requires exactly one wordlist"},
+			{"/armory/run/validate", fmt.Sprintf(`{"template_id":%q,"attack_type":"harpoon","wordlists":["words.txt"]}`, templateID), "template_id is not accepted here; send raw_template"},
+			{"/armory/run/validate", fmt.Sprintf(`{"raw_template":%q,"attack_type":"harpoon","wordlists":["words.txt"]}`, rawTemplate), "harpoon requires exactly one wordlist"},
 		} {
-			assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/armory/run", body), http.StatusBadRequest, "{\"error\":\"invalid_armory_request\"}\n")
+			for range 3 {
+				assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, tc.path, tc.body), http.StatusBadRequest, `{"error":"invalid_armory_request","message":"`+tc.message+`"}`+"\n")
+			}
 		}
-		validateBody := fmt.Sprintf(`{"raw_template":%q,"attack_type":"harpoon","wordlists":["words.txt"]}`, rawTemplate)
-		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/armory/run/validate", validateBody), http.StatusBadRequest, "{\"error\":\"invalid_armory_request\"}\n")
 		if len(repo.runs) != 0 {
 			t.Fatalf("invalid run was persisted: %+v", repo.runs)
 		}

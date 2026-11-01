@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,10 @@ import (
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/yosssi/gohtml"
 )
+
+// ErrMissingHeaderEnd is returned when a raw request or response has no blank
+// line between its headers and its body.
+var ErrMissingHeaderEnd = errors.New("no blank line ends the headers")
 
 // Prettify will atempt to prettify the body or return an empty byte slice if it fails
 // JSON, XML, HTML can be prettified if it cannot prettify the body it will return an empty string
@@ -157,18 +162,18 @@ func RecalculateContentLength(raw []byte) (updated []byte, err error) {
 		updated = append(updated, body...)
 		return updated, nil
 	}
-	return []byte{}, fmt.Errorf("malformed string : %s", normalized)
+	return []byte{}, ErrMissingHeaderEnd
 }
 
 // RebuildRequest creates a new *http.Request from a raw request slice, it takes the original request context and scheme
 func RebuildRequest(raw []byte, originalRequest *http.Request) (req *http.Request, err error) {
 	updated, err := RecalculateContentLength(raw)
 	if err != nil {
-		return nil, fmt.Errorf("recalculating content length : %w", err)
+		return nil, fmt.Errorf("recalculating content length: %w", err)
 	}
 	req, err = http.ReadRequest(bufio.NewReader(bytes.NewReader(updated)))
 	if err != nil {
-		return nil, fmt.Errorf("reading raw request %s : %w", raw, err)
+		return nil, fmt.Errorf("reading raw request: %w", err)
 	}
 	req = req.WithContext(originalRequest.Context())
 	req.URL.Host = req.Host
@@ -180,11 +185,11 @@ func RebuildRequest(raw []byte, originalRequest *http.Request) (req *http.Reques
 func RebuildResponse(raw []byte, req *http.Request) (res *http.Response, err error) {
 	updated, err := RecalculateContentLength(raw)
 	if err != nil {
-		return nil, fmt.Errorf("recalculating content length : %w", err)
+		return nil, fmt.Errorf("recalculating content length: %w", err)
 	}
 	res, err = http.ReadResponse(bufio.NewReader(bytes.NewReader(updated)), req)
 	if err != nil {
-		return nil, fmt.Errorf("reading raw response %s : %w", raw, err)
+		return nil, fmt.Errorf("reading raw response: %w", err)
 	}
 	return res, nil
 }

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/compass"
 	"github.com/tfkr-ae/marasi/extensions"
 )
 
@@ -31,14 +32,23 @@ type extensionGUIUpdatedEvent struct {
 	Value any       `json:"value"` // the value passed to marasi.gui:update
 }
 
+// extensionUI is the body of GET /extension/{id}/ui: what the extension last
+// drew per render target, other than a toast, and its last UI state per key.
+type extensionUI struct {
+	ID      uuid.UUID      `json:"id"`
+	Name    string         `json:"name"`
+	Renders map[string]any `json:"renders"`
+	State   map[string]any `json:"state"`
+}
+
 // ExtensionEvents is an extension option for NewProjectLifecycle. It gives the
 // extension marasi.gui and announces its print lines and marasi.gui calls on
 // /events, which is how a client of a service instance draws extension UI.
 func (l *listenerLifecycle) ExtensionEvents(runtime *extensions.Runtime) error {
-	return extensionEvents(l.events)(runtime)
+	return extensionEvents(l.events, l.proxy.GetScope)(runtime)
 }
 
-func extensionEvents(events *eventBroadcaster) func(*extensions.Runtime) error {
+func extensionEvents(events *eventBroadcaster, liveScope func() (*compass.Scope, error)) func(*extensions.Runtime) error {
 	return func(runtime *extensions.Runtime) error {
 		// A disabled extension still runs when called, but announces nothing
 		// (docs/adr/2026-10-06-extension-enabled-honored.md).
@@ -56,13 +66,37 @@ func extensionEvents(events *eventBroadcaster) func(*extensions.Runtime) error {
 		if err != nil {
 			return err
 		}
+		// Scope rules belong to the project, not the extension, so a change
+		// is announced whether or not the extension that made it is enabled.
+		// Only the live scope is announced: while a project opens, its Compass
+		// fills a scope that goes live only if the open succeeds, and clients
+		// reread the scope on project.opened.
+		err = extensions.ExtensionWithScopeChangeHandler(func(scope *compass.Scope) {
+			if live, err := liveScope(); err != nil || live != scope {
+				return
+			}
+			events.publish("scope.updated", scopeListFromScope(scope))
+		})(runtime)
+		if err != nil {
+			return err
+		}
+		// What an enabled extension draws is kept for GET /extension/{id}/ui,
+		// so a client that joins later can draw it.
 		return extensions.WithGUI(extensions.GUI{
 			Type: extensions.ServiceGUIType,
 			Render: func(target string, schema any) {
-				publish("extension.gui.rendered", extensionGUIRenderedEvent{ID: id, Name: name, Target: target, Schema: schema})
+				if !runtime.MetadataSnapshot().Enabled {
+					return
+				}
+				runtime.KeepRender(target, schema)
+				events.publish("extension.gui.rendered", extensionGUIRenderedEvent{ID: id, Name: name, Target: target, Schema: schema})
 			},
 			Update: func(key string, value any) {
-				publish("extension.gui.updated", extensionGUIUpdatedEvent{ID: id, Name: name, Key: key, Value: value})
+				if !runtime.MetadataSnapshot().Enabled {
+					return
+				}
+				runtime.KeepUpdate(key, value)
+				events.publish("extension.gui.updated", extensionGUIUpdatedEvent{ID: id, Name: name, Key: key, Value: value})
 			},
 		})(runtime)
 	}

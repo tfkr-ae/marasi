@@ -160,6 +160,19 @@ func TestArmoryCommandOptions(t *testing.T) {
 		stdout, stderr, err = runMarasi(binary, "--config-dir", errorDir, "--instance", "work", "armory", "template", "create", "--name", "Login", "--json")
 		assertJSONCommandError(t, stdout, stderr, err, "creating Armory template: invalid_armory_request")
 	})
+
+	t.Run("should print why an Armory run was refused", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"invalid_armory_request","message":"harpoon requires exactly one wordlist"}`)
+		stdout, stderr, err := executeRoot(t, "--config-dir", configDir, "--instance", "work", "armory", "run", "create", "--template", "01937d13-9632-75b1-9e73-c5129b06fa8c", "--attack-type", "harpoon", "--wordlist", "a.txt", "--wordlist", "b.txt")
+		if err == nil || stdout != "" {
+			t.Fatalf("\nwanted:\nan error and no stdout\ngot:\nerror %v, stdout %q", err, stdout)
+		}
+		want := "creating Armory run: invalid_armory_request: harpoon requires exactly one wordlist"
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("\nwanted stderr containing:\n%s\ngot:\n%s", want, stderr)
+		}
+	})
 }
 
 func armoryRunHuman(runID, templateID string) string {

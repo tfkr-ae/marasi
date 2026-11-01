@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/compass"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
@@ -80,6 +81,8 @@ func (p *listenerTestProxy) Serve(listener net.Listener) error {
 }
 
 func (p *listenerTestProxy) ForceCloseTransport() {}
+
+func (p *listenerTestProxy) GetScope() (*compass.Scope, error) { return nil, marasi.ErrScopeNotFound }
 
 func (p *listenerTestProxy) CloseTransportContext(context.Context) error {
 	p.mu.Lock()

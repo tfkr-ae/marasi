@@ -7,6 +7,7 @@ Users list the running instance's scope rules and test whether a URL falls insid
 - List the include and exclude rules and the default policy with `scope list`.
 - Check one URL with `scope check <url>`.
 - Read the verdict, the matched rule, and the compass flag with human-readable or `--json` output.
+- Follow rule changes live with `events`: `scope.updated`.
 
 ## How to get to it (user POV)
 
@@ -27,6 +28,7 @@ Run `scope check "example.com/path?q=1"` and require `tested_url: https://exampl
 - When no rule matches, JSON `rule` is `null` and human output omits both the `rule:` and `match_type:` lines.
 - `compass_enabled: false` does not disable Scope check evaluation: the verdict still applies the live rules. Disabling Compass skips its traffic-processing hooks; the check is not proof that Compass will filter a proxied request.
 - `scope check` and `scope list` never mutate rules and publish no event. There is still no `scope add`.
+- A Lua run that changes the rules or the default policy through `marasi:scope()` publishes one `scope.updated` when the run ends, with the same body as `scope list --json`, even when the run then fails and whether or not the extension is enabled. A run that only reads the scope publishes nothing. Only the live scope is announced: Compass filling the scope of a project that is opening publishes nothing, even when that open is later cancelled, and a client rereads `scope list` on `project.opened`. To prove it, start `events --json`, run the `extension update` above, and require exactly one `scope.updated` whose body equals the `scope list --json` that follows.
 - `scope list` answers the live rules when Compass is disabled too; disabling Compass leaves the rules in place.
 - An empty `scope list` table prints only the `default_allow:` line. `--json` keeps `include` and `exclude` as `[]`, never `null`.
 - The list's order is fixed; the rule `scope check` names is not (`docs/adr/2026-10-06-scope-check-does-not-stabilize-the-named-rule.md`).

@@ -2,6 +2,7 @@ package extensions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -102,11 +103,42 @@ func TestRuntime_ExecuteLua(t *testing.T) {
 		}
 	})
 
-	t.Run("should return error on invalid lua code", func(t *testing.T) {
+	t.Run("should return a LuaError carrying the syntax error message", func(t *testing.T) {
 		ext, _ := setupTestExtension(t, "")
+		top := ext.LuaState.Top()
 		err := ext.ExecuteLua(`invalid syntax`)
-		if err == nil {
-			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
+		luaErr, ok := errors.AsType[*LuaError](err)
+		if !ok {
+			t.Fatalf("\nwanted:\n*LuaError\ngot:\n%v", err)
+		}
+		want := `[string "invalid syntax"]:1: syntax error near syntax`
+		if luaErr.Message != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, luaErr.Message)
+		}
+		if !errors.Is(err, lua.SyntaxError) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", lua.SyntaxError, err)
+		}
+		if got := ext.LuaState.Top(); got != top {
+			t.Fatalf("\nwanted:\nstack top %d\ngot:\n%d", top, got)
+		}
+	})
+}
+
+func TestRuntime_CallFunctionContext(t *testing.T) {
+	t.Run("should return a LuaError carrying the raised message", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "function boom()\n  error(\"nope\")\nend")
+		top := ext.LuaState.Top()
+		err := ext.CallFunctionContext(context.Background(), "boom")
+		luaErr, ok := errors.AsType[*LuaError](err)
+		if !ok {
+			t.Fatalf("\nwanted:\n*LuaError\ngot:\n%v", err)
+		}
+		want := `[string "function boom()"]:2: nope`
+		if luaErr.Message != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, luaErr.Message)
+		}
+		if got := ext.LuaState.Top(); got != top {
+			t.Fatalf("\nwanted:\nstack top %d\ngot:\n%d", top, got)
 		}
 	})
 }

@@ -235,8 +235,8 @@ func TestRecalculateContentLength(t *testing.T) {
 			"Accept-Encoding: gzip\n" +
 			"User-Agent: curl/8.7.1\n" +
 			"Marasi"))
-		if err == nil {
-			t.Fatal("expected an error when recalculating a malformed request / response")
+		if !errors.Is(err, ErrMissingHeaderEnd) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", ErrMissingHeaderEnd, err)
 		}
 	})
 

@@ -33,6 +33,13 @@ type CheckpointItem struct {
 	ConnectionID uuid.UUID
 	// RequestID is the HTTP upgrade request that opened the WebSocket connection.
 	RequestID uuid.UUID
+	// FrameCount is how many frames carried the WebSocket message on the wire.
+	FrameCount int
+	// Compressed reports that the WebSocket message was compressed with
+	// permessage-deflate on the wire. Payload is always uncompressed.
+	Compressed bool
+	// Metadata is the WebSocket message's extension and proxy annotations.
+	Metadata map[string]any
 	// InterceptedAt is when Checkpoint held the item. A held response has its
 	// own time, though it shares its request's id.
 	InterceptedAt time.Time

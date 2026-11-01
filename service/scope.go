@@ -38,18 +38,23 @@ type scopeListResponse struct {
 
 var errInvalidScopeRequest = errors.New("invalid scope request")
 
+// scopeListFromScope is the body of GET /scope and of scope.updated.
+func scopeListFromScope(scope *compass.Scope) scopeListResponse {
+	includeRules, excludeRules, defaultAllow := scope.Snapshot()
+	return scopeListResponse{
+		DefaultAllow: defaultAllow,
+		Include:      sortedScopeRules(includeRules),
+		Exclude:      sortedScopeRules(excludeRules),
+	}
+}
+
 func addScopeRoutes(mux routeMux, proxy *marasi.Proxy) {
 	mux.HandleFunc("GET /scope", func(w http.ResponseWriter, r *http.Request) {
 		if proxy == nil || proxy.Scope == nil {
 			writeScopeCheckError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
-		includeRules, excludeRules, defaultAllow := proxy.Scope.Snapshot()
-		writeJSON(w, r, http.StatusOK, scopeListResponse{
-			DefaultAllow: defaultAllow,
-			Include:      sortedScopeRules(includeRules),
-			Exclude:      sortedScopeRules(excludeRules),
-		})
+		writeJSON(w, r, http.StatusOK, scopeListFromScope(proxy.Scope))
 	})
 
 	mux.HandleFunc("POST /scope/check", func(w http.ResponseWriter, r *http.Request) {

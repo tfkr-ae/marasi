@@ -49,6 +49,14 @@ type extensionSettings struct {
 	Settings map[string]any `json:"settings"`
 }
 
+// extensionSettingsUpdated is the data of extension.settings.updated. It names
+// the extension so a client rereads only that extension's settings.
+type extensionSettingsUpdated struct {
+	ID       uuid.UUID      `json:"id"`
+	Name     string         `json:"name"`
+	Settings map[string]any `json:"settings"`
+}
+
 type extensionUpdateRequest struct {
 	LuaContent *string `json:"lua_content"`
 }
@@ -171,7 +179,8 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		events.publish("extension.settings.updated", envelope)
+		data := runtime.MetadataSnapshot()
+		events.publish("extension.settings.updated", extensionSettingsUpdated{ID: data.ID, Name: data.Name, Settings: envelope.Settings})
 		writeJSON(w, r, http.StatusOK, envelope)
 	})
 
@@ -202,10 +211,24 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			return
 		}
 		if err := runtime.CallFunctionContext(r.Context(), name, args...); err != nil {
-			writeExtensionError(w, r, http.StatusBadRequest, "lua_error")
+			writeLuaRefusal(w, r, err)
 			return
 		}
 		writeJSON(w, r, http.StatusOK, extensionCallResult{Status: "called"})
+	})
+
+	mux.HandleFunc("GET /extension/{id}/ui", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseExtensionID(w, r)
+		if !ok {
+			return
+		}
+		runtime := findExtensionRuntime(proxy, id)
+		if runtime == nil {
+			writeExtensionError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		renders, state := runtime.GUISnapshot()
+		writeJSON(w, r, http.StatusOK, extensionUI{ID: runtime.Data.ID, Name: runtime.Data.Name, Renders: renders, State: state})
 	})
 
 	mux.HandleFunc("POST /extension/{id}/enable", func(w http.ResponseWriter, r *http.Request) {
@@ -235,6 +258,11 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			}
 			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
+		}
+		// A disabled extension's drawing is gone from every client, so a
+		// client that joins later must not draw it either.
+		if !enabled {
+			runtime.ForgetGUI()
 		}
 		summary := extensionSummaryFromData(runtime.MetadataSnapshot())
 		events.publish("extension.enabled", summary)
@@ -278,7 +306,7 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 		}
 		events.publish("extension.updated", extensionSummaryFromData(runtime.MetadataSnapshot()))
 		if err := runtime.ExecuteLuaContext(r.Context(), lua); err != nil {
-			writeExtensionError(w, r, http.StatusBadRequest, "lua_error")
+			writeLuaRefusal(w, r, err)
 			return
 		}
 		settings, err := extensionSettingsFromRepository(proxy, id)
@@ -445,6 +473,15 @@ func parseExtensionID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) 
 		return uuid.Nil, false
 	}
 	return id, true
+}
+
+// writeLuaRefusal refuses a failed Lua run with the message Lua raised.
+func writeLuaRefusal(w http.ResponseWriter, r *http.Request, err error) {
+	message := err.Error()
+	if luaErr, ok := errors.AsType[*extensions.LuaError](err); ok {
+		message = luaErr.Message
+	}
+	writeRefusal(w, r, http.StatusBadRequest, "lua_error", message)
 }
 
 func writeExtensionError(w http.ResponseWriter, r *http.Request, status int, code string) {

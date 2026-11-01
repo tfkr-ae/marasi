@@ -77,7 +77,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 			reqID, raw, checkpointHeldAt(t, proxy, reqID),
 		)
 		wsBody := fmt.Sprintf(
-			`{"items":[{"id":"%s","type":"websocket","payload":"%s","opcode":1,"direction":"client","connection_id":"%s","request_id":"%s","intercepted_at":"`+checkpointMessageHeldAt+`"}],"intercept":true,"websocket_intercept":false}`+"\n",
+			`{"items":[{"id":"%s","type":"websocket","payload":"%s","opcode":1,"direction":"client","connection_id":"%s","request_id":"%s","frame_count":3,"compressed":true,"metadata":{"tag":"seen"},"intercepted_at":"`+checkpointMessageHeldAt+`"}],"intercept":true,"websocket_intercept":false}`+"\n",
 			messageID, base64.StdEncoding.EncodeToString([]byte("held")), uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809"), uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a"),
 		)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint?kind=http", ""), http.StatusOK, httpBody)
@@ -118,6 +118,74 @@ func TestCheckpointControlRoutes(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 		assertCheckpointEvent(t, subscriber, "checkpoint.forwarded", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"forwarded"}`, reqID))
+	})
+
+	t.Run("should forward several items in one call and count done and gone", func(t *testing.T) {
+		server, proxy := newCheckpointServer(t)
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+		proxy.SetIntercept(true)
+		_, reqID, reqDone := startCheckpointHTTPHold(t, proxy)
+		waitForCheckpointItems(t, proxy, 1)
+		messageID, messageDone := startCheckpointWebSocketHold(t, proxy)
+		waitForCheckpointItems(t, proxy, 2)
+		drainCheckpointHeld(t, subscriber)
+		drainCheckpointHeld(t, subscriber)
+
+		missing := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e3678ff")
+		body := fmt.Sprintf(`{"ids":["%s","%s","%s","%s"]}`, reqID, missing, messageID, reqID)
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/forward", body), http.StatusOK, `{"done":2,"gone":1,"failed":0}`+"\n")
+		if err := receiveCheckpointHold(t, reqDone); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if err := receiveCheckpointHold(t, messageDone); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		assertCheckpointEvent(t, subscriber, "checkpoint.forwarded", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"forwarded"}`, reqID))
+		assertCheckpointEvent(t, subscriber, "checkpoint.forwarded", fmt.Sprintf(`{"id":"%s","type":"websocket","request_id":"0193802f-f0e7-73d9-a764-06d21e36780a","reason":"forwarded"}`, messageID))
+		assertNoCheckpointEvent(t, subscriber)
+
+		// Every id is resolved now, so a repeat finds them all gone.
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/forward", body), http.StatusOK, `{"done":0,"gone":3,"failed":0}`+"\n")
+		assertNoCheckpointEvent(t, subscriber)
+	})
+
+	t.Run("should drop several items in one call and count done and gone", func(t *testing.T) {
+		server, proxy := newCheckpointServer(t)
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+		proxy.SetIntercept(true)
+		_, firstID, firstDone := startCheckpointHTTPHold(t, proxy)
+		waitForCheckpointItems(t, proxy, 1)
+		_, secondID, secondDone := startCheckpointHTTPHold(t, proxy)
+		waitForCheckpointItems(t, proxy, 2)
+		drainCheckpointHeld(t, subscriber)
+		drainCheckpointHeld(t, subscriber)
+
+		missing := uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e3678ff")
+		body := fmt.Sprintf(`{"ids":["%s","%s","%s"]}`, secondID, missing, firstID)
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/drop", body), http.StatusOK, `{"done":2,"gone":1,"failed":0}`+"\n")
+		for _, done := range []<-chan error{firstDone, secondDone} {
+			if err := receiveCheckpointHold(t, done); !errors.Is(err, marasi.ErrDropped) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", marasi.ErrDropped, err)
+			}
+		}
+		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"dropped"}`, secondID))
+		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"dropped"}`, firstID))
+		assertNoCheckpointEvent(t, subscriber)
+		if items := proxy.CheckpointItems(); len(items) != 0 {
+			t.Fatalf("\nwanted:\nno items\ngot:\n%v", items)
+		}
+	})
+
+	t.Run("should refuse a bulk body without ids", func(t *testing.T) {
+		server, _ := newCheckpointServer(t)
+		want := `{"error":"invalid_checkpoint_request","message":"send {\"ids\": [...]} with at least one Checkpoint item UUID"}` + "\n"
+		for _, path := range []string{"/checkpoint/forward", "/checkpoint/drop"} {
+			for _, body := range []string{``, `{}`, `{"ids":[]}`, `{"ids":null}`, `{"ids":["nope"]}`, `{"ids":["0193802f-f0e7-73d9-a764-06d21e3678ff"],"raw":"x"}`} {
+				assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, path, body), http.StatusBadRequest, want)
+			}
+		}
 	})
 
 	t.Run("should drop an item and ignore a second resolve", func(t *testing.T) {
@@ -330,7 +398,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		})
 
 		want := fmt.Sprintf(
-			`{"id":"%s","type":"websocket","payload":"%s","opcode":1,"direction":"client","connection_id":"%s","request_id":"%s","intercepted_at":"`+checkpointMessageHeldAt+`"}`,
+			`{"id":"%s","type":"websocket","payload":"%s","opcode":1,"direction":"client","connection_id":"%s","request_id":"%s","frame_count":3,"compressed":true,"metadata":{"tag":"seen"},"intercepted_at":"`+checkpointMessageHeldAt+`"}`,
 			messageID, base64.StdEncoding.EncodeToString([]byte("held")),
 			uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809"),
 			uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a"),
@@ -397,7 +465,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		drainCheckpointHeld(t, subscriber)
 
 		badRaw := base64.StdEncoding.EncodeToString([]byte("not an HTTP request"))
-		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+reqID.String()+"/forward", `{"raw":"`+badRaw+`"}`), http.StatusBadRequest, `{"error":"invalid_checkpoint_request"}`+"\n")
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+reqID.String()+"/forward", `{"raw":"`+badRaw+`"}`), http.StatusBadRequest, `{"error":"invalid_checkpoint_request","message":"cannot rebuild request: recalculating content length: no blank line ends the headers"}`+"\n")
 		assertNoCheckpointEvent(t, subscriber)
 		if !proxy.HasPendingCheckpoint() {
 			t.Fatal("rebuild failure resolved the pending item")
@@ -642,6 +710,9 @@ func startCheckpointWebSocketHold(t *testing.T, proxy *marasi.Proxy) (uuid.UUID,
 		RequestID:    uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a"),
 		Direction:    marasiws.DirectionFromClient,
 		Opcode:       marasiws.OpText, Payload: []byte("held"),
+		// A compressed three-frame message with metadata, so the item proves
+		// each field comes from the held message rather than a zero value.
+		FrameCount: 3, Compressed: true, Metadata: map[string]any{"tag": "seen"},
 		CreatedAt: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC),
 	}
 	done := make(chan error, 1)

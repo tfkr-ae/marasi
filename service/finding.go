@@ -5,13 +5,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/cvss"
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -93,6 +96,10 @@ func addFindingRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			return
 		}
 		finding := &domain.Finding{ID: id, Title: *mutation.Title, Requests: []uuid.UUID{}, Artifacts: []*domain.ArtifactMetadata{}}
+		if err := scoreFindingCVSS(&mutation, finding); err != nil {
+			writeFindingCVSSRefusal(w, r, err)
+			return
+		}
 		applyFindingMutation(finding, mutation)
 		if err := repo.SaveFinding(finding); err != nil {
 			writeFindingError(w, r, http.StatusInternalServerError, "internal_server_error")
@@ -227,6 +234,10 @@ func addFindingRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 		if mutation.TestCaseIDSet && mutation.TestCaseID != nil && !findingTestCaseExists(w, r, repo, *mutation.TestCaseID) {
 			return
 		}
+		if err := scoreFindingCVSS(&mutation, finding); err != nil {
+			writeFindingCVSSRefusal(w, r, err)
+			return
+		}
 		if err := repo.UpdateFinding(id, mutation); err != nil {
 			writeFindingRepositoryError(w, r, err)
 			return
@@ -353,6 +364,61 @@ func canonicalFindingSeverity(severity string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// findingCVSSRefusal is a CVSS vector or score a finding cannot store. Code
+// is invalid_cvss_vector or invalid_cvss_score, and the message names the
+// field.
+type findingCVSSRefusal struct {
+	code, message string
+}
+
+func (e *findingCVSSRefusal) Error() string { return e.message }
+
+// scoreFindingCVSS normalizes the vector a create or update leaves the
+// finding with and works out its score, so every client stores a vector the
+// app can read and a score that agrees with it. It sets both fields on
+// mutation whenever either is sent, so the pair is written together. A sent
+// score must match the vector's; an empty vector means unscored, score 0.
+// current is the finding as stored, or the new finding on create.
+func scoreFindingCVSS(mutation *findingMutation, current *domain.Finding) error {
+	if mutation.CVSSVector == nil && mutation.CVSSScore == nil {
+		return nil
+	}
+	vector := current.CVSSVector
+	if mutation.CVSSVector != nil {
+		vector = *mutation.CVSSVector
+	}
+	var normalized string
+	var score float64
+	if strings.TrimSpace(vector) != "" {
+		var err error
+		normalized, score, err = cvss.Base(vector)
+		if err != nil {
+			if mutation.CVSSVector == nil {
+				return &findingCVSSRefusal{"invalid_cvss_vector", fmt.Sprintf("the stored cvss_vector %q is not a CVSS 3.1 base vector (%v); send cvss_vector with cvss_score", vector, err)}
+			}
+			return &findingCVSSRefusal{"invalid_cvss_vector", fmt.Sprintf("cvss_vector %q is not a CVSS 3.1 base vector: %v", vector, err)}
+		}
+	}
+	// Scores have one decimal place; compare in tenths so 4.3 sent as JSON
+	// matches 4.3 worked out.
+	if sent := mutation.CVSSScore; sent != nil && math.Round(*sent*10) != math.Round(score*10) {
+		if normalized == "" {
+			return &findingCVSSRefusal{"invalid_cvss_score", fmt.Sprintf("cvss_score %g needs a cvss_vector; an unscored finding has cvss_score 0", *sent)}
+		}
+		return &findingCVSSRefusal{"invalid_cvss_score", fmt.Sprintf("cvss_score %g does not match %g, the score of %s; omit cvss_score to have it worked out", *sent, score, normalized)}
+	}
+	mutation.CVSSVector, mutation.CVSSScore = &normalized, &score
+	return nil
+}
+
+func writeFindingCVSSRefusal(w http.ResponseWriter, r *http.Request, err error) {
+	if refusal, ok := errors.AsType[*findingCVSSRefusal](err); ok {
+		writeRefusal(w, r, http.StatusBadRequest, refusal.code, refusal.message)
+		return
+	}
+	writeFindingError(w, r, http.StatusInternalServerError, "internal_server_error")
 }
 
 func applyFindingMutation(finding *domain.Finding, mutation findingMutation) {

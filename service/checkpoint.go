@@ -22,14 +22,17 @@ type checkpointHTTPItem struct {
 }
 
 type checkpointWebSocketItem struct {
-	ID            uuid.UUID `json:"id"`
-	Type          string    `json:"type"`
-	Payload       []byte    `json:"payload"`
-	Opcode        int       `json:"opcode"`
-	Direction     string    `json:"direction"`
-	ConnectionID  uuid.UUID `json:"connection_id"`
-	RequestID     uuid.UUID `json:"request_id"`
-	InterceptedAt time.Time `json:"intercepted_at"`
+	ID            uuid.UUID      `json:"id"`
+	Type          string         `json:"type"`
+	Payload       []byte         `json:"payload"`
+	Opcode        int            `json:"opcode"`
+	Direction     string         `json:"direction"`
+	ConnectionID  uuid.UUID      `json:"connection_id"`
+	RequestID     uuid.UUID      `json:"request_id"`
+	FrameCount    int            `json:"frame_count"`
+	Compressed    bool           `json:"compressed"`
+	Metadata      map[string]any `json:"metadata"`
+	InterceptedAt time.Time      `json:"intercepted_at"`
 }
 
 type checkpointList struct {
@@ -138,6 +141,16 @@ func addCheckpointRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadca
 		writeJSON(w, r, http.StatusOK, getCheckpointList(proxy, ""))
 	})
 
+	mux.HandleFunc("POST /checkpoint/forward", func(w http.ResponseWriter, r *http.Request) {
+		serveCheckpointBulk(w, r, proxy, events, "checkpoint.forwarded", checkpointForwarded, func(id uuid.UUID) error {
+			return proxy.ForwardCheckpoint(id, marasi.CheckpointForward{})
+		})
+	})
+
+	mux.HandleFunc("POST /checkpoint/drop", func(w http.ResponseWriter, r *http.Request) {
+		serveCheckpointBulk(w, r, proxy, events, "checkpoint.dropped", checkpointDropped, proxy.DropCheckpoint)
+	})
+
 	mux.HandleFunc("POST /checkpoint/intercept", func(w http.ResponseWriter, r *http.Request) {
 		serveCheckpointFlag(w, r, proxy, events, "intercept", proxy.GetIntercept, proxy.SetIntercept)
 	})
@@ -145,6 +158,51 @@ func addCheckpointRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadca
 	mux.HandleFunc("POST /checkpoint/websocket-intercept", func(w http.ResponseWriter, r *http.Request) {
 		serveCheckpointFlag(w, r, proxy, events, "websocket_intercept", proxy.GetWebSocketIntercept, proxy.SetWebSocketIntercept)
 	})
+}
+
+// checkpointBulkResult answers a bulk forward or drop. Gone counts ids that
+// were not held when their turn came: already resolved, never held, or not a
+// Checkpoint item at all.
+type checkpointBulkResult struct {
+	Done   int `json:"done"`
+	Gone   int `json:"gone"`
+	Failed int `json:"failed"`
+}
+
+// serveCheckpointBulk resolves each id in {"ids": [...]} in order, counting a
+// repeated id once, and publishes event for each item it resolved, as the
+// single-item route does. A bulk forward sends each item's original bytes.
+func serveCheckpointBulk(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, events *eventBroadcaster, event string, reason checkpointResolution, resolve func(uuid.UUID) error) {
+	var body struct {
+		IDs []uuid.UUID `json:"ids"`
+	}
+	if r.Body == nil || !decodeStrictJSON(r.Body, &body) || len(body.IDs) == 0 {
+		writeRefusal(w, r, http.StatusBadRequest, "invalid_checkpoint_request", `send {"ids": [...]} with at least one Checkpoint item UUID`)
+		return
+	}
+	var result checkpointBulkResult
+	seen := make(map[uuid.UUID]bool, len(body.IDs))
+	for _, id := range body.IDs {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		item, found := proxy.GetCheckpoint(id)
+		if !found {
+			result.Gone++
+			continue
+		}
+		switch err := resolve(id); {
+		case err == nil:
+			result.Done++
+			events.publish(event, checkpointResolvedEventFromDomain(item, reason))
+		case errors.Is(err, marasi.ErrCheckpointNotFound):
+			result.Gone++
+		default:
+			result.Failed++
+		}
+	}
+	writeJSON(w, r, http.StatusOK, result)
 }
 
 func serveCheckpointFlag(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, events *eventBroadcaster, field string, get func() bool, set func(bool)) {
@@ -204,6 +262,10 @@ func getCheckpointList(proxy *marasi.Proxy, kind string) checkpointList {
 
 func checkpointItemFromDomain(item domain.CheckpointItem) any {
 	if item.Type == domain.CheckpointTypeWebSocket {
+		metadata := item.Metadata
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
 		return checkpointWebSocketItem{
 			ID:            item.ID,
 			Type:          item.Type,
@@ -212,6 +274,9 @@ func checkpointItemFromDomain(item domain.CheckpointItem) any {
 			Direction:     item.Direction,
 			ConnectionID:  item.ConnectionID,
 			RequestID:     item.RequestID,
+			FrameCount:    item.FrameCount,
+			Compressed:    item.Compressed,
+			Metadata:      metadata,
 			InterceptedAt: item.InterceptedAt,
 		}
 	}
@@ -229,19 +294,6 @@ func checkpointResolvedEventFromDomain(item domain.CheckpointItem, reason checkp
 		event.RequestID = &item.RequestID
 	}
 	return event
-}
-
-func checkpointItemFromWebSocket(message domain.WebSocketMessage) domain.CheckpointItem {
-	return domain.CheckpointItem{
-		ID:            message.ID,
-		Type:          domain.CheckpointTypeWebSocket,
-		Payload:       message.Payload,
-		Opcode:        message.Opcode,
-		Direction:     message.Direction,
-		ConnectionID:  message.ConnectionID,
-		RequestID:     message.RequestID,
-		InterceptedAt: message.CreatedAt,
-	}
 }
 
 func decodeCheckpointForward(r *http.Request, itemType string) (marasi.CheckpointForward, error) {
@@ -373,7 +425,7 @@ func writeCheckpointForwardError(w http.ResponseWriter, r *http.Request, err err
 	case errors.Is(err, marasi.ErrInterceptResponseNotAllowed),
 		errors.Is(err, marasi.ErrRebuildRequest),
 		errors.Is(err, marasi.ErrRebuildResponse):
-		writeCheckpointError(w, r, http.StatusBadRequest, "invalid_checkpoint_request")
+		writeRefusal(w, r, http.StatusBadRequest, "invalid_checkpoint_request", err.Error())
 	default:
 		writeCheckpointError(w, r, http.StatusInternalServerError, "internal_server_error")
 	}

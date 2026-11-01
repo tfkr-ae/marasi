@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/compass"
 	"github.com/tfkr-ae/marasi/domain"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
@@ -48,7 +49,11 @@ type listenerProxy interface {
 	CloseWebSockets(int, string) error
 	CloseTransportContext(context.Context) error
 	ForceCloseTransport()
+	// GetScope returns the open project's live scope.
+	GetScope() (*compass.Scope, error)
 }
+
+var _ listenerProxy = (*marasi.Proxy)(nil)
 
 type listenerOperation uint8
 

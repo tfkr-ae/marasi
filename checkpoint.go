@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"sync"
@@ -82,10 +83,13 @@ func (state *checkpointState) signalHoldStarted() {
 func cloneCheckpointItem(item domain.CheckpointItem) domain.CheckpointItem {
 	item.Raw = bytes.Clone(item.Raw)
 	item.Payload = bytes.Clone(item.Payload)
+	item.Metadata = maps.Clone(item.Metadata)
 	return item
 }
 
-func checkpointItemFromWebSocket(message domain.WebSocketMessage) domain.CheckpointItem {
+// CheckpointItemFromWebSocket returns the Checkpoint item for a held
+// WebSocket message.
+func CheckpointItemFromWebSocket(message domain.WebSocketMessage) domain.CheckpointItem {
 	return domain.CheckpointItem{
 		ID:           message.ID,
 		Type:         domain.CheckpointTypeWebSocket,
@@ -94,6 +98,9 @@ func checkpointItemFromWebSocket(message domain.WebSocketMessage) domain.Checkpo
 		Direction:    message.Direction,
 		ConnectionID: message.ConnectionID,
 		RequestID:    message.RequestID,
+		FrameCount:   message.FrameCount,
+		Compressed:   message.Compressed,
+		Metadata:     maps.Clone(message.Metadata),
 		// A message is held at most once, right after the proxy reads it and
 		// runs its hooks, so the time the proxy observed it stands for its hold.
 		InterceptedAt: message.CreatedAt,
@@ -154,7 +161,7 @@ func (proxy *Proxy) CheckpointItems() []domain.CheckpointItem {
 
 	wsByID := make(map[uuid.UUID]domain.CheckpointItem)
 	for _, message := range proxy.GetPendingWebSocketInterceptions() {
-		wsByID[message.ID] = checkpointItemFromWebSocket(message)
+		wsByID[message.ID] = CheckpointItemFromWebSocket(message)
 	}
 
 	proxy.checkpoint.mu.Lock()
@@ -196,7 +203,7 @@ func (proxy *Proxy) GetCheckpoint(id uuid.UUID) (domain.CheckpointItem, bool) {
 
 	for _, message := range proxy.GetPendingWebSocketInterceptions() {
 		if message.ID == id {
-			return checkpointItemFromWebSocket(message), true
+			return CheckpointItemFromWebSocket(message), true
 		}
 	}
 	return domain.CheckpointItem{}, false
@@ -252,7 +259,7 @@ func (proxy *Proxy) DropAllCheckpoint() []domain.CheckpointItem {
 	}
 	if proxy.WebSocketInterceptor != nil {
 		for _, message := range proxy.WebSocketInterceptor.CancelAll() {
-			removed = append(removed, checkpointItemFromWebSocket(message))
+			removed = append(removed, CheckpointItemFromWebSocket(message))
 		}
 	}
 	return removed
@@ -388,13 +395,13 @@ func (proxy *Proxy) forwardHTTP(id uuid.UUID, fwd CheckpointForward) error {
 		pending.rebuiltReq, err = rawhttp.RebuildRequest(raw, pending.req)
 		if err != nil {
 			proxy.checkpoint.mu.Unlock()
-			return fmt.Errorf("%w : %w", ErrRebuildRequest, err)
+			return fmt.Errorf("%w: %w", ErrRebuildRequest, err)
 		}
 	case domain.CheckpointTypeResponse:
 		pending.rebuiltRes, err = rawhttp.RebuildResponse(raw, pending.res.Request)
 		if err != nil {
 			proxy.checkpoint.mu.Unlock()
-			return fmt.Errorf("%w : %w", ErrRebuildResponse, err)
+			return fmt.Errorf("%w: %w", ErrRebuildResponse, err)
 		}
 	default:
 		proxy.checkpoint.mu.Unlock()
@@ -517,6 +524,6 @@ func (proxy *Proxy) abandonWebSocketCheckpoint(connectionID uuid.UUID) {
 		return
 	}
 	for _, message := range abandoned {
-		_ = notify(checkpointItemFromWebSocket(message))
+		_ = notify(CheckpointItemFromWebSocket(message))
 	}
 }
