@@ -2,6 +2,8 @@ package extensions
 
 import (
 	"errors"
+	"maps"
+	"sync"
 
 	"github.com/Shopify/go-lua"
 )
@@ -9,6 +11,65 @@ import (
 // ServiceGUIType is marasi.gui.type in a service instance. The Marasi App
 // registers its own marasi.gui with type "marasi-app".
 const ServiceGUIType = "marasi-service"
+
+// ToastTarget is the marasi.gui:render target that shows a toast. A toast is
+// shown once, so it is not kept as what the extension last drew.
+const ToastTarget = "toast"
+
+// guiMemory is what an extension last drew: the schema per render target and
+// the value per UI state key. A client that joins later draws it rather than
+// an empty page until the extension draws again.
+type guiMemory struct {
+	mu      sync.Mutex
+	renders map[string]any
+	state   map[string]any
+}
+
+// KeepRender records schema as what the extension last drew at target. A
+// toast is not kept.
+func (extension *Runtime) KeepRender(target string, schema any) {
+	if target == ToastTarget {
+		return
+	}
+	extension.gui.mu.Lock()
+	defer extension.gui.mu.Unlock()
+	if extension.gui.renders == nil {
+		extension.gui.renders = make(map[string]any)
+	}
+	extension.gui.renders[target] = schema
+}
+
+// KeepUpdate records value as the extension's last UI state for key.
+func (extension *Runtime) KeepUpdate(key string, value any) {
+	extension.gui.mu.Lock()
+	defer extension.gui.mu.Unlock()
+	if extension.gui.state == nil {
+		extension.gui.state = make(map[string]any)
+	}
+	extension.gui.state[key] = value
+}
+
+// GUISnapshot returns the kept renders by target and state by key. Neither
+// map is nil.
+func (extension *Runtime) GUISnapshot() (renders, state map[string]any) {
+	extension.gui.mu.Lock()
+	defer extension.gui.mu.Unlock()
+	renders, state = maps.Clone(extension.gui.renders), maps.Clone(extension.gui.state)
+	if renders == nil {
+		renders = map[string]any{}
+	}
+	if state == nil {
+		state = map[string]any{}
+	}
+	return renders, state
+}
+
+// ForgetGUI drops what the extension last drew.
+func (extension *Runtime) ForgetGUI() {
+	extension.gui.mu.Lock()
+	defer extension.gui.mu.Unlock()
+	extension.gui.renders, extension.gui.state = nil, nil
+}
 
 // GUI receives an extension's marasi.gui calls on behalf of the embedder that
 // draws the extension's UI.

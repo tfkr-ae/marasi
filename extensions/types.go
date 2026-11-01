@@ -107,6 +107,7 @@ func RegisterScopeType(extension *Runtime) {
 				lua.Errorf(l, fmt.Sprintf("adding rule : %s", err.Error()))
 				return 0
 			}
+			extension.changedScope = scope
 
 			return 0
 		}},
@@ -121,6 +122,7 @@ func RegisterScopeType(extension *Runtime) {
 				lua.Errorf(l, fmt.Sprintf("removing rule : %s", err.Error()))
 				return 0
 			}
+			extension.changedScope = scope
 			return 0
 		}},
 		{Name: "matches", Signature: "(input: req|res) -> boolean", Summary: "Checks if a request or response matches the scope.", Function: func(l *lua.State) int {
@@ -143,6 +145,7 @@ func RegisterScopeType(extension *Runtime) {
 			allow := l.ToBoolean(2)
 
 			scope.SetDefaultAllow(allow)
+			extension.changedScope = scope
 			return 0
 		}},
 		{Name: "matches_string", Signature: "(input: string, matchType: string) -> boolean", Summary: "Checks if a string matches a specific rule type in the scope.", Function: func(l *lua.State) int {
@@ -157,6 +160,7 @@ func RegisterScopeType(extension *Runtime) {
 		{Name: "clear_rules", Signature: "()", Summary: "Removes all rules from the scope.", Function: func(l *lua.State) int {
 			scope := lua.CheckUserData(l, 1, "scope").(*compass.Scope)
 			scope.ClearRules()
+			extension.changedScope = scope
 			return 0
 		}},
 	}

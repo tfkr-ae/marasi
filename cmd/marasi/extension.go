@@ -21,7 +21,7 @@ func init() {
 	extensionSettingsSetCmd.Flags().StringVar(&extensionSettingsFile, "file", "", "Read settings JSON from a file. If omitted, read JSON from stdin")
 	extensionCallCmd.Flags().StringVar(&extensionCallArgs, "args", "", "JSON array of arguments passed to FUNCTION")
 	extensionSettingsCmd.AddCommand(extensionSettingsGetCmd, extensionSettingsSetCmd)
-	extensionCmd.AddCommand(extensionListCmd, extensionGetCmd, extensionUpdateCmd, extensionLogsCmd, extensionSettingsCmd, extensionCallCmd, extensionEnableCmd, extensionDisableCmd)
+	extensionCmd.AddCommand(extensionListCmd, extensionGetCmd, extensionUpdateCmd, extensionLogsCmd, extensionSettingsCmd, extensionUICmd, extensionCallCmd, extensionEnableCmd, extensionDisableCmd)
 	rootCmd.AddCommand(extensionCmd)
 }
 
@@ -119,6 +119,25 @@ var extensionLogsCmd = &cobra.Command{
 			return err
 		}
 		return writeExtensionLogs(body, cmd.OutOrStdout())
+	},
+}
+
+var extensionUICmd = &cobra.Command{
+	Use:   "ui UUID",
+	Short: "Get what an extension last drew",
+	Long:  "Print what an enabled extension last drew with marasi.gui:render, per target other than toast, and its last marasi.gui:update value per key, as JSON.",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := serviceIDPath("/extension/", args[0], "/ui")
+		if err != nil {
+			return err
+		}
+		body, err := runControlRequest(cmd, http.MethodGet, path, "getting extension ui", nil)
+		if err != nil {
+			return err
+		}
+		_, err = cmd.OutOrStdout().Write(body)
+		return err
 	},
 }
 

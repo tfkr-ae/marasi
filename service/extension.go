@@ -217,6 +217,20 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 		writeJSON(w, r, http.StatusOK, extensionCallResult{Status: "called"})
 	})
 
+	mux.HandleFunc("GET /extension/{id}/ui", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseExtensionID(w, r)
+		if !ok {
+			return
+		}
+		runtime := findExtensionRuntime(proxy, id)
+		if runtime == nil {
+			writeExtensionError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		renders, state := runtime.GUISnapshot()
+		writeJSON(w, r, http.StatusOK, extensionUI{ID: runtime.Data.ID, Name: runtime.Data.Name, Renders: renders, State: state})
+	})
+
 	mux.HandleFunc("POST /extension/{id}/enable", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := parseExtensionID(w, r)
 		if !ok {
@@ -244,6 +258,11 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			}
 			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
+		}
+		// A disabled extension's drawing is gone from every client, so a
+		// client that joins later must not draw it either.
+		if !enabled {
+			runtime.ForgetGUI()
 		}
 		summary := extensionSummaryFromData(runtime.MetadataSnapshot())
 		events.publish("extension.enabled", summary)

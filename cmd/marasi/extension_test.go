@@ -130,6 +130,18 @@ func TestExtensionCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("should print ui as the API body", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		response := `{"id":"` + workshopID + `","name":"workshop","renders":{"main":{"title":"Scan"}},"state":{"progress":42}}` + "\n"
+		sent := startCannedControlAPI(t, configDir, "ui", http.StatusOK, response)
+
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "ui", "extension", "ui", workshopID)
+		got := sent.snapshot()
+		if err != nil || stdout != response || stderr != "" || got.Method != http.MethodGet || got.Path != "/extension/"+workshopID+"/ui" || got.Body != "" {
+			t.Fatalf("\nwanted:\nGET ui body on stdout\ngot:\n%s %s body %q, stdout %q, stderr %q, error %v", got.Method, got.Path, got.Body, stdout, stderr, err)
+		}
+	})
+
 	t.Run("should set settings from a file and write success on stderr", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		settingsFile := filepath.Join(t.TempDir(), "settings.json")

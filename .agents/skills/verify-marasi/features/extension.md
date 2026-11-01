@@ -9,12 +9,13 @@ Users inspect and change the Lua extensions loaded in the open project: source, 
 - Replace lua with `extension update` from `--file` or piped stdin.
 - Read print logs with `extension logs`.
 - Follow print lines and `marasi.gui` calls live with `events`: `extension.log`, `extension.gui.rendered`, and `extension.gui.updated`.
+- Read what an extension last drew with `extension ui`.
 - Read settings with `extension settings get`.
 - Replace settings with `extension settings set` from `--file` or piped stdin.
 - Call a global lua function with `extension call`.
 - Enable or disable with `extension enable` and `extension disable`.
 - Read the Lua API reference with `extension api [NAME]`. It needs no service.
-- Choose human-readable or `--json` output except `settings get`, which always prints the JSON envelope.
+- Choose human-readable or `--json` output except `settings get` and `ui`, which always print JSON.
 
 ## How to get to it (user POV)
 
@@ -37,4 +38,5 @@ For the reference, run `extension api` with no service and require the `HOOKS`, 
 - Update, settings set, and enable/disable publish `extension.updated`, `extension.settings.updated`, and `extension.enabled`. `extension.settings.updated` carries the extension's `id` and `name` with the new `settings`, though the `settings set` response is still `{"settings":…}` alone. Subscribe with `events` before the mutation; the stream has no replay. Call and logs publish no event of their own; Lua that prints or calls `marasi.gui` publishes `extension.log`, `extension.gui.rendered` or `extension.gui.updated` while the extension is enabled, and nothing while it is disabled (docs/adr/2026-10-06-extension-enabled-honored.md).
 - `extension api` ignores `--instance` and the service. An unknown NAME exits 1 with `no Lua API entry named`.
 - Extensions belong to the currently open project. After `project open`, use that project's list; do not reuse ids from the previous project without listing again.
+- `extension ui UUID` (`GET /extension/{id}/ui`) prints `{"id","name","renders","state"}` as JSON in both modes: what an enabled extension last drew per `marasi.gui:render` target other than `toast`, and its last `marasi.gui:update` value per key, so a client that joins later can draw it. Both maps are `{}` when nothing is kept. Disabling the extension forgets it, nothing is kept while it is disabled, and `project open` starts empty. A new render at a target replaces the old one; an `extension update` whose code no longer draws a target leaves the old render until disable or reopen. To prove it, run `extension update` on the workshop with Lua that renders `main` twice and `toast` once and updates one key, then require only the second `main` schema and that key in `extension ui`.
 - `marasi.gui` exists only in a service instance's extensions, with `marasi.gui.type` `marasi-service`. `extension.log` carries `{"id","name","time","text"}`, `extension.gui.rendered` `{"id","name","target","schema"}`, and `extension.gui.updated` `{"id","name","key","value"}`. A `render` schema that is not a table is a Lua error.

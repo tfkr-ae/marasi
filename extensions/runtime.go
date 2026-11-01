@@ -66,8 +66,17 @@ type Runtime struct {
 	CancelExecution  context.CancelFunc
 	// TrackExecution records project work for Lua execution and asynchronous requests.
 	// When non-nil, it returns a non-nil function that releases the record when the work ends.
-	TrackExecution   func() func()
+	TrackExecution func() func()
+	// OnScopeChange is called once at the end of a Lua execution that changed
+	// a scope's rules or default policy, with that scope. Compass replaces its
+	// rules with a clear and several adds, so one call per execution rather
+	// than per change gives a client one consistent update.
+	OnScopeChange func(*compass.Scope) `json:"-"`
+	// changedScope is set under Mu by the scope bindings during an execution.
+	changedScope     *compass.Scope
 	executionContext context.Context
+	// gui is what the extension last drew; see KeepRender.
+	gui guiMemory
 	// reference is set only while Reference records what registration adds.
 	reference       *APIReference
 	asyncExecutions sync.WaitGroup
@@ -155,6 +164,12 @@ func (extension *Runtime) beginExecution(ctx context.Context) func() {
 		stop()
 		cancel()
 		release()
+		if scope := extension.changedScope; scope != nil {
+			extension.changedScope = nil
+			if extension.OnScopeChange != nil {
+				extension.OnScopeChange(scope)
+			}
+		}
 	}
 }
 
@@ -472,6 +487,17 @@ func popLuaError(l *lua.State, err error) error {
 		message = err.Error()
 	}
 	return &LuaError{Message: message, Err: err}
+}
+
+// ExtensionWithScopeChangeHandler returns an option that sets OnScopeChange.
+func ExtensionWithScopeChangeHandler(handler func(*compass.Scope)) func(*Runtime) error {
+	return func(extension *Runtime) error {
+		if extension.OnScopeChange != nil {
+			return errors.New("extension already has a scope change handler")
+		}
+		extension.OnScopeChange = handler
+		return nil
+	}
 }
 
 // ExtensionWithLogHandler returns an option function to set a log handler on a LuaExtension.

@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
+	"github.com/tfkr-ae/marasi/compass"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
@@ -1416,6 +1417,14 @@ print("hidden")`)
 // It returns the proxy, the project's workshop runtime and a reader on /events.
 func openExtensionEventInstance(t *testing.T) (*marasi.Proxy, *extensions.Runtime, *bufio.Reader) {
 	t.Helper()
+	_, proxy, runtime, reader := openExtensionEventServer(t)
+	return proxy, runtime, reader
+}
+
+// openExtensionEventServer is openExtensionEventInstance that also returns
+// the server, for tests that call the control API.
+func openExtensionEventServer(t *testing.T) (*Server, *marasi.Proxy, *extensions.Runtime, *bufio.Reader) {
+	t.Helper()
 	var listener *listenerLifecycle
 	lifecycle, proxy, dir := newTestProjectLifecycle(t, func(runtime *extensions.Runtime) error {
 		return listener.ExtensionEvents(runtime)
@@ -1431,9 +1440,149 @@ func openExtensionEventInstance(t *testing.T) (*marasi.Proxy, *extensions.Runtim
 	reader := connectServiceEvents(t, server)
 	for _, runtime := range proxy.Extensions {
 		if runtime.Data.Name == "workshop" {
-			return proxy, runtime, reader
+			return server, proxy, runtime, reader
 		}
 	}
 	t.Fatal("workshop extension was not loaded")
-	return nil, nil, nil
+	return nil, nil, nil, nil
+}
+
+func TestExtensionUI(t *testing.T) {
+	t.Run("should keep the last render per target and the last state per key, but no toast", func(t *testing.T) {
+		server, _, runtime, _ := openExtensionEventServer(t)
+		id := runtime.Data.ID.String()
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/extension/"+id+"/ui", ""), http.StatusOK,
+			`{"id":"`+id+`","name":"workshop","renders":{},"state":{}}`+"\n")
+
+		err := runtime.ExecuteLua(`marasi.gui:render("main", {title = "first"})
+marasi.gui:render("main", {title = "second"})
+marasi.gui:render("panel", {items = {"a"}})
+marasi.gui:render("toast", {message = "once"})
+marasi.gui:update("progress", 10)
+marasi.gui:update("progress", 42)`)
+		if err != nil {
+			t.Fatalf("running gui calls: %v", err)
+		}
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/extension/"+id+"/ui", ""), http.StatusOK,
+			`{"id":"`+id+`","name":"workshop","renders":{"main":{"title":"second"},"panel":{"items":["a"]}},"state":{"progress":42}}`+"\n")
+	})
+
+	t.Run("should forget the drawing when the extension is disabled and keep nothing drawn while disabled", func(t *testing.T) {
+		server, _, runtime, _ := openExtensionEventServer(t)
+		id := runtime.Data.ID.String()
+		if err := runtime.ExecuteLua(`marasi.gui:render("main", {title = "shown"})`); err != nil {
+			t.Fatalf("running gui call: %v", err)
+		}
+		disabled := requestControlAPI(server, http.MethodPost, "/extension/"+id+"/enable", `{"enabled":false}`)
+		if disabled.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n200\ngot:\n%d %s", disabled.Code, disabled.Body.String())
+		}
+		if err := runtime.ExecuteLua(`marasi.gui:render("main", {title = "hidden"})
+marasi.gui:update("hidden", true)`); err != nil {
+			t.Fatalf("running disabled gui calls: %v", err)
+		}
+		empty := `{"id":"` + id + `","name":"workshop","renders":{},"state":{}}` + "\n"
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/extension/"+id+"/ui", ""), http.StatusOK, empty)
+
+		enabled := requestControlAPI(server, http.MethodPost, "/extension/"+id+"/enable", `{"enabled":true}`)
+		if enabled.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n200\ngot:\n%d %s", enabled.Code, enabled.Body.String())
+		}
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/extension/"+id+"/ui", ""), http.StatusOK, empty)
+	})
+
+	t.Run("should answer not_found for an extension that is not loaded", func(t *testing.T) {
+		server, _, _, _ := openExtensionEventServer(t)
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/extension/0193802f-f0e7-73d9-a764-06d21e3678ff/ui", ""), http.StatusNotFound, `{"error":"not_found"}`+"\n")
+	})
+}
+
+func TestScopeUpdatedEvent(t *testing.T) {
+	t.Run("should publish the whole rule list once per Lua run that changes it", func(t *testing.T) {
+		server, _, runtime, reader := openExtensionEventServer(t)
+		err := runtime.ExecuteLua(`local scope = marasi:scope()
+scope:clear_rules()
+scope:add_rule("example\\.com", "host")
+scope:add_rule("-/admin", "url")
+scope:set_default_allow(false)`)
+		if err != nil {
+			t.Fatalf("changing scope: %v", err)
+		}
+		want := `{"default_allow":false,"include":[{"pattern":"example\\.com","match_type":"host"}],"exclude":[{"pattern":"/admin","match_type":"url"}]}`
+		got := nextHTTPServiceEvent(t, reader)
+		if got.name != "scope.updated" || string(got.data) != want {
+			t.Fatalf("\nwanted:\nscope.updated %s\ngot:\n%s %s", want, got.name, got.data)
+		}
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/scope", ""), http.StatusOK, want+"\n")
+
+		// A run that only reads the scope publishes nothing; the next event
+		// is the marker update.
+		if err := runtime.ExecuteLua(`assert(not marasi:scope():matches_string("other.test", "host"))
+marasi.gui:update("marker", true)`); err != nil {
+			t.Fatalf("reading scope: %v", err)
+		}
+		if got := nextHTTPServiceEvent(t, reader); got.name != "extension.gui.updated" {
+			t.Fatalf("\nwanted:\nextension.gui.updated\ngot:\n%s %s", got.name, got.data)
+		}
+	})
+
+	t.Run("should publish nothing for a scope that is not live", func(t *testing.T) {
+		conn, err := db.New(filepath.Join(t.TempDir(), "project.marasi"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err != nil {
+			t.Fatalf("opening project db: %v", err)
+		}
+		repo := db.NewProxyRepo(conn)
+		t.Cleanup(func() { repo.Close() })
+		stored, err := repo.GetExtensionByUUID(uuid.MustParse("01937d13-9632-7f84-add5-14ec2c2c7f43"))
+		if err != nil {
+			t.Fatalf("getting workshop: %v", err)
+		}
+		stored.LuaContent = ""
+		// The runtime's proxy holds the scope Lua changes, as an opening
+		// project's does; live is the scope the instance serves.
+		opening, live := compass.NewScope(true), compass.NewScope(true)
+		events := newEventBroadcaster()
+		subscriber := events.subscribe()
+		defer events.unsubscribe(subscriber)
+		runtime := &extensions.Runtime{Data: stored}
+		liveScope := func() (*compass.Scope, error) { return live, nil }
+		if err := runtime.PrepareState(&marasi.Proxy{ExtensionRepo: repo, Scope: opening}, []func(*extensions.Runtime) error{extensionEvents(events, liveScope)}); err != nil {
+			t.Fatalf("preparing workshop: %v", err)
+		}
+
+		if err := runtime.ExecuteLua(`marasi:scope():add_rule("opening\\.test", "host")`); err != nil {
+			t.Fatalf("changing scope: %v", err)
+		}
+		select {
+		case event := <-subscriber.events:
+			t.Fatalf("\nwanted:\nno event\ngot:\n%s %s", event.name, event.data)
+		default:
+		}
+
+		live = opening
+		if err := runtime.ExecuteLua(`marasi:scope():add_rule("live\\.test", "host")`); err != nil {
+			t.Fatalf("changing scope: %v", err)
+		}
+		select {
+		case event := <-subscriber.events:
+			if event.name != "scope.updated" {
+				t.Fatalf("\nwanted:\nscope.updated\ngot:\n%s %s", event.name, event.data)
+			}
+		default:
+			t.Fatal("\nwanted:\nscope.updated once the scope is live\ngot:\nno event")
+		}
+	})
+
+	t.Run("should publish a change even when the Lua run then fails", func(t *testing.T) {
+		_, _, runtime, reader := openExtensionEventServer(t)
+		err := runtime.ExecuteLua(`marasi:scope():add_rule("kept\\.test", "host")
+error("after the change")`)
+		if err == nil {
+			t.Fatal("\nwanted:\nan error\ngot:\nnil")
+		}
+		got := nextHTTPServiceEvent(t, reader)
+		if got.name != "scope.updated" || !strings.Contains(string(got.data), `{"pattern":"kept\\.test","match_type":"host"}`) {
+			t.Fatalf("\nwanted:\nscope.updated with kept\\.test\ngot:\n%s %s", got.name, got.data)
+		}
+	})
 }
