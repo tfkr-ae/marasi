@@ -11,6 +11,7 @@ Users hold proxied HTTP messages (and optionally WebSocket messages) on a runnin
 - Send edited bytes with `--file` or piped stdin.
 - Hold the matching HTTP response with `--intercept-response` on a request forward.
 - Drop an item with `checkpoint drop "$CHECKPOINT_ID"`.
+- Forward or drop several items in one call with `checkpoint forward ID ID…` or `checkpoint drop ID ID…`.
 - Toggle HTTP intercept with `checkpoint intercept on` or `off`.
 - Toggle WebSocket intercept with `checkpoint websocket-intercept on` or `off`.
 - Choose human-readable or `--json` output.
@@ -27,6 +28,7 @@ Run `checkpoint list --json` and require `items` `[]` with `intercept` and `webs
 
 - `checkpoint intercept on` holds plain HTTP requests and, while intercept stays on, the matching responses. `CONNECT` itself is skipped. After a trusted MITM handshake, the decrypted inner request is held. An untrusted client fails the handshake and never reaches Checkpoint. Use `http://` for this proof.
 - A forward whose `--file` edit does not parse is refused with `invalid_checkpoint_request` and the parse error, in human and `--json` output, for example `forwarding checkpoint item: invalid_checkpoint_request: cannot rebuild request: recalculating content length: no blank line ends the headers`. The item stays held and no event is published.
+- `checkpoint forward` and `checkpoint drop` with two or more UUIDs call `POST /checkpoint/forward` or `POST /checkpoint/drop` with `{"ids":[…]}`. The answer is `{"done":N,"gone":N,"failed":N}`; human output is `checkpoint forwarded N, gone N, failed N` (or `dropped`) on stderr, and the command exits 0 whatever the counts. `gone` counts ids no longer held (already resolved or never held), and a repeated id counts once. Each resolved item publishes `checkpoint.forwarded` or `checkpoint.dropped` as a single forward or drop does. A bulk forward sends the original bytes: it does not read stdin, and `--file` or `--intercept-response` with several UUIDs fails before any request. To prove it, hold two requests, then run `checkpoint forward "$A" "$B" "$GONE_ID"` and require `forwarded 2, gone 1`, both curls answered, and two `checkpoint.forwarded` events.
 - `--intercept-response` on a request forward holds that response even when global intercept is off. With the seeded script, a request is held only while `checkpoint intercept` is on, or after you change `interceptRequest`. While intercept is on, the matching response is held anyway.
 - This CLI is not the seeded Lua extension named `checkpoint`. That extension's `interceptRequest` / `interceptResponse` return false by default. If that extension is disabled, `checkpoint intercept on` can report `intercept` true and hold nothing. Leave it enabled.
 - Dropping a held request does not fail the client. The proxy writes HTTP 200 with an empty body, so curl exits 0. Dropping a held response closes the client connection; curl exits non-zero and does not see that 200. The proof is that the id is gone from `checkpoint list`.

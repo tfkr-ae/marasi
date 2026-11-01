@@ -189,6 +189,52 @@ func TestCheckpointCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("should forward and drop several ids in one call and print the counts", func(t *testing.T) {
+		for _, tc := range []struct {
+			command, path, want string
+		}{
+			{"forward", "/checkpoint/forward", "checkpoint forwarded 1, gone 1, failed 0\n"},
+			{"drop", "/checkpoint/drop", "checkpoint dropped 1, gone 1, failed 0\n"},
+		} {
+			configDir := serviceConfigDir(t)
+			sent := startCannedControlAPI(t, configDir, "bulk", http.StatusOK, `{"done":1,"gone":1,"failed":0}`+"\n")
+			stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "bulk", "checkpoint", tc.command, httpID, wsID)
+			got := sent.snapshot()
+			wantBody := `{"ids":["` + httpID + `","` + wsID + `"]}`
+			if err != nil || stdout != "" || stderr != tc.want || got.Method != http.MethodPost || got.Path != tc.path || got.Body != wantBody {
+				t.Fatalf("\nwanted:\nPOST %s %s and stderr %q\ngot:\n%s %s body %q, stdout %q, stderr %q, error %v", tc.path, wantBody, tc.want, got.Method, got.Path, got.Body, stdout, stderr, err)
+			}
+
+			stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "bulk", "checkpoint", tc.command, httpID, wsID, "--json")
+			if err != nil || stdout != `{"done":1,"gone":1,"failed":0}`+"\n" || stderr != "" {
+				t.Fatalf("\nwanted:\nthe JSON body byte for byte\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+			}
+		}
+	})
+
+	t.Run("should refuse edits and a bad id in a bulk forward before the request", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "bulk-bad", http.StatusOK, `{"done":0,"gone":0,"failed":0}`+"\n")
+		file := filepath.Join(t.TempDir(), "edit.raw")
+		if err := os.WriteFile(file, httpDump, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, args := range [][]string{
+			{"forward", httpID, wsID, "--file", file},
+			{"forward", httpID, wsID, "--intercept-response"},
+			{"forward", httpID, "not-a-uuid"},
+			{"drop", httpID, "not-a-uuid"},
+		} {
+			commandArgs := append([]string{"--config-dir", configDir, "--instance", "bulk-bad", "checkpoint"}, args...)
+			if _, _, err := runMarasi(binary, commandArgs...); err == nil {
+				t.Fatalf("\nwanted:\nan error\ngot:\naccepted %v", args)
+			}
+		}
+		if got := sent.snapshot(); got.Method != "" {
+			t.Fatalf("\nwanted:\nno request\ngot:\n%s %s", got.Method, got.Path)
+		}
+	})
+
 	t.Run("should set intercept flags from on and off", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		sent := startCannedControlAPI(t, configDir, "intercept-on", http.StatusOK, listBody)
@@ -300,9 +346,9 @@ func TestCheckpointCommands(t *testing.T) {
 			{"checkpoint", "get"},
 			{"checkpoint", "get", httpID, "extra"},
 			{"checkpoint", "forward"},
-			{"checkpoint", "forward", httpID, "extra"},
+			{"checkpoint", "forward", httpID, "not-a-uuid"},
 			{"checkpoint", "drop"},
-			{"checkpoint", "drop", httpID, "extra"},
+			{"checkpoint", "drop", httpID, "not-a-uuid"},
 			{"checkpoint", "intercept"},
 			{"checkpoint", "intercept", "on", "extra"},
 			{"checkpoint", "websocket-intercept"},

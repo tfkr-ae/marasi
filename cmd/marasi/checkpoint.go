@@ -76,10 +76,17 @@ var checkpointGetCmd = &cobra.Command{
 }
 
 var checkpointForwardCmd = &cobra.Command{
-	Use:   "forward UUID",
-	Short: "Forward a Checkpoint item",
-	Args:  cobra.ExactArgs(1),
+	Use:   "forward UUID...",
+	Short: "Forward Checkpoint items",
+	Long:  "Forward one Checkpoint item, edited or not, or several items unedited in one call. With several UUIDs, --file and --intercept-response are refused, stdin is not read, and the output counts the items forwarded (done), no longer held (gone), and failed.",
+	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) > 1 {
+			if cmd.Flags().Changed("file") || cmd.Flags().Changed("intercept-response") {
+				return errors.New("checkpoint forward with several UUIDs forwards the original bytes; --file and --intercept-response need one UUID")
+			}
+			return runCheckpointBulk(cmd, "/checkpoint/forward", args, "forwarding checkpoint items", "forwarded")
+		}
 		payload, err := encodeCheckpointForward(cmd, args[0])
 		if err != nil {
 			return err
@@ -102,10 +109,14 @@ var checkpointForwardCmd = &cobra.Command{
 }
 
 var checkpointDropCmd = &cobra.Command{
-	Use:   "drop UUID",
-	Short: "Drop a Checkpoint item",
-	Args:  cobra.ExactArgs(1),
+	Use:   "drop UUID...",
+	Short: "Drop Checkpoint items",
+	Long:  "Drop one Checkpoint item, or several in one call. With several UUIDs, the output counts the items dropped (done), no longer held (gone), and failed.",
+	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) > 1 {
+			return runCheckpointBulk(cmd, "/checkpoint/drop", args, "dropping checkpoint items", "dropped")
+		}
 		path, err := serviceIDPath("/checkpoint/", args[0], "/drop")
 		if err != nil {
 			return err
@@ -121,6 +132,41 @@ var checkpointDropCmd = &cobra.Command{
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "checkpoint %s dropped\n", args[0])
 		return err
 	},
+}
+
+// runCheckpointBulk forwards or drops several items in one call. Gone and
+// failed items do not fail the command; the counts report them.
+func runCheckpointBulk(cmd *cobra.Command, path string, args []string, operation, verb string) error {
+	ids := make([]string, 0, len(args))
+	for _, arg := range args {
+		id, err := parseServiceID(arg)
+		if err != nil {
+			return err
+		}
+		ids = append(ids, id)
+	}
+	payload, err := json.Marshal(map[string][]string{"ids": ids})
+	if err != nil {
+		return fmt.Errorf("encoding checkpoint ids: %w", err)
+	}
+	body, err := runControlRequest(cmd, http.MethodPost, path, operation, payload)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		_, err = cmd.OutOrStdout().Write(body)
+		return err
+	}
+	var result struct {
+		Done   int `json:"done"`
+		Gone   int `json:"gone"`
+		Failed int `json:"failed"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("decoding checkpoint result: %w", err)
+	}
+	_, err = fmt.Fprintf(cmd.ErrOrStderr(), "checkpoint %s %d, gone %d, failed %d\n", verb, result.Done, result.Gone, result.Failed)
+	return err
 }
 
 var checkpointInterceptCmd = &cobra.Command{
