@@ -22,14 +22,17 @@ type checkpointHTTPItem struct {
 }
 
 type checkpointWebSocketItem struct {
-	ID            uuid.UUID `json:"id"`
-	Type          string    `json:"type"`
-	Payload       []byte    `json:"payload"`
-	Opcode        int       `json:"opcode"`
-	Direction     string    `json:"direction"`
-	ConnectionID  uuid.UUID `json:"connection_id"`
-	RequestID     uuid.UUID `json:"request_id"`
-	InterceptedAt time.Time `json:"intercepted_at"`
+	ID            uuid.UUID      `json:"id"`
+	Type          string         `json:"type"`
+	Payload       []byte         `json:"payload"`
+	Opcode        int            `json:"opcode"`
+	Direction     string         `json:"direction"`
+	ConnectionID  uuid.UUID      `json:"connection_id"`
+	RequestID     uuid.UUID      `json:"request_id"`
+	FrameCount    int            `json:"frame_count"`
+	Compressed    bool           `json:"compressed"`
+	Metadata      map[string]any `json:"metadata"`
+	InterceptedAt time.Time      `json:"intercepted_at"`
 }
 
 type checkpointList struct {
@@ -204,6 +207,10 @@ func getCheckpointList(proxy *marasi.Proxy, kind string) checkpointList {
 
 func checkpointItemFromDomain(item domain.CheckpointItem) any {
 	if item.Type == domain.CheckpointTypeWebSocket {
+		metadata := item.Metadata
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
 		return checkpointWebSocketItem{
 			ID:            item.ID,
 			Type:          item.Type,
@@ -212,6 +219,9 @@ func checkpointItemFromDomain(item domain.CheckpointItem) any {
 			Direction:     item.Direction,
 			ConnectionID:  item.ConnectionID,
 			RequestID:     item.RequestID,
+			FrameCount:    item.FrameCount,
+			Compressed:    item.Compressed,
+			Metadata:      metadata,
 			InterceptedAt: item.InterceptedAt,
 		}
 	}
@@ -229,19 +239,6 @@ func checkpointResolvedEventFromDomain(item domain.CheckpointItem, reason checkp
 		event.RequestID = &item.RequestID
 	}
 	return event
-}
-
-func checkpointItemFromWebSocket(message domain.WebSocketMessage) domain.CheckpointItem {
-	return domain.CheckpointItem{
-		ID:            message.ID,
-		Type:          domain.CheckpointTypeWebSocket,
-		Payload:       message.Payload,
-		Opcode:        message.Opcode,
-		Direction:     message.Direction,
-		ConnectionID:  message.ConnectionID,
-		RequestID:     message.RequestID,
-		InterceptedAt: message.CreatedAt,
-	}
 }
 
 func decodeCheckpointForward(r *http.Request, itemType string) (marasi.CheckpointForward, error) {

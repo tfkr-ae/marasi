@@ -549,7 +549,7 @@ func (s *Server) HandleCheckpointAbandoned(item domain.CheckpointItem) error {
 // HandleWebSocketIntercept publishes checkpoint.held after a WebSocket item is
 // pending. It always returns nil so notify cannot drop the hold or wait for subscribers.
 func (s *Server) HandleWebSocketIntercept(message domain.WebSocketMessage) error {
-	s.events.publish("checkpoint.held", checkpointItemFromDomain(checkpointItemFromWebSocket(message)))
+	s.events.publish("checkpoint.held", checkpointItemFromDomain(marasi.CheckpointItemFromWebSocket(message)))
 	return nil
 }
 

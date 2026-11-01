@@ -77,7 +77,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 			reqID, raw, checkpointHeldAt(t, proxy, reqID),
 		)
 		wsBody := fmt.Sprintf(
-			`{"items":[{"id":"%s","type":"websocket","payload":"%s","opcode":1,"direction":"client","connection_id":"%s","request_id":"%s","intercepted_at":"`+checkpointMessageHeldAt+`"}],"intercept":true,"websocket_intercept":false}`+"\n",
+			`{"items":[{"id":"%s","type":"websocket","payload":"%s","opcode":1,"direction":"client","connection_id":"%s","request_id":"%s","frame_count":3,"compressed":true,"metadata":{"tag":"seen"},"intercepted_at":"`+checkpointMessageHeldAt+`"}],"intercept":true,"websocket_intercept":false}`+"\n",
 			messageID, base64.StdEncoding.EncodeToString([]byte("held")), uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809"), uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a"),
 		)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint?kind=http", ""), http.StatusOK, httpBody)
@@ -330,7 +330,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		})
 
 		want := fmt.Sprintf(
-			`{"id":"%s","type":"websocket","payload":"%s","opcode":1,"direction":"client","connection_id":"%s","request_id":"%s","intercepted_at":"`+checkpointMessageHeldAt+`"}`,
+			`{"id":"%s","type":"websocket","payload":"%s","opcode":1,"direction":"client","connection_id":"%s","request_id":"%s","frame_count":3,"compressed":true,"metadata":{"tag":"seen"},"intercepted_at":"`+checkpointMessageHeldAt+`"}`,
 			messageID, base64.StdEncoding.EncodeToString([]byte("held")),
 			uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809"),
 			uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a"),
@@ -642,6 +642,9 @@ func startCheckpointWebSocketHold(t *testing.T, proxy *marasi.Proxy) (uuid.UUID,
 		RequestID:    uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a"),
 		Direction:    marasiws.DirectionFromClient,
 		Opcode:       marasiws.OpText, Payload: []byte("held"),
+		// A compressed three-frame message with metadata, so the item proves
+		// each field comes from the held message rather than a zero value.
+		FrameCount: 3, Compressed: true, Metadata: map[string]any{"tag": "seen"},
 		CreatedAt: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC),
 	}
 	done := make(chan error, 1)
