@@ -26,6 +26,7 @@ Run `checkpoint list --json` and require `items` `[]` with `intercept` and `webs
 ## Gotchas
 
 - `checkpoint intercept on` holds plain HTTP requests and, while intercept stays on, the matching responses. `CONNECT` itself is skipped. After a trusted MITM handshake, the decrypted inner request is held. An untrusted client fails the handshake and never reaches Checkpoint. Use `http://` for this proof.
+- A forward whose `--file` edit does not parse is refused with `invalid_checkpoint_request` and the parse error, in human and `--json` output, for example `forwarding checkpoint item: invalid_checkpoint_request: cannot rebuild request: recalculating content length: no blank line ends the headers`. The item stays held and no event is published.
 - `--intercept-response` on a request forward holds that response even when global intercept is off. With the seeded script, a request is held only while `checkpoint intercept` is on, or after you change `interceptRequest`. While intercept is on, the matching response is held anyway.
 - This CLI is not the seeded Lua extension named `checkpoint`. That extension's `interceptRequest` / `interceptResponse` return false by default. If that extension is disabled, `checkpoint intercept on` can report `intercept` true and hold nothing. Leave it enabled.
 - Dropping a held request does not fail the client. The proxy writes HTTP 200 with an empty body, so curl exits 0. Dropping a held response closes the client connection; curl exits non-zero and does not see that 200. The proof is that the id is gone from `checkpoint list`.

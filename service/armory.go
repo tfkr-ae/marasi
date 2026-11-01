@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -260,7 +263,7 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 	mux.HandleFunc("POST /armory/run", func(w http.ResponseWriter, r *http.Request) {
 		mutation, err := decodeArmoryRunMutation(r, true)
 		if err != nil {
-			writeArmoryError(w, r, http.StatusBadRequest, "invalid_armory_request")
+			writeRefusal(w, r, http.StatusBadRequest, "invalid_armory_request", err.Error())
 			return
 		}
 		armoryService, ok := armoryService(proxy)
@@ -285,7 +288,7 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 		}
 		run := mutation.armoryRun(id, template.RawTemplate)
 		if err := armoryService.ValidateRun(run); err != nil {
-			writeArmoryError(w, r, http.StatusBadRequest, "invalid_armory_request")
+			writeRefusal(w, r, http.StatusBadRequest, "invalid_armory_request", err.Error())
 			return
 		}
 		if err := repo.CreateArmoryRun(run); err != nil {
@@ -300,7 +303,7 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 	mux.HandleFunc("POST /armory/run/validate", func(w http.ResponseWriter, r *http.Request) {
 		mutation, err := decodeArmoryRunMutation(r, false)
 		if err != nil {
-			writeArmoryError(w, r, http.StatusBadRequest, "invalid_armory_request")
+			writeRefusal(w, r, http.StatusBadRequest, "invalid_armory_request", err.Error())
 			return
 		}
 		armoryService, ok := armoryService(proxy)
@@ -310,7 +313,7 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 		}
 		run := mutation.armoryRun(uuid.Nil, *mutation.RawTemplate)
 		if err := armoryService.ValidateRun(run); err != nil {
-			writeArmoryError(w, r, http.StatusBadRequest, "invalid_armory_request")
+			writeRefusal(w, r, http.StatusBadRequest, "invalid_armory_request", err.Error())
 			return
 		}
 		writeJSON(w, r, http.StatusOK, struct {
@@ -473,67 +476,85 @@ func armoryRepository(proxy *marasi.Proxy) (domain.ArmoryRepository, bool) {
 	return repo, repo != nil
 }
 
+// decodeArmoryRunMutation reads a run draft. Its errors are the refusal
+// message, naming the first problem in field-name order so the answer does
+// not depend on map order.
 func decodeArmoryRunMutation(r *http.Request, create bool) (armoryRunMutation, error) {
+	errNotObject := errors.New("the body must be one JSON object")
 	if r.Body == nil {
-		return armoryRunMutation{}, errInvalidArmoryRequest
+		return armoryRunMutation{}, errNotObject
 	}
 	decoder := json.NewDecoder(r.Body)
 	var fields map[string]json.RawMessage
 	if err := decoder.Decode(&fields); err != nil || fields == nil {
-		return armoryRunMutation{}, errInvalidArmoryRequest
+		return armoryRunMutation{}, errNotObject
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return armoryRunMutation{}, errInvalidArmoryRequest
+		return armoryRunMutation{}, errNotObject
 	}
 	mutation := armoryRunMutation{UseHTTPS: true, MaxConcurrent: 10}
 	var attackTypeSet, wordlistsSet bool
-	for name, raw := range fields {
+	for _, name := range slices.Sorted(maps.Keys(fields)) {
+		raw := fields[name]
 		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-			return armoryRunMutation{}, errInvalidArmoryRequest
+			return armoryRunMutation{}, fmt.Errorf("%s must not be null", name)
 		}
 		switch name {
 		case "template_id":
+			if !create {
+				return armoryRunMutation{}, errors.New("template_id is not accepted here; send raw_template")
+			}
 			var value uuid.UUID
-			if !create || json.Unmarshal(raw, &value) != nil || value == uuid.Nil {
-				return armoryRunMutation{}, errInvalidArmoryRequest
+			if json.Unmarshal(raw, &value) != nil || value == uuid.Nil {
+				return armoryRunMutation{}, errors.New("template_id must be an Armory template UUID")
 			}
 			mutation.TemplateID = &value
 		case "raw_template":
+			if create {
+				return armoryRunMutation{}, errors.New("raw_template is not accepted here; send template_id")
+			}
 			var value string
-			if create || json.Unmarshal(raw, &value) != nil {
-				return armoryRunMutation{}, errInvalidArmoryRequest
+			if json.Unmarshal(raw, &value) != nil {
+				return armoryRunMutation{}, errors.New("raw_template must be a string")
 			}
 			mutation.RawTemplate = &value
 		case "attack_type":
 			var value string
 			if json.Unmarshal(raw, &value) != nil {
-				return armoryRunMutation{}, errInvalidArmoryRequest
+				return armoryRunMutation{}, errors.New("attack_type must be a string")
 			}
 			attackType, ok := domain.ParseArmoryAttackType(value)
 			if !ok {
-				return armoryRunMutation{}, errInvalidArmoryRequest
+				return armoryRunMutation{}, fmt.Errorf("attack_type %q is not harpoon, broadside, tandem or maelstrom", value)
 			}
 			mutation.AttackType = attackType
 			attackTypeSet = true
 		case "wordlists":
 			if json.Unmarshal(raw, &mutation.Wordlists) != nil || mutation.Wordlists == nil {
-				return armoryRunMutation{}, errInvalidArmoryRequest
+				return armoryRunMutation{}, errors.New("wordlists must be an array of wordlist names")
 			}
 			wordlistsSet = true
 		case "use_https":
 			if json.Unmarshal(raw, &mutation.UseHTTPS) != nil {
-				return armoryRunMutation{}, errInvalidArmoryRequest
+				return armoryRunMutation{}, errors.New("use_https must be true or false")
 			}
 		case "max_concurrent":
 			if json.Unmarshal(raw, &mutation.MaxConcurrent) != nil || mutation.MaxConcurrent < 1 || mutation.MaxConcurrent > 100 {
-				return armoryRunMutation{}, errInvalidArmoryRequest
+				return armoryRunMutation{}, errors.New("max_concurrent must be a whole number from 1 to 100")
 			}
 		default:
-			return armoryRunMutation{}, errInvalidArmoryRequest
+			return armoryRunMutation{}, fmt.Errorf("unknown field %q", name)
 		}
 	}
-	if create && mutation.TemplateID == nil || !create && mutation.RawTemplate == nil || !attackTypeSet || !wordlistsSet {
-		return armoryRunMutation{}, errInvalidArmoryRequest
+	switch {
+	case create && mutation.TemplateID == nil:
+		return armoryRunMutation{}, errors.New("template_id is required")
+	case !create && mutation.RawTemplate == nil:
+		return armoryRunMutation{}, errors.New("raw_template is required")
+	case !attackTypeSet:
+		return armoryRunMutation{}, errors.New("attack_type is required")
+	case !wordlistsSet:
+		return armoryRunMutation{}, errors.New("wordlists is required")
 	}
 	return mutation, nil
 }

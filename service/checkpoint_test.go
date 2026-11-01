@@ -397,7 +397,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		drainCheckpointHeld(t, subscriber)
 
 		badRaw := base64.StdEncoding.EncodeToString([]byte("not an HTTP request"))
-		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+reqID.String()+"/forward", `{"raw":"`+badRaw+`"}`), http.StatusBadRequest, `{"error":"invalid_checkpoint_request"}`+"\n")
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+reqID.String()+"/forward", `{"raw":"`+badRaw+`"}`), http.StatusBadRequest, `{"error":"invalid_checkpoint_request","message":"cannot rebuild request: recalculating content length: no blank line ends the headers"}`+"\n")
 		assertNoCheckpointEvent(t, subscriber)
 		if !proxy.HasPendingCheckpoint() {
 			t.Fatal("rebuild failure resolved the pending item")

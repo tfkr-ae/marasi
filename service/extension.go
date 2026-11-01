@@ -202,7 +202,7 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			return
 		}
 		if err := runtime.CallFunctionContext(r.Context(), name, args...); err != nil {
-			writeExtensionError(w, r, http.StatusBadRequest, "lua_error")
+			writeLuaRefusal(w, r, err)
 			return
 		}
 		writeJSON(w, r, http.StatusOK, extensionCallResult{Status: "called"})
@@ -278,7 +278,7 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 		}
 		events.publish("extension.updated", extensionSummaryFromData(runtime.MetadataSnapshot()))
 		if err := runtime.ExecuteLuaContext(r.Context(), lua); err != nil {
-			writeExtensionError(w, r, http.StatusBadRequest, "lua_error")
+			writeLuaRefusal(w, r, err)
 			return
 		}
 		settings, err := extensionSettingsFromRepository(proxy, id)
@@ -445,6 +445,15 @@ func parseExtensionID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) 
 		return uuid.Nil, false
 	}
 	return id, true
+}
+
+// writeLuaRefusal refuses a failed Lua run with the message Lua raised.
+func writeLuaRefusal(w http.ResponseWriter, r *http.Request, err error) {
+	message := err.Error()
+	if luaErr, ok := errors.AsType[*extensions.LuaError](err); ok {
+		message = luaErr.Message
+	}
+	writeRefusal(w, r, http.StatusBadRequest, "lua_error", message)
 }
 
 func writeExtensionError(w http.ResponseWriter, r *http.Request, status int, code string) {

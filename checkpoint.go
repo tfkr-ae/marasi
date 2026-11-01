@@ -388,13 +388,13 @@ func (proxy *Proxy) forwardHTTP(id uuid.UUID, fwd CheckpointForward) error {
 		pending.rebuiltReq, err = rawhttp.RebuildRequest(raw, pending.req)
 		if err != nil {
 			proxy.checkpoint.mu.Unlock()
-			return fmt.Errorf("%w : %w", ErrRebuildRequest, err)
+			return fmt.Errorf("%w: %w", ErrRebuildRequest, err)
 		}
 	case domain.CheckpointTypeResponse:
 		pending.rebuiltRes, err = rawhttp.RebuildResponse(raw, pending.res.Request)
 		if err != nil {
 			proxy.checkpoint.mu.Unlock()
-			return fmt.Errorf("%w : %w", ErrRebuildResponse, err)
+			return fmt.Errorf("%w: %w", ErrRebuildResponse, err)
 		}
 	default:
 		proxy.checkpoint.mu.Unlock()

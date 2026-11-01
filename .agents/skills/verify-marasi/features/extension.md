@@ -32,6 +32,7 @@ For the reference, run `extension api` with no service and require the `HOOKS`, 
 
 - Update and settings set require `--file` or piped stdin. A TTY stdin fails.
 - `--args` on call must be a JSON array. A missing function returns `function_not_found`.
+- A Lua error in `extension update` or `extension call` is refused with `lua_error` and the message Lua raised, for example `calling extension: lua_error: [string "function boom()"]:2: nope`. A syntax error names its line too: `[string "this is not lua"]:1: syntax error near is`. The chunk name is the source's first line, cut short by Lua when long.
 - Human `extension get` prints lua only. List, logs, and mutation confirmations use the usual stdout/stderr split. `extension settings get` always writes `{"settings":...}` to stdout.
 - Update, settings set, and enable/disable publish `extension.updated`, `extension.settings.updated`, and `extension.enabled`. Subscribe with `events` before the mutation; the stream has no replay. Call and logs publish no event of their own; Lua that prints or calls `marasi.gui` publishes `extension.log`, `extension.gui.rendered` or `extension.gui.updated` while the extension is enabled, and nothing while it is disabled (docs/adr/2026-10-06-extension-enabled-honored.md).
 - `extension api` ignores `--instance` and the service. An unknown NAME exits 1 with `no Lua API entry named`.

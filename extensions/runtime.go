@@ -240,7 +240,7 @@ func (extension *Runtime) ExecuteLuaContext(ctx context.Context, code string) er
 
 	err := lua.DoString(extension.LuaState, code)
 	if err != nil {
-		return fmt.Errorf("executing string %s : %w", code, err)
+		return fmt.Errorf("executing string %s : %w", code, popLuaError(extension.LuaState, err))
 	}
 
 	return nil
@@ -445,11 +445,33 @@ func (extension *Runtime) CallFunctionContext(ctx context.Context, name string, 
 
 	err := extension.LuaState.ProtectedCall(len(args), 0, 0)
 	if err != nil {
-		extension.LuaState.Pop(1)
-		return fmt.Errorf("calling %s : %w", name, err)
+		return fmt.Errorf("calling %s : %w", name, popLuaError(extension.LuaState, err))
 	}
 	return nil
 
+}
+
+// LuaError is a failed Lua run. Message is the error value Lua raised, such
+// as `[string "..."]:3: attempt to call a nil value`. go-lua returns only a
+// generic error for a syntax error and leaves the real message on the stack.
+type LuaError struct {
+	Message string
+	Err     error
+}
+
+func (e *LuaError) Error() string { return e.Message }
+
+func (e *LuaError) Unwrap() error { return e.Err }
+
+// popLuaError pops the error value a failed load or ProtectedCall left on the
+// stack and pairs it with err.
+func popLuaError(l *lua.State, err error) error {
+	message, ok := l.ToString(-1)
+	l.Pop(1)
+	if !ok || message == "" {
+		message = err.Error()
+	}
+	return &LuaError{Message: message, Err: err}
 }
 
 // ExtensionWithLogHandler returns an option function to set a log handler on a LuaExtension.

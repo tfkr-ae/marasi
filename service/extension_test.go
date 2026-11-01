@@ -238,7 +238,7 @@ end`)
 
 		lua := "this is not lua"
 		response := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String(), `{"lua_content":"this is not lua"}`)
-		assertControlAPIResponse(t, response, http.StatusBadRequest, `{"error":"lua_error"}`+"\n")
+		assertControlAPIResponse(t, response, http.StatusBadRequest, `{"error":"lua_error","message":"[string \"this is not lua\"]:1: syntax error near is"}`+"\n")
 
 		stored, err := repo.GetExtensionByUUID(runtime.Data.ID)
 		if err != nil {
@@ -628,7 +628,7 @@ end`)
 		assertControlAPIResponse(t, missingFn, http.StatusNotFound, `{"error":"function_not_found"}`+"\n")
 
 		luaErr := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String()+"/call", `{"function":"boom"}`)
-		assertControlAPIResponse(t, luaErr, http.StatusBadRequest, `{"error":"lua_error"}`+"\n")
+		assertControlAPIResponse(t, luaErr, http.StatusBadRequest, `{"error":"lua_error","message":"[string \"function boom()\"]:2: nope"}`+"\n")
 
 		missing := requestControlAPI(server, http.MethodPost, "/extension/01937d13-9632-75b1-9e73-c5129b06fa8c/call", `{"function":"poke"}`)
 		assertControlAPIResponse(t, missing, http.StatusNotFound, `{"error":"not_found"}`+"\n")

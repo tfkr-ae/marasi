@@ -85,6 +85,12 @@ type controlRefusalBody struct {
 	Message string `json:"message"`
 }
 
+// writeRefusal writes a refusal whose message names its cause, so a client
+// can show why the command failed rather than only the code.
+func writeRefusal(w http.ResponseWriter, r *http.Request, status int, code, message string) {
+	writeJSON(w, r, status, controlRefusalBody{Error: code, Message: message})
+}
+
 // EnableControlAddress gives the instance a network address for its control
 // listener, inactive until Start, and serves the socket-only control token
 // routes. Call it once, before serving.
