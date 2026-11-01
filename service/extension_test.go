@@ -347,8 +347,9 @@ end`)
 		}
 
 		event := <-subscriber.events
-		if event.name != "extension.settings.updated" || string(event.data) != `{"settings":{"count":1,"theme":"dark"}}` {
-			t.Fatalf("\nwanted:\nextension.settings.updated %s\ngot:\n%s %s", want, event.name, event.data)
+		wantEvent := `{"id":"` + runtime.Data.ID.String() + `","name":"workshop","settings":{"count":1,"theme":"dark"}}`
+		if event.name != "extension.settings.updated" || string(event.data) != wantEvent {
+			t.Fatalf("\nwanted:\nextension.settings.updated %s\ngot:\n%s %s", wantEvent, event.name, event.data)
 		}
 	})
 

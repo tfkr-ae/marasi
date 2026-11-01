@@ -35,6 +35,15 @@ type trafficChanged struct {
 	Change    bulkChange      `json:"change"`
 	Count     int             `json:"count"` // number of pairs changed
 	Selection json.RawMessage `json:"selection"`
+	// Target names the launchpad, finding or test case of a link or unlink,
+	// so a client rereads only that one. Other changes omit it.
+	Target *trafficChangeTarget `json:"target,omitempty"`
+}
+
+// trafficChangeTarget is the target of a link or unlink in traffic.changed.
+type trafficChangeTarget struct {
+	Kind string    `json:"kind"` // launchpad, finding or test_case
+	ID   uuid.UUID `json:"id"`
 }
 
 // bulkResult is the JSON body of a successful bulk route.
@@ -46,6 +55,9 @@ type bulkResult struct {
 // an operation's body struct so decodeBulkBody can read it.
 type bulkSelection struct {
 	Selection json.RawMessage `json:"selection"`
+	// target is set by a link or unlink once its body names one, for
+	// serveBulk to put in traffic.changed.
+	target *domain.LinkTarget
 }
 
 func (b *bulkSelection) rawSelection() *bulkSelection { return b }
@@ -110,7 +122,11 @@ func serveBulk(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, even
 		writeBulkError(w, r, err)
 		return false
 	}
-	events.publish("traffic.changed", trafficChanged{Change: change, Count: count, Selection: body.rawSelection().Selection})
+	event := trafficChanged{Change: change, Count: count, Selection: body.rawSelection().Selection}
+	if target := body.rawSelection().target; target != nil {
+		event.Target = &trafficChangeTarget{Kind: target.Kind.String(), ID: target.ID}
+	}
+	events.publish("traffic.changed", event)
 	writeJSON(w, r, http.StatusOK, bulkResult{Count: count})
 	return true
 }
@@ -175,8 +191,8 @@ type bulkLinkBody struct {
 	TestCaseID  *uuid.UUID `json:"test_case_id"`
 }
 
-// target returns the one target the body names, or errInvalidBulkRequest.
-func (b *bulkLinkBody) target() (domain.LinkTarget, error) {
+// linkTarget returns the one target the body names, or errInvalidBulkRequest.
+func (b *bulkLinkBody) linkTarget() (domain.LinkTarget, error) {
 	var targets []domain.LinkTarget
 	for kind, id := range map[domain.LinkKind]*uuid.UUID{
 		domain.LinkLaunchpad: b.LaunchpadID,
@@ -270,10 +286,11 @@ func addTrafficBulkRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadc
 		mux.HandleFunc("POST /traffic/bulk/"+string(change), func(w http.ResponseWriter, r *http.Request) {
 			var body bulkLinkBody
 			serveBulk(w, r, proxy, events, change, &body, func(repo domain.TrafficRepository, sel domain.Selection) (int, error) {
-				target, err := body.target()
+				target, err := body.linkTarget()
 				if err != nil {
 					return 0, err
 				}
+				body.target = &target
 				return run(repo, sel, target)
 			})
 		})

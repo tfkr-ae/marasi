@@ -49,6 +49,14 @@ type extensionSettings struct {
 	Settings map[string]any `json:"settings"`
 }
 
+// extensionSettingsUpdated is the data of extension.settings.updated. It names
+// the extension so a client rereads only that extension's settings.
+type extensionSettingsUpdated struct {
+	ID       uuid.UUID      `json:"id"`
+	Name     string         `json:"name"`
+	Settings map[string]any `json:"settings"`
+}
+
 type extensionUpdateRequest struct {
 	LuaContent *string `json:"lua_content"`
 }
@@ -171,7 +179,8 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		events.publish("extension.settings.updated", envelope)
+		data := runtime.MetadataSnapshot()
+		events.publish("extension.settings.updated", extensionSettingsUpdated{ID: data.ID, Name: data.Name, Settings: envelope.Settings})
 		writeJSON(w, r, http.StatusOK, envelope)
 	})
 

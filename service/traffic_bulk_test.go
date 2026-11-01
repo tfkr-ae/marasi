@@ -87,7 +87,7 @@ func TestTrafficBulkLinkAPI(t *testing.T) {
 		assertControlAPIResponse(t, response, http.StatusOK, `{"count":2}`+"\n")
 
 		events := drainEvents(subscriber)
-		want := `{"change":"link","count":2,"selection":` + selection + `}`
+		want := `{"change":"link","count":2,"selection":` + selection + `,"target":{"kind":"launchpad","id":"` + launchpadID.String() + `"}}`
 		if len(events) != 1 || events[0].name != "traffic.changed" || string(events[0].data) != want {
 			t.Fatalf("\nwanted:\none traffic.changed %s\ngot:\n%v", want, eventSummary(events))
 		}
@@ -124,14 +124,19 @@ func TestTrafficBulkLinkAPI(t *testing.T) {
 			assertControlAPIResponse(t, response, http.StatusOK, `{"count":0}`+"\n")
 		}
 		events := drainEvents(subscriber)
-		wantChanges := []string{"link", "unlink", "unlink", "link", "unlink", "unlink"}
-		if len(events) != len(wantChanges) {
-			t.Fatalf("\nwanted:\n%d events\ngot:\n%v", len(wantChanges), eventSummary(events))
+		findingTarget := fmt.Sprintf(`{"kind":"finding","id":%q}`, finding.ID)
+		testCaseTarget := fmt.Sprintf(`{"kind":"test_case","id":%q}`, testCase.ID)
+		wants := []struct{ change, count, target string }{
+			{"link", "1", findingTarget}, {"unlink", "1", findingTarget}, {"unlink", "0", findingTarget},
+			{"link", "1", testCaseTarget}, {"unlink", "1", testCaseTarget}, {"unlink", "0", testCaseTarget},
 		}
-		for i, change := range wantChanges {
-			want := fmt.Sprintf(`"change":%q`, change)
-			if events[i].name != "traffic.changed" || !strings.Contains(string(events[i].data), want) {
-				t.Errorf("event %d = %s %s, want traffic.changed with %s", i, events[i].name, events[i].data, want)
+		if len(events) != len(wants) {
+			t.Fatalf("\nwanted:\n%d events\ngot:\n%v", len(wants), eventSummary(events))
+		}
+		for i, w := range wants {
+			want := fmt.Sprintf(`{"change":%q,"count":%s,"selection":%s,"target":%s}`, w.change, w.count, selection, w.target)
+			if events[i].name != "traffic.changed" || string(events[i].data) != want {
+				t.Errorf("\nwanted:\ntraffic.changed %s\ngot:\n%s %s", want, events[i].name, events[i].data)
 			}
 		}
 	})
