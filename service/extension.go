@@ -296,6 +296,12 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
+		// Run before storing: the project runs the stored source when it
+		// opens, so source that fails here would stop the project opening.
+		if err := runtime.ExecuteLuaContext(r.Context(), lua); err != nil {
+			writeLuaRefusal(w, r, err)
+			return
+		}
 		if err := runtime.UpdateLuaContent(repo, lua); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				writeExtensionError(w, r, http.StatusNotFound, "not_found")
@@ -305,10 +311,6 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			return
 		}
 		events.publish("extension.updated", extensionSummaryFromData(runtime.MetadataSnapshot()))
-		if err := runtime.ExecuteLuaContext(r.Context(), lua); err != nil {
-			writeLuaRefusal(w, r, err)
-			return
-		}
 		settings, err := extensionSettingsFromRepository(proxy, id)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {

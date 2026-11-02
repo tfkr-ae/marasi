@@ -227,33 +227,43 @@ end`)
 		}
 	})
 
-	t.Run("should keep persisted lua and publish when eval fails", func(t *testing.T) {
-		repo, runtime := preparedWorkshop(t, `print("ready")`)
-		oldLogs := append([]extensions.ExtensionLog(nil), runtime.Logs...)
-		server := newTestServer(&marasi.Proxy{
-			Extensions:    []*extensions.Runtime{runtime},
-			ExtensionRepo: repo,
-		}, func() {})
-		subscriber := server.events.subscribe()
-		defer server.events.unsubscribe(subscriber)
+	t.Run("should refuse failing lua without storing or publishing it", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, body, want string
+		}{
+			{"syntax error", `{"lua_content":"this is not lua"}`, `{"error":"lua_error","message":"[string \"this is not lua\"]:1: syntax error near is"}`},
+			{"runtime error", `{"lua_content":"error(\"nope\")"}`, `{"error":"lua_error","message":"[string \"error(\"nope\")\"]:1: nope"}`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				repo, runtime := preparedWorkshop(t, `print("ready")`)
+				before, err := repo.GetExtensionByUUID(runtime.Data.ID)
+				if err != nil {
+					t.Fatalf("getting persisted workshop: %v", err)
+				}
+				oldLogs := append([]extensions.ExtensionLog(nil), runtime.Logs...)
+				server := newTestServer(&marasi.Proxy{
+					Extensions:    []*extensions.Runtime{runtime},
+					ExtensionRepo: repo,
+				}, func() {})
+				subscriber := server.events.subscribe()
+				defer server.events.unsubscribe(subscriber)
 
-		lua := "this is not lua"
-		response := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String(), `{"lua_content":"this is not lua"}`)
-		assertControlAPIResponse(t, response, http.StatusBadRequest, `{"error":"lua_error","message":"[string \"this is not lua\"]:1: syntax error near is"}`+"\n")
+				response := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String(), tc.body)
+				assertControlAPIResponse(t, response, http.StatusBadRequest, tc.want+"\n")
 
-		stored, err := repo.GetExtensionByUUID(runtime.Data.ID)
-		if err != nil {
-			t.Fatalf("getting persisted workshop: %v", err)
-		}
-		if stored.LuaContent != lua || runtime.Data.LuaContent != lua {
-			t.Fatalf("\nwanted:\npersisted lua %q\ngot:\nrepo %q runtime %q", lua, stored.LuaContent, runtime.Data.LuaContent)
-		}
-		if len(runtime.Logs) != len(oldLogs) {
-			t.Fatalf("\nwanted:\nprint logs to survive failed eval\ngot:\n%d logs", len(runtime.Logs))
-		}
-		event := <-subscriber.events
-		if event.name != "extension.updated" {
-			t.Fatalf("\nwanted:\nextension.updated after persist\ngot:\n%s %s", event.name, event.data)
+				stored, err := repo.GetExtensionByUUID(runtime.Data.ID)
+				if err != nil {
+					t.Fatalf("getting persisted workshop: %v", err)
+				}
+				data := runtime.MetadataSnapshot()
+				if stored.LuaContent != before.LuaContent || data.LuaContent != `print("ready")` || !stored.UpdatedAt.Equal(before.UpdatedAt) || !data.UpdatedAt.Equal(before.UpdatedAt) {
+					t.Fatalf("\nwanted:\nprevious lua and updated_at kept\ngot:\nrepo %q %v runtime %q %v", stored.LuaContent, stored.UpdatedAt, data.LuaContent, data.UpdatedAt)
+				}
+				if len(runtime.Logs) != len(oldLogs) {
+					t.Fatalf("\nwanted:\nprint logs to survive failed eval\ngot:\n%d logs", len(runtime.Logs))
+				}
+				assertNoExtensionEvent(t, subscriber)
+			})
 		}
 	})
 
