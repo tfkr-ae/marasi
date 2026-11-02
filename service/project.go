@@ -144,9 +144,18 @@ func (lifecycle *ProjectLifecycle) Open(ctx context.Context, target string) (err
 		lifecycle.opening(path)
 	}
 	defer func() {
-		// A cleanup failure comes after the target was published as opened.
-		if err != nil && !errors.Is(err, ErrProjectCleanup) && lifecycle.openingFailed != nil {
+		// A cleanup failure comes after the target was published as opened,
+		// and is logged where it happens.
+		if err == nil || errors.Is(err, ErrProjectCleanup) {
+			return
+		}
+		if lifecycle.openingFailed != nil {
 			lifecycle.openingFailed(path, err)
+		}
+		// The caller gets only an error code, so log the cause. Another
+		// owner, busy work and a cancelled request are not faults.
+		if !errors.Is(err, ErrProjectAlreadyOpen) && !errors.Is(err, ErrProjectBusy) && !errors.Is(err, context.Canceled) {
+			lifecycle.logError("Failed to open project", path, err)
 		}
 	}()
 

@@ -2,6 +2,7 @@ package service
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/base64"
@@ -959,6 +960,38 @@ end`, holdURL)
 			}
 		default:
 			t.Fatal("\nwanted:\nstartup called the embedded function\ngot:\nno call")
+		}
+	})
+
+	t.Run("should log at error why a project failed to open", func(t *testing.T) {
+		lifecycle, _, configDir := newTestProjectLifecycle(t)
+		var logs bytes.Buffer
+		lifecycle.logger = slog.New(slog.NewTextHandler(&logs, nil))
+		target := canonicalProjectPath(t, filepath.Join(configDir, "broken.marasi"))
+		conn, err := db.New(target, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err != nil {
+			t.Fatalf("creating project: %v", err)
+		}
+		repository := db.NewProxyRepo(conn)
+		workshop, err := repository.GetExtensionByName("workshop")
+		if err != nil {
+			t.Fatalf("finding workshop: %v", err)
+		}
+		if err := repository.UpdateExtensionLuaCodeByUUID(workshop.ID, `this is not lua`); err != nil {
+			t.Fatalf("storing broken workshop: %v", err)
+		}
+		if err := conn.Close(); err != nil {
+			t.Fatalf("closing seeded project: %v", err)
+		}
+
+		if err := lifecycle.Open(context.Background(), target); err == nil {
+			t.Fatal("\nwanted:\nopen to fail\ngot:\nnil")
+		}
+		got := logs.String()
+		for _, want := range []string{"level=ERROR", `msg="Failed to open project"`, "path=" + target, "preparing project extension workshop", "syntax error near is"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("\nwanted:\nlog containing %q\ngot:\n%s", want, got)
+			}
 		}
 	})
 }
