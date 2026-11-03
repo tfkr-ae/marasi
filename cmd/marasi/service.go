@@ -652,7 +652,7 @@ func startServiceInstance(ctx context.Context, options serviceOptions, ready fun
 		if err != nil {
 			return err
 		}
-		controlStatus, err := controlNetwork.Start(serviceCtx, settings)
+		controlStatus, err := controlNetwork.Start(serviceCtx, settings, nil)
 		if err != nil {
 			return fmt.Errorf("binding control listener network address on %s: %w", options.controlAddress, err)
 		}

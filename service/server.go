@@ -245,20 +245,36 @@ func (s *Server) serveListenerUpdate(w http.ResponseWriter, r *http.Request) {
 var errInvalidListenerRequest = errors.New("invalid listener request")
 
 func decodeListenerSettings(r *http.Request) (ListenerSettings, error) {
+	fields, err := decodeListenerFields(r)
+	if err != nil {
+		return ListenerSettings{}, err
+	}
+	return listenerSettingsFrom(fields)
+}
+
+// decodeListenerFields decodes a listener request body, a single JSON
+// object, into its fields.
+func decodeListenerFields(r *http.Request) (map[string]json.RawMessage, error) {
 	if r.Body == nil {
-		return ListenerSettings{}, errInvalidListenerRequest
+		return nil, errInvalidListenerRequest
 	}
 	decoder := json.NewDecoder(r.Body)
 	var fields map[string]json.RawMessage
 	if err := decoder.Decode(&fields); err != nil {
-		return ListenerSettings{}, errInvalidListenerRequest
+		return nil, errInvalidListenerRequest
 	}
 	if fields == nil {
-		return ListenerSettings{}, errInvalidListenerRequest
+		return nil, errInvalidListenerRequest
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return ListenerSettings{}, errInvalidListenerRequest
+		return nil, errInvalidListenerRequest
 	}
+	return fields, nil
+}
+
+// listenerSettingsFrom reads the address and port of a listener request,
+// which must be its only fields.
+func listenerSettingsFrom(fields map[string]json.RawMessage) (ListenerSettings, error) {
 	if len(fields) != 2 {
 		return ListenerSettings{}, errInvalidListenerRequest
 	}
