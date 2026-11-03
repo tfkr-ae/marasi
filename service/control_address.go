@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -14,11 +15,13 @@ import (
 // ControlListenerStatus is the last completed state of the control
 // listener's network address. ControlListener is nil when it is inactive.
 // PasswordSet says whether a control password guards the address; the
-// password itself is never part of the status.
+// password itself is never part of the status. AllowedOrigins lists the
+// origins a browser may call the address from while it has no password.
 type ControlListenerStatus struct {
 	Status          ListenerState `json:"status"`
 	ControlListener *string       `json:"control_listener"`
 	PasswordSet     bool          `json:"password_set"`
+	AllowedOrigins  []string      `json:"allowed_origins"`
 }
 
 // ControlAddress is the control listener's network address: one TCP
@@ -43,6 +46,10 @@ type ControlAddress struct {
 	// with the control password generation it last authenticated with.
 	connsMu sync.Mutex
 	conns   map[net.Conn]*networkConn
+	// originsMu guards origins, the allowed origins in the form
+	// CheckAllowedOrigins returns.
+	originsMu sync.RWMutex
+	origins   []string
 }
 
 // networkConn is one open connection on the network address. authenticated
@@ -78,8 +85,10 @@ func writeRefusal(w http.ResponseWriter, r *http.Request, status int, code, mess
 
 // EnableControlAddress gives the instance a network address for its control
 // listener, inactive until Start, guarded by password when it is not empty.
-// Call it once, before serving.
-func (s *Server) EnableControlAddress(password string, logWriter io.Writer) *ControlAddress {
+// allowedOrigins are the origins a browser may call it from while it has no
+// password, as CheckAllowedOrigins returns them. Call it once, before
+// serving.
+func (s *Server) EnableControlAddress(password string, allowedOrigins []string, logWriter io.Writer) *ControlAddress {
 	if logWriter == nil {
 		logWriter = io.Discard
 	}
@@ -91,6 +100,7 @@ func (s *Server) EnableControlAddress(password string, logWriter io.Writer) *Con
 		status:    ControlListenerStatus{Status: ListenerInactive},
 		conns:     map[net.Conn]*networkConn{},
 	}
+	control.setAllowedOrigins(allowedOrigins)
 	s.control = control
 	controlMux := http.NewServeMux()
 	controlMux.HandleFunc("GET /status", s.serveControlListenerStatus)
@@ -126,6 +136,37 @@ func (c *ControlAddress) setPassword(ctx context.Context, password string) bool 
 		}
 	}
 	return true
+}
+
+// AllowedOrigins returns the origins a browser may call the network address
+// from while it has no password.
+func (c *ControlAddress) AllowedOrigins() []string {
+	c.originsMu.RLock()
+	defer c.originsMu.RUnlock()
+	return slices.Clone(c.origins)
+}
+
+// setAllowedOrigins replaces the allowed origins and reports whether they
+// changed. Allowing null is logged, since any site can send it.
+func (c *ControlAddress) setAllowedOrigins(origins []string) bool {
+	if warning := NullOriginWarning(origins); warning != "" {
+		fmt.Fprintln(c.logWriter, warning)
+	}
+	c.originsMu.Lock()
+	defer c.originsMu.Unlock()
+	if c.origins != nil && slices.Equal(c.origins, origins) {
+		return false
+	}
+	c.origins = append([]string{}, origins...)
+	return true
+}
+
+// originAllowed reports whether origin may call the network address while
+// it has no password.
+func (c *ControlAddress) originAllowed(origin string) bool {
+	c.originsMu.RLock()
+	defer c.originsMu.RUnlock()
+	return slices.Contains(c.origins, strings.ToLower(origin))
 }
 
 // trackConn records a new connection on the network address and returns
@@ -186,13 +227,14 @@ func (c *ControlAddress) Status() ControlListenerStatus {
 		address := *status.ControlListener
 		status.ControlListener = &address
 	}
-	return c.withPassword(status)
+	return c.withAccess(status)
 }
 
-// withPassword fills in whether a password is set, which can change without
-// the address changing.
-func (c *ControlAddress) withPassword(status ControlListenerStatus) ControlListenerStatus {
+// withAccess fills in whether a password is set and the allowed origins,
+// which can change without the address changing.
+func (c *ControlAddress) withAccess(status ControlListenerStatus) ControlListenerStatus {
 	status.PasswordSet = c.password.IsSet()
+	status.AllowedOrigins = c.AllowedOrigins()
 	return status
 }
 
@@ -204,8 +246,10 @@ func (c *ControlAddress) setStatus(status ControlListenerStatus) {
 
 // Start binds the network address in settings and serves the control API
 // there. Port 0 binds a free port, and the status reports the bound one.
-// password replaces the control password, "" removes it, and nil keeps it.
-func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings, password *string) (ControlListenerStatus, error) {
+// access replaces the control password and the allowed origins. An address
+// beyond loopback with no password is refused unless access removes the
+// password, the consent of --no-password.
+func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings, access ControlAccess) (ControlListenerStatus, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -218,14 +262,16 @@ func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings, p
 	if err != nil {
 		return ControlListenerStatus{}, err
 	}
+	if err := c.requirePassword(endpoint, access); err != nil {
+		return ControlListenerStatus{}, err
+	}
 	run, err := c.bind(ctx, endpoint)
 	if err != nil {
 		return ControlListenerStatus{}, err
 	}
 	c.run = run
-	if password != nil {
-		c.setPassword(ctx, *password)
-	}
+	c.applyAccess(ctx, access)
+	c.warnNoPassword(run)
 	status := c.activeStatus(run)
 	c.setStatus(status)
 	c.events.publish("control_listener.started", status)
@@ -329,6 +375,39 @@ func (c *ControlAddress) resumeAfterHandover(ctx context.Context) error {
 	return nil
 }
 
+// requirePassword refuses to bind endpoint beyond loopback when access
+// leaves the network address with no password and is not the consent of
+// --no-password. Keeping no password while moving beyond loopback needs the
+// consent too, so a move never exposes an instance by accident.
+func (c *ControlAddress) requirePassword(endpoint string, access ControlAccess) error {
+	passwordSet := c.password.IsSet()
+	if access.Password != nil {
+		passwordSet = *access.Password != ""
+	}
+	return RequirePasswordBeyondLoopback(endpoint, passwordSet, access.noPassword())
+}
+
+// applyAccess applies access for the request with context ctx and reports
+// whether the password or the allowed origins changed.
+func (c *ControlAddress) applyAccess(ctx context.Context, access ControlAccess) bool {
+	changed := false
+	if access.Password != nil {
+		changed = c.setPassword(ctx, *access.Password)
+	}
+	if access.AllowedOrigins != nil && c.setAllowedOrigins(*access.AllowedOrigins) {
+		changed = true
+	}
+	return changed
+}
+
+// warnNoPassword writes the no-password warning for run to the instance log
+// when no password is set.
+func (c *ControlAddress) warnNoPassword(run *controlAddressRun) {
+	if !c.password.IsSet() {
+		fmt.Fprintln(c.logWriter, NoPasswordWarning(run.listener.Addr().String()))
+	}
+}
+
 // bind listens on endpoint and starts serving the control API there.
 func (c *ControlAddress) bind(ctx context.Context, endpoint string) (*controlAddressRun, error) {
 	listener, err := (&net.ListenConfig{}).Listen(ctx, controlAddressNetwork(endpoint), endpoint)
@@ -371,53 +450,67 @@ func controlAddressNetwork(endpoint string) string {
 // next: CORS and the Host check belong in front of the control password, so
 // a preflight and a rebound name are answered before authentication.
 func (c *ControlAddress) networkHandler(bound string) http.Handler {
-	return allowAnyOrigin(c.requireBoundHost(bound, c.requireControlPassword(c.api)))
+	return c.checkOrigin(c.requireBoundHost(bound, c.requireControlPassword(c.api)))
 }
 
-// defaultHTTPPort is the port a Host header without one names.
-const defaultHTTPPort = "80"
-
-// requireBoundHost refuses a request whose Host header does not name bound,
-// the address the network address listens on, so a hostile page whose name
-// was rebound to the instance machine cannot reach the instance. On a wildcard
-// address any Host naming the bound port is accepted, because the operator
-// chose every interface. On loopback, localhost is accepted too: a rebound
-// name never arrives as localhost. With a password set, any Host is
-// accepted, because a rebound page without the password gets nothing.
+// requireBoundHost refuses a request whose Host header is a hostname, or an
+// IP other than bound, the address the network address listens on, while
+// no password is set. A hostile page whose name was rebound to the instance
+// machine always arrives under a hostname, so this keeps it out, also on a
+// wildcard address, where any IP is accepted because the operator chose
+// every interface. localhost is accepted on loopback and on a wildcard
+// address: a rebound name never arrives as localhost. The port is not
+// checked, so a published container port or an SSH tunnel on another port
+// still works. With a password set, any Host is accepted, because a rebound
+// page without the password gets nothing.
 func (c *ControlAddress) requireBoundHost(bound string, next http.Handler) http.Handler {
-	boundHost, boundPort, _ := net.SplitHostPort(bound)
+	boundHost, _, _ := net.SplitHostPort(bound)
 	boundIP := net.ParseIP(boundHost)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if c.password.IsSet() {
 			next.ServeHTTP(w, r)
 			return
 		}
-		host, port, err := net.SplitHostPort(r.Host)
+		host, _, err := net.SplitHostPort(r.Host)
 		if err != nil {
-			host, port = r.Host, defaultHTTPPort
+			host = strings.TrimSuffix(strings.TrimPrefix(r.Host, "["), "]")
 		}
-		if port != boundPort || !hostNamesBound(host, boundIP) {
-			writeJSON(w, r, http.StatusMisdirectedRequest, controlRefusalBody{Error: "host_mismatch", Message: "the Host header does not name the control listener network address"})
-			return
+		switch hostNamesBound(host, boundIP) {
+		case hostBound:
+			next.ServeHTTP(w, r)
+		case hostIsName:
+			writeRefusal(w, r, http.StatusMisdirectedRequest, "host_mismatch", "the Host header names a hostname, which a web page can rebind to this machine: use the IP address, or set a control password")
+		default:
+			writeRefusal(w, r, http.StatusMisdirectedRequest, "host_mismatch", "the Host header does not name the control listener network address: use its IP address, or set a control password")
 		}
-		next.ServeHTTP(w, r)
 	})
 }
 
-// hostNamesBound reports whether host, from a Host header without its port,
-// names the bound IP address.
-func hostNamesBound(host string, bound net.IP) bool {
-	if bound == nil {
-		return false
-	}
-	if bound.IsUnspecified() {
-		return true
-	}
-	if bound.IsLoopback() && strings.EqualFold(host, "localhost") {
-		return true
-	}
+// hostMatch is how a Host header without its port relates to the bound IP.
+type hostMatch int
+
+const (
+	hostBound   hostMatch = iota // names the bound IP
+	hostIsName                   // a hostname other than an accepted localhost
+	hostOtherIP                  // an IP the network address is not bound to, or no host
+)
+
+// hostNamesBound reports how host, from a Host header without its port,
+// relates to the bound IP address.
+func hostNamesBound(host string, bound net.IP) hostMatch {
 	ip := net.ParseIP(host)
-	return ip != nil && ip.Equal(bound)
+	switch {
+	case host == "":
+		return hostOtherIP
+	case ip == nil && strings.EqualFold(host, "localhost") && bound != nil && (bound.IsLoopback() || bound.IsUnspecified()):
+		return hostBound
+	case ip == nil:
+		return hostIsName
+	case bound != nil && (bound.IsUnspecified() || ip.Equal(bound)):
+		return hostBound
+	default:
+		return hostOtherIP
+	}
 }
 
 // The CORS preflight answer: the methods the control API uses, and the
@@ -427,18 +520,29 @@ const (
 	controlAllowedHeaders = "Authorization, Content-Type"
 )
 
-// allowAnyOrigin lets a page from any origin call the network address,
-// because the control password alone decides access. It echoes the request
-// Origin and never allows credentials, so a browser attaches nothing
-// ambient to a request. A preflight is answered here, without the password,
-// because a browser never sends one on a preflight.
-func allowAnyOrigin(next http.Handler) http.Handler {
+// checkOrigin decides which pages may call the network address from a
+// browser. With a password set, a page from any origin may, because the
+// control password alone decides access. With none, only an allowed origin
+// may, so a website in the user's browser cannot drive the instance; a
+// request with no Origin comes from a native client and passes. An allowed
+// origin is echoed and credentials are never allowed, so a browser attaches
+// nothing ambient to a request. A preflight is answered here, without the
+// password, because a browser never sends one on a preflight.
+func (c *ControlAddress) checkOrigin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "Origin")
-		if origin := r.Header.Get("Origin"); origin != "" {
+		origin := r.Header.Get("Origin")
+		preflight := r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != ""
+		if origin != "" && !c.password.IsSet() && !c.originAllowed(origin) {
+			// A refused preflight carries no CORS headers, so the browser
+			// sends nothing more.
+			writeRefusal(w, r, http.StatusForbidden, "origin_not_allowed", fmt.Sprintf("origin %s is not allowed without a control password: set a control password, or allow the origin with --allow-origin", origin))
+			return
+		}
+		if origin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 		}
-		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
+		if preflight {
 			w.Header().Set("Access-Control-Allow-Methods", controlAllowedMethods)
 			w.Header().Set("Access-Control-Allow-Headers", controlAllowedHeaders)
 			w.WriteHeader(http.StatusNoContent)

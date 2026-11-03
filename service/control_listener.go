@@ -24,12 +24,13 @@ var errControlAddressHandedOver = errors.New("control listener network address i
 var errControlAddressClosed = errors.New("the instance is stopping")
 
 // Update moves the network address to settings, and replaces the control
-// password with password: "" removes it, and nil keeps it. A nil settings
-// keeps the address. The new address is bound before the old one closes, so
-// a failed bind leaves the old one serving and the password unchanged.
-// Moving to the address already bound and setting the password already held
-// change nothing.
-func (c *ControlAddress) Update(ctx context.Context, settings *ListenerSettings, password *string) (ControlListenerStatus, error) {
+// password and the allowed origins with access. A nil settings keeps the
+// address. The new address is bound before the old one closes, so a failed
+// bind leaves the old one serving and the access unchanged. Moving to the
+// address already bound and setting what is already held change nothing.
+// A move beyond loopback with no password is refused unless access removes
+// the password, the consent of --no-password.
+func (c *ControlAddress) Update(ctx context.Context, settings *ListenerSettings, access ControlAccess) (ControlListenerStatus, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.run == nil {
@@ -45,6 +46,9 @@ func (c *ControlAddress) Update(ctx context.Context, settings *ListenerSettings,
 			return ControlListenerStatus{}, err
 		}
 		if endpoint != c.run.listener.Addr().String() {
+			if err := c.requirePassword(endpoint, access); err != nil {
+				return ControlListenerStatus{}, err
+			}
 			run, err := c.bind(ctx, endpoint)
 			if err != nil {
 				return ControlListenerStatus{}, err
@@ -54,7 +58,10 @@ func (c *ControlAddress) Update(ctx context.Context, settings *ListenerSettings,
 			moved = true
 		}
 	}
-	changed := password != nil && c.setPassword(ctx, *password)
+	changed := c.applyAccess(ctx, access)
+	if moved || access.noPassword() {
+		c.warnNoPassword(c.run)
+	}
 	status := c.activeStatus(c.run)
 	if !moved && !changed {
 		return status, nil
@@ -130,7 +137,7 @@ func (c *ControlAddress) closesConnection(r *http.Request) bool {
 // activeStatus is the status of the network address serving run.
 func (c *ControlAddress) activeStatus(run *controlAddressRun) ControlListenerStatus {
 	address := run.listener.Addr().String()
-	return c.withPassword(ControlListenerStatus{Status: ListenerActive, ControlListener: &address})
+	return c.withAccess(ControlListenerStatus{Status: ListenerActive, ControlListener: &address})
 }
 
 func (s *Server) serveControlListenerStatus(w http.ResponseWriter, r *http.Request) {
@@ -138,67 +145,79 @@ func (s *Server) serveControlListenerStatus(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) serveControlListenerStart(w http.ResponseWriter, r *http.Request) {
-	settings, password, err := decodeControlListenerRequest(r, true)
+	settings, access, err := decodeControlListenerRequest(r, true)
 	if err != nil {
 		writeControlListenerError(w, r, err)
 		return
 	}
-	status, err := s.control.Start(r.Context(), *settings, password)
+	status, err := s.control.Start(r.Context(), *settings, access)
 	s.writeControlListenerResult(w, r, status, err)
 }
 
 func (s *Server) serveControlListenerUpdate(w http.ResponseWriter, r *http.Request) {
-	settings, password, err := decodeControlListenerRequest(r, false)
+	settings, access, err := decodeControlListenerRequest(r, false)
 	if err != nil {
 		writeControlListenerError(w, r, err)
 		return
 	}
-	status, err := s.control.Update(r.Context(), settings, password)
+	status, err := s.control.Update(r.Context(), settings, access)
 	s.writeControlListenerResult(w, r, status, err)
 }
 
 // decodeControlListenerRequest decodes the body of a start or update of the
 // network address: address and port, plus password to set the control
-// password or no_password true to remove it. With neither, the password is
-// kept, and the returned password is nil. An update may leave out address
-// and port to keep the address, returning nil settings, but must change
-// something.
-func decodeControlListenerRequest(r *http.Request, addressRequired bool) (*ListenerSettings, *string, error) {
+// password or no_password true to remove it, and allowed_origins to replace
+// the allowed origins. A field left out keeps its value. An update may leave
+// out address and port to keep the address, returning nil settings, but
+// must change something.
+func decodeControlListenerRequest(r *http.Request, addressRequired bool) (*ListenerSettings, ControlAccess, error) {
+	var access ControlAccess
 	fields, err := decodeListenerFields(r)
 	if err != nil {
-		return nil, nil, err
+		return nil, access, err
 	}
-	var password *string
 	if raw, ok := fields["password"]; ok {
 		var value string
 		if err := json.Unmarshal(raw, &value); err != nil || value == "" {
-			return nil, nil, errInvalidListenerRequest
+			return nil, access, errInvalidListenerRequest
 		}
 		if err := CheckControlPassword(value); err != nil {
-			return nil, nil, err
+			return nil, access, err
 		}
-		password = &value
+		access.Password = &value
 		delete(fields, "password")
 	}
 	if raw, ok := fields["no_password"]; ok {
 		var remove bool
-		if err := json.Unmarshal(raw, &remove); err != nil || !remove || password != nil {
-			return nil, nil, errInvalidListenerRequest
+		if err := json.Unmarshal(raw, &remove); err != nil || !remove || access.Password != nil {
+			return nil, access, errInvalidListenerRequest
 		}
-		password = new(string)
+		access.Password = new(string)
 		delete(fields, "no_password")
 	}
-	if len(fields) == 0 && !addressRequired {
-		if password == nil {
-			return nil, nil, errInvalidListenerRequest
+	if raw, ok := fields["allowed_origins"]; ok {
+		var origins []string
+		if err := json.Unmarshal(raw, &origins); err != nil || origins == nil {
+			return nil, access, errInvalidListenerRequest
 		}
-		return nil, password, nil
+		checked, err := CheckAllowedOrigins(origins)
+		if err != nil {
+			return nil, access, err
+		}
+		access.AllowedOrigins = &checked
+		delete(fields, "allowed_origins")
+	}
+	if len(fields) == 0 && !addressRequired {
+		if access.Password == nil && access.AllowedOrigins == nil {
+			return nil, access, errInvalidListenerRequest
+		}
+		return nil, access, nil
 	}
 	settings, err := listenerSettingsFrom(fields)
 	if err != nil {
-		return nil, nil, err
+		return nil, access, err
 	}
-	return &settings, password, nil
+	return &settings, access, nil
 }
 
 func (s *Server) serveControlListenerStop(w http.ResponseWriter, r *http.Request) {
@@ -235,6 +254,14 @@ func (s *Server) writeControlListenerResult(w http.ResponseWriter, r *http.Reque
 func writeControlListenerError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, ErrInvalidControlPassword) {
 		writeJSON(w, r, http.StatusBadRequest, controlRefusalBody{Error: "invalid_password", Message: err.Error()})
+		return
+	}
+	if errors.Is(err, ErrInvalidAllowedOrigin) {
+		writeRefusal(w, r, http.StatusBadRequest, "invalid_origin", err.Error())
+		return
+	}
+	if errors.Is(err, ErrPasswordRequired) {
+		writeRefusal(w, r, http.StatusBadRequest, "password_required", err.Error())
 		return
 	}
 	if errors.Is(err, errControlAddressHandedOver) {

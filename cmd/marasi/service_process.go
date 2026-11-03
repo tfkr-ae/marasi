@@ -55,9 +55,7 @@ func startServiceProcess(ctx context.Context, options serviceOptions, stdout, st
 		"--port", strconv.FormatUint(uint64(options.proxyPort), 10),
 		"--service-child",
 	}
-	if options.controlAddress != "" {
-		args = append(args, "--control-address", options.controlAddress)
-	}
+	args = append(args, controlChildArgs(options.controlAddress, options.password, options.allowedOrigins)...)
 	command := exec.Command(executable, args...)
 	command.Env = childEnvironment(options.password)
 	configureDetachedProcess(command)
@@ -82,7 +80,7 @@ func startServiceProcess(ctx context.Context, options serviceOptions, stdout, st
 			stopChild(childInput, processResult)
 			return err
 		}
-		if err := writeStartOutput(stdout, stderr, asJSON, instanceName, startup); err != nil {
+		if err := writeStartOutput(stdout, stderr, asJSON, instanceName, options, startup); err != nil {
 			stopChild(childInput, processResult)
 			return err
 		}
@@ -137,17 +135,43 @@ func launchServiceChild(command *exec.Cmd) (io.WriteCloser, <-chan childStartup,
 	return childInput, startupResult, processResult, nil
 }
 
+// controlChildArgs are the service start arguments that hand a child the
+// control listener network address at controlAddress, "" for none, and the
+// allowed origins. The password goes in the child's environment instead. A
+// child with no password gets --no-password, since its parent already had
+// the consent to bind beyond loopback without one.
+func controlChildArgs(controlAddress, password string, origins []string) []string {
+	var args []string
+	if controlAddress != "" {
+		args = append(args, "--control-address", controlAddress)
+		if password == "" {
+			args = append(args, "--no-password")
+		}
+	}
+	for _, origin := range origins {
+		args = append(args, "--allow-origin", origin)
+	}
+	return args
+}
+
 // writeStartOutput writes the start result in JSON or human form. A control
 // listener network address beyond loopback adds a warning on stderr when it
 // is a terminal, written here because the detached child's stderr is
-// discarded. The instance log carries the warning either way.
-func writeStartOutput(stdout, stderr io.Writer, asJSON bool, instanceName string, startup childStartup) error {
+// discarded. The warnings for no password and for allowing the origin null
+// go to stderr in every case. The instance log carries every warning.
+func writeStartOutput(stdout, stderr io.Writer, asJSON bool, instanceName string, options serviceOptions, startup childStartup) error {
 	var controlListener *string
 	warning := ""
+	if line := service.NullOriginWarning(options.allowedOrigins); line != "" {
+		warning += line + "\n"
+	}
 	if startup.controlListener != "" {
 		controlListener = &startup.controlListener
 		if line := service.ControlAddressWarning(startup.controlListener); line != "" && writesToTerminal(stderr) {
-			warning = line + "\n"
+			warning += line + "\n"
+		}
+		if options.password == "" {
+			warning += service.NoPasswordWarning(startup.controlListener) + "\n"
 		}
 	}
 	if asJSON {

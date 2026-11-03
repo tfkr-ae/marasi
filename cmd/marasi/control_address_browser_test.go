@@ -114,41 +114,6 @@ func TestControlAddressBrowserAccess(t *testing.T) {
 		}
 	})
 
-	// Without a password the Host rule the control token had stays until the
-	// no-password browser rules replace it.
-	t.Run("should refuse a Host that does not name the bound address without a password", func(t *testing.T) {
-		startControlAddressInstanceWith(t, binary, configDir, "open", "127.0.0.1:0", nil)
-		open := *controlAddressOf(t, binary, configDir, "open")
-		_, port, _ := net.SplitHostPort(open)
-		const misdirected = "{\"error\":\"host_mismatch\",\"message\":\"the Host header does not name the control listener network address\"}\n"
-		for _, host := range []string{"evil.example:" + port, "evil.example", "127.0.0.1:1", "127.0.0.2:" + port, "", "marasi"} {
-			response, body := sendRaw(t, "tcp", open, rawRequest{method: http.MethodGet, path: "/service/status", host: host})
-			if response.StatusCode != http.StatusMisdirectedRequest || body != misdirected {
-				t.Fatalf("\nwanted:\n421 for Host %q\n%s\ngot:\n%d %s", host, misdirected, response.StatusCode, body)
-			}
-		}
-		for _, host := range []string{open, "localhost:" + port, "LOCALHOST:" + port} {
-			if response, body := sendRaw(t, "tcp", open, rawRequest{method: http.MethodGet, path: "/service/status", host: host}); response.StatusCode != http.StatusOK {
-				t.Fatalf("\nwanted:\n200 for Host %q\ngot:\n%d %s", host, response.StatusCode, body)
-			}
-		}
-	})
-
-	t.Run("should accept any Host naming the bound port on a wildcard address without a password", func(t *testing.T) {
-		startControlAddressInstanceWith(t, binary, configDir, "wild", "0.0.0.0:0", nil)
-		wild := *controlAddressOf(t, binary, configDir, "wild")
-		_, port, _ := net.SplitHostPort(wild)
-		dial := net.JoinHostPort("127.0.0.1", port)
-		for _, host := range []string{wild, "evil.example:" + port, "192.0.2.7:" + port} {
-			if response, body := sendRaw(t, "tcp", dial, rawRequest{method: http.MethodGet, path: "/service/status", host: host}); response.StatusCode != http.StatusOK {
-				t.Fatalf("\nwanted:\n200 for Host %q\ngot:\n%d %s", host, response.StatusCode, body)
-			}
-		}
-		if response, _ := sendRaw(t, "tcp", dial, rawRequest{method: http.MethodGet, path: "/service/status", host: "evil.example:1"}); response.StatusCode != http.StatusMisdirectedRequest {
-			t.Fatalf("\nwanted:\n421 for another port\ngot:\n%d", response.StatusCode)
-		}
-	})
-
 	t.Run("should stream events to a client that sends the bearer header", func(t *testing.T) {
 		conn, err := net.Dial("tcp", address)
 		if err != nil {

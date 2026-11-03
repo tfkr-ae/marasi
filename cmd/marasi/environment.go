@@ -20,6 +20,7 @@ const envAnnotation = "marasi_env"
 var flagConflicts = [][2]string{
 	{"project", "project-name"},
 	{"remote", "instance"},
+	{"password", "no-password"},
 }
 
 // boundVariables lists every variable bindEnv has bound, in binding order.

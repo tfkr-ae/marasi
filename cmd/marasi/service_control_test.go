@@ -44,13 +44,13 @@ func TestServiceControlListener(t *testing.T) {
 		stdout, stderr := runServiceControl(t, binary, configDir, "work", "start", "--address", "127.0.0.1", "--port", "0", "--json")
 		var started controlListenerStatus
 		if err := json.Unmarshal([]byte(stdout), &started); err != nil || started.Status != "active" || started.ControlListener == nil ||
-			!strings.HasPrefix(*started.ControlListener, "127.0.0.1:") || strings.HasSuffix(*started.ControlListener, ":0") || stderr != "" {
+			!strings.HasPrefix(*started.ControlListener, "127.0.0.1:") || strings.HasSuffix(*started.ControlListener, ":0") || stderr != noPasswordWarning(*started.ControlListener, true) {
 			t.Fatalf("\nwanted:\nactive on 127.0.0.1 with its bound port\ngot:\n%s%s", stdout, stderr)
 		}
 		address := *started.ControlListener
 
 		_, data := readEventNamed(t, events, "control_listener.started")
-		if want := `{"status":"active","control_listener":"` + address + `","password_set":false}`; data != want {
+		if want := `{"status":"active","control_listener":"` + address + `","password_set":false,"allowed_origins":[]}`; data != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, data)
 		}
 
@@ -58,7 +58,7 @@ func TestServiceControlListener(t *testing.T) {
 			t.Fatalf("\nwanted:\n%s in service status\ngot:\n%v", address, got)
 		}
 		stdout, _ = runServiceControl(t, binary, configDir, "work", "status")
-		if want := "status: active\ncontrol listener network address: " + address + "\npassword: none\n"; stdout != want {
+		if want := "status: active\ncontrol listener network address: " + address + "\npassword: none\nallowed origins: none\n"; stdout != want {
 			t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, stdout)
 		}
 		if status, _, body := networkRequest(t, http.MethodGet, address, "/service/status", ""); status != http.StatusOK {
@@ -84,7 +84,7 @@ func TestServiceControlListener(t *testing.T) {
 		if moved == nil || *moved == first || stderr != "control listener network address updated to "+*moved+"\n" {
 			t.Fatalf("\nwanted:\na new address on stderr\ngot:\n%s %v", stderr, moved)
 		}
-		if _, data := readEventNamed(t, events, "control_listener.updated"); data != `{"status":"active","control_listener":"`+*moved+`","password_set":true}` {
+		if _, data := readEventNamed(t, events, "control_listener.updated"); data != `{"status":"active","control_listener":"`+*moved+`","password_set":true,"allowed_origins":[]}` {
 			t.Fatalf("\nwanted:\ncontrol_listener.updated with %s\ngot:\n%s", *moved, data)
 		}
 		if _, err := net.Dial("tcp", first); err == nil {
@@ -98,11 +98,11 @@ func TestServiceControlListener(t *testing.T) {
 		if stderr != "control listener network address stopped successfully\n" {
 			t.Fatalf("\nwanted:\nstopped successfully\ngot:\n%q", stderr)
 		}
-		if _, data := readEventNamed(t, events, "control_listener.stopped"); data != `{"status":"inactive","control_listener":null,"password_set":true}` {
+		if _, data := readEventNamed(t, events, "control_listener.stopped"); data != `{"status":"inactive","control_listener":null,"password_set":true,"allowed_origins":[]}` {
 			t.Fatalf("\nwanted:\ncontrol_listener.stopped inactive\ngot:\n%s", data)
 		}
 		stdout, _ := runServiceControl(t, binary, configDir, "work", "status", "--json")
-		if want := "{\"status\":\"inactive\",\"control_listener\":null,\"password_set\":true}\n"; stdout != want {
+		if want := "{\"status\":\"inactive\",\"control_listener\":null,\"password_set\":true,\"allowed_origins\":[]}\n"; stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
 		if _, err := net.Dial("tcp", *moved); err == nil {
@@ -152,7 +152,7 @@ func TestServiceControlListener(t *testing.T) {
 		before := *controlAddressOf(t, binary, configDir, "work")
 		for _, args := range [][]string{
 			{"--address", host, "--port", port},
-			{"--address", "no-such-host.invalid", "--port", "0"},
+			{"--address", "no-such-host.invalid", "--port", "0", "--no-password"},
 		} {
 			_, stderr, err := runMarasi(binary, append([]string{"--config-dir", configDir, "--instance", "work", "service", "control", "update"}, args...)...)
 			if err == nil || !strings.Contains(stderr, "listener_unavailable") {
@@ -189,7 +189,7 @@ func TestServiceControlListener(t *testing.T) {
 		stream = openNetworkEvents(t, *moved.ControlListener, password)
 		defer stream.Close()
 		response, after = rawNetworkRequest(t, *moved.ControlListener, password, "POST /service/control-listener/stop", "")
-		if want := `{"status":"inactive","control_listener":null,"password_set":true}` + "\n"; response != want || after != nil {
+		if want := `{"status":"inactive","control_listener":null,"password_set":true,"allowed_origins":[]}` + "\n"; response != want || after != nil {
 			t.Fatalf("\nwanted:\n%s then a closed connection\ngot:\n%s %v", want, response, after)
 		}
 		waitStreamEnd(t, stream)
@@ -206,18 +206,18 @@ func TestServiceControlListener(t *testing.T) {
 		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
 
 		_, stderr := runServiceControl(t, binary, configDir, "work", "start", "--address", "127.0.0.1", "--port", "0")
-		if strings.Contains(stderr, "warning") {
-			t.Fatalf("\nwanted:\nno warning for loopback\ngot:\n%s", stderr)
+		if strings.Contains(stderr, "plain HTTP") {
+			t.Fatalf("\nwanted:\nno plain-HTTP warning for loopback\ngot:\n%s", stderr)
 		}
-		stdout, stderr := runServiceControl(t, binary, configDir, "work", "update", "--address", "0.0.0.0", "--port", "0", "--json")
+		stdout, stderr := runServiceControl(t, binary, configDir, "work", "update", "--address", "0.0.0.0", "--port", "0", "--no-password", "--json")
 		address := *controlAddressOf(t, binary, configDir, "work")
-		if stderr != "" || !strings.Contains(stdout, `"control_listener":"`+address+`"`) {
+		if stderr != noPasswordWarning(address, false) || !strings.Contains(stdout, `"control_listener":"`+address+`"`) {
 			t.Fatalf("\nwanted:\nno stderr\ngot:\n%s%s", stderr, stdout)
 		}
 		runServiceControl(t, binary, configDir, "work", "stop")
-		_, stderr = runServiceControl(t, binary, configDir, "work", "start", "--address", "0.0.0.0", "--port", "0")
+		_, stderr = runServiceControl(t, binary, configDir, "work", "start", "--address", "0.0.0.0", "--port", "0", "--no-password")
 		address = *controlAddressOf(t, binary, configDir, "work")
-		if want := "control listener network address started on " + address + "\n"; stderr != want {
+		if want := noPasswordWarning(address, false) + "control listener network address started on " + address + "\n"; stderr != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stderr)
 		}
 		log, err := os.ReadFile(filepath.Join(configDir, "instances", "work.log"))
