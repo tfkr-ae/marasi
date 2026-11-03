@@ -59,7 +59,7 @@ func (c *ControlAddress) Update(ctx context.Context, settings *ListenerSettings,
 		}
 	}
 	changed := c.applyAccess(ctx, access)
-	if moved || access.noPassword() {
+	if moved || access.Password.removes() {
 		c.warnNoPassword(c.run)
 	}
 	status := c.activeStatus(c.run)
@@ -184,15 +184,15 @@ func decodeControlListenerRequest(r *http.Request, addressRequired bool) (*Liste
 		if err := CheckControlPassword(value); err != nil {
 			return nil, access, err
 		}
-		access.Password = &value
+		access.Password = SetPassword(value)
 		delete(fields, "password")
 	}
 	if raw, ok := fields["no_password"]; ok {
 		var remove bool
-		if err := json.Unmarshal(raw, &remove); err != nil || !remove || access.Password != nil {
+		if err := json.Unmarshal(raw, &remove); err != nil || !remove || !access.Password.keeps() {
 			return nil, access, errInvalidListenerRequest
 		}
-		access.Password = new(string)
+		access.Password = RemovePassword()
 		delete(fields, "no_password")
 	}
 	if raw, ok := fields["allowed_origins"]; ok {
@@ -208,7 +208,7 @@ func decodeControlListenerRequest(r *http.Request, addressRequired bool) (*Liste
 		delete(fields, "allowed_origins")
 	}
 	if len(fields) == 0 && !addressRequired {
-		if access.Password == nil && access.AllowedOrigins == nil {
+		if access.Password.keeps() && access.AllowedOrigins == nil {
 			return nil, access, errInvalidListenerRequest
 		}
 		return nil, access, nil
@@ -253,7 +253,7 @@ func (s *Server) writeControlListenerResult(w http.ResponseWriter, r *http.Reque
 // address already in use.
 func writeControlListenerError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, ErrInvalidControlPassword) {
-		writeJSON(w, r, http.StatusBadRequest, controlRefusalBody{Error: "invalid_password", Message: err.Error()})
+		writeRefusal(w, r, http.StatusBadRequest, "invalid_password", err.Error())
 		return
 	}
 	if errors.Is(err, ErrInvalidAllowedOrigin) {
@@ -265,11 +265,11 @@ func writeControlListenerError(w http.ResponseWriter, r *http.Request, err error
 		return
 	}
 	if errors.Is(err, errControlAddressHandedOver) {
-		writeJSON(w, r, http.StatusConflict, controlRefusalBody{Error: "restart_in_progress", Message: "the instance is restarting"})
+		writeRefusal(w, r, http.StatusConflict, "restart_in_progress", "the instance is restarting")
 		return
 	}
 	if errors.Is(err, ErrListenerUnavailable) {
-		writeJSON(w, r, http.StatusConflict, controlRefusalBody{Error: "listener_unavailable", Message: err.Error()})
+		writeRefusal(w, r, http.StatusConflict, "listener_unavailable", err.Error())
 		return
 	}
 	writeListenerError(w, r, err)

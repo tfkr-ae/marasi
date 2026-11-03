@@ -10,21 +10,65 @@ import (
 )
 
 // ControlAccess is what a start or update of the network address changes
-// about who may use it. A nil field keeps the current value.
+// about who may use it. The zero value changes nothing.
 type ControlAccess struct {
-	// Password replaces the control password, and "" removes it. "" is
-	// also the consent that --no-password gives to serve beyond loopback
-	// without a password.
-	Password *string
+	Password PasswordChange
 	// AllowedOrigins replaces the origins that may call the network address
-	// from a browser while it has no password.
+	// from a browser while it has no password. nil keeps them.
 	AllowedOrigins *[]string
 }
 
-// noPassword reports whether access removes the password, which is the
+// passwordMode is what a PasswordChange does to the control password.
+type passwordMode int
+
+const (
+	keepPassword passwordMode = iota
+	setPassword
+	removePassword
+)
+
+// PasswordChange is what a start or update does to the control password:
+// keep it, which is the zero value, set it, or remove it.
+type PasswordChange struct {
+	mode  passwordMode
+	value string
+}
+
+// SetPassword returns the change that sets the control password to value,
+// which must not be empty.
+func SetPassword(value string) PasswordChange {
+	return PasswordChange{mode: setPassword, value: value}
+}
+
+// RemovePassword returns the change that removes the control password. It
+// is also the consent that --no-password gives to serve beyond loopback
+// without a password.
+func RemovePassword() PasswordChange {
+	return PasswordChange{mode: removePassword}
+}
+
+// keeps reports whether p leaves the control password as it is.
+func (p PasswordChange) keeps() bool {
+	return p.mode == keepPassword
+}
+
+// removes reports whether p removes the control password, which is the
 // consent to run without one.
-func (a ControlAccess) noPassword() bool {
-	return a.Password != nil && *a.Password == ""
+func (p PasswordChange) removes() bool {
+	return p.mode == removePassword
+}
+
+// leavesSet reports whether a password is set after p, when current says
+// whether one is set before it.
+func (p PasswordChange) leavesSet(current bool) bool {
+	switch p.mode {
+	case setPassword:
+		return true
+	case removePassword:
+		return false
+	default:
+		return current
+	}
 }
 
 // nullOrigin is the Origin a browser sends from a sandboxed iframe or a local
@@ -99,8 +143,9 @@ func RequirePasswordBeyondLoopback(endpoint string, passwordSet, noPassword bool
 	return passwordRequiredError{endpoint: endpoint}
 }
 
-// isLoopbackEndpoint reports whether endpoint names a loopback IP or
-// localhost. Any other hostname may resolve beyond loopback.
+// isLoopbackEndpoint reports whether endpoint, as HOST:PORT or a bare host,
+// names a loopback IP or localhost. Any other hostname may resolve beyond
+// loopback.
 func isLoopbackEndpoint(endpoint string) bool {
 	host, _, err := net.SplitHostPort(endpoint)
 	if err != nil {

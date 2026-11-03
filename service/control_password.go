@@ -1,7 +1,6 @@
 package service
 
 import (
-	"crypto/subtle"
 	"errors"
 	"strings"
 	"sync"
@@ -56,17 +55,13 @@ func (p *ControlPassword) set(value string) (uint64, bool) {
 	return p.generation, true
 }
 
-// admits reports whether a request presenting presented may pass, and the
-// generation of the password it was checked against. With no password set,
-// every request passes. The comparison takes the same time wherever the
-// first difference is.
-func (p *ControlPassword) admits(presented string, ok bool) (uint64, bool) {
+// snapshot returns the password, empty when none is set, and its
+// generation, read together. set replaces the value rather than writing into
+// it, so the returned slice never changes.
+func (p *ControlPassword) snapshot() ([]byte, uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.value) == 0 {
-		return p.generation, true
-	}
-	return p.generation, ok && subtle.ConstantTimeCompare([]byte(presented), p.value) == 1
+	return p.value, p.generation
 }
 
 // currentGeneration returns how many times the password has changed.
