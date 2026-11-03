@@ -470,7 +470,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		UpstreamProxy           string `json:"upstream_proxy"`
 		UpstreamProxyConfigured bool   `json:"upstream_proxy_configured"`
 		// ControlListener is the control listener's network address, null
-		// when it has none. The control token is never part of the status.
+		// when it has none. The control password is never part of the status.
 		ControlListener *string `json:"control_listener"`
 		// OS is the instance machine's operating system, as runtime.GOOS
 		// names it, so a client on another machine can tag paths for it.

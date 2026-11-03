@@ -13,18 +13,22 @@ import (
 
 // ControlListenerStatus is the last completed state of the control
 // listener's network address. ControlListener is nil when it is inactive.
+// PasswordSet says whether a control password guards the address; the
+// password itself is never part of the status.
 type ControlListenerStatus struct {
 	Status          ListenerState `json:"status"`
 	ControlListener *string       `json:"control_listener"`
+	PasswordSet     bool          `json:"password_set"`
 }
 
 // ControlAddress is the control listener's network address: one TCP
 // listener that serves the same control API as the socket, behind the
-// control token (docs/adr/2026-10-24-the-control-listener-network-address-is-guarded-by-a-token-alone.md).
+// optional control password
+// (docs/adr/2026-11-03-the-control-listener-network-address-is-guarded-by-an-optional-password.md).
 // Lifecycle changes are serialized by mu.
 type ControlAddress struct {
 	api       http.Handler
-	token     *ControlToken
+	password  *ControlPassword
 	logWriter io.Writer
 	events    *eventBroadcaster
 	mu        sync.Mutex
@@ -36,13 +40,13 @@ type ControlAddress struct {
 	statusMu sync.RWMutex
 	status   ControlListenerStatus
 	// connsMu guards conns, every open connection on the network address
-	// with the control token generation it last authenticated with.
+	// with the control password generation it last authenticated with.
 	connsMu sync.Mutex
 	conns   map[net.Conn]*networkConn
 }
 
 // networkConn is one open connection on the network address. authenticated
-// is false until a request on it presents the control token.
+// is false until a request on it passes the password check.
 type networkConn struct {
 	conn          net.Conn
 	run           *controlAddressRun
@@ -60,25 +64,6 @@ type controlAddressRun struct {
 	suspended bool // listener closed for a restart handover
 }
 
-// arrival says which way a control request reached the control listener.
-type arrival uint8
-
-const (
-	arrivedOnSocket arrival = iota
-	arrivedOnNetworkAddress
-)
-
-type arrivalKey struct{}
-
-// requestArrival returns which way r reached the control listener. A
-// request with no mark arrived on the socket.
-func requestArrival(r *http.Request) arrival {
-	if value, ok := r.Context().Value(arrivalKey{}).(arrival); ok {
-		return value
-	}
-	return arrivedOnSocket
-}
-
 // controlRefusalBody is the standard JSON error body with a message.
 type controlRefusalBody struct {
 	Error   string `json:"error"`
@@ -92,15 +77,15 @@ func writeRefusal(w http.ResponseWriter, r *http.Request, status int, code, mess
 }
 
 // EnableControlAddress gives the instance a network address for its control
-// listener, inactive until Start, and serves the socket-only control token
-// routes. Call it once, before serving.
-func (s *Server) EnableControlAddress(token *ControlToken, logWriter io.Writer) *ControlAddress {
+// listener, inactive until Start, guarded by password when it is not empty.
+// Call it once, before serving.
+func (s *Server) EnableControlAddress(password string, logWriter io.Writer) *ControlAddress {
 	if logWriter == nil {
 		logWriter = io.Discard
 	}
 	control := &ControlAddress{
 		api:       s,
-		token:     token,
+		password:  NewControlPassword(password),
 		logWriter: logWriter,
 		events:    s.events,
 		status:    ControlListenerStatus{Status: ListenerInactive},
@@ -108,8 +93,6 @@ func (s *Server) EnableControlAddress(token *ControlToken, logWriter io.Writer) 
 	}
 	s.control = control
 	controlMux := http.NewServeMux()
-	controlMux.HandleFunc("GET /token", s.serveControlToken)
-	controlMux.HandleFunc("POST /token/rotate", s.serveControlTokenRotate)
 	controlMux.HandleFunc("GET /status", s.serveControlListenerStatus)
 	controlMux.HandleFunc("POST /start", s.serveControlListenerStart)
 	controlMux.HandleFunc("POST /update", s.serveControlListenerUpdate)
@@ -118,67 +101,16 @@ func (s *Server) EnableControlAddress(token *ControlToken, logWriter io.Writer) 
 	return control
 }
 
-// serveControlToken returns the control token, only to a request that
-// arrived on the socket, so a stolen token cannot read itself back.
-func (s *Server) serveControlToken(w http.ResponseWriter, r *http.Request) {
-	if refuseOnNetworkAddress(w, r, "the control token is available only through the socket") {
-		return
-	}
-	value, err := s.control.token.Value()
-	s.writeControlToken(w, r, "reading control token", value, err)
+// Password returns the control password, "" when none is set.
+func (c *ControlAddress) Password() string {
+	return c.password.Value()
 }
 
-// serveControlTokenRotate replaces the control token and returns the new
-// one, only to a request that arrived on the socket, so a stolen token
-// cannot lock the owner out. Connections and event streams that used the
-// old token are dropped, and control_listener.token_rotated tells socket
-// clients to read the new token, without carrying it.
-func (s *Server) serveControlTokenRotate(w http.ResponseWriter, r *http.Request) {
-	if refuseOnNetworkAddress(w, r, "the control token can be rotated only through the socket") {
-		return
-	}
-	value, err := s.control.RotateToken()
-	if err == nil {
-		s.events.publish("control_listener.token_rotated", struct{}{})
-	}
-	s.writeControlToken(w, r, "rotating control token", value, err)
-}
-
-// refuseOnNetworkAddress answers 403 socket_only with message, and reports
-// true, when r arrived on the network address.
-func refuseOnNetworkAddress(w http.ResponseWriter, r *http.Request, message string) bool {
-	if requestArrival(r) != arrivedOnNetworkAddress {
-		return false
-	}
-	writeJSON(w, r, http.StatusForbidden, controlRefusalBody{Error: "socket_only", Message: message})
-	return true
-}
-
-// writeControlToken answers with the control token value, or, when err is
-// set, logs err under operation and answers internal_server_error without
-// its detail.
-func (s *Server) writeControlToken(w http.ResponseWriter, r *http.Request, operation, value string, err error) {
-	if err != nil {
-		fmt.Fprintf(s.control.logWriter, "%s: %v\n", operation, err)
-		writeJSON(w, r, http.StatusInternalServerError, struct {
-			Error string `json:"error"`
-		}{Error: "internal_server_error"})
-		return
-	}
-	writeJSON(w, r, http.StatusOK, struct {
-		Token string `json:"token"`
-	}{Token: value})
-}
-
-// RotateToken replaces the control token and closes every connection on the
-// network address that authenticated with an older one, which also ends its
-// event streams. The new token is returned.
-func (c *ControlAddress) RotateToken() (string, error) {
-	value, err := c.token.Rotate()
-	if err != nil {
-		return "", err
-	}
-	generation := c.token.currentGeneration()
+// SetPassword replaces the control password, or removes it when password is
+// empty, and closes every connection on the network address that
+// authenticated under the old one, which also ends its event streams.
+func (c *ControlAddress) SetPassword(password string) {
+	generation := c.password.set(password)
 	c.connsMu.Lock()
 	defer c.connsMu.Unlock()
 	for _, tracked := range c.conns {
@@ -186,17 +118,15 @@ func (c *ControlAddress) RotateToken() (string, error) {
 			_ = tracked.conn.Close()
 		}
 	}
-	return value, nil
 }
 
 // trackConn records a new connection on the network address and returns
-// its context, which carries the arrival mark and the tracked connection.
+// its context, which carries the tracked connection.
 func (c *ControlAddress) trackConn(ctx context.Context, conn net.Conn, run *controlAddressRun) context.Context {
 	tracked := &networkConn{conn: conn, run: run}
 	c.connsMu.Lock()
 	c.conns[conn] = tracked
 	c.connsMu.Unlock()
-	ctx = context.WithValue(ctx, arrivalKey{}, arrivedOnNetworkAddress)
 	return context.WithValue(ctx, networkConnKey{}, tracked)
 }
 
@@ -210,10 +140,10 @@ func (c *ControlAddress) forgetConn(conn net.Conn, state http.ConnState) {
 	c.connsMu.Unlock()
 }
 
-// authenticateConn records that r's connection presented the token of
-// generation. It reports false, and closes the connection, when the token
-// was rotated after the comparison, so a request cannot slip past a
-// rotation's sweep.
+// authenticateConn records that r's connection passed the check against the
+// password of generation. It reports false, and closes the connection, when
+// the password changed after the check, so a request cannot slip past a
+// change's sweep.
 func (c *ControlAddress) authenticateConn(r *http.Request, generation uint64) bool {
 	tracked, ok := r.Context().Value(networkConnKey{}).(*networkConn)
 	if !ok {
@@ -223,7 +153,7 @@ func (c *ControlAddress) authenticateConn(r *http.Request, generation uint64) bo
 	defer c.connsMu.Unlock()
 	tracked.authenticated = true
 	tracked.generation = generation
-	if generation != c.token.currentGeneration() {
+	if generation != c.password.currentGeneration() {
 		_ = tracked.conn.Close()
 		return false
 	}
@@ -248,6 +178,13 @@ func (c *ControlAddress) Status() ControlListenerStatus {
 		address := *status.ControlListener
 		status.ControlListener = &address
 	}
+	return c.withPassword(status)
+}
+
+// withPassword fills in whether a password is set, which can change without
+// the address changing.
+func (c *ControlAddress) withPassword(status ControlListenerStatus) ControlListenerStatus {
+	status.PasswordSet = c.password.IsSet()
 	return status
 }
 
@@ -258,8 +195,7 @@ func (c *ControlAddress) setStatus(status ControlListenerStatus) {
 }
 
 // Start binds the network address in settings and serves the control API
-// there. Port 0 binds a free port, and the status reports the bound one. The
-// control token is generated now if its file is absent.
+// there. Port 0 binds a free port, and the status reports the bound one.
 func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings) (ControlListenerStatus, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -273,15 +209,12 @@ func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings) (
 	if err != nil {
 		return ControlListenerStatus{}, err
 	}
-	if _, err := c.token.Value(); err != nil {
-		return ControlListenerStatus{}, err
-	}
 	run, err := c.bind(ctx, endpoint)
 	if err != nil {
 		return ControlListenerStatus{}, err
 	}
 	c.run = run
-	status := activeControlListenerStatus(run)
+	status := c.activeStatus(run)
 	c.setStatus(status)
 	c.events.publish("control_listener.started", status)
 	return status, nil
@@ -397,10 +330,8 @@ func (c *ControlAddress) bind(ctx context.Context, endpoint string) (*controlAdd
 	}
 	server := &http.Server{
 		Handler: c.networkHandler(address),
-		// Every request on this server is marked as arriving on the
-		// network address, so socket-only routes can refuse it, and every
-		// connection is tracked with its run, so a token rotation can drop
-		// it and so can a Stop or Update that closes its run.
+		// Every connection is tracked with its run, so a password change
+		// can drop it and so can a Stop or Update that closes its run.
 		ConnState: c.forgetConn,
 	}
 	run := &controlAddressRun{listener: listener, server: server, served: make(chan error, 1)}
@@ -425,10 +356,10 @@ func controlAddressNetwork(endpoint string) string {
 
 // networkHandler is the control API as the network address serves it. The
 // socket serves c.api with none of these checks. Each check runs before the
-// next: CORS and the Host check belong in front of the control token, so a
-// preflight and a rebound name are answered before authentication.
+// next: CORS and the Host check belong in front of the control password, so
+// a preflight and a rebound name are answered before authentication.
 func (c *ControlAddress) networkHandler(bound string) http.Handler {
-	return allowAnyOrigin(requireBoundHost(bound, c.requireControlToken(c.api)))
+	return allowAnyOrigin(c.requireBoundHost(bound, c.requireControlPassword(c.api)))
 }
 
 // defaultHTTPPort is the port a Host header without one names.
@@ -439,11 +370,16 @@ const defaultHTTPPort = "80"
 // was rebound to the instance machine cannot reach the instance. On a wildcard
 // address any Host naming the bound port is accepted, because the operator
 // chose every interface. On loopback, localhost is accepted too: a rebound
-// name never arrives as localhost.
-func requireBoundHost(bound string, next http.Handler) http.Handler {
+// name never arrives as localhost. With a password set, any Host is
+// accepted, because a rebound page without the password gets nothing.
+func (c *ControlAddress) requireBoundHost(bound string, next http.Handler) http.Handler {
 	boundHost, boundPort, _ := net.SplitHostPort(bound)
 	boundIP := net.ParseIP(boundHost)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if c.password.IsSet() {
+			next.ServeHTTP(w, r)
+			return
+		}
 		host, port, err := net.SplitHostPort(r.Host)
 		if err != nil {
 			host, port = r.Host, defaultHTTPPort
@@ -480,9 +416,9 @@ const (
 )
 
 // allowAnyOrigin lets a page from any origin call the network address,
-// because the control token alone decides access. It echoes the request
+// because the control password alone decides access. It echoes the request
 // Origin and never allows credentials, so a browser attaches nothing
-// ambient to a request. A preflight is answered here, without the token,
+// ambient to a request. A preflight is answered here, without the password,
 // because a browser never sends one on a preflight.
 func allowAnyOrigin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -500,20 +436,15 @@ func allowAnyOrigin(next http.Handler) http.Handler {
 	})
 }
 
-// requireControlToken refuses a request that does not carry the control
-// token as Authorization: Bearer. The token is never read from the query
-// string, because URLs end up in logs and history.
-func (c *ControlAddress) requireControlToken(next http.Handler) http.Handler {
+// requireControlPassword refuses a request that does not carry the control
+// password as Authorization: Bearer, when one is set. The password is never
+// read from the query string, because URLs end up in logs and history.
+func (c *ControlAddress) requireControlPassword(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		presented, ok := bearerToken(r.Header.Get("Authorization"))
-		var generation uint64
-		var matched bool
-		if ok {
-			generation, matched = c.token.matches(presented)
-		}
-		if !matched {
+		generation, admitted := c.password.admits(bearerToken(r.Header.Get("Authorization")))
+		if !admitted {
 			w.Header().Set("WWW-Authenticate", "Bearer")
-			writeJSON(w, r, http.StatusUnauthorized, controlRefusalBody{Error: "unauthorized", Message: "send the control token as Authorization: Bearer"})
+			writeJSON(w, r, http.StatusUnauthorized, controlRefusalBody{Error: "unauthorized", Message: "send the control password as Authorization: Bearer"})
 			return
 		}
 		if !c.authenticateConn(r, generation) {
@@ -537,7 +468,7 @@ func bearerToken(header string) (string, bool) {
 // ControlAddressWarning returns the warning line for a control listener
 // network address bound at address, or "" when address is loopback. The
 // network address serves plain HTTP, so anything beyond loopback can read
-// the control token on the wire.
+// the control password on the wire.
 func ControlAddressWarning(address string) string {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {

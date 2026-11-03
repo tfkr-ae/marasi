@@ -193,7 +193,7 @@ func TestInstanceSelectionEnvironment(t *testing.T) {
 			{name: "MARASI_INSTANCE", env: []string{"MARASI_INSTANCE=work"}},
 			{name: "--instance over MARASI_INSTANCE", env: []string{"MARASI_INSTANCE=other"}, args: []string{"--instance", "work"}},
 			{name: "--instance over MARASI_REMOTE", env: []string{"MARASI_REMOTE=" + remote}, args: []string{"--instance", "work"}},
-			{name: "--remote over MARASI_INSTANCE", env: []string{"MARASI_INSTANCE=work", "MARASI_TOKEN=secret"}, args: []string{"--remote", remote}, wantRemote: true},
+			{name: "--remote over MARASI_INSTANCE", env: []string{"MARASI_INSTANCE=work", "MARASI_PASSWORD=secret"}, args: []string{"--remote", remote}, wantRemote: true},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				reset()
@@ -215,8 +215,8 @@ func TestInstanceSelectionEnvironment(t *testing.T) {
 			args []string
 			want string
 		}{
-			{env: []string{"MARASI_REMOTE=" + remote, "MARASI_INSTANCE=work", "MARASI_TOKEN=secret"}, args: []string{"traffic", "list"}, want: "MARASI_REMOTE and MARASI_INSTANCE cannot be used together"},
-			{env: []string{"MARASI_TOKEN=secret"}, args: []string{"--remote", remote, "--instance", "work", "traffic", "list"}, want: "--remote and --instance cannot be used together"},
+			{env: []string{"MARASI_REMOTE=" + remote, "MARASI_INSTANCE=work", "MARASI_PASSWORD=secret"}, args: []string{"traffic", "list"}, want: "MARASI_REMOTE and MARASI_INSTANCE cannot be used together"},
+			{env: []string{"MARASI_PASSWORD=secret"}, args: []string{"--remote", remote, "--instance", "work", "traffic", "list"}, want: "--remote and --instance cannot be used together"},
 			{env: []string{"MARASI_REMOTE=" + remote}, args: []string{"service", "list"}, want: "marasi service list acts on this machine and does not accept MARASI_REMOTE"},
 		} {
 			reset()

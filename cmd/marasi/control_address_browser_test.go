@@ -66,8 +66,7 @@ func TestControlAddressBrowserAccess(t *testing.T) {
 	configDir := serviceConfigDir(t)
 	startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
 	address := *controlAddressOf(t, binary, configDir, "work")
-	token := controlTokenOf(t, binary, configDir, "work")
-	bearer := "Authorization: Bearer " + token
+	bearer := "Authorization: Bearer " + testControlPassword
 
 	t.Run("should echo any origin and never allow credentials", func(t *testing.T) {
 		for _, origin := range []string{"http://localhost:5173", "null", "app://marasi", "https://evil.example"} {
@@ -79,8 +78,8 @@ func TestControlAddressBrowserAccess(t *testing.T) {
 		}
 	})
 
-	t.Run("should answer a preflight without the token and allow the bearer header", func(t *testing.T) {
-		for _, path := range []string{"/service/status", "/project/open", "/service/control-listener/token"} {
+	t.Run("should answer a preflight without the password and allow the bearer header", func(t *testing.T) {
+		for _, path := range []string{"/service/status", "/project/open", "/service/control-listener/update"} {
 			response, body := sendRaw(t, "tcp", address, rawRequest{method: http.MethodOptions, path: path, host: address, headers: []string{
 				"Origin: null",
 				"Access-Control-Request-Method: POST",
@@ -103,36 +102,49 @@ func TestControlAddressBrowserAccess(t *testing.T) {
 		}
 	})
 
-	t.Run("should refuse a Host that does not name the bound address before authentication", func(t *testing.T) {
+	t.Run("should accept any Host with a password, and still ask for the password", func(t *testing.T) {
 		_, port, _ := net.SplitHostPort(address)
-		const misdirected = "{\"error\":\"host_mismatch\",\"message\":\"the Host header does not name the control listener network address\"}\n"
-		for _, host := range []string{"evil.example:" + port, "evil.example", "127.0.0.1:1", "127.0.0.2:" + port, "", "marasi"} {
-			for _, headers := range [][]string{{bearer}, nil} {
-				response, body := sendRaw(t, "tcp", address, rawRequest{method: http.MethodGet, path: "/service/status", host: host, headers: headers})
-				if response.StatusCode != http.StatusMisdirectedRequest || body != misdirected {
-					t.Fatalf("\nwanted:\n421 for Host %q with %v\n%s\ngot:\n%d %s", host, headers, misdirected, response.StatusCode, body)
-				}
+		for _, host := range []string{address, "localhost:" + port, "evil.example:" + port, "evil.example", "marasi.tailnet.ts.net:443", "127.0.0.2:" + port, "127.0.0.1:1"} {
+			if response, body := sendRaw(t, "tcp", address, rawRequest{method: http.MethodGet, path: "/service/status", host: host, headers: []string{bearer}}); response.StatusCode != http.StatusOK {
+				t.Fatalf("\nwanted:\n200 for Host %q\ngot:\n%d %s", host, response.StatusCode, body)
+			}
+			if response, body := sendRaw(t, "tcp", address, rawRequest{method: http.MethodGet, path: "/service/status", host: host}); response.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("\nwanted:\n401 for Host %q without the password\ngot:\n%d %s", host, response.StatusCode, body)
 			}
 		}
-		for _, host := range []string{address, "localhost:" + port, "LOCALHOST:" + port} {
-			if response, body := sendRaw(t, "tcp", address, rawRequest{method: http.MethodGet, path: "/service/status", host: host, headers: []string{bearer}}); response.StatusCode != http.StatusOK {
+	})
+
+	// Without a password the Host rule the control token had stays until the
+	// no-password browser rules replace it.
+	t.Run("should refuse a Host that does not name the bound address without a password", func(t *testing.T) {
+		startControlAddressInstanceWith(t, binary, configDir, "open", "127.0.0.1:0", nil)
+		open := *controlAddressOf(t, binary, configDir, "open")
+		_, port, _ := net.SplitHostPort(open)
+		const misdirected = "{\"error\":\"host_mismatch\",\"message\":\"the Host header does not name the control listener network address\"}\n"
+		for _, host := range []string{"evil.example:" + port, "evil.example", "127.0.0.1:1", "127.0.0.2:" + port, "", "marasi"} {
+			response, body := sendRaw(t, "tcp", open, rawRequest{method: http.MethodGet, path: "/service/status", host: host})
+			if response.StatusCode != http.StatusMisdirectedRequest || body != misdirected {
+				t.Fatalf("\nwanted:\n421 for Host %q\n%s\ngot:\n%d %s", host, misdirected, response.StatusCode, body)
+			}
+		}
+		for _, host := range []string{open, "localhost:" + port, "LOCALHOST:" + port} {
+			if response, body := sendRaw(t, "tcp", open, rawRequest{method: http.MethodGet, path: "/service/status", host: host}); response.StatusCode != http.StatusOK {
 				t.Fatalf("\nwanted:\n200 for Host %q\ngot:\n%d %s", host, response.StatusCode, body)
 			}
 		}
 	})
 
-	t.Run("should accept any Host naming the bound port on a wildcard address", func(t *testing.T) {
-		startControlAddressInstance(t, binary, configDir, "wild", "0.0.0.0:0")
+	t.Run("should accept any Host naming the bound port on a wildcard address without a password", func(t *testing.T) {
+		startControlAddressInstanceWith(t, binary, configDir, "wild", "0.0.0.0:0", nil)
 		wild := *controlAddressOf(t, binary, configDir, "wild")
-		wildToken := controlTokenOf(t, binary, configDir, "wild")
 		_, port, _ := net.SplitHostPort(wild)
 		dial := net.JoinHostPort("127.0.0.1", port)
 		for _, host := range []string{wild, "evil.example:" + port, "192.0.2.7:" + port} {
-			if response, body := sendRaw(t, "tcp", dial, rawRequest{method: http.MethodGet, path: "/service/status", host: host, headers: []string{"Authorization: Bearer " + wildToken}}); response.StatusCode != http.StatusOK {
+			if response, body := sendRaw(t, "tcp", dial, rawRequest{method: http.MethodGet, path: "/service/status", host: host}); response.StatusCode != http.StatusOK {
 				t.Fatalf("\nwanted:\n200 for Host %q\ngot:\n%d %s", host, response.StatusCode, body)
 			}
 		}
-		if response, _ := sendRaw(t, "tcp", dial, rawRequest{method: http.MethodGet, path: "/service/status", host: "evil.example:1", headers: []string{"Authorization: Bearer " + wildToken}}); response.StatusCode != http.StatusMisdirectedRequest {
+		if response, _ := sendRaw(t, "tcp", dial, rawRequest{method: http.MethodGet, path: "/service/status", host: "evil.example:1"}); response.StatusCode != http.StatusMisdirectedRequest {
 			t.Fatalf("\nwanted:\n421 for another port\ngot:\n%d", response.StatusCode)
 		}
 	})
@@ -177,7 +189,7 @@ func TestControlAddressBrowserAccess(t *testing.T) {
 		}
 	})
 
-	t.Run("should refuse a cross-origin request without the token with CORS headers", func(t *testing.T) {
+	t.Run("should refuse a cross-origin request without the password with CORS headers", func(t *testing.T) {
 		response, body := sendRaw(t, "tcp", address, rawRequest{method: http.MethodGet, path: "/service/status", host: address, headers: []string{"Origin: https://evil.example"}})
 		want := "Access-Control-Allow-Origin: https://evil.example\nVary: Origin"
 		if response.StatusCode != http.StatusUnauthorized || corsHeaders(response) != want || !strings.Contains(body, "\"unauthorized\"") {

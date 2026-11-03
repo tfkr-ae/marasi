@@ -100,9 +100,10 @@ func flagSource(name string) string {
 	return "--" + name
 }
 
-// withoutBoundVariables returns environ without the variables bound to flags. A service child gets its settings as flags, and a variable
-// left in its environment would bring back a setting its parent dropped, such
-// as a control address stopped before a restart.
+// withoutBoundVariables returns environ without the variables bound to flags.
+// A service child gets its settings as flags, and a variable left in its
+// environment would bring back a setting its parent dropped, such as a
+// control address stopped before a restart.
 func withoutBoundVariables(environ []string) []string {
 	kept := make([]string, 0, len(environ))
 	for _, variable := range environ {
@@ -112,4 +113,17 @@ func withoutBoundVariables(environ []string) []string {
 		}
 	}
 	return kept
+}
+
+// childEnvironment is the environment of a service child: this process's
+// environment without the variables bound to flags, plus password as
+// MARASI_PASSWORD when it is set. The password goes in the environment, not
+// the arguments, so ps on the instance machine does not show it
+// (docs/adr/2026-11-03-the-control-listener-network-address-is-guarded-by-an-optional-password.md).
+func childEnvironment(password string) []string {
+	environ := withoutBoundVariables(os.Environ())
+	if password != "" {
+		environ = append(environ, passwordVariable+"="+password)
+	}
+	return environ
 }

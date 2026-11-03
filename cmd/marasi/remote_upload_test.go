@@ -154,7 +154,7 @@ func TestRemoteAddSendsContents(t *testing.T) {
 			remote, requests := startCannedUploadAPI(t, http.StatusOK, `{"items":[]}`+"\n")
 			source := writeLocalFile(t, test.name, "line one\nline two\n")
 
-			stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, append([]string{"--config-dir", t.TempDir(), "--remote", remote, "--json"}, test.args(source)...)...)
+			stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_PASSWORD=secret"}, append([]string{"--config-dir", t.TempDir(), "--remote", remote, "--json"}, test.args(source)...)...)
 			if err != nil || stdout != `{"items":[]}`+"\n" || stderr != "" {
 				t.Fatalf("\nwanted:\nexit 0 and the response passed through\ngot:\n%v, stdout %q, stderr %q", err, stdout, stderr)
 			}
@@ -169,7 +169,7 @@ func TestRemoteAddSendsContents(t *testing.T) {
 			remote, _ := startCannedUploadAPI(t, http.StatusConflict, `{"error":"already_exists"}`+"\n")
 			source := writeLocalFile(t, test.name, "kept\n")
 
-			_, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, append([]string{"--config-dir", t.TempDir(), "--remote", remote}, test.args(source)...)...)
+			_, stderr, err := runMarasiEnv(binary, []string{"MARASI_PASSWORD=secret"}, append([]string{"--config-dir", t.TempDir(), "--remote", remote}, test.args(source)...)...)
 			if exitCode(err) != 1 || !strings.Contains(stderr, "already_exists") {
 				t.Fatalf("\nwanted:\nexit 1 naming already_exists\ngot:\n%v, stderr %q", err, stderr)
 			}
@@ -185,7 +185,7 @@ func TestRemoteAddSendsContents(t *testing.T) {
 			listener.Close()
 			source := writeLocalFile(t, test.name, "kept\n")
 
-			_, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, append([]string{"--config-dir", t.TempDir(), "--remote", closed}, test.args(source)...)...)
+			_, stderr, err := runMarasiEnv(binary, []string{"MARASI_PASSWORD=secret"}, append([]string{"--config-dir", t.TempDir(), "--remote", closed}, test.args(source)...)...)
 			if exitCode(err) != 1 || stderr == "" {
 				t.Fatalf("\nwanted:\nexit 1 with an error\ngot:\n%v, stderr %q", err, stderr)
 			}

@@ -27,10 +27,8 @@ import (
 // audited but not served here:
 //   - GET /certificate reads the CA certificate the proxy loaded at start,
 //     which the test proxy has not loaded.
-//   - GET /status and GET /token live on the control address, which the test
-//     server does not have. GET /token writes the control token file when it
-//     is missing. It is served only on the socket, and goes with the control
-//     token, which the control password replaces.
+//   - GET /status lives on the control address, which the test server does
+//     not have. It reads the network address's status.
 var readOnlyGetRoutes = map[string][]string{
 	"GET /armory/run/{id}":                   {"/armory/run/0190f0c4-7b6e-7000-8000-000000000001"},
 	"GET /armory/run/{id}/traffic":           {"/armory/run/0190f0c4-7b6e-7000-8000-000000000001/traffic"},
@@ -68,7 +66,6 @@ var readOnlyGetRoutes = map[string][]string{
 	"GET /test-case":                         {"/test-case"},
 	"GET /test-case/checklist":               {"/test-case/checklist"},
 	"GET /test-case/{id}":                    {"/test-case/0190f0c4-7b6e-7000-8000-000000000001"},
-	"GET /token":                             nil,
 	"GET /traffic":                           {"/traffic"},
 	"GET /traffic/content-types":             {"/traffic/content-types"},
 	"GET /traffic/count":                     {"/traffic/count"},

@@ -29,7 +29,7 @@ type controlListenerCommand struct {
 var (
 	controlStartCommand = controlListenerCommand{
 		name:      "start",
-		short:     "Serve the control API at a network address, guarded by the control token",
+		short:     "Serve the control API at a network address, guarded by the control password when one is set",
 		method:    http.MethodPost,
 		route:     "/start",
 		operation: "starting control listener network address",
@@ -64,7 +64,7 @@ var (
 	}
 	controlStatusCommand = controlListenerCommand{
 		name:      "status",
-		short:     "Print the control listener's network address",
+		short:     "Print the control listener's network address and whether a password guards it",
 		method:    http.MethodGet,
 		route:     "/status",
 		operation: "getting control listener status",
@@ -73,7 +73,11 @@ var (
 			if status.ControlListener != nil {
 				address = *status.ControlListener
 			}
-			_, err := fmt.Fprintf(stdout, "status: %s\ncontrol listener network address: %s\n", status.Status, address)
+			password := "none"
+			if status.PasswordSet {
+				password = "set"
+			}
+			_, err := fmt.Fprintf(stdout, "status: %s\ncontrol listener network address: %s\npassword: %s\n", status.Status, address, password)
 			return err
 		},
 	}

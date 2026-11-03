@@ -39,7 +39,7 @@ func (c *ControlAddress) Update(ctx context.Context, settings ListenerSettings) 
 		return ControlListenerStatus{}, err
 	}
 	if endpoint == c.run.listener.Addr().String() {
-		return activeControlListenerStatus(c.run), nil
+		return c.activeStatus(c.run), nil
 	}
 	run, err := c.bind(ctx, endpoint)
 	if err != nil {
@@ -47,14 +47,14 @@ func (c *ControlAddress) Update(ctx context.Context, settings ListenerSettings) 
 	}
 	c.retire(ctx, c.run)
 	c.run = run
-	status := activeControlListenerStatus(run)
+	status := c.activeStatus(run)
 	c.setStatus(status)
 	c.events.publish("control_listener.updated", status)
 	return status, nil
 }
 
 // Stop closes the network address and keeps no endpoint, so the next Start
-// names its address. The socket and the control token are not affected.
+// names its address. The socket and the control password are not affected.
 func (c *ControlAddress) Stop(ctx context.Context) (ControlListenerStatus, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -66,8 +66,8 @@ func (c *ControlAddress) Stop(ctx context.Context) (ControlListenerStatus, error
 	}
 	c.retire(ctx, c.run)
 	c.run = nil
-	status := ControlListenerStatus{Status: ListenerInactive}
-	c.setStatus(status)
+	c.setStatus(ControlListenerStatus{Status: ListenerInactive})
+	status := c.Status()
 	c.events.publish("control_listener.stopped", status)
 	return status, nil
 }
@@ -112,9 +112,10 @@ func (c *ControlAddress) closesConnection(r *http.Request) bool {
 	return tracked.run != c.run
 }
 
-func activeControlListenerStatus(run *controlAddressRun) ControlListenerStatus {
+// activeStatus is the status of the network address serving run.
+func (c *ControlAddress) activeStatus(run *controlAddressRun) ControlListenerStatus {
 	address := run.listener.Addr().String()
-	return ControlListenerStatus{Status: ListenerActive, ControlListener: &address}
+	return c.withPassword(ControlListenerStatus{Status: ListenerActive, ControlListener: &address})
 }
 
 func (s *Server) serveControlListenerStatus(w http.ResponseWriter, r *http.Request) {
