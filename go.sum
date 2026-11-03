@@ -177,3 +177,5 @@ modernc.org/token v1.1.0 h1:Xl7Ap9dKaEs5kLoOQeQmPWevfnk/DM5qcLcYlA8ys6Y=
 modernc.org/token v1.1.0/go.mod h1:UGzOrNV1mAFSEB63lOFHIpNRUVMvYTc6yu1SMY/XTDM=
 roci.dev/fracdex v0.0.0-20241211175510-82d7df79e312 h1:VUDREYj7HwVKN63NRDKZkx1tWrtydg95b9aiSyUlMCo=
 roci.dev/fracdex v0.0.0-20241211175510-82d7df79e312/go.mod h1:Lbb7V1DeB2FAkgeKjxff99mmSPrtrawik8cG1RbKVwg=
+rsc.io/qr v0.2.0 h1:6vBLea5/NRMVTz8V66gipeLycZMl/+UlFmk8DvqQ6WY=
+rsc.io/qr v0.2.0/go.mod h1:IF+uZjkb9fqyeF/4tlBoynqmQxUoPfWEKh921coOuXs=

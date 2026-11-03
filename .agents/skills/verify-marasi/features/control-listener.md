@@ -11,6 +11,7 @@
 - Use any instance command remotely with `--remote` or `MARASI_REMOTE`, plus `--password` or `MARASI_PASSWORD`. This includes `service status`, `service restart`, `service stop`, `events`, `traffic`, `project list` and `project open`.
 - Upload a local file through `--remote` with `wordlist add` and `report template add`.
 - Read `cli_version` in a remote `service status`, and the `warning` it adds when the two versions differ.
+- Print a Pairing QR code with `service control pair`, with `--host`, `--remote` and `--json`.
 - Choose human-readable or `--json` output.
 
 ## How to get to it (user POV)
@@ -28,8 +29,9 @@ Start a second instance for this feature so the main one keeps its socket-only s
 7. Remote `project list` must list the instance's projects. Remote `project open --name N` must resolve to the instance's `projects/N.marasi`. `project open --path rel/x.marasi` must fail with `invalid_project_request`.
 8. Over the socket, run `service control status --json` and require `{"status":"active","control_listener":ADDR,"password_set":true}`. Human output is `status: active`, `control listener network address: ADDR` and `password: set`. `service control start` while one is active must fail with `listener_already_active`. `update` to a port that is already bound must fail with `listener_unavailable`, and the old address must keep serving. `update --address 127.0.0.1 --port 0` must move to a new address and close the old one, and the same password must work. `stop` prints `control listener network address stopped successfully` on stderr. Status then reads `{"status":"inactive","control_listener":null,"password_set":true}`. `stop` or `update` while inactive must fail with `listener_inactive`. `start` prints `control listener network address started on ADDR` on stderr, and the password must not change. A socket `events` stream must carry `control_listener.updated`, `control_listener.stopped` and `control_listener.started`, each with `password_set` and never the password.
 9. `update --address 0.0.0.0 --port 0` writes a warning to the instance log that the address `is reachable beyond loopback and serves plain HTTP without TLS`. When stderr is not a terminal, the warning is not printed there. Move it back to `127.0.0.1` right away.
-10. Start a third instance with `--control-address 127.0.0.1:0` and no password. Raw requests with no `Authorization` header must get 200, and a `Host` that is not the listener's address must get 421 `host_mismatch`. Stop it.
-11. Remote `service restart --json` must return `restarted`. The same URL and password must keep working, a request with no password must still get 401, and `service control status` must report the same address. Remote `service stop --json` must return `stopped`, and the socket `service status` must then fail.
+10. Start a third instance with `--control-address 127.0.0.1:0` and no password. Raw requests with no `Authorization` header must get 200, and a `Host` that is not the listener's address must get 421 `host_mismatch`. Keep it for step 11, then stop it.
+11. Over the socket, `service control pair --json` must print exactly `{"url":"http://ADDR","password":PASSWORD,"instance":NAME}`, and the third instance's payload must have no `password`. `--host 100.64.0.7` must keep the port, and `--host laptop.local` on the third instance must fail naming the missing control password. Human `service control pair` prints a block of `█▀▄` lines, a blank line, and the URL. `GET /service/control-listener/pairing` on the network address must get 403 `socket_only`. On an instance with no network address, `pair` must fail with `start one with marasi service control start --address HOST --port PORT`. Remote `pair --json` must print the remote URL, the password and the instance name.
+12. Remote `service restart --json` must return `restarted`. The same URL and password must keep working, a request with no password must still get 401, and `service control status` must report the same address. Remote `service stop --json` must return `stopped`, and the socket `service status` must then fail.
 
 ## Gotchas
 
@@ -39,4 +41,5 @@ Start a second instance for this feature so the main one keeps its socket-only s
 - `service start` and `service list` refuse `--remote`, for example `marasi service start acts on this machine and does not accept --remote`.
 - A wrong password fails with `control password rejected by URL: check --password or MARASI_PASSWORD`, and a missing one with `control password rejected by URL: the instance needs one: pass --password or set MARASI_PASSWORD`. A URL where nothing listens fails with `no instance answers at URL`.
 - `service control update` needs both `--address` and `--port`. Otherwise it fails with `service control update requires --address and --port`.
+- `service control pair` with a wildcard address picks the default-route interface, so the host differs between machines. Check only that it is a non-loopback IP of the instance machine.
 - `service restart --json` returns `instance`, `status`, `version` and `proxy_listener` but not `control_listener`. Read the address from `service control status`.
