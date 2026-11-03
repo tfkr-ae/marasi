@@ -14,9 +14,10 @@ import (
 // bound to a flag by bindEnv.
 const envAnnotation = "marasi_env"
 
-// flagConflicts are the flag pairs that pick the same setting two ways. A
-// passed flag ignores the variable of the other flag in its pair, and the two
-// variables together, with neither flag passed, are a usage error.
+// flagConflicts are the two flags that pick the same setting two ways, for
+// each such setting. A passed flag ignores the variable of the other flag,
+// and the two variables together, with neither flag passed, are a usage
+// error.
 var flagConflicts = [][2]string{
 	{"project", "project-name"},
 	{"remote", "instance"},
@@ -58,8 +59,8 @@ func applyEnv(cmd *cobra.Command) error {
 			values[flag.Name] = value
 		}
 	})
-	for _, pair := range flagConflicts {
-		first, second := flags.Lookup(pair[0]), flags.Lookup(pair[1])
+	for _, conflict := range flagConflicts {
+		first, second := flags.Lookup(conflict[0]), flags.Lookup(conflict[1])
 		if first == nil || second == nil {
 			continue
 		}
