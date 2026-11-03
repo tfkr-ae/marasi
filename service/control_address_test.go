@@ -23,7 +23,7 @@ func startTestControlAddress(t *testing.T, api http.Handler) (*ControlAddress, s
 		conns:     map[net.Conn]*networkConn{},
 	}
 	address, port := "127.0.0.1", uint16(0)
-	status, err := control.Start(context.Background(), ListenerSettings{Address: &address, Port: &port})
+	status, err := control.Start(context.Background(), ListenerSettings{Address: &address, Port: &port}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

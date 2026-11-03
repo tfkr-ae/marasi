@@ -107,18 +107,25 @@ func (c *ControlAddress) Password() string {
 	return c.password.Value()
 }
 
-// SetPassword replaces the control password, or removes it when password is
-// empty, and closes every connection on the network address that
-// authenticated under the old one, which also ends its event streams.
-func (c *ControlAddress) SetPassword(password string) {
-	generation := c.password.set(password)
+// setPassword replaces the control password, or removes it when password is
+// empty, and reports whether it changed. A change closes every connection on
+// the network address that authenticated under the old password, which also
+// ends its event streams. The connection of the request with context ctx is
+// spared so it gets its response, and closes after it.
+func (c *ControlAddress) setPassword(ctx context.Context, password string) bool {
+	generation, changed := c.password.set(password)
+	if !changed {
+		return false
+	}
+	trigger, _ := ctx.Value(networkConnKey{}).(*networkConn)
 	c.connsMu.Lock()
 	defer c.connsMu.Unlock()
 	for _, tracked := range c.conns {
-		if tracked.authenticated && tracked.generation < generation {
+		if tracked != trigger && tracked.authenticated && tracked.generation < generation {
 			_ = tracked.conn.Close()
 		}
 	}
+	return true
 }
 
 // trackConn records a new connection on the network address and returns
@@ -197,7 +204,8 @@ func (c *ControlAddress) setStatus(status ControlListenerStatus) {
 
 // Start binds the network address in settings and serves the control API
 // there. Port 0 binds a free port, and the status reports the bound one.
-func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings) (ControlListenerStatus, error) {
+// password replaces the control password, "" removes it, and nil keeps it.
+func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings, password *string) (ControlListenerStatus, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -215,6 +223,9 @@ func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings) (
 		return ControlListenerStatus{}, err
 	}
 	c.run = run
+	if password != nil {
+		c.setPassword(ctx, *password)
+	}
 	status := c.activeStatus(run)
 	c.setStatus(status)
 	c.events.publish("control_listener.started", status)
