@@ -87,6 +87,11 @@ func init() {
 	proxyPort = 8080
 	startCmd.Flags().Var(&proxyPort, "port", "Proxy listener TCP port")
 	startCmd.Flags().StringVar(&controlAddress, "control-address", "", "Also serve the control API at this network address, HOST:PORT, guarded by the control token. Port 0 picks a free port")
+	bindEnv(startCmd.Flags(), "project", "MARASI_PROJECT")
+	bindEnv(startCmd.Flags(), "project-name", "MARASI_PROJECT_NAME")
+	bindEnv(startCmd.Flags(), "address", "MARASI_ADDRESS")
+	bindEnv(startCmd.Flags(), "port", "MARASI_PORT")
+	bindEnv(startCmd.Flags(), "control-address", "MARASI_CONTROL_ADDRESS")
 	serviceCmd.AddCommand(startCmd, stopCmd, statusCmd, listServiceInstancesCmd)
 	rootCmd.AddCommand(serviceCmd)
 }

@@ -125,7 +125,10 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&configDir, "config-dir", defaultConfigDir(), "Marasi config directory")
 	rootCmd.PersistentFlags().StringVar(&instance, "instance", "default", "Service instance name")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Print command output as JSON")
-	rootCmd.PersistentFlags().StringVar(&remoteURL, "remote", "", "Control listener network address URL of a service instance, such as http://host:port (default $"+remoteVariable+")")
+	rootCmd.PersistentFlags().StringVar(&remoteURL, "remote", "", "Control listener network address URL of a service instance, such as http://host:port")
+	bindEnv(rootCmd.PersistentFlags(), "config-dir", "MARASI_CONFIG_DIR")
+	bindEnv(rootCmd.PersistentFlags(), "instance", "MARASI_INSTANCE")
+	bindEnv(rootCmd.PersistentFlags(), "remote", remoteVariable)
 	rootCmd.PersistentFlags().StringVar(&tokenFile, "token-file", "", "File holding the control token for --remote (default $"+tokenVariable+")")
 }
 
@@ -163,19 +166,20 @@ func subcommandChoice(cmd *cobra.Command) string {
 	}
 }
 
-// prepareInstancePath resolves --config-dir and --instance, or --remote, into
-// endpoint and instancePath.
+// prepareInstancePath applies the environment variables bound to cmd's flags,
+// then resolves --config-dir and --instance, or --remote, into endpoint and
+// instancePath.
 func prepareInstancePath(cmd *cobra.Command, _ []string) error {
+	if err := applyEnv(cmd); err != nil {
+		return err
+	}
 	if cmd == skillCmd || cmd == extensionAPICmd {
 		return nil
 	}
 	if configDir == "" {
 		return fmt.Errorf("config dir is empty")
 	}
-	remote, remoteSource := remoteURL, "--remote"
-	if !cmd.Flags().Changed("remote") {
-		remote, remoteSource = os.Getenv(remoteVariable), remoteVariable
-	}
+	remote, remoteSource := remoteURL, flagSource("remote")
 	if remote == "" {
 		if cmd.Flags().Changed("token-file") {
 			return errors.New("--token-file needs --remote or " + remoteVariable)
@@ -187,7 +191,7 @@ func prepareInstancePath(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("%s acts on this machine and does not accept %s", cmd.CommandPath(), remoteSource)
 		}
 		if cmd.Flags().Changed("instance") {
-			return fmt.Errorf("%s and --instance cannot be used together: the remote URL already names one instance", remoteSource)
+			return fmt.Errorf("%s and %s cannot be used together: the remote URL already names one instance", remoteSource, flagSource("instance"))
 		}
 	}
 	if cmd == listServiceInstancesCmd || (cmd == projectListCmd && remote == "") {

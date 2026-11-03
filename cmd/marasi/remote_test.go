@@ -20,12 +20,12 @@ import (
 )
 
 // runMarasiEnv runs the binary with env added to an environment that has no
-// MARASI_REMOTE or MARASI_TOKEN of its own, so the test decides both.
+// MARASI_ variables of its own, so the test decides every one.
 func runMarasiEnv(binary string, env []string, args ...string) (stdout, stderr string, err error) {
 	var outBuf, errBuf bytes.Buffer
 	command := exec.Command(binary, args...)
 	for _, variable := range os.Environ() {
-		if !strings.HasPrefix(variable, "MARASI_REMOTE=") && !strings.HasPrefix(variable, "MARASI_TOKEN=") {
+		if !strings.HasPrefix(variable, "MARASI_") {
 			command.Env = append(command.Env, variable)
 		}
 	}
@@ -311,7 +311,6 @@ func TestRemoteUsageErrors(t *testing.T) {
 			want string
 		}{
 			{env: []string{"MARASI_TOKEN=secret"}, args: []string{"--remote", remote, "--instance", "work", "service", "status"}, want: "--remote and --instance cannot be used together"},
-			{env: []string{"MARASI_TOKEN=secret", "MARASI_REMOTE=" + remote}, args: []string{"--instance", "default", "traffic", "list"}, want: "MARASI_REMOTE and --instance cannot be used together"},
 			{args: []string{"--remote", remote, "service", "status"}, want: "--remote needs the instance's control token: set MARASI_TOKEN or pass --token-file PATH"},
 			{env: []string{"MARASI_REMOTE=" + remote}, args: []string{"events"}, want: "--remote needs the instance's control token"},
 			{env: []string{"MARASI_TOKEN=secret"}, args: []string{"--remote", remote, "--token-file", emptyToken, "service", "status"}, want: "control token file " + emptyToken + " is empty"},

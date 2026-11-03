@@ -49,6 +49,23 @@ If the control token leaked, `service control token --rotate` replaces it and pr
 
 Proceed only when status reports `running`, the intended instance and project, and a non-empty `proxy_listener`. To switch projects on a selected instance, use `project open --name NAME` or `project open --path PATH`, then confirm the new project with `service status`.
 
+### Set flags from the environment
+
+These environment variables set a flag when the flag is not passed. Each flag's `--help` names its variable as `(env MARASI_X)`. An empty variable counts as unset.
+
+| Variable | Flag | Commands |
+| --- | --- | --- |
+| `MARASI_CONFIG_DIR` | `--config-dir` | every command |
+| `MARASI_INSTANCE` | `--instance` | every command |
+| `MARASI_REMOTE` | `--remote` | every command except `service start` and `service list` |
+| `MARASI_PROJECT` | `--project` | `service start` |
+| `MARASI_PROJECT_NAME` | `--project-name` | `service start` |
+| `MARASI_ADDRESS` | `--address` | `service start` |
+| `MARASI_PORT` | `--port` | `service start` |
+| `MARASI_CONTROL_ADDRESS` | `--control-address` | `service start` |
+
+Precedence is the flag, then its variable, then the built-in default. A passed flag also ignores the variable it conflicts with: `--project-name` ignores `MARASI_PROJECT`, `--project` ignores `MARASI_PROJECT_NAME`, `--instance` ignores `MARASI_REMOTE`, and `--remote` ignores `MARASI_INSTANCE`. Two conflicting variables with no flag to settle them are a usage error that names both, such as `MARASI_PROJECT and MARASI_PROJECT_NAME cannot be used together: unset one`; the same holds for `MARASI_REMOTE` with `MARASI_INSTANCE`. Two conflicting flags stay a usage error. A value the flag would refuse fails as `invalid MARASI_X "VALUE"`. There is no `MARASI_JSON`: pass `--json` on each command that needs it.
+
 ### Drive an instance on another machine
 
 To drive an instance whose control listener has a network address, point the CLI at that address with `--remote URL` instead of `--instance`:
@@ -59,7 +76,7 @@ marasi --remote "http://$CONTROL_ADDRESS" service status --json
 marasi --remote "http://$CONTROL_ADDRESS" --token-file "$TOKEN_FILE" traffic list --json
 ```
 
-`--remote` takes an `http` or `https` URL (`https` for a TLS reverse proxy in front of the address; a path in the URL prefixes every request), and `MARASI_REMOTE` sets it for the shell session; `--remote` wins over `MARASI_REMOTE`. The control token comes from `--token-file PATH` or else `MARASI_TOKEN`. No flag takes the token itself, so it never shows in `ps` or shell history. `--remote` or `MARASI_REMOTE` together with an explicit `--instance` is a usage error, a missing token fails before any request, and `--token-file` without a remote is a usage error. A rejected token fails with `control token rejected by URL: check MARASI_TOKEN or --token-file`, and an address nothing answers at with `no instance answers at URL`. The local socket-path limit does not apply. Commands that only call the control API, `events`, and `service restart` behave and print exactly as they do through the socket, `--json` included. `service start` and `service list` act on this machine and refuse a remote. `service stop` sends the stop and returns once the instance stops answering at the URL: the connection is refused, or a reverse proxy answers in its place, such as with 502.
+`--remote` takes an `http` or `https` URL (`https` for a TLS reverse proxy in front of the address; a path in the URL prefixes every request), and `MARASI_REMOTE` sets it for the shell session; `--remote` wins over `MARASI_REMOTE`. The control token comes from `--token-file PATH` or else `MARASI_TOKEN`. No flag takes the token itself, so it never shows in `ps` or shell history. `--remote` together with `--instance` is a usage error, and so is `MARASI_REMOTE` together with `MARASI_INSTANCE`; `--instance` ignores `MARASI_REMOTE`. A missing token fails before any request, and `--token-file` without a remote is a usage error. A rejected token fails with `control token rejected by URL: check MARASI_TOKEN or --token-file`, and an address nothing answers at with `no instance answers at URL`. The local socket-path limit does not apply. Commands that only call the control API, `events`, and `service restart` behave and print exactly as they do through the socket, `--json` included. `service start` and `service list` act on this machine and refuse a remote. `service stop` sends the stop and returns once the instance stops answering at the URL: the connection is refused, or a reverse proxy answers in its place, such as with 502.
 
 The instance checks the `Host` header against the address it is bound to and answers 421 `host_mismatch` to any other name. A TLS reverse proxy in front of the address must therefore send the bound address as `Host`, for example nginx `proxy_set_header Host 127.0.0.1:PORT;`. `service restart` hands the network address and the control token to the successor, so the URL and token keep working; a client retries a request that fails during the handover.
 
