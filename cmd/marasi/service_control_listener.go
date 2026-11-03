@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi/service"
@@ -78,7 +80,11 @@ var (
 			if status.PasswordSet {
 				password = "set"
 			}
-			_, err := fmt.Fprintf(stdout, "status: %s\ncontrol listener network address: %s\npassword: %s\n", status.Status, address, password)
+			origins := "none"
+			if len(status.AllowedOrigins) > 0 {
+				origins = strings.Join(status.AllowedOrigins, ", ")
+			}
+			_, err := fmt.Fprintf(stdout, "status: %s\ncontrol listener network address: %s\npassword: %s\nallowed origins: %s\n", status.Status, address, password, origins)
 			return err
 		},
 	}
@@ -91,12 +97,40 @@ func init() {
 }
 
 // controlListenerRequest is the body of service control start and update:
-// the address to bind, and the control password to set. Password nil and
-// NoPassword false keep the current password.
+// the address to bind, the control password to set, and the allowed origins.
+// Password nil and NoPassword false keep the current password, and
+// AllowedOrigins nil keeps the allowed origins.
 type controlListenerRequest struct {
 	listenerRequest
-	Password   *string `json:"password,omitempty"`
-	NoPassword bool    `json:"no_password,omitempty"`
+	Password       *string   `json:"password,omitempty"`
+	NoPassword     bool      `json:"no_password,omitempty"`
+	AllowedOrigins *[]string `json:"allowed_origins,omitempty"`
+}
+
+// addAllowOriginFlag adds --allow-origin to cmd, read into origins and
+// bound to MARASI_ALLOW_ORIGIN.
+func addAllowOriginFlag(cmd *cobra.Command, origins *[]string) {
+	cmd.Flags().StringSliceVar(origins, "allow-origin", nil, "Origin a browser may call the control listener network address from while it has no password, such as http://localhost:5173; repeat it or separate origins with commas. null is accepted with a warning")
+	bindEnv(cmd.Flags(), "allow-origin", "MARASI_ALLOW_ORIGIN")
+}
+
+// checkAllowOrigins returns the origins of --allow-origin, or
+// MARASI_ALLOW_ORIGIN, in the form the instance keeps them, and nil when
+// neither is set, which keeps the current ones. An empty value allows none.
+func checkAllowOrigins(cmd *cobra.Command) (*[]string, error) {
+	if !cmd.Flags().Changed("allow-origin") {
+		return nil, nil
+	}
+	values, err := cmd.Flags().GetStringSlice("allow-origin")
+	if err != nil {
+		return nil, err
+	}
+	values = slices.DeleteFunc(values, func(value string) bool { return value == "" })
+	origins, err := service.CheckAllowedOrigins(values)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s: %w", flagSource("allow-origin"), err)
+	}
+	return &origins, nil
 }
 
 // cobraCommand builds the subcommand. A command that binds sends --address
@@ -107,6 +141,7 @@ func (c controlListenerCommand) cobraCommand() *cobra.Command {
 	var port decimalPort
 	var password string
 	var noPassword bool
+	var origins []string
 	command := &cobra.Command{
 		Use:   c.name,
 		Short: c.short,
@@ -125,14 +160,17 @@ func (c controlListenerCommand) cobraCommand() *cobra.Command {
 			} else {
 				request.Password = newPassword
 			}
+			if request.AllowedOrigins, err = checkAllowOrigins(cmd); err != nil {
+				return err
+			}
 			bindsAddress := request.Address != nil && request.Port != nil
 			switch {
 			case c.name == controlStartCommand.name && !bindsAddress:
 				return fmt.Errorf("service control %s requires --address and --port", c.name)
 			case (request.Address == nil) != (request.Port == nil):
 				return fmt.Errorf("service control %s requires --address and --port together", c.name)
-			case !bindsAddress && newPassword == nil:
-				return fmt.Errorf("service control %s requires --address and --port, --password, or --no-password", c.name)
+			case !bindsAddress && newPassword == nil && request.AllowedOrigins == nil:
+				return fmt.Errorf("service control %s requires --address and --port, --password, --no-password, or --allow-origin", c.name)
 			}
 			return c.run(cmd, &request)
 		},
@@ -144,8 +182,9 @@ func (c controlListenerCommand) cobraCommand() *cobra.Command {
 		// and with --remote the password to authenticate comes from
 		// MARASI_PASSWORD alone.
 		command.Flags().StringVar(&password, "password", "", "Control password to set on the instance, replacing the current one (env "+passwordVariable+" without --remote; with --remote, "+passwordVariable+" authenticates and only this flag sets a new one)")
-		command.Flags().BoolVar(&noPassword, "no-password", false, "Remove the control password, so the network address needs none")
+		command.Flags().BoolVar(&noPassword, "no-password", false, "Remove the control password, so the network address needs none; needed to bind beyond loopback without a password")
 		command.MarkFlagsMutuallyExclusive("password", "no-password")
+		addAllowOriginFlag(command, &origins)
 	}
 	return command
 }
@@ -168,6 +207,35 @@ func passwordToSet(cmd *cobra.Command, password string, noPassword bool) (*strin
 		return nil, fmt.Errorf("invalid %s: %w", source, err)
 	}
 	return &password, nil
+}
+
+// writeControlWarnings writes the warnings for a start or update that sent
+// request and got status, in both output modes, as service start does. The
+// plain-HTTP warning goes to a terminal's stderr only. The warnings for
+// allowing the origin null, and for an address that request bound or left
+// with no password, go to stderr in every case. The instance log carries
+// every warning.
+func writeControlWarnings(cmd *cobra.Command, request *controlListenerRequest, status service.ControlListenerStatus) error {
+	stderr := cmd.ErrOrStderr()
+	var lines []string
+	if request.AllowedOrigins != nil {
+		lines = append(lines, service.NullOriginWarning(*request.AllowedOrigins))
+	}
+	if writesToTerminal(stderr) {
+		lines = append(lines, service.ControlAddressWarning(*status.ControlListener))
+	}
+	if !status.PasswordSet && (request.Address != nil || request.NoPassword) {
+		lines = append(lines, service.NoPasswordWarning(*status.ControlListener))
+	}
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		if _, err := fmt.Fprintln(stderr, line); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // run sends the command's request, with settings as the body when given.
@@ -194,14 +262,9 @@ func (c controlListenerCommand) run(cmd *cobra.Command, settings *controlListene
 	if c.binds && status.ControlListener == nil {
 		return errors.New("decoding control listener status: no control_listener")
 	}
-	if c.binds && writesToTerminal(cmd.ErrOrStderr()) {
-		// The warning goes to a terminal's stderr in both output modes, as it
-		// does when service start binds the address. The instance log
-		// carries it either way.
-		if warning := service.ControlAddressWarning(*status.ControlListener); warning != "" {
-			if _, err := fmt.Fprintln(cmd.ErrOrStderr(), warning); err != nil {
-				return fmt.Errorf("writing control listener warning: %w", err)
-			}
+	if c.binds {
+		if err := writeControlWarnings(cmd, settings, status); err != nil {
+			return fmt.Errorf("writing control listener warning: %w", err)
 		}
 	}
 	if jsonOutput {

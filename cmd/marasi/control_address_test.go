@@ -215,7 +215,7 @@ func TestControlAddress(t *testing.T) {
 		}
 
 		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "json", "service", "stop") })
-		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "json", "service", "start", "--project-name", "json", "--port", "0", "--control-address", "127.0.0.1:0", "--json")
+		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_PASSWORD=" + testControlPassword}, "--config-dir", configDir, "--instance", "json", "service", "start", "--project-name", "json", "--port", "0", "--control-address", "127.0.0.1:0", "--json")
 		if err != nil || stderr != "" {
 			t.Fatalf("starting json: %v\n%s", err, stderr)
 		}
@@ -327,11 +327,11 @@ func TestControlAddress(t *testing.T) {
 		} {
 			address := *controlAddressOf(t, binary, configDir, test.name)
 			stdout, _ := runServiceControl(t, binary, configDir, test.name, "status", "--json")
-			if want := `{"status":"active","control_listener":"` + address + `","password_set":` + strconv.FormatBool(test.set) + "}\n"; stdout != want {
+			if want := `{"status":"active","control_listener":"` + address + `","password_set":` + strconv.FormatBool(test.set) + `,"allowed_origins":[]}` + "\n"; stdout != want {
 				t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 			}
 			stdout, _ = runServiceControl(t, binary, configDir, test.name, "status")
-			if want := "status: active\ncontrol listener network address: " + address + "\npassword: " + test.human + "\n"; stdout != want {
+			if want := "status: active\ncontrol listener network address: " + address + "\npassword: " + test.human + "\nallowed origins: none\n"; stdout != want {
 				t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, stdout)
 			}
 		}
@@ -343,11 +343,11 @@ func TestControlAddress(t *testing.T) {
 		startOut, _ := runServiceControl(t, binary, configDir, "work", "start", "--address", "127.0.0.1", "--port", "0", "--json")
 		_, started := readEventNamed(t, events, "control_listener.started")
 		for _, data := range []string{updateOut, updated, startOut, started} {
-			if !strings.Contains(data, `"status":"active"`) || !strings.HasSuffix(strings.TrimSpace(data), `,"password_set":true}`) || strings.Contains(data, testControlPassword) {
+			if !strings.Contains(data, `"status":"active"`) || !strings.HasSuffix(strings.TrimSpace(data), `,"password_set":true,"allowed_origins":[]}`) || strings.Contains(data, testControlPassword) {
 				t.Fatalf("\nwanted:\nan active status with password_set true and no password\ngot:\n%s", data)
 			}
 		}
-		if want := `{"status":"inactive","control_listener":null,"password_set":true}`; stopped != want {
+		if want := `{"status":"inactive","control_listener":null,"password_set":true,"allowed_origins":[]}`; stopped != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stopped)
 		}
 		address := *controlAddressOf(t, binary, configDir, "work")

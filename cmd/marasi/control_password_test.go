@@ -87,7 +87,7 @@ func TestControlPasswordChange(t *testing.T) {
 		address := *controlAddressOf(t, binary, configDir, "work")
 
 		stdout, _ := runServiceControl(t, binary, configDir, "work", "update", "--password", "new password", "--json")
-		if want := `{"status":"active","control_listener":"` + address + `","password_set":true}` + "\n"; stdout != want {
+		if want := `{"status":"active","control_listener":"` + address + `","password_set":true,"allowed_origins":[]}` + "\n"; stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
 		assertNetworkStatus(t, address, "Bearer "+testControlPassword, http.StatusUnauthorized)
@@ -131,7 +131,7 @@ func TestControlPasswordChange(t *testing.T) {
 		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
 		address := *controlAddressOf(t, binary, configDir, "work")
 		response, after := rawNetworkRequest(t, address, testControlPassword, "POST /service/control-listener/update", `{"password":"new password"}`)
-		if want := `{"status":"active","control_listener":"` + address + `","password_set":true}` + "\n"; response != want || after != nil {
+		if want := `{"status":"active","control_listener":"` + address + `","password_set":true,"allowed_origins":[]}` + "\n"; response != want || after != nil {
 			t.Fatalf("\nwanted:\n%s then a closed connection\ngot:\n%s %v", want, response, after)
 		}
 	})
@@ -198,7 +198,7 @@ func TestControlPasswordChange(t *testing.T) {
 			args []string
 			want string
 		}{
-			{args: []string{"update"}, want: "service control update requires --address and --port, --password, or --no-password"},
+			{args: []string{"update"}, want: "service control update requires --address and --port, --password, --no-password, or --allow-origin"},
 			{args: []string{"update", "--port", "0"}, want: "service control update requires --address and --port together"},
 			{args: []string{"update", "--password", "x", "--no-password"}, want: "[password no-password] are set none of the others can be"},
 			{args: []string{"update", "--password", " padded"}, want: "invalid --password: a control password cannot start or end with whitespace"},
@@ -232,7 +232,7 @@ func TestControlPasswordChange(t *testing.T) {
 		runServiceControl(t, binary, configDir, "work", "update", "--password", testControlPassword)
 		runServiceControl(t, binary, configDir, "work", "update", "--no-password")
 		_, updated := readEventNamed(t, events, "control_listener.updated")
-		if want := `{"status":"active","control_listener":"` + address + `","password_set":false}`; updated != want {
+		if want := `{"status":"active","control_listener":"` + address + `","password_set":false,"allowed_origins":[]}`; updated != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, updated)
 		}
 		assertConnClosed(t, conn, reader)
