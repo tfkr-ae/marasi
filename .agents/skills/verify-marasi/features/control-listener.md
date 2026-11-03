@@ -14,6 +14,7 @@
 - Use any instance command remotely with `--remote` or `MARASI_REMOTE`, plus `--password` or `MARASI_PASSWORD`. This includes `service status`, `service restart`, `service stop`, `events`, `traffic`, `project list` and `project open`.
 - Upload a local file through `--remote` with `wordlist add` and `report template add`.
 - Read `cli_version` in a remote `service status`, and the `warning` it adds when the two versions differ.
+- Print a Pairing QR code with `service control pair`, with `--host`, `--remote` and `--json`.
 - Choose human-readable or `--json` output.
 
 ## How to get to it (user POV)
@@ -37,8 +38,9 @@ Start a second instance for this feature so the main one keeps its socket-only s
     - `Origin: https://evil.example`: 403 `origin_not_allowed` naming the origin; a preflight from it: 403 with no CORS headers;
     - `Origin: http://localhost:5173`: 200 echoing it; its preflight: 204;
     - `Host: localhost:PORT`, `Host: 127.0.0.1:9999`: 200; `Host: 127.0.0.2:PORT`: 421; `Host: evil.example:PORT`: 421 `host_mismatch` saying to use the IP or set a password.
-    `service control update --allow-origin https://gui.example` must replace the list in `allowed_origins`, and `--allow-origin null` must print the `null` warning. `service control update --address 0.0.0.0 --port 0` must fail with `password_required`; with `--no-password` it must move and warn `any host that can reach it can control the instance`. Then `Host: 192.0.2.7:PORT` and `Host: localhost` get 200 and `Host: evil.example` gets 421. `service start` with `MARASI_CONTROL_ADDRESS=0.0.0.0:0` and no password must fail with `is beyond loopback`. Stop it.
-12. Remote `service restart --json` must return `restarted`. The same URL and password must keep working, a request with no password must still get 401, and `service control status` must report the same address. Remote `service stop --json` must return `stopped`, and the socket `service status` must then fail.
+    `service control update --allow-origin https://gui.example` must replace the list in `allowed_origins`, and `--allow-origin null` must print the `null` warning. `service control update --address 0.0.0.0 --port 0` must fail with `password_required`; with `--no-password` it must move and warn `any host that can reach it can control the instance`. Then `Host: 192.0.2.7:PORT` and `Host: localhost` get 200 and `Host: evil.example` gets 421. `service start` with `MARASI_CONTROL_ADDRESS=0.0.0.0:0` and no password must fail with `is beyond loopback`. Keep the third instance for step 12, then stop it.
+12. Over the socket, `service control pair --json` must print exactly `{"url":"http://ADDR","password":PASSWORD,"instance":NAME}` with the current password, and the third instance's payload must have no `password`. `--host 100.64.0.7` must keep the port, and `--host laptop.local` on the third instance must fail naming the missing control password. Human `service control pair` prints a block of `█▀▄` lines, a blank line, and the URL. `GET /service/control-listener/pairing` on the network address must get 403 `socket_only`. On an instance with no network address, `pair` must fail with `start one with marasi service control start --address HOST --port PORT`. Remote `pair --json` must print the remote URL, the password and the instance name.
+13. Remote `service restart --json` must return `restarted`. The same URL and password must keep working, a request with no password must still get 401, and `service control status` must report the same address. Remote `service stop --json` must return `stopped`, and the socket `service status` must then fail.
 
 ## Gotchas
 
@@ -49,4 +51,5 @@ Start a second instance for this feature so the main one keeps its socket-only s
 - A wrong password fails with `control password rejected by URL: check --password or MARASI_PASSWORD`, and a missing one with `control password rejected by URL: the instance needs one: pass --password or set MARASI_PASSWORD`. A URL where nothing listens fails with `no instance answers at URL`.
 - `service control update` takes `--address` and `--port` together. With neither, it needs `--password`, `--no-password` or `--allow-origin`, and fails otherwise with `service control update requires --address and --port, --password, --no-password, or --allow-origin`.
 - Without a password, the no-password warning goes to stderr even with `--json` and without a terminal; the plain-HTTP warning goes to stderr only on a terminal.
+- `service control pair` with a wildcard address picks the default-route interface, so the host differs between machines. Check only that it is a non-loopback IP of the instance machine.
 - `service restart --json` returns `instance`, `status`, `version` and `proxy_listener` but not `control_listener`. Read the address from `service control status`.
