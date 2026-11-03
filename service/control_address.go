@@ -97,6 +97,7 @@ func (s *Server) EnableControlAddress(password string, logWriter io.Writer) *Con
 	controlMux.HandleFunc("POST /start", s.serveControlListenerStart)
 	controlMux.HandleFunc("POST /update", s.serveControlListenerUpdate)
 	controlMux.HandleFunc("POST /stop", s.serveControlListenerStop)
+	controlMux.HandleFunc("GET /pairing", s.servePairing)
 	s.mux.Handle("/service/control-listener/", http.StripPrefix("/service/control-listener", controlMux))
 	return control
 }

@@ -29,6 +29,8 @@ import (
 //     which the test proxy has not loaded.
 //   - GET /status lives on the control address, which the test server does
 //     not have. It reads the network address's status.
+//   - GET /pairing lives on the control address too. It reads the network
+//     address and the control password.
 var readOnlyGetRoutes = map[string][]string{
 	"GET /armory/run/{id}":                   {"/armory/run/0190f0c4-7b6e-7000-8000-000000000001"},
 	"GET /armory/run/{id}/traffic":           {"/armory/run/0190f0c4-7b6e-7000-8000-000000000001/traffic"},
@@ -60,6 +62,7 @@ var readOnlyGetRoutes = map[string][]string{
 	"GET /launchpad/{id}":                    {"/launchpad/0190f0c4-7b6e-7000-8000-000000000001"},
 	"GET /notes":                             {"/notes"},
 	"GET /notes/{id}":                        {"/notes/0190f0c4-7b6e-7000-8000-000000000001"},
+	"GET /pairing":                           nil,
 	"GET /report/template":                   {"/report/template"},
 	"GET /scope":                             {"/scope"},
 	"GET /status":                            nil,
