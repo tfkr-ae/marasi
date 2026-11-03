@@ -3,18 +3,17 @@ package main
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/tfkr-ae/marasi/service"
 )
 
-// Environment variables that select a remote endpoint and its control token.
-// The token has no flag of its own, so it never shows in ps or shell history.
+// Environment variables that select a remote endpoint and its control
+// password. MARASI_PASSWORD also sets the password service start guards the
+// network address with.
 const (
-	remoteVariable = "MARASI_REMOTE"
-	tokenVariable  = "MARASI_TOKEN"
+	remoteVariable   = "MARASI_REMOTE"
+	passwordVariable = "MARASI_PASSWORD"
 )
 
 // instanceEndpoint is the service instance a command talks to. Every command
@@ -42,40 +41,14 @@ func resolveInstanceEndpoint(configDir, name string) (instanceEndpoint, error) {
 }
 
 // resolveRemoteEndpoint resolves a --remote URL into the instance a command
-// talks to. The control token comes from tokenFile when it is set, and from
-// MARASI_TOKEN otherwise. No local path is checked, since the instance's
-// socket is on its instance machine.
-func resolveRemoteEndpoint(rawURL, tokenFile string) (instanceEndpoint, error) {
-	token, err := remoteToken(tokenFile)
-	if err != nil {
-		return instanceEndpoint{}, err
-	}
-	control, err := service.RemoteEndpoint(rawURL, token)
+// talks to, presenting password when it is not empty. No local path is
+// checked, since the instance's socket is on its instance machine.
+func resolveRemoteEndpoint(rawURL, password string) (instanceEndpoint, error) {
+	control, err := service.RemoteEndpoint(rawURL, password)
 	if err != nil {
 		return instanceEndpoint{}, err
 	}
 	return instanceEndpoint{label: control.String(), control: control}, nil
-}
-
-// remoteToken reads the control token from tokenFile, or from MARASI_TOKEN
-// when tokenFile is empty.
-func remoteToken(tokenFile string) (string, error) {
-	if tokenFile != "" {
-		content, err := os.ReadFile(tokenFile)
-		if err != nil {
-			return "", fmt.Errorf("reading control token file: %w", err)
-		}
-		token := strings.TrimSpace(string(content))
-		if token == "" {
-			return "", fmt.Errorf("control token file %s is empty", tokenFile)
-		}
-		return token, nil
-	}
-	token := strings.TrimSpace(os.Getenv(tokenVariable))
-	if token == "" {
-		return "", errors.New("--remote needs the instance's control token: set " + tokenVariable + " or pass --token-file PATH")
-	}
-	return token, nil
 }
 
 // localInstanceEndpoint is the instance at path on this machine, named label
@@ -92,10 +65,14 @@ func (e instanceEndpoint) remote() bool {
 }
 
 // unreachable is the error for a request to the instance that got no
-// response: a rejected control token, or no instance answering.
+// response: a missing or rejected control password, or no instance
+// answering.
 func (e instanceEndpoint) unreachable(err error) error {
-	if errors.Is(err, service.ErrTokenRejected) {
-		return fmt.Errorf("%w: check %s or --token-file", err, tokenVariable)
+	if errors.Is(err, service.ErrPasswordRejected) {
+		if !e.control.HasPassword() {
+			return fmt.Errorf("%w: the instance needs one: pass --password or set %s", err, passwordVariable)
+		}
+		return fmt.Errorf("%w: check --password or %s", err, passwordVariable)
 	}
 	return instanceNotRunningError{name: e.label, remote: e.remote()}
 }

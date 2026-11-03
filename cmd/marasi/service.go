@@ -86,7 +86,7 @@ func init() {
 	startCmd.Flags().StringVar(&proxyAddress, "address", "127.0.0.1", "Proxy listener host or IP, without a port")
 	proxyPort = 8080
 	startCmd.Flags().Var(&proxyPort, "port", "Proxy listener TCP port")
-	startCmd.Flags().StringVar(&controlAddress, "control-address", "", "Also serve the control API at this network address, HOST:PORT, guarded by the control token. Port 0 picks a free port")
+	startCmd.Flags().StringVar(&controlAddress, "control-address", "", "Also serve the control API at this network address, HOST:PORT, guarded by --password when it is set. Port 0 picks a free port")
 	bindEnv(startCmd.Flags(), "project", "MARASI_PROJECT")
 	bindEnv(startCmd.Flags(), "project-name", "MARASI_PROJECT_NAME")
 	bindEnv(startCmd.Flags(), "address", "MARASI_ADDRESS")
@@ -114,6 +114,9 @@ var startCmd = &cobra.Command{
 				return err
 			}
 		}
+		if err := service.CheckControlPassword(controlPassword); err != nil {
+			return fmt.Errorf("invalid %s: %w", flagSource("password"), err)
+		}
 		options := serviceOptions{
 			configDir:      configDir,
 			projectPath:    projectPath,
@@ -122,6 +125,7 @@ var startCmd = &cobra.Command{
 			proxyPort:      uint16(proxyPort),
 			proxyListener:  !noProxyListener,
 			controlAddress: controlAddress,
+			password:       controlPassword,
 		}
 		if serviceChild {
 			return runServiceChild(ctx, options)
@@ -499,6 +503,7 @@ type serviceOptions struct {
 	proxyPort      uint16 // proxy listener port; 0 picks a free one
 	proxyListener  bool   // start the proxy listener
 	controlAddress string // control listener network address as HOST:PORT, "" for none
+	password       string // control password guarding the network address, "" for none
 }
 
 // startServiceInstance starts a proxy instance and calls ready with what it
@@ -632,7 +637,7 @@ func startServiceInstance(ctx context.Context, options serviceOptions, ready fun
 
 	serviceServer.EnableRestart(successorStarter{claim: claim, configDir: options.configDir, instancePath: options.instancePath, readyTimeout: restartReadyTimeout}.start)
 
-	controlNetwork = serviceServer.EnableControlAddress(service.NewControlToken(options.instancePath+".token", secureInstanceFile), logFile)
+	controlNetwork = serviceServer.EnableControlAddress(options.password, logFile)
 
 	var started serviceStarted
 	if options.proxyListener {
@@ -781,7 +786,7 @@ func remoteInstanceGone(ctx context.Context, target instanceEndpoint, instance s
 	switch {
 	case ctx.Err() != nil:
 		return false, ctx.Err()
-	case errors.As(err, &notRunning), errors.Is(err, service.ErrTokenRejected):
+	case errors.As(err, &notRunning), errors.Is(err, service.ErrPasswordRejected):
 		return true, nil
 	case err != nil:
 		// A response cut off mid-read is a stopping instance; ask again.

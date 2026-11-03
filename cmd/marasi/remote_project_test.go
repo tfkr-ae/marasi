@@ -110,7 +110,7 @@ func TestRemoteProjects(t *testing.T) {
 		go server.Serve(listener)
 		t.Cleanup(func() { server.Close() })
 
-		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=token"}, "--config-dir", instance.cliDir, "--remote", "http://"+listener.Addr().String(), "project", "open", "--name", "beta.marasi")
+		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_PASSWORD=secret"}, "--config-dir", instance.cliDir, "--remote", "http://"+listener.Addr().String(), "project", "open", "--name", "beta.marasi")
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v: %s", err, stderr)
 		}

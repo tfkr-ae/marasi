@@ -1456,7 +1456,7 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	oldLaunchpadQuery, oldLaunchpadExclude := launchpadGetQuery, launchpadGetExclude
 	oldOrderBy, oldLaunchpadOrderBy := trafficListOrderBy, launchpadGetOrderBy
 	oldConfigDir, oldInstance, oldInstancePath := configDir, instance, instancePath
-	oldRemoteURL, oldTokenFile, oldEndpoint := remoteURL, tokenFile, endpoint
+	oldRemoteURL, oldPassword, oldEndpoint := remoteURL, controlPassword, endpoint
 	var outBuf, errBuf bytes.Buffer
 	rootCmd.SetArgs(args)
 	rootCmd.SetOut(&outBuf)
@@ -1468,7 +1468,7 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 		launchpadGetQuery, launchpadGetExclude = oldLaunchpadQuery, oldLaunchpadExclude
 		trafficListOrderBy, launchpadGetOrderBy = oldOrderBy, oldLaunchpadOrderBy
 		configDir, instance, instancePath = oldConfigDir, oldInstance, oldInstancePath
-		remoteURL, tokenFile, endpoint = oldRemoteURL, oldTokenFile, oldEndpoint
+		remoteURL, controlPassword, endpoint = oldRemoteURL, oldPassword, oldEndpoint
 		rootCmd.SetArgs(nil)
 		rootCmd.SetOut(nil)
 		rootCmd.SetErr(nil)

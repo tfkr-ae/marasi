@@ -21,7 +21,7 @@ var instance string
 var instancePath string
 var jsonOutput bool
 var remoteURL string
-var tokenFile string
+var controlPassword string
 
 const unixSocketPathLimit = 104
 
@@ -128,8 +128,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&remoteURL, "remote", "", "Control listener network address URL of a service instance, such as http://host:port")
 	bindEnv(rootCmd.PersistentFlags(), "config-dir", "MARASI_CONFIG_DIR")
 	bindEnv(rootCmd.PersistentFlags(), "instance", "MARASI_INSTANCE")
+	rootCmd.PersistentFlags().StringVar(&controlPassword, "password", "", "Control password: sent with --remote, and set on the instance by service start")
 	bindEnv(rootCmd.PersistentFlags(), "remote", remoteVariable)
-	rootCmd.PersistentFlags().StringVar(&tokenFile, "token-file", "", "File holding the control token for --remote (default $"+tokenVariable+")")
+	bindEnv(rootCmd.PersistentFlags(), "password", passwordVariable)
 }
 
 // showSubcommandHelp prints command help when a group command is run with no subcommand.
@@ -180,11 +181,7 @@ func prepareInstancePath(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("config dir is empty")
 	}
 	remote, remoteSource := remoteURL, flagSource("remote")
-	if remote == "" {
-		if cmd.Flags().Changed("token-file") {
-			return errors.New("--token-file needs --remote or " + remoteVariable)
-		}
-	} else {
+	if remote != "" {
 		// Both commands act on this machine, so with a remote they would
 		// start or list instances somewhere the operator did not point.
 		if cmd == startCmd || cmd == listServiceInstancesCmd {
@@ -198,7 +195,7 @@ func prepareInstancePath(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	if remote != "" {
-		resolved, err := resolveRemoteEndpoint(remote, tokenFile)
+		resolved, err := resolveRemoteEndpoint(remote, controlPassword)
 		if err != nil {
 			return err
 		}

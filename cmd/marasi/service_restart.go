@@ -42,7 +42,7 @@ func init() {
 var restartCmd = &cobra.Command{
 	Use:   "restart",
 	Short: "Restart a service instance on the installed build",
-	Long: "Restart a service instance on the installed build. The successor keeps the instance name, open project, proxy listener address, and control listener network address with its control token. " +
+	Long: "Restart a service instance on the installed build. The successor keeps the instance name, open project, proxy listener address, control listener network address, and control password. " +
 		"If it does not become ready, the instance keeps running on its current build. " +
 		"A restart ends Armory runs, held Checkpoint items, live WebSocket and HTTP connections, and launches, and is refused while Checkpoint items are held unless --force is given.",
 	Args: cobra.NoArgs,
@@ -335,7 +335,7 @@ func (s successorStarter) start(ctx context.Context, handover service.Handover) 
 		return fail(err)
 	}
 	command := exec.Command(executable, args...)
-	command.Env = withoutBoundVariables(os.Environ())
+	command.Env = childEnvironment(handover.Password)
 	configureDetachedProcess(command)
 	// The successor's own failures before it logs anything still reach its log.
 	command.Stderr = logFile

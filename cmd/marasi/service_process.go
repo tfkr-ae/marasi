@@ -59,7 +59,7 @@ func startServiceProcess(ctx context.Context, options serviceOptions, stdout, st
 		args = append(args, "--control-address", options.controlAddress)
 	}
 	command := exec.Command(executable, args...)
-	command.Env = withoutBoundVariables(os.Environ())
+	command.Env = childEnvironment(options.password)
 	configureDetachedProcess(command)
 	discard, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 	if err != nil {

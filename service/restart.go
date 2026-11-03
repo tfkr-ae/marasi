@@ -32,6 +32,7 @@ type Handover struct {
 	Project         string  // project the successor opens
 	ProxyListener   *string // proxy listener address to bind, none when nil
 	ControlListener *string // control listener network address to bind, none when nil
+	Password        string  // control password the successor keeps, "" for none
 }
 
 // SuccessorStart hands the instance name to a successor started from the
@@ -169,7 +170,11 @@ func (s *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 	}
 	var successor Successor
 	if stepErr == nil {
-		successor, stepErr = start(ctx, Handover{Project: release.path, ProxyListener: proxyListener, ControlListener: controlListener})
+		handover := Handover{Project: release.path, ProxyListener: proxyListener, ControlListener: controlListener}
+		if s.control != nil {
+			handover.Password = s.control.Password()
+		}
+		successor, stepErr = start(ctx, handover)
 	}
 	if stepErr != nil {
 		s.rollBackRestart(w, r, ctx, release, proxyListener, stepErr)
