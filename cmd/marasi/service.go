@@ -517,6 +517,9 @@ func startServiceInstance(ctx context.Context, options serviceOptions, ready fun
 	if err != nil {
 		return fmt.Errorf("starting proxy with config dir: %w", err)
 	}
+	if err := service.WriteDefaultTestCaseChecklist(options.configDir); err != nil {
+		return err
+	}
 
 	wordlists, err := wordlist.NewManager(options.configDir)
 	if err != nil {

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -53,23 +55,51 @@ test_cases:
 		}
 	})
 
-	t.Run("writes and serves the bundled default when missing", func(t *testing.T) {
+	t.Run("should serve the bundled default without writing it when missing", func(t *testing.T) {
 		configDir := t.TempDir()
-		path := filepath.Join(configDir, "test_cases.yml")
 		server := newTestServer(&marasi.Proxy{ConfigDir: configDir}, func() {})
 		response := httptest.NewRecorder()
 
 		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/test-case/checklist", nil))
 
-		written, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("wanted default checklist written: %v", err)
-		}
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"title":"OWASP Web Security Testing Guide (WSTG)"`) || !strings.Contains(response.Body.String(), `"category":"Information Gathering"`) {
-			t.Fatalf("wanted bundled default response, got %d %s", response.Code, response.Body.String())
+			t.Fatalf("\nwanted:\n200 with the bundled default\ngot:\n%d %s", response.Code, response.Body.String())
 		}
-		if string(written) != string(defaultTestCasesYAML) {
-			t.Fatal("written checklist did not match the bundled default")
+		if _, err := os.Stat(filepath.Join(configDir, "test_cases.yml")); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", fs.ErrNotExist, err)
+		}
+	})
+}
+
+func TestWriteDefaultTestCaseChecklist(t *testing.T) {
+	t.Run("should write the bundled default when no checklist exists", func(t *testing.T) {
+		configDir := t.TempDir()
+
+		if err := WriteDefaultTestCaseChecklist(configDir); err != nil {
+			t.Fatal(err)
+		}
+
+		written, err := os.ReadFile(filepath.Join(configDir, "test_cases.yml"))
+		if err != nil || string(written) != string(defaultTestCasesYAML) {
+			t.Fatalf("\nwanted:\nthe bundled default\ngot:\n%q %v", written, err)
+		}
+	})
+
+	t.Run("should keep a checklist the user wrote", func(t *testing.T) {
+		configDir := t.TempDir()
+		path := filepath.Join(configDir, "test_cases.yml")
+		want := "title: Mine\ntest_cases: []\n"
+		if err := os.WriteFile(path, []byte(want), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := WriteDefaultTestCaseChecklist(configDir); err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != want {
+			t.Fatalf("\nwanted:\n%q\ngot:\n%q %v", want, got, err)
 		}
 	})
 }
