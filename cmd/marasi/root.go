@@ -128,7 +128,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&remoteURL, "remote", "", "Control listener network address URL of a service instance, such as http://host:port")
 	bindEnv(rootCmd.PersistentFlags(), "config-dir", "MARASI_CONFIG_DIR")
 	bindEnv(rootCmd.PersistentFlags(), "instance", "MARASI_INSTANCE")
-	rootCmd.PersistentFlags().StringVar(&controlPassword, "password", "", "Control password: sent with --remote, and set on the instance by service start")
+	rootCmd.PersistentFlags().StringVar(&controlPassword, "password", "", "Control password: sent with --remote, and set on the instance by service start. service control start and update take their own --password, the password to set")
 	bindEnv(rootCmd.PersistentFlags(), "remote", remoteVariable)
 	bindEnv(rootCmd.PersistentFlags(), "password", passwordVariable)
 }
@@ -195,7 +195,14 @@ func prepareInstancePath(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	if remote != "" {
-		resolved, err := resolveRemoteEndpoint(remote, controlPassword)
+		password := controlPassword
+		if cmd.Flags().Lookup("password") != cmd.Root().PersistentFlags().Lookup("password") {
+			// The command's own --password is the password to set, as on
+			// service control start and update, so the password that
+			// authenticates comes from MARASI_PASSWORD alone.
+			password = os.Getenv(passwordVariable)
+		}
+		resolved, err := resolveRemoteEndpoint(remote, password)
 		if err != nil {
 			return err
 		}

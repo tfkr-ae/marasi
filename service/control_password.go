@@ -43,13 +43,17 @@ func (p *ControlPassword) IsSet() bool {
 }
 
 // set replaces the password, or removes it when value is empty, and returns
-// the new generation.
-func (p *ControlPassword) set(value string) uint64 {
+// the current generation and whether the password changed. Setting the
+// password it already holds is no change, so it keeps its connections.
+func (p *ControlPassword) set(value string) (uint64, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if string(p.value) == value {
+		return p.generation, false
+	}
 	p.value = []byte(value)
 	p.generation++
-	return p.generation
+	return p.generation, true
 }
 
 // admits reports whether a request presenting presented may pass, and the

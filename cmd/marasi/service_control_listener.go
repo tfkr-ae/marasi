@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi/service"
@@ -41,7 +42,7 @@ var (
 	}
 	controlUpdateCommand = controlListenerCommand{
 		name:      "update",
-		short:     "Move the control listener's network address",
+		short:     "Move the control listener's network address or change its control password",
 		method:    http.MethodPost,
 		route:     "/update",
 		operation: "updating control listener network address",
@@ -89,11 +90,23 @@ func init() {
 	}
 }
 
-// cobraCommand builds the subcommand. A command that binds requires
-// --address and --port and sends them as the body.
+// controlListenerRequest is the body of service control start and update:
+// the address to bind, and the control password to set. Password nil and
+// NoPassword false keep the current password.
+type controlListenerRequest struct {
+	listenerRequest
+	Password   *string `json:"password,omitempty"`
+	NoPassword bool    `json:"no_password,omitempty"`
+}
+
+// cobraCommand builds the subcommand. A command that binds sends --address
+// and --port, which start requires and update may leave out to keep the
+// address, plus the control password to set.
 func (c controlListenerCommand) cobraCommand() *cobra.Command {
 	var address string
 	var port decimalPort
+	var password string
+	var noPassword bool
 	command := &cobra.Command{
 		Use:   c.name,
 		Short: c.short,
@@ -102,22 +115,63 @@ func (c controlListenerCommand) cobraCommand() *cobra.Command {
 			if !c.binds {
 				return c.run(cmd, nil)
 			}
-			settings := listenerSettings(cmd, address, port)
-			if settings.Address == nil || settings.Port == nil {
-				return fmt.Errorf("service control %s requires --address and --port", c.name)
+			request := controlListenerRequest{listenerRequest: listenerSettings(cmd, address, port)}
+			newPassword, err := passwordToSet(cmd, password, noPassword)
+			if err != nil {
+				return err
 			}
-			return c.run(cmd, &settings)
+			if newPassword != nil && *newPassword == "" {
+				request.NoPassword = true
+			} else {
+				request.Password = newPassword
+			}
+			bindsAddress := request.Address != nil && request.Port != nil
+			switch {
+			case c.name == controlStartCommand.name && !bindsAddress:
+				return fmt.Errorf("service control %s requires --address and --port", c.name)
+			case (request.Address == nil) != (request.Port == nil):
+				return fmt.Errorf("service control %s requires --address and --port together", c.name)
+			case !bindsAddress && newPassword == nil:
+				return fmt.Errorf("service control %s requires --address and --port, --password, or --no-password", c.name)
+			}
+			return c.run(cmd, &request)
 		},
 	}
 	if c.binds {
 		command.Flags().StringVar(&address, "address", "", "Host or IP, without a port")
 		command.Flags().Var(&port, "port", "TCP port; 0 picks a free port")
+		// This --password shadows the root one: it is the password to set,
+		// and with --remote the password to authenticate comes from
+		// MARASI_PASSWORD alone.
+		command.Flags().StringVar(&password, "password", "", "Control password to set on the instance, replacing the current one (env "+passwordVariable+" without --remote; with --remote, "+passwordVariable+" authenticates and only this flag sets a new one)")
+		command.Flags().BoolVar(&noPassword, "no-password", false, "Remove the control password, so the network address needs none")
+		command.MarkFlagsMutuallyExclusive("password", "no-password")
 	}
 	return command
 }
 
+// passwordToSet returns the control password a start or update sets:
+// --password, or MARASI_PASSWORD when the command talks to the socket. It
+// returns "" for --no-password, and nil to keep the current password.
+func passwordToSet(cmd *cobra.Command, password string, noPassword bool) (*string, error) {
+	source := "--password"
+	switch {
+	case noPassword:
+		return new(string), nil
+	case cmd.Flags().Changed("password"):
+	case remoteURL == "" && os.Getenv(passwordVariable) != "":
+		password, source = os.Getenv(passwordVariable), passwordVariable
+	default:
+		return nil, nil
+	}
+	if err := service.CheckControlPassword(password); err != nil {
+		return nil, fmt.Errorf("invalid %s: %w", source, err)
+	}
+	return &password, nil
+}
+
 // run sends the command's request, with settings as the body when given.
-func (c controlListenerCommand) run(cmd *cobra.Command, settings *listenerRequest) error {
+func (c controlListenerCommand) run(cmd *cobra.Command, settings *controlListenerRequest) error {
 	var body []byte
 	if settings != nil {
 		encoded, err := json.Marshal(settings)
