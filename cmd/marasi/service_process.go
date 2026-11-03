@@ -138,13 +138,14 @@ func launchServiceChild(command *exec.Cmd) (io.WriteCloser, <-chan childStartup,
 // controlChildArgs are the service start arguments that hand a child the
 // control listener network address at controlAddress, "" for none, and the
 // allowed origins. The password goes in the child's environment instead. A
-// child with no password gets --no-password, since its parent already had
-// the consent to bind beyond loopback without one.
+// child with no password beyond loopback gets --no-password, since its
+// parent already had the consent to bind there without one. On loopback it
+// needs no consent, so it gets none.
 func controlChildArgs(controlAddress, password string, origins []string) []string {
 	var args []string
 	if controlAddress != "" {
 		args = append(args, "--control-address", controlAddress)
-		if password == "" {
+		if password == "" && service.RequirePasswordBeyondLoopback(controlAddress, false, false) != nil {
 			args = append(args, "--no-password")
 		}
 	}
@@ -154,26 +155,15 @@ func controlChildArgs(controlAddress, password string, origins []string) []strin
 	return args
 }
 
-// writeStartOutput writes the start result in JSON or human form. A control
-// listener network address beyond loopback adds a warning on stderr when it
-// is a terminal, written here because the detached child's stderr is
-// discarded. The warnings for no password and for allowing the origin null
-// go to stderr in every case. The instance log carries every warning.
+// writeStartOutput writes the start result in JSON or human form, with the
+// warnings of controlWarnings on stderr. They are written here because the
+// detached child's stderr is discarded.
 func writeStartOutput(stdout, stderr io.Writer, asJSON bool, instanceName string, options serviceOptions, startup childStartup) error {
 	var controlListener *string
-	warning := ""
-	if line := service.NullOriginWarning(options.allowedOrigins); line != "" {
-		warning += line + "\n"
-	}
 	if startup.controlListener != "" {
 		controlListener = &startup.controlListener
-		if line := service.ControlAddressWarning(startup.controlListener); line != "" && writesToTerminal(stderr) {
-			warning += line + "\n"
-		}
-		if options.password == "" {
-			warning += service.NoPasswordWarning(startup.controlListener) + "\n"
-		}
 	}
+	warning := controlWarnings(stderr, options.allowedOrigins, startup.controlListener, options.password == "")
 	if asJSON {
 		payload, err := json.Marshal(struct {
 			Instance        string  `json:"instance"`

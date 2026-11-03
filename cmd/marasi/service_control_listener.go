@@ -25,18 +25,22 @@ type controlListenerCommand struct {
 	// binds is true for a command that binds an address from --address and
 	// --port, and so may warn that the address is beyond loopback.
 	binds bool
+	// requiresAddress is true for a command that binds must always name
+	// --address and --port, rather than leave them out to keep the address.
+	requiresAddress bool
 	// report writes the human result; status is the decoded response.
 	report func(stdout, stderr io.Writer, status service.ControlListenerStatus) error
 }
 
 var (
 	controlStartCommand = controlListenerCommand{
-		name:      "start",
-		short:     "Serve the control API at a network address, guarded by the control password when one is set",
-		method:    http.MethodPost,
-		route:     "/start",
-		operation: "starting control listener network address",
-		binds:     true,
+		name:            "start",
+		short:           "Serve the control API at a network address, guarded by the control password when one is set",
+		method:          http.MethodPost,
+		route:           "/start",
+		operation:       "starting control listener network address",
+		binds:           true,
+		requiresAddress: true,
 		report: func(_, stderr io.Writer, status service.ControlListenerStatus) error {
 			_, err := fmt.Fprintf(stderr, "control listener network address started on %s\n", *status.ControlListener)
 			return err
@@ -151,25 +155,20 @@ func (c controlListenerCommand) cobraCommand() *cobra.Command {
 				return c.run(cmd, nil)
 			}
 			request := controlListenerRequest{listenerRequest: listenerSettings(cmd, address, port)}
-			newPassword, err := passwordToSet(cmd, password, noPassword)
-			if err != nil {
+			var err error
+			if request.Password, request.NoPassword, err = passwordToSet(cmd, password, noPassword); err != nil {
 				return err
-			}
-			if newPassword != nil && *newPassword == "" {
-				request.NoPassword = true
-			} else {
-				request.Password = newPassword
 			}
 			if request.AllowedOrigins, err = checkAllowOrigins(cmd); err != nil {
 				return err
 			}
 			bindsAddress := request.Address != nil && request.Port != nil
 			switch {
-			case c.name == controlStartCommand.name && !bindsAddress:
+			case c.requiresAddress && !bindsAddress:
 				return fmt.Errorf("service control %s requires --address and --port", c.name)
 			case (request.Address == nil) != (request.Port == nil):
 				return fmt.Errorf("service control %s requires --address and --port together", c.name)
-			case !bindsAddress && newPassword == nil && request.AllowedOrigins == nil:
+			case !bindsAddress && request.Password == nil && !request.NoPassword && request.AllowedOrigins == nil:
 				return fmt.Errorf("service control %s requires --address and --port, --password, --no-password, or --allow-origin", c.name)
 			}
 			return c.run(cmd, &request)
@@ -191,51 +190,80 @@ func (c controlListenerCommand) cobraCommand() *cobra.Command {
 
 // passwordToSet returns the control password a start or update sets:
 // --password, or MARASI_PASSWORD when the command talks to the socket. It
-// returns "" for --no-password, and nil to keep the current password.
-func passwordToSet(cmd *cobra.Command, password string, noPassword bool) (*string, error) {
+// returns remove true for --no-password, and neither to keep the current
+// password. An empty --password is refused rather than read as
+// --no-password, which is the consent to bind beyond loopback without one.
+func passwordToSet(cmd *cobra.Command, password string, noPassword bool) (set *string, remove bool, err error) {
 	source := "--password"
 	switch {
 	case noPassword:
-		return new(string), nil
+		return nil, true, nil
 	case cmd.Flags().Changed("password"):
 	case remoteURL == "" && os.Getenv(passwordVariable) != "":
 		password, source = os.Getenv(passwordVariable), passwordVariable
 	default:
-		return nil, nil
+		return nil, false, nil
+	}
+	if err := checkPasswordToSet(password, source); err != nil {
+		return nil, false, err
+	}
+	return &password, false, nil
+}
+
+// errEmptyPassword refuses an empty control password given to set, so it is
+// never taken for --no-password.
+var errEmptyPassword = errors.New("a control password cannot be empty: pass --no-password to run without one")
+
+// checkPasswordToSet returns an error naming source when password, given to
+// set the control password, is empty or cannot be sent intact.
+func checkPasswordToSet(password, source string) error {
+	if password == "" {
+		return fmt.Errorf("invalid %s: %w", source, errEmptyPassword)
 	}
 	if err := service.CheckControlPassword(password); err != nil {
-		return nil, fmt.Errorf("invalid %s: %w", source, err)
+		return fmt.Errorf("invalid %s: %w", source, err)
 	}
-	return &password, nil
+	return nil
 }
 
 // writeControlWarnings writes the warnings for a start or update that sent
 // request and got status, in both output modes, as service start does. The
-// plain-HTTP warning goes to a terminal's stderr only. The warnings for
-// allowing the origin null, and for an address that request bound or left
-// with no password, go to stderr in every case. The instance log carries
-// every warning.
+// no-password warning is for an address that request bound or left with no
+// password.
 func writeControlWarnings(cmd *cobra.Command, request *controlListenerRequest, status service.ControlListenerStatus) error {
-	stderr := cmd.ErrOrStderr()
-	var lines []string
+	var origins []string
 	if request.AllowedOrigins != nil {
-		lines = append(lines, service.NullOriginWarning(*request.AllowedOrigins))
+		origins = *request.AllowedOrigins
 	}
-	if writesToTerminal(stderr) {
-		lines = append(lines, service.ControlAddressWarning(*status.ControlListener))
+	noPassword := !status.PasswordSet && (request.Address != nil || request.NoPassword)
+	stderr := cmd.ErrOrStderr()
+	_, err := io.WriteString(stderr, controlWarnings(stderr, origins, *status.ControlListener, noPassword))
+	return err
+}
+
+// controlWarnings returns the warning lines, each ending in a newline, for
+// allowing origins and for a network address at address, "" for none, with
+// no password when noPassword. The plain-HTTP warning beyond loopback is
+// for a terminal's stderr only. The warnings for allowing the origin null
+// and for no password are for stderr in every case. The instance log
+// carries every warning.
+func controlWarnings(stderr io.Writer, origins []string, address string, noPassword bool) string {
+	lines := []string{service.NullOriginWarning(origins)}
+	if address != "" {
+		if writesToTerminal(stderr) {
+			lines = append(lines, service.ControlAddressWarning(address))
+		}
+		if noPassword {
+			lines = append(lines, service.NoPasswordWarning(address))
+		}
 	}
-	if !status.PasswordSet && (request.Address != nil || request.NoPassword) {
-		lines = append(lines, service.NoPasswordWarning(*status.ControlListener))
-	}
+	var warnings strings.Builder
 	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		if _, err := fmt.Fprintln(stderr, line); err != nil {
-			return err
+		if line != "" {
+			warnings.WriteString(line + "\n")
 		}
 	}
-	return nil
+	return warnings.String()
 }
 
 // run sends the command's request, with settings as the body when given.

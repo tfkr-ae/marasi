@@ -40,13 +40,10 @@ func startControlAddressInstanceWith(t *testing.T, binary, configDir, name, cont
 	return stderr
 }
 
-// assertPasswordNotInArguments fails unless some running process has
-// configDir in its arguments, and none of those has testControlPassword.
-func assertPasswordNotInArguments(t *testing.T, configDir string) {
+// instanceArguments fails unless some running process has configDir in its
+// arguments, and returns the arguments of each such process.
+func instanceArguments(t *testing.T, configDir string) []string {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		return
-	}
 	output, err := exec.Command("ps", "-axww", "-o", "args=").Output()
 	if err != nil {
 		t.Fatalf("listing process arguments: %v", err)
@@ -60,7 +57,17 @@ func assertPasswordNotInArguments(t *testing.T, configDir string) {
 	if len(instances) == 0 {
 		t.Fatalf("\nwanted:\na running instance with %s in its arguments\ngot:\nnone", configDir)
 	}
-	for _, args := range instances {
+	return instances
+}
+
+// assertPasswordNotInArguments fails unless some running process has
+// configDir in its arguments, and none of those has testControlPassword.
+func assertPasswordNotInArguments(t *testing.T, configDir string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	for _, args := range instanceArguments(t, configDir) {
 		if strings.Contains(args, testControlPassword) {
 			t.Fatalf("\nwanted:\narguments without the control password\ngot:\n%s", args)
 		}

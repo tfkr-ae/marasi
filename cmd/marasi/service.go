@@ -116,8 +116,10 @@ var startCmd = &cobra.Command{
 		if startNoPassword && cmd.Flags().Changed("password") {
 			return fmt.Errorf("%s and --no-password cannot be used together", flagSource("password"))
 		}
-		if err := service.CheckControlPassword(controlPassword); err != nil {
-			return fmt.Errorf("invalid %s: %w", flagSource("password"), err)
+		if cmd.Flags().Changed("password") {
+			if err := checkPasswordToSet(controlPassword, flagSource("password")); err != nil {
+				return err
+			}
 		}
 		if controlAddress != "" {
 			if _, err := parseControlAddress(controlAddress); err != nil {
@@ -681,7 +683,7 @@ func startServiceInstance(ctx context.Context, options serviceOptions, ready fun
 		}
 		var access service.ControlAccess
 		if options.noPassword {
-			access.Password = new(string)
+			access.Password = service.RemovePassword()
 		}
 		controlStatus, err := controlNetwork.Start(serviceCtx, settings, access)
 		if err != nil {

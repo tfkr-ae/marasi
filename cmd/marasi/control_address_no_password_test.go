@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -189,17 +190,29 @@ func TestControlAddressWithoutPassword(t *testing.T) {
 			}
 		}
 
+		const empty = "invalid --password: a control password cannot be empty: pass --no-password to run without one"
+		_, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0", "--control-address", "0.0.0.0:0", "--password", "")
+		if exitCode(err) != 1 || !strings.Contains(stderr, empty) {
+			t.Fatalf("\nwanted:\nexit 1 with %q\ngot:\n%s %v", empty, stderr, err)
+		}
+
 		startControlAddressInstanceWith(t, binary, configDir, "open", "127.0.0.1:0", nil)
-		for _, args := range [][]string{
-			{"update", "--address", "0.0.0.0", "--port", "0"},
+		for _, test := range []struct {
+			env  []string
+			args []string
+			want string
+		}{
+			{args: []string{"update", "--address", "0.0.0.0", "--port", "0"}, want: refusal},
+			{env: []string{"MARASI_PASSWORD="}, args: []string{"update", "--address", "0.0.0.0", "--port", "0"}, want: refusal},
+			{args: []string{"update", "--address", "0.0.0.0", "--port", "0", "--password", ""}, want: empty},
 		} {
-			_, stderr, err := runMarasi(binary, append([]string{"--config-dir", configDir, "--instance", "open", "service", "control"}, args...)...)
-			if err == nil || !strings.Contains(stderr, refusal) {
-				t.Fatalf("\nwanted:\n%v refused with %q\ngot:\n%s %v", args, refusal, stderr, err)
+			_, stderr, err := runMarasiEnv(binary, test.env, append([]string{"--config-dir", configDir, "--instance", "open", "service", "control"}, test.args...)...)
+			if exitCode(err) == 0 || !strings.Contains(stderr, test.want) {
+				t.Fatalf("\nwanted:\n%v refused with %q\ngot:\n%s %v", test.args, test.want, stderr, err)
 			}
 		}
 		runServiceControl(t, binary, configDir, "open", "stop")
-		_, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "open", "service", "control", "start", "--address", "0.0.0.0", "--port", "0")
+		_, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "open", "service", "control", "start", "--address", "0.0.0.0", "--port", "0")
 		if err == nil || !strings.Contains(stderr, refusal) {
 			t.Fatalf("\nwanted:\nstart refused with %q\ngot:\n%s %v", refusal, stderr, err)
 		}
@@ -210,6 +223,19 @@ func TestControlAddressWithoutPassword(t *testing.T) {
 		}
 		runServiceControl(t, binary, configDir, "open", "update", "--password", testControlPassword)
 		runServiceControl(t, binary, configDir, "open", "update", "--address", "0.0.0.0", "--port", "0")
+	})
+
+	t.Run("should not hand --no-password to the process of a loopback instance, at start or restart", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("reads process arguments with ps")
+		}
+		configDir := serviceConfigDir(t)
+		startControlAddressInstanceWith(t, binary, configDir, "local", "127.0.0.1:0", nil)
+		assertNoPasswordFlagNotInArguments(t, configDir)
+		if _, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "local", "service", "restart"); err != nil {
+			t.Fatalf("restarting: %v\n%s", err, stderr)
+		}
+		assertNoPasswordFlagNotInArguments(t, configDir)
 	})
 
 	t.Run("should warn once on stderr and in the log without a password", func(t *testing.T) {
@@ -245,6 +271,17 @@ func assertHostnameRefused(t *testing.T, address, port string) {
 	for _, host := range []string{"evil.example:" + port, "evil.example", "marasi", "localhost.evil.example:" + port} {
 		if response, body := sendRaw(t, "tcp", address, rawRequest{method: http.MethodGet, path: "/service/status", host: host}); response.StatusCode != http.StatusMisdirectedRequest || body != refused {
 			t.Fatalf("\nwanted:\n421 for Host %q\n%s\ngot:\n%d %s", host, refused, response.StatusCode, body)
+		}
+	}
+}
+
+// assertNoPasswordFlagNotInArguments fails unless no running process with
+// configDir in its arguments has --no-password.
+func assertNoPasswordFlagNotInArguments(t *testing.T, configDir string) {
+	t.Helper()
+	for _, args := range instanceArguments(t, configDir) {
+		if strings.Contains(args, "--no-password") {
+			t.Fatalf("\nwanted:\narguments without --no-password on loopback\ngot:\n%s", args)
 		}
 	}
 }
