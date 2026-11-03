@@ -335,6 +335,7 @@ func (s successorStarter) start(ctx context.Context, handover service.Handover) 
 		return fail(err)
 	}
 	command := exec.Command(executable, args...)
+	command.Env = withoutBoundVariables(os.Environ())
 	configureDetachedProcess(command)
 	// The successor's own failures before it logs anything still reach its log.
 	command.Stderr = logFile
