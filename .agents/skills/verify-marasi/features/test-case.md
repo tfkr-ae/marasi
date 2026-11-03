@@ -28,7 +28,7 @@ Run `test-case create --title "Auth bypass" --category Access --tag auth --note 
 After linking, run `test-case list-requests "$TEST_CASE_ID" --json` and require the traffic id in `items`, with no test-case fields or artifacts. Check human output includes the request id, method, host, path, status code, and length. After unlinking, require `{"items":[]}`.
 
 - `--title` is required on create and must be non-empty. Update requires at least one changed flag. Repeat `--tag` for multiple tags.
-- Checklist items have no ids. The first `test-case checklist` writes `$VERIFY_CONFIG_DIR/test_cases.yml` from the bundled default if that file is missing.
+- Checklist items have no ids. `service start` writes `$VERIFY_CONFIG_DIR/test_cases.yml` from the bundled default if that file is missing. `test-case checklist` only reads: with the file missing, it prints the bundled default and writes nothing.
 - Duplicate link of the same request to the same case returns a conflict.
 - Link, unlink, get, and delete look up ids in the currently open project. After opening a different project, previous case and request ids are not visible. Opening the current path does not hide them.
 - Human `test-case get` prints scalar fields only. Linked traffic (`items`) and `artifacts` appear in `--json`.

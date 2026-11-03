@@ -1,30 +1,77 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
+// testControlPassword is the control password tests start instances with.
+const testControlPassword = "correct horse battery staple"
+
 // startControlAddressInstance starts name with its control listener also
-// reachable at controlAddress, and returns the start command's stderr.
+// reachable at controlAddress, guarded by testControlPassword from
+// MARASI_PASSWORD, and returns the start command's stderr.
 func startControlAddressInstance(t *testing.T, binary, configDir, name, controlAddress string) string {
 	t.Helper()
+	return startControlAddressInstanceWith(t, binary, configDir, name, controlAddress, []string{"MARASI_PASSWORD=" + testControlPassword})
+}
+
+// startControlAddressInstanceWith starts name with its control listener also
+// reachable at controlAddress, with env as its MARASI_ variables and args
+// added to service start, and returns the start command's stderr.
+func startControlAddressInstanceWith(t *testing.T, binary, configDir, name, controlAddress string, env []string, args ...string) string {
+	t.Helper()
 	t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", name, "service", "stop") })
-	_, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", name, "service", "start", "--project-name", name, "--port", "0", "--control-address", controlAddress)
+	_, stderr, err := runMarasiEnv(binary, env, append([]string{"--config-dir", configDir, "--instance", name, "service", "start", "--project-name", name, "--port", "0", "--control-address", controlAddress}, args...)...)
 	if err != nil {
 		t.Fatalf("starting %s: %v\n%s", name, err, stderr)
 	}
 	return stderr
+}
+
+// instanceArguments fails unless some running process has configDir in its
+// arguments, and returns the arguments of each such process.
+func instanceArguments(t *testing.T, configDir string) []string {
+	t.Helper()
+	output, err := exec.Command("ps", "-axww", "-o", "args=").Output()
+	if err != nil {
+		t.Fatalf("listing process arguments: %v", err)
+	}
+	var instances []string
+	for _, args := range strings.Split(string(output), "\n") {
+		if strings.Contains(args, configDir) {
+			instances = append(instances, args)
+		}
+	}
+	if len(instances) == 0 {
+		t.Fatalf("\nwanted:\na running instance with %s in its arguments\ngot:\nnone", configDir)
+	}
+	return instances
+}
+
+// assertPasswordNotInArguments fails unless some running process has
+// configDir in its arguments, and none of those has testControlPassword.
+func assertPasswordNotInArguments(t *testing.T, configDir string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	for _, args := range instanceArguments(t, configDir) {
+		if strings.Contains(args, testControlPassword) {
+			t.Fatalf("\nwanted:\narguments without the control password\ngot:\n%s", args)
+		}
+	}
 }
 
 // controlAddressOf reads the control listener's network address from
@@ -42,17 +89,6 @@ func controlAddressOf(t *testing.T, binary, configDir, name string) *string {
 		t.Fatalf("decoding status %q: %v", stdout, err)
 	}
 	return status.ControlListener
-}
-
-// controlTokenOf reads the control token through the socket with
-// service control token.
-func controlTokenOf(t *testing.T, binary, configDir, name string) string {
-	t.Helper()
-	stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", name, "service", "control", "token")
-	if err != nil {
-		t.Fatalf("reading control token of %s: %v\n%s", name, err, stderr)
-	}
-	return strings.TrimSuffix(stdout, "\n")
 }
 
 // networkRequest sends one raw HTTP request to the network address and
@@ -84,90 +120,94 @@ func networkRequest(t *testing.T, method, address, path, authorization string) (
 func TestControlAddress(t *testing.T) {
 	binary := buildMarasi(t)
 
-	t.Run("should serve the control API at the network address only with the control token", func(t *testing.T) {
+	const unauthorized = "{\"error\":\"unauthorized\",\"message\":\"send the control password as Authorization: Bearer\"}\n"
+
+	t.Run("should serve the control API at the network address only with the control password from MARASI_PASSWORD or --password", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
+		startControlAddressInstance(t, binary, configDir, "env", "127.0.0.1:0")
+		startControlAddressInstanceWith(t, binary, configDir, "flag", "127.0.0.1:0", nil, "--password", testControlPassword)
+		assertPasswordNotInArguments(t, configDir)
 
-		address := controlAddressOf(t, binary, configDir, "work")
-		if address == nil || !strings.HasPrefix(*address, "127.0.0.1:") || strings.HasSuffix(*address, ":0") {
-			t.Fatalf("\nwanted:\ncontrol_listener 127.0.0.1 with its bound port\ngot:\n%v", address)
-		}
+		for _, name := range []string{"env", "flag"} {
+			address := controlAddressOf(t, binary, configDir, name)
+			if address == nil || !strings.HasPrefix(*address, "127.0.0.1:") || strings.HasSuffix(*address, ":0") {
+				t.Fatalf("\nwanted:\ncontrol_listener 127.0.0.1 with its bound port\ngot:\n%v", address)
+			}
 
-		status, header, body := networkRequest(t, http.MethodGet, *address, "/service/status", "")
-		wantBody := "{\"error\":\"unauthorized\",\"message\":\"send the control token as Authorization: Bearer\"}\n"
-		if status != http.StatusUnauthorized || header.Get("Content-Type") != "application/json" || body != wantBody {
-			t.Fatalf("\nwanted:\n401 application/json %s\ngot:\n%d %s %s", wantBody, status, header.Get("Content-Type"), body)
-		}
+			status, header, body := networkRequest(t, http.MethodGet, *address, "/service/status", "")
+			if status != http.StatusUnauthorized || header.Get("Content-Type") != "application/json" || header.Get("WWW-Authenticate") != "Bearer" || body != unauthorized {
+				t.Fatalf("\nwanted:\n401 application/json %s\ngot:\n%d %s %s", unauthorized, status, header.Get("Content-Type"), body)
+			}
 
-		token := controlTokenOf(t, binary, configDir, "work")
-		status, _, body = networkRequest(t, http.MethodGet, *address, "/service/status", "Bearer "+token)
-		_, socketBody := doInstanceRequest(t, filepath.Join(configDir, "instances", "work.sock"), http.MethodGet, "/service/status", "")
-		if status != http.StatusOK || body != socketBody {
-			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", socketBody, status, body)
+			status, _, body = networkRequest(t, http.MethodGet, *address, "/service/status", "Bearer "+testControlPassword)
+			_, socketBody := doInstanceRequest(t, filepath.Join(configDir, "instances", name+".sock"), http.MethodGet, "/service/status", "")
+			if status != http.StatusOK || body != socketBody {
+				t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", socketBody, status, body)
+			}
 		}
 	})
 
-	t.Run("should refuse a wrong or misplaced token and the token route on the network address", func(t *testing.T) {
+	t.Run("should refuse a wrong or misplaced password", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
 		address := *controlAddressOf(t, binary, configDir, "work")
-		token := controlTokenOf(t, binary, configDir, "work")
 
-		const unauthorized = "{\"error\":\"unauthorized\",\"message\":\"send the control token as Authorization: Bearer\"}\n"
 		for _, test := range []struct {
 			name          string
 			path          string
 			authorization string
 		}{
-			{name: "a wrong token", path: "/service/status", authorization: "Bearer " + strings.Repeat("0", len(token))},
-			{name: "a token of another length", path: "/service/status", authorization: "Bearer " + token + "0"},
-			{name: "another scheme", path: "/service/status", authorization: "Basic " + token},
-			{name: "a query-string token", path: "/service/status?token=" + token + "&access_token=" + token},
+			{name: "a wrong password", path: "/service/status", authorization: "Bearer " + strings.Repeat("x", len(testControlPassword))},
+			{name: "a prefix of the password", path: "/service/status", authorization: "Bearer " + testControlPassword[:5]},
+			{name: "a longer password", path: "/service/status", authorization: "Bearer " + testControlPassword + "0"},
+			{name: "another scheme", path: "/service/status", authorization: "Basic " + testControlPassword},
+			{name: "a query-string password", path: "/service/status?password=" + url.QueryEscape(testControlPassword) + "&access_token=" + url.QueryEscape(testControlPassword)},
 		} {
 			status, header, body := networkRequest(t, http.MethodGet, address, test.path, test.authorization)
 			if status != http.StatusUnauthorized || header.Get("WWW-Authenticate") != "Bearer" || body != unauthorized {
 				t.Fatalf("\nwanted:\n401 for %s\ngot:\n%d %q %s", test.name, status, header.Get("WWW-Authenticate"), body)
 			}
 		}
-
-		status, _, body := networkRequest(t, http.MethodGet, address, "/service/control-listener/token", "bearer "+token)
-		wantForbidden := "{\"error\":\"socket_only\",\"message\":\"the control token is available only through the socket\"}\n"
-		if status != http.StatusForbidden || body != wantForbidden {
-			t.Fatalf("\nwanted:\n403 %s\ngot:\n%d %s", wantForbidden, status, body)
-		}
-
-		status, body = doInstanceRequest(t, filepath.Join(configDir, "instances", "work.sock"), http.MethodGet, "/service/control-listener/token", "")
-		if want := "{\"token\":\"" + token + "\"}\n"; status != http.StatusOK || body != want {
-			t.Fatalf("\nwanted:\n200 %s\ngot:\n%d %s", want, status, body)
-		}
-		if len(token) != 64 {
-			t.Fatalf("\nwanted:\n32 random bytes as 64 hex characters\ngot:\n%q", token)
+		status, _, body := networkRequest(t, http.MethodGet, address, "/service/status", "bearer "+testControlPassword)
+		if status != http.StatusOK {
+			t.Fatalf("\nwanted:\n200 for a lowercase scheme\ngot:\n%d %s", status, body)
 		}
 	})
 
-	t.Run("should keep the token in an owner-only file and reuse it on the next start", func(t *testing.T) {
+	t.Run("should forget the password when the instance stops and ignore a token file", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
-		token := controlTokenOf(t, binary, configDir, "work")
+		const staleToken = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 		tokenPath := filepath.Join(configDir, "instances", "work.token")
-		content, err := os.ReadFile(tokenPath)
-		if err != nil || string(content) != token+"\n" {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%q %v", token, content, err)
+		if err := os.MkdirAll(filepath.Dir(tokenPath), 0700); err != nil {
+			t.Fatal(err)
 		}
-		if runtime.GOOS != "windows" {
-			info, err := os.Stat(tokenPath)
-			if err != nil || info.Mode().Perm() != 0600 {
-				t.Fatalf("\nwanted:\n-rw-------\ngot:\n%v %v", info.Mode(), err)
-			}
+		if err := os.WriteFile(tokenPath, []byte(staleToken+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
+		address := *controlAddressOf(t, binary, configDir, "work")
+		if status, _, body := networkRequest(t, http.MethodGet, address, "/service/status", "Bearer "+staleToken); status != http.StatusUnauthorized {
+			t.Fatalf("\nwanted:\n401 for the old token file's token\ngot:\n%d %s", status, body)
 		}
 
 		if _, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop"); err != nil {
 			t.Fatalf("stopping work: %v\n%s", err, stderr)
 		}
-		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
-		address := *controlAddressOf(t, binary, configDir, "work")
-		if status, _, body := networkRequest(t, http.MethodGet, address, "/service/status", "Bearer "+token); status != http.StatusOK {
-			t.Fatalf("\nwanted:\n200 with the first start's token\ngot:\n%d %s", status, body)
+		entries, err := os.ReadDir(filepath.Join(configDir, "instances"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			content, err := os.ReadFile(filepath.Join(configDir, "instances", entry.Name()))
+			if err == nil && strings.Contains(string(content), testControlPassword) {
+				t.Fatalf("\nwanted:\nno file holding the password\ngot:\n%s", entry.Name())
+			}
+		}
+
+		startControlAddressInstanceWith(t, binary, configDir, "work", "127.0.0.1:0", nil)
+		address = *controlAddressOf(t, binary, configDir, "work")
+		if status, _, body := networkRequest(t, http.MethodGet, address, "/service/status", ""); status != http.StatusOK {
+			t.Fatalf("\nwanted:\n200 with no password after a start without one\ngot:\n%d %s", status, body)
 		}
 	})
 
@@ -182,7 +222,7 @@ func TestControlAddress(t *testing.T) {
 		}
 
 		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "json", "service", "stop") })
-		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "json", "service", "start", "--project-name", "json", "--port", "0", "--control-address", "127.0.0.1:0", "--json")
+		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_PASSWORD=" + testControlPassword}, "--config-dir", configDir, "--instance", "json", "service", "start", "--project-name", "json", "--port", "0", "--control-address", "127.0.0.1:0", "--json")
 		if err != nil || stderr != "" {
 			t.Fatalf("starting json: %v\n%s", err, stderr)
 		}
@@ -239,11 +279,11 @@ func TestControlAddress(t *testing.T) {
 		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
 	})
 
-	t.Run("should show the network address in service status and service list, and never the token", func(t *testing.T) {
+	t.Run("should show the network address in service status and service list, and never the password", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
 		address := controlAddressOf(t, binary, configDir, "work")
-		token := controlTokenOf(t, binary, configDir, "work")
+		token := testControlPassword
 		wantLine := "control listener network address: " + *address + "\n"
 
 		for _, args := range [][]string{
@@ -257,7 +297,7 @@ func TestControlAddress(t *testing.T) {
 				t.Fatalf("%v: %v\n%s", args, err, stderr)
 			}
 			if strings.Contains(stdout, token) {
-				t.Fatalf("\nwanted:\n%v without the control token\ngot:\n%s", args, stdout)
+				t.Fatalf("\nwanted:\n%v without the control password\ngot:\n%s", args, stdout)
 			}
 			if args[len(args)-1] == "--json" {
 				if !strings.Contains(stdout, "\"control_listener\":\""+*address+"\"") {
@@ -273,7 +313,97 @@ func TestControlAddress(t *testing.T) {
 			t.Fatal(err)
 		}
 		if strings.Contains(string(log), token) {
-			t.Fatalf("\nwanted:\ninstance log without the control token\ngot:\n%s", log)
+			t.Fatalf("\nwanted:\ninstance log without the control password\ngot:\n%s", log)
+		}
+	})
+
+	t.Run("should report whether a password is set in the control listener status and events, and never the password", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
+		startControlAddressInstanceWith(t, binary, configDir, "open", "127.0.0.1:0", nil)
+		_, events, closeEvents := connectInstanceEvents(t, filepath.Join(configDir, "instances", "work.sock"))
+		defer closeEvents()
+
+		for _, test := range []struct {
+			name  string
+			set   bool
+			human string
+		}{
+			{name: "work", set: true, human: "set"},
+			{name: "open", set: false, human: "none"},
+		} {
+			address := *controlAddressOf(t, binary, configDir, test.name)
+			stdout, _ := runServiceControl(t, binary, configDir, test.name, "status", "--json")
+			if want := `{"status":"active","control_listener":"` + address + `","password_set":` + strconv.FormatBool(test.set) + `,"allowed_origins":[]}` + "\n"; stdout != want {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
+			}
+			stdout, _ = runServiceControl(t, binary, configDir, test.name, "status")
+			if want := "status: active\ncontrol listener network address: " + address + "\npassword: " + test.human + "\nallowed origins: none\n"; stdout != want {
+				t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, stdout)
+			}
+		}
+
+		updateOut, _ := runServiceControl(t, binary, configDir, "work", "update", "--address", "127.0.0.1", "--port", "0", "--json")
+		_, updated := readEventNamed(t, events, "control_listener.updated")
+		runServiceControl(t, binary, configDir, "work", "stop")
+		_, stopped := readEventNamed(t, events, "control_listener.stopped")
+		startOut, _ := runServiceControl(t, binary, configDir, "work", "start", "--address", "127.0.0.1", "--port", "0", "--json")
+		_, started := readEventNamed(t, events, "control_listener.started")
+		for _, data := range []string{updateOut, updated, startOut, started} {
+			if !strings.Contains(data, `"status":"active"`) || !strings.HasSuffix(strings.TrimSpace(data), `,"password_set":true,"allowed_origins":[]}`) || strings.Contains(data, testControlPassword) {
+				t.Fatalf("\nwanted:\nan active status with password_set true and no password\ngot:\n%s", data)
+			}
+		}
+		if want := `{"status":"inactive","control_listener":null,"password_set":true,"allowed_origins":[]}`; stopped != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stopped)
+		}
+		address := *controlAddressOf(t, binary, configDir, "work")
+		if status, _, body := networkRequest(t, http.MethodGet, address, "/service/status", ""); status != http.StatusUnauthorized {
+			t.Fatalf("\nwanted:\n401 on a restarted network address that keeps the password\ngot:\n%d %s", status, body)
+		}
+	})
+
+	t.Run("should refuse a password that cannot be sent as a bearer header", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		for _, test := range []struct {
+			env  []string
+			args []string
+			want string
+		}{
+			{args: []string{"--password", " padded"}, want: "invalid --password: a control password cannot start or end with whitespace or contain control characters"},
+			{env: []string{"MARASI_PASSWORD=line\nbreak"}, want: "invalid MARASI_PASSWORD: a control password cannot start or end with whitespace or contain control characters"},
+		} {
+			_, stderr, err := runMarasiEnv(binary, test.env, append([]string{"--config-dir", configDir, "--instance", "work", "service", "start", "--port", "0", "--control-address", "127.0.0.1:0"}, test.args...)...)
+			if exitCode(err) != 1 || !strings.Contains(stderr, test.want) {
+				t.Fatalf("\nwanted:\nexit 1 with %q\ngot:\n%s %v", test.want, stderr, err)
+			}
+		}
+	})
+
+	t.Run("should remove the control token routes, command, and flags", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
+		socketPath := filepath.Join(configDir, "instances", "work.sock")
+		for _, route := range []struct{ method, path string }{
+			{http.MethodGet, "/service/control-listener/token"},
+			{http.MethodPost, "/service/control-listener/token/rotate"},
+		} {
+			if status, body := doInstanceRequest(t, socketPath, route.method, route.path, ""); status != http.StatusNotFound {
+				t.Fatalf("\nwanted:\n404 for %s %s\ngot:\n%d %s", route.method, route.path, status, body)
+			}
+		}
+		for _, test := range []struct {
+			args []string
+			want string
+		}{
+			{args: []string{"--instance", "work", "service", "control", "token"}, want: `unknown command "token" for "marasi service control"`},
+			{args: []string{"--instance", "work", "service", "control", "token", "--rotate"}, want: "unknown flag: --rotate"},
+			{args: []string{"--token-file", "token", "--instance", "work", "service", "status"}, want: "unknown flag: --token-file"},
+		} {
+			stdout, stderr, err := runMarasi(binary, append([]string{"--config-dir", configDir}, test.args...)...)
+			if err == nil || !strings.Contains(stdout+stderr, test.want) {
+				t.Fatalf("\nwanted:\n%v to fail with %q\ngot:\n%s%s %v", test.args, test.want, stdout, stderr, err)
+			}
 		}
 	})
 
@@ -291,166 +421,6 @@ func TestControlAddress(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(configDir, "instances", "work.token")); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("\nwanted:\nno control token file\ngot:\n%v", err)
-		}
-	})
-}
-
-// openNetworkConn dials the network address, writes request when it is not
-// empty, and reads until the bytes received contain until.
-func openNetworkConn(t *testing.T, address, request, until string) net.Conn {
-	t.Helper()
-	conn, err := net.Dial("tcp", address)
-	if err != nil {
-		t.Fatalf("dialing the network address: %v", err)
-	}
-	t.Cleanup(func() { conn.Close() })
-	if request == "" {
-		return conn
-	}
-	if _, err := conn.Write([]byte(request)); err != nil {
-		t.Fatalf("writing to the network address: %v", err)
-	}
-	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	var received []byte
-	buffer := make([]byte, 4096)
-	for !strings.Contains(string(received), until) {
-		n, err := conn.Read(buffer)
-		received = append(received, buffer[:n]...)
-		if err != nil {
-			t.Fatalf("\nwanted:\n%q\ngot:\n%q %v", until, received, err)
-		}
-	}
-	if err := conn.SetReadDeadline(time.Time{}); err != nil {
-		t.Fatal(err)
-	}
-	return conn
-}
-
-// readUntilClosed discards what conn sends until the peer closes it, and
-// fails if that takes longer than five seconds.
-func readUntilClosed(conn net.Conn) error {
-	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		return err
-	}
-	buffer := make([]byte, 4096)
-	for {
-		_, err := conn.Read(buffer)
-		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
-			return err
-		}
-		if err != nil {
-			return nil
-		}
-	}
-}
-
-// readResponseHead returns the status line of the next response on conn.
-func readResponseHead(t *testing.T, conn net.Conn) string {
-	t.Helper()
-	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	line, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil {
-		t.Fatalf("reading a response on the network address: %v", err)
-	}
-	return line
-}
-
-func TestControlTokenRotate(t *testing.T) {
-	binary := buildMarasi(t)
-
-	t.Run("should replace the token so the old one gets 401 and the new one works", func(t *testing.T) {
-		configDir := serviceConfigDir(t)
-		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
-		address := *controlAddressOf(t, binary, configDir, "work")
-		oldToken := controlTokenOf(t, binary, configDir, "work")
-
-		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "control", "token", "--rotate")
-		if err != nil {
-			t.Fatalf("rotating the control token: %v\n%s", err, stderr)
-		}
-		newToken := strings.TrimSuffix(stdout, "\n")
-		if len(newToken) != 64 || newToken == oldToken || stdout != newToken+"\n" || stderr != "" {
-			t.Fatalf("\nwanted:\na new 64 character token on stdout\ngot:\n%q %q", stdout, stderr)
-		}
-		if read := controlTokenOf(t, binary, configDir, "work"); read != newToken {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", newToken, read)
-		}
-		content, err := os.ReadFile(filepath.Join(configDir, "instances", "work.token"))
-		if err != nil || string(content) != newToken+"\n" {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%q %v", newToken, content, err)
-		}
-		if status, _, body := networkRequest(t, http.MethodGet, address, "/service/status", "Bearer "+oldToken); status != http.StatusUnauthorized {
-			t.Fatalf("\nwanted:\n401 with the old token\ngot:\n%d %s", status, body)
-		}
-		if status, _, body := networkRequest(t, http.MethodGet, address, "/service/status", "Bearer "+newToken); status != http.StatusOK {
-			t.Fatalf("\nwanted:\n200 with the new token\ngot:\n%d %s", status, body)
-		}
-
-		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "control", "token", "--rotate", "--json")
-		var rotated struct {
-			Token string `json:"token"`
-		}
-		if err != nil || json.Unmarshal([]byte(stdout), &rotated) != nil || len(rotated.Token) != 64 || rotated.Token == newToken {
-			t.Fatalf("\nwanted:\n{\"token\":...} with a new token\ngot:\n%q %q %v", stdout, stderr, err)
-		}
-	})
-
-	t.Run("should drop connections and event streams that used the old token and publish token_rotated without it", func(t *testing.T) {
-		configDir := serviceConfigDir(t)
-		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
-		address := *controlAddressOf(t, binary, configDir, "work")
-		oldToken := controlTokenOf(t, binary, configDir, "work")
-		_, socketEvents, closeSocketEvents := connectInstanceEvents(t, filepath.Join(configDir, "instances", "work.sock"))
-		defer closeSocketEvents()
-
-		stream := openNetworkConn(t, address, "GET /events HTTP/1.1\r\nHost: "+address+"\r\nAuthorization: Bearer "+oldToken+"\r\n\r\n", ": connected")
-		keepAlive := openNetworkConn(t, address, "GET /service/status HTTP/1.1\r\nHost: "+address+"\r\nAuthorization: Bearer "+oldToken+"\r\n\r\n", "\"status\":\"running\"")
-		idle := openNetworkConn(t, address, "", "")
-
-		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "control", "token", "--rotate")
-		if err != nil {
-			t.Fatalf("rotating the control token: %v\n%s", err, stderr)
-		}
-		newToken := strings.TrimSuffix(stdout, "\n")
-
-		_, data := readEventNamed(t, socketEvents, "control_listener.token_rotated")
-		if data != "{}" || strings.Contains(data, newToken) {
-			t.Fatalf("\nwanted:\ncontrol_listener.token_rotated with {}\ngot:\n%s", data)
-		}
-		for name, conn := range map[string]net.Conn{"the event stream": stream, "the keep-alive connection": keepAlive} {
-			if err := readUntilClosed(conn); err != nil {
-				t.Fatalf("\nwanted:\n%s closed after rotation\ngot:\n%v", name, err)
-			}
-		}
-		if _, err := idle.Write([]byte("GET /service/status HTTP/1.1\r\nHost: " + address + "\r\nAuthorization: Bearer " + newToken + "\r\n\r\n")); err != nil {
-			t.Fatalf("\nwanted:\na connection that never authenticated kept open\ngot:\n%v", err)
-		}
-		if got := readResponseHead(t, idle); !strings.HasPrefix(got, "HTTP/1.1 200 ") {
-			t.Fatalf("\nwanted:\n200 with the new token on the unauthenticated connection\ngot:\n%s", got)
-		}
-	})
-
-	t.Run("should refuse rotation on the network address and keep the token", func(t *testing.T) {
-		configDir := serviceConfigDir(t)
-		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
-		address := *controlAddressOf(t, binary, configDir, "work")
-		token := controlTokenOf(t, binary, configDir, "work")
-
-		status, _, body := networkRequest(t, http.MethodPost, address, "/service/control-listener/token/rotate", "Bearer "+token)
-		wantForbidden := "{\"error\":\"socket_only\",\"message\":\"the control token can be rotated only through the socket\"}\n"
-		if status != http.StatusForbidden || body != wantForbidden {
-			t.Fatalf("\nwanted:\n403 %s\ngot:\n%d %s", wantForbidden, status, body)
-		}
-		if read := controlTokenOf(t, binary, configDir, "work"); read != token {
-			t.Fatalf("\nwanted:\nthe token unchanged %s\ngot:\n%s", token, read)
-		}
-		if status, _, body := networkRequest(t, http.MethodGet, address, "/service/status", "Bearer "+token); status != http.StatusOK {
-			t.Fatalf("\nwanted:\n200 with the unchanged token\ngot:\n%d %s", status, body)
 		}
 	})
 }

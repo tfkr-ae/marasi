@@ -5,7 +5,7 @@ description: Verify Marasi's CLI-driven proxy service when a change needs proof 
 
 # Verify Marasi
 
-Marasi's primary user surface is the `marasi` CLI. It launches a detached HTTP/HTTPS proxy and talks to that process over a Unix-domain socket on every OS, including Windows. An instance can also serve the same control API at a token-guarded network address, which `--remote` drives; see [control listener](features/control-listener.md). The HTTP control API and Go library are secondary. Drive with the `marasi` commands in this file and in `features/`. Do not wrap them.
+Marasi's primary user surface is the `marasi` CLI. It launches a detached HTTP/HTTPS proxy and talks to that process over a Unix-domain socket on every OS, including Windows. An instance can also serve the same control API at a network address, guarded by an optional control password, which `--remote` drives; see [control listener](features/control-listener.md). The HTTP control API and Go library are secondary. Drive with the `marasi` commands in this file and in `features/`. Do not wrap them.
 
 ## Isolate
 

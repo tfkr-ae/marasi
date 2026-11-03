@@ -34,6 +34,8 @@ var projectPath string
 var proxyAddress string
 var proxyPort decimalPort
 var controlAddress string
+var allowedOrigins []string
+var startNoPassword bool
 
 // decimalPort is a pflag.Value for a TCP port parsed in base 10.
 type decimalPort uint16
@@ -86,7 +88,14 @@ func init() {
 	startCmd.Flags().StringVar(&proxyAddress, "address", "127.0.0.1", "Proxy listener host or IP, without a port")
 	proxyPort = 8080
 	startCmd.Flags().Var(&proxyPort, "port", "Proxy listener TCP port")
-	startCmd.Flags().StringVar(&controlAddress, "control-address", "", "Also serve the control API at this network address, HOST:PORT, guarded by the control token. Port 0 picks a free port")
+	startCmd.Flags().StringVar(&controlAddress, "control-address", "", "Also serve the control API at this network address, HOST:PORT, guarded by --password when it is set. Port 0 picks a free port")
+	bindEnv(startCmd.Flags(), "project", "MARASI_PROJECT")
+	bindEnv(startCmd.Flags(), "project-name", "MARASI_PROJECT_NAME")
+	bindEnv(startCmd.Flags(), "address", "MARASI_ADDRESS")
+	bindEnv(startCmd.Flags(), "port", "MARASI_PORT")
+	startCmd.Flags().BoolVar(&startNoPassword, "no-password", false, "Run the control listener network address with no control password; needed to bind it beyond loopback without --password")
+	addAllowOriginFlag(startCmd, &allowedOrigins)
+	bindEnv(startCmd.Flags(), "control-address", "MARASI_CONTROL_ADDRESS")
 	serviceCmd.AddCommand(startCmd, stopCmd, statusCmd, listServiceInstancesCmd)
 	rootCmd.AddCommand(serviceCmd)
 }
@@ -104,10 +113,25 @@ var startCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
+		if startNoPassword && cmd.Flags().Changed("password") {
+			return fmt.Errorf("%s and --no-password cannot be used together", flagSource("password"))
+		}
+		if cmd.Flags().Changed("password") {
+			if err := checkPasswordToSet(controlPassword, flagSource("password")); err != nil {
+				return err
+			}
+		}
 		if controlAddress != "" {
 			if _, err := parseControlAddress(controlAddress); err != nil {
 				return err
 			}
+			if err := service.RequirePasswordBeyondLoopback(controlAddress, controlPassword != "", startNoPassword); err != nil {
+				return err
+			}
+		}
+		origins, err := checkAllowOrigins(cmd)
+		if err != nil {
+			return err
 		}
 		options := serviceOptions{
 			configDir:      configDir,
@@ -117,12 +141,24 @@ var startCmd = &cobra.Command{
 			proxyPort:      uint16(proxyPort),
 			proxyListener:  !noProxyListener,
 			controlAddress: controlAddress,
+			password:       controlPassword,
+			noPassword:     startNoPassword,
+			allowedOrigins: allowedOriginsOrNone(origins),
 		}
 		if serviceChild {
 			return runServiceChild(ctx, options)
 		}
 		return startServiceProcess(ctx, options, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput)
 	},
+}
+
+// allowedOriginsOrNone returns the origins checkAllowOrigins returned, with
+// none for nil.
+func allowedOriginsOrNone(origins *[]string) []string {
+	if origins == nil {
+		return nil
+	}
+	return *origins
 }
 
 var stopCmd = &cobra.Command{
@@ -490,10 +526,13 @@ type serviceOptions struct {
 	configDir      string
 	projectPath    string
 	instancePath   string
-	proxyAddress   string // proxy listener host
-	proxyPort      uint16 // proxy listener port; 0 picks a free one
-	proxyListener  bool   // start the proxy listener
-	controlAddress string // control listener network address as HOST:PORT, "" for none
+	proxyAddress   string   // proxy listener host
+	proxyPort      uint16   // proxy listener port; 0 picks a free one
+	proxyListener  bool     // start the proxy listener
+	controlAddress string   // control listener network address as HOST:PORT, "" for none
+	password       string   // control password guarding the network address, "" for none
+	noPassword     bool     // --no-password: consent to no password beyond loopback
+	allowedOrigins []string // origins allowed without a password, as service.CheckAllowedOrigins returns them
 }
 
 // startServiceInstance starts a proxy instance and calls ready with what it
@@ -516,6 +555,9 @@ func startServiceInstance(ctx context.Context, options serviceOptions, ready fun
 	proxy, err := marasi.New(marasi.WithLogger(logger), marasi.WithConfigDir(options.configDir))
 	if err != nil {
 		return fmt.Errorf("starting proxy with config dir: %w", err)
+	}
+	if err := service.WriteDefaultTestCaseChecklist(options.configDir); err != nil {
+		return err
 	}
 
 	wordlists, err := wordlist.NewManager(options.configDir)
@@ -624,7 +666,7 @@ func startServiceInstance(ctx context.Context, options serviceOptions, ready fun
 
 	serviceServer.EnableRestart(successorStarter{claim: claim, configDir: options.configDir, instancePath: options.instancePath, readyTimeout: restartReadyTimeout}.start)
 
-	controlNetwork = serviceServer.EnableControlAddress(service.NewControlToken(options.instancePath+".token", secureInstanceFile), logFile)
+	controlNetwork = serviceServer.EnableControlAddress(options.password, options.allowedOrigins, logFile)
 
 	var started serviceStarted
 	if options.proxyListener {
@@ -639,7 +681,11 @@ func startServiceInstance(ctx context.Context, options serviceOptions, ready fun
 		if err != nil {
 			return err
 		}
-		controlStatus, err := controlNetwork.Start(serviceCtx, settings)
+		var access service.ControlAccess
+		if options.noPassword {
+			access.Password = service.RemovePassword()
+		}
+		controlStatus, err := controlNetwork.Start(serviceCtx, settings, access)
 		if err != nil {
 			return fmt.Errorf("binding control listener network address on %s: %w", options.controlAddress, err)
 		}
@@ -773,7 +819,7 @@ func remoteInstanceGone(ctx context.Context, target instanceEndpoint, instance s
 	switch {
 	case ctx.Err() != nil:
 		return false, ctx.Err()
-	case errors.As(err, &notRunning), errors.Is(err, service.ErrTokenRejected):
+	case errors.As(err, &notRunning), errors.Is(err, service.ErrPasswordRejected):
 		return true, nil
 	case err != nil:
 		// A response cut off mid-read is a stopping instance; ask again.

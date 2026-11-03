@@ -21,7 +21,7 @@ var instance string
 var instancePath string
 var jsonOutput bool
 var remoteURL string
-var tokenFile string
+var controlPassword string
 
 const unixSocketPathLimit = 104
 
@@ -125,8 +125,12 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&configDir, "config-dir", defaultConfigDir(), "Marasi config directory")
 	rootCmd.PersistentFlags().StringVar(&instance, "instance", "default", "Service instance name")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Print command output as JSON")
-	rootCmd.PersistentFlags().StringVar(&remoteURL, "remote", "", "Control listener network address URL of a service instance, such as http://host:port (default $"+remoteVariable+")")
-	rootCmd.PersistentFlags().StringVar(&tokenFile, "token-file", "", "File holding the control token for --remote (default $"+tokenVariable+")")
+	rootCmd.PersistentFlags().StringVar(&remoteURL, "remote", "", "Control listener network address URL of a service instance, such as http://host:port")
+	bindEnv(rootCmd.PersistentFlags(), "config-dir", "MARASI_CONFIG_DIR")
+	bindEnv(rootCmd.PersistentFlags(), "instance", "MARASI_INSTANCE")
+	rootCmd.PersistentFlags().StringVar(&controlPassword, "password", "", "Control password: sent with --remote, and set on the instance by service start. service control start and update take their own --password, the password to set")
+	bindEnv(rootCmd.PersistentFlags(), "remote", remoteVariable)
+	bindEnv(rootCmd.PersistentFlags(), "password", passwordVariable)
 }
 
 // showSubcommandHelp prints command help when a group command is run with no subcommand.
@@ -163,38 +167,42 @@ func subcommandChoice(cmd *cobra.Command) string {
 	}
 }
 
-// prepareInstancePath resolves --config-dir and --instance, or --remote, into
-// endpoint and instancePath.
+// prepareInstancePath applies the environment variables bound to cmd's flags,
+// then resolves --config-dir and --instance, or --remote, into endpoint and
+// instancePath.
 func prepareInstancePath(cmd *cobra.Command, _ []string) error {
+	if err := applyEnv(cmd); err != nil {
+		return err
+	}
 	if cmd == skillCmd || cmd == extensionAPICmd {
 		return nil
 	}
 	if configDir == "" {
 		return fmt.Errorf("config dir is empty")
 	}
-	remote, remoteSource := remoteURL, "--remote"
-	if !cmd.Flags().Changed("remote") {
-		remote, remoteSource = os.Getenv(remoteVariable), remoteVariable
-	}
-	if remote == "" {
-		if cmd.Flags().Changed("token-file") {
-			return errors.New("--token-file needs --remote or " + remoteVariable)
-		}
-	} else {
+	remote, remoteSource := remoteURL, flagSource("remote")
+	if remote != "" {
 		// Both commands act on this machine, so with a remote they would
 		// start or list instances somewhere the operator did not point.
 		if cmd == startCmd || cmd == listServiceInstancesCmd {
 			return fmt.Errorf("%s acts on this machine and does not accept %s", cmd.CommandPath(), remoteSource)
 		}
 		if cmd.Flags().Changed("instance") {
-			return fmt.Errorf("%s and --instance cannot be used together: the remote URL already names one instance", remoteSource)
+			return fmt.Errorf("%s and %s cannot be used together: the remote URL already names one instance", remoteSource, flagSource("instance"))
 		}
 	}
 	if cmd == listServiceInstancesCmd || (cmd == projectListCmd && remote == "") {
 		return nil
 	}
 	if remote != "" {
-		resolved, err := resolveRemoteEndpoint(remote, tokenFile)
+		password := controlPassword
+		if cmd.Flags().Lookup("password") != cmd.Root().PersistentFlags().Lookup("password") {
+			// The command's own --password is the password to set, as on
+			// service control start and update, so the password that
+			// authenticates comes from MARASI_PASSWORD alone.
+			password = os.Getenv(passwordVariable)
+		}
+		resolved, err := resolveRemoteEndpoint(remote, password)
 		if err != nil {
 			return err
 		}

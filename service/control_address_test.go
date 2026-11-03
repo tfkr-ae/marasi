@@ -5,35 +5,30 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
 // startTestControlAddress starts a network address on loopback that serves
-// api, and returns it with its control token and bound address.
+// api, and returns it with its control password and bound address.
 func startTestControlAddress(t *testing.T, api http.Handler) (*ControlAddress, string, string) {
 	t.Helper()
 	control := &ControlAddress{
 		api:       api,
-		token:     NewControlToken(filepath.Join(t.TempDir(), "token"), func(string) error { return nil }),
+		password:  NewControlPassword("test password"),
 		logWriter: io.Discard,
 		events:    newEventBroadcaster(),
 		status:    ControlListenerStatus{Status: ListenerInactive},
 		conns:     map[net.Conn]*networkConn{},
 	}
 	address, port := "127.0.0.1", uint16(0)
-	status, err := control.Start(context.Background(), ListenerSettings{Address: &address, Port: &port})
-	if err != nil {
-		t.Fatal(err)
-	}
-	token, err := control.token.Value()
+	status, err := control.Start(context.Background(), ListenerSettings{Address: &address, Port: &port}, ControlAccess{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = control.Shutdown(context.Background()) })
-	return control, token, *status.ControlListener
+	return control, control.Password(), *status.ControlListener
 }
 
 func TestControlAddressShutdown(t *testing.T) {

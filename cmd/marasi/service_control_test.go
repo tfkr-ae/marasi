@@ -44,13 +44,13 @@ func TestServiceControlListener(t *testing.T) {
 		stdout, stderr := runServiceControl(t, binary, configDir, "work", "start", "--address", "127.0.0.1", "--port", "0", "--json")
 		var started controlListenerStatus
 		if err := json.Unmarshal([]byte(stdout), &started); err != nil || started.Status != "active" || started.ControlListener == nil ||
-			!strings.HasPrefix(*started.ControlListener, "127.0.0.1:") || strings.HasSuffix(*started.ControlListener, ":0") || stderr != "" {
+			!strings.HasPrefix(*started.ControlListener, "127.0.0.1:") || strings.HasSuffix(*started.ControlListener, ":0") || stderr != noPasswordWarning(*started.ControlListener, true) {
 			t.Fatalf("\nwanted:\nactive on 127.0.0.1 with its bound port\ngot:\n%s%s", stdout, stderr)
 		}
 		address := *started.ControlListener
 
 		_, data := readEventNamed(t, events, "control_listener.started")
-		if want := `{"status":"active","control_listener":"` + address + `"}`; data != want {
+		if want := `{"status":"active","control_listener":"` + address + `","password_set":false,"allowed_origins":[]}`; data != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, data)
 		}
 
@@ -58,12 +58,11 @@ func TestServiceControlListener(t *testing.T) {
 			t.Fatalf("\nwanted:\n%s in service status\ngot:\n%v", address, got)
 		}
 		stdout, _ = runServiceControl(t, binary, configDir, "work", "status")
-		if want := "status: active\ncontrol listener network address: " + address + "\n"; stdout != want {
+		if want := "status: active\ncontrol listener network address: " + address + "\npassword: none\nallowed origins: none\n"; stdout != want {
 			t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, stdout)
 		}
-		token := controlTokenOf(t, binary, configDir, "work")
-		if status, _, body := networkRequest(t, http.MethodGet, address, "/service/status", "Bearer "+token); status != http.StatusOK {
-			t.Fatalf("\nwanted:\n200 on the started address\ngot:\n%d %s", status, body)
+		if status, _, body := networkRequest(t, http.MethodGet, address, "/service/status", ""); status != http.StatusOK {
+			t.Fatalf("\nwanted:\n200 on the started address, which has no password\ngot:\n%d %s", status, body)
 		}
 
 		_, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "control", "start", "--address", "127.0.0.1", "--port", "0")
@@ -72,11 +71,11 @@ func TestServiceControlListener(t *testing.T) {
 		}
 	})
 
-	t.Run("should move and stop the network address, keep the token, and remember no endpoint", func(t *testing.T) {
+	t.Run("should move and stop the network address, keep the password, and remember no endpoint", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
 		first := *controlAddressOf(t, binary, configDir, "work")
-		token := controlTokenOf(t, binary, configDir, "work")
+		password := testControlPassword
 		_, events, closeEvents := connectInstanceEvents(t, filepath.Join(configDir, "instances", "work.sock"))
 		defer closeEvents()
 
@@ -85,25 +84,25 @@ func TestServiceControlListener(t *testing.T) {
 		if moved == nil || *moved == first || stderr != "control listener network address updated to "+*moved+"\n" {
 			t.Fatalf("\nwanted:\na new address on stderr\ngot:\n%s %v", stderr, moved)
 		}
-		if _, data := readEventNamed(t, events, "control_listener.updated"); data != `{"status":"active","control_listener":"`+*moved+`"}` {
+		if _, data := readEventNamed(t, events, "control_listener.updated"); data != `{"status":"active","control_listener":"`+*moved+`","password_set":true,"allowed_origins":[]}` {
 			t.Fatalf("\nwanted:\ncontrol_listener.updated with %s\ngot:\n%s", *moved, data)
 		}
 		if _, err := net.Dial("tcp", first); err == nil {
 			t.Fatalf("\nwanted:\nthe old address %s closed\ngot:\na connection", first)
 		}
-		if status, _, body := networkRequest(t, http.MethodGet, *moved, "/service/status", "Bearer "+token); status != http.StatusOK {
-			t.Fatalf("\nwanted:\n200 with the same token on the moved address\ngot:\n%d %s", status, body)
+		if status, _, body := networkRequest(t, http.MethodGet, *moved, "/service/status", "Bearer "+password); status != http.StatusOK {
+			t.Fatalf("\nwanted:\n200 with the same password on the moved address\ngot:\n%d %s", status, body)
 		}
 
 		_, stderr = runServiceControl(t, binary, configDir, "work", "stop")
 		if stderr != "control listener network address stopped successfully\n" {
 			t.Fatalf("\nwanted:\nstopped successfully\ngot:\n%q", stderr)
 		}
-		if _, data := readEventNamed(t, events, "control_listener.stopped"); data != `{"status":"inactive","control_listener":null}` {
+		if _, data := readEventNamed(t, events, "control_listener.stopped"); data != `{"status":"inactive","control_listener":null,"password_set":true,"allowed_origins":[]}` {
 			t.Fatalf("\nwanted:\ncontrol_listener.stopped inactive\ngot:\n%s", data)
 		}
 		stdout, _ := runServiceControl(t, binary, configDir, "work", "status", "--json")
-		if want := "{\"status\":\"inactive\",\"control_listener\":null}\n"; stdout != want {
+		if want := "{\"status\":\"inactive\",\"control_listener\":null,\"password_set\":true,\"allowed_origins\":[]}\n"; stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
 		if _, err := net.Dial("tcp", *moved); err == nil {
@@ -125,8 +124,8 @@ func TestServiceControlListener(t *testing.T) {
 		if err := json.Unmarshal([]byte(stdout), &restarted); err != nil || restarted.ControlListener == nil {
 			t.Fatalf("\nwanted:\nan active address\ngot:\n%s", stdout)
 		}
-		if status, _, body := networkRequest(t, http.MethodGet, *restarted.ControlListener, "/service/status", "Bearer "+token); status != http.StatusOK {
-			t.Fatalf("\nwanted:\n200 with the same token after stop and start\ngot:\n%d %s", status, body)
+		if status, _, body := networkRequest(t, http.MethodGet, *restarted.ControlListener, "/service/status", "Bearer "+password); status != http.StatusOK {
+			t.Fatalf("\nwanted:\n200 with the same password after stop and start\ngot:\n%d %s", status, body)
 		}
 	})
 
@@ -153,7 +152,7 @@ func TestServiceControlListener(t *testing.T) {
 		before := *controlAddressOf(t, binary, configDir, "work")
 		for _, args := range [][]string{
 			{"--address", host, "--port", port},
-			{"--address", "no-such-host.invalid", "--port", "0"},
+			{"--address", "no-such-host.invalid", "--port", "0", "--no-password"},
 		} {
 			_, stderr, err := runMarasi(binary, append([]string{"--config-dir", configDir, "--instance", "work", "service", "control", "update"}, args...)...)
 			if err == nil || !strings.Contains(stderr, "listener_unavailable") {
@@ -163,8 +162,8 @@ func TestServiceControlListener(t *testing.T) {
 				t.Fatalf("\nwanted:\n%s unchanged\ngot:\n%v", before, after)
 			}
 		}
-		token := controlTokenOf(t, binary, configDir, "work")
-		if status, _, body := networkRequest(t, http.MethodGet, before, "/service/status", "Bearer "+token); status != http.StatusOK {
+		password := testControlPassword
+		if status, _, body := networkRequest(t, http.MethodGet, before, "/service/status", "Bearer "+password); status != http.StatusOK {
 			t.Fatalf("\nwanted:\n200 on the unchanged address\ngot:\n%d %s", status, body)
 		}
 	})
@@ -173,11 +172,11 @@ func TestServiceControlListener(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
 		first := *controlAddressOf(t, binary, configDir, "work")
-		token := controlTokenOf(t, binary, configDir, "work")
+		password := testControlPassword
 
-		stream := openNetworkEvents(t, first, token)
+		stream := openNetworkEvents(t, first, password)
 		defer stream.Close()
-		response, after := rawNetworkRequest(t, first, token, "POST /service/control-listener/update", `{"address":"127.0.0.1","port":0}`)
+		response, after := rawNetworkRequest(t, first, password, "POST /service/control-listener/update", `{"address":"127.0.0.1","port":0}`)
 		var moved controlListenerStatus
 		if err := json.Unmarshal([]byte(response), &moved); err != nil || moved.Status != "active" || moved.ControlListener == nil || *moved.ControlListener == first {
 			t.Fatalf("\nwanted:\nthe full update response on the old address\ngot:\n%s", response)
@@ -187,10 +186,10 @@ func TestServiceControlListener(t *testing.T) {
 		}
 		waitStreamEnd(t, stream)
 
-		stream = openNetworkEvents(t, *moved.ControlListener, token)
+		stream = openNetworkEvents(t, *moved.ControlListener, password)
 		defer stream.Close()
-		response, after = rawNetworkRequest(t, *moved.ControlListener, token, "POST /service/control-listener/stop", "")
-		if want := `{"status":"inactive","control_listener":null}` + "\n"; response != want || after != nil {
+		response, after = rawNetworkRequest(t, *moved.ControlListener, password, "POST /service/control-listener/stop", "")
+		if want := `{"status":"inactive","control_listener":null,"password_set":true,"allowed_origins":[]}` + "\n"; response != want || after != nil {
 			t.Fatalf("\nwanted:\n%s then a closed connection\ngot:\n%s %v", want, response, after)
 		}
 		waitStreamEnd(t, stream)
@@ -207,18 +206,18 @@ func TestServiceControlListener(t *testing.T) {
 		t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })
 
 		_, stderr := runServiceControl(t, binary, configDir, "work", "start", "--address", "127.0.0.1", "--port", "0")
-		if strings.Contains(stderr, "warning") {
-			t.Fatalf("\nwanted:\nno warning for loopback\ngot:\n%s", stderr)
+		if strings.Contains(stderr, "plain HTTP") {
+			t.Fatalf("\nwanted:\nno plain-HTTP warning for loopback\ngot:\n%s", stderr)
 		}
-		stdout, stderr := runServiceControl(t, binary, configDir, "work", "update", "--address", "0.0.0.0", "--port", "0", "--json")
+		stdout, stderr := runServiceControl(t, binary, configDir, "work", "update", "--address", "0.0.0.0", "--port", "0", "--no-password", "--json")
 		address := *controlAddressOf(t, binary, configDir, "work")
-		if stderr != "" || !strings.Contains(stdout, `"control_listener":"`+address+`"`) {
+		if stderr != noPasswordWarning(address, false) || !strings.Contains(stdout, `"control_listener":"`+address+`"`) {
 			t.Fatalf("\nwanted:\nno stderr\ngot:\n%s%s", stderr, stdout)
 		}
 		runServiceControl(t, binary, configDir, "work", "stop")
-		_, stderr = runServiceControl(t, binary, configDir, "work", "start", "--address", "0.0.0.0", "--port", "0")
+		_, stderr = runServiceControl(t, binary, configDir, "work", "start", "--address", "0.0.0.0", "--port", "0", "--no-password")
 		address = *controlAddressOf(t, binary, configDir, "work")
-		if want := "control listener network address started on " + address + "\n"; stderr != want {
+		if want := noPasswordWarning(address, false) + "control listener network address started on " + address + "\n"; stderr != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stderr)
 		}
 		log, err := os.ReadFile(filepath.Join(configDir, "instances", "work.log"))
@@ -231,13 +230,13 @@ func TestServiceControlListener(t *testing.T) {
 
 // openNetworkEvents opens an event stream on the network address and reads
 // its connected comment.
-func openNetworkEvents(t *testing.T, address, token string) io.ReadCloser {
+func openNetworkEvents(t *testing.T, address, password string) io.ReadCloser {
 	t.Helper()
 	request, err := http.NewRequest(http.MethodGet, "http://"+address+"/events", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Authorization", "Bearer "+password)
 	response, err := (&http.Client{Transport: &http.Transport{}}).Do(request)
 	if err != nil || response.StatusCode != http.StatusOK {
 		t.Fatalf("opening events on %s: %v %v", address, response, err)
@@ -269,7 +268,7 @@ func waitStreamEnd(t *testing.T, stream io.Reader) {
 // rawNetworkRequest sends "METHOD PATH" with body on one connection to the
 // network address, and returns the response body and the error of a later
 // read on the same connection, which is nil once the server has closed it.
-func rawNetworkRequest(t *testing.T, address, token, line, body string) (string, error) {
+func rawNetworkRequest(t *testing.T, address, password, line, body string) (string, error) {
 	t.Helper()
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
@@ -277,7 +276,7 @@ func rawNetworkRequest(t *testing.T, address, token, line, body string) (string,
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	request := fmt.Sprintf("%s HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", line, address, token, len(body), body)
+	request := fmt.Sprintf("%s HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", line, address, password, len(body), body)
 	if _, err := io.WriteString(conn, request); err != nil {
 		t.Fatal(err)
 	}

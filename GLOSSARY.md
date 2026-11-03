@@ -24,16 +24,20 @@ The exclusive claim held by one service instance while it controls an open proje
 _Avoid_: Project lock when referring to the domain rule rather than its filesystem implementation.
 
 **Control listener**:
-The listener through which clients send control API requests to one service instance. It is always reachable at the instance's socket and can also be reachable at one network address. Both serve the same control API, except that only the socket reads or rotates the control token.
+The listener through which clients send control API requests to one service instance. It is always reachable at the instance's socket and can also be reachable at one network address. Both serve the same control API, except that only the socket hands out what pairing needs.
 _Avoid_: control socket or control port as names for the listener itself.
+
+**Pairing**:
+Handing a client the control listener's network address, and its control password when one is set, as a QR code, so the client can connect without typing them.
+_Avoid_: pair, which always means a request/response pair. The CLI command is `service control pair`, a name the spec fixed; prose and code still say pairing.
 
 **Instance machine**:
 The machine a service instance runs on. Paths a client sends to the instance, and the machine config, wordlists, report templates, and Chrome paths the instance uses, are on its instance machine, not on the client's machine.
 _Avoid_: server, remote host, this machine when a client may be on another machine.
 
-**Control token**:
-The secret a client presents with every request it sends to a control listener's network address. One per service instance. It stays the same across restarts until it is rotated. The socket does not ask for it.
-_Avoid_: API key, password, session
+**Control password**:
+The optional secret, chosen by the user, that a client presents with every request it sends to a control listener's network address. A restart keeps it, but stopping the instance forgets it. The socket does not ask for it.
+_Avoid_: control token, API key, session
 
 **Proxy listener**:
 The listener through which browsers and other clients send traffic to a service instance for proxying.

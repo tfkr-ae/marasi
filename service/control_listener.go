@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,10 +23,14 @@ var errControlAddressHandedOver = errors.New("control listener network address i
 // errControlAddressClosed refuses a start once the instance is stopping.
 var errControlAddressClosed = errors.New("the instance is stopping")
 
-// Update moves the network address to settings. The new address is bound
-// before the old one closes, so a failed bind leaves the old one serving.
-// Moving to the address already bound changes nothing.
-func (c *ControlAddress) Update(ctx context.Context, settings ListenerSettings) (ControlListenerStatus, error) {
+// Update moves the network address to settings, and replaces the control
+// password and the allowed origins with access. A nil settings keeps the
+// address. The new address is bound before the old one closes, so a failed
+// bind leaves the old one serving and the access unchanged. Moving to the
+// address already bound and setting what is already held change nothing.
+// A move beyond loopback with no password is refused unless access removes
+// the password, the consent of --no-password.
+func (c *ControlAddress) Update(ctx context.Context, settings *ListenerSettings, access ControlAccess) (ControlListenerStatus, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.run == nil {
@@ -34,27 +39,40 @@ func (c *ControlAddress) Update(ctx context.Context, settings ListenerSettings) 
 	if c.run.suspended {
 		return ControlListenerStatus{}, errControlAddressHandedOver
 	}
-	endpoint, err := listenerEndpoint(settings)
-	if err != nil {
-		return ControlListenerStatus{}, err
+	moved := false
+	if settings != nil {
+		endpoint, err := listenerEndpoint(*settings)
+		if err != nil {
+			return ControlListenerStatus{}, err
+		}
+		if endpoint != c.run.listener.Addr().String() {
+			if err := c.requirePassword(endpoint, access); err != nil {
+				return ControlListenerStatus{}, err
+			}
+			run, err := c.bind(ctx, endpoint)
+			if err != nil {
+				return ControlListenerStatus{}, err
+			}
+			c.retire(ctx, c.run)
+			c.run = run
+			moved = true
+		}
 	}
-	if endpoint == c.run.listener.Addr().String() {
-		return activeControlListenerStatus(c.run), nil
+	changed := c.applyAccess(ctx, access)
+	if moved || access.Password.removes() {
+		c.warnNoPassword(c.run)
 	}
-	run, err := c.bind(ctx, endpoint)
-	if err != nil {
-		return ControlListenerStatus{}, err
+	status := c.activeStatus(c.run)
+	if !moved && !changed {
+		return status, nil
 	}
-	c.retire(ctx, c.run)
-	c.run = run
-	status := activeControlListenerStatus(run)
 	c.setStatus(status)
 	c.events.publish("control_listener.updated", status)
 	return status, nil
 }
 
 // Stop closes the network address and keeps no endpoint, so the next Start
-// names its address. The socket and the control token are not affected.
+// names its address. The socket and the control password are not affected.
 func (c *ControlAddress) Stop(ctx context.Context) (ControlListenerStatus, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -66,8 +84,8 @@ func (c *ControlAddress) Stop(ctx context.Context) (ControlListenerStatus, error
 	}
 	c.retire(ctx, c.run)
 	c.run = nil
-	status := ControlListenerStatus{Status: ListenerInactive}
-	c.setStatus(status)
+	c.setStatus(ControlListenerStatus{Status: ListenerInactive})
+	status := c.Status()
 	c.events.publish("control_listener.stopped", status)
 	return status, nil
 }
@@ -101,20 +119,25 @@ func (c *ControlAddress) retire(ctx context.Context, run *controlAddressRun) {
 }
 
 // closesConnection reports whether the network address that r arrived on is
-// no longer the active one, so r's connection must close after its response.
+// no longer the active one, or r authenticated with a password that is no
+// longer the current one, so r's connection must close after its response.
 func (c *ControlAddress) closesConnection(r *http.Request) bool {
 	tracked, ok := r.Context().Value(networkConnKey{}).(*networkConn)
 	if !ok {
 		return false
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	return tracked.run != c.run
+	retired := tracked.run != c.run
+	c.mu.Unlock()
+	c.connsMu.Lock()
+	defer c.connsMu.Unlock()
+	return retired || tracked.generation != c.password.currentGeneration()
 }
 
-func activeControlListenerStatus(run *controlAddressRun) ControlListenerStatus {
+// activeStatus is the status of the network address serving run.
+func (c *ControlAddress) activeStatus(run *controlAddressRun) ControlListenerStatus {
 	address := run.listener.Addr().String()
-	return ControlListenerStatus{Status: ListenerActive, ControlListener: &address}
+	return c.withAccess(ControlListenerStatus{Status: ListenerActive, ControlListener: &address})
 }
 
 func (s *Server) serveControlListenerStatus(w http.ResponseWriter, r *http.Request) {
@@ -122,23 +145,79 @@ func (s *Server) serveControlListenerStatus(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) serveControlListenerStart(w http.ResponseWriter, r *http.Request) {
-	settings, err := decodeListenerSettings(r)
+	settings, access, err := decodeControlListenerRequest(r, true)
 	if err != nil {
 		writeControlListenerError(w, r, err)
 		return
 	}
-	status, err := s.control.Start(r.Context(), settings)
+	status, err := s.control.Start(r.Context(), *settings, access)
 	s.writeControlListenerResult(w, r, status, err)
 }
 
 func (s *Server) serveControlListenerUpdate(w http.ResponseWriter, r *http.Request) {
-	settings, err := decodeListenerSettings(r)
+	settings, access, err := decodeControlListenerRequest(r, false)
 	if err != nil {
 		writeControlListenerError(w, r, err)
 		return
 	}
-	status, err := s.control.Update(r.Context(), settings)
+	status, err := s.control.Update(r.Context(), settings, access)
 	s.writeControlListenerResult(w, r, status, err)
+}
+
+// decodeControlListenerRequest decodes the body of a start or update of the
+// network address: address and port, plus password to set the control
+// password or no_password true to remove it, and allowed_origins to replace
+// the allowed origins. A field left out keeps its value. An update may leave
+// out address and port to keep the address, returning nil settings, but
+// must change something.
+func decodeControlListenerRequest(r *http.Request, addressRequired bool) (*ListenerSettings, ControlAccess, error) {
+	var access ControlAccess
+	fields, err := decodeListenerFields(r)
+	if err != nil {
+		return nil, access, err
+	}
+	if raw, ok := fields["password"]; ok {
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil || value == "" {
+			return nil, access, errInvalidListenerRequest
+		}
+		if err := CheckControlPassword(value); err != nil {
+			return nil, access, err
+		}
+		access.Password = SetPassword(value)
+		delete(fields, "password")
+	}
+	if raw, ok := fields["no_password"]; ok {
+		var remove bool
+		if err := json.Unmarshal(raw, &remove); err != nil || !remove || !access.Password.keeps() {
+			return nil, access, errInvalidListenerRequest
+		}
+		access.Password = RemovePassword()
+		delete(fields, "no_password")
+	}
+	if raw, ok := fields["allowed_origins"]; ok {
+		var origins []string
+		if err := json.Unmarshal(raw, &origins); err != nil || origins == nil {
+			return nil, access, errInvalidListenerRequest
+		}
+		checked, err := CheckAllowedOrigins(origins)
+		if err != nil {
+			return nil, access, err
+		}
+		access.AllowedOrigins = &checked
+		delete(fields, "allowed_origins")
+	}
+	if len(fields) == 0 && !addressRequired {
+		if access.Password.keeps() && access.AllowedOrigins == nil {
+			return nil, access, errInvalidListenerRequest
+		}
+		return nil, access, nil
+	}
+	settings, err := listenerSettingsFrom(fields)
+	if err != nil {
+		return nil, access, err
+	}
+	return &settings, access, nil
 }
 
 func (s *Server) serveControlListenerStop(w http.ResponseWriter, r *http.Request) {
@@ -173,12 +252,24 @@ func (s *Server) writeControlListenerResult(w http.ResponseWriter, r *http.Reque
 // restart_in_progress. A failed bind also carries the reason, such as an
 // address already in use.
 func writeControlListenerError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, ErrInvalidControlPassword) {
+		writeRefusal(w, r, http.StatusBadRequest, "invalid_password", err.Error())
+		return
+	}
+	if errors.Is(err, ErrInvalidAllowedOrigin) {
+		writeRefusal(w, r, http.StatusBadRequest, "invalid_origin", err.Error())
+		return
+	}
+	if errors.Is(err, ErrPasswordRequired) {
+		writeRefusal(w, r, http.StatusBadRequest, "password_required", err.Error())
+		return
+	}
 	if errors.Is(err, errControlAddressHandedOver) {
-		writeJSON(w, r, http.StatusConflict, controlRefusalBody{Error: "restart_in_progress", Message: "the instance is restarting"})
+		writeRefusal(w, r, http.StatusConflict, "restart_in_progress", "the instance is restarting")
 		return
 	}
 	if errors.Is(err, ErrListenerUnavailable) {
-		writeJSON(w, r, http.StatusConflict, controlRefusalBody{Error: "listener_unavailable", Message: err.Error()})
+		writeRefusal(w, r, http.StatusConflict, "listener_unavailable", err.Error())
 		return
 	}
 	writeListenerError(w, r, err)

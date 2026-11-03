@@ -1,10 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"net"
-	"net/http"
 	"strconv"
 
 	"github.com/spf13/cobra"
@@ -12,48 +10,14 @@ import (
 )
 
 func init() {
-	serviceControlTokenCmd.Flags().Bool("rotate", false, "replace the control token, drop connections that used the old one, and print the new one")
-	serviceControlCmd.AddCommand(serviceControlTokenCmd)
 	serviceCmd.AddCommand(serviceControlCmd)
 }
 
 var serviceControlCmd = &cobra.Command{
 	Use:   "control",
-	Short: "Manage the control listener's network address and control token",
-}
-
-var serviceControlTokenCmd = &cobra.Command{
-	Use:   "token",
-	Short: "Print the control token",
-	Long:  "Print the control token that every request to the control listener's network address must send as Authorization: Bearer. Only the socket returns it, and Marasi generates it on first use. With --rotate, replace it first: the old token stops working at once, and connections and event streams that used it are dropped.",
+	Short: "Manage the control listener's network address",
 	Args:  cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		rotate, err := cmd.Flags().GetBool("rotate")
-		if err != nil {
-			return err
-		}
-		method, path, operation := http.MethodGet, "/service/control-listener/token", "reading control token"
-		if rotate {
-			method, path, operation = http.MethodPost, "/service/control-listener/token/rotate", "rotating control token"
-		}
-		body, err := runControlRequestStatus(cmd, method, path, operation, nil, http.StatusOK)
-		if err != nil {
-			return withStartHint(err)
-		}
-		if jsonOutput {
-			return writeJSONBody(cmd, body)
-		}
-		var response struct {
-			Token string `json:"token"`
-		}
-		if err := json.Unmarshal(body, &response); err != nil || response.Token == "" {
-			return fmt.Errorf("decoding control token: %s", body)
-		}
-		if _, err := fmt.Fprintln(cmd.OutOrStdout(), response.Token); err != nil {
-			return fmt.Errorf("writing control token: %w", err)
-		}
-		return nil
-	},
+	RunE:  showSubcommandHelp,
 }
 
 // parseControlAddress reads a control listener network address given as

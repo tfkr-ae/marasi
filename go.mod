@@ -14,12 +14,14 @@ require (
 	github.com/klauspost/compress v1.18.0
 	github.com/refraction-networking/utls v1.8.1
 	github.com/spf13/cobra v1.10.2
+	github.com/spf13/pflag v1.0.9
 	github.com/spf13/viper v1.19.0
 	go.einride.tech/aip v0.86.3
 	golang.org/x/net v0.42.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20250528174236-200df99c418a
 	modernc.org/sqlite v1.38.2
 	roci.dev/fracdex v0.0.0-20241211175510-82d7df79e312
+	rsc.io/qr v0.2.0
 )
 
 require (
@@ -36,7 +38,6 @@ require (
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spf13/afero v1.11.0 // indirect
 	github.com/spf13/cast v1.6.0 // indirect
-	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/crypto v0.40.0 // indirect

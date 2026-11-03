@@ -1,8 +1,11 @@
 package service
 
 import (
+	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -38,21 +41,44 @@ func addTestCaseChecklistRoute(mux routeMux, proxy *marasi.Proxy) {
 	})
 }
 
+// testCaseChecklistFile is the checklist a user edits, in the config dir.
+const testCaseChecklistFile = "test_cases.yml"
+
+// WriteDefaultTestCaseChecklist writes the bundled checklist to the config
+// dir when no checklist is there, so a user has a file to edit. The service
+// calls it at start rather than on GET /test-case/checklist, because a GET
+// changes no state (docs/adr/2026-11-03-the-control-listener-network-address-is-guarded-by-an-optional-password.md).
+func WriteDefaultTestCaseChecklist(configDir string) error {
+	file, err := os.OpenFile(filepath.Join(configDir, testCaseChecklistFile), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if errors.Is(err, fs.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("writing default test case checklist: %w", err)
+	}
+	_, err = file.Write(defaultTestCasesYAML)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("writing default test case checklist: %w", err)
+	}
+	return nil
+}
+
+// loadTestCaseChecklist reads the config dir's checklist, or the bundled one
+// when that file is missing. It writes nothing.
 func loadTestCaseChecklist(configDir string) (testCaseChecklist, error) {
-	path := filepath.Join(configDir, "test_cases.yml")
-	if _, err := os.Stat(path); err != nil {
-		if !os.IsNotExist(err) {
-			return testCaseChecklist{}, fmt.Errorf("checking test case checklist: %w", err)
-		}
-		if err := os.WriteFile(path, defaultTestCasesYAML, 0600); err != nil {
-			return testCaseChecklist{}, fmt.Errorf("writing default test case checklist: %w", err)
-		}
+	content, err := os.ReadFile(filepath.Join(configDir, testCaseChecklistFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		content = defaultTestCasesYAML
+	} else if err != nil {
+		return testCaseChecklist{}, fmt.Errorf("reading test case checklist: %w", err)
 	}
 
 	config := viper.New()
-	config.SetConfigFile(path)
 	config.SetConfigType("yaml")
-	if err := config.ReadInConfig(); err != nil {
+	if err := config.ReadConfig(bytes.NewReader(content)); err != nil {
 		return testCaseChecklist{}, fmt.Errorf("reading test case checklist: %w", err)
 	}
 	var checklist testCaseChecklist

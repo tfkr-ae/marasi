@@ -20,12 +20,12 @@ import (
 )
 
 // runMarasiEnv runs the binary with env added to an environment that has no
-// MARASI_REMOTE or MARASI_TOKEN of its own, so the test decides both.
+// MARASI_ variables of its own, so the test decides every one.
 func runMarasiEnv(binary string, env []string, args ...string) (stdout, stderr string, err error) {
 	var outBuf, errBuf bytes.Buffer
 	command := exec.Command(binary, args...)
 	for _, variable := range os.Environ() {
-		if !strings.HasPrefix(variable, "MARASI_REMOTE=") && !strings.HasPrefix(variable, "MARASI_TOKEN=") {
+		if !strings.HasPrefix(variable, "MARASI_") {
 			command.Env = append(command.Env, variable)
 		}
 	}
@@ -56,11 +56,12 @@ type remoteInstance struct {
 	configDir string // the instance machine's config dir
 	cliDir    string // the CLI's config dir, which holds no instance
 	url       string // the network address as a --remote URL
-	token     string
+	password  string // the instance's control password
 }
 
 // startRemoteInstance starts instance work with a network address on
-// 127.0.0.1 and reads its address and control token through the socket.
+// 127.0.0.1, guarded by testControlPassword, and reads its address through
+// the socket.
 func startRemoteInstance(t *testing.T, binary string) remoteInstance {
 	t.Helper()
 	configDir := serviceConfigDir(t)
@@ -70,7 +71,7 @@ func startRemoteInstance(t *testing.T, binary string) remoteInstance {
 		configDir: configDir,
 		cliDir:    t.TempDir(),
 		url:       "http://" + *controlAddressOf(t, binary, configDir, "work"),
-		token:     controlTokenOf(t, binary, configDir, "work"),
+		password:  testControlPassword,
 	}
 }
 
@@ -80,9 +81,9 @@ func (r remoteInstance) local(args ...string) (stdout, stderr string, err error)
 }
 
 // remote runs a command against the instance over --remote with
-// MARASI_TOKEN, from the CLI's own config dir.
+// MARASI_PASSWORD, from the CLI's own config dir.
 func (r remoteInstance) remote(args ...string) (stdout, stderr string, err error) {
-	return runMarasiEnv(r.binary, []string{"MARASI_TOKEN=" + r.token}, append([]string{"--config-dir", r.cliDir, "--remote", r.url}, args...)...)
+	return runMarasiEnv(r.binary, []string{"MARASI_PASSWORD=" + r.password}, append([]string{"--config-dir", r.cliDir, "--remote", r.url}, args...)...)
 }
 
 func TestRemote(t *testing.T) {
@@ -117,14 +118,6 @@ func TestRemoteSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantStatus := strings.TrimSuffix(localStatus, "}\n") + `,"cli_version":"dev"}` + "\n"
-	tokenPath := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenPath, []byte(instance.token+"\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	wrongPath := filepath.Join(t.TempDir(), "wrong")
-	if err := os.WriteFile(wrongPath, []byte(strings.Repeat("0", len(instance.token))), 0600); err != nil {
-		t.Fatal(err)
-	}
 
 	t.Run("should reach the instance named by MARASI_REMOTE, or by --remote over it", func(t *testing.T) {
 		for _, test := range []struct {
@@ -132,10 +125,10 @@ func TestRemoteSelection(t *testing.T) {
 			env  []string
 			args []string
 		}{
-			{name: "MARASI_REMOTE", env: []string{"MARASI_REMOTE=" + instance.url, "MARASI_TOKEN=" + instance.token}},
-			{name: "--remote over MARASI_REMOTE", env: []string{"MARASI_REMOTE=http://127.0.0.1:1", "MARASI_TOKEN=" + instance.token}, args: []string{"--remote", instance.url}},
-			{name: "--token-file", args: []string{"--remote", instance.url, "--token-file", tokenPath}},
-			{name: "--token-file over MARASI_TOKEN", env: []string{"MARASI_TOKEN=wrong"}, args: []string{"--remote", instance.url, "--token-file", tokenPath}},
+			{name: "MARASI_REMOTE", env: []string{"MARASI_REMOTE=" + instance.url, "MARASI_PASSWORD=" + instance.password}},
+			{name: "--remote over MARASI_REMOTE", env: []string{"MARASI_REMOTE=http://127.0.0.1:1", "MARASI_PASSWORD=" + instance.password}, args: []string{"--remote", instance.url}},
+			{name: "--password", args: []string{"--remote", instance.url, "--password", instance.password}},
+			{name: "--password over MARASI_PASSWORD", env: []string{"MARASI_PASSWORD=wrong"}, args: []string{"--remote", instance.url, "--password", instance.password}},
 		} {
 			args := append([]string{"--config-dir", instance.cliDir}, test.args...)
 			stdout, stderr, err := runMarasiEnv(binary, test.env, append(args, "service", "status", "--json")...)
@@ -145,21 +138,32 @@ func TestRemoteSelection(t *testing.T) {
 		}
 	})
 
-	t.Run("should print a token error when the instance rejects the control token", func(t *testing.T) {
-		want := "control token rejected by " + instance.url + ": check MARASI_TOKEN or --token-file"
-		args := []string{"--config-dir", instance.cliDir, "--remote", instance.url, "--token-file", wrongPath}
-		for _, command := range [][]string{{"service", "status"}, {"traffic", "list"}, {"events"}, {"service", "restart"}} {
-			stdout, stderr, err := runMarasiEnv(binary, nil, append(args, command...)...)
-			if exitCode(err) != 1 || stdout != "" || !strings.Contains(stderr, "Error: "+want+"\n") {
-				t.Fatalf("\nwanted:\n%v: %s\ngot:\nstdout %q stderr %q error %v", command, want, stdout, stderr, err)
+	t.Run("should print an authentication error when the control password is wrong or missing", func(t *testing.T) {
+		for _, test := range []struct {
+			name string
+			env  []string
+			args []string
+			want string
+		}{
+			{name: "a wrong --password", args: []string{"--password", "wrong"}, want: "control password rejected by " + instance.url + ": check --password or MARASI_PASSWORD"},
+			{name: "a wrong MARASI_PASSWORD", env: []string{"MARASI_PASSWORD=wrong"}, want: "control password rejected by " + instance.url + ": check --password or MARASI_PASSWORD"},
+			{name: "no password", want: "control password rejected by " + instance.url + ": the instance needs one: pass --password or set MARASI_PASSWORD"},
+			{name: "only the removed MARASI_TOKEN", env: []string{"MARASI_TOKEN=" + instance.password}, want: "control password rejected by " + instance.url + ": the instance needs one: pass --password or set MARASI_PASSWORD"},
+		} {
+			args := append([]string{"--config-dir", instance.cliDir, "--remote", instance.url}, test.args...)
+			for _, command := range [][]string{{"service", "status"}, {"traffic", "list"}, {"events"}, {"service", "restart"}} {
+				stdout, stderr, err := runMarasiEnv(binary, test.env, append(args, command...)...)
+				if exitCode(err) != 1 || stdout != "" || !strings.Contains(stderr, "Error: "+test.want+"\n") {
+					t.Fatalf("\nwanted:\n%s %v: %s\ngot:\nstdout %q stderr %q error %v", test.name, command, test.want, stdout, stderr, err)
+				}
+				stdout, stderr, err = runMarasiEnv(binary, test.env, append(append(args, command...), "--json")...)
+				assertJSONCommandError(t, stdout, stderr, err, test.want)
 			}
-			stdout, stderr, err = runMarasiEnv(binary, nil, append(append(args, command...), "--json")...)
-			assertJSONCommandError(t, stdout, stderr, err, want)
 		}
 	})
 
 	t.Run("should say no instance answers at a remote URL nothing listens on", func(t *testing.T) {
-		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=" + instance.token}, "--config-dir", instance.cliDir, "--remote", "http://127.0.0.1:1", "service", "restart")
+		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_PASSWORD=" + instance.password}, "--config-dir", instance.cliDir, "--remote", "http://127.0.0.1:1", "service", "restart")
 		want := "Error: no instance answers at http://127.0.0.1:1\n"
 		if exitCode(err) != 1 || stdout != "" || !strings.HasSuffix(stderr, want) {
 			t.Fatalf("\nwanted:\n%q\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
@@ -168,7 +172,7 @@ func TestRemoteSelection(t *testing.T) {
 
 	t.Run("should skip the local socket-path length check", func(t *testing.T) {
 		longDir := filepath.Join(t.TempDir(), strings.Repeat("d", 120))
-		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=" + instance.token}, "--config-dir", longDir, "--remote", instance.url, "service", "status", "--json")
+		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_PASSWORD=" + instance.password}, "--config-dir", longDir, "--remote", instance.url, "service", "status", "--json")
 		if err != nil || stdout != wantStatus || stderr != "" {
 			t.Fatalf("\nwanted:\n%s\ngot:\nstdout %q stderr %q error %v", wantStatus, stdout, stderr, err)
 		}
@@ -184,7 +188,7 @@ func TestRemoteSelection(t *testing.T) {
 			{args: []string{"--remote", instance.url, "service", "list"}, want: "marasi service list acts on this machine and does not accept --remote"},
 			{env: []string{"MARASI_REMOTE=" + instance.url}, args: []string{"service", "list"}, want: "marasi service list acts on this machine and does not accept MARASI_REMOTE"},
 		} {
-			env := append([]string{"MARASI_TOKEN=" + instance.token}, test.env...)
+			env := append([]string{"MARASI_PASSWORD=" + instance.password}, test.env...)
 			args := append([]string{"--config-dir", instance.cliDir}, test.args...)
 			stdout, stderr, err := runMarasiEnv(binary, env, args...)
 			if exitCode(err) != 1 || stdout != "" || stderr != "Error: "+test.want+"\n" {
@@ -211,7 +215,7 @@ func TestRemoteSelection(t *testing.T) {
 			stdoutWriter.Close()
 		})
 		command := exec.Command(binary, "--json", "--config-dir", instance.cliDir, "--remote", instance.url, "events")
-		command.Env = append(os.Environ(), "MARASI_TOKEN="+instance.token)
+		command.Env = append(os.Environ(), "MARASI_PASSWORD="+instance.password)
 		command.Stdout = stdoutWriter
 		var stderr bytes.Buffer
 		command.Stderr = &stderr
@@ -299,26 +303,16 @@ func startCannedRemoteAPIHandler(t *testing.T, handle http.HandlerFunc) (string,
 func TestRemoteUsageErrors(t *testing.T) {
 	binary := buildMarasi(t)
 	remote, sent := startCannedRemoteAPI(t)
-	emptyToken := filepath.Join(t.TempDir(), "empty")
-	if err := os.WriteFile(emptyToken, []byte("\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
 
-	t.Run("should fail before any request on --instance with a remote or a missing token", func(t *testing.T) {
+	t.Run("should fail before any request on --instance with a remote or an invalid remote URL", func(t *testing.T) {
 		for _, test := range []struct {
 			env  []string
 			args []string
 			want string
 		}{
-			{env: []string{"MARASI_TOKEN=secret"}, args: []string{"--remote", remote, "--instance", "work", "service", "status"}, want: "--remote and --instance cannot be used together"},
-			{env: []string{"MARASI_TOKEN=secret", "MARASI_REMOTE=" + remote}, args: []string{"--instance", "default", "traffic", "list"}, want: "MARASI_REMOTE and --instance cannot be used together"},
-			{args: []string{"--remote", remote, "service", "status"}, want: "--remote needs the instance's control token: set MARASI_TOKEN or pass --token-file PATH"},
-			{env: []string{"MARASI_REMOTE=" + remote}, args: []string{"events"}, want: "--remote needs the instance's control token"},
-			{env: []string{"MARASI_TOKEN=secret"}, args: []string{"--remote", remote, "--token-file", emptyToken, "service", "status"}, want: "control token file " + emptyToken + " is empty"},
-			{env: []string{"MARASI_TOKEN=secret"}, args: []string{"--remote", remote, "--token-file", filepath.Join(t.TempDir(), "missing"), "service", "status"}, want: "reading control token file"},
-			{env: []string{"MARASI_TOKEN=secret"}, args: []string{"--remote", "ftp://" + strings.TrimPrefix(remote, "http://"), "service", "status"}, want: "must start with http:// or https://"},
-			{env: []string{"MARASI_TOKEN=secret"}, args: []string{"--remote", remote + "?token=secret", "service", "status"}, want: "must not have a user, query, or fragment"},
-			{args: []string{"--token-file", emptyToken, "service", "status"}, want: "--token-file needs --remote or MARASI_REMOTE"},
+			{env: []string{"MARASI_PASSWORD=secret"}, args: []string{"--remote", remote, "--instance", "work", "service", "status"}, want: "--remote and --instance cannot be used together"},
+			{env: []string{"MARASI_PASSWORD=secret"}, args: []string{"--remote", "ftp://" + strings.TrimPrefix(remote, "http://"), "service", "status"}, want: "must start with http:// or https://"},
+			{env: []string{"MARASI_PASSWORD=secret"}, args: []string{"--remote", remote + "?password=secret", "service", "status"}, want: "must not have a user, query, or fragment"},
 		} {
 			args := append([]string{"--config-dir", t.TempDir()}, test.args...)
 			stdout, stderr, err := runMarasiEnv(binary, test.env, args...)
@@ -333,7 +327,7 @@ func TestRemoteUsageErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("should send the remote URL's host and the token as a bearer", func(t *testing.T) {
+	t.Run("should send the remote URL's host and the control password as a bearer from --password or MARASI_PASSWORD, and none without one", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
@@ -348,13 +342,27 @@ func TestRemoteUsageErrors(t *testing.T) {
 		t.Cleanup(func() { server.Close() })
 		address := listener.Addr().String()
 
-		_, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, "--config-dir", t.TempDir(), "--remote", "http://"+address+"/prefix/", "traffic", "list", "--json", "--limit", "5")
-		if err != nil {
-			t.Fatalf("traffic list: %v\n%s", err, stderr)
-		}
-		got := <-requests
-		if got.Host != address || got.URL.Path != "/prefix/traffic" || got.URL.Query().Get("limit") != "5" || got.Header.Get("Authorization") != "Bearer secret" {
-			t.Fatalf("\nwanted:\nHost %s, /prefix/traffic?limit=5, Bearer secret\ngot:\nHost %s, %s?%s, %q", address, got.Host, got.URL.Path, got.URL.RawQuery, got.Header.Get("Authorization"))
+		for _, test := range []struct {
+			name string
+			env  []string
+			args []string
+			want string
+		}{
+			{name: "MARASI_PASSWORD", env: []string{"MARASI_PASSWORD=env secret"}, want: "Bearer env secret"},
+			{name: "--password", args: []string{"--password", "flag secret"}, want: "Bearer flag secret"},
+			{name: "--password over MARASI_PASSWORD", env: []string{"MARASI_PASSWORD=env secret"}, args: []string{"--password", "flag secret"}, want: "Bearer flag secret"},
+			{name: "no password", want: ""},
+		} {
+			args := append([]string{"--config-dir", t.TempDir(), "--remote", "http://" + address + "/prefix/"}, test.args...)
+			_, stderr, err := runMarasiEnv(binary, test.env, append(args, "traffic", "list", "--json", "--limit", "5")...)
+			if err != nil {
+				t.Fatalf("traffic list with %s: %v\n%s", test.name, err, stderr)
+			}
+			got := <-requests
+			_, hasAuthorization := got.Header["Authorization"]
+			if got.Host != address || got.URL.Path != "/prefix/traffic" || got.URL.Query().Get("limit") != "5" || got.Header.Get("Authorization") != test.want || hasAuthorization != (test.want != "") {
+				t.Fatalf("\nwanted:\n%s: Host %s, /prefix/traffic?limit=5, %q\ngot:\nHost %s, %s?%s, %q", test.name, address, test.want, got.Host, got.URL.Path, got.URL.RawQuery, got.Header.Get("Authorization"))
+			}
 		}
 	})
 }
@@ -411,7 +419,7 @@ func TestRemoteStop(t *testing.T) {
 		var err error
 		go func() {
 			defer close(done)
-			stdout, stderr, err = runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, "--config-dir", t.TempDir(), "--remote", remote, "service", "stop")
+			stdout, stderr, err = runMarasiEnv(binary, []string{"MARASI_PASSWORD=secret"}, "--config-dir", t.TempDir(), "--remote", remote, "service", "stop")
 		}()
 		select {
 		case <-done:
@@ -432,7 +440,7 @@ func TestRemoteStop(t *testing.T) {
 	})
 
 	t.Run("should say no instance answers when nothing listens at the remote URL", func(t *testing.T) {
-		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, "--config-dir", t.TempDir(), "--remote", "http://127.0.0.1:1", "service", "stop")
+		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_PASSWORD=secret"}, "--config-dir", t.TempDir(), "--remote", "http://127.0.0.1:1", "service", "stop")
 		if want := "Error: no instance answers at http://127.0.0.1:1\n"; exitCode(err) != 1 || stdout != "" || stderr != want {
 			t.Fatalf("\nwanted:\n%q\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
 		}
@@ -451,7 +459,7 @@ func TestRemoteVersionWarning(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := func(binary string, args ...string) (string, string, error) {
-		return runMarasiEnv(binary, []string{"MARASI_TOKEN=" + instance.token}, append([]string{"--config-dir", instance.cliDir, "--remote", instance.url, "service", "status"}, args...)...)
+		return runMarasiEnv(binary, []string{"MARASI_PASSWORD=" + instance.password}, append([]string{"--config-dir", instance.cliDir, "--remote", instance.url, "service", "status"}, args...)...)
 	}
 
 	t.Run("should show both versions and warn on stderr when they differ", func(t *testing.T) {
@@ -503,7 +511,7 @@ func TestRemoteChromePathOS(t *testing.T) {
 	t.Run("should default --os to the instance's operating system over --remote", func(t *testing.T) {
 		for _, command := range []string{"add", "remove"} {
 			sent.reset()
-			_, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, "--config-dir", t.TempDir(), "--remote", remote, "chrome", "path", command, "--path", "/opt/chrome")
+			_, stderr, err := runMarasiEnv(binary, []string{"MARASI_PASSWORD=secret"}, "--config-dir", t.TempDir(), "--remote", remote, "chrome", "path", command, "--path", "/opt/chrome")
 			if err != nil {
 				t.Fatalf("chrome path %s: %v\n%s", command, err, stderr)
 			}
@@ -516,7 +524,7 @@ func TestRemoteChromePathOS(t *testing.T) {
 
 	t.Run("should send an explicit --os over --remote without reading the status", func(t *testing.T) {
 		sent.reset()
-		_, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, "--config-dir", t.TempDir(), "--remote", remote, "chrome", "path", "add", "--os", "darwin", "--path", "/opt/chrome")
+		_, stderr, err := runMarasiEnv(binary, []string{"MARASI_PASSWORD=secret"}, "--config-dir", t.TempDir(), "--remote", remote, "chrome", "path", "add", "--os", "darwin", "--path", "/opt/chrome")
 		if err != nil {
 			t.Fatalf("chrome path add: %v\n%s", err, stderr)
 		}
@@ -532,7 +540,7 @@ func TestRemoteChromePathOS(t *testing.T) {
 			io.WriteString(w, `{"status":"running"}`)
 		})
 		want := "the instance does not report its operating system: pass --os"
-		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_TOKEN=secret"}, "--config-dir", t.TempDir(), "--remote", older, "chrome", "path", "add", "--path", "/opt/chrome")
+		stdout, stderr, err := runMarasiEnv(binary, []string{"MARASI_PASSWORD=secret"}, "--config-dir", t.TempDir(), "--remote", older, "chrome", "path", "add", "--path", "/opt/chrome")
 		if exitCode(err) != 1 || stdout != "" || stderr != "Error: "+want+"\n" {
 			t.Fatalf("\nwanted:\n%s\ngot:\nstdout %q stderr %q error %v", want, stdout, stderr, err)
 		}
@@ -564,7 +572,7 @@ func TestRemoteRestart(t *testing.T) {
 		}
 		stdout, stderr, err = instance.remote("--json", "service", "status")
 		if err != nil || !strings.Contains(stdout, `"version":"new-build"`) {
-			t.Fatalf("\nwanted:\nnew-build at the same address and token\ngot:\nstdout %q stderr %q error %v", stdout, stderr, err)
+			t.Fatalf("\nwanted:\nnew-build at the same address and password\ngot:\nstdout %q stderr %q error %v", stdout, stderr, err)
 		}
 	})
 }
