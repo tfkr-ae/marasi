@@ -19,6 +19,8 @@ The control socket is `<config-dir>/instances/<instance>.sock`. Marasi rejects t
 
 A parent `go.work` can exclude this worktree. Build with `GOWORK=off`.
 
+Marasi reads `MARASI_CONFIG_DIR` and `MARASI_INSTANCE` for every command, and `MARASI_PROJECT`, `MARASI_PROJECT_NAME`, `MARASI_ADDRESS`, `MARASI_PORT`, `MARASI_CONTROL_ADDRESS`, `MARASI_PASSWORD` and `MARASI_ALLOW_ORIGIN` for `service start`. A passed flag wins over its variable, but a variable whose flag Launch does not pass still applies: an exported `MARASI_CONTROL_ADDRESS` gives the main instance a network address and makes readiness `control_listener` non-null. Run `env | grep ^MARASI_` and unset what it prints before Launch, and unset `MARASI_PASSWORD` after the [control listener](features/control-listener.md) recipe exports it.
+
 ## Launch
 
 Run from the repository root.
@@ -50,7 +52,7 @@ The start command exits after its detached child is ready. Readiness is a zero e
 
 Unix detach is a new session. Windows detach is a new process group with `DETACHED_PROCESS`. Both wait on the same stdin handshake. A Windows detached child does not receive console Ctrl+C. Stop it with `service stop`.
 
-Verification needs no authentication, seed data, or browser. Marasi creates the project database, CA material, an empty `wordlists` directory, and `templates/default_template.md` under the scratch config directory.
+Verification needs no authentication, seed data, or browser. Marasi creates the project database, CA material, `marasi_config.yaml`, `test_cases.yml`, an empty `wordlists` directory, and `templates/default_template.md` under the scratch config directory.
 
 ## Doctor
 
