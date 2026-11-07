@@ -1,6 +1,6 @@
 # Events
 
-Users subscribe to a running instance and print live named events until the stream ends or they interrupt.
+Users subscribe to a running instance and print named events until the stream ends or they interrupt. Each event has an opaque id, and a subscriber that reconnects with the last id it saw gets the events it missed.
 
 ## Sub-features
 
@@ -9,7 +9,9 @@ Users subscribe to a running instance and print live named events until the stre
 - Print listener, project, launchpad, test-case, finding, artifact, note, metadata, checkpoint, Chrome path/profile, waypoint, wordlist, Armory template/run, extension, WebSocket, report-template, and log (`log.added`) events from those CLI operations.
 - Print `extension.log`, `extension.gui.rendered`, and `extension.gui.updated` when an enabled extension's Lua prints or calls `marasi.gui`; see [extension](extension.md).
 - Print `traffic.changed` for each `traffic bulk` command, and `sitemap.changed` after `traffic bulk delete` and `jobs rebuild sitemap`.
-- Choose human-readable or `--json` output.
+- Choose human-readable or `--json` output, both showing each event's id.
+- Resume after a disconnect with `--last-event-id ID`, or get `stream.reset` when the id cannot be resumed from.
+- Get `stream.dropped` before the instance closes a subscriber that fell 1023 events behind.
 
 ## How to get to it (user POV)
 
@@ -17,12 +19,15 @@ Start a service first. Run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --inst
 
 ## Driving it with shell and curl
 
-Start `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANCE" events` as its own process, redirecting stdout and stderr. Wait until stderr is `: connected`. Proxy one HTTP request whose path you control. Require stdout to contain `traffic.request` then `traffic.response` with the same `id`. Require `path` on `traffic.request` only. Send SIGINT to the subscriber; after a successful connect that interrupt is a zero exit.
+Start `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --instance "$VERIFY_INSTANCE" events` without `--json` as its own process, redirecting stdout and stderr. Wait until stderr is `: connected`; `--json` writes no such line. Proxy one HTTP request whose path you control. Require stdout to contain `traffic.request` then `traffic.response` with the same `id`. Require `path` on `traffic.request` only. Send SIGINT to the subscriber; after a successful connect that interrupt is a zero exit.
 
 ## Gotchas
 
-- The stream is live only. Subscribe before the action; there is no replay.
-- Human mode writes `: connected` to stderr and `name <json>` lines to stdout. `--json` writes NDJSON `{"event":...,"data":...}` to stdout and omits the connected comment.
+- Subscribe before the action, or resume with the id of the last event you saw. Each event has an id `<run_id>.<n>`, where `run_id` is the one `service status --json` reports; treat it as opaque. Human stdout is `name id json`, with `-` for an event without an id. `--json` writes `{"event","id","data"}`, without `id` then.
+- To prove resume, run `events` until it prints an event, stop it with SIGINT, keep the last id, proxy several requests, then run `events --last-event-id "$LAST_ID"`. Require the missed `traffic.request` and `traffic.response` events first, in order, with ids following `$LAST_ID` and none repeated, before live events. `GET /events?last_event_id=ID` does the same; a `Last-Event-ID` header wins over the parameter.
+- The instance keeps the newest 4096 events, 16 MiB at most. Resuming from an older id, from an id issued before a `service restart`, or from an id the instance never issued prints `stream.reset` first with `{"reason":"expired"}`, `{"reason":"restarted"}` or `{"reason":"invalid"}` and an id, then only live events. Never 400. To force `expired`, push more than 4096 events after the id, such as 2100 proxied requests (a request and a response each). The reset's id can itself be resumed from.
+- A subscriber whose 1024-event queue fills gets `stream.dropped` `{"reason":"overflow"}` with no id, and the stream ends; reconnect with the last id.
+- Human mode writes `: connected` to stderr and `name id json` lines to stdout. `--json` writes NDJSON `{"event":...,"id":...,"data":...}` to stdout and omits the connected comment, so with `--json` there is no line that says the subscription is live. Use human mode when you need to wait for it.
 - Heartbeat comments are dropped. Only named SSE events are printed.
 - If the instance is not running, the command fails with `instance $VERIFY_INSTANCE is not running`.
 - After `: connected`, SIGINT or SIGTERM is a zero exit. Closing before that comment fails. `events` installs its own SIGINT handler, so `kill -INT` of that PID is a zero exit even when the job inherited SIGINT ignored. Windows cannot deliver `os.Interrupt` to another process. Foreground Ctrl-C is the equivalent.

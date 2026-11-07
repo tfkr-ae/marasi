@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,7 +73,7 @@ func TestServiceEvents(t *testing.T) {
 		}
 	})
 
-	t.Run("should frame publications without an SSE id", func(t *testing.T) {
+	t.Run("should frame publications with the run id and a sequence number", func(t *testing.T) {
 		server := newTestServer(nil, func() {})
 		httpServer := httptest.NewServer(server)
 		defer httpServer.Close()
@@ -84,8 +85,9 @@ func TestServiceEvents(t *testing.T) {
 			Path string `json:"path"`
 		}{ID: "0193802f-f0e7-73d9-a764-06d21e367809", Path: "/a?b=c"})
 
-		if got := readEventFrame(t, reader); got != "event: traffic.request\ndata: {\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"path\":\"/a?b=c\"}\n\n" {
-			t.Fatalf("\nwanted exact event frame without id field\ngot:\n%s", got)
+		want := "id: " + server.RunID() + ".1\nevent: traffic.request\ndata: {\"id\":\"0193802f-f0e7-73d9-a764-06d21e367809\",\"path\":\"/a?b=c\"}\n\n"
+		if got := readRawEventFrame(t, reader); got != want {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
 	})
 
@@ -592,7 +594,40 @@ func connectEventStream(t *testing.T, url string) (*http.Response, *bufio.Reader
 	return response, reader
 }
 
+// readEventFrame reads one SSE frame and returns it without its id line,
+// failing unless that id is from this run.
 func readEventFrame(t *testing.T, reader *bufio.Reader) string {
+	t.Helper()
+	id, frame := readEventFrameWithID(t, reader)
+	if id != "" && !strings.HasPrefix(id, processRunID+".") {
+		t.Fatalf("\nwanted:\nan id from run %s\ngot:\n%s", processRunID, id)
+	}
+	return frame
+}
+
+// readEventFrameWithID reads one SSE frame and returns its id and the frame
+// without its id line.
+func readEventFrameWithID(t *testing.T, reader *bufio.Reader) (string, string) {
+	t.Helper()
+	var id, frame string
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("reading event frame: %v", err)
+		}
+		if after, ok := strings.CutPrefix(line, "id: "); ok && frame == "" && id == "" {
+			id = strings.TrimSuffix(after, "\n")
+			continue
+		}
+		frame += line
+		if line == "\n" {
+			return id, frame
+		}
+	}
+}
+
+// readRawEventFrame reads one SSE frame exactly as written.
+func readRawEventFrame(t *testing.T, reader *bufio.Reader) string {
 	t.Helper()
 	var frame string
 	for {

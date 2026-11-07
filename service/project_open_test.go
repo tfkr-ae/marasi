@@ -634,6 +634,9 @@ func TestProjectEvents(t *testing.T) {
 				if err != nil {
 					return
 				}
+				if strings.HasPrefix(line, "id: ") {
+					continue
+				}
 				frame += line
 				if line != "\n" {
 					continue
