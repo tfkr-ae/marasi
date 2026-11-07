@@ -59,6 +59,7 @@ var readOnlyGetRoutes = map[string][]string{
 	"GET /launch":                            {"/launch"},
 	"GET /launch/{id}":                       {"/launch/0190f0c4-7b6e-7000-8000-000000000001"},
 	"GET /launchpad":                         {"/launchpad"},
+	"GET /launchpad/search":                  {"/launchpad/search?q=x"},
 	"GET /launchpad/{id}":                    {"/launchpad/0190f0c4-7b6e-7000-8000-000000000001"},
 	"GET /notes":                             {"/notes"},
 	"GET /notes/{id}":                        {"/notes/0190f0c4-7b6e-7000-8000-000000000001"},

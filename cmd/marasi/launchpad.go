@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"syscall"
 	"time"
@@ -32,6 +33,7 @@ var launchpadGetExclude []string
 var launchpadGetOrderBy string
 var launchpadMoveBefore string
 var launchpadMoveTarget string
+var launchpadSearchQuery string
 
 type launchpadRequest struct {
 	Name        *string `json:"name,omitempty"`
@@ -52,6 +54,7 @@ func init() {
 	launchpadGetCmd.Flags().StringVarP(&launchpadGetQuery, "query", "q", "", "AIP-160 traffic query that narrows the entries; see marasi traffic list --help")
 	launchpadGetCmd.Flags().StringArrayVar(&launchpadGetExclude, "exclude", nil, "Content type to hide, exact or major/*; repeat for more")
 	launchpadGetCmd.Flags().StringVar(&launchpadGetOrderBy, "order-by", "", "Sort the entries: one field, then optional desc, as in marasi traffic list --help; default entry order")
+	launchpadSearchCmd.Flags().StringVarP(&launchpadSearchQuery, "query", "q", "", "AIP-160 traffic query to run over every launchpad's entries; see marasi traffic list --help")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateName, "name", "", "Launchpad name")
 	launchpadUpdateCmd.Flags().StringVar(&launchpadUpdateDescription, "description", "", "Launchpad description")
 	launchpadLinkCmd.Flags().StringVar(&launchpadLinkRequest, "request", "", "UUID of the request/response pair")
@@ -62,7 +65,7 @@ func init() {
 	launchpadLaunchCmd.MarkFlagRequired("scheme")
 	launchpadMoveCmd.Flags().StringVar(&launchpadMoveBefore, "before", "", "UUID of the entry to place the moved entries before. If omitted, they go after the last entry")
 	launchpadMoveCmd.Flags().StringVar(&launchpadMoveTarget, "target", "", "UUID of the launchpad to move the entries to. If omitted, the entries stay in their launchpad")
-	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadUpdateCmd, launchpadDeleteCmd, launchpadLinkCmd, launchpadUnlinkCmd, launchpadMoveCmd, launchpadLaunchCmd, launchpadPendingCmd, launchpadStatusCmd, launchpadCancelCmd)
+	launchpadCmd.AddCommand(launchpadCreateCmd, launchpadListCmd, launchpadGetCmd, launchpadSearchCmd, launchpadUpdateCmd, launchpadDeleteCmd, launchpadLinkCmd, launchpadUnlinkCmd, launchpadMoveCmd, launchpadLaunchCmd, launchpadPendingCmd, launchpadStatusCmd, launchpadCancelCmd)
 	rootCmd.AddCommand(launchpadCmd)
 }
 
@@ -126,6 +129,32 @@ only the entries that match it. See marasi traffic list --help for the fields.`,
 			path += "?" + query.Encode()
 		}
 		return runLaunchpadCommand(cmd, http.MethodGet, path, "getting launchpad", "get", launchpadRequest{})
+	},
+}
+
+var launchpadSearchCmd = &cobra.Command{
+	Use:   "search",
+	Short: "Find matching entries across every launchpad",
+	Long: `Run one traffic query over the entries of every launchpad and print one
+row per match: the launchpad id and the request id. Rows are grouped by
+launchpad, oldest launchpad first, and follow each launchpad's entry order.
+A pair linked to several launchpads appears under each one. Linked captured
+traffic counts as well as launched pairs. Launchpads without a match are left
+out, and without --query every entry matches.
+
+--query (-q) takes the same AIP-160 query as marasi traffic list. An invalid
+query exits non-zero with invalid_query and its position in the text you typed.
+
+With --json the command writes the control API body: an object that maps each
+matching launchpad id to its request ids, or {} when nothing matches.`,
+	Example: `  marasi launchpad search -q 'response_body:"token" AND status_code >= 500'`,
+	Args:    cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		path := "/launchpad/search"
+		if launchpadSearchQuery != "" {
+			path += "?" + url.Values{"q": {launchpadSearchQuery}}.Encode()
+		}
+		return runLaunchpadCommand(cmd, http.MethodGet, path, "searching launchpads", "search", launchpadRequest{})
 	},
 }
 
@@ -508,6 +537,8 @@ func runLaunchpadCommand(cmd *cobra.Command, method, path, operation, action str
 		return writeLaunchpadListHuman(response, cmd.OutOrStdout())
 	case "get":
 		return writeLaunchpadGetHuman(response, cmd.OutOrStdout())
+	case "search":
+		return writeLaunchpadSearchHuman(response, cmd.OutOrStdout())
 	case "pending":
 		return writeLaunchListHuman(response, cmd.OutOrStdout())
 	case "create":
@@ -592,6 +623,27 @@ func writeLaunchpadListHuman(body []byte, stdout io.Writer) error {
 			lastStatus = strconv.Itoa(*item.LastStatusCode)
 		}
 		table.row(item.ID, truncateDisplay(item.Name, trafficPathDisplayLimit), truncateDisplay(item.Description, trafficPathDisplayLimit), item.EntryCount, lastStatus)
+	}
+	return table.flush()
+}
+
+// writeLaunchpadSearchHuman prints one row per match. Launchpad ids are
+// UUIDv7, so sorting them lists launchpads oldest first.
+func writeLaunchpadSearchHuman(body []byte, stdout io.Writer) error {
+	var matches map[string][]string
+	if err := json.Unmarshal(body, &matches); err != nil {
+		return fmt.Errorf("decoding launchpad search: %w", err)
+	}
+	launchpadIDs := make([]string, 0, len(matches))
+	for id := range matches {
+		launchpadIDs = append(launchpadIDs, id)
+	}
+	sort.Strings(launchpadIDs)
+	table := newListTable(stdout, "LAUNCHPAD ID", "REQUEST ID")
+	for _, launchpadID := range launchpadIDs {
+		for _, requestID := range matches[launchpadID] {
+			table.row(launchpadID, requestID)
+		}
 	}
 	return table.flush()
 }
