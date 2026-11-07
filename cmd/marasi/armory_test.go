@@ -42,6 +42,8 @@ func TestArmoryCommands(t *testing.T) {
 		{name: "template update", args: []string{"armory", "template", "update", templateID, "--description", ""}, response: template, method: http.MethodPost, path: "/armory/template/" + templateID, body: `{"description":""}`, wantStderr: "armory template " + templateID + " updated successfully\n"},
 		{name: "template delete", args: []string{"armory", "template", "delete", templateID}, response: `{"id":"` + templateID + `"}` + "\n", method: http.MethodDelete, path: "/armory/template/" + templateID, wantStderr: "armory template " + templateID + " deleted successfully\n"},
 		{name: "run list", args: []string{"armory", "run", "list", "--template", templateID}, response: `{"items":[` + strings.TrimSpace(run) + `]}` + "\n", method: http.MethodGet, path: "/armory/template/" + templateID + "/run", wantStdout: armoryRunHuman(runID, templateID)},
+		{name: "project run list", args: []string{"armory", "run", "list"}, response: `{"items":[` + strings.TrimSpace(run) + `]}` + "\n", method: http.MethodGet, path: "/armory/run", wantStdout: armoryRunHuman(runID, templateID)},
+		{name: "project run list by status", args: []string{"armory", "run", "list", "--status", "in_progress", "--status", "draft,failed"}, response: `{"items":[]}` + "\n", method: http.MethodGet, path: "/armory/run", query: "status=in_progress&status=draft%2Cfailed"},
 		{name: "run get", args: []string{"armory", "run", "get", runID}, response: run, method: http.MethodGet, path: "/armory/run/" + runID, wantStdout: armoryRunHuman(runID, templateID)},
 		{name: "run create", args: []string{"armory", "run", "create", "--template", templateID, "--attack-type", "tandem", "--wordlist", "users", "--wordlist", "passwords", "--http", "--max-concurrent", "4"}, response: run, method: http.MethodPost, path: "/armory/run", body: `{"template_id":"` + templateID + `","attack_type":"tandem","wordlists":["users","passwords"],"use_https":false,"max_concurrent":4}`, wantStderr: "armory run " + runID + " created successfully\n"},
 		{name: "run validate", args: []string{"armory", "run", "validate", "--raw-file", rawFile, "--attack-type", "harpoon"}, response: "{\"status\":\"ok\"}\n", method: http.MethodPost, path: "/armory/run/validate", body: `{"raw_template":"GET /@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","attack_type":"harpoon","wordlists":[]}`, wantStdout: "status: ok\n"},
@@ -127,7 +129,7 @@ func TestArmoryCommandOptions(t *testing.T) {
 		for _, args := range [][]string{
 			{"armory", "template", "create"},
 			{"armory", "template", "update", templateID},
-			{"armory", "run", "list"},
+			{"armory", "run", "list", "--template", templateID, "--status", "draft"},
 			{"armory", "run", "create", "--template", templateID},
 			{"armory", "run", "create", "--template", templateID, "--attack-type", "invalid"},
 			{"armory", "run", "validate", "--attack-type", "harpoon"},

@@ -25,6 +25,7 @@ var armoryTemplateUpdateName string
 var armoryTemplateUpdateDescription string
 var armoryTemplateUpdateRawFile string
 var armoryRunTemplate string
+var armoryRunListStatuses []string
 var armoryRunAttackType string
 var armoryRunWordlists []string
 var armoryRunHTTP bool
@@ -69,8 +70,8 @@ func init() {
 	armoryTemplateUpdateCmd.Flags().StringVar(&armoryTemplateUpdateName, "name", "", "Template name")
 	armoryTemplateUpdateCmd.Flags().StringVar(&armoryTemplateUpdateDescription, "description", "", "Template description")
 	armoryTemplateUpdateCmd.Flags().StringVar(&armoryTemplateUpdateRawFile, "raw-file", "", "Read the raw template from a file")
-	armoryRunListCmd.Flags().StringVar(&armoryRunTemplate, "template", "", "Template UUID")
-	armoryRunListCmd.MarkFlagRequired("template")
+	armoryRunListCmd.Flags().StringVar(&armoryRunTemplate, "template", "", "Template UUID. Omit to list every run in the project")
+	armoryRunListCmd.Flags().StringArrayVar(&armoryRunListStatuses, "status", nil, "Only list runs with this status: draft, in_progress, complete, failed, or cancelled. Repeat the flag or separate statuses with commas. Project-wide lists only")
 	addArmoryRunFlags(armoryRunCreateCmd, true)
 	addArmoryRunFlags(armoryRunValidateCmd, false)
 	armoryRunValidateCmd.Flags().StringVar(&armoryRunRawFile, "raw-file", "", "Read the raw template from a file. If omitted, read it from stdin")
@@ -180,8 +181,18 @@ var armoryTemplateDeleteCmd = &cobra.Command{
 }
 
 var armoryRunListCmd = &cobra.Command{
-	Use: "list", Short: "List runs for an Armory template", Args: cobra.NoArgs,
+	Use: "list", Short: "List Armory runs in the project or for one template", Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		if !cmd.Flags().Changed("template") {
+			path := "/armory/run"
+			if len(armoryRunListStatuses) > 0 {
+				path += "?" + url.Values{"status": armoryRunListStatuses}.Encode()
+			}
+			return runArmoryCommand(cmd, http.MethodGet, path, nil, "listing Armory runs", writeArmoryRunListHuman, "")
+		}
+		if cmd.Flags().Changed("status") {
+			return errors.New("--status lists runs across the project; omit --template")
+		}
 		path, err := serviceIDPath("/armory/template/", armoryRunTemplate, "/run")
 		if err != nil {
 			return err
