@@ -32,6 +32,7 @@ import (
 //   - GET /pairing lives on the control address too. It reads the network
 //     address and the control password.
 var readOnlyGetRoutes = map[string][]string{
+	"GET /armory/run":                        {"/armory/run", "/armory/run?status=in_progress"},
 	"GET /armory/run/{id}":                   {"/armory/run/0190f0c4-7b6e-7000-8000-000000000001"},
 	"GET /armory/run/{id}/traffic":           {"/armory/run/0190f0c4-7b6e-7000-8000-000000000001/traffic"},
 	"GET /armory/template":                   {"/armory/template"},
