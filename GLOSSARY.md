@@ -31,6 +31,10 @@ _Avoid_: control socket or control port as names for the listener itself.
 Handing a client the control listener's network address, and its control password when one is set, as a QR code, so the client can connect without typing them.
 _Avoid_: pair, which always means a request/response pair. The CLI command is `service control pair`, a name the spec fixed; prose and code still say pairing.
 
+**API level**:
+The integer, reported as `api` by `GET /service/status`, that names which shape of the control API a service instance speaks. It goes up by one when a route, request field, response field or event that a client relies on is removed or changes meaning; additions never raise it. A client decides whether it supports a service instance from the API level, not from its version.
+_Avoid_: API version, protocol version, Marasi version when meaning compatibility.
+
 **Instance machine**:
 The machine a service instance runs on. Paths a client sends to the instance, and the machine config, wordlists, report templates, and Chrome paths the instance uses, are on its instance machine, not on the client's machine.
 _Avoid_: server, remote host, this machine when a client may be on another machine.

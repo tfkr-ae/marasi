@@ -476,6 +476,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, http.StatusOK, struct {
 		Status          string          `json:"status"`
 		Version         string          `json:"version"`
+		API             int             `json:"api"` // control API level; see APILevel
 		Channel         *update.Channel `json:"channel"`
 		Instance        string          `json:"instance"`
 		Project         string          `json:"project"`
@@ -494,6 +495,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 	}{
 		Status:                  "running",
 		Version:                 s.version,
+		API:                     APILevel,
 		Channel:                 channel,
 		Instance:                s.instance,
 		Project:                 project,

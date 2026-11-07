@@ -258,7 +258,7 @@ func TestServiceStatusCommand(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := fmt.Sprintf("status: running\nversion: dev\nchannel: none\ninstance: work\nproject: %s\nproxy listener: %s\nrestart required: no\nupstream proxy: none\ncontrol listener network address: none\nos: %s\n", canonicalProject, listener, runtime.GOOS)
+		want := fmt.Sprintf("status: running\nversion: dev\napi: 1\nchannel: none\ninstance: work\nproject: %s\nproxy listener: %s\nrestart required: no\nupstream proxy: none\ncontrol listener network address: none\nos: %s\n", canonicalProject, listener, runtime.GOOS)
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
 		if err != nil || stdout != want || stderr != "" {
