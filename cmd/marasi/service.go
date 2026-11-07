@@ -443,6 +443,8 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 		ControlListener json.RawMessage `json:"control_listener"`
 		// OS is absent from instances older than remote control.
 		OS *string `json:"os"`
+		// RunID is absent from instances older than the run id.
+		RunID *string `json:"run_id"`
 	}
 	if err := json.Unmarshal(body, &status); err != nil {
 		return fmt.Errorf("decoding service status: %w", err)
@@ -523,6 +525,9 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 	}
 	if status.OS != nil {
 		fmt.Fprintf(&output, "os: %s\n", *status.OS)
+	}
+	if status.RunID != nil {
+		fmt.Fprintf(&output, "run id: %s\n", *status.RunID)
 	}
 	if _, err := io.WriteString(stdout, output.String()); err != nil {
 		return fmt.Errorf("writing service status: %w", err)

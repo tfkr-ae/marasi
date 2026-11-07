@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
@@ -21,6 +22,11 @@ import (
 )
 
 const eventHeartbeatInterval = 15 * time.Second
+
+// processRunID identifies this process: it is drawn once when the process
+// starts, so it stays the same for the process's life and differs after any
+// start, including a restart after a crash. It is a UUID, so it has no '.'.
+var processRunID = uuid.NewString()
 
 // Server serves a service instance's control API.
 type Server struct {
@@ -51,6 +57,15 @@ type Server struct {
 	control *ControlAddress
 	// interfaces reads the instance machine's network interfaces.
 	interfaces func() ([]hostInterface, error)
+	// runID identifies the process serving this instance; see RunID.
+	runID string
+}
+
+// RunID identifies the process serving this instance. Every Server in one
+// process returns the same value, and a new process returns a new one, so a
+// client that sees it change knows the instance restarted.
+func (s *Server) RunID() string {
+	return s.runID
 }
 
 // NewServer creates a control API server for proxy.
@@ -88,6 +103,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		instance:          instance,
 		project:           project,
 		interfaces:        readHostInterfaces,
+		runID:             processRunID,
 	}
 	if projects != nil {
 		projects.opening = func(path string) {
@@ -492,6 +508,8 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		// OS is the instance machine's operating system, as runtime.GOOS
 		// names it, so a client on another machine can tag paths for it.
 		OS string `json:"os"`
+		// RunID identifies this process and changes on every start.
+		RunID string `json:"run_id"`
 	}{
 		Status:                  "running",
 		Version:                 s.version,
@@ -505,6 +523,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		UpstreamProxyConfigured: selection.Configured,
 		ControlListener:         s.controlListenerAddress(),
 		OS:                      runtime.GOOS,
+		RunID:                   s.runID,
 	})
 }
 

@@ -66,6 +66,8 @@ For Pairing, which hands another device the network address and password to conn
 
 Proceed only when status reports `running`, the intended instance and project, and a non-empty `proxy_listener`. To switch projects on a selected instance, use `project open --name NAME` or `project open --path PATH`, then confirm the new project with `service status`.
 
+`service status` also reports `run_id` (`run id:` in human output): an opaque value that the instance process draws when it starts. It stays the same for the life of that process and changes on every start, including a `service stop` and `service start`, a `service restart`, or a restart after a crash. When `run_id` differs from the last value you read, the instance restarted, so read again any state you cached from it. Compare it only for equality; do not parse it.
+
 ### Set flags from the environment
 
 These environment variables set a flag when the flag is not passed. Each flag's `--help` names its variable as `(env MARASI_X)`. An empty variable counts as unset.

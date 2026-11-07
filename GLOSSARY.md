@@ -8,6 +8,10 @@ Marasi is an application security testing proxy controlled through named service
 A named running copy of the Marasi service that controls one open project.
 _Avoid_: Service, daemon, or process when referring to the named running copy. The start command is not the service instance.
 
+**Run ID**:
+An opaque value that identifies the process serving a service instance. The process draws it when it starts, keeps it for its whole life, and reports it as `run_id` in the service status. Every start, including a restart's successor and a start after a crash, draws a new one.
+_Avoid_: session ID, boot ID, instance ID
+
 **Project**:
 A Marasi workspace stored in a `.marasi` file and identified by its canonical absolute path.
 
