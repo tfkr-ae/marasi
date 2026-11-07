@@ -369,7 +369,7 @@ func TestServiceStatus(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := fmt.Sprintf("{\"status\":\"running\",\"version\":\"13.09.2026\",\"channel\":null,\"instance\":\"work\",\"project\":\"/work/juice-shop.marasi\",\"proxy_listener\":%q,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\"}\n", *status.ProxyListener)
+		want := fmt.Sprintf("{\"status\":\"running\",\"version\":\"13.09.2026\",\"channel\":null,\"instance\":\"work\",\"project\":\"/work/juice-shop.marasi\",\"proxy_listener\":%q,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\",\"run_id\":\""+server.RunID()+"\"}\n", *status.ProxyListener)
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -379,7 +379,7 @@ func TestServiceStatus(t *testing.T) {
 		}
 		response = httptest.NewRecorder()
 		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/service/status", nil))
-		want = "{\"status\":\"running\",\"version\":\"13.09.2026\",\"channel\":null,\"instance\":\"work\",\"project\":\"/work/juice-shop.marasi\",\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\"" + runtime.GOOS + "\"}\n"
+		want = "{\"status\":\"running\",\"version\":\"13.09.2026\",\"channel\":null,\"instance\":\"work\",\"project\":\"/work/juice-shop.marasi\",\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\"" + runtime.GOOS + "\",\"run_id\":\"" + server.RunID() + "\"}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -399,7 +399,7 @@ func TestServiceStatus(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("\nwanted:\napplication/json\ngot:\n%s", got)
 		}
-		want := "{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":\"/work/scratchpad.marasi\",\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\"" + runtime.GOOS + "\"}\n"
+		want := "{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":\"/work/scratchpad.marasi\",\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\"" + runtime.GOOS + "\",\"run_id\":\"" + server.RunID() + "\"}\n"
 		if got := response.Body.String(); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
@@ -506,7 +506,7 @@ func TestListenerControl(t *testing.T) {
 		}
 		serviceStatus := httptest.NewRecorder()
 		server.ServeHTTP(serviceStatus, httptest.NewRequest(http.MethodGet, "/service/status", nil))
-		wantServiceStatus := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":\"/work/scratchpad.marasi\",\"proxy_listener\":%q,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\"}\n", startedAddress)
+		wantServiceStatus := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":\"/work/scratchpad.marasi\",\"proxy_listener\":%q,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\",\"run_id\":\""+server.RunID()+"\"}\n", startedAddress)
 		if serviceStatus.Code != http.StatusOK || serviceStatus.Body.String() != wantServiceStatus {
 			t.Fatalf("\nwanted synchronized service status:\n%s\ngot:\n%d %s", wantServiceStatus, serviceStatus.Code, serviceStatus.Body.String())
 		}
@@ -529,7 +529,7 @@ func TestListenerControl(t *testing.T) {
 		}
 		serviceStatus = httptest.NewRecorder()
 		server.ServeHTTP(serviceStatus, httptest.NewRequest(http.MethodGet, "/service/status", nil))
-		wantServiceStatus = "{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":\"/work/scratchpad.marasi\",\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\"" + runtime.GOOS + "\"}\n"
+		wantServiceStatus = "{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":\"/work/scratchpad.marasi\",\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\"" + runtime.GOOS + "\",\"run_id\":\"" + server.RunID() + "\"}\n"
 		if serviceStatus.Code != http.StatusOK || serviceStatus.Body.String() != wantServiceStatus {
 			t.Fatalf("\nwanted synchronized inactive service status:\n%s\ngot:\n%d %s", wantServiceStatus, serviceStatus.Code, serviceStatus.Body.String())
 		}
@@ -1500,6 +1500,42 @@ func TestTrafficList(t *testing.T) {
 		}
 		if repo.listQuery.Text != "" {
 			t.Fatalf("\nwanted:\nempty query\ngot:\n%s", repo.listQuery.Text)
+		}
+	})
+}
+
+func TestServiceStatusRunID(t *testing.T) {
+	readRunID := func(t *testing.T, server *Server) string {
+		t.Helper()
+		response := requestListener(t, server, http.MethodGet, "/service/status", "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n%d\ngot:\n%d %s", http.StatusOK, response.Code, response.Body.String())
+		}
+		var status struct {
+			RunID *string `json:"run_id"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil {
+			t.Fatalf("decoding status: %v", err)
+		}
+		if status.RunID == nil {
+			t.Fatalf("\nwanted:\nrun_id\ngot:\n%s", response.Body.String())
+		}
+		return *status.RunID
+	}
+
+	t.Run("should report one opaque run_id for every read from one process", func(t *testing.T) {
+		server := NewServer(&marasi.Proxy{}, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, nil, func() {}, "dev", "default", "/work/scratchpad.marasi")
+		first := readRunID(t, server)
+		second := readRunID(t, server)
+		if first == "" || strings.Contains(first, ".") {
+			t.Fatalf("\nwanted:\nnon-empty run_id without '.'\ngot:\n%q", first)
+		}
+		if first != second || first != server.RunID() {
+			t.Fatalf("\nwanted:\nthe same run_id\ngot:\n%q, %q, accessor %q", first, second, server.RunID())
+		}
+		other := NewServer(&marasi.Proxy{}, &statusListener{status: ListenerStatus{Status: ListenerInactive}}, nil, func() {}, "dev", "default", "/work/scratchpad.marasi")
+		if other.RunID() != first {
+			t.Fatalf("\nwanted:\nthe process run_id %q\ngot:\n%q", first, other.RunID())
 		}
 	})
 }

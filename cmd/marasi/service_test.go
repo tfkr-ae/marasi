@@ -1816,13 +1816,19 @@ func TestStartService(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := fmt.Sprintf("{\"status\":\"running\",\"version\":%q,\"channel\":\"nightly\",\"instance\":\"work\",\"project\":%q,\"proxy_listener\":%q,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\"}\n", wantVersion, canonicalProject, proxyListener)
+		var reported struct {
+			RunID string `json:"run_id"`
+		}
+		if err := json.Unmarshal(body, &reported); err != nil || reported.RunID == "" {
+			t.Fatalf("\nwanted:\nnon-empty run_id\ngot:\n%s, %v", body, err)
+		}
+		want := fmt.Sprintf("{\"status\":\"running\",\"version\":%q,\"channel\":\"nightly\",\"instance\":\"work\",\"project\":%q,\"proxy_listener\":%q,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\",\"run_id\":%q}\n", wantVersion, canonicalProject, proxyListener, reported.RunID)
 		if got := string(body); got != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
 		}
 
 		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
-		want = fmt.Sprintf("status: running\nversion: %s\nchannel: nightly\ninstance: work\nproject: %s\nproxy listener: %s\nrestart required: no\nupstream proxy: none\ncontrol listener network address: none\nos: %s\n", wantVersion, canonicalProject, proxyListener, runtime.GOOS)
+		want = fmt.Sprintf("status: running\nversion: %s\nchannel: nightly\ninstance: work\nproject: %s\nproxy listener: %s\nrestart required: no\nupstream proxy: none\ncontrol listener network address: none\nos: %s\nrun id: %s\n", wantVersion, canonicalProject, proxyListener, runtime.GOOS, reported.RunID)
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}
