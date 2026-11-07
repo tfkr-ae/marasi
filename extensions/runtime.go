@@ -77,6 +77,10 @@ type Runtime struct {
 	executionContext context.Context
 	// gui is what the extension last drew; see KeepRender.
 	gui guiMemory
+	// webComponent is the ui_code and version globals as the last Lua
+	// execution left them; see WebComponentSnapshot.
+	webComponent   WebComponent
+	webComponentMu sync.RWMutex
 	// reference is set only while Reference records what registration adds.
 	reference       *APIReference
 	asyncExecutions sync.WaitGroup
@@ -87,6 +91,41 @@ func (extension *Runtime) LogSnapshot() []ExtensionLog {
 	extension.logsMu.RLock()
 	defer extension.logsMu.RUnlock()
 	return append([]ExtensionLog(nil), extension.Logs...)
+}
+
+// WebComponent is the UI an extension ships for its UI tab: the string globals
+// ui_code and version.
+type WebComponent struct {
+	UICode  string
+	Version string
+}
+
+// WebComponentSnapshot returns ui_code and version as the last Lua execution
+// left them, without waiting for a running one. Each is "" when the extension
+// does not set it as a string or has not run.
+func (extension *Runtime) WebComponentSnapshot() WebComponent {
+	extension.webComponentMu.RLock()
+	defer extension.webComponentMu.RUnlock()
+	return extension.webComponent
+}
+
+// recordWebComponent runs under Mu at the end of each execution.
+func (extension *Runtime) recordWebComponent() {
+	component := WebComponent{
+		UICode:  globalStringLocked(extension.LuaState, "ui_code"),
+		Version: globalStringLocked(extension.LuaState, "version"),
+	}
+	extension.webComponentMu.Lock()
+	extension.webComponent = component
+	extension.webComponentMu.Unlock()
+}
+
+// globalStringLocked reads a string global; the caller holds Mu.
+func globalStringLocked(l *lua.State, name string) string {
+	l.Global(name)
+	defer l.Pop(1)
+	value, _ := GoValue(l, -1).(string)
+	return value
 }
 
 // MetadataSnapshot returns detached loaded metadata. Settings remain repository-owned.
@@ -160,6 +199,7 @@ func (extension *Runtime) beginExecution(ctx context.Context) func() {
 	}, lua.MaskCount, 1000)
 	return func() {
 		lua.SetDebugHook(extension.LuaState, nil, 0, 0)
+		extension.recordWebComponent()
 		extension.executionContext = nil
 		stop()
 		cancel()

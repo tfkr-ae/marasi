@@ -92,9 +92,71 @@ func TestExtensionControlRoutes(t *testing.T) {
 		defer server.events.unsubscribe(subscriber)
 
 		response := requestControlAPI(server, http.MethodGet, "/extension/"+id.String(), "")
-		want := `{"id":"01937d13-9632-7f84-add5-14ec2c2c7f43","name":"workshop","enabled":true,"author":"TenSoon","description":"Workshop","source_url":"marasi-internal","updated_at":"2026-09-19T10:00:00Z","lua_content":"print(\"hi\")","settings":{"theme":"dark"}}` + "\n"
+		want := `{"id":"01937d13-9632-7f84-add5-14ec2c2c7f43","name":"workshop","enabled":true,"author":"TenSoon","description":"Workshop","source_url":"marasi-internal","updated_at":"2026-09-19T10:00:00Z","lua_content":"print(\"hi\")","settings":{"theme":"dark"},"ui_code":"","version":""}` + "\n"
 		assertControlAPIResponse(t, response, http.StatusOK, want)
 		assertNoExtensionEvent(t, subscriber)
+	})
+
+	t.Run("should get the web component ui_code and version from the running lua globals", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `ui_code = "<x-panel></x-panel>"
+version = "1.2.0"`)
+		server := newTestServer(&marasi.Proxy{ExtensionRepo: repo, Extensions: []*extensions.Runtime{runtime}}, func() {})
+
+		detail := getExtensionDetail(t, server, runtime.Data.ID)
+		if detail.UICode != "<x-panel></x-panel>" || detail.Version != "1.2.0" {
+			t.Fatalf("\nwanted:\nui_code %q version %q\ngot:\nui_code %q version %q", "<x-panel></x-panel>", "1.2.0", detail.UICode, detail.Version)
+		}
+	})
+
+	t.Run("should get empty ui_code and version when the lua defines neither", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `answer = 42`)
+		server := newTestServer(&marasi.Proxy{ExtensionRepo: repo, Extensions: []*extensions.Runtime{runtime}}, func() {})
+
+		response := requestControlAPI(server, http.MethodGet, "/extension/"+runtime.Data.ID.String(), "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n200\ngot:\n%d %s", response.Code, response.Body.String())
+		}
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decoding extension: %v", err)
+		}
+		if string(payload["ui_code"]) != `""` || string(payload["version"]) != `""` {
+			t.Fatalf("\nwanted:\nui_code \"\" version \"\"\ngot:\n%s", response.Body.String())
+		}
+	})
+
+	t.Run("should announce a reload that changes ui_code and serve the new value", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `ui_code = "<x-old></x-old>"
+version = "1"`)
+		server := newTestServer(&marasi.Proxy{ExtensionRepo: repo, Extensions: []*extensions.Runtime{runtime}}, func() {})
+		subscriber := server.events.subscribe()
+		defer server.events.unsubscribe(subscriber)
+
+		body, err := json.Marshal(map[string]string{"lua_content": `ui_code = "<x-new></x-new>"
+version = "2"`})
+		if err != nil {
+			t.Fatalf("encoding update: %v", err)
+		}
+		update := requestControlAPI(server, http.MethodPost, "/extension/"+runtime.Data.ID.String(), string(body))
+		if update.Code != http.StatusOK {
+			t.Fatalf("\nwanted:\n200\ngot:\n%d %s", update.Code, update.Body.String())
+		}
+
+		event := <-subscriber.events
+		var payload struct {
+			ID uuid.UUID `json:"id"`
+		}
+		if err := json.Unmarshal(event.data, &payload); err != nil {
+			t.Fatalf("decoding event: %v", err)
+		}
+		if event.name != "extension.updated" || payload.ID != runtime.Data.ID {
+			t.Fatalf("\nwanted:\nextension.updated for %s\ngot:\n%s %s", runtime.Data.ID, event.name, event.data)
+		}
+
+		detail := getExtensionDetail(t, server, runtime.Data.ID)
+		if detail.UICode != "<x-new></x-new>" || detail.Version != "2" {
+			t.Fatalf("\nwanted:\nui_code %q version %q\ngot:\nui_code %q version %q", "<x-new></x-new>", "2", detail.UICode, detail.Version)
+		}
 	})
 
 	t.Run("should reject a missing id and a malformed uuid", func(t *testing.T) {
@@ -164,7 +226,7 @@ func TestExtensionControlRoutes(t *testing.T) {
 		}}, func() {})
 
 		response := requestControlAPI(server, http.MethodGet, "/extension/"+id.String(), "")
-		want := `{"id":"01937d13-9632-72aa-83b9-c10ea1abbdd6","name":"compass","enabled":true,"author":"","description":"","source_url":"","updated_at":"2026-09-19T10:00:00Z","lua_content":"","settings":{}}` + "\n"
+		want := `{"id":"01937d13-9632-72aa-83b9-c10ea1abbdd6","name":"compass","enabled":true,"author":"","description":"","source_url":"","updated_at":"2026-09-19T10:00:00Z","lua_content":"","settings":{},"ui_code":"","version":""}` + "\n"
 		assertControlAPIResponse(t, response, http.StatusOK, want)
 	})
 
@@ -1034,6 +1096,19 @@ func (repo *extensionSnapshotHoldRepository) SetExtensionEnabledByUUID(id uuid.U
 	err := repo.ExtensionRepository.SetExtensionEnabledByUUID(id, enabled)
 	close(repo.enabledPersisted)
 	return err
+}
+
+func getExtensionDetail(t *testing.T, server *Server, id uuid.UUID) extensionDetail {
+	t.Helper()
+	response := requestControlAPI(server, http.MethodGet, "/extension/"+id.String(), "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("\nwanted:\n200\ngot:\n%d %s", response.Code, response.Body.String())
+	}
+	var detail extensionDetail
+	if err := json.Unmarshal(response.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("decoding extension: %v", err)
+	}
+	return detail
 }
 
 func assertNoExtensionEvent(t *testing.T, subscriber *eventSubscriber) {

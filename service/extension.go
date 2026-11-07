@@ -34,6 +34,11 @@ type extensionDetail struct {
 	extensionSummary
 	LuaContent string         `json:"lua_content"`
 	Settings   map[string]any `json:"settings"`
+	// UICode and Version are the running extension's ui_code and version
+	// globals as its last Lua execution left them: the web component a client
+	// renders in the extension's UI tab. Each is empty when unset.
+	UICode  string `json:"ui_code"`
+	Version string `json:"version"`
 }
 
 type extensionLogItem struct {
@@ -349,10 +354,13 @@ func extensionSummaryFromData(data domain.Extension) extensionSummary {
 
 func extensionDetailFromRuntime(runtime *extensions.Runtime, settings map[string]any) extensionDetail {
 	data := runtime.MetadataSnapshot()
+	component := runtime.WebComponentSnapshot()
 	return extensionDetail{
 		extensionSummary: extensionSummaryFromData(data),
 		LuaContent:       data.LuaContent,
 		Settings:         settings,
+		UICode:           component.UICode,
+		Version:          component.Version,
 	}
 }
 
