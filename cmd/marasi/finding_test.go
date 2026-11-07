@@ -111,6 +111,42 @@ func TestFindingCommands(t *testing.T) {
 		})
 	}
 
+	t.Run("list sends full only with --full and counts linked records", func(t *testing.T) {
+		configDir := serviceConfigDir(t)
+		sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"items":[]}`)
+		if _, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "finding", "list"); err != nil {
+			t.Fatal(err)
+		}
+		if got := sent.snapshot(); got.Path != "/finding" || got.RawQuery != "" {
+			t.Fatalf("wanted GET /finding with no query, got %s?%s", got.Path, got.RawQuery)
+		}
+
+		configDir = serviceConfigDir(t)
+		response := `{"items":[{"id":"` + id + `","test_case_id":null,"title":"Access control","severity":"High","cvss_vector":"","cvss_score":0,"writeup":"","treatment_plan":"","created_at":"2026-09-16T10:00:00Z","items":[{"id":"` + testCaseID + `"},{"id":"` + id + `"}],"artifacts":[{"id":"` + id + `"}]}]}` + "\n"
+		sent = startCannedControlAPI(t, configDir, "work", http.StatusOK, response)
+		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "finding", "list", "--full")
+		if err != nil || stderr != "" {
+			t.Fatalf("wanted nil error and empty stderr, got %v %q", err, stderr)
+		}
+		if got := sent.snapshot(); got.Method != http.MethodGet || got.Path != "/finding" || got.RawQuery != "full=1" {
+			t.Fatalf("wanted GET /finding?full=1, got %s %s?%s", got.Method, got.Path, got.RawQuery)
+		}
+		lines := strings.Split(stdout, "\n")
+		if header := strings.Fields(lines[0]); header[len(header)-2] != "REQUESTS" || header[len(header)-1] != "ARTIFACTS" {
+			t.Fatalf("wanted REQUESTS and ARTIFACTS columns, got %q", lines[0])
+		}
+		if row := strings.Fields(lines[1]); row[0] != id || row[len(row)-2] != "2" || row[len(row)-1] != "1" {
+			t.Fatalf("wanted 2 requests and 1 artifact, got %q", lines[1])
+		}
+
+		configDir = serviceConfigDir(t)
+		startCannedControlAPI(t, configDir, "work", http.StatusOK, response)
+		stdout, _, err = runMarasi(binary, "--config-dir", configDir, "--instance", "work", "finding", "list", "--full", "--json")
+		if err != nil || stdout != response {
+			t.Fatalf("wanted passthrough %q, got %q %v", response, stdout, err)
+		}
+	})
+
 	t.Run("passes json bytes through before or after the group", func(t *testing.T) {
 		for _, args := range [][]string{{"--json", "finding", "list"}, {"finding", "list", "--json"}} {
 			configDir := serviceConfigDir(t)

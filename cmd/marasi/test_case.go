@@ -28,6 +28,7 @@ var testCaseUpdateTags []string
 var testCaseUpdateNote string
 var testCaseLinkRequest string
 var testCaseUnlinkRequest string
+var testCaseListFull bool
 
 type testCaseRequest struct {
 	Title       *string   `json:"title,omitempty"`
@@ -49,6 +50,7 @@ func init() {
 	testCaseUpdateCmd.Flags().StringVar(&testCaseUpdateCategory, "category", "", "Test case category")
 	testCaseUpdateCmd.Flags().StringSliceVar(&testCaseUpdateTags, "tag", nil, "Tag. Repeat the flag to set more than one")
 	testCaseUpdateCmd.Flags().StringVar(&testCaseUpdateNote, "note", "", "Test case note")
+	testCaseListCmd.Flags().BoolVar(&testCaseListFull, "full", false, "Return every test case as test-case get does, with its linked traffic and artifacts")
 	testCaseLinkCmd.Flags().StringVar(&testCaseLinkRequest, "request", "", "UUID of the request/response pair")
 	testCaseLinkCmd.MarkFlagRequired("request")
 	testCaseUnlinkCmd.Flags().StringVar(&testCaseUnlinkRequest, "request", "", "UUID of the request/response pair")
@@ -101,6 +103,9 @@ var testCaseListCmd = &cobra.Command{
 	Short: "List test cases newest-first",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		if testCaseListFull {
+			return runTestCaseCommand(cmd, http.MethodGet, "/test-case?full=1", "listing test cases", "list-full", testCaseRequest{})
+		}
 		return runTestCaseCommand(cmd, http.MethodGet, "/test-case", "listing test cases", "list", testCaseRequest{})
 	},
 }
@@ -278,8 +283,8 @@ func runTestCaseCommand(cmd *cobra.Command, method, path, operation, action stri
 		_, err = cmd.OutOrStdout().Write(response)
 		return err
 	}
-	if action == "list" {
-		return writeTestCaseListHuman(response, cmd.OutOrStdout())
+	if action == "list" || action == "list-full" {
+		return writeTestCaseListHuman(response, cmd.OutOrStdout(), action == "list-full")
 	}
 	if action == "checklist" {
 		return writeTestCaseChecklistHuman(response, cmd.OutOrStdout())
@@ -297,22 +302,34 @@ func runTestCaseCommand(cmd *cobra.Command, method, path, operation, action stri
 	return err
 }
 
-func writeTestCaseListHuman(body []byte, stdout io.Writer) error {
+// writeTestCaseListHuman prints the test case list as a table. full adds the
+// count of linked requests and artifacts that GET /test-case?full=1 returns.
+func writeTestCaseListHuman(body []byte, stdout io.Writer, full bool) error {
 	var response struct {
 		Items []struct {
-			ID        string   `json:"id"`
-			Title     string   `json:"title"`
-			Category  string   `json:"category"`
-			Tags      []string `json:"tags"`
-			CreatedAt string   `json:"created_at"`
+			ID        string            `json:"id"`
+			Title     string            `json:"title"`
+			Category  string            `json:"category"`
+			Tags      []string          `json:"tags"`
+			CreatedAt string            `json:"created_at"`
+			Items     []json.RawMessage `json:"items"`
+			Artifacts []json.RawMessage `json:"artifacts"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		return fmt.Errorf("decoding test case list: %w", err)
 	}
-	table := newListTable(stdout, "ID", "TITLE", "CATEGORY", "TAGS", "CREATED AT")
+	headers := []string{"ID", "TITLE", "CATEGORY", "TAGS", "CREATED AT"}
+	if full {
+		headers = append(headers, "REQUESTS", "ARTIFACTS")
+	}
+	table := newListTable(stdout, headers...)
 	for _, item := range response.Items {
-		table.row(item.ID, truncateDisplay(item.Title, trafficPathDisplayLimit), truncateDisplay(item.Category, trafficPathDisplayLimit), truncateDisplay(strings.Join(item.Tags, ","), trafficPathDisplayLimit), item.CreatedAt)
+		cells := []any{item.ID, truncateDisplay(item.Title, trafficPathDisplayLimit), truncateDisplay(item.Category, trafficPathDisplayLimit), truncateDisplay(strings.Join(item.Tags, ","), trafficPathDisplayLimit), item.CreatedAt}
+		if full {
+			cells = append(cells, len(item.Items), len(item.Artifacts))
+		}
+		table.row(cells...)
 	}
 	return table.flush()
 }
