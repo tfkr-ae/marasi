@@ -124,6 +124,46 @@ func TestRuntime_ExecuteLua(t *testing.T) {
 	})
 }
 
+func TestRuntime_WebComponentSnapshot(t *testing.T) {
+	t.Run("should be empty before the extension has run", func(t *testing.T) {
+		ext := &Runtime{Data: &domain.Extension{Name: "unloaded"}}
+		if got := ext.WebComponentSnapshot(); got != (WebComponent{}) {
+			t.Fatalf("\nwanted:\nempty web component\ngot:\n%+v", got)
+		}
+	})
+
+	t.Run("should be empty when the globals are unset or not strings", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "")
+		if err := ext.ExecuteLua(`ui_code = {} version = nil`); err != nil {
+			t.Fatalf("executing lua: %v", err)
+		}
+		if got := ext.WebComponentSnapshot(); got != (WebComponent{}) {
+			t.Fatalf("\nwanted:\nempty web component\ngot:\n%+v", got)
+		}
+	})
+
+	t.Run("should follow the globals each execution leaves, function calls included", func(t *testing.T) {
+		ext, _ := setupTestExtension(t, "")
+		top := ext.LuaState.Top()
+		if err := ext.ExecuteLua(`ui_code = "<x-a></x-a>" version = "1"
+function bump() version = "2" end`); err != nil {
+			t.Fatalf("executing lua: %v", err)
+		}
+		if got, want := ext.WebComponentSnapshot(), (WebComponent{UICode: "<x-a></x-a>", Version: "1"}); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		if err := ext.CallFunction("bump"); err != nil {
+			t.Fatalf("calling bump: %v", err)
+		}
+		if got, want := ext.WebComponentSnapshot(), (WebComponent{UICode: "<x-a></x-a>", Version: "2"}); got != want {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+		if got := ext.LuaState.Top(); got != top {
+			t.Fatalf("\nwanted:\nstack top %d\ngot:\n%d", top, got)
+		}
+	})
+}
+
 func TestRuntime_CallFunctionContext(t *testing.T) {
 	t.Run("should return a LuaError carrying the raised message", func(t *testing.T) {
 		ext, _ := setupTestExtension(t, "function boom()\n  error(\"nope\")\nend")
