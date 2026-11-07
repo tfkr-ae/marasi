@@ -84,7 +84,7 @@ Capture one HTTP exchange:
 
 1. Read `proxy_listener` from `service status --json`.
 2. Start a local HTTP origin on `127.0.0.1` with a port assigned by the OS.
-3. Run `events` and wait for `: connected` on stderr before the request. The stream has no replay. Human stdout is `event-name json`.
+3. Run `events` without `--json` and wait for `: connected` on stderr before the request. `--json` writes no `: connected` line, so it gives nothing to wait for. Human stdout is `event-name id json`. A later `events --last-event-id ID` replays what followed `ID`; see `features/events.md`.
 4. `curl --noproxy '' --proxy "http://$PROXY_LISTENER" "http://127.0.0.1:$ORIGIN_PORT/proof.txt"`. `--noproxy ''` is required. `NO_PROXY` often bypasses localhost.
 5. Require events stdout to print `traffic.request` then `traffic.response` for that exchange, with the same `id`.
 6. `traffic list -q 'path = "/proof.txt" AND status_code = 200' --json`, then `traffic get` that `id`. The event `id` must match. `request.raw` and `response.raw` are base64.

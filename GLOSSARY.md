@@ -227,8 +227,20 @@ Work that Marasi does on an open project after opening it, such as building the 
 _Avoid_: task, migration, maintenance
 
 **Event**:
-A named live notification emitted by a service instance at the moment something happens. It is not stored with the open project and is not replayed.
+A named live notification emitted by a service instance at the moment something happens. It is not stored with the open project. A client that reconnects can have recent events replayed from the replay buffer.
 _Avoid_: Stream, message, log.
+
+**Event id**:
+The opaque value a service instance gives each event it publishes, the same for every subscriber, written as the event's SSE `id:`. A client keeps the last one it saw and passes it back to resume the stream. It is the run ID and a sequence number, but clients compare it only for equality.
+_Avoid_: event number, sequence, cursor
+
+**Replay buffer**:
+The newest events a service instance keeps in memory, shared by all subscribers, so a client that reconnects with an event id gets the events it missed. It holds at most 4096 events or 16 MiB of payload, drops the oldest first, and is lost when the process ends.
+_Avoid_: event log, history, backlog
+
+**Stream reset**:
+The `stream.reset` event a service instance sends first when a client asks to resume from an event id it cannot resume from: one older than the replay buffer (`expired`), from another run (`restarted`), or not one it issued (`invalid`). No events are replayed after it, so the client re-reads its state.
+_Avoid_: resync event, gap event
 
 **Chrome path**:
 A configured Chrome or Chromium executable location on the instance machine, tagged with an operating system.
