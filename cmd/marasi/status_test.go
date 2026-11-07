@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -258,7 +259,14 @@ func TestServiceStatusCommand(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := fmt.Sprintf("status: running\nversion: dev\nchannel: none\ninstance: work\nproject: %s\nproxy listener: %s\nrestart required: no\nupstream proxy: none\ncontrol listener network address: none\nos: %s\n", canonicalProject, listener, runtime.GOOS)
+		statusJSON, _, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status", "--json")
+		var reported struct {
+			RunID string `json:"run_id"`
+		}
+		if err != nil || json.Unmarshal([]byte(statusJSON), &reported) != nil || reported.RunID == "" {
+			t.Fatalf("\nwanted:\nstatus with run_id\ngot:\n%s, %v", statusJSON, err)
+		}
+		want := fmt.Sprintf("status: running\nversion: dev\nchannel: none\ninstance: work\nproject: %s\nproxy listener: %s\nrestart required: no\nupstream proxy: none\ncontrol listener network address: none\nos: %s\nrun id: %s\n", canonicalProject, listener, runtime.GOOS, reported.RunID)
 
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "status")
 		if err != nil || stdout != want || stderr != "" {
