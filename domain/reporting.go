@@ -163,6 +163,9 @@ type ReportingRepository interface {
 	UnlinkRequestFromTestCase(uuid.UUID, uuid.UUID) error
 	// GetTestCaseRequests retrieves oldest-first traffic summaries linked to a test case.
 	GetTestCaseRequests(uuid.UUID) ([]*RequestResponseSummary, error)
+	// ListTestCaseRequests retrieves the traffic summaries linked to every test case,
+	// keyed by test case id, oldest-first within each.
+	ListTestCaseRequests() (map[uuid.UUID][]*RequestResponseSummary, error)
 
 	// GetFinding retrieves a single finding by its ID.
 	GetFinding(uuid.UUID) (*Finding, error)
@@ -180,6 +183,9 @@ type ReportingRepository interface {
 	UnlinkRequestFromFinding(uuid.UUID, uuid.UUID) error
 	// GetFindingRequests retrieves oldest-first traffic summaries linked to a finding.
 	GetFindingRequests(uuid.UUID) ([]*RequestResponseSummary, error)
+	// ListFindingRequests retrieves the traffic summaries linked to every finding,
+	// keyed by finding id, oldest-first within each.
+	ListFindingRequests() (map[uuid.UUID][]*RequestResponseSummary, error)
 
 	// SaveArtifact persists an artifact and its raw data.
 	SaveArtifact(*Artifact) error
