@@ -457,11 +457,13 @@ func TestExtensionCommandLifecycle(t *testing.T) {
 		Settings   map[string]any  `json:"settings"`
 		Logs       json.RawMessage `json:"logs"`
 		Core       json.RawMessage `json:"core"`
+		UICode     *string         `json:"ui_code"`
+		Version    *string         `json:"version"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &detail); err != nil {
 		t.Fatalf("decoding extension get: %v", err)
 	}
-	if detail.ID != workshopID || detail.Name != "workshop" || !strings.Contains(detail.LuaContent, "Welcome to the Marasi Workshop") || detail.Settings == nil || detail.Logs != nil || detail.Core != nil {
+	if detail.ID != workshopID || detail.Name != "workshop" || !strings.Contains(detail.LuaContent, "Welcome to the Marasi Workshop") || detail.Settings == nil || detail.Logs != nil || detail.Core != nil || detail.UICode == nil || *detail.UICode != "" || detail.Version == nil || *detail.Version != "" {
 		t.Fatalf("wanted workshop detail with lua and settings, got %#v", detail)
 	}
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,8 +17,12 @@ import (
 )
 
 func init() {
+	eventsCmd.Flags().StringVar(&eventsLastEventID, "last-event-id", "", "resume after the event with this id, replaying the events missed since")
 	rootCmd.AddCommand(eventsCmd)
 }
+
+// eventsLastEventID is the --last-event-id value.
+var eventsLastEventID string
 
 var eventsCmd = &cobra.Command{
 	Use:   "events",
@@ -28,19 +33,23 @@ var eventsCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return printEvents(ctx, endpoint, jsonOutput, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		return printEvents(ctx, endpoint, eventsLastEventID, jsonOutput, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
 var streamConnected bool
 
-// printEvents subscribes to the instance and prints named events until the connection closes.
-func printEvents(ctx context.Context, target instanceEndpoint, asJSON bool, stdout, stderr io.Writer) error {
+// printEvents subscribes to the instance and prints named events until the
+// connection closes. A non-empty lastEventID resumes after that event.
+func printEvents(ctx context.Context, target instanceEndpoint, lastEventID string, asJSON bool, stdout, stderr io.Writer) error {
 	client := target.client()
 	defer client.Close()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/events", nil)
 	if err != nil {
 		return fmt.Errorf("creating events request: %w", err)
+	}
+	if lastEventID != "" {
+		request.Header.Set("Last-Event-ID", lastEventID)
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -74,7 +83,7 @@ func printEvents(ctx context.Context, target instanceEndpoint, asJSON bool, stdo
 		if !connected {
 			return nil
 		}
-		writeErr = writeEvent(stdout, frame.name, frame.data, asJSON)
+		writeErr = writeEvent(stdout, frame.id, frame.name, frame.data, asJSON)
 		return writeErr
 	})
 	if writeErr != nil {
@@ -91,6 +100,7 @@ func printEvents(ctx context.Context, target instanceEndpoint, asJSON bool, stdo
 
 // eventFrame is one named event from GET /events.
 type eventFrame struct {
+	id   string // the frame's id line, or "" for an event without one
 	name string
 	data string
 }
@@ -100,7 +110,7 @@ type eventFrame struct {
 // ends or a callback fails. It returns what ended it: the read error
 // (io.EOF at the end of the stream) or the callback's error.
 func readEventFrames(reader *bufio.Reader, comment func(string) error, frame func(eventFrame) error) error {
-	name, data := "", ""
+	id, name, data := "", "", ""
 	for {
 		line, err := reader.ReadString('\n')
 		if len(line) == 0 && err != nil {
@@ -114,17 +124,19 @@ func readEventFrames(reader *bufio.Reader, comment func(string) error, frame fun
 					return err
 				}
 			}
+		case strings.HasPrefix(line, "id:"):
+			id = strings.TrimPrefix(strings.TrimPrefix(line, "id:"), " ")
 		case strings.HasPrefix(line, "event:"):
 			name = strings.TrimPrefix(strings.TrimPrefix(line, "event:"), " ")
 		case strings.HasPrefix(line, "data:"):
 			data = strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
 		case line == "" && err == nil:
 			if name != "" && frame != nil {
-				if err := frame(eventFrame{name: name, data: data}); err != nil {
+				if err := frame(eventFrame{id: id, name: name, data: data}); err != nil {
 					return err
 				}
 			}
-			name, data = "", ""
+			id, name, data = "", "", ""
 		}
 		if err != nil {
 			return err
@@ -132,20 +144,30 @@ func readEventFrames(reader *bufio.Reader, comment func(string) error, frame fun
 	}
 }
 
-func writeEvent(writer io.Writer, name, data string, asJSON bool) error {
+// writeEvent prints one event: "name id data" for people, with "-" for an
+// event without an id, or {"event","id","data"} as JSON, without "id" then.
+func writeEvent(writer io.Writer, id, name, data string, asJSON bool) error {
 	if asJSON {
 		encodedName, err := json.Marshal(name)
 		if err != nil {
 			return err
 		}
 		line := append([]byte(`{"event":`), encodedName...)
+		if id != "" {
+			encodedID, err := json.Marshal(id)
+			if err != nil {
+				return err
+			}
+			line = append(line, `,"id":`...)
+			line = append(line, encodedID...)
+		}
 		line = append(line, `,"data":`...)
 		line = append(line, data...)
 		line = append(line, '}', '\n')
 		if _, err := writer.Write(line); err != nil {
 			return err
 		}
-	} else if _, err := fmt.Fprintf(writer, "%s %s\n", name, data); err != nil {
+	} else if _, err := fmt.Fprintf(writer, "%s %s %s\n", name, cmp.Or(id, "-"), data); err != nil {
 		return err
 	}
 	return flushEventsWriter(writer)

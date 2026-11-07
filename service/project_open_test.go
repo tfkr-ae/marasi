@@ -99,7 +99,7 @@ func TestProjectOpen(t *testing.T) {
 		}
 
 		status := requestListener(t, server, http.MethodGet, "/service/status", "")
-		wantStatus := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\"}\n", target)
+		wantStatus := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"api\":1,\"channel\":null,\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\",\"run_id\":\""+server.RunID()+"\"}\n", target)
 		if status.Code != http.StatusOK || status.Body.String() != wantStatus {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%d %s", wantStatus, status.Code, status.Body.String())
 		}
@@ -184,7 +184,7 @@ func TestProjectOpen(t *testing.T) {
 		defer held()
 		response := requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(owned))
 		assertProjectError(t, response, http.StatusConflict, "project_already_open")
-		wantCurrent := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\"}\n", current)
+		wantCurrent := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"api\":1,\"channel\":null,\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\",\"run_id\":\""+server.RunID()+"\"}\n", current)
 		status := requestListener(t, server, http.MethodGet, "/service/status", "")
 		if status.Code != http.StatusOK || status.Body.String() != wantCurrent {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%d %s", wantCurrent, status.Code, status.Body.String())
@@ -203,7 +203,7 @@ func TestProjectOpen(t *testing.T) {
 		}
 		response = requestListener(t, server, http.MethodPost, "/project/open", projectOpenBody(target))
 		assertProjectError(t, response, http.StatusInternalServerError, "project_cleanup_failed")
-		wantStatus := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\"}\n", target)
+		wantStatus := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"api\":1,\"channel\":null,\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\",\"run_id\":\""+server.RunID()+"\"}\n", target)
 		status = requestListener(t, server, http.MethodGet, "/service/status", "")
 		if status.Code != http.StatusOK || status.Body.String() != wantStatus {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%d %s", wantStatus, status.Code, status.Body.String())
@@ -369,7 +369,7 @@ func TestProjectOpen(t *testing.T) {
 		if lifecycle.Path() != current {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", current, lifecycle.Path())
 		}
-		wantCurrent := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\"}\n", current)
+		wantCurrent := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"api\":1,\"channel\":null,\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\",\"run_id\":\""+server.RunID()+"\"}\n", current)
 		status := requestListener(t, server, http.MethodGet, "/service/status", "")
 		if status.Code != http.StatusOK || status.Body.String() != wantCurrent {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%d %s", wantCurrent, status.Code, status.Body.String())
@@ -480,7 +480,7 @@ func TestProjectOpen(t *testing.T) {
 		case <-time.After(50 * time.Millisecond):
 		}
 		status := requestListener(t, server, http.MethodGet, "/service/status", "")
-		wantCurrent := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\"}\n", current)
+		wantCurrent := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"api\":1,\"channel\":null,\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\",\"run_id\":\""+server.RunID()+"\"}\n", current)
 		if status.Code != http.StatusOK || status.Body.String() != wantCurrent {
 			release()
 			t.Fatalf("\nwanted:\n%s\ngot:\n%d %s", wantCurrent, status.Code, status.Body.String())
@@ -634,6 +634,9 @@ func TestProjectEvents(t *testing.T) {
 				if err != nil {
 					return
 				}
+				if strings.HasPrefix(line, "id: ") {
+					continue
+				}
 				frame += line
 				if line != "\n" {
 					continue
@@ -663,7 +666,7 @@ func TestProjectEvents(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 		status := requestListener(t, server, http.MethodGet, "/service/status", "")
-		wantCurrent := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"channel\":null,\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\"}\n", current)
+		wantCurrent := fmt.Sprintf("{\"status\":\"running\",\"version\":\"dev\",\"api\":1,\"channel\":null,\"instance\":\"default\",\"project\":%q,\"proxy_listener\":null,\"restart_required\":false,\"upstream_proxy\":\"\",\"upstream_proxy_configured\":true,\"control_listener\":null,\"os\":\""+runtime.GOOS+"\",\"run_id\":\""+server.RunID()+"\"}\n", current)
 		if status.Body.String() != wantCurrent {
 			release()
 			t.Fatalf("\nwanted:\nold project before publication\ngot:\n%s", status.Body.String())

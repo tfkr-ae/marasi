@@ -452,7 +452,7 @@ func followUpdateInstall(cmd *cobra.Command, path string, body []byte, operation
 			continue
 		}
 		if jsonOutput {
-			if err := writeEvent(stdout, frame.name, frame.data, true); err != nil {
+			if err := writeEvent(stdout, "", frame.name, frame.data, true); err != nil {
 				return err
 			}
 		}

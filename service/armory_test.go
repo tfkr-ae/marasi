@@ -134,18 +134,25 @@ func (repo *stubArmoryRepository) ListArmoryRunTraffic(runID uuid.UUID, cursor *
 
 type stubArmoryService struct {
 	marasi.ArmoryService
-	repo       domain.ArmoryRepository
-	active     []uuid.UUID
-	validate   func(*domain.ArmoryRun) error
-	start      func(uuid.UUID) error
-	cancel     func(uuid.UUID) error
-	validateMu sync.Mutex
-	validated  []*domain.ArmoryRun
+	repo   domain.ArmoryRepository
+	active []uuid.UUID
+	// beforeActive runs at the start of every ActiveRunIDs call.
+	beforeActive func()
+	validate     func(*domain.ArmoryRun) error
+	start        func(uuid.UUID) error
+	cancel       func(uuid.UUID) error
+	validateMu   sync.Mutex
+	validated    []*domain.ArmoryRun
 }
 
 func (service *stubArmoryService) Repo() domain.ArmoryRepository { return service.repo }
-func (service *stubArmoryService) ActiveRunIDs() []uuid.UUID     { return service.active }
-func (service *stubArmoryService) Shutdown()                     {}
+func (service *stubArmoryService) ActiveRunIDs() []uuid.UUID {
+	if service.beforeActive != nil {
+		service.beforeActive()
+	}
+	return service.active
+}
+func (service *stubArmoryService) Shutdown() {}
 func (service *stubArmoryService) ValidateRun(run *domain.ArmoryRun) error {
 	service.validateMu.Lock()
 	service.validated = append(service.validated, run)

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
@@ -21,6 +22,11 @@ import (
 )
 
 const eventHeartbeatInterval = 15 * time.Second
+
+// processRunID identifies this process: it is drawn once when the process
+// starts, so it stays the same for the process's life and differs after any
+// start, including a restart after a crash. It is a UUID, so it has no '.'.
+var processRunID = uuid.NewString()
 
 // Server serves a service instance's control API.
 type Server struct {
@@ -51,6 +57,15 @@ type Server struct {
 	control *ControlAddress
 	// interfaces reads the instance machine's network interfaces.
 	interfaces func() ([]hostInterface, error)
+	// runID identifies the process serving this instance; see RunID.
+	runID string
+}
+
+// RunID identifies the process serving this instance. Every Server in one
+// process returns the same value, and a new process returns a new one, so a
+// client that sees it change knows the instance restarted.
+func (s *Server) RunID() string {
+	return s.runID
 }
 
 // NewServer creates a control API server for proxy.
@@ -88,6 +103,7 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 		instance:          instance,
 		project:           project,
 		interfaces:        readHostInterfaces,
+		runID:             processRunID,
 	}
 	if projects != nil {
 		projects.opening = func(path string) {
@@ -476,6 +492,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, http.StatusOK, struct {
 		Status          string          `json:"status"`
 		Version         string          `json:"version"`
+		API             int             `json:"api"` // control API level; see APILevel
 		Channel         *update.Channel `json:"channel"`
 		Instance        string          `json:"instance"`
 		Project         string          `json:"project"`
@@ -491,9 +508,12 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		// OS is the instance machine's operating system, as runtime.GOOS
 		// names it, so a client on another machine can tag paths for it.
 		OS string `json:"os"`
+		// RunID identifies this process and changes on every start.
+		RunID string `json:"run_id"`
 	}{
 		Status:                  "running",
 		Version:                 s.version,
+		API:                     APILevel,
 		Channel:                 channel,
 		Instance:                s.instance,
 		Project:                 project,
@@ -503,6 +523,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		UpstreamProxyConfigured: selection.Configured,
 		ControlListener:         s.controlListenerAddress(),
 		OS:                      runtime.GOOS,
+		RunID:                   s.runID,
 	})
 }
 
@@ -587,13 +608,16 @@ func (s *Server) Close() {
 
 // serveEvents handles GET /events as a Server-Sent Events stream of service events.
 // It writes a connected comment before events and heartbeat comments while idle.
+// A Last-Event-ID header, or else a last_event_id query parameter, resumes the
+// stream after that event: missed events are replayed before live ones, or a
+// stream.reset comes first when the id cannot be resumed from.
 func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	subscriber := s.events.subscribe()
+	subscriber, resume := s.events.resume(lastEventID(r))
 	defer s.events.unsubscribe(subscriber)
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -603,6 +627,18 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return
+	}
+	runID := s.events.runID
+	if resume.reset != "" {
+		reset := serviceEvent{name: "stream.reset", data: []byte(`{"reason":"` + resume.reset + `"}`), seq: resume.resetSeq}
+		if writeServiceEvent(w, runID, reset, true) != nil {
+			return
+		}
+	}
+	for _, event := range resume.replay {
+		if writeServiceEvent(w, runID, event, false) != nil {
+			return
+		}
 	}
 	flusher.Flush()
 
@@ -616,7 +652,7 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request) {
 			if !open {
 				return
 			}
-			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.name, event.data); err != nil {
+			if writeServiceEvent(w, runID, event, false) != nil {
 				return
 			}
 			flusher.Flush()
@@ -635,4 +671,29 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request) {
 			heartbeat.Reset(s.heartbeatInterval)
 		}
 	}
+}
+
+// lastEventID returns where a GET /events resumes: the Last-Event-ID header
+// when the request has one, even an empty one, else the last_event_id query
+// parameter. Empty means a fresh subscribe.
+func lastEventID(r *http.Request) string {
+	if values, ok := r.Header["Last-Event-Id"]; ok {
+		if len(values) == 0 {
+			return ""
+		}
+		return strings.TrimSpace(values[0])
+	}
+	return strings.TrimSpace(r.URL.Query().Get("last_event_id"))
+}
+
+// writeServiceEvent writes one SSE frame. An event with seq 0 has no id line
+// unless withID is set, as for stream.reset before anything was published.
+func writeServiceEvent(w io.Writer, runID string, event serviceEvent, withID bool) error {
+	var err error
+	if event.seq != 0 || withID {
+		_, err = fmt.Fprintf(w, "id: %s.%d\nevent: %s\ndata: %s\n\n", runID, event.seq, event.name, event.data)
+	} else {
+		_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.name, event.data)
+	}
+	return err
 }

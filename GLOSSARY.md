@@ -8,6 +8,10 @@ Marasi is an application security testing proxy controlled through named service
 A named running copy of the Marasi service that controls one open project.
 _Avoid_: Service, daemon, or process when referring to the named running copy. The start command is not the service instance.
 
+**Run ID**:
+An opaque value that identifies the process serving a service instance. The process draws it when it starts, keeps it for its whole life, and reports it as `run_id` in the service status. Every start, including a restart's successor and a start after a crash, draws a new one.
+_Avoid_: session ID, boot ID, instance ID
+
 **Project**:
 A Marasi workspace stored in a `.marasi` file and identified by its canonical absolute path.
 
@@ -30,6 +34,10 @@ _Avoid_: control socket or control port as names for the listener itself.
 **Pairing**:
 Handing a client the control listener's network address, and its control password when one is set, as a QR code, so the client can connect without typing them.
 _Avoid_: pair, which always means a request/response pair. The CLI command is `service control pair`, a name the spec fixed; prose and code still say pairing.
+
+**API level**:
+The integer, reported as `api` by `GET /service/status`, that names which shape of the control API a service instance speaks. It goes up by one when a route, request field, response field or event that a client relies on is removed or changes meaning; additions never raise it. A client decides whether it supports a service instance from the API level, not from its version.
+_Avoid_: API version, protocol version, Marasi version when meaning compatibility.
 
 **Instance machine**:
 The machine a service instance runs on. Paths a client sends to the instance, and the machine config, wordlists, report templates, and Chrome paths the instance uses, are on its instance machine, not on the client's machine.
@@ -219,8 +227,20 @@ Work that Marasi does on an open project after opening it, such as building the 
 _Avoid_: task, migration, maintenance
 
 **Event**:
-A named live notification emitted by a service instance at the moment something happens. It is not stored with the open project and is not replayed.
+A named live notification emitted by a service instance at the moment something happens. It is not stored with the open project. A client that reconnects can have recent events replayed from the replay buffer.
 _Avoid_: Stream, message, log.
+
+**Event id**:
+The opaque value a service instance gives each event it publishes, the same for every subscriber, written as the event's SSE `id:`. A client keeps the last one it saw and passes it back to resume the stream. It is the run ID and a sequence number, but clients compare it only for equality.
+_Avoid_: event number, sequence, cursor
+
+**Replay buffer**:
+The newest events a service instance keeps in memory, shared by all subscribers, so a client that reconnects with an event id gets the events it missed. It holds at most 4096 events or 16 MiB of payload, drops the oldest first, and is lost when the process ends.
+_Avoid_: event log, history, backlog
+
+**Stream reset**:
+The `stream.reset` event a service instance sends first when a client asks to resume from an event id it cannot resume from: one older than the replay buffer (`expired`), from another run (`restarted`), or not one it issued (`invalid`). No events are replayed after it, so the client re-reads its state.
+_Avoid_: resync event, gap event
 
 **Chrome path**:
 A configured Chrome or Chromium executable location on the instance machine, tagged with an operating system.

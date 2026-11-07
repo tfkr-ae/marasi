@@ -107,6 +107,34 @@ func addLaunchpadRoutes(mux routeMux, raw *http.ServeMux, proxy *marasi.Proxy, e
 		writeJSON(w, r, http.StatusOK, response)
 	})
 
+	// GET /launchpad/search runs q over every launchpad's entries and returns
+	// {launchpad_id: [request_id…]}, entries in launchpad order, for each
+	// launchpad with a match. A pair linked to several launchpads appears
+	// under each; linked originals count, though they carry no launchpad_id.
+	// Registered before GET /launchpad/{id} so the literal segment reads first.
+	mux.HandleFunc("GET /launchpad/search", func(w http.ResponseWriter, r *http.Request) {
+		launchpadRepo, err := proxy.GetLaunchpadRepo()
+		if err != nil {
+			writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		trafficRepo, err := proxy.GetTrafficRepo()
+		if err != nil {
+			writeLaunchpadError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		matches, err := searchLaunchpads(launchpadRepo, trafficRepo, r.URL.Query().Get("q"))
+		var queryErr *domain.QueryError
+		switch {
+		case errors.As(err, &queryErr):
+			writeJSON(w, r, http.StatusBadRequest, invalidQuery{Error: "invalid_query", Message: queryErr.Message, Position: queryErr.Position})
+		case err != nil:
+			writeLaunchpadError(w, r, http.StatusInternalServerError, "internal_server_error")
+		default:
+			writeJSON(w, r, http.StatusOK, matches)
+		}
+	})
+
 	mux.HandleFunc("GET /launchpad/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := parseLaunchpadID(w, r)
 		if !ok {

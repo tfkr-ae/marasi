@@ -260,6 +260,31 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 		writeJSON(w, r, http.StatusOK, armoryRunList{Items: items})
 	})
 
+	mux.HandleFunc("GET /armory/run", func(w http.ResponseWriter, r *http.Request) {
+		statuses, err := parseArmoryRunStatusFilter(r)
+		if err != nil {
+			writeRefusal(w, r, http.StatusBadRequest, "invalid_armory_request", err.Error())
+			return
+		}
+		armoryService, ok := armoryService(proxy)
+		if !ok || armoryService.Repo() == nil {
+			writeArmoryError(w, r, http.StatusNotFound, "not_found")
+			return
+		}
+		runs, err := listProjectArmoryRuns(armoryService)
+		if err != nil {
+			writeArmoryRepositoryError(w, r, err)
+			return
+		}
+		items := make([]armoryRun, 0, len(runs))
+		for _, run := range runs {
+			if len(statuses) == 0 || statuses[run.Status] {
+				items = append(items, armoryRunFromDomain(run))
+			}
+		}
+		writeJSON(w, r, http.StatusOK, armoryRunList{Items: items})
+	})
+
 	mux.HandleFunc("POST /armory/run", func(w http.ResponseWriter, r *http.Request) {
 		mutation, err := decodeArmoryRunMutation(r, true)
 		if err != nil {
@@ -457,6 +482,100 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 		events.publish("armory.run.deleted", response)
 		writeJSON(w, r, http.StatusOK, response)
 	})
+}
+
+// parseArmoryRunStatusFilter reads every status query value. Each value may
+// hold several comma-separated statuses. No status parameter means no filter.
+func parseArmoryRunStatusFilter(r *http.Request) (map[domain.ArmoryRunStatus]bool, error) {
+	values, present := r.URL.Query()["status"]
+	if !present {
+		return nil, nil
+	}
+	statuses := make(map[domain.ArmoryRunStatus]bool)
+	for _, value := range values {
+		for _, name := range strings.Split(value, ",") {
+			status := domain.ArmoryRunStatus(name)
+			switch status {
+			case domain.ArmoryRunDraft, domain.ArmoryRunInProgress, domain.ArmoryRunCompleted, domain.ArmoryRunFailed, domain.ArmoryRunCancelled:
+				statuses[status] = true
+			default:
+				return nil, fmt.Errorf("status %q is not draft, in_progress, complete, failed or cancelled", name)
+			}
+		}
+	}
+	return statuses, nil
+}
+
+// listProjectArmoryRuns returns every run in the project, oldest first, with
+// in_progress reported for exactly the runs in one ActiveRunIDs snapshot.
+//
+// The rows are read before the snapshot. A run starts by joining the active
+// set before its in_progress write, and finishes by storing its final status
+// before it leaves the set. So a run read as in_progress but missing from the
+// snapshot has finished, and is read again for its final status. A run in the
+// snapshot that the rows missed was created after they were read, and is read
+// on its own.
+func listProjectArmoryRuns(service marasi.ArmoryService) ([]*domain.ArmoryRun, error) {
+	repo := service.Repo()
+	templates, err := repo.GetArmoryTemplates()
+	if err != nil {
+		return nil, err
+	}
+	var runs []*domain.ArmoryRun
+	for _, template := range templates {
+		templateRuns, err := repo.GetArmoryRuns(template.ID)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, templateRuns...)
+	}
+
+	active := make(map[uuid.UUID]bool)
+	for _, id := range service.ActiveRunIDs() {
+		active[id] = true
+	}
+
+	result := make([]*domain.ArmoryRun, 0, len(runs)+len(active))
+	seen := make(map[uuid.UUID]bool, len(runs))
+	for _, run := range runs {
+		seen[run.ID] = true
+		if !active[run.ID] && run.Status == domain.ArmoryRunInProgress {
+			current, err := repo.GetArmoryRun(run.ID)
+			if errors.Is(err, domain.ErrArmoryRunNotFound) || (err == nil && current == nil) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			run = current
+		}
+		result = append(result, run)
+	}
+	for id := range active {
+		if seen[id] {
+			continue
+		}
+		run, err := repo.GetArmoryRun(id)
+		if errors.Is(err, domain.ErrArmoryRunNotFound) || (err == nil && run == nil) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, run)
+	}
+	for _, run := range result {
+		if active[run.ID] {
+			run.Status = domain.ArmoryRunInProgress
+		}
+	}
+	slices.SortFunc(result, func(a, b *domain.ArmoryRun) int {
+		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID.String(), b.ID.String())
+	})
+	return result, nil
 }
 
 func armoryService(proxy *marasi.Proxy) (marasi.ArmoryService, bool) {

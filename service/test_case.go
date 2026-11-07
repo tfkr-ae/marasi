@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -54,9 +55,29 @@ func addTestCaseRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcast
 			writeTestCaseError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
+		full, ok := parseFullListQuery(r)
+		if !ok {
+			writeTestCaseError(w, r, http.StatusBadRequest, "bad_request")
+			return
+		}
 		testCases, err := repo.ListTestCases()
 		if err != nil {
 			writeTestCaseError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		if full {
+			members, err := repo.ListTestCaseRequests()
+			if err != nil {
+				writeTestCaseError(w, r, http.StatusInternalServerError, "internal_server_error")
+				return
+			}
+			items := make([]testCaseDetail, 0, len(testCases))
+			for _, testCase := range testCases {
+				items = append(items, testCaseDetailFromDomain(testCase, members[testCase.ID]))
+			}
+			writeJSON(w, r, http.StatusOK, struct {
+				Items []testCaseDetail `json:"items"`
+			}{Items: items})
 			return
 		}
 		items := make([]testCaseSummary, 0, len(testCases))
@@ -129,15 +150,7 @@ func addTestCaseRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcast
 			writeTestCaseError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		items := make([]trafficSummary, 0, len(members))
-		for _, member := range members {
-			items = append(items, trafficSummaryFromDomain(member))
-		}
-		writeJSON(w, r, http.StatusOK, testCaseDetail{
-			testCaseResponse: testCaseResponseFromDomain(testCase),
-			Items:            items,
-			Artifacts:        artifactResponsesForTestCase(testCase),
-		})
+		writeJSON(w, r, http.StatusOK, testCaseDetailFromDomain(testCase, members))
 	})
 
 	mux.HandleFunc("POST /test-case/{id}/traffic", func(w http.ResponseWriter, r *http.Request) {
@@ -367,6 +380,39 @@ func testCaseResponseFromDomain(testCase *domain.TestCase) testCaseResponse {
 		Note:        testCase.Note,
 		CreatedAt:   testCase.CreatedAt,
 	}
+}
+
+// testCaseDetailFromDomain is the full record GET /test-case/{id} returns,
+// and each item of GET /test-case?full=1. members is the test case's linked
+// traffic, oldest-first.
+func testCaseDetailFromDomain(testCase *domain.TestCase, members []*domain.RequestResponseSummary) testCaseDetail {
+	return testCaseDetail{
+		testCaseResponse: testCaseResponseFromDomain(testCase),
+		Items:            trafficSummariesFromDomain(members),
+		Artifacts:        artifactResponsesForTestCase(testCase),
+	}
+}
+
+// trafficSummariesFromDomain converts linked traffic, never returning nil, so
+// a record without traffic encodes "items":[].
+func trafficSummariesFromDomain(members []*domain.RequestResponseSummary) []trafficSummary {
+	items := make([]trafficSummary, 0, len(members))
+	for _, member := range members {
+		items = append(items, trafficSummaryFromDomain(member))
+	}
+	return items
+}
+
+// parseFullListQuery reads the full query parameter of GET /finding and GET
+// /test-case. Absent means the summary list; otherwise it must parse as a
+// bool.
+func parseFullListQuery(r *http.Request) (full, ok bool) {
+	raw := r.URL.Query().Get("full")
+	if raw == "" {
+		return false, true
+	}
+	full, err := strconv.ParseBool(raw)
+	return full, err == nil
 }
 
 func writeTestCaseError(w http.ResponseWriter, r *http.Request, status int, code string) {

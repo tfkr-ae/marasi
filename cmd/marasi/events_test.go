@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -39,7 +40,7 @@ func TestEventsCommand(t *testing.T) {
 					}
 				})
 				args := []string{"--config-dir", configDir, "--instance", "work", "events"}
-				want := eventName + " " + payload + "\ncheckpoint.updated {\"intercept\":false}\n"
+				want := eventName + " - " + payload + "\ncheckpoint.updated - {\"intercept\":false}\n"
 				wantStderr := ": connected\n"
 				if asJSON {
 					args = append(args, "--json")
@@ -75,8 +76,8 @@ func TestEventsCommand(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/events" || got.RawQuery != "" {
 			t.Fatalf("\nwanted:\nGET /events\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
-		if stdout != "traffic.request {\"path\":\"/a\"}\n" {
-			t.Fatalf("\nwanted:\ntraffic.request {\"path\":\"/a\"}\ngot:\n%s", stdout)
+		if stdout != "traffic.request - {\"path\":\"/a\"}\n" {
+			t.Fatalf("\nwanted:\ntraffic.request - {\"path\":\"/a\"}\ngot:\n%s", stdout)
 		}
 		if stderr != ": connected\n" {
 			t.Fatalf("\nwanted:\n: connected\ngot:\n%s", stderr)
@@ -94,7 +95,7 @@ func TestEventsCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if stdout != "traffic.request { \"id\" : 1 }  \nlog.added [ 1, 2 ]\n" {
+		if stdout != "traffic.request - { \"id\" : 1 }  \nlog.added - [ 1, 2 ]\n" {
 			t.Fatalf("\nwanted:\npreserved known and unknown events\ngot:\n%s", stdout)
 		}
 		if stderr != ": connected\n" {
@@ -129,6 +130,66 @@ func TestEventsCommand(t *testing.T) {
 			}
 			if stderr != "" {
 				t.Fatalf("\nwanted:\nempty stderr\ngot:\n%s", stderr)
+			}
+		})
+	}
+
+	for _, asJSON := range []bool{false, true} {
+		t.Run(fmt.Sprintf("should print each event's id with json %t", asJSON), func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			startCannedEventAPI(t, configDir, "work", func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, ": connected\n\nid: run-1.7\nevent: traffic.request\ndata: {\"path\":\"/a\"}\n\nid:run-1.8\nevent: stream.reset\ndata: {\"reason\":\"expired\"}\n\nevent: stream.dropped\ndata: {\"reason\":\"overflow\"}\n\n")
+			})
+			args := []string{"--config-dir", configDir, "--instance", "work", "events"}
+			want := "traffic.request run-1.7 {\"path\":\"/a\"}\nstream.reset run-1.8 {\"reason\":\"expired\"}\nstream.dropped - {\"reason\":\"overflow\"}\n"
+			if asJSON {
+				args = append(args, "--json")
+				want = "{\"event\":\"traffic.request\",\"id\":\"run-1.7\",\"data\":{\"path\":\"/a\"}}\n{\"event\":\"stream.reset\",\"id\":\"run-1.8\",\"data\":{\"reason\":\"expired\"}}\n{\"event\":\"stream.dropped\",\"data\":{\"reason\":\"overflow\"}}\n"
+			}
+			stdout, stderr, err := runMarasi(buildMarasi(t), args...)
+			if err != nil {
+				t.Fatalf("\nwanted:\nexit status 0\ngot:\n%v\nstderr:\n%s", err, stderr)
+			}
+			if stdout != want {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "send the last event id as Last-Event-ID", args: []string{"--last-event-id", "run-1.42"}, want: "run-1.42"},
+		{name: "send no Last-Event-ID without the flag", want: ""},
+	} {
+		t.Run("should "+test.name, func(t *testing.T) {
+			configDir := serviceConfigDir(t)
+			var mu sync.Mutex
+			var header []string
+			sent := startCannedEventAPI(t, configDir, "work", func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				header = r.Header.Values("Last-Event-ID")
+				mu.Unlock()
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, ": connected\n\n")
+			})
+			args := append([]string{"--config-dir", configDir, "--instance", "work", "events"}, test.args...)
+			if _, stderr, err := runMarasi(buildMarasi(t), args...); err != nil {
+				t.Fatalf("\nwanted:\nexit status 0\ngot:\n%v\nstderr:\n%s", err, stderr)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if test.want == "" && len(header) != 0 {
+				t.Fatalf("\nwanted:\nno Last-Event-ID\ngot:\n%q", header)
+			}
+			if test.want != "" && (len(header) != 1 || header[0] != test.want) {
+				t.Fatalf("\nwanted:\n%q\ngot:\n%q", test.want, header)
+			}
+			if got := sent.snapshot(); got.RawQuery != "" {
+				t.Fatalf("\nwanted:\nno query\ngot:\n%s", got.RawQuery)
 			}
 		})
 	}

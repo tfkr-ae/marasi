@@ -100,7 +100,7 @@ func (repo *Repository) GetTestCase(id uuid.UUID) (*domain.TestCase, error) {
 		SELECT id, filename, mime_type, size_bytes, created_at 
 		FROM artifacts 
 		WHERE test_case_id = ?
-		ORDER BY created_at ASC
+		ORDER BY created_at ASC, id ASC
 	`
 
 	err = repo.dbConn.Select(&dbArtifacts, queryArtifacts, id)
@@ -252,7 +252,7 @@ func (repo *Repository) ListTestCases() ([]*domain.TestCase, error) {
 		SELECT id, test_case_id, filename, mime_type, size_bytes, created_at 
 		FROM artifacts
 		WHERE test_case_id IS NOT NULL
-		ORDER BY created_at ASC
+		ORDER BY created_at ASC, id ASC
 	`
 
 	err = repo.dbConn.Select(&artifactRows, queryArtifacts)
@@ -386,7 +386,7 @@ func (repo *Repository) GetFinding(id uuid.UUID) (*domain.Finding, error) {
 		SELECT id, filename, mime_type, size_bytes, created_at 
 		FROM artifacts 
 		WHERE finding_id = ?
-		ORDER BY created_at ASC
+		ORDER BY created_at ASC, id ASC
 	`
 
 	err = repo.dbConn.Select(&dbArtifacts, queryArtifacts, id)
@@ -552,7 +552,7 @@ func (repo *Repository) ListFindings() ([]*domain.Finding, error) {
 		SELECT id, finding_id, filename, mime_type, size_bytes, created_at 
 		FROM artifacts
 		WHERE finding_id IS NOT NULL
-		ORDER BY created_at ASC
+		ORDER BY created_at ASC, id ASC
 	`
 
 	err = repo.dbConn.Select(&artifactRows, queryArtifacts)
@@ -861,6 +861,59 @@ func (repo *Repository) GetFindingRequests(id uuid.UUID) ([]*domain.RequestRespo
 	items := make([]*domain.RequestResponseSummary, len(rows))
 	for i, row := range rows {
 		items[i] = toDomainRequestResponseSummary(row)
+	}
+	return items, nil
+}
+
+// linkedRequestSummaryRow is a traffic summary with the id of the test case
+// or finding it is linked to.
+type linkedRequestSummaryRow struct {
+	ParentID uuid.UUID `db:"parent_id"`
+	dbRequestResponseSummary
+}
+
+// listLinkedRequests runs one query for the traffic linked through junction
+// to every parent, and groups it by parent id, oldest-first within each.
+func (repo *Repository) listLinkedRequests(junction, parentColumn string) (map[uuid.UUID][]*domain.RequestResponseSummary, error) {
+	var rows []*linkedRequestSummaryRow
+	query := `SELECT
+			  j.` + parentColumn + ` AS parent_id,
+			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
+			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
+			  r.upstream_proxy_name, r.upstream_proxy_address,
+			  r.metadata,
+			  h.highlight, pn.number
+		      FROM request r
+		      JOIN ` + junction + ` j ON r.id = j.request_id
+		      LEFT JOIN pair_highlight h ON h.request_id = r.id
+		      LEFT JOIN pair_number pn ON pn.request_id = r.id
+		      ORDER BY j.` + parentColumn + `, r.requested_at ASC, r.id ASC`
+	if err := repo.dbConn.Select(&rows, query); err != nil {
+		return nil, err
+	}
+	items := make(map[uuid.UUID][]*domain.RequestResponseSummary)
+	for _, row := range rows {
+		items[row.ParentID] = append(items[row.ParentID], toDomainRequestResponseSummary(&row.dbRequestResponseSummary))
+	}
+	return items, nil
+}
+
+// ListTestCaseRequests retrieves the traffic summaries linked to every test
+// case in one query, keyed by test case id, oldest-first within each.
+func (repo *Repository) ListTestCaseRequests() (map[uuid.UUID][]*domain.RequestResponseSummary, error) {
+	items, err := repo.listLinkedRequests("test_case_requests", "test_case_id")
+	if err != nil {
+		return nil, fmt.Errorf("listing test case requests: %w", err)
+	}
+	return items, nil
+}
+
+// ListFindingRequests retrieves the traffic summaries linked to every finding
+// in one query, keyed by finding id, oldest-first within each.
+func (repo *Repository) ListFindingRequests() (map[uuid.UUID][]*domain.RequestResponseSummary, error) {
+	items, err := repo.listLinkedRequests("finding_requests", "finding_id")
+	if err != nil {
+		return nil, fmt.Errorf("listing finding requests: %w", err)
 	}
 	return items, nil
 }

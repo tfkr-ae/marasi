@@ -59,9 +59,29 @@ func addFindingRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeFindingError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
+		full, ok := parseFullListQuery(r)
+		if !ok {
+			writeFindingError(w, r, http.StatusBadRequest, "bad_request")
+			return
+		}
 		findings, err := repo.ListFindings()
 		if err != nil {
 			writeFindingError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		if full {
+			members, err := repo.ListFindingRequests()
+			if err != nil {
+				writeFindingError(w, r, http.StatusInternalServerError, "internal_server_error")
+				return
+			}
+			items := make([]findingDetail, 0, len(findings))
+			for _, finding := range findings {
+				items = append(items, findingDetailFromDomain(finding, members[finding.ID]))
+			}
+			writeJSON(w, r, http.StatusOK, struct {
+				Items []findingDetail `json:"items"`
+			}{Items: items})
 			return
 		}
 		items := make([]findingSummary, 0, len(findings))
@@ -135,15 +155,7 @@ func addFindingRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeFindingError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		items := make([]trafficSummary, 0, len(members))
-		for _, member := range members {
-			items = append(items, trafficSummaryFromDomain(member))
-		}
-		writeJSON(w, r, http.StatusOK, findingDetail{
-			findingResponse: findingResponseFromDomain(finding),
-			Items:           items,
-			Artifacts:       artifactResponsesForFinding(finding),
-		})
+		writeJSON(w, r, http.StatusOK, findingDetailFromDomain(finding, members))
 	})
 
 	mux.HandleFunc("POST /finding/{id}/traffic", func(w http.ResponseWriter, r *http.Request) {
@@ -450,6 +462,17 @@ func findingResponseFromDomain(finding *domain.Finding) findingResponse {
 		ID: finding.ID, TestCaseID: finding.TestCaseID, Title: finding.Title, Severity: finding.Severity,
 		CVSSVector: finding.CVSSVector, CVSSScore: finding.CVSSScore, WriteUp: finding.WriteUp,
 		TreatmentPlan: finding.TreatmentPlan, CreatedAt: finding.CreatedAt,
+	}
+}
+
+// findingDetailFromDomain is the full record GET /finding/{id} returns, and
+// each item of GET /finding?full=1. members is the finding's linked traffic,
+// oldest-first.
+func findingDetailFromDomain(finding *domain.Finding, members []*domain.RequestResponseSummary) findingDetail {
+	return findingDetail{
+		findingResponse: findingResponseFromDomain(finding),
+		Items:           trafficSummariesFromDomain(members),
+		Artifacts:       artifactResponsesForFinding(finding),
 	}
 }
 

@@ -31,6 +31,7 @@ var findingUpdateTestCase string
 var findingUpdateClearTestCase bool
 var findingLinkRequest string
 var findingUnlinkRequest string
+var findingListFull bool
 
 type findingRequest struct {
 	Title         *string  `json:"title,omitempty"`
@@ -59,6 +60,7 @@ func init() {
 	findingUpdateCmd.Flags().StringVar(&findingUpdateTreatmentPlan, "treatment-plan", "", "Treatment plan text")
 	findingUpdateCmd.Flags().StringVar(&findingUpdateTestCase, "test-case", "", "Related test case UUID. Do not set this with --clear-test-case")
 	findingUpdateCmd.Flags().BoolVar(&findingUpdateClearTestCase, "clear-test-case", false, "Clear the related test case. Do not set this with --test-case")
+	findingListCmd.Flags().BoolVar(&findingListFull, "full", false, "Return every finding as finding get does, with its linked traffic and artifacts")
 	findingLinkCmd.Flags().StringVar(&findingLinkRequest, "request", "", "UUID of the request/response pair")
 	findingLinkCmd.MarkFlagRequired("request")
 	findingUnlinkCmd.Flags().StringVar(&findingUnlinkRequest, "request", "", "UUID of the request/response pair")
@@ -91,6 +93,9 @@ var findingListCmd = &cobra.Command{
 	Short: "List findings newest-first",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		if findingListFull {
+			return runFindingCommand(cmd, http.MethodGet, "/finding?full=1", "listing findings", "list-full", findingRequest{})
+		}
 		return runFindingCommand(cmd, http.MethodGet, "/finding", "listing findings", "list", findingRequest{})
 	},
 }
@@ -241,8 +246,8 @@ func runFindingCommand(cmd *cobra.Command, method, path, operation, human string
 		_, err = cmd.OutOrStdout().Write(response.Body)
 		return err
 	}
-	if human == "list" {
-		return writeFindingListHuman(response.Body, cmd.OutOrStdout())
+	if human == "list" || human == "list-full" {
+		return writeFindingListHuman(response.Body, cmd.OutOrStdout(), human == "list-full")
 	}
 	if human == "get" {
 		return writeFindingGetHuman(response.Body, cmd.OutOrStdout())
@@ -257,23 +262,35 @@ func runFindingCommand(cmd *cobra.Command, method, path, operation, human string
 	return err
 }
 
-func writeFindingListHuman(body []byte, stdout io.Writer) error {
+// writeFindingListHuman prints the finding list as a table. full adds the
+// count of linked requests and artifacts that GET /finding?full=1 returns.
+func writeFindingListHuman(body []byte, stdout io.Writer, full bool) error {
 	var response struct {
 		Items []struct {
-			ID         string  `json:"id"`
-			Title      string  `json:"title"`
-			Severity   string  `json:"severity"`
-			TestCaseID *string `json:"test_case_id"`
-			CVSSScore  float64 `json:"cvss_score"`
-			CreatedAt  string  `json:"created_at"`
+			ID         string            `json:"id"`
+			Title      string            `json:"title"`
+			Severity   string            `json:"severity"`
+			TestCaseID *string           `json:"test_case_id"`
+			CVSSScore  float64           `json:"cvss_score"`
+			CreatedAt  string            `json:"created_at"`
+			Items      []json.RawMessage `json:"items"`
+			Artifacts  []json.RawMessage `json:"artifacts"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		return fmt.Errorf("decoding finding list: %w", err)
 	}
-	table := newListTable(stdout, "ID", "TITLE", "SEVERITY", "TEST CASE", "CVSS", "CREATED AT")
+	headers := []string{"ID", "TITLE", "SEVERITY", "TEST CASE", "CVSS", "CREATED AT"}
+	if full {
+		headers = append(headers, "REQUESTS", "ARTIFACTS")
+	}
+	table := newListTable(stdout, headers...)
 	for _, item := range response.Items {
-		table.row(item.ID, truncateDisplay(item.Title, trafficPathDisplayLimit), item.Severity, findingTestCaseText(item.TestCaseID), item.CVSSScore, item.CreatedAt)
+		cells := []any{item.ID, truncateDisplay(item.Title, trafficPathDisplayLimit), item.Severity, findingTestCaseText(item.TestCaseID), item.CVSSScore, item.CreatedAt}
+		if full {
+			cells = append(cells, len(item.Items), len(item.Artifacts))
+		}
+		table.row(cells...)
 	}
 	return table.flush()
 }

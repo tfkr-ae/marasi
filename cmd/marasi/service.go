@@ -341,7 +341,7 @@ func getServiceStatus(ctx context.Context, target instanceEndpoint, asJSON bool,
 		return fmt.Errorf("getting service status: %s", response.Status)
 	}
 	if target.remote() {
-		return writeRemoteServiceStatus(body, asJSON, stdout, stderr)
+		return writeRemoteServiceStatus(body, service.APILevel, asJSON, stdout, stderr)
 	}
 	if asJSON {
 		if _, err := stdout.Write(body); err != nil {
@@ -353,10 +353,11 @@ func getServiceStatus(ctx context.Context, target instanceEndpoint, asJSON bool,
 }
 
 // writeRemoteServiceStatus writes a remote instance's status with this CLI's
-// version beside the instance's, and a warning when they differ, since the
-// two machines update separately. Under --json both go in the status object,
-// which keeps stderr empty.
-func writeRemoteServiceStatus(body []byte, asJSON bool, stdout, stderr io.Writer) error {
+// version and API level beside the instance's, since the two machines update
+// separately. It warns when the API levels differ, cliAPI being this CLI's;
+// differing versions alone do not warn. Under --json the CLI's fields and the
+// warning go in the status object, which keeps stderr empty.
+func writeRemoteServiceStatus(body []byte, cliAPI int, asJSON bool, stdout, stderr io.Writer) error {
 	var status map[string]json.RawMessage
 	if err := json.Unmarshal(body, &status); err != nil || status == nil {
 		return errors.New("invalid service status: must be a JSON object")
@@ -365,9 +366,16 @@ func writeRemoteServiceStatus(body []byte, asJSON bool, stdout, stderr io.Writer
 	if err := json.Unmarshal(status["version"], &instanceVersion); err != nil || instanceVersion == "" {
 		return errors.New("invalid service status: version must be a non-empty string")
 	}
+	instanceAPI, err := statusAPILevel(status["api"])
+	if err != nil {
+		return err
+	}
 	warning := ""
-	if instanceVersion != version {
-		warning = fmt.Sprintf("this marasi is version %s but the instance runs %s", version, instanceVersion)
+	switch {
+	case instanceAPI == 0:
+		warning = fmt.Sprintf("this marasi speaks API level %d but the instance reports no API level", cliAPI)
+	case instanceAPI != cliAPI:
+		warning = fmt.Sprintf("this marasi speaks API level %d but the instance speaks API level %d", cliAPI, instanceAPI)
 	}
 
 	if asJSON {
@@ -375,7 +383,7 @@ func writeRemoteServiceStatus(body []byte, asJSON bool, stdout, stderr io.Writer
 		// instance's own fields keep their order.
 		var extra strings.Builder
 		cliVersion, _ := json.Marshal(version)
-		fmt.Fprintf(&extra, `,"cli_version":%s`, cliVersion)
+		fmt.Fprintf(&extra, `,"cli_version":%s,"cli_api":%d`, cliVersion, cliAPI)
 		if warning != "" {
 			warningJSON, _ := json.Marshal(warning)
 			fmt.Fprintf(&extra, `,"warning":%s`, warningJSON)
@@ -389,7 +397,7 @@ func writeRemoteServiceStatus(body []byte, asJSON bool, stdout, stderr io.Writer
 	if err := writeServiceStatusHuman(body, stdout); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(stdout, "cli version: %s\n", version); err != nil {
+	if _, err := fmt.Fprintf(stdout, "cli version: %s\ncli api: %d\n", version, cliAPI); err != nil {
 		return fmt.Errorf("writing service status: %w", err)
 	}
 	if warning != "" {
@@ -400,11 +408,26 @@ func writeRemoteServiceStatus(body []byte, asJSON bool, stdout, stderr io.Writer
 	return nil
 }
 
+// statusAPILevel decodes a service status "api" field. It returns 0 when the
+// field is absent, as from an instance older than API levels.
+func statusAPILevel(raw json.RawMessage) (int, error) {
+	if raw == nil {
+		return 0, nil
+	}
+	var level int
+	if err := json.Unmarshal(raw, &level); err != nil || level < 1 {
+		return 0, errors.New("invalid service status: api must be a positive integer")
+	}
+	return level, nil
+}
+
 // writeServiceStatusHuman validates and writes the service status projection.
 func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 	var status struct {
-		Status        *string         `json:"status"`
-		Version       *string         `json:"version"`
+		Status  *string `json:"status"`
+		Version *string `json:"version"`
+		// API is absent from instances older than API levels.
+		API           json.RawMessage `json:"api"`
 		Channel       json.RawMessage `json:"channel"`
 		Instance      *string         `json:"instance"`
 		Project       *string         `json:"project"`
@@ -420,6 +443,8 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 		ControlListener json.RawMessage `json:"control_listener"`
 		// OS is absent from instances older than remote control.
 		OS *string `json:"os"`
+		// RunID is absent from instances older than the run id.
+		RunID *string `json:"run_id"`
 	}
 	if err := json.Unmarshal(body, &status); err != nil {
 		return fmt.Errorf("decoding service status: %w", err)
@@ -429,6 +454,10 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 	}
 	if status.Version == nil || *status.Version == "" {
 		return errors.New("invalid service status: version must be a non-empty string")
+	}
+	api, err := statusAPILevel(status.API)
+	if err != nil {
+		return err
 	}
 	if status.Instance == nil || *status.Instance == "" {
 		return errors.New("invalid service status: instance must be a non-empty string")
@@ -467,7 +496,11 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 	}
 
 	var output strings.Builder
-	fmt.Fprintf(&output, "status: %s\nversion: %s\nchannel: %s\ninstance: %s\nproject: %s\nproxy listener: %s\n", *status.Status, *status.Version, channel, *status.Instance, *status.Project, proxyListener)
+	fmt.Fprintf(&output, "status: %s\nversion: %s\n", *status.Status, *status.Version)
+	if api != 0 {
+		fmt.Fprintf(&output, "api: %d\n", api)
+	}
+	fmt.Fprintf(&output, "channel: %s\ninstance: %s\nproject: %s\nproxy listener: %s\n", channel, *status.Instance, *status.Project, proxyListener)
 	if status.RestartRequired != nil {
 		fmt.Fprintf(&output, "restart required: %s\n", yesNo(*status.RestartRequired))
 	}
@@ -492,6 +525,9 @@ func writeServiceStatusHuman(body []byte, stdout io.Writer) error {
 	}
 	if status.OS != nil {
 		fmt.Fprintf(&output, "os: %s\n", *status.OS)
+	}
+	if status.RunID != nil {
+		fmt.Fprintf(&output, "run id: %s\n", *status.RunID)
 	}
 	if _, err := io.WriteString(stdout, output.String()); err != nil {
 		return fmt.Errorf("writing service status: %w", err)

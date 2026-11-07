@@ -20,6 +20,6 @@ Capture three pairs through the proxy. Retry `jobs list --json` until the `sitem
 
 - `jobs list` needs an open project; without one it is `listing jobs: not_found`.
 - Rebuilding a job that cannot be rebuilt is `rebuilding job: not_rebuildable`.
-- `jobs rebuild sitemap` publishes `sitemap.changed` with `{"reason":"rebuild"}`, because the tree is empty until the job refills it. Subscribe with `events` first; the stream has no replay.
+- `jobs rebuild sitemap` publishes `sitemap.changed` with `{"reason":"rebuild"}`, because the tree is empty until the job refills it. Subscribe with `events` first; a fresh subscription replays nothing.
 - The rebuild returns once the job restarts, not when it finishes. Reads that depend on a job report it: `index.complete` and `sitemap.complete` in JSON, and a `notice:` line on stderr in human output.
 - `jobs rebuild traffic_index` re-decodes bodies that were indexed before content-encoding decoding (see captured-traffic-inspection.md).
