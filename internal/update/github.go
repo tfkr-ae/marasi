@@ -47,8 +47,14 @@ type Candidate struct {
 // Asset is one file a release publishes.
 type Asset struct {
 	Name string
-	URL  string
-	Size int64
+	// URL is the asset's API endpoint, which serves the file when asked for
+	// application/octet-stream. It stays up when github.com release pages
+	// and their download links fail.
+	URL string
+	// BrowserURL is the github.com download link, tried when URL fails, for
+	// example once the unauthenticated API rate limit is spent.
+	BrowserURL string
+	Size       int64
 }
 
 // Asset returns the asset called name.
@@ -93,9 +99,10 @@ type githubRelease struct {
 	Page      string    `json:"html_url"`
 	Published time.Time `json:"published_at"`
 	Assets    []struct {
-		Name string `json:"name"`
-		URL  string `json:"browser_download_url"`
-		Size int64  `json:"size"`
+		Name       string `json:"name"`
+		URL        string `json:"url"`
+		BrowserURL string `json:"browser_download_url"`
+		Size       int64  `json:"size"`
 	} `json:"assets"`
 }
 
@@ -138,7 +145,11 @@ func (u *Updater) fetchRelease(ctx context.Context, path string, channel Channel
 	build.Published = gh.Published
 	c := Candidate{Channel: channel, Build: build, Notes: notes, Page: gh.Page}
 	for _, a := range gh.Assets {
-		c.Assets = append(c.Assets, Asset{Name: a.Name, URL: a.URL, Size: a.Size})
+		asset := Asset{Name: a.Name, URL: a.URL, BrowserURL: a.BrowserURL, Size: a.Size}
+		if asset.URL == "" {
+			asset.URL, asset.BrowserURL = asset.BrowserURL, ""
+		}
+		c.Assets = append(c.Assets, asset)
 	}
 	return c, nil
 }

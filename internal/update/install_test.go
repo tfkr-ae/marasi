@@ -3,6 +3,7 @@ package update
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -327,4 +328,56 @@ func TestInstallFollowsSymlinkToInstalledBuild(t *testing.T) {
 	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Errorf("the symlink was replaced: %v %v", info, err)
 	}
+}
+
+func TestInstallDownloadsThroughTheAPI(t *testing.T) {
+	f := newInstallFixture(t, "linux", "marasi", map[string][]byte{"marasi-linux-amd64": []byte("new build")})
+	u := f.updater(t, Config{})
+
+	if err := u.Install(context.Background(), f.candidate(t, u), f.target, nil); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if got := f.github.downloadRoutes(); !slices.Equal(got, []string{"api", "api", "api"}) {
+		t.Errorf("download routes = %v, want every asset through the API", got)
+	}
+}
+
+func TestInstallFallsBackToBrowserURLWhenAPIFails(t *testing.T) {
+	// github.com release pages can fail while the API works, and the API can
+	// refuse once the unauthenticated rate limit is spent; each route covers
+	// the other.
+	for _, status := range []int{http.StatusForbidden, http.StatusGatewayTimeout} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			f := newInstallFixture(t, "linux", "marasi", map[string][]byte{"marasi-linux-amd64": []byte("new build")})
+			u := f.updater(t, Config{})
+			c := f.candidate(t, u)
+			f.github.failRoutes(status, 0)
+
+			if err := u.Install(context.Background(), c, f.target, nil); err != nil {
+				t.Fatalf("Install: %v", err)
+			}
+			got, _ := os.ReadFile(f.target)
+			if string(got) != "new build" {
+				t.Errorf("installed build = %q, want the new build", got)
+			}
+			if routes := f.github.downloadRoutes(); !slices.Equal(routes, []string{"browser", "browser", "browser"}) {
+				t.Errorf("download routes = %v, want the browser fallback", routes)
+			}
+		})
+	}
+}
+
+func TestInstallReportsBothRoutesWhenBothFail(t *testing.T) {
+	f := newInstallFixture(t, "linux", "marasi", map[string][]byte{"marasi-linux-amd64": []byte("new build")})
+	u := f.updater(t, Config{})
+	c := f.candidate(t, u)
+	f.github.failRoutes(http.StatusForbidden, http.StatusGatewayTimeout)
+
+	err := u.Install(context.Background(), c, f.target, nil)
+	failure := assertFailure(t, err, KindNetwork, StepDownload)
+	want := "downloading checksums.txt: 504 Gateway Timeout (from the GitHub API: 403 Forbidden)"
+	if failure.Err.Error() != want {
+		t.Errorf("error = %q, want %q", failure.Err, want)
+	}
+	f.assertUnchanged(t)
 }
