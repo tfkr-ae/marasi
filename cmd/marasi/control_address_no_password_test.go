@@ -60,7 +60,7 @@ func TestControlAddressWithoutPassword(t *testing.T) {
 		}
 
 		response, _ = sendRaw(t, "tcp", address, rawRequest{method: http.MethodOptions, path: "/service/status", host: address, headers: []string{"Origin: http://localhost:5173", "Access-Control-Request-Method: POST"}})
-		want := "Access-Control-Allow-Origin: http://localhost:5173\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE\nAccess-Control-Allow-Headers: Authorization, Content-Type\nVary: Origin"
+		want := "Access-Control-Allow-Origin: http://localhost:5173\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE\nAccess-Control-Allow-Headers: Authorization, Content-Type\nAccess-Control-Max-Age: 600\nVary: Origin"
 		if response.StatusCode != http.StatusNoContent || corsHeaders(response) != want {
 			t.Fatalf("\nwanted:\n204\n%s\ngot:\n%d\n%s", want, response.StatusCode, corsHeaders(response))
 		}

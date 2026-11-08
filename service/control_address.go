@@ -547,11 +547,16 @@ func hostNamesBound(host string, bound net.IP) hostMatch {
 	}
 }
 
-// The CORS preflight answer: the methods the control API uses, and the
-// request headers an authenticated JSON call sends.
+// The CORS preflight answer: the methods the control API uses, the request
+// headers an authenticated JSON call sends, and how many seconds a browser
+// may reuse the answer. Every authenticated call from a page is preflighted,
+// so without a max age each one costs an extra round trip to a remote
+// instance. 600 is the most WebKit, which Marasi App's web view uses, will
+// keep; browsers cache a preflight per URL.
 const (
-	controlAllowedMethods = "GET, POST, PUT, DELETE"
-	controlAllowedHeaders = "Authorization, Content-Type"
+	controlAllowedMethods  = "GET, POST, PUT, DELETE"
+	controlAllowedHeaders  = "Authorization, Content-Type"
+	controlPreflightMaxAge = "600"
 )
 
 // checkOrigin decides which pages may call the network address from a
@@ -578,6 +583,7 @@ func checkOrigin(w http.ResponseWriter, r *http.Request, access networkAccess) b
 	if preflight {
 		w.Header().Set("Access-Control-Allow-Methods", controlAllowedMethods)
 		w.Header().Set("Access-Control-Allow-Headers", controlAllowedHeaders)
+		w.Header().Set("Access-Control-Max-Age", controlPreflightMaxAge)
 		w.WriteHeader(http.StatusNoContent)
 		return false
 	}

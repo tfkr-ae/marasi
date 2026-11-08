@@ -60,12 +60,20 @@ jobs:
             exit 1
           fi
           make linux-amd64 windows-amd64 VERSION="$VERSION" CHANNEL="$CHANNEL" SIGNING_PUBLIC_KEY="$SIGNING_PUBLIC_KEY"
+      # Some networks block bare executables but let archives through, so
+      # each build is also published as an archive holding one marasi file.
+      - name: Archive
+        run: |
+          scripts/archive-cli.sh dist/marasi-linux-amd64
+          scripts/archive-cli.sh dist/marasi-windows-amd64.exe
       - uses: actions/upload-artifact@v4
         with:
           name: unix-windows
           path: |
             dist/marasi-linux-amd64
+            dist/marasi-linux-amd64.tar.gz
             dist/marasi-windows-amd64.exe
+            dist/marasi-windows-amd64.zip
 
   build-darwin:
     needs: test
@@ -105,8 +113,8 @@ jobs:
           codesign --verify --verbose "$binary"
           team_id="${MACOS_DEVELOPER_CERT_ID##*(}"
           team_id="${team_id%)}"
-          zip_path="${binary}.zip"
-          ditto -c -k "$binary" "$zip_path"
+          # The notarized zip is published as the archive for macOS.
+          zip_path=$(scripts/archive-cli.sh "$binary")
           keychain="$HOME/Library/Keychains/signing_temp.keychain-db"
           xcrun notarytool store-credentials marasi-notary \
             --apple-id "$APPLE_ID" \
@@ -117,11 +125,12 @@ jobs:
             --keychain-profile marasi-notary \
             --keychain "$keychain" \
             --wait
-          rm -f "$zip_path"
       - uses: actions/upload-artifact@v4
         with:
           name: darwin
-          path: dist/marasi-darwin-arm64
+          path: |
+            dist/marasi-darwin-arm64
+            dist/marasi-darwin-arm64.zip
 
   publish:
     needs: [build-linux, build-darwin]
@@ -133,7 +142,11 @@ jobs:
           merge-multiple: true
       - name: Checksums
         working-directory: dist
-        run: sha256sum marasi-linux-amd64 marasi-darwin-arm64 marasi-windows-amd64.exe > checksums.txt
+        run: |
+          sha256sum \
+            marasi-linux-amd64 marasi-darwin-arm64 marasi-windows-amd64.exe \
+            marasi-linux-amd64.tar.gz marasi-darwin-arm64.zip marasi-windows-amd64.zip \
+            > checksums.txt
       - uses: actions/setup-go@v5
         with:
           go-version: stable
@@ -174,5 +187,8 @@ jobs:
             dist/marasi-linux-amd64 \
             dist/marasi-darwin-arm64 \
             dist/marasi-windows-amd64.exe \
+            dist/marasi-linux-amd64.tar.gz \
+            dist/marasi-darwin-arm64.zip \
+            dist/marasi-windows-amd64.zip \
             dist/checksums.txt \
             dist/checksums.txt.minisig
