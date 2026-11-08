@@ -46,6 +46,10 @@ type fakeRelease struct {
 
 // fakeGitHub serves the GitHub releases API for one repository and the
 // release assets, and records every asset download.
+//
+// Like GitHub, an asset's API url redirects to storage when asked for
+// application/octet-stream and answers its JSON metadata otherwise, and its
+// browser_download_url serves the file from the github.com side.
 type fakeGitHub struct {
 	server *httptest.Server
 
@@ -53,6 +57,12 @@ type fakeGitHub struct {
 	latest    *fakeRelease
 	nightly   *fakeRelease
 	downloads []string
+	// routes records, per download, "api" or "browser".
+	routes []string
+	// apiStatus and browserStatus, when set, fail that route's asset
+	// requests with the status.
+	apiStatus     int
+	browserStatus int
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
@@ -78,6 +88,21 @@ func (g *fakeGitHub) setNightly(r *fakeRelease) {
 	g.nightly = r
 }
 
+// failRoutes fails asset requests on the API route, the browser route, or
+// both with the given statuses; 0 leaves a route working.
+func (g *fakeGitHub) failRoutes(api, browser int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.apiStatus, g.browserStatus = api, browser
+}
+
+// downloadRoutes returns, per download so far, "api" or "browser".
+func (g *fakeGitHub) downloadRoutes() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]string(nil), g.routes...)
+}
+
 // downloaded returns the asset names downloaded so far.
 func (g *fakeGitHub) downloaded() []string {
 	g.mu.Lock()
@@ -93,12 +118,32 @@ func (g *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		g.writeRelease(w, g.latest)
 	case r.URL.Path == "/repos/tfkr-ae/marasi/releases/tags/nightly":
 		g.writeRelease(w, g.nightly)
+	case strings.HasPrefix(r.URL.Path, "/repos/tfkr-ae/marasi/releases/assets/"):
+		if g.apiStatus != 0 {
+			http.Error(w, http.StatusText(g.apiStatus), g.apiStatus)
+			return
+		}
+		key := strings.TrimPrefix(r.URL.Path, "/repos/tfkr-ae/marasi/releases/assets/")
+		if r.Header.Get("Accept") != "application/octet-stream" {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"name":%q}`, key)
+			return
+		}
+		http.Redirect(w, r, "/storage/api/"+key, http.StatusFound)
 	case strings.HasPrefix(r.URL.Path, "/download/"):
-		tag, name, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/download/"), "/")
+		if g.browserStatus != 0 {
+			http.Error(w, http.StatusText(g.browserStatus), g.browserStatus)
+			return
+		}
+		http.Redirect(w, r, "/storage/browser/"+strings.TrimPrefix(r.URL.Path, "/download/"), http.StatusFound)
+	case strings.HasPrefix(r.URL.Path, "/storage/"):
+		route, key, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/storage/"), "/")
+		tag, name, _ := strings.Cut(key, "/")
 		for _, release := range []*fakeRelease{g.latest, g.nightly} {
 			if release != nil && release.tag == tag {
 				if content, ok := release.assets[name]; ok {
 					g.downloads = append(g.downloads, name)
+					g.routes = append(g.routes, route)
 					w.Header().Set("Content-Length", fmt.Sprint(len(content)))
 					w.Write(content)
 					return
@@ -117,9 +162,10 @@ func (g *fakeGitHub) writeRelease(w http.ResponseWriter, release *fakeRelease) {
 		return
 	}
 	type asset struct {
-		Name string `json:"name"`
-		Size int    `json:"size"`
-		URL  string `json:"browser_download_url"`
+		Name       string `json:"name"`
+		Size       int    `json:"size"`
+		URL        string `json:"url"`
+		BrowserURL string `json:"browser_download_url"`
 	}
 	body := struct {
 		Tag       string  `json:"tag_name"`
@@ -137,7 +183,12 @@ func (g *fakeGitHub) writeRelease(w http.ResponseWriter, release *fakeRelease) {
 		Assets:    []asset{},
 	}
 	for name, content := range release.assets {
-		body.Assets = append(body.Assets, asset{Name: name, Size: len(content), URL: g.server.URL + "/download/" + release.tag + "/" + name})
+		body.Assets = append(body.Assets, asset{
+			Name:       name,
+			Size:       len(content),
+			URL:        g.server.URL + "/repos/tfkr-ae/marasi/releases/assets/" + release.tag + "/" + name,
+			BrowserURL: g.server.URL + "/download/" + release.tag + "/" + name,
+		})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(body)

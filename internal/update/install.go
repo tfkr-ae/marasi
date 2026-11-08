@@ -266,19 +266,35 @@ func (in *install) downloadBuild(ctx context.Context, asset Asset, dst io.Writer
 }
 
 func (u *Updater) get(ctx context.Context, asset Asset) (io.ReadCloser, int64, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
-	if err != nil {
+	body, size, err := u.getURL(ctx, asset.URL)
+	if err == nil {
+		return body, size, nil
+	}
+	if asset.BrowserURL == "" || asset.BrowserURL == asset.URL || ctx.Err() != nil {
 		return nil, 0, fail(KindNetwork, StepDownload, "downloading %s: %w", asset.Name, err)
+	}
+	body, size, browserErr := u.getURL(ctx, asset.BrowserURL)
+	if browserErr != nil {
+		return nil, 0, fail(KindNetwork, StepDownload, "downloading %s: %w (from the GitHub API: %w)", asset.Name, browserErr, err)
+	}
+	return body, size, nil
+}
+
+// getURL requests one asset URL and returns the body of a 200 response.
+func (u *Updater) getURL(ctx context.Context, url string) (io.ReadCloser, int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, 0, err
 	}
 	req.Header.Set("Accept", "application/octet-stream")
 	req.Header.Set("User-Agent", "marasi/"+u.installed.Version)
 	resp, err := u.client.Do(req)
 	if err != nil {
-		return nil, 0, fail(KindNetwork, StepDownload, "downloading %s: %w", asset.Name, err)
+		return nil, 0, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, 0, fail(KindNetwork, StepDownload, "downloading %s: %s", asset.Name, resp.Status)
+		return nil, 0, errors.New(resp.Status)
 	}
 	return resp.Body, resp.ContentLength, nil
 }
