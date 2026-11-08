@@ -53,7 +53,7 @@ func sendRaw(t *testing.T, network, address string, request rawRequest) (*http.R
 // so a test can compare them all at once.
 func corsHeaders(response *http.Response) string {
 	var lines []string
-	for _, name := range []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Credentials", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers", "Vary"} {
+	for _, name := range []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Credentials", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers", "Access-Control-Max-Age", "Vary"} {
 		if values := response.Header.Values(name); len(values) > 0 {
 			lines = append(lines, name+": "+strings.Join(values, ", "))
 		}
@@ -85,7 +85,7 @@ func TestControlAddressBrowserAccess(t *testing.T) {
 				"Access-Control-Request-Method: POST",
 				"Access-Control-Request-Headers: authorization, content-type",
 			}})
-			want := "Access-Control-Allow-Origin: null\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE\nAccess-Control-Allow-Headers: Authorization, Content-Type\nVary: Origin"
+			want := "Access-Control-Allow-Origin: null\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE\nAccess-Control-Allow-Headers: Authorization, Content-Type\nAccess-Control-Max-Age: 600\nVary: Origin"
 			if response.StatusCode != http.StatusNoContent || corsHeaders(response) != want || body != "" {
 				t.Fatalf("\nwanted:\n204 for %s\n%s\ngot:\n%d\n%s\n%s", path, want, response.StatusCode, corsHeaders(response), body)
 			}
