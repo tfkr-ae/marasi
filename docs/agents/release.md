@@ -18,6 +18,8 @@ A release is an annotated `DD.MM.YYYY` tag on `main`. Pushing the tag publishes 
 
 3. Wait for the Release workflow (`gh run list --workflow=release.yml`). It tests, builds, signs, and publishes the release with generated notes, marked latest, titled with the bare tag.
 
+   Each build is published twice: as a bare executable (`marasi-linux-amd64`, `marasi-darwin-arm64`, `marasi-windows-amd64.exe`) and as an archive holding one `marasi` file (`marasi-linux-amd64.tar.gz`, `marasi-darwin-arm64.zip`, `marasi-windows-amd64.zip`), made by `scripts/archive-cli.sh`. Some networks block bare executables but let archives through. `checksums.txt` lists all six, and `checksums.txt.minisig` signs it. Nightly publishes the same assets.
+
 4. Set the title to `<tag> - <Theme In Title Case>`:
 
    ```bash
