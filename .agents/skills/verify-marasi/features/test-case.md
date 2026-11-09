@@ -6,6 +6,7 @@ Users record named test cases in the open project, attach captured traffic, and 
 
 - Create with `test-case create --title`.
 - List newest first with `test-case list`. Order is by creation time to the second; test cases created in the same second keep creation order.
+- List every case as `test-case get` returns it, with linked traffic and artifacts, with `test-case list --full`.
 - Read one case and its linked traffic with `test-case get`.
 - List linked traffic oldest-first with `test-case list-requests UUID`.
 - Change title, description, category, tags, or note with `test-case update`.
@@ -31,5 +32,6 @@ After linking, run `test-case list-requests "$TEST_CASE_ID" --json` and require 
 - Checklist items have no ids. `service start` writes `$VERIFY_CONFIG_DIR/test_cases.yml` from the bundled default if that file is missing. `test-case checklist` only reads: with the file missing, it prints the bundled default and writes nothing.
 - Duplicate link of the same request to the same case returns a conflict.
 - Link, unlink, get, and delete look up ids in the currently open project. After opening a different project, previous case and request ids are not visible. Opening the current path does not hide them.
+- `test-case list --full --json` items each equal that case's `test-case get --json`, with `items` and `artifacts`; plain `test-case list` items have neither. Human `--full` adds `REQUESTS` and `ARTIFACTS` count columns.
 - Human `test-case get` prints scalar fields only. Linked traffic (`items`) and `artifacts` appear in `--json`.
 - `test-case get --json` includes an `artifacts` array filled by `artifact upload --test-case`.
