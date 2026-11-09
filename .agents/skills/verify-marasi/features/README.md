@@ -13,12 +13,12 @@ The primary surface is the `marasi` CLI. It controls a detached proxy service th
 | Notes | `notes set`, `notes get`, `notes list`, list pagination, `notes clear`, `traffic bulk note append`, `traffic bulk note clear` | [notes](notes.md) |
 | Project open | `project open --name`, `project open --path`, `project switch`, `project list` | [project open](project-open.md) |
 | Events | `events`, `traffic bulk highlight` | [events](events.md) |
-| Launchpad | `launchpad create`, `launchpad list`, `launchpad get`, `launchpad update`, `launchpad delete`, `launchpad link`, `launchpad unlink`, `launchpad move`, `launchpad launch`, `launchpad pending`, `launchpad status`, `launchpad cancel`, `traffic bulk link`, `traffic bulk unlink` | [launchpad](launchpad.md) |
+| Launchpad | `launchpad create`, `launchpad list`, `launchpad get`, `launchpad update`, `launchpad delete`, `launchpad link`, `launchpad unlink`, `launchpad move`, `launchpad launch`, `launchpad pending`, `launchpad status`, `launchpad cancel`, `launchpad search`, `traffic bulk link`, `traffic bulk unlink` | [launchpad](launchpad.md) |
 | Background jobs | `jobs list`, `jobs rebuild` | [jobs](jobs.md) |
 | Dashboard counts | `dashboard` | [dashboard](dashboard.md) |
 | Client settings | `settings list`, `settings get`, `settings set`, `settings delete` | [settings](settings.md) |
-| Test case | `test-case create`, `test-case list`, `test-case get`, `test-case list-requests`, `test-case update`, `test-case delete`, `test-case link`, `test-case unlink`, `test-case checklist` | [test case](test-case.md) |
-| Finding | `finding create`, `finding list`, `finding get`, `finding list-requests`, `finding update`, `finding delete`, `finding link`, `finding unlink` | [finding](finding.md) |
+| Test case | `test-case create`, `test-case list`, `test-case list --full`, `test-case get`, `test-case list-requests`, `test-case update`, `test-case delete`, `test-case link`, `test-case unlink`, `test-case checklist` | [test case](test-case.md) |
+| Finding | `finding create`, `finding list`, `finding list --full`, `finding get`, `finding list-requests`, `finding update`, `finding delete`, `finding link`, `finding unlink` | [finding](finding.md) |
 | Artifact | `artifact upload`, `artifact list`, `artifact get`, `artifact download`, `artifact delete` | [artifact](artifact.md) |
 | Checkpoint | `checkpoint list`, `checkpoint get`, `checkpoint forward`, `checkpoint drop`, `checkpoint intercept`, `checkpoint websocket-intercept` | [checkpoint](checkpoint.md) |
 | Chrome | `chrome path add`, `chrome path list`, `chrome path remove`, `chrome profile add`, `chrome profile list`, `chrome profile remove`, `chrome start` | [chrome](chrome.md) |

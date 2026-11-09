@@ -6,6 +6,7 @@ Users record findings in the open project, optionally point them at a test case,
 
 - Create with `finding create --title`.
 - List newest first with `finding list`. Order is by creation time to the second; findings created in the same second keep creation order.
+- List every finding as `finding get` returns it, with linked traffic and artifacts, with `finding list --full`.
 - Read one finding and its linked traffic with `finding get`.
 - List linked traffic oldest-first with `finding list-requests UUID`.
 - Change title, severity, CVSS fields, writeup, treatment plan, or related test case with `finding update`.
@@ -32,5 +33,6 @@ After linking, run `finding list-requests "$FINDING_ID" --json` and require the 
 - A related test case id must already exist in the open project.
 - Duplicate link of the same request to the same finding returns a conflict.
 - Link, unlink, get, and delete look up ids in the currently open project. After opening a different project, previous finding and request ids are not visible. Opening the current path does not hide them.
+- `finding list --full --json` items each equal that finding's `finding get --json`, with `items` and `artifacts`; plain `finding list` items have neither. Human `--full` adds `REQUESTS` and `ARTIFACTS` count columns.
 - Human `finding get` prints scalar fields only. Linked traffic (`items`) and `artifacts` appear in `--json`.
 - `finding get --json` includes an `artifacts` array filled by `artifact upload --finding`.

@@ -5,7 +5,7 @@ Marasi users start a named detached proxy service for a named project, inspect i
 ## Sub-features
 
 - Start an instance with `service start`.
-- Inspect version, instance, project, proxy-listener identity, and whether a restart is required with `service status`.
+- Inspect version, API level, instance, project, proxy-listener identity, run id, and whether a restart is required with `service status`.
 - Stop the selected instance with `service stop`.
 - Restart the selected instance on the installed build with `service restart [--force]`.
 - List instances in the config directory with `service list`.
@@ -20,7 +20,7 @@ Build `dist/marasi`, then run `dist/marasi --config-dir "$VERIFY_CONFIG_DIR" --i
 
 ## Driving it with shell and curl
 
-Run `service start --project-name "$VERIFY_PROJECT" --address 127.0.0.1 --port 0 --json`. Start JSON is exactly `instance`, `proxy_listener` and `control_listener`, which is `null` without `--control-address`. Then `service status --json`. Match `instance` to `$VERIFY_INSTANCE`, `status` to `running`, and `version` to the build `VERSION`. Require `project` to be the canonical absolute path of `$VERIFY_CONFIG_DIR/projects/$VERIFY_PROJECT.marasi`. Require `proxy_listener` to contain `127.0.0.1` and an assigned decimal port, and to equal the start value. Run `service list --json` and require one item whose `instance` equals `$VERIFY_INSTANCE` and whose `status` is `running`. Run `service restart --json` and require `{"instance":"$VERIFY_INSTANCE","status":"restarted","version":...,"proxy_listener":...}` with the same `proxy_listener`; `service status --json` afterwards reports the same instance, project, and listener. Run `service stop --json` and require its `instance` to equal `$VERIFY_INSTANCE` and its `status` to equal `stopped`. A second `service status --json` must exit non-zero with `{"error":"instance $VERIFY_INSTANCE is not running"}`.
+Run `service start --project-name "$VERIFY_PROJECT" --address 127.0.0.1 --port 0 --json`. Start JSON is exactly `instance`, `proxy_listener` and `control_listener`, which is `null` without `--control-address`. Then `service status --json`. Match `instance` to `$VERIFY_INSTANCE`, `status` to `running`, and `version` to the build `VERSION`. Require `project` to be the canonical absolute path of `$VERIFY_CONFIG_DIR/projects/$VERIFY_PROJECT.marasi`. Require `proxy_listener` to contain `127.0.0.1` and an assigned decimal port, and to equal the start value. Require `api` to be `1` and `run_id` a UUID; human status prints `api: 1` and `run id: <run_id>`. Run `service list --json` and require one item whose `instance` equals `$VERIFY_INSTANCE` and whose `status` is `running`. Run `service restart --json` and require `{"instance":"$VERIFY_INSTANCE","status":"restarted","version":...,"proxy_listener":...}` with the same `proxy_listener`; `service status --json` afterwards reports the same instance, project, listener, and `api`, and a new `run_id`. Run `service stop --json` and require its `instance` to equal `$VERIFY_INSTANCE` and its `status` to equal `stopped`. A second `service status --json` must exit non-zero with `{"error":"instance $VERIFY_INSTANCE is not running"}`.
 
 ## Gotchas
 
