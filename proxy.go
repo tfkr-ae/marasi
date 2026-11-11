@@ -535,7 +535,7 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyReque
 		req.URL.Host = currentURLHost
 
 		if err != nil {
-			return nil, fmt.Errorf("dumping request %d body : %w", requestId, err)
+			return nil, fmt.Errorf("dumping request %d body: %w", requestId, err)
 		}
 
 		proxyRequest.Raw = domain.RawField(rawReq)
@@ -807,7 +807,7 @@ func (proxy *Proxy) WriteLog(level string, message string, options ...func(log *
 	}
 	uuid, err := uuid.NewV7()
 	if err != nil {
-		return fmt.Errorf("generating new uuid : %w", err)
+		return fmt.Errorf("generating new uuid: %w", err)
 	}
 	log := domain.Log{
 		ID:        uuid,
@@ -818,7 +818,7 @@ func (proxy *Proxy) WriteLog(level string, message string, options ...func(log *
 	for _, option := range options {
 		err := option(&log)
 		if err != nil {
-			return fmt.Errorf("applying log option : %w", err)
+			return fmt.Errorf("applying log option: %w", err)
 		}
 	}
 	proxy.DBWriteChannel <- &log

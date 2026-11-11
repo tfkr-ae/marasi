@@ -317,7 +317,7 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 		return queueIndex(tx, req.ID)
 	})
 	if err != nil {
-		return fmt.Errorf("inserting request %s : %w", req.ID, err)
+		return fmt.Errorf("inserting request %s: %w", req.ID, err)
 	}
 	repo.indexQueued()
 	repo.pairCaptured()
@@ -387,7 +387,7 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 		return queueIndex(tx, resp.ID)
 	})
 	if err != nil {
-		return fmt.Errorf("inserting response %s : %w", resp.ID, err)
+		return fmt.Errorf("inserting response %s: %w", resp.ID, err)
 	}
 	repo.indexQueued()
 	return nil
@@ -405,7 +405,7 @@ func (repo *Repository) GetResponse(id uuid.UUID) (*domain.ProxyResponse, error)
 
 	err := repo.dbConn.Get(&dbRow, query, id)
 	if err != nil {
-		return nil, fmt.Errorf("getting response with id %s : %w", id, err)
+		return nil, fmt.Errorf("getting response with id %s: %w", id, err)
 	}
 
 	return toDomainProxyResponse(&dbRow), nil
@@ -429,7 +429,7 @@ func (repo *Repository) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResp
 
 	err := repo.dbConn.Get(&dbRow, query, id)
 	if err != nil {
-		return nil, fmt.Errorf("getting request & response with id %s : %w", id, err)
+		return nil, fmt.Errorf("getting request & response with id %s: %w", id, err)
 	}
 
 	return toDomainRequestResponseRow(&dbRow), nil
@@ -497,7 +497,7 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 
 	err := repo.dbConn.Select(&dbSummary, query)
 	if err != nil {
-		return nil, fmt.Errorf("getting request & response summary : %w", err)
+		return nil, fmt.Errorf("getting request & response summary: %w", err)
 	}
 
 	reqResSummary := make([]*domain.RequestResponseSummary, len(dbSummary))
@@ -514,7 +514,7 @@ func (repo *Repository) GetMetadata(id uuid.UUID) (map[string]any, error) {
 
 	err := repo.dbConn.Get(&dbMeta, query, id)
 	if err != nil {
-		return dbMeta, fmt.Errorf("selecting metadata for request %v : %w", id, err)
+		return dbMeta, fmt.Errorf("selecting metadata for request %v: %w", id, err)
 	}
 
 	return map[string]any(dbMeta), nil
@@ -535,18 +535,18 @@ func (repo *Repository) UpdateMetadata(metadata map[string]any, ids ...uuid.UUID
 		for _, id := range ids {
 			result, err := tx.Exec(query, dbMeta, id)
 			if err != nil {
-				return fmt.Errorf("updating metadata %v for %v : %w", dbMeta, id, err)
+				return fmt.Errorf("updating metadata %v for %v: %w", dbMeta, id, err)
 			}
 			rowsAffected, err := result.RowsAffected()
 			if err != nil {
-				return fmt.Errorf("updating metadata %v for %v : %w", dbMeta, id, err)
+				return fmt.Errorf("updating metadata %v for %v: %w", dbMeta, id, err)
 			}
 			if rowsAffected == 0 {
 				// No such request: nothing changed, so there is nothing to index.
 				continue
 			}
 			if err := indexAnnotations(tx, id); err != nil {
-				return fmt.Errorf("updating metadata %v for %v : %w", dbMeta, id, err)
+				return fmt.Errorf("updating metadata %v for %v: %w", dbMeta, id, err)
 			}
 			if err := syncIntercepted(tx, id); err != nil {
 				return err

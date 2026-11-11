@@ -598,7 +598,7 @@ func startServiceInstance(ctx context.Context, options serviceOptions, ready fun
 
 	wordlists, err := wordlist.NewManager(options.configDir)
 	if err != nil {
-		return fmt.Errorf("creating wordlist manager : %w", err)
+		return fmt.Errorf("creating wordlist manager: %w", err)
 	}
 
 	// The network address closes last, after the project and the instance
