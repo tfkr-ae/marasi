@@ -267,7 +267,9 @@ func TestProtocolMuxListener(t *testing.T) {
 		}
 
 		// Write 2 bytes only
-		_, err = clientConn.Write([]byte{0x01, 0x02})
+		if _, err := clientConn.Write([]byte{0x01, 0x02}); err != nil {
+			t.Fatalf("client failed to write: %v", err)
+		}
 		clientConn.Close()
 
 		serverErr := <-serverErrChannel
@@ -472,6 +474,7 @@ func TestClosingListener_Accept(t *testing.T) {
 			t.Fatalf("Accept() error does not wrap net.ErrClosed: %v", err)
 		}
 		netErr, ok := err.(net.Error)
+		//lint:ignore SA1019 ClosingListener reports shutdown errors as Temporary by design, and this test pins that.
 		if !ok || !netErr.Temporary() {
 			t.Fatalf("Accept() error is not temporary: %v", err)
 		}

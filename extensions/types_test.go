@@ -35,7 +35,7 @@ func TestScopeType(t *testing.T) {
 			`,
 			setupScope: func() *compass.Scope { return compass.NewScope(false) },
 			validatorFunc: func(t *testing.T, scope *compass.Scope, ext *Runtime, got any) {
-				pattern, err := regexp.Compile("marasi\\.app")
+				pattern, err := regexp.Compile(`marasi\.app`)
 				if err != nil {
 					t.Fatalf("compiling regex")
 				}
@@ -66,7 +66,7 @@ func TestScopeType(t *testing.T) {
 			`,
 			setupScope: func() *compass.Scope { return compass.NewScope(false) },
 			validatorFunc: func(t *testing.T, scope *compass.Scope, ext *Runtime, got any) {
-				pattern, err := regexp.Compile("marasi\\.app")
+				pattern, err := regexp.Compile(`marasi\.app`)
 				if err != nil {
 					t.Fatalf("compiling regex")
 				}
@@ -120,7 +120,7 @@ func TestScopeType(t *testing.T) {
 			`,
 			setupScope: func() *compass.Scope { return compass.NewScope(false) },
 			validatorFunc: func(t *testing.T, scope *compass.Scope, ext *Runtime, got any) {
-				pattern, err := regexp.Compile("marasi\\.com")
+				pattern, err := regexp.Compile(`marasi\.com`)
 				if err != nil {
 					t.Fatalf("compiling regex")
 				}

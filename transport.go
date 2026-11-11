@@ -11,7 +11,6 @@ import (
 
 	"github.com/tfkr-ae/marasi/core"
 
-	tls "github.com/refraction-networking/utls"
 	utls "github.com/refraction-networking/utls"
 )
 
@@ -218,7 +217,7 @@ func (rt *routedTransport) openTLS(ctx context.Context, network, addr string, ro
 	// This will loop over all the TLSExtensions and set the ALPNExtension to accept
 	// http/1.1 only. This needs to be done before .HandshakeContext
 	for _, ext := range uConn.Extensions {
-		if alpnExt, ok := ext.(*tls.ALPNExtension); ok {
+		if alpnExt, ok := ext.(*utls.ALPNExtension); ok {
 			alpnExt.AlpnProtocols = []string{"http/1.1"}
 			foundALPN = true
 			break

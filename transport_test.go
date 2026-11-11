@@ -15,7 +15,6 @@ import (
 type testBaseRoundTripper struct {
 	wasCalled bool
 	response  *http.Response
-	err       error
 	request   *http.Request
 }
 

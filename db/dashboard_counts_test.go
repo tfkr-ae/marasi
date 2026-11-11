@@ -11,10 +11,6 @@ import (
 	"github.com/tfkr-ae/marasi/domain"
 )
 
-// dashboardCountsMigrationVersion is the migration that adds the maintained
-// dashboard counts.
-const dashboardCountsMigrationVersion = 23
-
 // scannedCounts is what the dashboard counted before ticket 23, by scanning
 // request: the oracle every maintained count must equal.
 func scannedCounts(t *testing.T, q sqlx.Queryer) (pairs, intercepted int) {

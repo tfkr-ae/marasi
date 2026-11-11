@@ -35,7 +35,7 @@ type trackingResponseBody struct {
 
 func (b *trackingResponseBody) Read([]byte) (int, error) {
 	b.read = true
-	return 0, forcedErr
+	return 0, errForced
 }
 
 func (b *trackingResponseBody) Close() error {
@@ -81,13 +81,13 @@ func testResponse(body string) *http.Response {
 	}
 }
 
-var forcedErr = errors.New("forced error")
+var errForced = errors.New("forced error")
 
 // erroringReader will return an error on Reads
 type erroringReader struct{}
 
 func (er *erroringReader) Read(p []byte) (n int, err error) {
-	return 0, forcedErr
+	return 0, errForced
 }
 
 func (er *erroringReader) Close() error {
