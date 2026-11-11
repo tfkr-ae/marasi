@@ -22,7 +22,9 @@ const verifySkillDir = ".agents/skills/verify-marasi"
 
 // skillDriftAllowed lists mentions that may disagree with the CLI on purpose,
 // keyed by file and the exact span or command text, with the reason.
-var skillDriftAllowed = map[string]string{}
+var skillDriftAllowed = map[string]string{
+	".agents/skills/verify-marasi/features/proxy-listener-control.md: listener restart": "the feature map says there is no such command",
+}
 
 // TestSkillProseMatchesCLI checks the marasi commands and flags that the
 // printed skill and the verify-marasi skill mention in prose, so neither can
@@ -42,8 +44,8 @@ var skillDriftAllowed = map[string]string{}
 // For a command it walks the words: a word that names a subcommand extends the
 // command path, the first other word ends the path, and every later word that
 // is not a flag is an argument and is skipped. That covers placeholders such
-// as `<id>`, `…` and `"$VAR"`, and redirections such as `</dev/null`. `[--ca <pem-file>]` counts as `--ca`. A word
-// `start|update` in the path means either command, and `…|--no-ca` means the
+// as `<id>`, `…` and `"$VAR"`, and redirections such as `</dev/null`. `[--ca <pem-file>]` counts as `--ca`.
+// A word `start|update` in the path means either command, and `…|--no-ca` means the
 // flag. Every flag must be a flag of the command or a persistent flag of one
 // of its parents.
 //
@@ -61,6 +63,10 @@ var skillDriftAllowed = map[string]string{}
 // that resolves under a mentioned command is read only that way, so `update`
 // next to `service control start` is not also `marasi update`; otherwise a
 // span with several readings passes when one of them accepts all its flags.
+//
+// A span without the binary that names a command group and then one bare word
+// that is none of its subcommands, such as `listener bogus`, is reported as an
+// unknown subcommand.
 //
 // A span that is only a flag, such as `--address` or `--status in_progress`,
 // is checked in table rows, where each row describes one command group: the
@@ -158,6 +164,20 @@ func TestSkillDriftParsing(t *testing.T) {
 			name: "should report an unknown command in a marasi span",
 			doc:  "Run `marasi service bogus --json`.\n",
 			want: []string{"bogus"},
+		},
+		{
+			name: "should report an unknown subcommand in a span without the binary",
+			doc:  "Run `service bogus --json`.\n",
+			want: []string{"bogus"},
+		},
+		{
+			name: "should report an unknown subcommand in a table row",
+			doc:  "| Move | `listener` | `listener bogus` lists. |\n",
+			want: []string{"bogus"},
+		},
+		{
+			name: "should skip a message that starts with a command group",
+			doc:  "It prints `service is not running`.\n",
 		},
 		{
 			name: "should report an unknown flag in a span without the binary",
@@ -308,12 +328,16 @@ func skillDriftProblems(doc string, checkFences bool) (problems []skillDriftProb
 			if len(nested) > 0 {
 				resolved = nested
 			}
-			if len(resolved) > 0 {
+			switch unknown := unknownSubcommand(span); {
+			case len(resolved) > 0:
 				checked++
 				context = append(context, resolved...)
-			} else if best != nil {
+			case best != nil:
 				checked++
 				problems = append(problems, best...)
+			case unknown != nil:
+				checked++
+				problems = append(problems, *unknown)
 			}
 		}
 
@@ -412,6 +436,32 @@ func walkCommand(parent *cobra.Command, tokens []string) (command *cobra.Command
 		}
 	}
 	return command, consumed, flags, args
+}
+
+// bareWord matches a word that could name a subcommand, so a span such as
+// `listener bogus` reads as a command while `service is not running` does not.
+var bareWord = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+// unknownSubcommand reports a span without the binary that names a top-level
+// command group and then one word that is none of its subcommands, as a
+// removed or renamed subcommand leaves behind. Only a single bare word counts,
+// so a quoted message that starts with a command name stays prose.
+func unknownSubcommand(span codeSpan) *skillDriftProblem {
+	tokens := expandAlternatives(span.tokens)[0]
+	if childCommand(rootCmd, tokens[0]) == nil {
+		return nil
+	}
+	command, _, _, args := walkCommand(rootCmd, tokens)
+	if !command.HasSubCommands() || command.Args != nil || len(args) != 1 || !bareWord.MatchString(args[0]) {
+		return nil
+	}
+	return &skillDriftProblem{
+		line:   span.line,
+		text:   span.text,
+		flag:   args[0],
+		wanted: "a subcommand of " + command.CommandPath(),
+		got:    "unknown command " + args[0],
+	}
 }
 
 // omittedArgsLimit is how many arguments a span may leave out, as

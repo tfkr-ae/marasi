@@ -1,5 +1,5 @@
 # Violations of CODING_STANDARDS.md that predate internal/repolint.
-# One per line: rule, file and quoted key, separated by tabs. Do not add
+# One line per occurrence: rule, file and quoted key, separated by tabs. Do not add
 # entries by hand; fix the code, then regenerate with:
 #	GOWORK=off go test ./internal/repolint -update
 errorf-wrap-colon	listener/listener_test.go	"accept failed : %w"
@@ -107,7 +107,9 @@ subtest-should	modifiers_test.go	"a hook calling the removed message:fin() shoul
 subtest-should	modifiers_test.go	"checkpoint error should log and return false"
 subtest-should	modifiers_test.go	"chunked response modifier should return an error if it fails to read the body"
 subtest-should	modifiers_test.go	"disabled checkpoint should not intercept HTTP"
+subtest-should	modifiers_test.go	"disabled checkpoint should not intercept HTTP"
 subtest-should	modifiers_test.go	"disabled checkpoint should return false"
+subtest-should	modifiers_test.go	"disabled compass should skip scope filtering without returning ErrExtensionNotFound"
 subtest-should	modifiers_test.go	"disabled compass should skip scope filtering without returning ErrExtensionNotFound"
 subtest-should	modifiers_test.go	"disabled workshop should not set processRequest headers"
 subtest-should	modifiers_test.go	"disabled workshop should not set processResponse headers"
@@ -118,10 +120,13 @@ subtest-should	modifiers_test.go	"enabled extensions should process messages in 
 subtest-should	modifiers_test.go	"extensions should run in order"
 subtest-should	modifiers_test.go	"extensions should run in the order they are defined"
 subtest-should	modifiers_test.go	"extensions with a lua error should not crash the proxy"
+subtest-should	modifiers_test.go	"extensions with a lua error should not crash the proxy"
 subtest-should	modifiers_test.go	"extensions without processRequest defined should not be executed on requests"
 subtest-should	modifiers_test.go	"extensions without processResponse defined should not be executed on responses"
 subtest-should	modifiers_test.go	"global websocket interception should return true without checkpoint"
 subtest-should	modifiers_test.go	"if first extension drops the remaining should not run"
+subtest-should	modifiers_test.go	"if first extension drops the remaining should not run"
+subtest-should	modifiers_test.go	"if first extension skips the remaining should not run"
 subtest-should	modifiers_test.go	"if first extension skips the remaining should not run"
 subtest-should	modifiers_test.go	"if request x-extension-id matches extensionID it should skip execution"
 subtest-should	modifiers_test.go	"if response x-extension-id matches extensionID it should skip execution"
@@ -130,6 +135,7 @@ subtest-should	modifiers_test.go	"missing request ID should return an error"
 subtest-should	modifiers_test.go	"missing session should return an error"
 subtest-should	modifiers_test.go	"missing upstream should return an error"
 subtest-should	modifiers_test.go	"modifier should return ErrProxyResponse when it fails to build a ProxyResponse from the response"
+subtest-should	modifiers_test.go	"modifier should return an error if the modified request is invalid / malformed"
 subtest-should	modifiers_test.go	"modifier should return an error if the modified request is invalid / malformed"
 subtest-should	modifiers_test.go	"modifier should return nil when OnRequest is defined and a standard request comes in"
 subtest-should	modifiers_test.go	"modifier should return nil when OnResponse is defined and a standard response comes in"

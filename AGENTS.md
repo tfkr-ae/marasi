@@ -4,7 +4,7 @@ When a change adds or changes a CLI command, flag, or output, update `skills/mar
 
 ## Before you commit
 
-Run `make check` and fix what it reports. It runs gofmt, `go vet`, staticcheck and the short tests. CI runs the same static checks through `make lint`.
+Run `make check` and fix what it reports. It runs gofmt, `go vet`, staticcheck and `go test -short ./...`, which skips only the capture benchmarks. CI runs the same static checks through `make lint`.
 
 ## Release
 

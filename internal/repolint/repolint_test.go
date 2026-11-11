@@ -89,17 +89,17 @@ func TestRepoRules(t *testing.T) {
 	root := moduleRoot(t)
 	files, err := goFiles(root)
 	if err != nil {
-		t.Fatalf("listing Go files: %v", err)
+		t.Fatalf("\nwanted:\nthe module's Go files\ngot:\n%v", err)
 	}
 	var found []violation
 	for _, file := range files {
 		src, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file)))
 		if err != nil {
-			t.Fatalf("reading %s: %v", file, err)
+			t.Fatalf("\nwanted:\nthe contents of %s\ngot:\n%v", file, err)
 		}
 		vs, err := lintFile(file, src)
 		if err != nil {
-			t.Fatalf("parsing %s: %v", file, err)
+			t.Fatalf("\nwanted:\n%s to parse\ngot:\n%v", file, err)
 		}
 		found = append(found, vs...)
 	}
@@ -133,26 +133,27 @@ func TestRepoRules(t *testing.T) {
 			}
 		}
 		if err := writeBaseline(baselineFile, entries); err != nil {
-			t.Fatalf("writing %s: %v", baselineFile, err)
+			t.Fatalf("\nwanted:\n%s written\ngot:\n%v", baselineFile, err)
 		}
 		return
 	}
 
 	baseline, err := readBaseline(baselineFile)
 	if err != nil {
-		t.Fatalf("reading %s: %v", baselineFile, err)
+		t.Fatalf("\nwanted:\n%s read\ngot:\n%v", baselineFile, err)
 	}
-	occurring := map[string]bool{}
+	// Each occurrence uses up one line of its entry, so a second copy of a
+	// baselined violation fails and a fixed one leaves a stale line.
 	for _, v := range live {
 		entry := v.entry()
-		if baseline[entry] {
-			occurring[entry] = true
+		if baseline[entry] > 0 {
+			baseline[entry]--
 			continue
 		}
 		t.Error(v)
 	}
 	for _, entry := range sortedKeys(baseline) {
-		if occurring[entry] {
+		if baseline[entry] == 0 {
 			continue
 		}
 		fields := strings.SplitN(entry, "\t", 3)
@@ -165,7 +166,7 @@ func moduleRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
 	if err != nil {
-		t.Fatalf("getting working directory: %v", err)
+		t.Fatalf("\nwanted:\nthe working directory\ngot:\n%v", err)
 	}
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
@@ -173,7 +174,7 @@ func moduleRoot(t *testing.T) string {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			t.Fatalf("finding go.mod above %s: none found", dir)
+			t.Fatalf("\nwanted:\na go.mod above %s\ngot:\nnone", dir)
 		}
 		dir = parent
 	}
@@ -542,16 +543,17 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-func readBaseline(name string) (map[string]bool, error) {
+// readBaseline returns how many times each entry occurs in name.
+func readBaseline(name string) (map[string]int, error) {
 	f, err := os.Open(name)
 	if errors.Is(err, fs.ErrNotExist) {
-		return map[string]bool{}, nil
+		return map[string]int{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	entries := map[string]bool{}
+	entries := map[string]int{}
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -565,7 +567,7 @@ func readBaseline(name string) (map[string]bool, error) {
 		if !rule(fields[0]).baselined() {
 			return nil, fmt.Errorf("parsing entry %q: rule %s cannot be baselined", line, fields[0])
 		}
-		entries[line] = true
+		entries[line]++
 	}
 	return entries, scanner.Err()
 }
@@ -574,16 +576,11 @@ func writeBaseline(name string, entries []string) error {
 	sort.Strings(entries)
 	var b strings.Builder
 	b.WriteString("# Violations of CODING_STANDARDS.md that predate internal/repolint.\n")
-	b.WriteString("# One per line: rule, file and quoted key, separated by tabs. Do not add\n")
+	b.WriteString("# One line per occurrence: rule, file and quoted key, separated by tabs. Do not add\n")
 	b.WriteString("# entries by hand; fix the code, then regenerate with:\n")
 	b.WriteString("#\t" + updateCommand + "\n")
-	previous := ""
 	for _, entry := range entries {
-		if entry == previous {
-			continue
-		}
 		b.WriteString(entry + "\n")
-		previous = entry
 	}
 	return os.WriteFile(name, []byte(b.String()), 0o644)
 }
