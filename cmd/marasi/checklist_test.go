@@ -6,6 +6,8 @@ import (
 )
 
 func TestTestCaseChecklistCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	body := `{"title":"Team checklist","description":"Current scope","version":"2","items":[{"title":"Check authorization","description":"Try another user","category":"Access control"},{"title":"Check headers","description":"Inspect responses","category":"Configuration"}]}` + "\n"
 

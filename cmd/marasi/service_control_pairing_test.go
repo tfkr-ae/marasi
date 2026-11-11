@@ -36,6 +36,8 @@ func runPairJSON(t *testing.T, binary string, env []string, args ...string) pair
 }
 
 func TestServiceControlPair(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should print the URL, password, and instance of a network address on a specific IP", func(t *testing.T) {

@@ -10,6 +10,8 @@ import (
 )
 
 func TestTrafficMetadataCommands(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	id := "0193802f-f0e7-73d9-a764-06d21e367809"
 	getBody := `{"highlight":"red"}` + "\n"
@@ -68,6 +70,8 @@ func TestTrafficMetadataCommands(t *testing.T) {
 }
 
 func TestTrafficMetadataCommandContract(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	id := "0193802f-f0e7-73d9-a764-06d21e367809"
 

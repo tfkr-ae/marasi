@@ -21,7 +21,7 @@ func upMigrateToBlob(ctx context.Context, tx *sql.Tx) error {
 	`
 	_, err := tx.Exec(alterQuery)
 	if err != nil {
-		return fmt.Errorf("adding new blob columns : %w", err)
+		return fmt.Errorf("adding new blob columns: %w", err)
 	}
 	rows, err := tx.Query("SELECT id, request_raw, response_raw FROM request")
 	if err != nil {
@@ -57,7 +57,7 @@ func upMigrateToBlob(ctx context.Context, tx *sql.Tx) error {
 		}
 		_, err = tx.Exec("UPDATE request SET request_raw_blob = ?, response_raw_blob = ? WHERE id = ?", requestRawBytes, responseRawBytes, id)
 		if err != nil {
-			return fmt.Errorf("updating row %s : %w", id, err)
+			return fmt.Errorf("updating row %s: %w", id, err)
 		}
 	}
 	err = rows.Err()
@@ -66,11 +66,11 @@ func upMigrateToBlob(ctx context.Context, tx *sql.Tx) error {
 	}
 	_, err = tx.Exec("ALTER TABLE request DROP COLUMN request_raw")
 	if err != nil {
-		return fmt.Errorf("dropping request raw column : %w", err)
+		return fmt.Errorf("dropping request raw column: %w", err)
 	}
 	_, err = tx.Exec("ALTER TABLE request DROP COLUMN response_raw")
 	if err != nil {
-		return fmt.Errorf("dropping response raw column : %w", err)
+		return fmt.Errorf("dropping response raw column: %w", err)
 	}
 	_, err = tx.Exec("ALTER TABLE request RENAME COLUMN request_raw_blob TO request_raw")
 	if err != nil {

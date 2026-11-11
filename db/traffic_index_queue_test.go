@@ -139,5 +139,6 @@ func stopIndexQueue(repo *Repository) {
 	}
 	queue.mu.Unlock()
 	queue.flushMu.Lock()
+	//lint:ignore SA2001 the empty critical section is a barrier: it waits for a flush in progress.
 	queue.flushMu.Unlock()
 }

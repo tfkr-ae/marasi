@@ -14,6 +14,8 @@ import (
 )
 
 func TestListenerCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	for _, test := range []struct {
@@ -309,6 +311,8 @@ func startBlockingControlAPI(t *testing.T, configDir, name string) (<-chan struc
 }
 
 func TestListenerCommandLifecycle(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	t.Cleanup(func() { runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "stop") })

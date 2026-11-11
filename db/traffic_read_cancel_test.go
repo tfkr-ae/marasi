@@ -68,7 +68,10 @@ func TestTrafficRepo_ReadsStopWhenContextEnds(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), full/10)
 			defer cancel()
 			took, err := timed(ctx)
-			if !errors.Is(err, context.DeadlineExceeded) || took > full/2 {
+			// A read that ignores its context runs about as long as a full
+			// one. The bound leaves room for the scheduling delay of a
+			// loaded machine, where a prompt stop measured 57% of a full read.
+			if !errors.Is(err, context.DeadlineExceeded) || took > full*3/4 {
 				t.Fatalf("\nwanted:\ncontext.DeadlineExceeded well within the %v a full read takes\ngot:\n%v after %v", full, err, took)
 			}
 

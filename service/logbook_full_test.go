@@ -156,7 +156,7 @@ func TestLogbookFullLists(t *testing.T) {
 
 			linked := perID[ids[0]]
 			var detail struct {
-				Items     []struct{ ID uuid.UUID } `json:"items"`
+				Items     []struct{ ID uuid.UUID }    `json:"items"`
 				Artifacts []struct{ Filename string } `json:"artifacts"`
 			}
 			if err := json.Unmarshal(linked, &detail); err != nil {

@@ -7,6 +7,8 @@ import (
 )
 
 func TestLaunchpadDeleteCommand(t *testing.T) {
+	t.Parallel()
+
 	runCannedCommandCases(t, buildMarasi(t), []cannedCommandCase{
 		{
 			name: "launchpad delete", args: []string{"launchpad", "delete", bulkAsOf},
@@ -18,6 +20,8 @@ func TestLaunchpadDeleteCommand(t *testing.T) {
 }
 
 func TestLaunchpadDeleteUsage(t *testing.T) {
+	t.Parallel()
+
 	assertUsageErrorsBeforeRequest(t, buildMarasi(t), usageArgs(
 		[]string{"launchpad", "delete"},
 		[]string{"launchpad", "delete", "junk"},
@@ -26,6 +30,8 @@ func TestLaunchpadDeleteUsage(t *testing.T) {
 }
 
 func TestLaunchpadDeleteRefusals(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	for _, test := range []struct {
 		name, response, want string

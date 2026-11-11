@@ -15,6 +15,8 @@ import (
 // and launchpad unlink command against a running service and real captured
 // traffic.
 func TestLedgerCommandsLifecycle(t *testing.T) {
+	t.Parallel()
+
 	if runtime.GOOS == "windows" {
 		t.Skip("service process fixture uses Unix control sockets")
 	}

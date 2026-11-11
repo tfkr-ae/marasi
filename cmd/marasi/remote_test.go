@@ -87,6 +87,8 @@ func (r remoteInstance) remote(args ...string) (stdout, stderr string, err error
 }
 
 func TestRemote(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	instance := startRemoteInstance(t, binary)
 
@@ -111,6 +113,8 @@ func TestRemote(t *testing.T) {
 }
 
 func TestRemoteSelection(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	instance := startRemoteInstance(t, binary)
 	localStatus, _, err := instance.local("service", "status", "--json")
@@ -301,6 +305,8 @@ func startCannedRemoteAPIHandler(t *testing.T, handle http.HandlerFunc) (string,
 }
 
 func TestRemoteUsageErrors(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	remote, sent := startCannedRemoteAPI(t)
 
@@ -368,6 +374,8 @@ func TestRemoteUsageErrors(t *testing.T) {
 }
 
 func TestRemoteStop(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should stop the instance and return once its network address refuses connections", func(t *testing.T) {
@@ -448,6 +456,8 @@ func TestRemoteStop(t *testing.T) {
 }
 
 func TestRemoteAPILevelWarning(t *testing.T) {
+	t.Parallel()
+
 	instance := startRemoteInstance(t, buildMarasiVersion(t, "old-build"))
 	cli := buildMarasiVersion(t, "new-build")
 	localStatus, _, err := instance.local("service", "status")
@@ -497,6 +507,8 @@ func TestRemoteAPILevelWarning(t *testing.T) {
 }
 
 func TestRemoteChromePathOS(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	// An instance machine whose operating system is not this one, so the
 	// default cannot come from the CLI's own machine.
@@ -553,6 +565,8 @@ func TestRemoteChromePathOS(t *testing.T) {
 }
 
 func TestRemoteRestart(t *testing.T) {
+	t.Parallel()
+
 	if runtime.GOOS == "windows" {
 		t.Skip("restart fixture renames over a running executable")
 	}

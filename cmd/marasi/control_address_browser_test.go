@@ -62,6 +62,8 @@ func corsHeaders(response *http.Response) string {
 }
 
 func TestControlAddressBrowserAccess(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")

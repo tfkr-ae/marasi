@@ -36,6 +36,8 @@ func noPasswordWarning(address string, loopback bool) string {
 }
 
 func TestControlAddressWithoutPassword(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should refuse an origin that is not allowed and answer an allowed one and a request with no origin", func(t *testing.T) {

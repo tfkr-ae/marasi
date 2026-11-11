@@ -7,6 +7,8 @@ import (
 )
 
 func TestLogsCommand(t *testing.T) {
+	t.Parallel()
+
 	const (
 		newID       = "01938032-1b17-7243-b035-e6a9f4645904"
 		oldID       = "0193802f-f0e7-73d9-a764-06d21e367809"

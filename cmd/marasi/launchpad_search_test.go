@@ -7,6 +7,8 @@ import (
 )
 
 func TestLaunchpadSearchCommand(t *testing.T) {
+	t.Parallel()
+
 	// moveIDC sorts after bulkIDA, so its launchpad prints second.
 	found := `{"` + moveIDC + `":["` + bulkIDB + `"],"` + bulkIDA + `":["` + bulkIDA + `","` + bulkIDB + `"]}`
 	runCannedCommandCases(t, buildMarasi(t), []cannedCommandCase{
@@ -30,6 +32,8 @@ func TestLaunchpadSearchCommand(t *testing.T) {
 }
 
 func TestLaunchpadSearchInvalidQuery(t *testing.T) {
+	t.Parallel()
+
 	configDir := serviceConfigDir(t)
 	startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"invalid_query","message":"unknown field \"stauts\"","position":1}`)
 	stdout, stderr, err := runMarasiWithStdin(buildMarasi(t), "", "--config-dir", configDir, "--instance", "work", "launchpad", "search", "-q", "stauts = 1")

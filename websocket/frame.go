@@ -92,7 +92,7 @@ func ReadFrame(r io.Reader) (Frame, error) {
 	payload := make([]byte, length)
 	if length > 0 {
 		if _, err := io.ReadFull(r, payload); err != nil {
-			return Frame{}, fmt.Errorf("reading payload : %w", err)
+			return Frame{}, fmt.Errorf("reading payload: %w", err)
 		}
 	}
 	if frame.Masked {
@@ -110,7 +110,7 @@ func readFrameHeader(r io.Reader) (Frame, int64, error) {
 
 	_, err := io.ReadFull(r, header[:])
 	if err != nil {
-		return Frame{}, 0, fmt.Errorf("reading header bytes : %w", err)
+		return Frame{}, 0, fmt.Errorf("reading header bytes: %w", err)
 	}
 
 	frame := Frame{
@@ -127,13 +127,13 @@ func readFrameHeader(r io.Reader) (Frame, int64, error) {
 	case 126:
 		var extended [2]byte
 		if _, err := io.ReadFull(r, extended[:]); err != nil {
-			return Frame{}, 0, fmt.Errorf("reading 16-bit extended payload length : %w", err)
+			return Frame{}, 0, fmt.Errorf("reading 16-bit extended payload length: %w", err)
 		}
 		payloadLength = int64(binary.BigEndian.Uint16(extended[:]))
 	case 127:
 		var extended [8]byte
 		if _, err := io.ReadFull(r, extended[:]); err != nil {
-			return Frame{}, 0, fmt.Errorf("reading 64-bit extended payload length : %w", err)
+			return Frame{}, 0, fmt.Errorf("reading 64-bit extended payload length: %w", err)
 		}
 		rawLength := binary.BigEndian.Uint64(extended[:])
 		if rawLength > math.MaxInt64 {
@@ -144,7 +144,7 @@ func readFrameHeader(r io.Reader) (Frame, int64, error) {
 
 	if frame.Masked {
 		if _, err := io.ReadFull(r, frame.Key[:]); err != nil {
-			return Frame{}, 0, fmt.Errorf("reading mask key : %w", err)
+			return Frame{}, 0, fmt.Errorf("reading mask key: %w", err)
 		}
 	}
 
@@ -228,7 +228,7 @@ func WriteFrame(w io.Writer, frame Frame, mask bool) error {
 	}
 
 	if _, err := w.Write(encoded); err != nil {
-		return fmt.Errorf("writing frame : %w", err)
+		return fmt.Errorf("writing frame: %w", err)
 	}
 
 	return nil

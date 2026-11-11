@@ -168,6 +168,7 @@ func (extension *Runtime) UpdateLuaContent(repo domain.ExtensionRepository, code
 // WaitExecution waits after cancellation, before the project's database closes.
 func (extension *Runtime) WaitExecution() {
 	extension.Mu.Lock()
+	//lint:ignore SA2001 the empty critical section is a barrier: it waits for a hook call that holds Mu to return.
 	extension.Mu.Unlock()
 	extension.asyncExecutions.Wait()
 }
@@ -226,15 +227,15 @@ func (extension *Runtime) PrepareState(proxy ProxyService, options []func(*Runti
 	for _, option := range options {
 		err := option(extension)
 		if err != nil {
-			return fmt.Errorf("applying option for extension %s : %w", extension.Data.Name, err)
+			return fmt.Errorf("applying option for extension %s: %w", extension.Data.Name, err)
 		}
 	}
 	if err := extension.ExecuteLua(extension.Data.LuaContent); err != nil {
-		return fmt.Errorf("preparing state for extension %s : %w", extension.Data.Name, err)
+		return fmt.Errorf("preparing state for extension %s: %w", extension.Data.Name, err)
 	}
 
 	if err := extension.CallFunction(hookStartup); err != nil {
-		return fmt.Errorf("running startup for %s : %w", extension.Data.Name, err)
+		return fmt.Errorf("running startup for %s: %w", extension.Data.Name, err)
 	}
 	return nil
 }
@@ -295,7 +296,7 @@ func (extension *Runtime) ExecuteLuaContext(ctx context.Context, code string) er
 
 	err := lua.DoString(extension.LuaState, code)
 	if err != nil {
-		return fmt.Errorf("executing string %s : %w", code, popLuaError(extension.LuaState, err))
+		return fmt.Errorf("executing string %s: %w", code, popLuaError(extension.LuaState, err))
 	}
 
 	return nil
@@ -321,7 +322,7 @@ func (extension *Runtime) ShouldInterceptRequest(req *http.Request) (bool, error
 	err := extension.LuaState.ProtectedCall(1, 1, 0)
 	if err != nil {
 		extension.LuaState.Pop(1)
-		return false, fmt.Errorf("calling shouldInterceptRequest : %w", err)
+		return false, fmt.Errorf("calling shouldInterceptRequest: %w", err)
 	}
 
 	should := extension.LuaState.ToBoolean(-1)
@@ -351,7 +352,7 @@ func (extension *Runtime) ShouldInterceptResponse(res *http.Response) (bool, err
 	err := extension.LuaState.ProtectedCall(1, 1, 0)
 	if err != nil {
 		extension.LuaState.Pop(1)
-		return false, fmt.Errorf("calling shouldInterceptResponse : %w", err)
+		return false, fmt.Errorf("calling shouldInterceptResponse: %w", err)
 	}
 	should := extension.LuaState.ToBoolean(-1)
 	extension.LuaState.Pop(1)
@@ -374,7 +375,7 @@ func (extension *Runtime) HasFunction(name string) bool {
 func (extension *Runtime) ShouldInterceptWebSocketMessage(message *marasiws.Message) (bool, error) {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
-	defer extension.beginExecution(nil)()
+	defer extension.beginExecution(context.Background())()
 
 	extension.LuaState.Global(hookInterceptWebSocketMessage)
 	if !extension.LuaState.IsFunction(-1) {
@@ -386,7 +387,7 @@ func (extension *Runtime) ShouldInterceptWebSocketMessage(message *marasiws.Mess
 	lua.SetMetaTableNamed(extension.LuaState, "wsmsg")
 	if err := extension.LuaState.ProtectedCall(1, 1, 0); err != nil {
 		extension.LuaState.Pop(1)
-		return false, fmt.Errorf("calling shouldInterceptWebSocketMessage : %w", err)
+		return false, fmt.Errorf("calling shouldInterceptWebSocketMessage: %w", err)
 	}
 
 	should := extension.LuaState.ToBoolean(-1)
@@ -399,7 +400,7 @@ func (extension *Runtime) ShouldInterceptWebSocketMessage(message *marasiws.Mess
 func (extension *Runtime) CallWebSocketMessageHandler(message *marasiws.Message) error {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
-	defer extension.beginExecution(nil)()
+	defer extension.beginExecution(context.Background())()
 
 	extension.LuaState.Global(hookProcessWebSocketMessage)
 	if !extension.LuaState.IsFunction(-1) {
@@ -411,7 +412,7 @@ func (extension *Runtime) CallWebSocketMessageHandler(message *marasiws.Message)
 	lua.SetMetaTableNamed(extension.LuaState, "wsmsg")
 	if err := extension.LuaState.ProtectedCall(1, 0, 0); err != nil {
 		extension.LuaState.Pop(1)
-		return fmt.Errorf("calling processWebSocketMessage : %w", err)
+		return fmt.Errorf("calling processWebSocketMessage: %w", err)
 	}
 
 	return nil
@@ -440,7 +441,7 @@ func (extension *Runtime) CallResponseHandler(res *http.Response) error {
 	err := extension.LuaState.ProtectedCall(1, 0, 0)
 	if err != nil {
 		extension.LuaState.Pop(1)
-		return fmt.Errorf("calling processResponse : %w", err)
+		return fmt.Errorf("calling processResponse: %w", err)
 	}
 	return nil
 }
@@ -465,7 +466,7 @@ func (extension *Runtime) CallRequestHandler(req *http.Request) error {
 	err := extension.LuaState.ProtectedCall(1, 0, 0)
 	if err != nil {
 		extension.LuaState.Pop(1)
-		return fmt.Errorf("calling processRequest : %w", err)
+		return fmt.Errorf("calling processRequest: %w", err)
 	}
 	return nil
 }
@@ -500,7 +501,7 @@ func (extension *Runtime) CallFunctionContext(ctx context.Context, name string, 
 
 	err := extension.LuaState.ProtectedCall(len(args), 0, 0)
 	if err != nil {
-		return fmt.Errorf("calling %s : %w", name, popLuaError(extension.LuaState, err))
+		return fmt.Errorf("calling %s: %w", name, popLuaError(extension.LuaState, err))
 	}
 	return nil
 

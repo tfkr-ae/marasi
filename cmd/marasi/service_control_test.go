@@ -32,6 +32,8 @@ func runServiceControl(t *testing.T, binary, configDir, name string, args ...str
 }
 
 func TestServiceControlListener(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should start the network address on a running instance and report the bound port", func(t *testing.T) {

@@ -93,7 +93,7 @@ func (repo *Repository) Close() error {
 	_, _ = repo.dbConn.Exec(`PRAGMA optimize`)
 	err := repo.dbConn.Close()
 	if err != nil {
-		return fmt.Errorf("closing repo : %w", err)
+		return fmt.Errorf("closing repo: %w", err)
 	}
 	return nil
 }
@@ -163,7 +163,7 @@ func New(name string, logger *slog.Logger, options ...Option) (*sqlx.DB, error) 
 
 	if err != nil {
 		dbLogger.Error("Failed to connect to database", "error", err)
-		return nil, fmt.Errorf("connecting to db : %w", err)
+		return nil, fmt.Errorf("connecting to db: %w", err)
 	}
 
 	db.SetMaxOpenConns(1)

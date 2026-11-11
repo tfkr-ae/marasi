@@ -81,9 +81,7 @@ func registerMarasiLibrary(extension *Runtime, proxy ProxyService) {
 							}
 						}
 
-						for _, cookie := range req.Cookies() {
-							builder.cookies = append(builder.cookies, cookie)
-						}
+						builder.cookies = append(builder.cookies, req.Cookies()...)
 
 						if req.Body != nil {
 							bodyBytes, err := io.ReadAll(req.Body)

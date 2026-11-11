@@ -77,7 +77,7 @@ func NewManager(parentDir string) (*Manager, error) {
 
 	err := os.MkdirAll(dir, 0700)
 	if err != nil {
-		return nil, fmt.Errorf("creating wordlist dir %s : %w", dir, err)
+		return nil, fmt.Errorf("creating wordlist dir %s: %w", dir, err)
 	}
 
 	return &Manager{
@@ -89,7 +89,7 @@ func NewManager(parentDir string) (*Manager, error) {
 func (m *Manager) List() ([]Info, error) {
 	entries, err := os.ReadDir(m.wordlistDir)
 	if err != nil {
-		return nil, fmt.Errorf("reading wordlist dir %s : %w", m.wordlistDir, err)
+		return nil, fmt.Errorf("reading wordlist dir %s: %w", m.wordlistDir, err)
 	}
 
 	wordlists := make([]Info, 0, len(entries))
@@ -101,7 +101,7 @@ func (m *Manager) List() ([]Info, error) {
 
 		info, err := entry.Info()
 		if err != nil {
-			return nil, fmt.Errorf("getting file info %s : %w", entry.Name(), err)
+			return nil, fmt.Errorf("getting file info %s: %w", entry.Name(), err)
 		}
 
 		if !info.Mode().IsRegular() {
@@ -132,18 +132,18 @@ func (m *Manager) Add(source string) error {
 
 	info, err := os.Lstat(source)
 	if err != nil {
-		return fmt.Errorf("getting file info %s : %w", source, err)
+		return fmt.Errorf("getting file info %s: %w", source, err)
 	}
 	if !info.Mode().IsRegular() {
 		return ErrInvalidSource
 	}
 	resolvedSource, err := filepath.EvalSymlinks(source)
 	if err != nil {
-		return fmt.Errorf("resolving source wordlist %s : %w", source, err)
+		return fmt.Errorf("resolving source wordlist %s: %w", source, err)
 	}
 	resolvedWordlistDir, err := filepath.EvalSymlinks(m.wordlistDir)
 	if err != nil {
-		return fmt.Errorf("resolving wordlist dir %s : %w", m.wordlistDir, err)
+		return fmt.Errorf("resolving wordlist dir %s: %w", m.wordlistDir, err)
 	}
 	if pathWithin(resolvedWordlistDir, resolvedSource) {
 		return ErrInvalidSource
@@ -161,7 +161,7 @@ func (m *Manager) Add(source string) error {
 			return errors.Join(ErrInvalidSource, statErr, os.Remove(destination))
 		}
 		if err = os.Remove(source); err != nil {
-			return errors.Join(fmt.Errorf("removing source wordlist %s : %w", source, err), os.Remove(destination))
+			return errors.Join(fmt.Errorf("removing source wordlist %s: %w", source, err), os.Remove(destination))
 		}
 		return nil
 	}
@@ -197,7 +197,7 @@ func (m *Manager) Remove(name string) error {
 		return errors.New("wordlist name invalid")
 	}
 	if err := os.Remove(filepath.Join(m.wordlistDir, name)); err != nil {
-		return fmt.Errorf("removing wordlist %s : %w", name, err)
+		return fmt.Errorf("removing wordlist %s: %w", name, err)
 	}
 	return nil
 }
@@ -205,16 +205,16 @@ func (m *Manager) Remove(name string) error {
 func copyWordlist(source, destination string, sourceInfo os.FileInfo) (err error) {
 	sourceFile, err := os.Open(source)
 	if err != nil {
-		return fmt.Errorf("opening source wordlist %s : %w", source, err)
+		return fmt.Errorf("opening source wordlist %s: %w", source, err)
 	}
 	defer sourceFile.Close()
 	openedInfo, err := sourceFile.Stat()
 	if err != nil {
-		return fmt.Errorf("getting source wordlist info %s : %w", source, err)
+		return fmt.Errorf("getting source wordlist info %s: %w", source, err)
 	}
 	currentSourceInfo, err := os.Lstat(source)
 	if err != nil {
-		return fmt.Errorf("getting source wordlist info %s : %w", source, err)
+		return fmt.Errorf("getting source wordlist info %s: %w", source, err)
 	}
 	if !currentSourceInfo.Mode().IsRegular() || !os.SameFile(sourceInfo, openedInfo) || !os.SameFile(openedInfo, currentSourceInfo) {
 		return ErrInvalidSource
@@ -225,7 +225,7 @@ func copyWordlist(source, destination string, sourceInfo os.FileInfo) (err error
 		return ErrAlreadyExists
 	}
 	if err != nil {
-		return fmt.Errorf("creating wordlist %s : %w", destination, err)
+		return fmt.Errorf("creating wordlist %s: %w", destination, err)
 	}
 
 	removeDestination := true
@@ -234,7 +234,7 @@ func copyWordlist(source, destination string, sourceInfo os.FileInfo) (err error
 		if !destinationClosed {
 			closeErr := destinationFile.Close()
 			if err == nil && closeErr != nil {
-				err = fmt.Errorf("closing wordlist %s : %w", destination, closeErr)
+				err = fmt.Errorf("closing wordlist %s: %w", destination, closeErr)
 			}
 		}
 		if removeDestination {
@@ -243,27 +243,27 @@ func copyWordlist(source, destination string, sourceInfo os.FileInfo) (err error
 	}()
 
 	if _, err = io.Copy(destinationFile, sourceFile); err != nil {
-		return fmt.Errorf("copying wordlist %s : %w", destination, err)
+		return fmt.Errorf("copying wordlist %s: %w", destination, err)
 	}
 	if err = destinationFile.Sync(); err != nil {
-		return fmt.Errorf("syncing wordlist %s : %w", destination, err)
+		return fmt.Errorf("syncing wordlist %s: %w", destination, err)
 	}
 	if err = destinationFile.Close(); err != nil {
-		return fmt.Errorf("closing wordlist %s : %w", destination, err)
+		return fmt.Errorf("closing wordlist %s: %w", destination, err)
 	}
 	destinationClosed = true
 	currentSourceInfo, err = os.Lstat(source)
 	if err != nil {
-		return fmt.Errorf("getting source wordlist info %s : %w", source, err)
+		return fmt.Errorf("getting source wordlist info %s: %w", source, err)
 	}
 	if !currentSourceInfo.Mode().IsRegular() || !os.SameFile(openedInfo, currentSourceInfo) {
 		return ErrInvalidSource
 	}
 	if err = sourceFile.Close(); err != nil {
-		return fmt.Errorf("closing source wordlist %s : %w", source, err)
+		return fmt.Errorf("closing source wordlist %s: %w", source, err)
 	}
 	if err = os.Remove(source); err != nil {
-		return fmt.Errorf("removing source wordlist %s : %w", source, err)
+		return fmt.Errorf("removing source wordlist %s: %w", source, err)
 	}
 	removeDestination = false
 	return nil
@@ -289,7 +289,7 @@ func (m *Manager) Open(name string) (Iterator, error) {
 
 	info, err := os.Lstat(wordlistPath)
 	if err != nil {
-		return nil, fmt.Errorf("getting file info %s : %w", wordlistPath, err)
+		return nil, fmt.Errorf("getting file info %s: %w", wordlistPath, err)
 	}
 
 	if !info.Mode().IsRegular() {
@@ -298,7 +298,7 @@ func (m *Manager) Open(name string) (Iterator, error) {
 
 	file, err := os.Open(wordlistPath)
 	if err != nil {
-		return nil, fmt.Errorf("reading wordlist %s : %w", wordlistPath, err)
+		return nil, fmt.Errorf("reading wordlist %s: %w", wordlistPath, err)
 	}
 
 	return newIterator(file), nil

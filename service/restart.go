@@ -179,7 +179,7 @@ func (s *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 		successor, stepErr = start(ctx, handover)
 	}
 	if stepErr != nil {
-		s.rollBackRestart(w, r, ctx, release, proxyListener, stepErr)
+		s.rollBackRestart(ctx, w, r, release, proxyListener, stepErr)
 		return
 	}
 
@@ -196,7 +196,7 @@ func (s *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 
 // rollBackRestart takes the project and listener back after a failed
 // handover and reports the failure.
-func (s *Server) rollBackRestart(w http.ResponseWriter, r *http.Request, ctx context.Context, release projectRelease, proxyListener *string, cause error) {
+func (s *Server) rollBackRestart(ctx context.Context, w http.ResponseWriter, r *http.Request, release projectRelease, proxyListener *string, cause error) {
 	var rollbackErr error
 	if release.reopen != nil {
 		rollbackErr = wrapError("reopening project", release.reopen(ctx))

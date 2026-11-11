@@ -1,10 +1,10 @@
-## Go commands
-
-Run Go commands as `GOWORK=off go …`. Agent worktrees can sit inside a checkout whose parent `go.work` excludes this module, and `go` then fails with "main module … does not contain package".
-
 ## CLI skill
 
 When a change adds or changes a CLI command, flag, or output, update `skills/marasi/SKILL.md` in the same change. `marasi skill` prints it.
+
+## Before you commit
+
+Run `make check` and fix what it reports. It runs gofmt, `go vet`, staticcheck and `go test -short ./...`, which skips only the capture benchmarks. CI runs the same static checks through `make lint`.
 
 ## Release
 

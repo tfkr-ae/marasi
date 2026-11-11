@@ -13,6 +13,8 @@ import (
 )
 
 func TestArtifactCommands(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	id := "01938032-1b17-7243-b035-e6a9f4645904"
 	testCaseID := "0193802f-f0e7-73d9-a764-06d21e367809"
@@ -164,6 +166,8 @@ func runMarasiInDir(binary, dir string, args ...string) (stdout, stderr string, 
 	return outBuf.String(), errBuf.String(), err
 }
 func TestArtifactListCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	id := "01938032-1b17-7243-b035-e6a9f4645904"
 	parentID := "0193802f-f0e7-73d9-a764-06d21e367809"

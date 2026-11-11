@@ -2,6 +2,8 @@
 
 Conventions this repo follows, most of them enforced in past code reviews. Apply them to new and changed code. Older code that predates a rule is not a finding unless the change touches it. Decisions about behaviour live in `docs/adr/`, and domain terms in `GLOSSARY.md`.
 
+A rule marked _(checked by `internal/repolint`)_ is enforced by `go test ./internal/repolint` for the part the note names; the rest of that rule, and every unmarked rule, is for the reviewer. Violations that predate the check are listed in `internal/repolint/baseline.txt`.
+
 ## Design
 
 - **One place for shared logic.** When two places need the same logic, extract one helper and call it from both (`decodeStrictJSON`, `controlRefusal`).
@@ -16,17 +18,17 @@ Conventions this repo follows, most of them enforced in past code reviews. Apply
 - **Release before waiting.** Never hold a lock or the project gate while waiting on the network or another process. Release it first (`docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md`).
 - **One transaction for writes that land together.** Use `repo.inTx` or `repo.inTxContext`, and check the write's preconditions inside the same transaction.
 - **Closures own their errors.** A closure passed to `inTx` or a read callback declares its own `err` rather than assigning to the enclosing function's.
-- **Context first.** `ctx context.Context` is the first parameter. A read a client can abandon has a `…Context` variant, and the context-free form calls it.
+- **Context first.** `ctx context.Context` is the first parameter. A read a client can abandon has a `…Context` variant, and the context-free form calls it. _(Parameter position in non-test code checked by `internal/repolint`.)_
 
 ## Errors
 
-- **Wrap with a lowercase gerund phrase.** `fmt.Errorf("reading configuration: %w", err)`: `": %w"` with no space before the colon.
-- **Sentinel errors.** Declare expected failures as `Err… = errors.New(…)` and compare them with `errors.Is`.
+- **Wrap with a lowercase gerund phrase.** `fmt.Errorf("reading configuration: %w", err)`: `": %w"` with no space before the colon. _(Colon placement and lowercase start checked by `internal/repolint`.)_
+- **Sentinel errors.** Declare expected failures as `Err… = errors.New(…)` and compare them with `errors.Is`. _(The `Err…` name of a package-level `errors.New` value checked by `internal/repolint`.)_
 - **Refusals carry a code.** A refused control API command returns a machine-readable code with a human message (404 `not_found`, not a bare status).
 
 ## Proxy traffic
 
-- **Add no headers.** Every transport that sends captured, proxied, launched or Armory traffic sets `DisableCompression`. Marasi's own code adds no header to a request (`docs/adr/2026-10-19-the-proxy-adds-no-headers-to-a-request.md`, `docs/agents/maps/request-path.md`).
+- **Add no headers.** Every transport that sends captured, proxied, launched or Armory traffic sets `DisableCompression`. Marasi's own code adds no header to a request (`docs/adr/2026-10-19-the-proxy-adds-no-headers-to-a-request.md`, `docs/agents/maps/request-path.md`). _(`DisableCompression` on every `http.Transport` literal in non-test code checked by `internal/repolint`, with reviewed exemptions for non-proxy traffic.)_
 
 ## Comments
 
@@ -34,6 +36,6 @@ Conventions this repo follows, most of them enforced in past code reviews. Apply
 
 ## Tests
 
-- **Subtests start with "should".** `t.Run("should fail with upstream_error when …", …)`.
+- **Subtests start with "should".** `t.Run("should fail with upstream_error when …", …)`. _(Checked by `internal/repolint`.)_
 - **Failure messages use the wanted/got form.** `t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)`. The standard library is enough; this repo uses no assertion library.
 - **Pin claimed behaviour.** A behaviour that docs or skills state, such as a status code or a JSON value, has a test that would fail if it changed.

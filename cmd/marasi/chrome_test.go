@@ -14,6 +14,8 @@ import (
 )
 
 func TestChromePathCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	for _, test := range []struct {
@@ -74,6 +76,8 @@ func TestChromePathCommand(t *testing.T) {
 }
 
 func TestChromeProfileAndStartCommands(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	for _, test := range []struct {
@@ -177,6 +181,8 @@ func TestChromeProfileAndStartCommands(t *testing.T) {
 }
 
 func TestChromeCommandContract(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should pass every successful response through byte for byte in JSON mode", func(t *testing.T) {
@@ -355,6 +361,8 @@ func TestChromeCommandContract(t *testing.T) {
 }
 
 func TestChromeCommandLifecycle(t *testing.T) {
+	t.Parallel()
+
 	if runtime.GOOS == "windows" {
 		t.Skip("test fixture uses a shell executable")
 	}

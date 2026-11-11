@@ -2,6 +2,10 @@ BIN     := marasi
 PKG     := ./cmd/marasi
 DIST    := dist
 GO      ?= go
+# A parent go.work can exclude this module; build and test it on its own.
+ifeq ($(GOWORK),)
+export GOWORK := off
+endif
 PREFIX  ?= $(HOME)/.local
 BINDIR  := $(PREFIX)/bin
 TARGETS := darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64 windows-arm64
@@ -12,10 +16,13 @@ VERSION ?= $(shell date -u '+%d.%m.%Y (dev)')
 CHANNEL ?=
 SIGNING_PUBLIC_KEY ?=
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.buildChannel=$(CHANNEL)' -X 'main.signingPublicKey=$(SIGNING_PUBLIC_KEY)'
+# Pinned so every machine and CI run the same checks; v0.8.2 is built for go 1.26.
+# `go run pkg@version` keeps it out of go.mod.
+STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
 
 .DEFAULT_GOAL := build
 
-.PHONY: build all test clean install uninstall help autobahn autobahn-baseline $(TARGETS)
+.PHONY: build all test lint check clean install uninstall help autobahn autobahn-baseline $(TARGETS)
 
 # Autobahn WebSocket testsuite (Docker). See `make help`.
 CASES   ?= *
@@ -31,6 +38,8 @@ help:
 		'make linux-amd64     build one target into dist/marasi-linux-amd64' \
 		'make all             build every target' \
 		'make test            run tests' \
+		'make lint            check gofmt, run go vet and staticcheck' \
+		'make check           run lint, then the short tests; run it before you commit' \
 		'make autobahn        run the Autobahn suite through Marasi and diff it against the' \
 		'                     committed direct baseline; exits non-zero on a deviation outside 9.x.' \
 		'                     Narrow with CASES=3.*,7.9.* EXCLUDE=9.* MODES=fuzzingclient' \
@@ -55,6 +64,19 @@ all: $(TARGETS)
 
 test:
 	$(GO) test ./...
+
+lint:
+	@unformatted="$$(gofmt -l .)"; \
+	if [ -n "$$unformatted" ]; then \
+		echo "gofmt needs to format these files (run gofmt -w on them):"; \
+		echo "$$unformatted"; \
+		exit 1; \
+	fi
+	$(GO) vet ./...
+	$(GO) run $(STATICCHECK) ./...
+
+check: lint
+	$(GO) test -short ./...
 
 autobahn: build
 	$(GO) run ./internal/autobahn/cmd/autobahn $(AUTOBAHN_FLAGS) -runs '$(RUNS)'

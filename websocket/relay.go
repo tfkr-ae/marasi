@@ -374,7 +374,7 @@ func (in *inbound) readPayload(frame Frame, length int64) ([]byte, error) {
 			if read == length && errors.Is(err, io.EOF) {
 				break
 			}
-			return nil, fmt.Errorf("reading websocket frame: reading payload : %w", err)
+			return nil, fmt.Errorf("reading websocket frame: reading payload: %w", err)
 		}
 	}
 	return payload, nil
@@ -472,7 +472,7 @@ func (in *inbound) closeLegs(code int) {
 // discard reads and drops a payload of length bytes.
 func (in *inbound) discard(length int64) error {
 	if _, err := io.CopyN(io.Discard, in.reader, length); err != nil {
-		return fmt.Errorf("reading websocket frame: discarding payload : %w", err)
+		return fmt.Errorf("reading websocket frame: discarding payload: %w", err)
 	}
 	return nil
 }

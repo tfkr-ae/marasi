@@ -45,6 +45,7 @@ func Base(vector string) (normalized string, score float64, err error) {
 	body := strings.TrimSpace(vector)
 	if version, rest, found := strings.Cut(body, "/"); found && strings.HasPrefix(version, "CVSS:") {
 		if version+"/" != Prefix {
+			//lint:ignore ST1005 the message ends with an example vector, whose "..." is part of the text.
 			return "", 0, fmt.Errorf("%s is not CVSS 3.1; write the vector as %sAV:N/AC:L/...", version, Prefix)
 		}
 		body = rest

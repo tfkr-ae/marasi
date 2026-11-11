@@ -1,0 +1,5 @@
+# A parent go.work can exclude this module and break `go` with
+# "main module ... does not contain package". Codex loads this file only
+# when the project is trusted.
+[shell_environment_policy.set]
+GOWORK = "off"
