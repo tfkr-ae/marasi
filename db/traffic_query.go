@@ -569,14 +569,83 @@ func (t *queryTranslator) textMatch(e *expr.Expr, column string) (string, error)
 	case "":
 		// One IN over the union, not an OR of two INs, so SQLite builds a
 		// single match set and still drives the page from it.
-		search = t.indexSearch("traffic_index", bodyColumns+" : "+phrase) +
+		search = t.bodySearch(bodyColumns, "", term, phrase) +
 			" UNION " + t.indexSearch("traffic_annotation_index", phrase)
 	case "note", "metadata":
 		search = t.indexSearch("traffic_annotation_index", column+" : "+phrase)
 	default:
-		search = t.indexSearch("traffic_index", column+" : "+phrase)
+		search = t.bodySearch(column, column, term, phrase)
 	}
 	return "request.id IN (" + search + ")", nil
+}
+
+// bodySearch selects the ids of pairs whose body index text in the columns
+// of filter contains term, which phrase quotes. column is the one body index
+// column filter names, or "" for all four.
+//
+// FTS5 matches a phrase by walking the positions of each of its trigrams in
+// every candidate row, once per trigram in the phrase. Distinct trigrams
+// share no positions, so that walk costs about one pass over the text. A term
+// that repeats a trigram, such as a run of one character, walks the same
+// positions once per repeat, which over padded or repetitive bodies took
+// 39 seconds across 90,000 pairs. Such a term finds its candidates by its
+// distinct trigrams instead, which needs no positions, and
+// pair_text_check settles each candidate by searching its text.
+func (t *queryTranslator) bodySearch(filter, column, term, phrase string) string {
+	if !repeatsTrigram(term) {
+		return t.indexSearch("traffic_index", filter+" : "+phrase)
+	}
+	t.text = true
+	t.bind(filter + " : (" + strings.Join(uniqueTrigramPhrases(termTrigrams(term)), " AND ") + ")")
+	search := "SELECT k.request_id FROM traffic_index JOIN traffic_index_key k ON k.id = traffic_index.rowid" +
+		" JOIN request r ON r.id = k.request_id WHERE traffic_index MATCH ?" + t.afterBound("traffic_index")
+	raws := "r.request_raw, r.response_raw"
+	switch {
+	case strings.HasPrefix(column, "request_"):
+		raws = "r.request_raw, NULL"
+	case strings.HasPrefix(column, "response_"):
+		raws = "NULL, r.response_raw"
+	}
+	// When the check cannot tell, FTS5 matches the phrase against this
+	// pair's row alone.
+	t.bind(column, term, filter+" : "+phrase)
+	return search + " AND CASE " + pairTextCheckFunction + "(" + raws + ", ?, ?) WHEN 1 THEN 1 WHEN 0 THEN 0" +
+		" ELSE EXISTS (SELECT 1 FROM traffic_index WHERE traffic_index MATCH ? AND traffic_index.rowid = k.id) END"
+}
+
+// repeatsTrigram reports whether term has a trigram more than once, ignoring
+// case as the index does. Go's case folding is close to FTS5's but not the
+// same, so it only decides how bodySearch searches, never what matches.
+func repeatsTrigram(term string) bool {
+	trigrams := termTrigrams(strings.ToLower(term))
+	return len(uniqueTrigramPhrases(trigrams)) < len(trigrams)
+}
+
+// termTrigrams returns the trigrams the index's tokenizer makes of term, in
+// order and as written.
+func termTrigrams(term string) []string {
+	runes := []rune(term)
+	trigrams := make([]string, 0, max(len(runes)-2, 0))
+	for i := 0; i+3 <= len(runes); i++ {
+		trigrams = append(trigrams, string(runes[i:i+3]))
+	}
+	return trigrams
+}
+
+// uniqueTrigramPhrases returns each different trigram once, in first
+// appearance order, quoted as an FTS5 phrase. Trigrams that differ only in
+// case stay apart, so FTS5 folds each one itself.
+func uniqueTrigramPhrases(trigrams []string) []string {
+	seen := make(map[string]bool, len(trigrams))
+	var phrases []string
+	for _, trigram := range trigrams {
+		if seen[trigram] {
+			continue
+		}
+		seen[trigram] = true
+		phrases = append(phrases, `"`+strings.ReplaceAll(trigram, `"`, `""`)+`"`)
+	}
+	return phrases
 }
 
 // bodyColumns is the column filter on every body index match. Body index rows
@@ -590,16 +659,21 @@ const bodyColumns = "{request_head request_body response_head response_body}"
 func (t *queryTranslator) indexSearch(table, match string) string {
 	t.text = true
 	t.bind(match)
-	search := "SELECT k.request_id FROM " + table + " JOIN traffic_index_key k ON k.id = " + table + ".rowid WHERE " + table + " MATCH ?"
+	return "SELECT k.request_id FROM " + table + " JOIN traffic_index_key k ON k.id = " + table + ".rowid WHERE " + table + " MATCH ?" + t.afterBound(table)
+}
+
+// afterBound returns the condition, with a leading AND, that limits a search
+// of table to the index rows pairs above after can have, or "" without after.
+func (t *queryTranslator) afterBound(table string) string {
 	if t.after == nil {
-		return search
+		return ""
 	}
 	// Every pair above after has an index key at or above the smallest key
 	// of those pairs, so the search can start there. When none of them is
 	// indexed yet, the bound is NULL and the term matches none of them,
 	// as it would without the bound.
 	t.bind(*t.after)
-	return search + " AND " + table + ".rowid >= (SELECT min(id) FROM traffic_index_key WHERE request_id > ?)"
+	return " AND " + table + ".rowid >= (SELECT min(id) FROM traffic_index_key WHERE request_id > ?)"
 }
 
 // textTerm returns the text of a quoted string, an unquoted word, or a number
