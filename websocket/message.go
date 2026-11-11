@@ -106,7 +106,7 @@ func NewMessage(connectionID, requestID uuid.UUID, direction string, frame Frame
 func newMessage(connectionID, requestID uuid.UUID, direction string) (*Message, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
-		return nil, fmt.Errorf("creating uuid : %w", err)
+		return nil, fmt.Errorf("creating uuid: %w", err)
 	}
 
 	return &Message{

@@ -149,7 +149,7 @@ func toDomainWebSocketMessage(row *dbWebSocketMessage) *domain.WebSocketMessage 
 func (repo *Repository) InsertConnection(conn *domain.WebSocketConnection) error {
 	row, err := fromDomainWebSocketConnection(conn)
 	if err != nil {
-		return fmt.Errorf("inserting websocket connection %s : %w", conn.ID, err)
+		return fmt.Errorf("inserting websocket connection %s: %w", conn.ID, err)
 	}
 	query := `INSERT INTO websocket_connections(
 				id, request_id, state, transport, host, path,
@@ -163,7 +163,7 @@ func (repo *Repository) InsertConnection(conn *domain.WebSocketConnection) error
 
 	_, err = repo.dbConn.NamedExec(query, row)
 	if err != nil {
-		return fmt.Errorf("inserting websocket connection %s : %w", conn.ID, err)
+		return fmt.Errorf("inserting websocket connection %s: %w", conn.ID, err)
 	}
 
 	return nil
@@ -191,12 +191,12 @@ func (repo *Repository) UpdateConnection(conn *domain.WebSocketConnection) error
 	})
 
 	if err != nil {
-		return fmt.Errorf("updating websocket connection %s : %w", conn.ID, err)
+		return fmt.Errorf("updating websocket connection %s: %w", conn.ID, err)
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("checking rows affected for websocket connection %s : %w", conn.ID, err)
+		return fmt.Errorf("checking rows affected for websocket connection %s: %w", conn.ID, err)
 	}
 
 	if rowsAffected == 0 {
@@ -216,7 +216,7 @@ func (repo *Repository) GetConnection(id uuid.UUID) (*domain.WebSocketConnection
 
 	err := repo.dbConn.Get(&row, query, id)
 	if err != nil {
-		return nil, fmt.Errorf("getting websocket connection %s : %w", id, err)
+		return nil, fmt.Errorf("getting websocket connection %s: %w", id, err)
 	}
 
 	return toDomainWebSocketConnection(&row)
@@ -232,7 +232,7 @@ func (repo *Repository) GetConnectionByRequestID(requestID uuid.UUID) (*domain.W
 
 	err := repo.dbConn.Get(&row, query, requestID)
 	if err != nil {
-		return nil, fmt.Errorf("getting websocket connection for request %s : %w", requestID, err)
+		return nil, fmt.Errorf("getting websocket connection for request %s: %w", requestID, err)
 	}
 
 	return toDomainWebSocketConnection(&row)
@@ -286,7 +286,7 @@ func (repo *Repository) InsertMessage(msg *domain.WebSocketMessage) error {
 
 	_, err := repo.dbConn.NamedExec(query, row)
 	if err != nil {
-		return fmt.Errorf("inserting websocket message %s : %w", msg.ID, err)
+		return fmt.Errorf("inserting websocket message %s: %w", msg.ID, err)
 	}
 
 	return nil
@@ -300,7 +300,7 @@ func (repo *Repository) GetMessage(id uuid.UUID) (*domain.WebSocketMessage, erro
 
 	err := repo.dbConn.Get(&row, query, id)
 	if err != nil {
-		return nil, fmt.Errorf("getting websocket message %s : %w", id, err)
+		return nil, fmt.Errorf("getting websocket message %s: %w", id, err)
 	}
 
 	return toDomainWebSocketMessage(&row), nil
@@ -315,7 +315,7 @@ func (repo *Repository) GetMessages(connectionID uuid.UUID) ([]*domain.WebSocket
 
 	err := repo.dbConn.Select(&rows, query, connectionID)
 	if err != nil {
-		return nil, fmt.Errorf("getting websocket messages for connection %s : %w", connectionID, err)
+		return nil, fmt.Errorf("getting websocket messages for connection %s: %w", connectionID, err)
 	}
 
 	messages := make([]*domain.WebSocketMessage, len(rows))
@@ -363,7 +363,7 @@ func (repo *Repository) CountMessages(connectionID uuid.UUID) (int, error) {
 
 	err := repo.dbConn.Get(&count, query, connectionID)
 	if err != nil {
-		return 0, fmt.Errorf("counting websocket messages for connection %s : %w", connectionID, err)
+		return 0, fmt.Errorf("counting websocket messages for connection %s: %w", connectionID, err)
 	}
 
 	return count, nil
@@ -379,7 +379,7 @@ func (repo *Repository) GetMessagesByRequestID(requestID uuid.UUID) ([]*domain.W
 
 	err := repo.dbConn.Select(&rows, query, requestID)
 	if err != nil {
-		return nil, fmt.Errorf("getting websocket messages for request %s : %w", requestID, err)
+		return nil, fmt.Errorf("getting websocket messages for request %s: %w", requestID, err)
 	}
 
 	messages := make([]*domain.WebSocketMessage, len(rows))

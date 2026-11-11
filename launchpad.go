@@ -98,15 +98,15 @@ func (proxy *Proxy) LaunchSync(ctx context.Context, raw string, launchpadID stri
 func (proxy *Proxy) startLaunch(raw string, launchpadID string, useHttps bool) (*launchEntry, error) {
 	launchpad, err := uuid.Parse(launchpadID)
 	if err != nil {
-		return nil, fmt.Errorf("parsing launchpad id : %w", err)
+		return nil, fmt.Errorf("parsing launchpad id: %w", err)
 	}
 	updated, err := rawhttp.RecalculateContentLength([]byte(raw))
 	if err != nil {
-		return nil, fmt.Errorf("recalculating content length : %w", err)
+		return nil, fmt.Errorf("recalculating content length: %w", err)
 	}
 	req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(updated)))
 	if err != nil {
-		return nil, fmt.Errorf("reading http request : %w", err)
+		return nil, fmt.Errorf("reading http request: %w", err)
 	}
 
 	scheme := "http"
@@ -164,7 +164,7 @@ func launchedRequest(req *http.Request, launch domain.Launch) (*domain.ProxyRequ
 	snapshot := core.ContextWithMetadata(core.ContextWithRequestTime(req, time.Now()), metadata)
 	launched, err := NewProxyRequest(snapshot, launch.ID)
 	if err != nil {
-		return nil, fmt.Errorf("recording launched request : %w", err)
+		return nil, fmt.Errorf("recording launched request: %w", err)
 	}
 	// NewProxyRequest buffers the body on the snapshot; hand it back to the request.
 	req.Body = snapshot.Body
@@ -342,7 +342,7 @@ func (proxy *Proxy) registerLaunch(launchpadID uuid.UUID, cancel context.CancelF
 	for {
 		id, err := newID()
 		if err != nil {
-			return nil, fmt.Errorf("generating launch id : %w", err)
+			return nil, fmt.Errorf("generating launch id: %w", err)
 		}
 		if _, held := proxy.launches[id]; held {
 			continue

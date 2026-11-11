@@ -50,7 +50,7 @@ func Prettify(bodyBytes []byte) ([]byte, error) {
 		var output bytes.Buffer
 		_, err := doc.WriteTo(&output)
 		if err != nil {
-			return []byte{}, fmt.Errorf("writing indented XML : %w", err)
+			return []byte{}, fmt.Errorf("writing indented XML: %w", err)
 		}
 		// etree adds a newline at the end, which you might not want
 		return output.Bytes(), nil
@@ -76,7 +76,7 @@ func Prettify(bodyBytes []byte) ([]byte, error) {
 func DumpResponse(res *http.Response) (rawDump []byte, prettyDump string, error error) {
 	responseDump, err := httputil.DumpResponse(res, false)
 	if err != nil {
-		return []byte{}, "", fmt.Errorf("dumping response : %w", err)
+		return []byte{}, "", fmt.Errorf("dumping response: %w", err)
 	}
 
 	if res.Body == nil {
@@ -108,7 +108,7 @@ func DumpResponse(res *http.Response) (rawDump []byte, prettyDump string, error 
 func DumpRequest(req *http.Request) (rawDump []byte, prettyDump string, err error) {
 	requestDump, err := httputil.DumpRequest(req, false)
 	if err != nil {
-		return []byte{}, "", fmt.Errorf("dumping request : %w", err)
+		return []byte{}, "", fmt.Errorf("dumping request: %w", err)
 	}
 	bodyBytes, err := io.ReadAll(req.Body)
 	if err != nil {

@@ -69,7 +69,7 @@ func (proxy *Proxy) WithOptions(options ...func(*Proxy) error) error {
 	for _, option := range options {
 		err := option(proxy)
 		if err != nil {
-			return fmt.Errorf("applying option on marasi : %w", err)
+			return fmt.Errorf("applying option on marasi: %w", err)
 		}
 	}
 	return nil
@@ -118,20 +118,20 @@ func WithConfigDir(appConfigDir string) func(*Proxy) error {
 				if err != nil {
 					if readErr := viperInstance.ReadInConfig(); readErr != nil {
 						return errors.Join(
-							fmt.Errorf("writing config file : %w", err),
-							fmt.Errorf("reading concurrently created config file : %w", readErr),
+							fmt.Errorf("writing config file: %w", err),
+							fmt.Errorf("reading concurrently created config file: %w", readErr),
 						)
 					}
 				}
 			} else {
-				return fmt.Errorf("reading config file : %w", err)
+				return fmt.Errorf("reading config file: %w", err)
 			}
 		}
 		if err := viperInstance.Unmarshal(&proxy.Config); err != nil {
-			return fmt.Errorf("unmarshalling config to struct : %w", err)
+			return fmt.Errorf("unmarshalling config to struct: %w", err)
 		}
 		if err := proxy.Config.validate(); err != nil {
-			return fmt.Errorf("invalid configuration : %w", err)
+			return fmt.Errorf("invalid configuration: %w", err)
 		}
 		if err := restrictConfigWithCredentials(filepath.Join(appConfigDir, "marasi_config.yaml"), proxy.Config.UpstreamProxies); err != nil {
 			return err
@@ -158,7 +158,7 @@ func WithExtension(extension *domain.Extension, options ...func(*extensions.Runt
 			ext := &extensions.Runtime{Data: extension}
 			err := ext.PrepareState(proxy, options)
 			if err != nil {
-				return fmt.Errorf("preparing extension %s : %w", extension.Name, err)
+				return fmt.Errorf("preparing extension %s: %w", extension.Name, err)
 			}
 			proxy.Extensions = append(proxy.Extensions, ext)
 		}
@@ -355,11 +355,11 @@ func WithTLSContext(ctx context.Context) func(*Proxy) error {
 		proxy.Cert = certificate
 		err = proxy.ConfigRepo.UpdateSPKI(proxy.SPKIHash)
 		if err != nil {
-			return fmt.Errorf("setting spki hash %s : %w", proxy.SPKIHash, err)
+			return fmt.Errorf("setting spki hash %s: %w", proxy.SPKIHash, err)
 		}
 		mitmConfig, err := mitm.NewConfig(certificate, privateKey)
 		if err != nil {
-			return fmt.Errorf("creating new mitm config : %w", err)
+			return fmt.Errorf("creating new mitm config: %w", err)
 		}
 		proxy.martianProxy.SetMITM(mitmConfig)
 		proxy.mitmConfig = mitmConfig.TLS()
@@ -367,7 +367,7 @@ func WithTLSContext(ctx context.Context) func(*Proxy) error {
 		// Add system certificates + marasi cert
 		systemPool, err := x509.SystemCertPool()
 		if err != nil {
-			return fmt.Errorf("fetching system cert pool : %w", err)
+			return fmt.Errorf("fetching system cert pool: %w", err)
 		}
 		systemPool.AddCert(certificate)
 		proxy.MarasiClientTLSConfig = &tls.Config{
@@ -592,7 +592,7 @@ func WithBasePipeline() func(*Proxy) error {
 					// fails, so a refused request ends its connection instead.
 					conn, _, hijackErr := session.Hijack()
 					if hijackErr != nil {
-						return errors.Join(err, fmt.Errorf("hijacking session : %w", hijackErr))
+						return errors.Join(err, fmt.Errorf("hijacking session: %w", hijackErr))
 					}
 					return errors.Join(err, conn.Close())
 				}
@@ -663,11 +663,11 @@ func WithBasePipeline() func(*Proxy) error {
 					if session, ok := core.SessionFromContext(res.Request.Context()); ok {
 						conn, _, err := session.Hijack()
 						if err != nil {
-							return fmt.Errorf("hijacking session : %w", err)
+							return fmt.Errorf("hijacking session: %w", err)
 						}
 						err = conn.Close()
 						if err != nil {
-							return fmt.Errorf("closing connection : %w", err)
+							return fmt.Errorf("closing connection: %w", err)
 						}
 					} else {
 						return ErrSessionContext

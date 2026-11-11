@@ -81,7 +81,7 @@ func (repo *Repository) GetTestCase(id uuid.UUID) (*domain.TestCase, error) {
 
 	err := repo.dbConn.Get(&dbTC, queryTC, id)
 	if err != nil {
-		return nil, fmt.Errorf("getting test case %s : %w", id, err)
+		return nil, fmt.Errorf("getting test case %s: %w", id, err)
 	}
 
 	requestIDs := make([]uuid.UUID, 0)
@@ -92,7 +92,7 @@ func (repo *Repository) GetTestCase(id uuid.UUID) (*domain.TestCase, error) {
 	`
 	err = repo.dbConn.Select(&requestIDs, queryRequests, id)
 	if err != nil {
-		return nil, fmt.Errorf("getting requests for test case %s : %w", id, err)
+		return nil, fmt.Errorf("getting requests for test case %s: %w", id, err)
 	}
 
 	dbArtifacts := make([]dbArtifactMetadata, 0)
@@ -105,7 +105,7 @@ func (repo *Repository) GetTestCase(id uuid.UUID) (*domain.TestCase, error) {
 
 	err = repo.dbConn.Select(&dbArtifacts, queryArtifacts, id)
 	if err != nil {
-		return nil, fmt.Errorf("getting artifacts for test case %s : %w", id, err)
+		return nil, fmt.Errorf("getting artifacts for test case %s: %w", id, err)
 	}
 
 	domainArtifacts := make([]*domain.ArtifactMetadata, len(dbArtifacts))
@@ -122,7 +122,7 @@ func (repo *Repository) SaveTestCase(domainTC *domain.TestCase) error {
 
 	tx, err := repo.dbConn.Beginx()
 	if err != nil {
-		return fmt.Errorf("beginning transaction : %w", err)
+		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -139,12 +139,12 @@ func (repo *Repository) SaveTestCase(domainTC *domain.TestCase) error {
 
 	_, err = tx.NamedExec(upsertTestCase, dbTestCase)
 	if err != nil {
-		return fmt.Errorf("inserting test case %s : %w", dbTestCase.Title, err)
+		return fmt.Errorf("inserting test case %s: %w", dbTestCase.Title, err)
 	}
 
 	_, err = tx.Exec(`DELETE FROM test_case_requests WHERE test_case_id = ?`, dbTestCase.ID)
 	if err != nil {
-		return fmt.Errorf("deleting test case requests for test case %s : %w", dbTestCase.ID, err)
+		return fmt.Errorf("deleting test case requests for test case %s: %w", dbTestCase.ID, err)
 	}
 
 	if len(domainTC.Requests) > 0 {
@@ -152,14 +152,14 @@ func (repo *Repository) SaveTestCase(domainTC *domain.TestCase) error {
 
 		stmt, err := tx.Preparex(insertTestCaseRequests)
 		if err != nil {
-			return fmt.Errorf("preparing query test case request query : %w", err)
+			return fmt.Errorf("preparing query test case request query: %w", err)
 		}
 		defer stmt.Close()
 
 		for _, reqID := range domainTC.Requests {
 			_, err := stmt.Exec(dbTestCase.ID, reqID)
 			if err != nil {
-				return fmt.Errorf("linking test case to request %s : %w", reqID, err)
+				return fmt.Errorf("linking test case to request %s: %w", reqID, err)
 			}
 		}
 	}
@@ -367,7 +367,7 @@ func (repo *Repository) GetFinding(id uuid.UUID) (*domain.Finding, error) {
 
 	err := repo.dbConn.Get(&dbF, queryF, id)
 	if err != nil {
-		return nil, fmt.Errorf("getting finding %s : %w", id, err)
+		return nil, fmt.Errorf("getting finding %s: %w", id, err)
 	}
 
 	requestIDs := make([]uuid.UUID, 0)
@@ -378,7 +378,7 @@ func (repo *Repository) GetFinding(id uuid.UUID) (*domain.Finding, error) {
 	`
 	err = repo.dbConn.Select(&requestIDs, queryRequests, id)
 	if err != nil {
-		return nil, fmt.Errorf("getting requests for finding %s : %w", id, err)
+		return nil, fmt.Errorf("getting requests for finding %s: %w", id, err)
 	}
 
 	dbArtifacts := make([]dbArtifactMetadata, 0)
@@ -391,7 +391,7 @@ func (repo *Repository) GetFinding(id uuid.UUID) (*domain.Finding, error) {
 
 	err = repo.dbConn.Select(&dbArtifacts, queryArtifacts, id)
 	if err != nil {
-		return nil, fmt.Errorf("getting artifacts for finding %s : %w", id, err)
+		return nil, fmt.Errorf("getting artifacts for finding %s: %w", id, err)
 	}
 
 	domainArtifacts := make([]*domain.ArtifactMetadata, len(dbArtifacts))
@@ -408,7 +408,7 @@ func (repo *Repository) SaveFinding(domainF *domain.Finding) error {
 
 	tx, err := repo.dbConn.Beginx()
 	if err != nil {
-		return fmt.Errorf("beginning transaction : %w", err)
+		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -433,12 +433,12 @@ func (repo *Repository) SaveFinding(domainF *domain.Finding) error {
 
 	_, err = tx.NamedExec(upsertFinding, dbFinding)
 	if err != nil {
-		return fmt.Errorf("inserting finding %s : %w", dbFinding.Title, err)
+		return fmt.Errorf("inserting finding %s: %w", dbFinding.Title, err)
 	}
 
 	_, err = tx.Exec(`DELETE FROM finding_requests WHERE finding_id = ?`, dbFinding.ID)
 	if err != nil {
-		return fmt.Errorf("deleting finding requests for finding %s : %w", dbFinding.ID, err)
+		return fmt.Errorf("deleting finding requests for finding %s: %w", dbFinding.ID, err)
 	}
 
 	if len(domainF.Requests) > 0 {
@@ -446,14 +446,14 @@ func (repo *Repository) SaveFinding(domainF *domain.Finding) error {
 
 		stmt, err := tx.Preparex(insertFindingRequests)
 		if err != nil {
-			return fmt.Errorf("preparing query finding request query : %w", err)
+			return fmt.Errorf("preparing query finding request query: %w", err)
 		}
 		defer stmt.Close()
 
 		for _, reqID := range domainF.Requests {
 			_, err := stmt.Exec(dbFinding.ID, reqID)
 			if err != nil {
-				return fmt.Errorf("linking finding to request %s : %w", reqID, err)
+				return fmt.Errorf("linking finding to request %s: %w", reqID, err)
 			}
 		}
 	}

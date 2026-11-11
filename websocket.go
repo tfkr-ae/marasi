@@ -296,7 +296,7 @@ func (proxy *Proxy) updateWebSocketRequestState(requestID uuid.UUID, state strin
 func (proxy *Proxy) applyWebSocketRequestState(requestID uuid.UUID, state string) error {
 	metadata, err := proxy.TrafficRepo.GetMetadata(requestID)
 	if err != nil {
-		return fmt.Errorf("getting metadata for websocket request %s : %w", requestID, err)
+		return fmt.Errorf("getting metadata for websocket request %s: %w", requestID, err)
 	}
 	if metadata == nil {
 		metadata = make(map[string]any)
@@ -304,7 +304,7 @@ func (proxy *Proxy) applyWebSocketRequestState(requestID uuid.UUID, state string
 	metadata["websocket.state"] = state
 
 	if err := proxy.TrafficRepo.UpdateMetadata(metadata, requestID); err != nil {
-		return fmt.Errorf("updating websocket state metadata for %s : %w", requestID, err)
+		return fmt.Errorf("updating websocket state metadata for %s: %w", requestID, err)
 	}
 	return nil
 }

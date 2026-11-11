@@ -211,7 +211,7 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 	metadata := make(map[string]any)
 	uuid, err := uuid.NewV7()
 	if err != nil {
-		return fmt.Errorf("generating uuid for request : %w", err)
+		return fmt.Errorf("generating uuid for request: %w", err)
 	}
 
 	// An internal request naming a pending, unclaimed launch becomes that
@@ -374,7 +374,7 @@ func CheckpointRequestModifier(proxy *Proxy, req *http.Request) error {
 		if shouldIntercept || proxy.GetIntercept() {
 			original, err := httputil.DumpRequest(req, true)
 			if err != nil {
-				return fmt.Errorf("getting raw request for intercept : %w", err)
+				return fmt.Errorf("getting raw request for intercept: %w", err)
 			}
 			reqID, ok := core.RequestIDFromContext(req.Context())
 			if !ok {
@@ -422,7 +422,7 @@ func WriteRequestModifier(proxy *Proxy, req *http.Request) error {
 	if reqID, ok := core.RequestIDFromContext(req.Context()); ok {
 		proxyRequest, err := NewProxyRequest(req, reqID)
 		if err != nil {
-			return fmt.Errorf("%w : %w", ErrProxyRequest, err)
+			return fmt.Errorf("%w: %w", ErrProxyRequest, err)
 		}
 		// The number is taken here, not by the writer, so the request
 		// event already carries it (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md).
@@ -744,7 +744,7 @@ func BufferStreamingBodyModifier(proxy *Proxy, res *http.Response) error {
 
 	responseBody, err := io.ReadAll(res.Body)
 	if err != nil {
-		return fmt.Errorf("%w : %w", ErrReadBody, err)
+		return fmt.Errorf("%w: %w", ErrReadBody, err)
 	}
 
 	res.Body = io.NopCloser(bytes.NewReader(responseBody))
@@ -787,7 +787,7 @@ func CompressedResponseModifier(proxy *Proxy, res *http.Response) error {
 
 			decompressedBody, err := io.ReadAll(brotliReader)
 			if err != nil {
-				return fmt.Errorf("reading brotli content : %w", err)
+				return fmt.Errorf("reading brotli content: %w", err)
 			}
 
 			res.Body = io.NopCloser(bytes.NewReader(decompressedBody))
@@ -880,7 +880,7 @@ func CheckpointResponseModifier(proxy *Proxy, res *http.Response) error {
 		if interceptFlag, ok := core.InterceptFlagFromContext(res.Request.Context()); (ok && interceptFlag) || shouldIntercept || proxy.GetIntercept() {
 			original, err := httputil.DumpResponse(res, true)
 			if err != nil {
-				return fmt.Errorf("getting raw response for intercept : %w", err)
+				return fmt.Errorf("getting raw response for intercept: %w", err)
 			}
 			reqID, ok := core.RequestIDFromContext(res.Request.Context())
 			if !ok {
@@ -921,7 +921,7 @@ func CheckpointResponseModifier(proxy *Proxy, res *http.Response) error {
 func WriteResponseModifier(proxy *Proxy, res *http.Response) error {
 	proxyResponse, err := NewProxyResponse(res)
 	if err != nil {
-		return fmt.Errorf("%w : %w", ErrProxyResponse, err)
+		return fmt.Errorf("%w: %w", ErrProxyResponse, err)
 	}
 	proxy.DBWriteChannel <- proxyResponse
 	if proxy.OnResponse == nil {
