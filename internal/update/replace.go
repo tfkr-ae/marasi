@@ -37,6 +37,7 @@ func CheckWritable(target string) error {
 	dir := filepath.Dir(resolved)
 	probe, err := os.CreateTemp(dir, ".marasi-write-check-*")
 	if err != nil {
+		//lint:ignore ST1005 "Marasi" is a proper noun.
 		return fmt.Errorf("Marasi cannot write to %s, so it cannot replace itself; download the new build by hand: %w", dir, err)
 	}
 	name := probe.Name()

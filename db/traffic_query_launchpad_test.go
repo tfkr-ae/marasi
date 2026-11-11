@@ -114,19 +114,6 @@ func (f *launchpadQueryFixture) names(items []*domain.RequestResponseSummary) st
 	return strings.Join(names, ",")
 }
 
-// tableCounts returns the row counts of request, launchpad, and
-// launchpad_request.
-func tableCounts(t *testing.T, repo *Repository) [3]int {
-	t.Helper()
-	var counts [3]int
-	for i, table := range []string{"request", "launchpad", "launchpad_request"} {
-		if err := repo.dbConn.Get(&counts[i], "SELECT count(*) FROM "+table); err != nil {
-			t.Fatalf("counting %s: %v", table, err)
-		}
-	}
-	return counts
-}
-
 func TestTrafficRepo_ListTrafficLaunchpadQuery(t *testing.T) {
 	t.Parallel()
 	f := setupLaunchpadQueryFixture(t)

@@ -236,8 +236,7 @@ func addTestCaseRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcast
 			writeTestCaseError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
-		testCase, err := repo.GetTestCase(id)
-		if err != nil {
+		if _, err := repo.GetTestCase(id); err != nil {
 			writeTestCaseRepositoryError(w, r, err)
 			return
 		}
@@ -245,7 +244,7 @@ func addTestCaseRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcast
 			writeTestCaseRepositoryError(w, r, err)
 			return
 		}
-		testCase, err = repo.GetTestCase(id)
+		testCase, err := repo.GetTestCase(id)
 		if err != nil {
 			writeTestCaseRepositoryError(w, r, err)
 			return

@@ -168,6 +168,7 @@ func (extension *Runtime) UpdateLuaContent(repo domain.ExtensionRepository, code
 // WaitExecution waits after cancellation, before the project's database closes.
 func (extension *Runtime) WaitExecution() {
 	extension.Mu.Lock()
+	//lint:ignore SA2001 the empty critical section is a barrier: it waits for a hook call that holds Mu to return.
 	extension.Mu.Unlock()
 	extension.asyncExecutions.Wait()
 }
@@ -374,7 +375,7 @@ func (extension *Runtime) HasFunction(name string) bool {
 func (extension *Runtime) ShouldInterceptWebSocketMessage(message *marasiws.Message) (bool, error) {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
-	defer extension.beginExecution(nil)()
+	defer extension.beginExecution(context.Background())()
 
 	extension.LuaState.Global(hookInterceptWebSocketMessage)
 	if !extension.LuaState.IsFunction(-1) {
@@ -399,7 +400,7 @@ func (extension *Runtime) ShouldInterceptWebSocketMessage(message *marasiws.Mess
 func (extension *Runtime) CallWebSocketMessageHandler(message *marasiws.Message) error {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
-	defer extension.beginExecution(nil)()
+	defer extension.beginExecution(context.Background())()
 
 	extension.LuaState.Global(hookProcessWebSocketMessage)
 	if !extension.LuaState.IsFunction(-1) {

@@ -11,13 +11,13 @@ import (
 	"testing"
 )
 
-var forcedErr = errors.New("forced error")
+var errForced = errors.New("forced error")
 
 // erroringReader will return an error on Reads
 type erroringReader struct{}
 
 func (er *erroringReader) Read(p []byte) (n int, err error) {
-	return 0, forcedErr
+	return 0, errForced
 }
 
 func (er *erroringReader) Close() error {
@@ -386,8 +386,8 @@ func TestDumpRequest(t *testing.T) {
 		}
 
 		// Check for the forced error
-		if !errors.Is(err, forcedErr) {
-			t.Errorf("expected error to wrap %q, but got: %v", forcedErr, err)
+		if !errors.Is(err, errForced) {
+			t.Errorf("expected error to wrap %q, but got: %v", errForced, err)
 		}
 
 		// Check that DumpRequest added its context
@@ -515,8 +515,8 @@ func TestDumpResponse(t *testing.T) {
 		}
 
 		// Check for the forced error
-		if !errors.Is(err, forcedErr) {
-			t.Errorf("expected error to wrap %q, but got: %v", forcedErr, err)
+		if !errors.Is(err, errForced) {
+			t.Errorf("expected error to wrap %q, but got: %v", errForced, err)
 		}
 
 		// Check that DumpResponse added its context
