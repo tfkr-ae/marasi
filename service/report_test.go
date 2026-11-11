@@ -604,14 +604,17 @@ func TestReportExportErrors(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(templates, "broken.md"), []byte("{{.Missing}}"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	want, err := json.Marshal(struct {
+	// The control API leaves < and > in the message unescaped.
+	var want strings.Builder
+	encoder := json.NewEncoder(&want)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(struct {
 		Error   string `json:"error"`
 		Message string `json:"message"`
-	}{Error: "invalid_report_request", Message: templateErr.Error()})
-	if err != nil {
+	}{Error: "invalid_report_request", Message: templateErr.Error()}); err != nil {
 		t.Fatal(err)
 	}
-	assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/report", `{"template":"broken.md","start":"2026-01-02","end":"2026-01-16"}`), http.StatusBadRequest, string(want)+"\n")
+	assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/report", `{"template":"broken.md","start":"2026-01-02","end":"2026-01-16"}`), http.StatusBadRequest, want.String())
 	select {
 	case event := <-subscriber.events:
 		t.Fatalf("export error emitted %s", event.name)

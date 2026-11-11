@@ -513,12 +513,17 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
+		parts, ok := parsePairParts(r)
+		if !ok {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
 		row, err := repo.GetRequestResponseRow(id)
 		if err != nil {
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		writeJSON(w, r, http.StatusOK, trafficDetailFromRow(row))
+		writeJSON(w, r, http.StatusOK, parts.apply(trafficDetailFromRow(row)))
 	})
 	mux.HandleFunc("GET /traffic/{id}/metadata", func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(r.PathValue("id"))
@@ -820,6 +825,43 @@ func trafficDetailFromRow(row *domain.RequestResponseRow) trafficDetail {
 		},
 		UpstreamProxy: trafficRouteFromDomain(row.Route),
 	}
+}
+
+// pairParts are the large parts of a pair read a client asked for. A pair
+// with a large body is mostly its raw messages and prettified copies, so a
+// client that shows only some of them can leave the rest out.
+type pairParts struct {
+	raw        bool
+	prettified bool
+}
+
+// parsePairParts reads the raw and prettified query parameters of GET
+// /traffic/{id}. Each defaults to true; otherwise it must parse as a bool.
+func parsePairParts(r *http.Request) (pairParts, bool) {
+	parts := pairParts{raw: true, prettified: true}
+	query := r.URL.Query()
+	for name, include := range map[string]*bool{"raw": &parts.raw, "prettified": &parts.prettified} {
+		if !query.Has(name) {
+			continue
+		}
+		value, err := strconv.ParseBool(query.Get(name))
+		if err != nil {
+			return pairParts{}, false
+		}
+		*include = value
+	}
+	return parts, true
+}
+
+// apply sets the parts the client left out to null.
+func (p pairParts) apply(detail trafficDetail) trafficDetail {
+	if !p.raw {
+		detail.Request.Raw, detail.Response.Raw = nil, nil
+	}
+	if !p.prettified {
+		detail.Prettified = trafficPrettified{}
+	}
+	return detail
 }
 
 // prettifiedCopy returns copy, or nil when the pair has no such copy.

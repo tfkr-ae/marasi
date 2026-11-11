@@ -108,7 +108,12 @@ func addServiceRoutes(mux *http.ServeMux, status, restart http.HandlerFunc, stop
 func encode[T any](w http.ResponseWriter, r *http.Request, status int, value T) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	return json.NewEncoder(w).Encode(value)
+	encoder := json.NewEncoder(w)
+	// The control API serves JSON, never HTML, so <, > and & need no
+	// escaping. Escaped, each costs six bytes, which tripled the size of a
+	// stored HTML or JavaScript body in a pair read.
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(value)
 }
 
 // writeJSON writes value as JSON and logs encoding failures to stderr.
