@@ -87,6 +87,8 @@ func installNDJSON() string {
 }
 
 func TestUpdateInstallCommands(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	installedHuman := "download 0% of 20.0 MiB\n" +
 		"download 50% of 20.0 MiB\n" +
@@ -295,6 +297,8 @@ const updateRunningHuman = "installed: 01.10.2026 (release)\n" +
 	"install path: /usr/local/bin/marasi\n"
 
 func TestUpdateStatusCommands(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	runCannedCommandCases(t, binary, []cannedCommandCase{
 		{
@@ -342,6 +346,8 @@ func TestUpdateStatusCommands(t *testing.T) {
 }
 
 func TestUpdateCommandErrors(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should tell the user to start an instance when none is running", func(t *testing.T) {

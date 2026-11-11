@@ -7,6 +7,8 @@ import (
 )
 
 func TestWaypointCommands(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	for _, test := range []struct {
@@ -80,6 +82,8 @@ func TestWaypointCommands(t *testing.T) {
 }
 
 func TestWaypointCommandContract(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should pass successful responses through byte for byte in JSON mode", func(t *testing.T) {
@@ -157,6 +161,8 @@ func TestWaypointCommandContract(t *testing.T) {
 }
 
 func TestWaypointCommandLifecycle(t *testing.T) {
+	t.Parallel()
+
 	if runtime.GOOS == "windows" {
 		t.Skip("service process fixture uses Unix control sockets")
 	}

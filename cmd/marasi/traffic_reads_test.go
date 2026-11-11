@@ -8,6 +8,8 @@ import (
 )
 
 func TestTrafficReadCommands(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	sitemapBody := `{"items":[{"name":"https://a.test","segment":"https://a.test","pairs":12,"errors":1,"has_children":true},{"name":"http://b.test:8080","segment":"http://b.test:8080","pairs":3,"errors":0,"has_children":false}],"next_cursor":"opaque","sitemap":{"complete":false},"index":{"complete":false}}` + "\n"
 	for _, test := range []struct {
@@ -103,6 +105,8 @@ func TestTrafficReadCommands(t *testing.T) {
 }
 
 func TestTrafficSitemapLevels(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	body := `{"levels":[` +
 		`{"node":"","items":[{"name":"https://a.test","segment":"https://a.test","pairs":12,"errors":1,"has_children":true,"matching":3,"matching_errors":1}],"next_cursor":"opaque","missing":false},` +
@@ -183,6 +187,8 @@ func TestTrafficSitemapLevels(t *testing.T) {
 }
 
 func TestTrafficValidateRejectsInvalidQuery(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"invalid_query","message":"unknown field \"hots\"","position":1}`)
@@ -197,6 +203,8 @@ func TestTrafficValidateRejectsInvalidQuery(t *testing.T) {
 }
 
 func TestTrafficReadUsage(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{}`)
@@ -227,6 +235,8 @@ func TestTrafficReadUsage(t *testing.T) {
 }
 
 func TestTrafficCountChecksAsOfBeforeAfter(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	for range 5 {
 		assertUsageErrorsBeforeRequest(t, binary, []usageCase{

@@ -7,6 +7,8 @@ import (
 )
 
 func TestServiceURLParsing(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	const id = "0193802f-f0e7-73d9-a764-06d21e367809"
 

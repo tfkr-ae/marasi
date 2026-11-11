@@ -79,6 +79,8 @@ func assertConnClosed(t *testing.T, conn net.Conn, reader *bufio.Reader) {
 }
 
 func TestControlPasswordChange(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should replace the password from the socket with service control update --password", func(t *testing.T) {

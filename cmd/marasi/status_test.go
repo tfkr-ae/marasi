@@ -12,6 +12,8 @@ import (
 )
 
 func TestServiceStatusCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should print exact status for the selected named instance", func(t *testing.T) {
@@ -276,6 +278,8 @@ func TestServiceStatusCommand(t *testing.T) {
 }
 
 func TestServiceListCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should list running instances by name and ignore --instance", func(t *testing.T) {

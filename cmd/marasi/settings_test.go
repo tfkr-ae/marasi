@@ -10,6 +10,8 @@ import (
 const testClientSetting = `{"client":"marasi-app","key":"ledger/view","value":{"columns":["host"]},"updated_at":"2026-10-15T00:00:00Z"}`
 
 func TestSettingsCommands(t *testing.T) {
+	t.Parallel()
+
 	valueFile := filepath.Join(t.TempDir(), "value.json")
 	if err := os.WriteFile(valueFile, []byte("{\"columns\": [\"host\"]}\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -55,6 +57,8 @@ func TestSettingsCommands(t *testing.T) {
 }
 
 func TestSettingsUsage(t *testing.T) {
+	t.Parallel()
+
 	assertUsageErrorsBeforeRequest(t, buildMarasi(t), usageArgs(
 		[]string{"settings", "list"},
 		[]string{"settings", "get", "marasi-app"},
@@ -66,6 +70,8 @@ func TestSettingsUsage(t *testing.T) {
 }
 
 func TestSettingsSetInputUsage(t *testing.T) {
+	t.Parallel()
+
 	const want = "settings set requires exactly one of text, --file, or piped stdin"
 	assertUsageErrorsBeforeRequest(t, buildMarasi(t), []usageCase{
 		{args: []string{"settings", "set", "marasi-app", "k"}, want: want},

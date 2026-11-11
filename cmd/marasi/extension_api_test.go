@@ -7,6 +7,8 @@ import (
 )
 
 func TestExtensionAPICommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	// The reference needs no instance, so an unusable instance name must not stop it.
 	run := func(args ...string) (string, string, error) {

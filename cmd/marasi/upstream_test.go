@@ -11,6 +11,8 @@ import (
 const upstreamProxyTestPEM = "-----BEGIN CERTIFICATE-----\nMIIBtest\n-----END CERTIFICATE-----\n"
 
 func TestUpstreamCommands(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	caDir := t.TempDir()
 	caFile := filepath.Join(caDir, "burp.pem")
@@ -133,6 +135,8 @@ func TestUpstreamCommands(t *testing.T) {
 }
 
 func TestUpstreamCommandContract(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	caFile := filepath.Join(t.TempDir(), "burp.pem")
 	if err := os.WriteFile(caFile, []byte(upstreamProxyTestPEM), 0600); err != nil {

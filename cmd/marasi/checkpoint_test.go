@@ -20,6 +20,8 @@ import (
 )
 
 func TestCheckpointCommands(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	httpID := "0193802f-f0e7-73d9-a764-06d21e367809"
 	wsID := "01938032-1b17-7243-b035-e6a9f4645904"
@@ -398,6 +400,8 @@ func TestCheckpointCommands(t *testing.T) {
 }
 
 func TestCheckpointCommandLifecycle(t *testing.T) {
+	t.Parallel()
+
 	if runtime.GOOS == "windows" {
 		t.Skip("service process fixture uses Unix control sockets")
 	}
@@ -655,6 +659,8 @@ func waitForCheckpointID(t *testing.T, binary, configDir, wantType string) strin
 }
 
 func TestWriteCheckpointGetEndsTerminalOutputWithNewline(t *testing.T) {
+	t.Parallel()
+
 	item := func(payload string) []byte {
 		return []byte(fmt.Sprintf(`{"type":"websocket","payload":%q}`, base64.StdEncoding.EncodeToString([]byte(payload))))
 	}

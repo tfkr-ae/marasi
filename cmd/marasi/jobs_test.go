@@ -6,6 +6,8 @@ import (
 )
 
 func TestJobsCommands(t *testing.T) {
+	t.Parallel()
+
 	runCannedCommandCases(t, buildMarasi(t), []cannedCommandCase{
 		{
 			name: "jobs list", args: []string{"jobs", "list"},
@@ -23,6 +25,8 @@ func TestJobsCommands(t *testing.T) {
 }
 
 func TestJobsUsage(t *testing.T) {
+	t.Parallel()
+
 	assertUsageErrorsBeforeRequest(t, buildMarasi(t), usageArgs(
 		[]string{"jobs", "list", "extra"},
 		[]string{"jobs", "rebuild"},

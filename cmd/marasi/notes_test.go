@@ -12,6 +12,8 @@ import (
 )
 
 func TestNotesCommands(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	id := "0193802f-f0e7-73d9-a764-06d21e367809"
 	setBody := `{"id":"` + id + `","note":"needs review"}` + "\n"
@@ -86,6 +88,8 @@ func TestNotesCommands(t *testing.T) {
 }
 
 func TestNotesCommandContract(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	id := "0193802f-f0e7-73d9-a764-06d21e367809"
 
@@ -208,6 +212,8 @@ func TestNotesCommandContract(t *testing.T) {
 }
 
 func TestNotesListCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should print the newest page in JSON item order", func(t *testing.T) {
@@ -383,6 +389,8 @@ func TestNotesListCommand(t *testing.T) {
 	})
 }
 func TestNotesGet(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	id := "0193802f-f0e7-73d9-a764-06d21e367809"
 	body := `{"id":"` + id + `","note":"Full note, not truncated, with multiple lines\nsecond line"}` + "\n"

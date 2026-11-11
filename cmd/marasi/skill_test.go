@@ -8,6 +8,8 @@ import (
 )
 
 func TestSkillCommandPrintsSkill(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	// The skill needs no instance, so an unusable instance name must not stop it.

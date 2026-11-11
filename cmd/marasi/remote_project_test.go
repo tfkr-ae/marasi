@@ -14,6 +14,8 @@ import (
 // dir that stands in for a second machine, so a project name or path that
 // resolved on the CLI's side would land in the wrong directory.
 func TestRemoteProjects(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	instance := startRemoteInstance(t, binary)
 	projectsDir := filepath.Join(instance.configDir, "projects")

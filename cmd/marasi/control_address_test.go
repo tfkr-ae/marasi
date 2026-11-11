@@ -118,6 +118,8 @@ func networkRequest(t *testing.T, method, address, path, authorization string) (
 }
 
 func TestControlAddress(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	const unauthorized = "{\"error\":\"unauthorized\",\"message\":\"send the control password as Authorization: Bearer\"}\n"

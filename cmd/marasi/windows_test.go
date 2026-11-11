@@ -11,6 +11,8 @@ import (
 )
 
 func TestWindowsInstanceSecurity(t *testing.T) {
+	t.Parallel()
+
 	t.Run("should protect the instances directory and inherit its access rules", func(t *testing.T) {
 		socketPath, lockPath, err := instanceResourcePaths(t.TempDir(), "work")
 		if err != nil {
