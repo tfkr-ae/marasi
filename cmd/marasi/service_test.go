@@ -1140,7 +1140,7 @@ func TestStopService(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(configDir, "instances", "stalled-stop.sock")); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("instance socket remains: %v", err)
 			}
-			stdout, stderr, err = runMarasi(binary, append(args, "service", "start", "--port", "0", "--json")...)
+			_, stderr, err = runMarasi(binary, append(args, "service", "start", "--port", "0", "--json")...)
 			if err != nil {
 				t.Fatalf("reopen same instance and project: %v %s", err, stderr)
 			}
@@ -1227,6 +1227,9 @@ function ping() end`, origin.URL)
 					trafficClient := &http.Client{Transport: transport}
 					send = trafficClient.Do
 					request, err = http.NewRequestWithContext(ctx, http.MethodGet, origin.URL+"/outer", nil)
+					if err != nil {
+						t.Fatal(err)
+					}
 				}
 				if err != nil {
 					t.Fatal(err)
