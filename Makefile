@@ -2,6 +2,8 @@ BIN     := marasi
 PKG     := ./cmd/marasi
 DIST    := dist
 GO      ?= go
+# A parent go.work can exclude this module; build and test it on its own.
+export GOWORK ?= off
 PREFIX  ?= $(HOME)/.local
 BINDIR  := $(PREFIX)/bin
 TARGETS := darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64 windows-arm64

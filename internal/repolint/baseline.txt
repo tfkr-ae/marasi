@@ -4,8 +4,6 @@
 #	GOWORK=off go test ./internal/repolint -update
 errorf-wrap-colon	listener/listener_test.go	"accept failed : %w"
 errorf-wrap-lowercase	internal/update/replace.go	"Marasi cannot write to %s, so it cannot replace itself; download the new build by hand: %w"
-sentinel-err-name	modifiers_test.go	"forcedErr"
-sentinel-err-name	rawhttp/rawhttp_test.go	"forcedErr"
 subtest-should	browser_view_test.go	"and send the next request to the URL to the origin"
 subtest-should	chrome/chrome_test.go	"Should apply provided options correctly"
 subtest-should	chrome/chrome_test.go	"Should fail when configDir is empty"
