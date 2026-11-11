@@ -7,6 +7,8 @@ import (
 )
 
 func TestLaunchpadUnlinkCommand(t *testing.T) {
+	t.Parallel()
+
 	runCannedCommandCases(t, buildMarasi(t), []cannedCommandCase{
 		{
 			name: "launchpad unlink", args: []string{"launchpad", "unlink", bulkAsOf, bulkIDA},
@@ -18,6 +20,8 @@ func TestLaunchpadUnlinkCommand(t *testing.T) {
 }
 
 func TestLaunchpadUnlinkUsage(t *testing.T) {
+	t.Parallel()
+
 	assertUsageErrorsBeforeRequest(t, buildMarasi(t), usageArgs(
 		[]string{"launchpad", "unlink", bulkAsOf},
 		[]string{"launchpad", "unlink", "junk", bulkIDA},
@@ -26,6 +30,8 @@ func TestLaunchpadUnlinkUsage(t *testing.T) {
 }
 
 func TestLaunchPendingRefusalCommands(t *testing.T) {
+	t.Parallel()
+
 	refused := `{"error":"launch_pending","message":"launch pending: ` + bulkIDA + `","request_ids":["` + bulkIDA + `"]}`
 	binary := buildMarasi(t)
 	for _, args := range [][]string{

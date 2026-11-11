@@ -9,6 +9,8 @@ import (
 const moveIDC = "0193802f-f0e7-73d9-a764-06d21e36780b"
 
 func TestLaunchpadMoveCommand(t *testing.T) {
+	t.Parallel()
+
 	moved := func(ids string) string {
 		return `{"source_launchpad_id":"` + bulkAsOf + `","target_launchpad_id":"` + bulkAsOf + `","request_ids":[` + ids + `]}`
 	}
@@ -31,6 +33,8 @@ func TestLaunchpadMoveCommand(t *testing.T) {
 }
 
 func TestLaunchpadMoveUsage(t *testing.T) {
+	t.Parallel()
+
 	assertUsageErrorsBeforeRequest(t, buildMarasi(t), usageArgs(
 		[]string{"launchpad", "move", bulkAsOf},
 		[]string{"launchpad", "move", "junk", bulkIDA},
@@ -41,6 +45,8 @@ func TestLaunchpadMoveUsage(t *testing.T) {
 }
 
 func TestLaunchpadMoveRefusedPlacement(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	startCannedControlAPI(t, configDir, "work", http.StatusBadRequest, `{"error":"invalid_placement"}`)
@@ -57,6 +63,8 @@ func TestLaunchpadMoveRefusedPlacement(t *testing.T) {
 }
 
 func TestLaunchpadMoveRefusalNamesItsCodeInHumanMode(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	for _, refusal := range []struct {
 		status int

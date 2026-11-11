@@ -60,6 +60,8 @@ func (l *failingListener) Close() error {
 }
 
 func TestProjectPath(t *testing.T) {
+	t.Parallel()
+
 	t.Run("should resolve a relative project path to an absolute path", func(t *testing.T) {
 		parent, err := os.MkdirTemp(".", "project-path-")
 		if err != nil {
@@ -158,6 +160,8 @@ func TestProjectPath(t *testing.T) {
 }
 
 func TestNamedProjectPath(t *testing.T) {
+	t.Parallel()
+
 	for _, name := range []string{"scratchpad", "scratchpad.marasi"} {
 		t.Run("should resolve name "+name+" under projects", func(t *testing.T) {
 			configDir := t.TempDir()
@@ -214,6 +218,8 @@ func TestNamedProjectPath(t *testing.T) {
 }
 
 func TestInstancePath(t *testing.T) {
+	t.Parallel()
+
 	t.Run("should resolve a named instance under instances", func(t *testing.T) {
 		configDir := filepath.Join(string(filepath.Separator), "config")
 
@@ -338,6 +344,8 @@ func TestProxyListenerFlags(t *testing.T) {
 }
 
 func TestGlobalJSONOption(t *testing.T) {
+	t.Parallel()
+
 	t.Run("should be accepted by every executable command", func(t *testing.T) {
 		binary := buildMarasi(t)
 		tests := []struct {
@@ -681,6 +689,8 @@ func instanceResourcePaths(configDir, name string) (string, string, error) {
 }
 
 func TestClaimInstance(t *testing.T) {
+	t.Parallel()
+
 	t.Run("should create owner-only instance resources", func(t *testing.T) {
 		socketPath, lockPath, err := instanceResourcePaths(serviceConfigDir(t), "work")
 		if err != nil {
@@ -860,6 +870,8 @@ func serviceConfigDir(t *testing.T) string {
 }
 
 func TestLockProject(t *testing.T) {
+	t.Parallel()
+
 	t.Run("should create the projects directory", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "projects", "scratchpad.marasi")
 
@@ -932,6 +944,8 @@ func TestLockProject(t *testing.T) {
 }
 
 func TestCleanupService(t *testing.T) {
+	t.Parallel()
+
 	t.Run("should clean up in completion order and preserve errors", func(t *testing.T) {
 		var order []string
 		err := cleanupService(
@@ -961,6 +975,8 @@ func TestCleanupService(t *testing.T) {
 }
 
 func TestStopService(t *testing.T) {
+	t.Parallel()
+
 	for _, test := range []struct {
 		name       string
 		graceful   bool
@@ -1759,6 +1775,8 @@ func TestStopCommand(t *testing.T) {
 }
 
 func TestStartService(t *testing.T) {
+	t.Parallel()
+
 	t.Run("should report the Make-injected version, channel, and canonical names from the running binary", func(t *testing.T) {
 		dist := t.TempDir()
 		const wantVersion = "ticket-01-test-version"
@@ -2172,7 +2190,7 @@ func TestStartService(t *testing.T) {
 		case err := <-result:
 			finished = true
 			t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
-		case <-time.After(5 * time.Second):
+		case <-time.After(serviceStartTimeout):
 			t.Fatal("\nwanted:\nrunning service\ngot:\ntimeout")
 		}
 		roots := x509.NewCertPool()
@@ -2247,7 +2265,7 @@ func TestStartService(t *testing.T) {
 				addresses[address] = struct{}{}
 			case err := <-instance.result:
 				t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
-			case <-time.After(5 * time.Second):
+			case <-time.After(serviceStartTimeout):
 				t.Fatal("\nwanted:\nrunning service\ngot:\ntimeout")
 			}
 		}
@@ -2375,7 +2393,7 @@ func TestStartService(t *testing.T) {
 		case err := <-result:
 			finished = true
 			t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
-		case <-time.After(5 * time.Second):
+		case <-time.After(serviceStartTimeout):
 			t.Fatal("\nwanted:\nproxy startup message\ngot:\ntimeout")
 		}
 		const prefix = "proxy listener started on "
@@ -2463,7 +2481,7 @@ func TestStartService(t *testing.T) {
 		case err := <-result:
 			finished = true
 			t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
-		case <-time.After(5 * time.Second):
+		case <-time.After(serviceStartTimeout):
 			t.Fatal("\nwanted:\nproxy startup message\ngot:\ntimeout")
 		}
 		const prefix = "proxy listener started on "
@@ -2557,7 +2575,7 @@ func TestStartService(t *testing.T) {
 		case err := <-result:
 			finished = true
 			t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
-		case <-time.After(5 * time.Second):
+		case <-time.After(serviceStartTimeout):
 			t.Fatal("\nwanted:\nproxy startup message\ngot:\ntimeout")
 		}
 		proxyAddress := strings.TrimPrefix(line, "proxy listener started on ")
@@ -2753,7 +2771,7 @@ func TestStartService(t *testing.T) {
 		case err := <-result:
 			finished = true
 			t.Fatalf("\nwanted:\nrunning service\ngot:\n%v", err)
-		case <-time.After(5 * time.Second):
+		case <-time.After(serviceStartTimeout):
 			t.Fatal("\nwanted:\nproxy startup message\ngot:\ntimeout")
 		}
 		const prefix = "proxy listener started on "
@@ -2924,18 +2942,11 @@ func testCanceledStart(t *testing.T, signal os.Signal, asJSON bool) {
 	probe.Close()
 }
 
+// buildMarasi returns the marasi command built once for this test process.
+// Tests share the file, so a test must not move, replace or remove it.
 func buildMarasi(t *testing.T) string {
 	t.Helper()
-	binary := filepath.Join(t.TempDir(), "marasi")
-	if runtime.GOOS == "windows" {
-		binary += ".exe"
-	}
-	command := exec.Command("go", "build", "-o", binary, ".")
-	command.Env = append(os.Environ(), "GOWORK=off")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("\nwanted:\nbuilt marasi command\ngot:\n%s\n%v", output, err)
-	}
-	return binary
+	return sharedBuild(t, "")
 }
 
 func runMarasi(binary string, args ...string) (stdout, stderr string, err error) {
@@ -2969,6 +2980,8 @@ func assertJSONCommandError(t *testing.T, stdout, stderr string, commandErr erro
 }
 
 func TestServeControlAPI(t *testing.T) {
+	t.Parallel()
+
 	t.Run("should give an active request time to finish", func(t *testing.T) {
 		requestStarted := make(chan struct{})
 		finishRequest := make(chan struct{})

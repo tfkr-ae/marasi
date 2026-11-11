@@ -15,6 +15,8 @@ const (
 )
 
 func TestTrafficBulkCommands(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	idsFile := filepath.Join(t.TempDir(), "ids.txt")
 	if err := os.WriteFile(idsFile, []byte(bulkIDA+"\n\n"+bulkIDB+"\n"), 0o600); err != nil {
@@ -76,6 +78,8 @@ func TestTrafficBulkCommands(t *testing.T) {
 }
 
 func TestTrafficBulkSelectionUsage(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	sent := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{"count":1}`)
@@ -126,6 +130,8 @@ func TestTrafficBulkSelectionUsage(t *testing.T) {
 }
 
 func TestTrafficBulkNoteAppendInputUsage(t *testing.T) {
+	t.Parallel()
+
 	const want = "traffic bulk note append requires exactly one of text, --file, or piped stdin"
 	assertUsageErrorsBeforeRequest(t, buildMarasi(t), []usageCase{
 		{args: []string{"traffic", "bulk", "note", "append", "--id", bulkIDA}, want: want},
@@ -136,6 +142,8 @@ func TestTrafficBulkNoteAppendInputUsage(t *testing.T) {
 }
 
 func TestTrafficBulkLinkTargetUsageIsDeterministic(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	for range 5 {
 		assertUsageErrorsBeforeRequest(t, binary, []usageCase{

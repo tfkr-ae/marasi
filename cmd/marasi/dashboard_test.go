@@ -6,6 +6,8 @@ import (
 )
 
 func TestDashboardCommand(t *testing.T) {
+	t.Parallel()
+
 	runCannedCommandCases(t, buildMarasi(t), []cannedCommandCase{
 		{
 			name: "complete", args: []string{"dashboard"},
@@ -24,6 +26,8 @@ func TestDashboardCommand(t *testing.T) {
 }
 
 func TestDashboardUsage(t *testing.T) {
+	t.Parallel()
+
 	assertUsageErrorsBeforeRequest(t, buildMarasi(t), usageArgs(
 		[]string{"dashboard", "extra"},
 	))

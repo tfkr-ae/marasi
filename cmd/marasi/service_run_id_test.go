@@ -12,6 +12,8 @@ import (
 )
 
 func TestServiceStatusRunID(t *testing.T) {
+	t.Parallel()
+
 	t.Run("should keep run_id for one process and change it on every start", func(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			t.Skip("finding the detached service process uses pgrep")

@@ -7,6 +7,8 @@ import (
 )
 
 func TestReadCommands(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	id := "01938032-1b17-7243-b035-e6a9f4645904"
 	for _, test := range []struct {

@@ -7,6 +7,8 @@ import (
 )
 
 func TestLaunchServiceChild(t *testing.T) {
+	t.Parallel()
+
 	if runtime.GOOS == "windows" {
 		t.Skip("uses sh to stand in for a service child")
 	}

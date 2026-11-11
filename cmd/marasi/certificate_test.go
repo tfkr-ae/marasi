@@ -22,6 +22,8 @@ import (
 )
 
 func TestCertificateCommandLifecycle(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	t.Cleanup(func() {

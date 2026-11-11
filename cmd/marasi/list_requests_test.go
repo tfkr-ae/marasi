@@ -6,10 +6,14 @@ import (
 )
 
 func TestFindingListRequests(t *testing.T) {
+	t.Parallel()
+
 	testListRequests(t, "finding")
 }
 
 func TestTestCaseListRequests(t *testing.T) {
+	t.Parallel()
+
 	testListRequests(t, "test-case")
 }
 

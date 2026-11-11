@@ -22,6 +22,8 @@ import (
 )
 
 func TestProjectCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should open a project by path on the selected instance", func(t *testing.T) {
@@ -302,6 +304,8 @@ func TestProjectCommand(t *testing.T) {
 }
 
 func TestProjectListCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should list regular projects by name without requiring an instance", func(t *testing.T) {
@@ -521,6 +525,8 @@ func TestProjectListCommand(t *testing.T) {
 }
 
 func TestProjectCommandLifecycle(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	t.Cleanup(func() {

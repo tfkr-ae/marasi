@@ -5,23 +5,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
 
-// buildMarasiVersion builds the marasi command with version set to v.
+// buildMarasiVersion returns a copy, owned by the test, of the marasi command
+// built with version set to v. Each version is built once per test process;
+// the copy lets a test rename a new build over its binary the way an update does.
 func buildMarasiVersion(t *testing.T, v string) string {
 	t.Helper()
-	binary := filepath.Join(t.TempDir(), "marasi")
-	command := exec.Command("go", "build", "-ldflags", "-X main.version="+v, "-o", binary, ".")
-	command.Env = append(os.Environ(), "GOWORK=off")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("\nwanted:\nbuilt marasi command\ngot:\n%s\n%v", output, err)
-	}
-	return binary
+	return copyBuild(t, sharedBuild(t, v))
 }
 
 // installBuild replaces the installed build at installed with the file at next,
@@ -68,6 +63,8 @@ func readEventNamed(t *testing.T, reader *bufio.Reader, want string) (string, st
 }
 
 func TestServiceRestart(t *testing.T) {
+	t.Parallel()
+
 	if runtime.GOOS == "windows" {
 		t.Skip("restart fixture renames over a running executable and uses Unix control sockets")
 	}

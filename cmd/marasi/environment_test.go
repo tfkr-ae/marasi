@@ -47,6 +47,8 @@ func freePort(t *testing.T, host string) string {
 }
 
 func TestServiceStartEnvironment(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should start the instance the variables describe and reach it by them", func(t *testing.T) {
@@ -174,6 +176,8 @@ func TestServiceStartEnvironment(t *testing.T) {
 }
 
 func TestInstanceSelectionEnvironment(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	local := startCannedControlAPI(t, configDir, "work", http.StatusOK, `{}`)

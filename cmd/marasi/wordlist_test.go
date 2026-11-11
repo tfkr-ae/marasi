@@ -8,6 +8,8 @@ import (
 )
 
 func TestWordlistAddCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	sent := startCannedControlAPI(t, configDir, "add", http.StatusOK, `{"items":[{"name":"passwords.txt","size":15}]}`+"\n")
@@ -28,6 +30,8 @@ func TestWordlistAddCommand(t *testing.T) {
 }
 
 func TestWordlistRemoveCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	sent := startCannedControlAPI(t, configDir, "remove", http.StatusOK, `{"items":[]}`+"\n")
@@ -46,6 +50,8 @@ func TestWordlistRemoveCommand(t *testing.T) {
 }
 
 func TestWordlistListCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	sent := startCannedControlAPI(t, configDir, "list", http.StatusOK, `{"items":[{"name":"passwords.txt","size":15},{"name":"users.txt","size":5}]}`+"\n")
@@ -65,6 +71,8 @@ func TestWordlistListCommand(t *testing.T) {
 }
 
 func TestWordlistPreviewCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	sent := startCannedControlAPI(t, configDir, "preview", http.StatusOK, `{"name":"passwords.txt","items":["one","two"]}`+"\n")
@@ -83,6 +91,8 @@ func TestWordlistPreviewCommand(t *testing.T) {
 }
 
 func TestWordlistPreviewCommandPassesLimit(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	sent := startCannedControlAPI(t, configDir, "preview-limit", http.StatusOK, `{"name":"passwords.txt","items":["one"]}`+"\n")
@@ -98,6 +108,8 @@ func TestWordlistPreviewCommandPassesLimit(t *testing.T) {
 }
 
 func TestWordlistCommandContract(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should pass successful responses through byte for byte in JSON mode", func(t *testing.T) {

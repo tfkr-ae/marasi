@@ -10,6 +10,8 @@ import (
 )
 
 func TestReportTemplateListCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	body := "{\"items\":[{\"name\":\"a.md\",\"size\":5},{\"name\":\"default_template.md\",\"size\":7}]}\n"
@@ -34,6 +36,8 @@ func TestReportTemplateListCommand(t *testing.T) {
 }
 
 func TestReportTemplateListCommandFailure(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	startCannedControlAPI(t, configDir, "report-list-error", http.StatusBadRequest, `{"error":"invalid_report_template_request"}`)
@@ -43,6 +47,8 @@ func TestReportTemplateListCommandFailure(t *testing.T) {
 }
 
 func TestReportTemplateAddCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	source := filepath.Join(t.TempDir(), "custom.md")
@@ -84,6 +90,8 @@ func TestReportTemplateAddCommand(t *testing.T) {
 }
 
 func TestReportTemplateAddCommandFailure(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	startCannedControlAPI(t, configDir, "report-add-error", http.StatusConflict, `{"error":"report_template_already_exists"}`)
@@ -92,6 +100,8 @@ func TestReportTemplateAddCommandFailure(t *testing.T) {
 }
 
 func TestReportTemplateRemoveCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	body := "{\"items\":[{\"name\":\"z.md\",\"size\":2}]}\n"
@@ -112,6 +122,8 @@ func TestReportTemplateRemoveCommand(t *testing.T) {
 }
 
 func TestReportTemplateRemoveCommandFailure(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	startCannedControlAPI(t, configDir, "report-remove-error", http.StatusNotFound, `{"error":"not_found"}`)
@@ -120,6 +132,8 @@ func TestReportTemplateRemoveCommandFailure(t *testing.T) {
 }
 
 func TestReportTemplateRestoreCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	body := "{\"items\":[{\"name\":\"default_template.md\",\"size\":8433}]}\n"
@@ -140,6 +154,8 @@ func TestReportTemplateRestoreCommand(t *testing.T) {
 }
 
 func TestReportTemplateRestoreCommandFailure(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	startCannedControlAPI(t, configDir, "report-restore-error", http.StatusNotFound, `{"error":"not_found"}`)
@@ -148,6 +164,8 @@ func TestReportTemplateRestoreCommandFailure(t *testing.T) {
 }
 
 func TestReportExportCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	dir := t.TempDir()
@@ -186,6 +204,8 @@ func TestReportExportCommand(t *testing.T) {
 }
 
 func TestReportExportCommandNamesAndOverwrite(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	dir := t.TempDir()
@@ -262,6 +282,8 @@ func TestReportExportCommandNamesAndOverwrite(t *testing.T) {
 }
 
 func TestReportExportCommandFailures(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	configDir := serviceConfigDir(t)
 	dir := t.TempDir()

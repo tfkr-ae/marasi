@@ -13,6 +13,8 @@ import (
 )
 
 func TestExtensionCommands(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	compassID := "01937d13-9632-72aa-83b9-c10ea1abbdd6"
 	checkpointID := "01937d13-9632-75b1-9e73-c5129b06fa8c"
@@ -377,6 +379,8 @@ func TestExtensionCommands(t *testing.T) {
 }
 
 func TestExtensionCommandLifecycle(t *testing.T) {
+	t.Parallel()
+
 	if runtime.GOOS == "windows" {
 		t.Skip("service process fixture uses Unix control sockets")
 	}

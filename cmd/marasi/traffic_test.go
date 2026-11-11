@@ -963,6 +963,8 @@ func TestLaunchpadCommands(t *testing.T) {
 }
 
 func TestLaunchpadCancelCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	launchID := "01938034-298e-73dc-b640-eb321b621154"
 	cancelled := `{"launch_id":"` + launchID + `","launchpad_id":"01938032-1b17-7243-b035-e6a9f4645904","status":"cancelled"}` + "\n"
@@ -1032,6 +1034,8 @@ func TestLaunchpadCancelCommand(t *testing.T) {
 }
 
 func TestLaunchpadPendingCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	launchpadID := "01938032-1b17-7243-b035-e6a9f4645904"
 	first := "01938034-298e-73dc-b640-eb321b621154"
@@ -1083,6 +1087,8 @@ func TestLaunchpadPendingCommand(t *testing.T) {
 }
 
 func TestLaunchpadStatusCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	launchpadID := "01938032-1b17-7243-b035-e6a9f4645904"
 	launchID := "01938034-298e-73dc-b640-eb321b621154"
@@ -1203,6 +1209,8 @@ func (fake *fakeLaunchService) paths() []string {
 }
 
 func TestLaunchpadLaunchCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	launchpadID := "01938032-1b17-7243-b035-e6a9f4645904"
 	launchID := "01938034-298e-73dc-b640-eb321b621154"
@@ -1473,6 +1481,14 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 		rootCmd.SetOut(nil)
 		rootCmd.SetErr(nil)
 		rootCmd.SetContext(nil)
+		// Cobra keeps a parsed --help on the command, so without this reset
+		// every later run of that command in the process prints help instead.
+		if command, _, findErr := rootCmd.Find(args); findErr == nil {
+			if help := command.Flags().Lookup("help"); help != nil {
+				_ = help.Value.Set("false")
+				help.Changed = false
+			}
+		}
 	})
 	err = executeCommand(args)
 	return outBuf.String(), errBuf.String(), err

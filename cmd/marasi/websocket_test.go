@@ -103,6 +103,8 @@ func TestWebSocketListCommand(t *testing.T) {
 }
 
 func TestWebSocketInjectCommand(t *testing.T) {
+	t.Parallel()
+
 	const id = "0193802f-f0e7-73d9-a764-06d21e367809"
 	const body = `{"id":"0193802f-f0e7-73d9-a764-06d21e367810","connection_id":"` + id + `","payload":""}` + "\n"
 	binary := buildMarasi(t)
@@ -239,6 +241,8 @@ func TestWebSocketInjectCommand(t *testing.T) {
 }
 
 func TestWebSocketCloseCommand(t *testing.T) {
+	t.Parallel()
+
 	const id = "0193802f-f0e7-73d9-a764-06d21e367809"
 	const body = `{"id":"` + id + `","state":"closed","close_code":1000}` + "\n"
 	binary := buildMarasi(t)

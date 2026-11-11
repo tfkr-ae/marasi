@@ -15,6 +15,8 @@ import (
 )
 
 func TestArmoryCommands(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	templateID := "0193802f-f0e7-73d9-a764-06d21e367809"
 	runID := "01938032-1b17-7243-b035-e6a9f4645904"
@@ -182,6 +184,8 @@ func armoryRunHuman(runID, templateID string) string {
 }
 
 func TestArmoryCommandLifecycle(t *testing.T) {
+	t.Parallel()
+
 	if runtime.GOOS == "windows" {
 		t.Skip("service process fixture uses Unix control sockets")
 	}

@@ -39,6 +39,8 @@ func assertNoFile(t *testing.T, path string) {
 }
 
 func TestRemoteAddUploads(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	instance := startRemoteInstance(t, binary)
 
@@ -140,6 +142,8 @@ func startCannedUploadAPI(t *testing.T, status int, body string) (string, <-chan
 // The instance in these tests shares the CLI's file system, so only a canned
 // API can show that a remote add sends contents rather than a path.
 func TestRemoteAddSendsContents(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	for _, test := range []struct {

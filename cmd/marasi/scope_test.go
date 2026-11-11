@@ -7,6 +7,8 @@ import (
 )
 
 func TestScopeCheckCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 
 	t.Run("should post the positional URL unchanged to the selected instance", func(t *testing.T) {
@@ -120,6 +122,8 @@ func TestScopeCheckCommand(t *testing.T) {
 }
 
 func TestScopeListCommand(t *testing.T) {
+	t.Parallel()
+
 	binary := buildMarasi(t)
 	body := `{"default_allow":true,"include":[{"pattern":"alpha\\.example","match_type":"host"},{"pattern":"alpha\\.example","match_type":"url"}],"exclude":[{"pattern":".*\\.gstatic\\.com","match_type":"host"}]}` + "\n"
 

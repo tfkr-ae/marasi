@@ -9,6 +9,8 @@ import (
 )
 
 func TestRemoteServiceStatusAPILevel(t *testing.T) {
+	t.Parallel()
+
 	directory, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
