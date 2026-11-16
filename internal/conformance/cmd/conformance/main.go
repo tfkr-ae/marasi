@@ -121,6 +121,12 @@ func main() {
 		defer summary.Close()
 		settings.Summary = summary
 	}
+	// One harness CA per run: the suites' TLS targets and Marasi's
+	// container both use it.
+	if settings.CA, err = conformance.NewCA(); err != nil {
+		fail(err)
+	}
+	container.CA = settings.CA
 	settings.Launch = conformance.Launchers(conformance.MarasiLauncher(binary, settings.Log),
 		conformance.ContainerLauncher(container, settings.Log))
 

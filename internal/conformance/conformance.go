@@ -104,6 +104,13 @@ type Job struct {
 	Approaches []Approach // client approaches to run; empty means all the suite supports
 	Dir        string     // working directory for this target's tester output
 	Log        io.Writer  // progress output
+	// CA is the run's harness CA: TLS targets serve certificates it
+	// issues, and the direct run trusts it.
+	CA *CA
+	// ProxyCA is the proxy's CA certificate, PEM-encoded, which a client
+	// trusts for TLS inside CONNECT; empty in the direct run or when the
+	// proxy gives none (see Certifier).
+	ProxyCA []byte
 }
 
 // Difference is one way a proxied recording differs from its direct baseline.
@@ -158,6 +165,13 @@ type Proxy interface {
 	Newest(ctx context.Context, kind TrafficKind) (string, error)
 	// Stop stops the proxy.
 	Stop()
+}
+
+// Certifier is a Proxy that intercepts TLS inside CONNECT and gives the CA
+// certificate it signs with, so the harness client can trust it.
+type Certifier interface {
+	// Certificate returns the proxy's CA certificate, PEM-encoded.
+	Certificate(ctx context.Context) ([]byte, error)
 }
 
 // Launcher starts the proxy for suite under run. dir is the run's report

@@ -72,13 +72,21 @@ suites:
 
 - `autobahn` runs the Autobahn WebSocket testsuite, with Marasi on the host.
 - `h1-origin` sends each origin fixture case's HTTP/1.1 requests with the
-  harness's own client, as an absolute-form request (`absolute`) and as plain
-  HTTP inside `CONNECT` (`connect-plain`). Its recording holds the responses the
-  client received and the requests the origin received. Hop-by-hop fields and
-  framing are left out of the comparison. Marasi runs in a Linux container built
-  by `make linux-<arch>` for this machine's architecture (`LINUX_ARCH`), on the
+  harness's own client, as an absolute-form request (`absolute`), as plain
+  HTTP inside `CONNECT` (`connect-plain`) and as TLS inside `CONNECT`
+  (`connect-tls`). Its recording holds the responses the client received and
+  the requests the origin received. Hop-by-hop fields and framing are left out
+  of the comparison. Marasi runs in a Linux container built by
+  `make linux-<arch>` for this machine's architecture (`LINUX_ARCH`), on the
   host's network, and resolves the fixtures' name `origin.test` to loopback.
   The `proxy` run is the only conformance run so far.
+
+For TLS, the harness generates a CA on each run and never writes its key to
+disk. The fixtures serve certificates it issues. In Marasi's container,
+`SSL_CERT_FILE` names the image's system roots plus that CA, so Marasi verifies
+the fixtures with no Marasi setting changed. The direct run's client trusts the
+harness CA. Through Marasi, the client trusts Marasi's CA certificate, fetched
+with `marasi certificate get`.
 
 Each suite keeps its committed files in `internal/conformance/baselines/<suite>/`:
 

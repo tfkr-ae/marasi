@@ -1,6 +1,7 @@
 package h1origin
 
 import (
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -83,10 +84,14 @@ type originConn struct {
 	end      h1.End // empty while open
 }
 
-func startOrigin(listen string, script []Step, timeout time.Duration) (*origin, error) {
+// startOrigin starts an origin; with config set it serves TLS.
+func startOrigin(listen string, script []Step, timeout time.Duration, config *tls.Config) (*origin, error) {
 	listener, err := net.Listen("tcp", net.JoinHostPort(listen, "0"))
 	if err != nil {
 		return nil, err
+	}
+	if config != nil {
+		listener = tls.NewListener(listener, config)
 	}
 	o := &origin{listener: listener, script: script, timeout: timeout}
 	o.wg.Go(o.accept)
@@ -153,8 +158,9 @@ func (o *origin) serve(c *originConn) {
 		case StepDelay:
 			time.Sleep(step.Delay)
 		case StepHalfClose:
-			if tcp, ok := c.conn.(*net.TCPConn); ok {
-				_ = tcp.CloseWrite()
+			// Over TLS this sends close_notify first.
+			if conn, ok := c.conn.(interface{ CloseWrite() error }); ok {
+				_ = conn.CloseWrite()
 			}
 		case StepClose:
 			o.finish(c, h1.EndClosedBy)
@@ -162,10 +168,14 @@ func (o *origin) serve(c *originConn) {
 			return
 		case StepReset:
 			o.finish(c, h1.EndResetBy)
-			if tcp, ok := c.conn.(*net.TCPConn); ok {
+			raw := c.conn
+			if conn, ok := raw.(*tls.Conn); ok {
+				raw = conn.NetConn()
+			}
+			if tcp, ok := raw.(*net.TCPConn); ok {
 				_ = tcp.SetLinger(0)
 			}
-			_ = c.conn.Close()
+			_ = raw.Close()
 			return
 		}
 	}

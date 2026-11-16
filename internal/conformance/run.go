@@ -28,6 +28,10 @@ type Settings struct {
 	Phase       int        // phase given to the known entries UpdateKnown writes
 	Log         io.Writer  // progress output
 	Summary     io.Writer  // receives every Markdown summary too, such as $GITHUB_STEP_SUMMARY; may be nil
+	// CA is the harness CA every Job gets. Nil means Run generates one; a
+	// launcher that must trust it (ContainerSettings.CA) needs the same CA,
+	// so the command generates it and sets both.
+	CA *CA
 }
 
 // Result is one target of a suite under one conformance run.
@@ -115,6 +119,13 @@ func (s Settings) BaselineFile(suite, target string) string {
 // one target is in its Result.
 func Run(ctx context.Context, settings Settings) (Outcome, error) {
 	var outcome Outcome
+	if settings.CA == nil {
+		ca, err := NewCA()
+		if err != nil {
+			return outcome, fmt.Errorf("generating the harness CA: %w", err)
+		}
+		settings.CA = ca
+	}
 	for _, suite := range settings.Suites {
 		if len(settings.Approaches) > 0 && !slices.ContainsFunc(suite.Approaches(), func(a Approach) bool {
 			return slices.Contains(settings.Approaches, a)
@@ -202,6 +213,7 @@ func (s Settings) job(run RunName, target, proxy, dir string) Job {
 		Approaches: s.Approaches,
 		Dir:        filepath.Join(dir, target),
 		Log:        s.Log,
+		CA:         s.CA,
 	}
 }
 
@@ -260,6 +272,11 @@ func (s Settings) compareTarget(ctx context.Context, suite Suite, run RunName, t
 		return err
 	}
 	job := s.job(run, target, proxy.Address(), dir)
+	if certifier, ok := proxy.(Certifier); ok {
+		if job.ProxyCA, err = certifier.Certificate(ctx); err != nil {
+			return fmt.Errorf("fetching the proxy's CA certificate: %w", err)
+		}
+	}
 	got, err := suite.Execute(ctx, job)
 	if err != nil {
 		return err

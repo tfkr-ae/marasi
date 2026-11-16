@@ -290,5 +290,151 @@
         }
       }
     ]
+  },
+  "chunked-trailers@connect-tls": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /chunked HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "X-Request-ID",
+                "value": " 1"
+              },
+              {
+                "name": "x-lower-case",
+                "value": " request"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "X-ORIGIN-case",
+                "value": " Mixed"
+              },
+              {
+                "name": "x-lower",
+                "value": " yes"
+              },
+              {
+                "name": "Transfer-Encoding",
+                "value": " chunked"
+              },
+              {
+                "name": "Trailer",
+                "value": " X-Checksum"
+              }
+            ],
+            "body": "aGVsbG8sIHdvcmxk",
+            "trailers": [
+              {
+                "name": "X-Checksum",
+                "value": " 42"
+              }
+            ],
+            "framing": {
+              "kind": "chunked",
+              "chunks": [
+                5,
+                7
+              ]
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jaHVua2VkIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpYLVJlcXVlc3QtSUQ6IDENCngtbG93ZXItY2FzZTogcmVxdWVzdA0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NClgtT1JJR0lOLWNhc2U6IE1peGVkDQp4LWxvd2VyOiB5ZXMNClRyYW5zZmVyLUVuY29kaW5nOiBjaHVua2VkDQpUcmFpbGVyOiBYLUNoZWNrc3VtDQoNCjUNCmhlbGxvDQo3DQosIHdvcmxkDQowDQpYLUNoZWNrc3VtOiA0Mg0KDQo="
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /chunked HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "X-Request-ID",
+                "value": " 1"
+              },
+              {
+                "name": "x-lower-case",
+                "value": " request"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "X-ORIGIN-case",
+                "value": " Mixed"
+              },
+              {
+                "name": "x-lower",
+                "value": " yes"
+              },
+              {
+                "name": "Transfer-Encoding",
+                "value": " chunked"
+              },
+              {
+                "name": "Trailer",
+                "value": " X-Checksum"
+              }
+            ],
+            "body": "aGVsbG8sIHdvcmxk",
+            "trailers": [
+              {
+                "name": "X-Checksum",
+                "value": " 42"
+              }
+            ],
+            "framing": {
+              "kind": "chunked",
+              "chunks": [
+                5,
+                7
+              ]
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jaHVua2VkIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpYLVJlcXVlc3QtSUQ6IDENCngtbG93ZXItY2FzZTogcmVxdWVzdA0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NClgtT1JJR0lOLWNhc2U6IE1peGVkDQp4LWxvd2VyOiB5ZXMNClRyYW5zZmVyLUVuY29kaW5nOiBjaHVua2VkDQpUcmFpbGVyOiBYLUNoZWNrc3VtDQoNCjUNCmhlbGxvDQo3DQosIHdvcmxkDQowDQpYLUNoZWNrc3VtOiA0Mg0KDQo="
+        }
+      }
+    ]
   }
 }

@@ -22,6 +22,10 @@ const ContainerImage = "alpine@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e
 const (
 	containerBinary    = "/usr/local/bin/marasi"
 	containerConfigDir = "/root/mcf"
+	// containerRoots is the image's system roots; containerBundle is them
+	// plus the harness CA, which SSL_CERT_FILE names.
+	containerRoots  = "/etc/ssl/certs/ca-certificates.crt"
+	containerBundle = "/etc/ssl/conformance-roots.pem"
 )
 
 // ContainerSettings says how to start Marasi in a Linux container.
@@ -29,6 +33,10 @@ type ContainerSettings struct {
 	Binary string // the marasi binary built by make linux-<Arch>
 	Arch   string // its architecture, such as arm64; the container's platform is linux/<Arch>
 	Image  string // base image; empty means ContainerImage
+	// CA is the harness CA. When set, SSL_CERT_FILE in the container
+	// names the image's system roots plus it, so Marasi verifies the
+	// targets' certificates with no Marasi setting changed.
+	CA *CA
 }
 
 // StartContainer starts a container on the host's network, copies the
@@ -36,7 +44,9 @@ type ContainerSettings struct {
 // resolves to 127.0.0.1 inside it, so Marasi reaches targets that listen on
 // the host's loopback. The proxy listener is on loopback too, where the
 // harness reaches it: Docker Desktop shares the host network with the Mac
-// when host networking is on, as Autobahn needs too.
+// when host networking is on, as Autobahn needs too. With settings.CA set,
+// Go's TLS in the container trusts it as well as the system roots.
+// SSL_CERT_FILE works only on Linux, which is why Marasi runs there.
 func StartContainer(ctx context.Context, settings ContainerSettings, name, project string, hosts []string) (*Instance, error) {
 	image := settings.Image
 	if image == "" {
@@ -47,9 +57,21 @@ func StartContainer(ctx context.Context, settings ContainerSettings, name, proje
 	for _, host := range hosts {
 		args = append(args, "--add-host", host+":127.0.0.1")
 	}
+	if settings.CA != nil {
+		args = append(args, "--env", "SSL_CERT_FILE="+containerBundle)
+	}
 	args = append(args, image, "sleep", "infinity")
 	if err := docker(ctx, args...); err != nil {
 		return nil, err
+	}
+	if settings.CA != nil {
+		// The bundle exists before Marasi starts, and Go reads the roots
+		// on first use.
+		script := "cat " + containerRoots + " - > " + containerBundle
+		if err := dockerInput(ctx, settings.CA.PEM(), "exec", "-i", name, "sh", "-c", script); err != nil {
+			removeContainer(name)
+			return nil, fmt.Errorf("writing the roots bundle: %w", err)
+		}
 	}
 	if err := docker(ctx, "cp", settings.Binary, name+":"+containerBinary); err != nil {
 		removeContainer(name)
@@ -124,7 +146,15 @@ func Launchers(host, container Launcher) Launcher {
 }
 
 func docker(ctx context.Context, args ...string) error {
+	return dockerInput(ctx, nil, args...)
+}
+
+// dockerInput runs docker with stdin as its input.
+func dockerInput(ctx context.Context, stdin []byte, args ...string) error {
 	cmd := exec.CommandContext(ctx, "docker", args...)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

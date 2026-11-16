@@ -3,6 +3,7 @@ package h1origin
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -19,10 +20,21 @@ import (
 // records the same bytes whichever port its origin listened on.
 const PortPlaceholder = "PORT"
 
-// record runs one case on one client approach, directly when proxy is
-// empty, and returns its recording.
-func (s Suite) record(ctx context.Context, c Case, approach conformance.Approach, proxy string) (h1.Recording, error) {
-	o, err := startOrigin(s.listen(), c.Script, s.timeout())
+// record runs one case on one client approach, directly when job.Proxy is
+// empty, and returns its recording. On connect-tls the origin serves TLS
+// with a certificate from the harness CA; the client trusts that CA
+// directly and the proxy's CA through the proxy.
+func (s Suite) record(ctx context.Context, c Case, approach conformance.Approach, job conformance.Job) (h1.Recording, error) {
+	proxy := job.Proxy
+	secure := approach == conformance.ApproachConnectTLS
+	var serverTLS, clientTLS *tls.Config
+	if secure {
+		var err error
+		if serverTLS, clientTLS, err = s.tlsConfigs(job); err != nil {
+			return h1.Recording{}, err
+		}
+	}
+	o, err := startOrigin(s.listen(), c.Script, s.timeout(), serverTLS)
 	if err != nil {
 		return h1.Recording{}, fmt.Errorf("starting origin: %w", err)
 	}
@@ -45,12 +57,18 @@ func (s Suite) record(ctx context.Context, c Case, approach conformance.Approach
 
 	cl := &clientConn{conn: conn, timeout: s.timeout()}
 	var tunnel string
-	if proxy != "" && approach == conformance.ApproachConnectPlain {
+	if proxy != "" && approach != conformance.ApproachAbsolute {
 		if tunnel, err = cl.connect(authority); err != nil {
 			return h1.Recording{}, err
 		}
 	}
-	if tunnel == "" || strings.Contains(tunnel, " 200 ") {
+	tunnelled := tunnel == "" || strings.Contains(tunnel, " 200 ")
+	if tunnelled && secure {
+		if err := cl.handshake(ctx, clientTLS); err != nil {
+			return h1.Recording{}, err
+		}
+	}
+	if tunnelled {
 		cl.exchange(c.Requests, func(request string) string {
 			request = strings.ReplaceAll(request, "{authority}", authority)
 			if proxy != "" && approach == conformance.ApproachAbsolute {
@@ -70,6 +88,26 @@ func (s Suite) record(ctx context.Context, c Case, approach conformance.Approach
 	client.Tunnel = tunnel
 	recording.Client = []h1.Connection{client}
 	return recording, nil
+}
+
+// tlsConfigs returns the origin's server configuration, from the harness
+// CA, and the client's, which trusts the harness CA in the direct run and
+// the proxy's CA through a proxy.
+func (s Suite) tlsConfigs(job conformance.Job) (server, client *tls.Config, err error) {
+	if job.CA == nil {
+		return nil, nil, errors.New("connect-tls needs the harness CA")
+	}
+	if server, err = job.CA.ServerTLS(s.originHost()); err != nil {
+		return nil, nil, err
+	}
+	if job.Proxy == "" {
+		return server, job.CA.ClientTLS(s.originHost()), nil
+	}
+	if len(job.ProxyCA) == 0 {
+		return nil, nil, errors.New("connect-tls through a proxy needs the proxy's CA certificate, and the proxy gave none")
+	}
+	client, err = conformance.ClientTLSFromPEM(job.ProxyCA, s.originHost())
+	return server, client, err
 }
 
 // absoluteForm rewrites the request target of request's first line from
@@ -116,6 +154,22 @@ func (c *clientConn) connect(authority string) (string, error) {
 			return "", fmt.Errorf("reading the answer to CONNECT %q: %w", answer, err)
 		}
 	}
+}
+
+// handshake starts TLS on the connection, straight to the origin or inside
+// the proxy's tunnel. Only the bytes inside TLS are recorded.
+func (c *clientConn) handshake(ctx context.Context, config *tls.Config) error {
+	if len(c.received) > 0 {
+		return fmt.Errorf("the proxy sent %q after its answer to CONNECT, before TLS", c.received)
+	}
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	conn := tls.Client(c.conn, config)
+	if err := conn.HandshakeContext(ctx); err != nil {
+		return fmt.Errorf("shaking hands over TLS as %s: %w", config.ServerName, err)
+	}
+	c.conn = conn
+	return nil
 }
 
 // exchange sends each request after the response to the one before.

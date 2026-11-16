@@ -2,6 +2,7 @@ package h1origin_test
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"os"
@@ -42,13 +43,18 @@ func newHarness(t *testing.T, broken bool, deviations conformance.Deviations) ha
 	t.Helper()
 	dir := t.TempDir()
 	silent := new(bool)
+	ca, err := conformance.NewCA()
+	if err != nil {
+		t.Fatal(err)
+	}
 	settings := conformance.Settings{
+		CA:          ca,
 		Suites:      []conformance.Suite{h1origin.Suite{Cases: []h1origin.Case{trailerCase}}},
 		Cases:       []string{"*"},
 		BaselineDir: filepath.Join(dir, "baselines"),
 		OutDir:      filepath.Join(dir, "out"),
 		Launch: func(context.Context, conformance.Suite, conformance.RunName, string) (conformance.Proxy, error) {
-			proxy := startStandIn(t, broken)
+			proxy := startStandIn(t, broken, ca)
 			proxy.silent = *silent
 			return proxy, nil
 		},
@@ -89,12 +95,12 @@ func TestTransparentRelay(t *testing.T) {
 		outcome := runHarness(t, h.settings)
 
 		result := onlyResult(t, outcome)
-		wantCases := []string{"chunked-trailers@absolute", "chunked-trailers@connect-plain"}
+		wantCases := []string{"chunked-trailers@absolute", "chunked-trailers@connect-plain", "chunked-trailers@connect-tls"}
 		if !reflect.DeepEqual(result.Cases, wantCases) {
 			t.Fatalf("\nwanted cases:\n%v\ngot:\n%v", wantCases, result.Cases)
 		}
-		if result.Matched() != 2 || len(result.New)+len(result.Known)+len(result.Allowed) != 0 {
-			t.Fatalf("\nwanted 2 matched and no differences\ngot %d matched:\n%+v", result.Matched(), result.Sorted)
+		if result.Matched() != 3 || len(result.New)+len(result.Known)+len(result.Allowed) != 0 {
+			t.Fatalf("\nwanted 3 matched and no differences\ngot %d matched:\n%+v", result.Matched(), result.Sorted)
 		}
 		if outcome.Failed() {
 			t.Fatal("wanted the gate to pass")
@@ -120,6 +126,7 @@ var (
 const (
 	absolute     = "chunked-trailers@absolute"
 	connectPlain = "chunked-trailers@connect-plain"
+	connectTLS   = "chunked-trailers@connect-tls"
 )
 
 var (
@@ -137,11 +144,12 @@ func TestBrokenStandIn(t *testing.T) {
 		outcome := runHarness(t, h.settings)
 
 		result := onlyResult(t, outcome)
-		wantNew := []conformance.Difference{swallowed(absolute), swallowed(connectPlain), requestCase(connectPlain)}
+		wantNew := []conformance.Difference{swallowed(absolute), swallowed(connectPlain), requestCase(connectPlain),
+			swallowed(connectTLS), requestCase(connectTLS)}
 		if !reflect.DeepEqual(result.New, wantNew) {
 			t.Fatalf("\nwanted new:\n%+v\ngot:\n%+v", wantNew, result.New)
 		}
-		wantKnown := []conformance.Difference{responseCase(absolute), responseCase(connectPlain)}
+		wantKnown := []conformance.Difference{responseCase(absolute), responseCase(connectPlain), responseCase(connectTLS)}
 		if got := differences(result.Known); !reflect.DeepEqual(got, wantKnown) {
 			t.Fatalf("\nwanted known:\n%+v\ngot:\n%+v", wantKnown, got)
 		}
@@ -199,14 +207,14 @@ func TestBrokenStandIn(t *testing.T) {
 		h.settings.UpdateKnown = false
 
 		result := onlyResult(t, runHarness(t, h.settings))
-		if len(result.New) != 0 || len(result.Allowed) != 1 || len(result.Known) != 5 {
-			t.Fatalf("\nwanted 5 known, 1 allowed, none new\ngot:\n%+v", result.Sorted)
+		if len(result.New) != 0 || len(result.Allowed) != 1 || len(result.Known) != 8 {
+			t.Fatalf("\nwanted 8 known, 1 allowed, none new\ngot:\n%+v", result.Sorted)
 		}
 		deviations, err := conformance.ReadDeviations(h.settings.DeviationsFile(h1origin.Name))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(deviations) != 6 || !reflect.DeepEqual(deviations[0], acceptedRequestCase) {
+		if len(deviations) != 9 || !reflect.DeepEqual(deviations[0], acceptedRequestCase) {
 			t.Fatalf("\nwanted the accepted entry first and unchanged\ngot:\n%+v", deviations[0])
 		}
 	})
@@ -223,6 +231,54 @@ func TestNoTrafficThroughProxy(t *testing.T) {
 		}
 	})
 }
+
+func TestConnectTLS(t *testing.T) {
+	t.Run("should fail a connect-tls case when the proxy gives no CA certificate to trust", func(t *testing.T) {
+		h := newHarness(t, false, nil)
+		launch := h.settings.Launch
+		h.settings.Launch = func(ctx context.Context, suite conformance.Suite, run conformance.RunName, dir string) (conformance.Proxy, error) {
+			proxy, err := launch(ctx, suite, run, dir)
+			return noCertificate{proxy}, err
+		}
+		h.settings.Approaches = []conformance.Approach{conformance.ApproachConnectTLS}
+
+		result := runHarness(t, h.settings).Results[0]
+		if result.Err == nil || !strings.Contains(result.Err.Error(), "CA certificate") {
+			t.Fatalf("wanted an error naming the missing CA certificate\ngot: %v", result.Err)
+		}
+	})
+
+	t.Run("should fail a connect-tls case when the proxy's certificate is not from its CA", func(t *testing.T) {
+		h := newHarness(t, false, nil)
+		other, err := conformance.NewCA()
+		if err != nil {
+			t.Fatal(err)
+		}
+		launch := h.settings.Launch
+		h.settings.Launch = func(ctx context.Context, suite conformance.Suite, run conformance.RunName, dir string) (conformance.Proxy, error) {
+			proxy, err := launch(ctx, suite, run, dir)
+			return otherCertificate{Proxy: proxy, pem: other.PEM()}, err
+		}
+		h.settings.Approaches = []conformance.Approach{conformance.ApproachConnectTLS}
+
+		result := runHarness(t, h.settings).Results[0]
+		var unknown x509.UnknownAuthorityError
+		if !errors.As(result.Err, &unknown) {
+			t.Fatalf("wanted an unknown-authority error\ngot: %v", result.Err)
+		}
+	})
+}
+
+// noCertificate hides the stand-in's CA certificate.
+type noCertificate struct{ conformance.Proxy }
+
+// otherCertificate gives a CA certificate the stand-in did not sign with.
+type otherCertificate struct {
+	conformance.Proxy
+	pem []byte
+}
+
+func (o otherCertificate) Certificate(context.Context) ([]byte, error) { return o.pem, nil }
 
 func differences(matches []conformance.Match) []conformance.Difference {
 	var ds []conformance.Difference
