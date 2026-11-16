@@ -22,15 +22,19 @@ STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
 
 .DEFAULT_GOAL := build
 
-.PHONY: build all test lint check clean install uninstall help autobahn autobahn-baseline $(TARGETS)
+.PHONY: build all test lint check clean install uninstall help conformance conformance-baseline conformance-update-known autobahn autobahn-baseline $(TARGETS)
 
-# Autobahn WebSocket testsuite (Docker). See `make help`.
-CASES   ?= *
-EXCLUDE ?=
-MODES   ?= fuzzingclient,fuzzingserver
-PEERS   ?= strict,lenient
-RUNS    ?= proxy,checkpoint-forward,checkpoint-edit,extension
-AUTOBAHN_FLAGS = -cases '$(CASES)' -exclude '$(EXCLUDE)' -modes '$(MODES)' -peers '$(PEERS)' $(if $(VERBOSE),-verbose)
+# Conformance harness (Docker). See `make help`.
+SUITES     ?= autobahn
+CASES      ?= *
+EXCLUDE    ?=
+APPROACHES ?=
+MODES      ?= fuzzingclient,fuzzingserver
+PEERS      ?= strict,lenient
+RUNS       ?= proxy,checkpoint-forward,checkpoint-edit,extension
+PHASE      ?=
+CONFORMANCE      = $(GO) run ./internal/conformance/cmd/conformance
+CONFORMANCE_FLAGS = -cases '$(CASES)' -exclude '$(EXCLUDE)' -approaches '$(APPROACHES)' -modes '$(MODES)' -peers '$(PEERS)' $(if $(VERBOSE),-verbose)
 
 help:
 	@printf '%s\n' \
@@ -40,13 +44,21 @@ help:
 		'make test            run tests' \
 		'make lint            check gofmt, run go vet and staticcheck' \
 		'make check           run lint, then the short tests; run it before you commit' \
-		'make autobahn        run the Autobahn suite through Marasi and diff it against the' \
-		'                     committed direct baseline; exits non-zero on a deviation outside 9.x.' \
-		'                     Narrow with CASES=3.*,7.9.* EXCLUDE=9.* MODES=fuzzingclient' \
-		'                     PEERS=strict RUNS=proxy (runs: proxy checkpoint-forward' \
-		'                     checkpoint-edit extension). Reports land in dist/autobahn/.' \
-		'make autobahn-baseline  rerun the selected cases with no proxy and merge them' \
-		'                     into internal/autobahn/baseline/' \
+		'make conformance     run the conformance suites (Docker) through Marasi and score each' \
+		'                     case against its direct baseline and deviations.json in' \
+		'                     internal/conformance/baselines/<suite>/; exits non-zero on a new' \
+		'                     deviation, a known deviation that went away, or, in a full run,' \
+		'                     an entry that matched nothing. Narrow with SUITES=autobahn' \
+		'                     RUNS=proxy CASES=3.*,7.9.* EXCLUDE=9.* APPROACHES=connect-tls,' \
+		'                     and for autobahn MODES=fuzzingclient PEERS=strict (runs: proxy' \
+		'                     checkpoint-forward checkpoint-edit extension). VERBOSE=1 streams' \
+		'                     tester output. Reports land in dist/conformance/<suite>/<run>/.' \
+		'make conformance-baseline  rerun the selected cases with no proxy and merge them' \
+		'                     into the direct baselines' \
+		'make conformance-update-known PHASE=2  run, then rewrite the known entries of' \
+		'                     deviations.json and score.json; accepted entries are never touched' \
+		'make autobahn        make conformance SUITES=autobahn' \
+		'make autobahn-baseline  make conformance-baseline SUITES=autobahn' \
 		'make install         build and install to $(BINDIR)/$(BIN)' \
 		'make uninstall       remove $(BINDIR)/$(BIN)' \
 		'make clean           remove dist/'
@@ -78,11 +90,20 @@ lint:
 check: lint
 	$(GO) test -short ./...
 
+conformance: build
+	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites '$(SUITES)' -runs '$(RUNS)'
+
+conformance-baseline:
+	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites '$(SUITES)' -runs direct
+
+conformance-update-known: build
+	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites '$(SUITES)' -runs '$(RUNS)' -update-known $(if $(PHASE),-phase '$(PHASE)')
+
 autobahn: build
-	$(GO) run ./internal/autobahn/cmd/autobahn $(AUTOBAHN_FLAGS) -runs '$(RUNS)'
+	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites autobahn -runs '$(RUNS)'
 
 autobahn-baseline:
-	$(GO) run ./internal/autobahn/cmd/autobahn $(AUTOBAHN_FLAGS) -runs direct
+	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites autobahn -runs direct
 
 install: build
 	@mkdir -p $(BINDIR)

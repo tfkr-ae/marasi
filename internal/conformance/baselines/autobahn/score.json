@@ -1,0 +1,101 @@
+{
+  "suite": "autobahn",
+  "rows": [
+    {
+      "run": "proxy",
+      "target": "fuzzingclient-lenient",
+      "matched": 247,
+      "cases": 247
+    },
+    {
+      "run": "proxy",
+      "target": "fuzzingclient-strict",
+      "matched": 243,
+      "cases": 247
+    },
+    {
+      "run": "proxy",
+      "target": "fuzzingserver-lenient",
+      "matched": 247,
+      "cases": 247
+    },
+    {
+      "run": "proxy",
+      "target": "fuzzingserver-strict",
+      "matched": 243,
+      "cases": 247
+    },
+    {
+      "run": "checkpoint-forward",
+      "target": "fuzzingclient-lenient",
+      "matched": 247,
+      "cases": 247
+    },
+    {
+      "run": "checkpoint-forward",
+      "target": "fuzzingclient-strict",
+      "matched": 243,
+      "cases": 247
+    },
+    {
+      "run": "checkpoint-forward",
+      "target": "fuzzingserver-lenient",
+      "matched": 247,
+      "cases": 247
+    },
+    {
+      "run": "checkpoint-forward",
+      "target": "fuzzingserver-strict",
+      "matched": 243,
+      "cases": 247
+    },
+    {
+      "run": "checkpoint-edit",
+      "target": "fuzzingclient-lenient",
+      "matched": 247,
+      "cases": 247
+    },
+    {
+      "run": "checkpoint-edit",
+      "target": "fuzzingclient-strict",
+      "matched": 243,
+      "cases": 247
+    },
+    {
+      "run": "checkpoint-edit",
+      "target": "fuzzingserver-lenient",
+      "matched": 247,
+      "cases": 247
+    },
+    {
+      "run": "checkpoint-edit",
+      "target": "fuzzingserver-strict",
+      "matched": 243,
+      "cases": 247
+    },
+    {
+      "run": "extension",
+      "target": "fuzzingclient-lenient",
+      "matched": 247,
+      "cases": 247
+    },
+    {
+      "run": "extension",
+      "target": "fuzzingclient-strict",
+      "matched": 243,
+      "cases": 247
+    },
+    {
+      "run": "extension",
+      "target": "fuzzingserver-lenient",
+      "matched": 247,
+      "cases": 247
+    },
+    {
+      "run": "extension",
+      "target": "fuzzingserver-strict",
+      "matched": 243,
+      "cases": 247
+    }
+  ]
+}

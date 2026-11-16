@@ -1,4 +1,4 @@
-package autobahn
+package conformance
 
 import (
 	"bufio"
@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -24,18 +25,18 @@ type Instance struct {
 	Binary    string // path to the marasi binary
 	ConfigDir string // scratch config directory owned by the harness
 	Name      string // instance name
-	Proxy     string // proxy listener host:port
+	Listener  string // proxy listener host:port
 	LogCopy   string // file Stop copies the instance log to, or empty
 }
 
 // StartInstance launches a detached service instance in a scratch config
 // directory under /tmp, which keeps the control socket path short.
 func StartInstance(ctx context.Context, binary, project string) (*Instance, error) {
-	configDir, err := os.MkdirTemp("/tmp", "mab.")
+	configDir, err := os.MkdirTemp("/tmp", "mcf.")
 	if err != nil {
 		return nil, err
 	}
-	instance := &Instance{Binary: binary, ConfigDir: configDir, Name: fmt.Sprintf("ab%d", os.Getpid())}
+	instance := &Instance{Binary: binary, ConfigDir: configDir, Name: fmt.Sprintf("cf%d", os.Getpid())}
 	out, err := instance.cli(ctx, nil, "service", "start", "--project-name", project, "--address", "127.0.0.1", "--port", "0", "--json")
 	if err != nil {
 		_ = os.RemoveAll(configDir)
@@ -48,7 +49,7 @@ func StartInstance(ctx context.Context, binary, project string) (*Instance, erro
 		instance.Stop()
 		return nil, fmt.Errorf("reading service start output %q: %w", out, err)
 	}
-	instance.Proxy = started.ProxyListener
+	instance.Listener = started.ProxyListener
 	return instance, nil
 }
 
@@ -85,9 +86,17 @@ func (i *Instance) cli(ctx context.Context, stdin []byte, args ...string) ([]byt
 	return out, nil
 }
 
-// NewestWebSocket returns the ID of the newest WebSocket connection the
-// instance recorded, or "" when there is none.
-func (i *Instance) NewestWebSocket(ctx context.Context) (string, error) {
+// Address is the proxy listener host:port.
+func (i *Instance) Address() string {
+	return i.Listener
+}
+
+// Newest returns the ID of the newest item of kind the instance recorded,
+// or "" when there is none.
+func (i *Instance) Newest(ctx context.Context, kind TrafficKind) (string, error) {
+	if kind != TrafficWebSocket {
+		return "", fmt.Errorf("no newest-item check for traffic kind %q", kind)
+	}
 	out, err := i.cli(ctx, nil, "websocket", "list", "--limit", "1", "--json")
 	if err != nil {
 		return "", err
@@ -106,24 +115,18 @@ func (i *Instance) NewestWebSocket(ctx context.Context) (string, error) {
 	return list.Items[0].ID, nil
 }
 
-// EnableWebSocketCheckpoint turns on global WebSocket Checkpoint, so every
-// message is held until something forwards or drops it.
-func (i *Instance) EnableWebSocketCheckpoint(ctx context.Context) error {
+// EnableCheckpoint turns on global Checkpoint for kind, so every item of
+// that kind is held until something forwards or drops it.
+func (i *Instance) EnableCheckpoint(ctx context.Context, kind CheckpointKind) error {
+	if kind != CheckpointWebSocket {
+		return fmt.Errorf("no Checkpoint setup for kind %q", kind)
+	}
 	_, err := i.cli(ctx, nil, "checkpoint", "websocket-intercept", "on", "--json")
 	return err
 }
 
-// echoExtension sets every message payload to itself in processWebSocketMessage.
-const echoExtension = `
-
--- Autobahn harness: a no-op edit through the extension path.
-function processWebSocketMessage(message)
-	message:set_payload(message:payload())
-end
-`
-
-// InstallEchoExtension appends the payload-to-itself hook to the workshop extension.
-func (i *Instance) InstallEchoExtension(ctx context.Context) error {
+// InstallExtension appends lua to the workshop extension.
+func (i *Instance) InstallExtension(ctx context.Context, lua string) error {
 	out, err := i.cli(ctx, nil, "extension", "list", "--json")
 	if err != nil {
 		return err
@@ -156,13 +159,81 @@ func (i *Instance) InstallEchoExtension(ctx context.Context) error {
 	if err := json.Unmarshal(out, &extension); err != nil {
 		return fmt.Errorf("decoding workshop extension: %w", err)
 	}
-	file := filepath.Join(i.ConfigDir, "autobahn-workshop.lua")
-	if err := os.WriteFile(file, []byte(extension.LuaContent+echoExtension), 0o600); err != nil {
+	file := filepath.Join(i.ConfigDir, "conformance-workshop.lua")
+	if err := os.WriteFile(file, []byte(extension.LuaContent+lua), 0o600); err != nil {
 		return err
 	}
 	_, err = i.cli(ctx, nil, "extension", "update", id, "--file", file, "--json")
 	return err
 }
+
+// MarasiLauncher starts a Marasi service instance on the host for each
+// proxied conformance run and sets it up for the run: Checkpoint with a
+// resolver for the Checkpoint runs, the suite's Lua for the extension run.
+// Its log is copied to the run's report directory when it stops.
+func MarasiLauncher(binary string, log io.Writer) Launcher {
+	return func(ctx context.Context, suite Suite, run RunName, dir string) (Proxy, error) {
+		instance, err := StartInstance(ctx, binary, "conformance-"+suite.Name()+"-"+string(run))
+		if err != nil {
+			return nil, err
+		}
+		launched := &launchedInstance{Instance: instance}
+		// The instance log goes into the reports, so a failed run keeps it.
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			launched.Stop()
+			return nil, err
+		}
+		instance.LogCopy = filepath.Join(dir, "marasi.log")
+		setup := suite.Setup()
+		switch run {
+		case RunProxy:
+		case RunCheckpointForward, RunCheckpointEdit:
+			for _, kind := range setup.Checkpoint {
+				if err := instance.EnableCheckpoint(ctx, kind); err != nil {
+					launched.Stop()
+					return nil, err
+				}
+			}
+			resolver := &Resolver{Edit: run == RunCheckpointEdit}
+			resolveCtx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() {
+				resolver.Run(resolveCtx, instance)
+				close(done)
+			}()
+			launched.stops = append(launched.stops, func() {
+				cancel()
+				<-done
+				fmt.Fprintf(log, "resolver forwarded %d items, %d rejected\n", resolver.Forwarded.Load(), resolver.Failed.Load())
+			})
+		case RunExtension:
+			if err := instance.InstallExtension(ctx, setup.Extension); err != nil {
+				launched.Stop()
+				return nil, err
+			}
+		default:
+			launched.Stop()
+			return nil, fmt.Errorf("unknown conformance run %q", run)
+		}
+		return launched, nil
+	}
+}
+
+// launchedInstance is an instance with the helpers its run started, which
+// stop before it does.
+type launchedInstance struct {
+	*Instance
+	stops []func()
+}
+
+func (l *launchedInstance) Stop() {
+	for i := len(l.stops) - 1; i >= 0; i-- {
+		l.stops[i]()
+	}
+	l.Instance.Stop()
+}
+
+var _ Proxy = (*launchedInstance)(nil)
 
 // Resolver forwards every held WebSocket Checkpoint item through the
 // control API. With Edit set, each forward carries the original payload and
