@@ -174,6 +174,36 @@ func brokenRules(result conformance.Result) map[string][]string {
 	return broken
 }
 
+func TestEveryProxiedRun(t *testing.T) {
+	t.Run("should score a transparent relay as matching in all four proxied runs, on every approach and leg rule", func(t *testing.T) {
+		viaEverywhere := acceptVia
+		viaEverywhere.Runs = conformance.ProxiedRuns
+		h := newHarness(t, false, conformance.Deviations{viaEverywhere}, trailerCase, hopCase, reframeCase, clteCase)
+		h.settings.Runs = conformance.ProxiedRuns
+		outcome := runHarness(t, h.settings)
+
+		var runs []conformance.RunName
+		for _, result := range outcome.Results {
+			if result.Err != nil || len(result.Cases) != 12 || result.Matched() != 12 || len(result.New)+len(result.Known) != 0 {
+				t.Fatalf("\nwanted 12 of 12 matched, nothing new or known, and no error in %s\ngot:\n%+v", result.Run, result)
+			}
+			for c, rules := range brokenRules(result) {
+				if !reflect.DeepEqual(rules, []string{"leg:via"}) {
+					t.Fatalf("\nwanted only Via broken on %s in %s\ngot: %v", c, result.Run, rules)
+				}
+			}
+			runs = append(runs, result.Run)
+		}
+		want := []conformance.RunName{conformance.RunProxy, conformance.RunCheckpointForward, conformance.RunCheckpointEdit, conformance.RunExtension}
+		if !reflect.DeepEqual(runs, want) {
+			t.Fatalf("\nwanted runs:\n%v\ngot:\n%v", want, runs)
+		}
+		if outcome.Failed() {
+			t.Fatal("wanted the gate to pass")
+		}
+	})
+}
+
 // Every difference the broken stand-in makes, in case order.
 var (
 	responseCase = func(id string) conformance.Difference {

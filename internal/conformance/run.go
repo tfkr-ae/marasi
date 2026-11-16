@@ -280,6 +280,16 @@ func (s Settings) compareTarget(ctx context.Context, suite Suite, run RunName, t
 	if err != nil {
 		return err
 	}
+	holder, holds := proxy.(Holder)
+	if isCheckpointRun(run) && !holds {
+		return fmt.Errorf("%w: the proxy cannot report held items", ErrNotHeld)
+	}
+	var heldBefore int64
+	if isCheckpointRun(run) {
+		if heldBefore, err = holder.Held(ctx); err != nil {
+			return err
+		}
+	}
 	job := s.job(run, target, proxy.Address(), dir)
 	if certifier, ok := proxy.(Certifier); ok {
 		if job.ProxyCA, err = certifier.Certificate(ctx); err != nil {
@@ -289,6 +299,15 @@ func (s Settings) compareTarget(ctx context.Context, suite Suite, run RunName, t
 	got, err := suite.Execute(ctx, job)
 	if err != nil {
 		return err
+	}
+	if isCheckpointRun(run) {
+		heldAfter, err := holder.Held(ctx)
+		if err != nil {
+			return err
+		}
+		if heldAfter == heldBefore {
+			return ErrNotHeld
+		}
 	}
 	after, err := proxy.Newest(ctx, kind)
 	// Marasi stores what it captured in the background, so the newest

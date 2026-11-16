@@ -39,9 +39,8 @@ var _ conformance.Suite = Suite{}
 // Name is "h1-origin".
 func (s Suite) Name() string { return Name }
 
-// Runs is the proxy run. The Checkpoint and extension runs need HTTP setup
-// in the container launcher first.
-func (s Suite) Runs() []conformance.RunName { return []conformance.RunName{conformance.RunProxy} }
+// Runs is every proxied run.
+func (s Suite) Runs() []conformance.RunName { return conformance.ProxiedRuns }
 
 // Approaches are absolute form, plain HTTP inside CONNECT and TLS inside
 // CONNECT.
@@ -52,10 +51,13 @@ func (s Suite) Approaches() []conformance.Approach {
 // Targets is the fixtures.
 func (s Suite) Targets() []string { return []string{Target} }
 
-// Setup checks HTTP traffic and runs Marasi in a container that resolves
-// the origin's name to loopback.
+// Setup is the HTTP setup of every proxied run, with Marasi in a container
+// that resolves the origin's name to loopback.
 func (s Suite) Setup() conformance.Setup {
-	return conformance.Setup{Traffic: conformance.TrafficHTTP, Container: true, Hosts: []string{s.originHost()}}
+	setup := conformance.HTTPSetup()
+	setup.Container = true
+	setup.Hosts = []string{s.originHost()}
+	return setup
 }
 
 // Execute runs every selected case on every selected approach, one at a time.

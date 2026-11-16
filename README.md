@@ -87,7 +87,7 @@ suites:
   Marasi runs in a Linux container built by `make linux-<arch>` for this
   machine's architecture (`LINUX_ARCH`), on the
   host's network, and resolves the fixtures' name `origin.test` to loopback.
-  The `proxy` run is the only conformance run so far.
+  The harness drives it through a control listener on loopback.
 
 For TLS, the harness generates a CA on each run and never writes its key to
 disk. The fixtures serve certificates it issues. In Marasi's container,
@@ -110,10 +110,11 @@ Each suite keeps its committed files in `internal/conformance/baselines/<suite>/
 
 The suites need Docker with host networking. `make conformance` runs four
 conformance runs: `proxy` (no interception), `checkpoint-forward` (global
-WebSocket Checkpoint with an auto-resolver that forwards each item unchanged),
+Checkpoint with an auto-resolver that forwards each item unchanged),
 `checkpoint-edit` (the resolver forwards each item as an edit with the same
-bytes), and `extension` (a workshop `processWebSocketMessage` sets each payload
-to itself). Autobahn runs both modes (`fuzzingclient`, `fuzzingserver`) against
+bytes), and `extension` (a workshop hook sets each payload or body to itself:
+`processWebSocketMessage` for WebSocket, `processRequest` and
+`processResponse` for HTTP). Autobahn runs both modes (`fuzzingclient`, `fuzzingserver`) against
 two peers: Autobahn's strict testee and the harness's lenient echo peer.
 Variables narrow a run:
 

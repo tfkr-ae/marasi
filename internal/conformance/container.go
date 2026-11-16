@@ -78,22 +78,29 @@ func StartContainer(ctx context.Context, settings ContainerSettings, name, proje
 		return nil, err
 	}
 	instance := &Instance{Binary: containerBinary, ConfigDir: containerConfigDir, Name: "cf", Container: name}
-	out, err := instance.cli(ctx, nil, "service", "start", "--project-name", project, "--address", "127.0.0.1", "--port", "0", "--json")
+	// The control listener's network address on loopback stands in for the
+	// unix socket, which Docker Desktop does not share with the host. It
+	// has no password: only processes on this machine reach loopback.
+	out, err := instance.cli(ctx, nil, "service", "start", "--project-name", project, "--address", "127.0.0.1", "--port", "0",
+		"--control-address", "127.0.0.1:0", "--no-password", "--json")
 	if err != nil {
 		removeContainer(name)
 		return nil, err
 	}
 	var started struct {
-		ProxyListener string `json:"proxy_listener"`
+		ProxyListener   string `json:"proxy_listener"`
+		ControlListener string `json:"control_listener"`
 	}
-	if err := json.Unmarshal(out, &started); err != nil || started.ProxyListener == "" {
+	if err := json.Unmarshal(out, &started); err != nil || started.ProxyListener == "" || started.ControlListener == "" {
 		instance.Stop()
 		return nil, fmt.Errorf("reading service start output %q: %w", out, err)
 	}
-	instance.Listener = started.ProxyListener
-	if err := awaitListener(ctx, instance.Listener); err != nil {
-		instance.Stop()
-		return nil, err
+	instance.Listener, instance.Control = started.ProxyListener, started.ControlListener
+	for _, address := range []string{instance.Listener, instance.Control} {
+		if err := awaitListener(ctx, address); err != nil {
+			instance.Stop()
+			return nil, err
+		}
 	}
 	return instance, nil
 }
@@ -110,7 +117,7 @@ func awaitListener(ctx context.Context, address string) error {
 			return conn.Close()
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
-			return fmt.Errorf("proxy listener %s in the container never took a connection from the host: %w", address, err)
+			return fmt.Errorf("listener %s in the container never took a connection from the host: %w", address, err)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
