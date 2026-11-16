@@ -106,6 +106,21 @@ suites:
   `Host` field, which names the shim's port, so nginx listens on that port at
   `127.0.0.2`, where Marasi resolves `nginx.test`. The first run builds the
   Http11Probe image, which takes a few minutes.
+- `h2-origin` sends each h2 origin fixture case's requests as HTTP/2 streams
+  inside `CONNECT` over TLS (`connect-tls`), offering ALPN `h2` then
+  `http/1.1`, to fixtures that script frames and serve ALPN `h2`. Its
+  recording holds, for each side, the negotiated protocol, each stream's
+  decoded header blocks with pseudo-header fields, DATA bytes, trailers,
+  where END_STREAM fell and the RST_STREAM code, and the connection's GOAWAY
+  code and the streams it says were processed. SETTINGS, WINDOW_UPDATE, PING,
+  PRIORITY, DATA splitting, padding, HPACK encoding and stream IDs are not
+  recorded, so they never differ. It runs only `proxy`, has no leg rules yet,
+  and is report only: it exits non-zero like any suite, so run it on its own
+  (`make conformance SUITES=h2-origin RUNS=proxy`), and CI does not block a
+  merge on it. Through Marasi the client trusts only Marasi's CA, so a
+  recorded case shows Marasi in the path even though Marasi, answering ALPN
+  with `http/1.1`, records no HTTP/2 traffic. Marasi runs in the same
+  container as for `h1-origin`.
 
 For TLS, the harness generates a CA on each run and never writes its key to
 disk. The fixtures serve certificates it issues. In Marasi's container,
@@ -140,6 +155,7 @@ Variables narrow a run:
 make conformance SUITES=autobahn CASES='3.*,7.9.*' RUNS=proxy MODES=fuzzingclient PEERS=strict
 make autobahn EXCLUDE='9.*,12.*,13.*' VERBOSE=1
 make conformance SUITES=h1-origin APPROACHES=connect-plain
+make conformance SUITES=h2-origin RUNS=proxy
 ```
 
 Reports are written to `dist/conformance/<suite>/<run>/`: a `summary.md` with

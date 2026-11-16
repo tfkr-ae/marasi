@@ -309,8 +309,14 @@ func (s Settings) proxied(ctx context.Context, suite Suite, run RunName, deviati
 
 func (s Settings) compareTarget(ctx context.Context, suite Suite, run RunName, target, dir string, proxy Proxy,
 	kind TrafficKind, deviations Deviations, matched []bool, result *Result) error {
-	before, err := proxy.Newest(ctx, kind)
-	if err != nil {
+	certifier, certifies := proxy.(Certifier)
+	var before string
+	var err error
+	if kind == TrafficTLS {
+		if !certifies {
+			return fmt.Errorf("%w: the proxy gives no CA certificate, so intercepted TLS cannot show it", ErrNotProxied)
+		}
+	} else if before, err = proxy.Newest(ctx, kind); err != nil {
 		return err
 	}
 	holder, holds := proxy.(Holder)
@@ -324,7 +330,7 @@ func (s Settings) compareTarget(ctx context.Context, suite Suite, run RunName, t
 		}
 	}
 	job := s.job(run, target, proxy.Address(), dir)
-	if certifier, ok := proxy.(Certifier); ok {
+	if certifies {
 		if job.ProxyCA, err = certifier.Certificate(ctx); err != nil {
 			return fmt.Errorf("fetching the proxy's CA certificate: %w", err)
 		}
@@ -342,18 +348,20 @@ func (s Settings) compareTarget(ctx context.Context, suite Suite, run RunName, t
 			return ErrNotHeld
 		}
 	}
-	after, err := proxy.Newest(ctx, kind)
-	// Marasi stores what it captured in the background, so the newest
-	// item can lag the traffic by a moment.
-	for wait := time.Now().Add(newestWait); err == nil && checkProxied(before, after) != nil && time.Now().Before(wait); {
-		time.Sleep(50 * time.Millisecond)
-		after, err = proxy.Newest(ctx, kind)
-	}
-	if err != nil {
-		return err
-	}
-	if err := checkProxied(before, after); err != nil {
-		return err
+	if kind != TrafficTLS {
+		after, err := proxy.Newest(ctx, kind)
+		// Marasi stores what it captured in the background, so the newest
+		// item can lag the traffic by a moment.
+		for wait := time.Now().Add(newestWait); err == nil && checkProxied(before, after) != nil && time.Now().Before(wait); {
+			time.Sleep(50 * time.Millisecond)
+			after, err = proxy.Newest(ctx, kind)
+		}
+		if err != nil {
+			return err
+		}
+		if err := checkProxied(before, after); err != nil {
+			return err
+		}
 	}
 	baseline, err := ReadBaseline(s.BaselineFile(suite.Name(), target))
 	if err != nil {
