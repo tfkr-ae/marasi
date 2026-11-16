@@ -66,6 +66,12 @@ type TrafficKind string
 const (
 	TrafficWebSocket TrafficKind = "websocket"
 	TrafficHTTP      TrafficKind = "http" // request/response pairs
+	// TrafficTLS is TLS inside CONNECT that the proxy intercepts. A suite
+	// whose client trusts only the proxy's CA in a proxied run shows the
+	// proxy in the path with every case it records, even when the proxy
+	// stores nothing, as Martian stores no HTTP/2. The harness then needs
+	// the proxy to be a Certifier and checks no newest item.
+	TrafficTLS TrafficKind = "tls"
 )
 
 // CheckpointKind is a Checkpoint item kind a suite needs held in the

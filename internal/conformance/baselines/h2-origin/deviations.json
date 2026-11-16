@@ -1,0 +1,162 @@
+[
+  {
+    "cases": "data-padded-split@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].alpn",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"h2\", got \"http/1.1\"",
+    "phase": 5
+  },
+  {
+    "cases": "data-padded-split@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].streams.count",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
+    "phase": 5
+  },
+  {
+    "cases": "data-padded-split@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "origin.count",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
+    "phase": 5
+  },
+  {
+    "cases": "goaway@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].alpn",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"h2\", got \"http/1.1\"",
+    "phase": 5
+  },
+  {
+    "cases": "goaway@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].goaway",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"NO_ERROR processed [0]\", got \"none\"",
+    "phase": 5
+  },
+  {
+    "cases": "goaway@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].streams.count",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"2\", got \"0\"",
+    "phase": 5
+  },
+  {
+    "cases": "goaway@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "origin.count",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
+    "phase": 5
+  },
+  {
+    "cases": "headers-with-data@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].alpn",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"h2\", got \"http/1.1\"",
+    "phase": 5
+  },
+  {
+    "cases": "headers-with-data@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].streams.count",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
+    "phase": 5
+  },
+  {
+    "cases": "headers-with-data@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "origin.count",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
+    "phase": 5
+  },
+  {
+    "cases": "rst-stream@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].alpn",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"h2\", got \"http/1.1\"",
+    "phase": 5
+  },
+  {
+    "cases": "rst-stream@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].streams.count",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
+    "phase": 5
+  },
+  {
+    "cases": "rst-stream@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "origin.count",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
+    "phase": 5
+  },
+  {
+    "cases": "trailers@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].alpn",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"h2\", got \"http/1.1\"",
+    "phase": 5
+  },
+  {
+    "cases": "trailers@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].streams.count",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
+    "phase": 5
+  },
+  {
+    "cases": "trailers@connect-tls",
+    "runs": [
+      "proxy"
+    ],
+    "field": "origin.count",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
+    "phase": 5
+  }
+]

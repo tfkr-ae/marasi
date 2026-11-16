@@ -20,6 +20,7 @@ import (
 	"github.com/tfkr-ae/marasi/internal/conformance"
 	"github.com/tfkr-ae/marasi/internal/conformance/autobahn"
 	"github.com/tfkr-ae/marasi/internal/conformance/h1origin"
+	"github.com/tfkr-ae/marasi/internal/conformance/h2origin"
 )
 
 // narrowing are the flags that select less than everything. A run with
@@ -88,6 +89,8 @@ func main() {
 			settings.Suites = append(settings.Suites, autobahnSuite)
 		case h1origin.Name:
 			settings.Suites = append(settings.Suites, h1origin.Suite{})
+		case h2origin.Name:
+			settings.Suites = append(settings.Suites, h2origin.Suite{})
 		default:
 			fail(fmt.Errorf("unknown suite %q", name))
 		}
