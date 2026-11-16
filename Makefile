@@ -33,8 +33,10 @@ MODES      ?= fuzzingclient,fuzzingserver
 PEERS      ?= strict,lenient
 RUNS       ?= proxy,checkpoint-forward,checkpoint-edit,extension
 PHASE      ?=
+# The HTTP suites run Marasi in a Linux container, built for this architecture.
+LINUX_ARCH ?= $(shell $(GO) env GOARCH)
 CONFORMANCE      = $(GO) run ./internal/conformance/cmd/conformance
-CONFORMANCE_FLAGS = -cases '$(CASES)' -exclude '$(EXCLUDE)' -approaches '$(APPROACHES)' -modes '$(MODES)' -peers '$(PEERS)' $(if $(VERBOSE),-verbose)
+CONFORMANCE_FLAGS = -linux-arch '$(LINUX_ARCH)' -cases '$(CASES)' -exclude '$(EXCLUDE)' -approaches '$(APPROACHES)' -modes '$(MODES)' -peers '$(PEERS)' $(if $(VERBOSE),-verbose)
 
 help:
 	@printf '%s\n' \
@@ -48,7 +50,9 @@ help:
 		'                     case against its direct baseline and deviations.json in' \
 		'                     internal/conformance/baselines/<suite>/; exits non-zero on a new' \
 		'                     deviation, a known deviation that went away, or, in a full run,' \
-		'                     an entry that matched nothing. Narrow with SUITES=autobahn' \
+		'                     an entry that matched nothing. Suites: autobahn (Marasi on the' \
+		'                     host) and h1-origin (Marasi in a Linux container built for' \
+		'                     LINUX_ARCH, this machine by default). Narrow with SUITES=autobahn' \
 		'                     RUNS=proxy CASES=3.*,7.9.* EXCLUDE=9.* APPROACHES=connect-tls,' \
 		'                     and for autobahn MODES=fuzzingclient PEERS=strict (runs: proxy' \
 		'                     checkpoint-forward checkpoint-edit extension). VERBOSE=1 streams' \
@@ -90,13 +94,13 @@ lint:
 check: lint
 	$(GO) test -short ./...
 
-conformance: build
+conformance: build linux-$(LINUX_ARCH)
 	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites '$(SUITES)' -runs '$(RUNS)'
 
 conformance-baseline:
 	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites '$(SUITES)' -runs direct
 
-conformance-update-known: build
+conformance-update-known: build linux-$(LINUX_ARCH)
 	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites '$(SUITES)' -runs '$(RUNS)' -update-known $(if $(PHASE),-phase '$(PHASE)')
 
 autobahn: build

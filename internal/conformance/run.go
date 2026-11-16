@@ -6,7 +6,12 @@ import (
 	"io"
 	"path/filepath"
 	"slices"
+	"time"
 )
+
+// newestWait is how long a proxied run waits for the proxy's newest item to
+// change after a target before it decides no traffic went through.
+const newestWait = 2 * time.Second
 
 // Settings selects what Run runs and where it keeps its files.
 type Settings struct {
@@ -260,6 +265,12 @@ func (s Settings) compareTarget(ctx context.Context, suite Suite, run RunName, t
 		return err
 	}
 	after, err := proxy.Newest(ctx, kind)
+	// Marasi stores what it captured in the background, so the newest
+	// item can lag the traffic by a moment.
+	for wait := time.Now().Add(newestWait); err == nil && checkProxied(before, after) != nil && time.Now().Before(wait); {
+		time.Sleep(50 * time.Millisecond)
+		after, err = proxy.Newest(ctx, kind)
+	}
 	if err != nil {
 		return err
 	}

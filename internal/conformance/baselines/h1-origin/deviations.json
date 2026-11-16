@@ -1,0 +1,122 @@
+[
+  {
+    "cases": "chunked-trailers@absolute",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"Trailer: X-Checksum\", got \"\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@absolute",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].responses[0].fields.name-case",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"X-ORIGIN-case, x-lower\", got \"X-Origin-Case, X-Lower\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@absolute",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].responses[0].fields.order",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"content-type, x-origin-case, x-lower\", got \"content-type, x-lower, x-origin-case\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@absolute",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].responses[0].trailers",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"X-Checksum: 42\", got \"\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@absolute",
+    "runs": [
+      "proxy"
+    ],
+    "field": "origin[0].requests[0].fields.name-case",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"X-Request-ID, x-lower-case\", got \"X-Request-Id, X-Lower-Case\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@absolute",
+    "runs": [
+      "proxy"
+    ],
+    "field": "origin[0].requests[0].fields.order",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"host, x-request-id, x-lower-case\", got \"host, x-lower-case, x-request-id\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@connect-plain",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"Trailer: X-Checksum\", got \"\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@connect-plain",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].responses[0].fields.name-case",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"X-ORIGIN-case, x-lower\", got \"X-Origin-Case, X-Lower\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@connect-plain",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].responses[0].fields.order",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"content-type, x-origin-case, x-lower\", got \"content-type, x-lower, x-origin-case\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@connect-plain",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].responses[0].trailers",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"X-Checksum: 42\", got \"\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@connect-plain",
+    "runs": [
+      "proxy"
+    ],
+    "field": "origin[0].requests[0].fields.name-case",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"X-Request-ID, x-lower-case\", got \"X-Request-Id, X-Lower-Case\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@connect-plain",
+    "runs": [
+      "proxy"
+    ],
+    "field": "origin[0].requests[0].fields.order",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"host, x-request-id, x-lower-case\", got \"host, x-lower-case, x-request-id\"",
+    "phase": 2
+  }
+]

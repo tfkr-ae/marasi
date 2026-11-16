@@ -27,6 +27,10 @@ type Instance struct {
 	Name      string // instance name
 	Listener  string // proxy listener host:port
 	LogCopy   string // file Stop copies the instance log to, or empty
+	// Container is the Docker container the instance runs in, or empty on
+	// the host. Binary and ConfigDir are then paths inside it, and every
+	// CLI call runs through docker exec.
+	Container string
 }
 
 // StartInstance launches a detached service instance in a scratch config
@@ -57,6 +61,16 @@ func StartInstance(ctx context.Context, binary, project string) (*Instance, erro
 // its config directory.
 func (i *Instance) Stop() {
 	_, _ = i.cli(context.Background(), nil, "service", "stop", "--json")
+	if i.Container != "" {
+		if i.LogCopy != "" {
+			log := filepath.Join(i.ConfigDir, "instances", i.Name+".log")
+			if data, err := exec.Command("docker", "exec", i.Container, "cat", log).Output(); err == nil {
+				_ = os.WriteFile(i.LogCopy, data, 0o644)
+			}
+		}
+		removeContainer(i.Container)
+		return
+	}
 	if i.LogCopy != "" {
 		if data, err := os.ReadFile(filepath.Join(i.ConfigDir, "instances", i.Name+".log")); err == nil {
 			_ = os.WriteFile(i.LogCopy, data, 0o644)
@@ -66,7 +80,11 @@ func (i *Instance) Stop() {
 }
 
 func (i *Instance) cli(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, i.Binary, append([]string{"--config-dir", i.ConfigDir, "--instance", i.Name}, args...)...)
+	argv := append([]string{i.Binary, "--config-dir", i.ConfigDir, "--instance", i.Name}, args...)
+	if i.Container != "" {
+		argv = append([]string{"docker", "exec", "-i", i.Container}, argv...)
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	} else {
@@ -94,10 +112,17 @@ func (i *Instance) Address() string {
 // Newest returns the ID of the newest item of kind the instance recorded,
 // or "" when there is none.
 func (i *Instance) Newest(ctx context.Context, kind TrafficKind) (string, error) {
-	if kind != TrafficWebSocket {
+	var command string
+	switch kind {
+	case TrafficWebSocket:
+		command = "websocket"
+	case TrafficHTTP:
+		// A one-item page of traffic list is the newest pair.
+		command = "traffic"
+	default:
 		return "", fmt.Errorf("no newest-item check for traffic kind %q", kind)
 	}
-	out, err := i.cli(ctx, nil, "websocket", "list", "--limit", "1", "--json")
+	out, err := i.cli(ctx, nil, command, "list", "--limit", "1", "--json")
 	if err != nil {
 		return "", err
 	}
@@ -107,7 +132,7 @@ func (i *Instance) Newest(ctx context.Context, kind TrafficKind) (string, error)
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(out, &list); err != nil {
-		return "", fmt.Errorf("decoding websocket list: %w", err)
+		return "", fmt.Errorf("decoding %s list: %w", command, err)
 	}
 	if len(list.Items) == 0 {
 		return "", nil
@@ -177,46 +202,61 @@ func MarasiLauncher(binary string, log io.Writer) Launcher {
 		if err != nil {
 			return nil, err
 		}
-		launched := &launchedInstance{Instance: instance}
-		// The instance log goes into the reports, so a failed run keeps it.
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		return prepare(ctx, instance, suite, run, dir, log)
+	}
+}
+
+// prepare sets a started instance up for run and keeps its log in dir.
+func prepare(ctx context.Context, instance *Instance, suite Suite, run RunName, dir string, log io.Writer) (Proxy, error) {
+	launched := &launchedInstance{Instance: instance}
+	// The instance log goes into the reports, so a failed run keeps it.
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		launched.Stop()
+		return nil, err
+	}
+	instance.LogCopy = filepath.Join(dir, "marasi.log")
+	setup := suite.Setup()
+	switch run {
+	case RunProxy:
+	case RunCheckpointForward, RunCheckpointEdit:
+		if instance.Container != "" {
+			// The resolver talks to the control socket, which a container
+			// on Docker Desktop does not share with the host.
 			launched.Stop()
-			return nil, err
+			return nil, fmt.Errorf("the %s run is not set up for Marasi in a container yet", run)
 		}
-		instance.LogCopy = filepath.Join(dir, "marasi.log")
-		setup := suite.Setup()
-		switch run {
-		case RunProxy:
-		case RunCheckpointForward, RunCheckpointEdit:
-			for _, kind := range setup.Checkpoint {
-				if err := instance.EnableCheckpoint(ctx, kind); err != nil {
-					launched.Stop()
-					return nil, err
-				}
-			}
-			resolver := &Resolver{Edit: run == RunCheckpointEdit}
-			resolveCtx, cancel := context.WithCancel(context.Background())
-			done := make(chan struct{})
-			go func() {
-				resolver.Run(resolveCtx, instance)
-				close(done)
-			}()
-			launched.stops = append(launched.stops, func() {
-				cancel()
-				<-done
-				fmt.Fprintf(log, "resolver forwarded %d items, %d rejected\n", resolver.Forwarded.Load(), resolver.Failed.Load())
-			})
-		case RunExtension:
-			if err := instance.InstallExtension(ctx, setup.Extension); err != nil {
+		for _, kind := range setup.Checkpoint {
+			if err := instance.EnableCheckpoint(ctx, kind); err != nil {
 				launched.Stop()
 				return nil, err
 			}
-		default:
-			launched.Stop()
-			return nil, fmt.Errorf("unknown conformance run %q", run)
 		}
-		return launched, nil
+		resolver := &Resolver{Edit: run == RunCheckpointEdit}
+		resolveCtx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			resolver.Run(resolveCtx, instance)
+			close(done)
+		}()
+		launched.stops = append(launched.stops, func() {
+			cancel()
+			<-done
+			fmt.Fprintf(log, "resolver forwarded %d items, %d rejected\n", resolver.Forwarded.Load(), resolver.Failed.Load())
+		})
+	case RunExtension:
+		if instance.Container != "" {
+			launched.Stop()
+			return nil, fmt.Errorf("the %s run is not set up for Marasi in a container yet", run)
+		}
+		if err := instance.InstallExtension(ctx, setup.Extension); err != nil {
+			launched.Stop()
+			return nil, err
+		}
+	default:
+		launched.Stop()
+		return nil, fmt.Errorf("unknown conformance run %q", run)
 	}
+	return launched, nil
 }
 
 // launchedInstance is an instance with the helpers its run started, which
