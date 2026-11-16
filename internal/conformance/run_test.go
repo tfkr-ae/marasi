@@ -316,6 +316,68 @@ func TestRunDirectMergesTheBaseline(t *testing.T) {
 	})
 }
 
+// twiceSuite is a fakeSuite that asks for deterministic direct runs; a case
+// in flaky gives a different recording on every direct call.
+type twiceSuite struct {
+	*fakeSuite
+	flaky []string
+	calls int
+}
+
+func (s *twiceSuite) Deterministic() {}
+
+func (s *twiceSuite) Execute(ctx context.Context, job Job) (Recordings, error) {
+	got, err := s.fakeSuite.Execute(ctx, job)
+	if job.Run == RunDirect {
+		s.calls++
+		for _, id := range s.flaky {
+			got[id] = json.RawMessage(strconv.Itoa(100 + s.calls))
+		}
+	}
+	return got, err
+}
+
+func TestRunDirectRecordsADeterministicSuiteTwice(t *testing.T) {
+	t.Run("should refuse a case whose two recordings differ and merge the rest", func(t *testing.T) {
+		f := newFixture(t, nil)
+		f.suite.got[RunDirect] = recordings(map[string]int{"a": 9, "f": 9})
+		suite := &twiceSuite{fakeSuite: f.suite, flaky: []string{"f"}}
+		f.settings.Suites = []Suite{suite}
+		f.settings.Runs = []RunName{RunDirect}
+		f.settings.Cases = []string{"a", "f"}
+		outcome := run(t, f.settings)
+
+		if suite.calls != 2 {
+			t.Fatalf("\nwanted:\n2 direct recordings\ngot:\n%d", suite.calls)
+		}
+		if len(outcome.Results) != 1 || outcome.Results[0].Err == nil || !strings.Contains(outcome.Results[0].Err.Error(), `"f"`) {
+			t.Fatalf("\nwanted:\nan error naming case f\ngot:\n%+v", outcome.Results)
+		}
+		got, err := ReadBaseline(f.settings.BaselineFile("fake", "t"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := recordings(map[string]int{"a": 9, "b": 1, "c": 1, "d": 1, "e": 1})
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+		}
+	})
+
+	t.Run("should merge every case when both recordings agree", func(t *testing.T) {
+		f := newFixture(t, nil)
+		f.suite.got[RunDirect] = recordings(map[string]int{"a": 9})
+		suite := &twiceSuite{fakeSuite: f.suite}
+		f.settings.Suites = []Suite{suite}
+		f.settings.Runs = []RunName{RunDirect}
+		f.settings.Cases = []string{"a"}
+		outcome := run(t, f.settings)
+
+		if suite.calls != 2 || outcome.Results[0].Err != nil {
+			t.Fatalf("\nwanted:\n2 recordings and no error\ngot:\n%d, %v", suite.calls, outcome.Results[0].Err)
+		}
+	})
+}
+
 func TestRunUpdateKnown(t *testing.T) {
 	t.Run("should add new differences as known, drop runs that went away and keep accepted entries", func(t *testing.T) {
 		f := newFixture(t, Deviations{allowB, knownC, knownE, allowY})

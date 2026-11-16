@@ -5,132 +5,132 @@
       "run": "proxy",
       "target": "fixtures",
       "approach": "absolute",
-      "matched": 3,
-      "cases": 5,
+      "matched": 11,
+      "cases": 23,
       "leg_rules": {
-        "passed": 19,
-        "failed": 6
+        "passed": 89,
+        "failed": 26
       }
     },
     {
       "run": "proxy",
       "target": "fixtures",
       "approach": "connect-plain",
-      "matched": 3,
-      "cases": 5,
+      "matched": 11,
+      "cases": 23,
       "leg_rules": {
-        "passed": 19,
-        "failed": 6
+        "passed": 89,
+        "failed": 26
       }
     },
     {
       "run": "proxy",
       "target": "fixtures",
       "approach": "connect-tls",
-      "matched": 3,
-      "cases": 5,
+      "matched": 11,
+      "cases": 23,
       "leg_rules": {
-        "passed": 19,
-        "failed": 6
+        "passed": 89,
+        "failed": 26
       }
     },
     {
       "run": "checkpoint-forward",
       "target": "fixtures",
       "approach": "absolute",
-      "matched": 2,
-      "cases": 5,
+      "matched": 10,
+      "cases": 23,
       "leg_rules": {
-        "passed": 18,
-        "failed": 7
+        "passed": 88,
+        "failed": 27
       }
     },
     {
       "run": "checkpoint-forward",
       "target": "fixtures",
       "approach": "connect-plain",
-      "matched": 2,
-      "cases": 5,
+      "matched": 10,
+      "cases": 23,
       "leg_rules": {
-        "passed": 18,
-        "failed": 7
+        "passed": 88,
+        "failed": 27
       }
     },
     {
       "run": "checkpoint-forward",
       "target": "fixtures",
       "approach": "connect-tls",
-      "matched": 2,
-      "cases": 5,
+      "matched": 10,
+      "cases": 23,
       "leg_rules": {
-        "passed": 18,
-        "failed": 7
+        "passed": 88,
+        "failed": 27
       }
     },
     {
       "run": "checkpoint-edit",
       "target": "fixtures",
       "approach": "absolute",
-      "matched": 2,
-      "cases": 5,
+      "matched": 10,
+      "cases": 23,
       "leg_rules": {
-        "passed": 18,
-        "failed": 7
+        "passed": 88,
+        "failed": 27
       }
     },
     {
       "run": "checkpoint-edit",
       "target": "fixtures",
       "approach": "connect-plain",
-      "matched": 2,
-      "cases": 5,
+      "matched": 10,
+      "cases": 23,
       "leg_rules": {
-        "passed": 18,
-        "failed": 7
+        "passed": 88,
+        "failed": 27
       }
     },
     {
       "run": "checkpoint-edit",
       "target": "fixtures",
       "approach": "connect-tls",
-      "matched": 2,
-      "cases": 5,
+      "matched": 10,
+      "cases": 23,
       "leg_rules": {
-        "passed": 18,
-        "failed": 7
+        "passed": 88,
+        "failed": 27
       }
     },
     {
       "run": "extension",
       "target": "fixtures",
       "approach": "absolute",
-      "matched": 3,
-      "cases": 5,
+      "matched": 11,
+      "cases": 23,
       "leg_rules": {
-        "passed": 19,
-        "failed": 6
+        "passed": 89,
+        "failed": 26
       }
     },
     {
       "run": "extension",
       "target": "fixtures",
       "approach": "connect-plain",
-      "matched": 3,
-      "cases": 5,
+      "matched": 11,
+      "cases": 23,
       "leg_rules": {
-        "passed": 19,
-        "failed": 6
+        "passed": 89,
+        "failed": 26
       }
     },
     {
       "run": "extension",
       "target": "fixtures",
       "approach": "connect-tls",
-      "matched": 3,
-      "cases": 5,
+      "matched": 11,
+      "cases": 23,
       "leg_rules": {
-        "passed": 19,
-        "failed": 6
+        "passed": 89,
+        "failed": 26
       }
     }
   ]

@@ -58,7 +58,7 @@ The source requires Go 1.26 or later. These commands run from the repository roo
 | `make all` | Builds the targets listed by `TARGETS` in [Makefile](Makefile). |
 | `make test` | Runs `go test ./...`. |
 | `make conformance` | Runs the conformance suites in Docker through Marasi and scores each case against its committed direct baseline and deviations file. It exits non-zero on a new deviation, a known deviation that went away, or, in a full run, a deviations entry that matched nothing. |
-| `make conformance-baseline` | Runs the selected cases with no proxy and merges them into the direct baselines. |
+| `make conformance-baseline` | Runs the selected cases with no proxy and merges them into the direct baselines. For `h1-origin` it records each case twice and leaves out, with an error, a case whose two recordings differ. |
 | `make conformance-update-known PHASE=<n>` | Runs the selected cases, then rewrites the known entries in `deviations.json` and the suite's `score.json`. |
 | `make autobahn`, `make autobahn-baseline` | The same as `make conformance` and `make conformance-baseline`, restricted to the autobahn suite. |
 
@@ -74,7 +74,12 @@ suites:
 - `h1-origin` sends each origin fixture case's HTTP/1.1 requests with the
   harness's own client, as an absolute-form request (`absolute`), as plain
   HTTP inside `CONNECT` (`connect-plain`) and as TLS inside `CONNECT`
-  (`connect-tls`). Its recording holds the responses the client received and
+  (`connect-tls`). The fixtures, in `internal/conformance/h1origin/catalogue.go`,
+  cover chunked bodies and trailers, Content-Length and close-delimited bodies,
+  field name case, order and whitespace, `Connection`, `Keep-Alive`, transfer
+  codings, 1xx, HEAD, 204 and 304, an early close, a reset mid-body, several
+  requests on one connection, and request fields that must reach the origin
+  as sent. Its recording holds the responses the client received and
   the requests the origin received. Hop-by-hop fields and framing are left out
   of the comparison and checked by leg rules instead, on what Marasi sent on
   each leg: `leg:connection` (remove `Connection` and the fields it names, RFC
