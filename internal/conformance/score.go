@@ -12,7 +12,8 @@ import (
 )
 
 // Score is a suite's score.json: for each conformance run, target and
-// client approach, the cases that match the baseline out of the cases run.
+// client approach, the cases that match the baseline out of the cases run,
+// and the leg rules that passed and broke.
 type Score struct {
 	Suite string     `json:"suite"`
 	Rows  []ScoreRow `json:"rows"`
@@ -25,6 +26,17 @@ type ScoreRow struct {
 	Approach Approach `json:"approach,omitempty"`
 	Matched  int      `json:"matched"` // cases with no difference from the baseline
 	Cases    int      `json:"cases"`   // cases run and scored
+	// LegRules counts the leg rules checked on the row's cases; nil for a
+	// suite with no leg rules.
+	LegRules *LegScore `json:"leg_rules,omitempty"`
+}
+
+// LegScore counts leg-rule checks, one per rule and case. A broken rule
+// counts whether or not the deviations file lists it.
+type LegScore struct {
+	Passed int `json:"passed"`
+	Failed int `json:"failed"`           // broken MUST rules
+	Warned int `json:"warned,omitempty"` // broken SHOULD rules
 }
 
 func (r ScoreRow) key() string {
@@ -39,14 +51,32 @@ func scoreRows(results []Result) []ScoreRow {
 			continue
 		}
 		differing := result.differing()
-		for _, id := range result.Cases {
-			row := ScoreRow{Run: result.Run, Target: result.Target, Approach: CaseApproach(id)}
-			if rows[row.key()] == nil {
-				rows[row.key()] = &row
+		row := func(id string) *ScoreRow {
+			r := ScoreRow{Run: result.Run, Target: result.Target, Approach: CaseApproach(id)}
+			if rows[r.key()] == nil {
+				rows[r.key()] = &r
 			}
-			rows[row.key()].Cases++
+			return rows[r.key()]
+		}
+		for _, id := range result.Cases {
+			r := row(id)
+			r.Cases++
 			if !differing[id] {
-				rows[row.key()].Matched++
+				r.Matched++
+			}
+		}
+		for _, check := range result.LegChecks {
+			r := row(check.Case)
+			if r.LegRules == nil {
+				r.LegRules = &LegScore{}
+			}
+			switch {
+			case !check.Broken:
+				r.LegRules.Passed++
+			case check.Rule.Level == LevelShould:
+				r.LegRules.Warned++
+			default:
+				r.LegRules.Failed++
 			}
 		}
 	}

@@ -108,13 +108,15 @@ type Match struct {
 
 // Sorted is a run's differences sorted against the deviations file.
 type Sorted struct {
-	New     []Difference // listed nowhere: the gate fails
-	Known   []Match
-	Allowed []Match
+	New      []Difference // listed nowhere: the gate fails
+	Known    []Match
+	Allowed  []Match
+	Warnings []Difference // broken SHOULD leg rules listed nowhere: reported, not failed
 }
 
 // Sort sorts the differences of run. An accepted entry wins over a known
-// one; a difference neither lists is new.
+// one; a difference neither lists is new, or a warning when it is a broken
+// SHOULD leg rule.
 func (d Deviations) Sort(run RunName, differences []Difference) Sorted {
 	sorted, _ := d.sort(run, differences)
 	return sorted
@@ -131,6 +133,8 @@ func (d Deviations) sort(run RunName, differences []Difference) (Sorted, []bool)
 		} else if i := d.find(run, difference, KindKnown); i >= 0 {
 			matched[i] = true
 			sorted.Known = append(sorted.Known, Match{difference, d[i]})
+		} else if difference.Level == LevelShould {
+			sorted.Warnings = append(sorted.Warnings, difference)
 		} else {
 			sorted.New = append(sorted.New, difference)
 		}

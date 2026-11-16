@@ -38,25 +38,34 @@ type Result struct {
 	Cases  []string // scored case IDs; in the direct run, the cases recorded
 	Sorted          // the differences, sorted against the deviations file
 	Notes  []string // suite notes, such as timing
-	Err    error    // harness failure; the target has no result
+	// LegChecks are the leg rules checked on each scored case.
+	LegChecks []LegCheck
+	Err       error // harness failure; the target has no result
 }
 
-// Matched counts the scored cases with no difference at all.
+// Matched counts the scored cases that match the baseline. A broken leg
+// rule does not count against a case: leg rules are scored apart.
 func (r Result) Matched() int {
 	return len(r.Cases) - len(r.differing())
 }
 
-// differing returns the case IDs with any difference, listed or not.
+// differing returns the case IDs that differ from the baseline, listed or
+// not. Broken leg rules are left out.
 func (r Result) differing() map[string]bool {
 	differing := map[string]bool{}
+	add := func(d Difference) {
+		if d.Level == "" {
+			differing[d.Case] = true
+		}
+	}
 	for _, d := range r.New {
-		differing[d.Case] = true
+		add(d)
 	}
 	for _, m := range r.Known {
-		differing[m.Case] = true
+		add(m.Difference)
 	}
 	for _, m := range r.Allowed {
-		differing[m.Case] = true
+		add(m.Difference)
 	}
 	return differing
 }
@@ -291,6 +300,7 @@ func (s Settings) compareTarget(ctx context.Context, suite Suite, run RunName, t
 		matched[i] = matched[i] || targetMatched[i]
 	}
 	result.Cases, result.Sorted, result.Notes = comparison.Cases, sorted, comparison.Notes
+	result.LegChecks = comparison.LegChecks
 	return writeCaseDiffs(filepath.Join(dir, "diffs", target), result, baseline, got)
 }
 

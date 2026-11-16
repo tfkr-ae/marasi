@@ -19,6 +19,9 @@ type fakeSuite struct {
 	got        map[RunName]Recordings
 	traffic    *int // proxied traffic the stand-in proxy saw
 	silent     bool // send nothing through the proxy
+	// legChecks are the leg rules checked on each proxied case; a broken
+	// one is also reported as a difference named by the rule's ID.
+	legChecks []LegCheck
 }
 
 func (f *fakeSuite) Name() string           { return "fake" }
@@ -35,6 +38,21 @@ func (f *fakeSuite) Execute(_ context.Context, job Job) (Recordings, error) {
 }
 
 func (f *fakeSuite) Compare(_ string, baseline, got Recordings) (Comparison, error) {
+	comparison, err := f.compare(baseline, got)
+	for _, check := range f.legChecks {
+		if _, ok := got[check.Case]; !ok {
+			continue
+		}
+		comparison.LegChecks = append(comparison.LegChecks, check)
+		if check.Broken {
+			comparison.Differences = append(comparison.Differences,
+				Difference{Case: check.Case, Field: check.Rule.ID, Level: check.Rule.Level, Got: "broken"})
+		}
+	}
+	return comparison, err
+}
+
+func (f *fakeSuite) compare(baseline, got Recordings) (Comparison, error) {
 	return CompareCases(baseline, got, nil, func(a, b string) bool { return a < b },
 		func(id string, want, got json.RawMessage) ([]Difference, error) {
 			if string(want) == string(got) {
@@ -397,6 +415,121 @@ func TestRunWritesReports(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(dir, "diffs", "t", "c.json")); !os.IsNotExist(err) {
 			t.Fatalf("\nwanted:\nno diff for a known case\ngot:\n%v", err)
+		}
+	})
+}
+
+var (
+	ruleMust   = LegRule{ID: "leg:must", RFC: "RFC 9110 §7.6.1", Level: LevelMust, Text: "a MUST"}
+	ruleShould = LegRule{ID: "leg:should", RFC: "RFC 9110 §7.6.2", Level: LevelShould, Text: "a SHOULD"}
+	ruleVia    = LegRule{ID: "leg:via", RFC: "RFC 9110 §7.6.3", Level: LevelMust, Text: "send Via"}
+	acceptVia  = Entry{Cases: "*", Runs: []RunName{RunProxy}, Field: "leg:via", Kind: KindAccepted, Reason: "a testing tool does not announce itself"}
+)
+
+// legChecks checks every rule on a, where only Via is broken, and on b,
+// where every rule is broken.
+func legChecks() []LegCheck {
+	return []LegCheck{
+		{Case: "a", Rule: ruleMust}, {Case: "a", Rule: ruleShould}, {Case: "a", Rule: ruleVia, Broken: true},
+		{Case: "b", Rule: ruleMust, Broken: true}, {Case: "b", Rule: ruleShould, Broken: true}, {Case: "b", Rule: ruleVia, Broken: true},
+	}
+}
+
+func TestRunLegRules(t *testing.T) {
+	t.Run("should fail an unlisted broken MUST and only warn on a broken SHOULD", func(t *testing.T) {
+		f := newFixture(t, Deviations{allowB, acceptVia})
+		f.suite.legChecks = legChecks()
+		f.settings.Cases = []string{"a", "b"}
+		outcome := run(t, f.settings)
+
+		result := outcome.Results[0]
+		wantNew := []Difference{{Case: "b", Field: "leg:must", Level: LevelMust, Got: "broken"}}
+		if !reflect.DeepEqual(result.New, wantNew) {
+			t.Fatalf("\nwanted new:\n%+v\ngot:\n%+v", wantNew, result.New)
+		}
+		wantWarnings := []Difference{{Case: "b", Field: "leg:should", Level: LevelShould, Got: "broken"}}
+		if !reflect.DeepEqual(result.Warnings, wantWarnings) {
+			t.Fatalf("\nwanted warnings:\n%+v\ngot:\n%+v", wantWarnings, result.Warnings)
+		}
+		if got := matchCases(result.Allowed); !reflect.DeepEqual(got, []string{"b", "a", "b"}) {
+			t.Fatalf("\nwanted allowed:\n[b a b]\ngot:\n%v", got)
+		}
+		if !outcome.Failed() {
+			t.Fatal("\nwanted:\na failed gate\ngot:\na pass")
+		}
+	})
+
+	t.Run("should pass when the only broken rules are a listed MUST and a SHOULD", func(t *testing.T) {
+		knownMust := Entry{Cases: "b", Runs: []RunName{RunProxy}, Field: "leg:must", Kind: KindKnown, Reason: "forwards Connection today", Phase: 2}
+		f := newFixture(t, Deviations{allowB, acceptVia, knownMust})
+		f.suite.legChecks = legChecks()
+		f.settings.Cases = []string{"a", "b"}
+		outcome := run(t, f.settings)
+
+		if outcome.Failed() {
+			t.Fatalf("\nwanted:\na pass\ngot:\n%+v", outcome.Results[0].Sorted)
+		}
+	})
+
+	t.Run("should score a case by its comparison and count leg rules apart", func(t *testing.T) {
+		f := newFixture(t, Deviations{allowB, acceptVia})
+		f.suite.legChecks = legChecks()
+		f.settings.Cases = []string{"a", "b"}
+		run(t, f.settings)
+
+		got, err := ReadScore(filepath.Join(f.settings.OutDir, "fake", "score.json"), "fake")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// a matches its baseline although Via is broken; b differs.
+		want := Score{Suite: "fake", Rows: []ScoreRow{{Run: RunProxy, Target: "t", Matched: 1, Cases: 2,
+			LegRules: &LegScore{Passed: 2, Failed: 3, Warned: 1}}}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+	})
+
+	t.Run("should list each rule and the warnings in the summary's leg-rule section, after allowed deviations", func(t *testing.T) {
+		f := newFixture(t, Deviations{allowB, acceptVia})
+		f.suite.legChecks = legChecks()
+		f.settings.Cases = []string{"a", "b"}
+		run(t, f.settings)
+
+		data, err := os.ReadFile(filepath.Join(f.settings.OutDir, "fake", "proxy", "summary.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		summary := string(data)
+		allowed, legRules := strings.Index(summary, "### Allowed deviations"), strings.Index(summary, "### Leg rules")
+		if allowed < 0 || legRules < allowed {
+			t.Fatalf("\nwanted a leg-rule section after allowed deviations\ngot:\n%s", summary)
+		}
+		for _, row := range []string{
+			"| leg:must | RFC 9110 §7.6.1 | MUST | 1 | 1 |",
+			"| leg:should | RFC 9110 §7.6.2 | SHOULD | 1 | 1 |",
+			"| leg:via | RFC 9110 §7.6.3 | MUST | 0 | 2 |",
+			"| t | b | leg:should | broken |",
+		} {
+			if !strings.Contains(summary[legRules:], row) {
+				t.Fatalf("\nwanted row in the leg-rule section:\n%s\ngot:\n%s", row, summary[legRules:])
+			}
+		}
+	})
+
+	t.Run("should not write a known entry for a warning", func(t *testing.T) {
+		f := newFixture(t, Deviations{allowB, acceptVia})
+		f.suite.legChecks = legChecks()
+		f.settings.Cases = []string{"a", "b"}
+		f.settings.UpdateKnown, f.settings.Phase = true, 2
+		run(t, f.settings)
+
+		got, err := ReadDeviations(f.settings.DeviationsFile("fake"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fields := cases(got, func(e Entry) string { return e.Field })
+		if want := []string{"value", "leg:via", "leg:must"}; !reflect.DeepEqual(fields, want) {
+			t.Fatalf("\nwanted entries for:\n%v\ngot:\n%v", want, fields)
 		}
 	})
 }

@@ -84,12 +84,18 @@ func mergeBaseline(file string, job Job, got Recordings) error {
 	return WriteBaseline(file, baseline)
 }
 
+// LegChecker checks the leg rules on one proxied recording. It returns a
+// difference for each broken rule and a check for each rule it checked.
+type LegChecker func(caseID string, got json.RawMessage) ([]Difference, []LegCheck, error)
+
 // CompareCases compares every case in baseline or got, in the order less
 // gives, skipping the cases skip names. A case on one side only is a
 // FieldMissing or FieldNoBaseline difference; diff compares the rest.
-// Suites build Compare on it.
+// Each legs, such as h1.Check, then checks the leg rules on every case the
+// run recorded, after the case's comparison differences. Suites build
+// Compare on it.
 func CompareCases(baseline, got Recordings, skip func(caseID string) bool, less func(a, b string) bool,
-	diff func(caseID string, want, got json.RawMessage) ([]Difference, error)) (Comparison, error) {
+	diff func(caseID string, want, got json.RawMessage) ([]Difference, error), legs ...LegChecker) (Comparison, error) {
 	ids := map[string]struct{}{}
 	for id := range baseline {
 		ids[id] = struct{}{}
@@ -126,6 +132,17 @@ func CompareCases(baseline, got Recordings, skip func(caseID string) bool, less 
 				return Comparison{}, fmt.Errorf("comparing case %s: %w", id, err)
 			}
 			comparison.Differences = append(comparison.Differences, differences...)
+		}
+		if !inRun {
+			continue
+		}
+		for _, check := range legs {
+			differences, checks, err := check(id, recording)
+			if err != nil {
+				return Comparison{}, fmt.Errorf("checking leg rules on case %s: %w", id, err)
+			}
+			comparison.Differences = append(comparison.Differences, differences...)
+			comparison.LegChecks = append(comparison.LegChecks, checks...)
 		}
 	}
 	return comparison, nil

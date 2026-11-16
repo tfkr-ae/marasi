@@ -86,7 +86,8 @@ func (s Suite) Execute(ctx context.Context, job conformance.Job) (conformance.Re
 	return recordings, nil
 }
 
-// Compare compares the recordings with the baseline in catalogue order.
+// Compare compares the recordings with the baseline in catalogue order and
+// checks the leg rules on what Marasi sent on both legs of each case.
 func (s Suite) Compare(_ string, baseline, got conformance.Recordings) (conformance.Comparison, error) {
 	order := map[string]int{}
 	for i, c := range s.cases() {
@@ -105,7 +106,7 @@ func (s Suite) Compare(_ string, baseline, got conformance.Recordings) (conforma
 			return rank(a) < rank(b)
 		}
 		return a < b
-	}, h1.Compare)
+	}, h1.Compare, h1.Check)
 }
 
 func (s Suite) cases() []Case {

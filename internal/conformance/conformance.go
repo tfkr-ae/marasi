@@ -106,12 +106,41 @@ type Job struct {
 	Log        io.Writer  // progress output
 }
 
-// Difference is one way a proxied recording differs from its direct baseline.
+// Difference is one way a proxied recording differs from its direct
+// baseline, or a leg rule it broke.
 type Difference struct {
-	Case  string `json:"case"`           // case ID, with the approach
-	Field string `json:"field"`          // field path in the recording, a leg-rule ID, FieldMissing or FieldNoBaseline
-	Want  string `json:"want,omitempty"` // the baseline's value, rendered
-	Got   string `json:"got,omitempty"`  // the proxied value, rendered
+	Case  string `json:"case"`            // case ID, with the approach
+	Field string `json:"field"`           // field path in the recording, a leg-rule ID, FieldMissing or FieldNoBaseline
+	Want  string `json:"want,omitempty"`  // the baseline's value, or what the leg rule asks for, rendered
+	Got   string `json:"got,omitempty"`   // the proxied value, rendered
+	Level Level  `json:"level,omitempty"` // a broken leg rule's level; empty for a field path
+}
+
+// Level is a leg rule's requirement level. A broken MUST fails the gate
+// unless the deviations file lists it; a broken SHOULD warns.
+type Level string
+
+// Requirement levels (RFC 2119).
+const (
+	LevelMust   Level = "MUST"
+	LevelShould Level = "SHOULD"
+)
+
+// LegRule is an RFC requirement on what Marasi itself sends on one leg,
+// which a direct baseline cannot show. Its ID is the field of the
+// difference that reports it broken and of the deviations entries that list it.
+type LegRule struct {
+	ID    string `json:"id"`
+	RFC   string `json:"rfc"`
+	Level Level  `json:"level"`
+	Text  string `json:"text"` // what the rule asks for
+}
+
+// LegCheck is one leg rule checked on one case.
+type LegCheck struct {
+	Case   string
+	Rule   LegRule
+	Broken bool
 }
 
 // Fields every suite reports for a case present on only one side.
@@ -125,6 +154,9 @@ type Comparison struct {
 	Cases       []string     // scored case IDs, in the suite's order
 	Differences []Difference // in case order
 	Notes       []string     // extra lines for the report, such as timing
+	// LegChecks are the leg rules checked on each case. A broken one is
+	// also in Differences, with the rule's ID as its field and its level.
+	LegChecks []LegCheck
 }
 
 // Suite is one tester and its targets. It runs the selected cases directly

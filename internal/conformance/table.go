@@ -73,6 +73,9 @@ func WriteTable(w io.Writer, outcome Outcome) {
 		if len(result.Allowed) > 0 {
 			counts += fmt.Sprintf(", %d allowed", len(result.Allowed))
 		}
+		if len(result.Warnings) > 0 {
+			counts += fmt.Sprintf(", %d leg-rule warnings", len(result.Warnings))
+		}
 		if len(result.Notes) > 0 {
 			counts += ", " + strings.Join(result.Notes, ", ")
 		}
