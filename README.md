@@ -57,37 +57,67 @@ The source requires Go 1.26 or later. These commands run from the repository roo
 | `make windows-amd64` | Builds `dist/marasi-windows-amd64.exe`. |
 | `make all` | Builds the targets listed by `TARGETS` in [Makefile](Makefile). |
 | `make test` | Runs `go test ./...`. |
-| `make autobahn` | Runs the Autobahn WebSocket testsuite in Docker through a Marasi service instance. It prints each case whose verdict, close code, or clean close differs from the committed direct baseline, and exits non-zero on any deviation outside 9.x. |
-| `make autobahn-baseline` | Runs the selected cases with no proxy and merges them into `internal/autobahn/baseline/`. |
+| `make conformance` | Runs the conformance suites in Docker through Marasi and scores each case against its committed direct baseline and deviations file. It exits non-zero on a new deviation, a known deviation that went away, or, in a full run, a deviations entry that matched nothing. |
+| `make conformance-baseline` | Runs the selected cases with no proxy and merges them into the direct baselines. |
+| `make conformance-update-known PHASE=<n>` | Runs the selected cases, then rewrites the known entries in `deviations.json` and the suite's `score.json`. |
+| `make autobahn`, `make autobahn-baseline` | The same as `make conformance` and `make conformance-baseline`, restricted to the autobahn suite. |
 
-The Autobahn targets need Docker with host networking. Both modes
-(`fuzzingclient`, `fuzzingserver`) run against two peers: Autobahn's strict
-testee and the harness's lenient echo peer. `make autobahn` runs four runs:
-`proxy` (no interception), `checkpoint-forward` (global WebSocket Checkpoint
-with an auto-resolver that forwards each item unchanged), `checkpoint-edit` (the
-resolver forwards each item as an edit with the same bytes), and `extension` (a
-workshop `processWebSocketMessage` sets each payload to itself). Variables narrow
-a run:
+### Conformance harness
+
+The conformance harness measures what Marasi changes in the traffic between a
+client and an origin. It records every case twice: directly (the direct
+baseline) and through Marasi. A case passes when the two recordings match,
+apart from the entries in the suite's `deviations.json`. Today it has one
+suite, `autobahn`, which runs the Autobahn WebSocket testsuite.
+
+Each suite keeps its committed files in `internal/conformance/baselines/<suite>/`:
+
+- One direct baseline file for each target, for example `fuzzingclient-strict.json`.
+- `deviations.json`. Each entry names the case IDs it covers (a glob), the
+  conformance runs, the field that may differ, its kind, a reason, and an
+  optional RFC. An `accepted` entry is on the allow-list: Marasi keeps that
+  difference on purpose, and only a person edits it. A `known` entry is a
+  difference Marasi does not mean to keep, with the phase expected to remove it.
+- `score.json`: for each conformance run and target, the cases that matched the
+  baseline out of the cases run.
+
+The suites need Docker with host networking. `make conformance` runs four
+conformance runs: `proxy` (no interception), `checkpoint-forward` (global
+WebSocket Checkpoint with an auto-resolver that forwards each item unchanged),
+`checkpoint-edit` (the resolver forwards each item as an edit with the same
+bytes), and `extension` (a workshop `processWebSocketMessage` sets each payload
+to itself). Autobahn runs both modes (`fuzzingclient`, `fuzzingserver`) against
+two peers: Autobahn's strict testee and the harness's lenient echo peer.
+Variables narrow a run:
 
 ```bash
-make autobahn CASES='3.*,7.9.*' RUNS=proxy MODES=fuzzingclient PEERS=strict
+make conformance SUITES=autobahn CASES='3.*,7.9.*' RUNS=proxy MODES=fuzzingclient PEERS=strict
 make autobahn EXCLUDE='9.*,12.*,13.*' VERBOSE=1
 ```
 
-Reports are written to `dist/autobahn/<run>/<mode>-<peer>/` and the run log to
-`dist/autobahn/autobahn.log`. `RUNS=direct,proxy` refreshes the baseline before
-comparing. On an arm64 Mac, where the amd64 image runs under emulation, the
-direct baseline takes about 20 minutes and a full `make autobahn` about 30. The
-strict peers negotiate permessage-deflate, so 12.x and 13.x are most of a direct
+Reports are written to `dist/conformance/<suite>/<run>/`: a `summary.md` with
+the score, then new deviations, known deviations that went away, known
+deviations and allowed deviations, a JSON diff with both recordings for each
+failing case under `diffs/`, Marasi's log, and the tester's output for each
+target. The run log is `dist/conformance/conformance.log`. In GitHub Actions
+the summary is also added to the job summary. `RUNS=direct,proxy` refreshes the
+baseline before comparing. On an arm64 Mac, where the amd64 Autobahn image runs
+under emulation, the Autobahn direct baseline takes about 20 minutes. The strict
+peers negotiate permessage-deflate, so 12.x and 13.x are most of a direct
 strict suite.
+
+A known deviation that went away fails the run: a change fixed it, so remove
+its entry, or run `make conformance-update-known PHASE=<n>`, which also adds a
+known entry for each new deviation with the phase you give. Review that diff
+before you commit it.
 
 ### Autobahn checks
 
-The Autobahn workflow in GitHub Actions runs the full suite on every pull
+The Autobahn workflow in GitHub Actions runs the autobahn suite on every pull
 request that changes a path in its `paths` filter, every Monday, and when you
 start it manually. The filter includes `db/` and `proxy.go` because a WebSocket
 relay waits on the database writer's queue: a change that slows the writer can
-fail a case even though it touches no WebSocket code. A job fails on any
+fail a case even though it touches no WebSocket code. A job fails on any new
 deviation from the committed baseline. On a failure, the job's artifact holds
 the per-case reports, Marasi's log, and a resource log, and the job log shows
 kernel OOM messages.
@@ -108,11 +138,12 @@ Run it locally on a change to the same paths:
    make autobahn
    ```
 
-Both commands exit non-zero on a deviation from the committed baseline. The
-6.4.1 to 6.4.4 cases are allowed and listed separately. If a deviation looks
-unrelated to the change, run `make autobahn-baseline` and compare the
-baseline diff before you commit it: the baseline changes only with the pinned
-Autobahn image or the harness.
+Both commands exit non-zero on a new deviation from the committed baseline.
+The 6.4.1 to 6.4.4 cases are accepted entries in
+`internal/conformance/baselines/autobahn/deviations.json` and are listed
+separately. If a deviation looks unrelated to the change, run
+`make autobahn-baseline` and compare the baseline diff before you commit it:
+the baseline changes only with the pinned Autobahn image or the harness.
 
 A build without Make uses `go build -o marasi ./cmd/marasi`, or
 `go build -o marasi.exe ./cmd/marasi` on Windows. If a parent `go.work` excludes

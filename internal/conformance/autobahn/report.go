@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/tfkr-ae/marasi/internal/conformance"
 )
 
 // Result is what the harness keeps from one Autobahn case report.
@@ -27,37 +28,6 @@ type Report map[string]Result
 // timing and excluded from the verdict comparison.
 func IsPerformance(id string) bool {
 	return strings.HasPrefix(id, "9.")
-}
-
-// Cases returns the case ids in Autobahn order (numeric per dotted part).
-func (r Report) Cases() []string {
-	ids := make([]string, 0, len(r))
-	for id := range r {
-		ids = append(ids, id)
-	}
-	SortCases(ids)
-	return ids
-}
-
-// Select returns the cases that match any include pattern and no exclude
-// pattern. Patterns use Autobahn's spec syntax ("3.*", "12.1.1").
-func (r Report) Select(include, exclude []string) Report {
-	selected := Report{}
-	for id, result := range r {
-		if matchAny(include, id) && !matchAny(exclude, id) {
-			selected[id] = result
-		}
-	}
-	return selected
-}
-
-func matchAny(patterns []string, id string) bool {
-	for _, pattern := range patterns {
-		if ok, _ := path.Match(pattern, id); ok {
-			return true
-		}
-	}
-	return false
 }
 
 // SortCases sorts case ids numerically per dotted part, as Autobahn lists them.
@@ -91,15 +61,38 @@ type Timing struct {
 
 // PerformanceTiming sums the durations of the 9.x cases present in run, and
 // of the same cases in baseline.
-func PerformanceTiming(baseline, run Report) Timing {
+func PerformanceTiming(baseline, run conformance.Recordings) (Timing, error) {
 	var timing Timing
-	for id, result := range run {
-		if IsPerformance(id) {
-			timing.Run += result.Duration
-			timing.Baseline += baseline[id].Duration
+	for id, recording := range run {
+		if !IsPerformance(id) {
+			continue
 		}
+		var got, want Result
+		if err := json.Unmarshal(recording, &got); err != nil {
+			return Timing{}, fmt.Errorf("decoding case %s: %w", id, err)
+		}
+		if recorded, ok := baseline[id]; ok {
+			if err := json.Unmarshal(recorded, &want); err != nil {
+				return Timing{}, fmt.Errorf("decoding baseline case %s: %w", id, err)
+			}
+		}
+		timing.Run += got.Duration
+		timing.Baseline += want.Duration
 	}
-	return timing
+	return timing, nil
+}
+
+// Recordings converts a report to the harness's recordings.
+func (r Report) Recordings() (conformance.Recordings, error) {
+	recordings := conformance.Recordings{}
+	for id, result := range r {
+		data, err := json.Marshal(result)
+		if err != nil {
+			return nil, fmt.Errorf("encoding case %s: %w", id, err)
+		}
+		recordings[id] = data
+	}
+	return recordings, nil
 }
 
 // LoadReport reads the index.json Autobahn wrote to dir and the per-case
@@ -140,32 +133,4 @@ func LoadReport(dir, agent string) (Report, error) {
 		report[id] = result
 	}
 	return report, nil
-}
-
-// ReadBaseline reads a committed baseline report. A missing file is an empty report.
-func ReadBaseline(file string) (Report, error) {
-	data, err := os.ReadFile(file)
-	if os.IsNotExist(err) {
-		return Report{}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("reading baseline: %w", err)
-	}
-	report := Report{}
-	if err := json.Unmarshal(data, &report); err != nil {
-		return nil, fmt.Errorf("decoding baseline %s: %w", file, err)
-	}
-	return report, nil
-}
-
-// WriteBaseline writes report as indented JSON with sorted keys.
-func WriteBaseline(file string, report Report) error {
-	data, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encoding baseline: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-		return fmt.Errorf("creating baseline directory: %w", err)
-	}
-	return os.WriteFile(file, append(data, '\n'), 0o644)
 }

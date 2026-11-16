@@ -33,8 +33,8 @@ const (
 //go:embed wstest_proxy.py
 var wstestProxy []byte
 
-// Suite runs one Autobahn mode against one peer, directly or through a proxy.
-type Suite struct {
+// testsuite runs one Autobahn mode against one peer, directly or through a proxy.
+type testsuite struct {
 	Image   string    // Autobahn testsuite Docker image
 	Dir     string    // working directory for spec, wrapper, and reports
 	Cases   []string  // Autobahn case patterns to run
@@ -46,7 +46,7 @@ var containerSeq atomic.Int64
 
 // Run executes mode against peer and returns the report. proxy is the
 // proxy listener host:port, or empty for a direct run.
-func (s Suite) Run(ctx context.Context, mode, peer, proxy string) (Report, error) {
+func (s testsuite) Run(ctx context.Context, mode, peer, proxy string) (Report, error) {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func (s Suite) Run(ctx context.Context, mode, peer, proxy string) (Report, error
 // serverStartError is a server that did not listen on its port in time.
 type serverStartError struct{ error }
 
-func (s Suite) spec(extra map[string]any) error {
+func (s testsuite) spec(extra map[string]any) error {
 	spec := map[string]any{
 		"outdir":              "/work/reports",
 		"cases":               s.Cases,
@@ -113,7 +113,7 @@ func nonNil(values []string) []string {
 	return values
 }
 
-func (s Suite) runFuzzingClient(ctx context.Context, peer, proxy, upstream string) error {
+func (s testsuite) runFuzzingClient(ctx context.Context, peer, proxy, upstream string) error {
 	var stop func(logs bool)
 	switch peer {
 	case PeerStrict:
@@ -148,7 +148,7 @@ func (s Suite) runFuzzingClient(ctx context.Context, peer, proxy, upstream strin
 	return s.runContainer(ctx, proxy, "pypy", "/work/wstest_proxy.py", "-m", "fuzzingclient", "-s", "/work/spec.json")
 }
 
-func (s Suite) runFuzzingServer(ctx context.Context, peer, proxy, upstream string) error {
+func (s testsuite) runFuzzingServer(ctx context.Context, peer, proxy, upstream string) error {
 	if err := s.spec(map[string]any{"url": "ws://" + upstream}); err != nil {
 		return err
 	}
@@ -175,7 +175,7 @@ func (s Suite) runFuzzingServer(ctx context.Context, peer, proxy, upstream strin
 	return waitForFile(ctx, filepath.Join(s.Dir, "reports", "index.json"))
 }
 
-func (s Suite) dockerArgs(name, proxy string) []string {
+func (s testsuite) dockerArgs(name, proxy string) []string {
 	// The image is amd64-only; naming the platform keeps arm64 hosts quiet.
 	// Unbuffered output makes each "Running test case" line reach the log
 	// when the case starts, not in batches.
@@ -198,7 +198,7 @@ func containerName() string {
 }
 
 // runContainer runs the image in the foreground and removes it if ctx ends first.
-func (s Suite) runContainer(ctx context.Context, proxy string, command ...string) error {
+func (s testsuite) runContainer(ctx context.Context, proxy string, command ...string) error {
 	name := containerName()
 	cmd := exec.Command("docker", append(s.dockerArgs(name, proxy), command...)...)
 	cmd.Stdout, cmd.Stderr = s.Log, s.Log
@@ -224,7 +224,7 @@ func (s Suite) runContainer(ctx context.Context, proxy string, command ...string
 
 // startContainer runs the image in the background and returns its stop
 // function, which first copies the container's output to the log when asked.
-func (s Suite) startContainer(ctx context.Context, command ...string) (func(logs bool), error) {
+func (s testsuite) startContainer(ctx context.Context, command ...string) (func(logs bool), error) {
 	name := containerName()
 	args := append(s.dockerArgs(name, ""), command...)
 	args = append([]string{args[0], "-d"}, args[1:]...)
@@ -248,7 +248,7 @@ func (s Suite) startContainer(ctx context.Context, command ...string) (func(logs
 
 // logState logs a container's exit state, including whether the kernel
 // OOM-killed it, unless it is still running.
-func (s Suite) logState(name string) {
+func (s testsuite) logState(name string) {
 	out, err := exec.Command("docker", "inspect", "--format",
 		"{{.State.Status}} exit={{.State.ExitCode}} oomkilled={{.State.OOMKilled}} error={{printf \"%q\" .State.Error}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}", name).Output()
 	if err != nil || bytes.HasPrefix(out, []byte("running ")) {
