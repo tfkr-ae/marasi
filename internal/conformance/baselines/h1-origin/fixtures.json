@@ -291,6 +291,152 @@
       }
     ]
   },
+  "chunked-trailers@connect-tls": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /chunked HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "X-Request-ID",
+                "value": " 1"
+              },
+              {
+                "name": "x-lower-case",
+                "value": " request"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "X-ORIGIN-case",
+                "value": " Mixed"
+              },
+              {
+                "name": "x-lower",
+                "value": " yes"
+              },
+              {
+                "name": "Transfer-Encoding",
+                "value": " chunked"
+              },
+              {
+                "name": "Trailer",
+                "value": " X-Checksum"
+              }
+            ],
+            "body": "aGVsbG8sIHdvcmxk",
+            "trailers": [
+              {
+                "name": "X-Checksum",
+                "value": " 42"
+              }
+            ],
+            "framing": {
+              "kind": "chunked",
+              "chunks": [
+                5,
+                7
+              ]
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jaHVua2VkIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpYLVJlcXVlc3QtSUQ6IDENCngtbG93ZXItY2FzZTogcmVxdWVzdA0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NClgtT1JJR0lOLWNhc2U6IE1peGVkDQp4LWxvd2VyOiB5ZXMNClRyYW5zZmVyLUVuY29kaW5nOiBjaHVua2VkDQpUcmFpbGVyOiBYLUNoZWNrc3VtDQoNCjUNCmhlbGxvDQo3DQosIHdvcmxkDQowDQpYLUNoZWNrc3VtOiA0Mg0KDQo="
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /chunked HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "X-Request-ID",
+                "value": " 1"
+              },
+              {
+                "name": "x-lower-case",
+                "value": " request"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "X-ORIGIN-case",
+                "value": " Mixed"
+              },
+              {
+                "name": "x-lower",
+                "value": " yes"
+              },
+              {
+                "name": "Transfer-Encoding",
+                "value": " chunked"
+              },
+              {
+                "name": "Trailer",
+                "value": " X-Checksum"
+              }
+            ],
+            "body": "aGVsbG8sIHdvcmxk",
+            "trailers": [
+              {
+                "name": "X-Checksum",
+                "value": " 42"
+              }
+            ],
+            "framing": {
+              "kind": "chunked",
+              "chunks": [
+                5,
+                7
+              ]
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jaHVua2VkIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpYLVJlcXVlc3QtSUQ6IDENCngtbG93ZXItY2FzZTogcmVxdWVzdA0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NClgtT1JJR0lOLWNhc2U6IE1peGVkDQp4LWxvd2VyOiB5ZXMNClRyYW5zZmVyLUVuY29kaW5nOiBjaHVua2VkDQpUcmFpbGVyOiBYLUNoZWNrc3VtDQoNCjUNCmhlbGxvDQo3DQosIHdvcmxkDQowDQpYLUNoZWNrc3VtOiA0Mg0KDQo="
+        }
+      }
+    ]
+  },
   "connection-named-fields@absolute": {
     "client": [
       {
@@ -418,6 +564,132 @@
     ]
   },
   "connection-named-fields@connect-plain": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /hop HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Connection",
+                "value": " X-Hop"
+              },
+              {
+                "name": "X-Hop",
+                "value": " request"
+              },
+              {
+                "name": "X-End",
+                "value": " request"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 2"
+              },
+              {
+                "name": "Connection",
+                "value": " X-Back"
+              },
+              {
+                "name": "X-Back",
+                "value": " response"
+              },
+              {
+                "name": "X-End",
+                "value": " response"
+              }
+            ],
+            "body": "b2s=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9ob3AgSFRUUC8xLjENCkhvc3Q6IG9yaWdpbi50ZXN0OlBPUlQNCkNvbm5lY3Rpb246IFgtSG9wDQpYLUhvcDogcmVxdWVzdA0KWC1FbmQ6IHJlcXVlc3QNCg0K",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LUxlbmd0aDogMg0KQ29ubmVjdGlvbjogWC1CYWNrDQpYLUJhY2s6IHJlc3BvbnNlDQpYLUVuZDogcmVzcG9uc2UNCg0Kb2s="
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /hop HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Connection",
+                "value": " X-Hop"
+              },
+              {
+                "name": "X-Hop",
+                "value": " request"
+              },
+              {
+                "name": "X-End",
+                "value": " request"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 2"
+              },
+              {
+                "name": "Connection",
+                "value": " X-Back"
+              },
+              {
+                "name": "X-Back",
+                "value": " response"
+              },
+              {
+                "name": "X-End",
+                "value": " response"
+              }
+            ],
+            "body": "b2s=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9ob3AgSFRUUC8xLjENCkhvc3Q6IG9yaWdpbi50ZXN0OlBPUlQNCkNvbm5lY3Rpb246IFgtSG9wDQpYLUhvcDogcmVxdWVzdA0KWC1FbmQ6IHJlcXVlc3QNCg0K",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LUxlbmd0aDogMg0KQ29ubmVjdGlvbjogWC1CYWNrDQpYLUJhY2s6IHJlc3BvbnNlDQpYLUVuZDogcmVzcG9uc2UNCg0Kb2s="
+        }
+      }
+    ]
+  },
+  "connection-named-fields@connect-tls": {
     "client": [
       {
         "requests": [
@@ -751,6 +1023,110 @@
       }
     ]
   },
+  "request-body-chunked@connect-tls": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "POST /chunked HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Transfer-Encoding",
+                "value": " chunked"
+              }
+            ],
+            "body": "aGVsbG8gd29ybGQ=",
+            "framing": {
+              "kind": "chunked",
+              "chunks": [
+                5,
+                6
+              ]
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 2"
+              }
+            ],
+            "body": "b2s=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "UE9TVCAvY2h1bmtlZCBIVFRQLzEuMQ0KSG9zdDogb3JpZ2luLnRlc3Q6UE9SVA0KQ29udGVudC1UeXBlOiB0ZXh0L3BsYWluDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KDQo1DQpoZWxsbw0KNg0KIHdvcmxkDQowDQoNCg==",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LUxlbmd0aDogMg0KDQpvaw=="
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "POST /chunked HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Transfer-Encoding",
+                "value": " chunked"
+              }
+            ],
+            "body": "aGVsbG8gd29ybGQ=",
+            "framing": {
+              "kind": "chunked",
+              "chunks": [
+                5,
+                6
+              ]
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 2"
+              }
+            ],
+            "body": "b2s=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "UE9TVCAvY2h1bmtlZCBIVFRQLzEuMQ0KSG9zdDogb3JpZ2luLnRlc3Q6UE9SVA0KQ29udGVudC1UeXBlOiB0ZXh0L3BsYWluDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KDQo1DQpoZWxsbw0KNg0KIHdvcmxkDQowDQoNCg==",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LUxlbmd0aDogMg0KDQpvaw=="
+        }
+      }
+    ]
+  },
   "request-body-length@absolute": {
     "client": [
       {
@@ -848,6 +1224,102 @@
     ]
   },
   "request-body-length@connect-plain": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "POST /length HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 11"
+              }
+            ],
+            "body": "aGVsbG8gd29ybGQ=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 2"
+              }
+            ],
+            "body": "b2s=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "UE9TVCAvbGVuZ3RoIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCkNvbnRlbnQtTGVuZ3RoOiAxMQ0KDQpoZWxsbyB3b3JsZA==",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LUxlbmd0aDogMg0KDQpvaw=="
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "POST /length HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 11"
+              }
+            ],
+            "body": "aGVsbG8gd29ybGQ=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 2"
+              }
+            ],
+            "body": "b2s=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "UE9TVCAvbGVuZ3RoIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCkNvbnRlbnQtTGVuZ3RoOiAxMQ0KDQpoZWxsbyB3b3JsZA==",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LUxlbmd0aDogMg0KDQpvaw=="
+        }
+      }
+    ]
+  },
+  "request-body-length@connect-tls": {
     "client": [
       {
         "requests": [
@@ -1094,6 +1566,156 @@
     ]
   },
   "same-name-fields@connect-plain": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /order HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "X-Multi",
+                "value": " one"
+              },
+              {
+                "name": "X-Other",
+                "value": " between"
+              },
+              {
+                "name": "X-Multi",
+                "value": " two"
+              },
+              {
+                "name": "X-Multi",
+                "value": " three"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Set-Cookie",
+                "value": " b=2"
+              },
+              {
+                "name": "X-Other",
+                "value": " between"
+              },
+              {
+                "name": "Set-Cookie",
+                "value": " a=1"
+              },
+              {
+                "name": "X-Multi",
+                "value": " z"
+              },
+              {
+                "name": "X-Multi",
+                "value": " y"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 2"
+              }
+            ],
+            "body": "b2s=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9vcmRlciBIVFRQLzEuMQ0KSG9zdDogb3JpZ2luLnRlc3Q6UE9SVA0KWC1NdWx0aTogb25lDQpYLU90aGVyOiBiZXR3ZWVuDQpYLU11bHRpOiB0d28NClgtTXVsdGk6IHRocmVlDQoNCg==",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpTZXQtQ29va2llOiBiPTINClgtT3RoZXI6IGJldHdlZW4NClNldC1Db29raWU6IGE9MQ0KWC1NdWx0aTogeg0KWC1NdWx0aTogeQ0KQ29udGVudC1MZW5ndGg6IDINCg0Kb2s="
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /order HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "X-Multi",
+                "value": " one"
+              },
+              {
+                "name": "X-Other",
+                "value": " between"
+              },
+              {
+                "name": "X-Multi",
+                "value": " two"
+              },
+              {
+                "name": "X-Multi",
+                "value": " three"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Set-Cookie",
+                "value": " b=2"
+              },
+              {
+                "name": "X-Other",
+                "value": " between"
+              },
+              {
+                "name": "Set-Cookie",
+                "value": " a=1"
+              },
+              {
+                "name": "X-Multi",
+                "value": " z"
+              },
+              {
+                "name": "X-Multi",
+                "value": " y"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 2"
+              }
+            ],
+            "body": "b2s=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9vcmRlciBIVFRQLzEuMQ0KSG9zdDogb3JpZ2luLnRlc3Q6UE9SVA0KWC1NdWx0aTogb25lDQpYLU90aGVyOiBiZXR3ZWVuDQpYLU11bHRpOiB0d28NClgtTXVsdGk6IHRocmVlDQoNCg==",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpTZXQtQ29va2llOiBiPTINClgtT3RoZXI6IGJldHdlZW4NClNldC1Db29raWU6IGE9MQ0KWC1NdWx0aTogeg0KWC1NdWx0aTogeQ0KQ29udGVudC1MZW5ndGg6IDINCg0Kb2s="
+        }
+      }
+    ]
+  },
+  "same-name-fields@connect-tls": {
     "client": [
       {
         "requests": [

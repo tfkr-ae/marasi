@@ -15,7 +15,10 @@
   {
     "cases": "chunked-trailers@absolute",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
@@ -25,7 +28,10 @@
   {
     "cases": "chunked-trailers@absolute",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "client[0].responses[0].fields.name-case",
     "kind": "known",
@@ -35,7 +41,10 @@
   {
     "cases": "chunked-trailers@absolute",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "client[0].responses[0].fields.order",
     "kind": "known",
@@ -45,7 +54,10 @@
   {
     "cases": "chunked-trailers@absolute",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "client[0].responses[0].trailers",
     "kind": "known",
@@ -55,7 +67,10 @@
   {
     "cases": "chunked-trailers@absolute",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "origin[0].requests[0].fields.name-case",
     "kind": "known",
@@ -65,7 +80,10 @@
   {
     "cases": "chunked-trailers@absolute",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "origin[0].requests[0].fields.order",
     "kind": "known",
@@ -75,7 +93,10 @@
   {
     "cases": "chunked-trailers@connect-plain",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
@@ -85,7 +106,10 @@
   {
     "cases": "chunked-trailers@connect-plain",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "client[0].responses[0].fields.name-case",
     "kind": "known",
@@ -95,7 +119,10 @@
   {
     "cases": "chunked-trailers@connect-plain",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "client[0].responses[0].fields.order",
     "kind": "known",
@@ -105,7 +132,10 @@
   {
     "cases": "chunked-trailers@connect-plain",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "client[0].responses[0].trailers",
     "kind": "known",
@@ -115,7 +145,10 @@
   {
     "cases": "chunked-trailers@connect-plain",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "origin[0].requests[0].fields.name-case",
     "kind": "known",
@@ -125,7 +158,88 @@
   {
     "cases": "chunked-trailers@connect-plain",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].requests[0].fields.order",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"host, x-request-id, x-lower-case\", got \"host, x-lower-case, x-request-id\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"Trailer: X-Checksum\", got \"\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields.name-case",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"X-ORIGIN-case, x-lower\", got \"X-Origin-Case, X-Lower\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields.order",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"content-type, x-origin-case, x-lower\", got \"content-type, x-lower, x-origin-case\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].trailers",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"X-Checksum: 42\", got \"\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].requests[0].fields.name-case",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"X-Request-ID, x-lower-case\", got \"X-Request-Id, X-Lower-Case\"",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-trailers@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "origin[0].requests[0].fields.order",
     "kind": "known",
@@ -135,7 +249,10 @@
   {
     "cases": "connection-named-fields@absolute",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "leg:connection",
     "kind": "known",
@@ -145,7 +262,10 @@
   {
     "cases": "connection-named-fields@connect-plain",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "leg:connection",
     "kind": "known",
@@ -153,9 +273,355 @@
     "phase": 2
   },
   {
+    "cases": "connection-named-fields@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "leg:connection",
+    "kind": "known",
+    "reason": "Martian forwards the fields Connection names on both legs (docs/adr/2026-10-19-the-proxy-adds-no-headers-to-a-request.md forwards Connection lines as written): sent X-Hop to the origin and X-Back to the client",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@absolute",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"open\", got \"closed\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@absolute",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"\\\"ok\\\"\", got \"\\\"\\\"\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@absolute",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"\", got \"Warning: 199 \\\"martian\\\" \\\"chunked line ends with bare LF\\\" \\\"Mon, 16 Nov 2026 19:39:13 GMT\\\"\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@absolute",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].responses[0].reason",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"OK\", got \"Bad Gateway\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@absolute",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].responses[0].status",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"200\", got \"502\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@absolute",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "leg:framing",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: broke \"framing is valid and matches the body\", sent \"origin[0].requests[0]: message cut short after 0 body bytes\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@absolute",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "origin[0].end",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"open\", got \"closed\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@absolute",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "origin[0].requests[0].body",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"\\\"hello world\\\"\", got \"\\\"\\\"\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@absolute",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "origin[0].requests[0].fields",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"\", got \"Warning: 199 \\\"martian\\\" \\\"failed to create proxyrequest: dumping request [1 161 229 222 231 166 117 27 151 66 83 183 4 51 228 126] body: reading request body: chunked line ends with bare LF\\\" \\\"Mon, 16 Nov 2026 19:39:13 GMT\\\"\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@absolute",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "origin[0].requests[0].truncated",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"false\", got \"true\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-plain",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"open\", got \"closed\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-plain",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"\\\"ok\\\"\", got \"\\\"\\\"\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-plain",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"\", got \"Warning: 199 \\\"martian\\\" \\\"chunked line ends with bare LF\\\" \\\"Mon, 16 Nov 2026 19:39:13 GMT\\\"\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-plain",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].responses[0].reason",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"OK\", got \"Bad Gateway\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-plain",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].responses[0].status",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"200\", got \"502\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-plain",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "leg:framing",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: broke \"framing is valid and matches the body\", sent \"origin[0].requests[0]: message cut short after 0 body bytes\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-plain",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "origin[0].end",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"open\", got \"closed\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-plain",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "origin[0].requests[0].body",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"\\\"hello world\\\"\", got \"\\\"\\\"\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-plain",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "origin[0].requests[0].fields",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"\", got \"Warning: 199 \\\"martian\\\" \\\"failed to create proxyrequest: dumping request [1 161 229 222 231 168 123 90 136 248 83 79 231 97 50 190] body: reading request body: chunked line ends with bare LF\\\" \\\"Mon, 16 Nov 2026 19:39:13 GMT\\\"\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-plain",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "origin[0].requests[0].truncated",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"false\", got \"true\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-tls",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"open\", got \"closed\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-tls",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"\\\"ok\\\"\", got \"\\\"\\\"\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-tls",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"\", got \"Warning: 199 \\\"martian\\\" \\\"chunked line ends with bare LF\\\" \\\"Mon, 16 Nov 2026 19:39:13 GMT\\\"\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-tls",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].responses[0].reason",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"OK\", got \"Bad Gateway\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-tls",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].responses[0].status",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"200\", got \"502\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-tls",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "leg:framing",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: broke \"framing is valid and matches the body\", sent \"origin[0].requests[0]: message cut short after 0 body bytes\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-tls",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "origin[0].end",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"open\", got \"closed\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-tls",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "origin[0].requests[0].body",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"\\\"hello world\\\"\", got \"\\\"\\\"\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-tls",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "origin[0].requests[0].fields",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"\", got \"Warning: 199 \\\"martian\\\" \\\"failed to create proxyrequest: dumping request [1 161 229 222 231 172 120 24 170 52 147 92 217 5 38 20] body: reading request body: chunked line ends with bare LF\\\" \\\"Mon, 16 Nov 2026 19:39:13 GMT\\\"\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-tls",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "origin[0].requests[0].truncated",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"false\", got \"true\"",
+    "phase": 2
+  },
+  {
     "cases": "same-name-fields@absolute",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "client[0].responses[0].fields.order",
     "kind": "known",
@@ -165,7 +631,10 @@
   {
     "cases": "same-name-fields@absolute",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "origin[0].requests[0].fields.order",
     "kind": "known",
@@ -175,7 +644,10 @@
   {
     "cases": "same-name-fields@connect-plain",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "client[0].responses[0].fields.order",
     "kind": "known",
@@ -185,7 +657,36 @@
   {
     "cases": "same-name-fields@connect-plain",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].requests[0].fields.order",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"host, x-multi, x-other, x-multi, x-multi\", got \"host, x-multi, x-multi, x-multi, x-other\"",
+    "phase": 2
+  },
+  {
+    "cases": "same-name-fields@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields.order",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"set-cookie, x-other, set-cookie, x-multi, x-multi\", got \"set-cookie, set-cookie, x-multi, x-multi, x-other\"",
+    "phase": 2
+  },
+  {
+    "cases": "same-name-fields@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "origin[0].requests[0].fields.order",
     "kind": "known",
