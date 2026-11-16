@@ -14,6 +14,48 @@
       "approach": "connect-plain",
       "matched": 0,
       "cases": 1
+    },
+    {
+      "run": "checkpoint-forward",
+      "target": "fixtures",
+      "approach": "absolute",
+      "matched": 0,
+      "cases": 1
+    },
+    {
+      "run": "checkpoint-forward",
+      "target": "fixtures",
+      "approach": "connect-plain",
+      "matched": 0,
+      "cases": 1
+    },
+    {
+      "run": "checkpoint-edit",
+      "target": "fixtures",
+      "approach": "absolute",
+      "matched": 0,
+      "cases": 1
+    },
+    {
+      "run": "checkpoint-edit",
+      "target": "fixtures",
+      "approach": "connect-plain",
+      "matched": 0,
+      "cases": 1
+    },
+    {
+      "run": "extension",
+      "target": "fixtures",
+      "approach": "absolute",
+      "matched": 0,
+      "cases": 1
+    },
+    {
+      "run": "extension",
+      "target": "fixtures",
+      "approach": "connect-plain",
+      "matched": 0,
+      "cases": 1
     }
   ]
 }

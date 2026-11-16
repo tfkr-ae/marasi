@@ -102,6 +102,26 @@ func TestTransparentRelay(t *testing.T) {
 	})
 }
 
+func TestEveryProxiedRun(t *testing.T) {
+	t.Run("should score a transparent relay as matching in all four proxied runs", func(t *testing.T) {
+		h := newHarness(t, false, nil)
+		h.settings.Runs = conformance.ProxiedRuns
+		outcome := runHarness(t, h.settings)
+
+		var runs []conformance.RunName
+		for _, result := range outcome.Results {
+			if result.Err != nil || result.Matched() != 2 {
+				t.Fatalf("\nwanted 2 matched and no error in %s\ngot:\n%+v", result.Run, result)
+			}
+			runs = append(runs, result.Run)
+		}
+		want := []conformance.RunName{conformance.RunProxy, conformance.RunCheckpointForward, conformance.RunCheckpointEdit, conformance.RunExtension}
+		if !reflect.DeepEqual(runs, want) {
+			t.Fatalf("\nwanted runs:\n%v\ngot:\n%v", want, runs)
+		}
+	})
+}
+
 // Every difference the broken stand-in makes, in case order.
 var (
 	responseCase = func(id string) conformance.Difference {

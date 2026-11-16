@@ -75,7 +75,30 @@ type CheckpointKind string
 // Checkpoint kinds.
 const (
 	CheckpointWebSocket CheckpointKind = "websocket"
+	CheckpointHTTP      CheckpointKind = "http" // requests and their responses
 )
+
+// HTTPExtension sets every HTTP request and response body to itself in
+// processRequest and processResponse, a no-op edit through the extension
+// path. Lua can set only the body of a message, not its head.
+const HTTPExtension = `
+
+-- Conformance harness: a no-op edit through the extension path.
+function processRequest(request)
+	request:set_body(request:body())
+end
+
+function processResponse(response)
+	response:set_body(response:body())
+end
+`
+
+// HTTPSetup is the Setup of an HTTP/1.1 suite that runs all four proxied
+// runs: it checks HTTP traffic, holds HTTP requests and responses in the
+// Checkpoint runs, and installs HTTPExtension in the extension run.
+func HTTPSetup() Setup {
+	return Setup{Traffic: TrafficHTTP, Checkpoint: []CheckpointKind{CheckpointHTTP}, Extension: HTTPExtension}
+}
 
 // Setup is what a suite needs from Marasi in each conformance run.
 type Setup struct {
@@ -167,6 +190,22 @@ type Launcher func(ctx context.Context, suite Suite, run RunName, dir string) (P
 // ErrNotProxied reports a proxied run that sent no traffic through Marasi,
 // so its recordings say nothing about the proxy.
 var ErrNotProxied = errors.New("no traffic went through the proxy")
+
+// Holder is a proxy that can say how many Checkpoint items it has held and
+// resolved, so a Checkpoint run can show it took the Checkpoint path.
+type Holder interface {
+	// Held counts the Checkpoint items the proxy held and resolved so far.
+	Held(ctx context.Context) (int64, error)
+}
+
+// ErrNotHeld reports a Checkpoint run whose proxy held no item during a
+// target, so its recordings say nothing about the Checkpoint path.
+var ErrNotHeld = errors.New("the proxy held no Checkpoint item")
+
+// isCheckpointRun reports whether run holds every item in Checkpoint.
+func isCheckpointRun(run RunName) bool {
+	return run == RunCheckpointForward || run == RunCheckpointEdit
+}
 
 // checkProxied fails unless the newest item the proxy recorded changed
 // during a target: before and after are its ID, or empty when there is none.

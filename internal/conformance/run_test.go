@@ -228,6 +228,57 @@ func TestRunChecksTrafficWentThroughTheProxy(t *testing.T) {
 	})
 }
 
+// holdingStandIn is a stand-in that reports Checkpoint items it held: one
+// per proxied target when holds is set, none otherwise.
+type holdingStandIn struct {
+	standIn
+	holds bool
+}
+
+func (s holdingStandIn) Held(context.Context) (int64, error) {
+	if !s.holds {
+		return 0, nil
+	}
+	return int64(*s.traffic), nil
+}
+
+func TestRunChecksCheckpointRunsHeldItems(t *testing.T) {
+	checkpointRun := func(t *testing.T, launch func(traffic *int) Proxy) Outcome {
+		t.Helper()
+		f := newFixture(t, nil)
+		f.suite.got[RunCheckpointForward] = recordings(baseline)
+		f.settings.Runs = []RunName{RunCheckpointForward}
+		f.settings.Launch = func(context.Context, Suite, RunName, string) (Proxy, error) {
+			return launch(f.suite.traffic), nil
+		}
+		return run(t, f.settings)
+	}
+
+	t.Run("should fail a Checkpoint run whose proxy held nothing", func(t *testing.T) {
+		outcome := checkpointRun(t, func(traffic *int) Proxy { return holdingStandIn{standIn{traffic}, false} })
+
+		if len(outcome.Results) != 1 || !errors.Is(outcome.Results[0].Err, ErrNotHeld) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%+v", ErrNotHeld, outcome.Results)
+		}
+	})
+
+	t.Run("should fail a Checkpoint run whose proxy cannot report held items", func(t *testing.T) {
+		outcome := checkpointRun(t, func(traffic *int) Proxy { return standIn{traffic} })
+
+		if len(outcome.Results) != 1 || !errors.Is(outcome.Results[0].Err, ErrNotHeld) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%+v", ErrNotHeld, outcome.Results)
+		}
+	})
+
+	t.Run("should pass a Checkpoint run whose proxy held items during the target", func(t *testing.T) {
+		outcome := checkpointRun(t, func(traffic *int) Proxy { return holdingStandIn{standIn{traffic}, true} })
+
+		if len(outcome.Results) != 1 || outcome.Results[0].Err != nil || outcome.Failed() {
+			t.Fatalf("\nwanted:\na passing result\ngot:\n%+v", outcome.Results)
+		}
+	})
+}
+
 func TestRunDirectMergesTheBaseline(t *testing.T) {
 	t.Run("should replace only the selected cases in the baseline", func(t *testing.T) {
 		f := newFixture(t, nil)

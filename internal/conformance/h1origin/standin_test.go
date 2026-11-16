@@ -50,6 +50,15 @@ func startStandIn(t *testing.T, broken bool) *standIn {
 	return s
 }
 
+// Held counts every relayed connection as a held item, so the stand-in
+// passes the Checkpoint runs' check unless it is silent.
+func (s *standIn) Held(context.Context) (int64, error) {
+	if s.silent {
+		return 0, nil
+	}
+	return s.connections.Load(), nil
+}
+
 func (s *standIn) Address() string { return s.listener.Addr().String() }
 
 func (s *standIn) Newest(context.Context, conformance.TrafficKind) (string, error) {

@@ -31,6 +31,10 @@ type Instance struct {
 	// the host. Binary and ConfigDir are then paths inside it, and every
 	// CLI call runs through docker exec.
 	Container string
+	// Control is the host:port of the control listener's network address,
+	// or empty when the harness reaches the control API through the unix
+	// socket. A container's socket is not shared with the host.
+	Control string
 }
 
 // StartInstance launches a detached service instance in a scratch config
@@ -141,13 +145,33 @@ func (i *Instance) Newest(ctx context.Context, kind TrafficKind) (string, error)
 }
 
 // EnableCheckpoint turns on global Checkpoint for kind, so every item of
-// that kind is held until something forwards or drops it.
+// that kind is held until something forwards or drops it. HTTP intercept
+// holds each request and, while it stays on, the request's response.
 func (i *Instance) EnableCheckpoint(ctx context.Context, kind CheckpointKind) error {
-	if kind != CheckpointWebSocket {
+	var flag string
+	switch kind {
+	case CheckpointWebSocket:
+		flag = "websocket-intercept"
+	case CheckpointHTTP:
+		flag = "intercept"
+	default:
 		return fmt.Errorf("no Checkpoint setup for kind %q", kind)
 	}
-	_, err := i.cli(ctx, nil, "checkpoint", "websocket-intercept", "on", "--json")
+	_, err := i.cli(ctx, nil, "checkpoint", flag, "on", "--json")
 	return err
+}
+
+// client returns a control API client: over the control listener's network
+// address when the instance has one, else over the unix socket.
+func (i *Instance) client() (*service.Client, error) {
+	if i.Control == "" {
+		return service.NewClient(filepath.Join(i.ConfigDir, "instances", i.Name+".sock")), nil
+	}
+	endpoint, err := service.RemoteEndpoint("http://"+i.Control, "")
+	if err != nil {
+		return nil, err
+	}
+	return service.NewEndpointClient(endpoint), nil
 }
 
 // InstallExtension appends lua to the workshop extension.
@@ -184,11 +208,9 @@ func (i *Instance) InstallExtension(ctx context.Context, lua string) error {
 	if err := json.Unmarshal(out, &extension); err != nil {
 		return fmt.Errorf("decoding workshop extension: %w", err)
 	}
-	file := filepath.Join(i.ConfigDir, "conformance-workshop.lua")
-	if err := os.WriteFile(file, []byte(extension.LuaContent+lua), 0o600); err != nil {
-		return err
-	}
-	_, err = i.cli(ctx, nil, "extension", "update", id, "--file", file, "--json")
+	// The Lua goes in on stdin, which reaches an instance in a container
+	// as well as one on the host.
+	_, err = i.cli(ctx, []byte(extension.LuaContent+lua), "extension", "update", id, "--json")
 	return err
 }
 
@@ -219,23 +241,23 @@ func prepare(ctx context.Context, instance *Instance, suite Suite, run RunName, 
 	switch run {
 	case RunProxy:
 	case RunCheckpointForward, RunCheckpointEdit:
-		if instance.Container != "" {
-			// The resolver talks to the control socket, which a container
-			// on Docker Desktop does not share with the host.
-			launched.Stop()
-			return nil, fmt.Errorf("the %s run is not set up for Marasi in a container yet", run)
-		}
 		for _, kind := range setup.Checkpoint {
 			if err := instance.EnableCheckpoint(ctx, kind); err != nil {
 				launched.Stop()
 				return nil, err
 			}
 		}
+		client, err := instance.client()
+		if err != nil {
+			launched.Stop()
+			return nil, err
+		}
 		resolver := &Resolver{Edit: run == RunCheckpointEdit}
+		launched.resolver = resolver
 		resolveCtx, cancel := context.WithCancel(context.Background())
 		done := make(chan struct{})
 		go func() {
-			resolver.Run(resolveCtx, instance)
+			resolver.Run(resolveCtx, client)
 			close(done)
 		}()
 		launched.stops = append(launched.stops, func() {
@@ -244,10 +266,6 @@ func prepare(ctx context.Context, instance *Instance, suite Suite, run RunName, 
 			fmt.Fprintf(log, "resolver forwarded %d items, %d rejected\n", resolver.Forwarded.Load(), resolver.Failed.Load())
 		})
 	case RunExtension:
-		if instance.Container != "" {
-			launched.Stop()
-			return nil, fmt.Errorf("the %s run is not set up for Marasi in a container yet", run)
-		}
 		if err := instance.InstallExtension(ctx, setup.Extension); err != nil {
 			launched.Stop()
 			return nil, err
@@ -263,7 +281,16 @@ func prepare(ctx context.Context, instance *Instance, suite Suite, run RunName, 
 // stop before it does.
 type launchedInstance struct {
 	*Instance
-	stops []func()
+	stops    []func()
+	resolver *Resolver // in the Checkpoint runs
+}
+
+// Held counts the items the resolver forwarded.
+func (l *launchedInstance) Held(context.Context) (int64, error) {
+	if l.resolver == nil {
+		return 0, nil
+	}
+	return l.resolver.Forwarded.Load(), nil
 }
 
 func (l *launchedInstance) Stop() {
@@ -273,11 +300,15 @@ func (l *launchedInstance) Stop() {
 	l.Instance.Stop()
 }
 
-var _ Proxy = (*launchedInstance)(nil)
+var (
+	_ Proxy  = (*launchedInstance)(nil)
+	_ Holder = (*launchedInstance)(nil)
+)
 
-// Resolver forwards every held WebSocket Checkpoint item through the
-// control API. With Edit set, each forward carries the original payload and
-// opcode as an edit, taking the same path as a real edit.
+// Resolver forwards every held Checkpoint item through the control API.
+// With Edit set, each forward carries the original content as an edit,
+// taking the same path as a real edit: the raw bytes of an HTTP request or
+// response, the payload and opcode of a WebSocket message.
 type Resolver struct {
 	Edit      bool
 	Forwarded atomic.Int64 // items forwarded
@@ -289,11 +320,10 @@ type Resolver struct {
 // covers an event stream that dropped or has not connected yet.
 const resolverPoll = 50 * time.Millisecond
 
-// Run resolves items until ctx ends. Every hold in a suite waits for the
-// resolver, so it lists again as soon as a checkpoint.held event arrives
-// instead of sleeping between polls.
-func (r *Resolver) Run(ctx context.Context, instance *Instance) {
-	client := service.NewClient(filepath.Join(instance.ConfigDir, "instances", instance.Name+".sock"))
+// Run resolves items until ctx ends, then closes client. Every hold in a
+// suite waits for the resolver, so it lists again as soon as a
+// checkpoint.held event arrives instead of sleeping between polls.
+func (r *Resolver) Run(ctx context.Context, client *service.Client) {
 	defer client.Close()
 	wake := make(chan struct{}, 1)
 	subscribed := make(chan struct{})
@@ -372,14 +402,18 @@ func streamHolds(ctx context.Context, client *service.Client, wake chan<- struct
 	}
 }
 
-type heldMessage struct {
+// heldItem is a held Checkpoint item: Raw for an HTTP request or response,
+// Payload and Opcode for a WebSocket message.
+type heldItem struct {
 	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Raw     []byte `json:"raw"`
 	Payload []byte `json:"payload"`
 	Opcode  int    `json:"opcode"`
 }
 
-func (r *Resolver) pending(ctx context.Context, client *service.Client) ([]heldMessage, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/checkpoint?kind=websocket", nil)
+func (r *Resolver) pending(ctx context.Context, client *service.Client) ([]heldItem, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://marasi/checkpoint", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -389,7 +423,7 @@ func (r *Resolver) pending(ctx context.Context, client *service.Client) ([]heldM
 	}
 	defer response.Body.Close()
 	var list struct {
-		Items []heldMessage `json:"items"`
+		Items []heldItem `json:"items"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&list); err != nil {
 		return nil, err
@@ -397,17 +431,10 @@ func (r *Resolver) pending(ctx context.Context, client *service.Client) ([]heldM
 	return list.Items, nil
 }
 
-func (r *Resolver) forward(ctx context.Context, client *service.Client, item heldMessage) {
+func (r *Resolver) forward(ctx context.Context, client *service.Client, item heldItem) {
 	body := []byte("{}")
 	if r.Edit {
-		payload := item.Payload
-		if payload == nil {
-			payload = []byte{}
-		}
-		body, _ = json.Marshal(struct {
-			Payload []byte `json:"payload"`
-			Opcode  int    `json:"opcode"`
-		}{payload, item.Opcode})
+		body = editBody(item)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://marasi/checkpoint/"+item.ID+"/forward", bytes.NewReader(body))
 	if err != nil {
@@ -428,4 +455,28 @@ func (r *Resolver) forward(ctx context.Context, client *service.Client, item hel
 	default:
 		r.Failed.Add(1)
 	}
+}
+
+// editBody is a forward that carries item's original content as an edit.
+func editBody(item heldItem) []byte {
+	var body []byte
+	if item.Type == "websocket" {
+		payload := item.Payload
+		if payload == nil {
+			payload = []byte{}
+		}
+		body, _ = json.Marshal(struct {
+			Payload []byte `json:"payload"`
+			Opcode  int    `json:"opcode"`
+		}{payload, item.Opcode})
+		return body
+	}
+	raw := item.Raw
+	if raw == nil {
+		raw = []byte{}
+	}
+	body, _ = json.Marshal(struct {
+		Raw []byte `json:"raw"`
+	}{raw})
+	return body
 }
