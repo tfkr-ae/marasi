@@ -140,6 +140,14 @@ func (i *Instance) Newest(ctx context.Context, kind TrafficKind) (string, error)
 	return list.Items[0].ID, nil
 }
 
+// Certificate returns the instance's loaded CA certificate, PEM-encoded,
+// through certificate get.
+func (i *Instance) Certificate(ctx context.Context) ([]byte, error) {
+	return i.cli(ctx, nil, "certificate", "get")
+}
+
+var _ Certifier = (*Instance)(nil)
+
 // EnableCheckpoint turns on global Checkpoint for kind, so every item of
 // that kind is held until something forwards or drops it.
 func (i *Instance) EnableCheckpoint(ctx context.Context, kind CheckpointKind) error {

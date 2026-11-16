@@ -72,21 +72,29 @@ suites:
 
 - `autobahn` runs the Autobahn WebSocket testsuite, with Marasi on the host.
 - `h1-origin` sends each origin fixture case's HTTP/1.1 requests with the
-  harness's own client, as an absolute-form request (`absolute`) and as plain
-  HTTP inside `CONNECT` (`connect-plain`). Its recording holds the responses the
-  client received and the requests the origin received. Hop-by-hop fields and
-  framing are left out of the comparison and checked by leg rules instead, on
-  what Marasi sent on each leg: `leg:connection` (remove `Connection` and the
-  fields it names, RFC 9110 §7.6.1), `leg:framing` (valid framing that matches
-  the body, RFC 9112 §6), `leg:cl-and-te` (never both `Content-Length` and
-  `Transfer-Encoding`, RFC 9112 §6.1), `leg:field-order` (keep the order of
-  same-name field lines, RFC 9110 §5.3) and `leg:via` (send `Via`, RFC 9110
-  §7.6.3, accepted: Marasi does not announce itself). A broken MUST rule fails
-  like a deviation unless `deviations.json` lists its ID as the field; a broken
-  SHOULD rule warns. Marasi runs in a Linux container built
-  by `make linux-<arch>` for this machine's architecture (`LINUX_ARCH`), on the
+  harness's own client, as an absolute-form request (`absolute`), as plain
+  HTTP inside `CONNECT` (`connect-plain`) and as TLS inside `CONNECT`
+  (`connect-tls`). Its recording holds the responses the client received and
+  the requests the origin received. Hop-by-hop fields and framing are left out
+  of the comparison and checked by leg rules instead, on what Marasi sent on
+  each leg: `leg:connection` (remove `Connection` and the fields it names, RFC
+  9110 §7.6.1), `leg:framing` (valid framing that matches the body, RFC 9112
+  §6), `leg:cl-and-te` (never both `Content-Length` and `Transfer-Encoding`, RFC
+  9112 §6.1), `leg:field-order` (keep the order of same-name field lines, RFC
+  9110 §5.3) and `leg:via` (send `Via`, RFC 9110 §7.6.3, accepted: Marasi does
+  not announce itself). A broken MUST rule fails like a deviation unless
+  `deviations.json` lists its ID as the field; a broken SHOULD rule warns.
+  Marasi runs in a Linux container built by `make linux-<arch>` for this
+  machine's architecture (`LINUX_ARCH`), on the
   host's network, and resolves the fixtures' name `origin.test` to loopback.
   The `proxy` run is the only conformance run so far.
+
+For TLS, the harness generates a CA on each run and never writes its key to
+disk. The fixtures serve certificates it issues. In Marasi's container,
+`SSL_CERT_FILE` names the image's system roots plus that CA, so Marasi verifies
+the fixtures with no Marasi setting changed. The direct run's client trusts the
+harness CA. Through Marasi, the client trusts Marasi's CA certificate, fetched
+with `marasi certificate get`.
 
 Each suite keeps its committed files in `internal/conformance/baselines/<suite>/`:
 

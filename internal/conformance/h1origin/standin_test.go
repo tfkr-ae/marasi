@@ -3,6 +3,7 @@ package h1origin_test
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"io"
 	"net"
 	"net/textproto"
@@ -27,21 +28,31 @@ import (
 //   - any other path: adds Via to the request and response
 //   - /reframe: re-frames the chunked response to a matching Content-Length
 //   - /cl-te: sends Content-Length with the chunked response
+//
+// Inside CONNECT it intercepts TLS as Marasi does: it answers with a
+// certificate from its own CA and dials the origin over TLS, trusting the
+// harness CA.
 type standIn struct {
 	listener    net.Listener
 	broken      bool
+	harnessCA   *conformance.CA // the origins' CA
+	ownCA       *conformance.CA // signs what the client sees
 	connections atomic.Int64
 	silent      bool // Newest reports no traffic, as a misrouted run would
 	wg          sync.WaitGroup
 }
 
-func startStandIn(t *testing.T, broken bool) *standIn {
+func startStandIn(t *testing.T, broken bool, harnessCA *conformance.CA) *standIn {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &standIn{listener: listener, broken: broken}
+	ownCA, err := conformance.NewCA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &standIn{listener: listener, broken: broken, harnessCA: harnessCA, ownCA: ownCA}
 	s.wg.Go(func() {
 		for {
 			conn, err := listener.Accept()
@@ -65,13 +76,17 @@ func (s *standIn) Newest(context.Context, conformance.TrafficKind) (string, erro
 	return strconv.FormatInt(s.connections.Load(), 10), nil
 }
 
+// Certificate is the stand-in's CA certificate, as Marasi's comes from
+// certificate get.
+func (s *standIn) Certificate(context.Context) ([]byte, error) { return s.ownCA.PEM(), nil }
+
 func (s *standIn) Stop() {
 	_ = s.listener.Close()
 	s.wg.Wait()
 }
 
 func (s *standIn) serve(client net.Conn) {
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	reader := bufio.NewReader(client)
 	head, err := readHead(reader)
 	if err != nil {
@@ -80,10 +95,21 @@ func (s *standIn) serve(client net.Conn) {
 	method, rest, _ := strings.Cut(head[0], " ")
 	target, version, _ := strings.Cut(rest, " ")
 	var authority string
+	secure := false
 	if method == "CONNECT" {
 		authority = target
 		if _, err := io.WriteString(client, "HTTP/1.1 200 Connection established\r\n\r\n"); err != nil {
 			return
+		}
+		if first, err := reader.Peek(1); err == nil && first[0] == 0x16 { // a TLS handshake record
+			host, _, _ := net.SplitHostPort(authority)
+			config, err := s.ownCA.ServerTLS(host)
+			if err != nil {
+				return
+			}
+			client = tls.Server(&bufferedConn{Conn: client, r: reader}, config)
+			reader = bufio.NewReader(client)
+			secure = true
 		}
 		if head, err = readHead(reader); err != nil {
 			return
@@ -96,8 +122,13 @@ func (s *standIn) serve(client net.Conn) {
 		authority = u.Host
 		head[0] = method + " " + u.RequestURI() + " " + version
 	}
-	_, port, _ := net.SplitHostPort(authority)
-	origin, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", port))
+	host, port, _ := net.SplitHostPort(authority)
+	var origin net.Conn
+	if secure {
+		origin, err = tls.Dial("tcp", net.JoinHostPort("127.0.0.1", port), s.harnessCA.ClientTLS(host))
+	} else {
+		origin, err = net.Dial("tcp", net.JoinHostPort("127.0.0.1", port))
+	}
 	if err != nil {
 		return
 	}
@@ -118,8 +149,8 @@ func (s *standIn) serve(client net.Conn) {
 	done := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(origin, reader)
-		if tcp, ok := origin.(*net.TCPConn); ok {
-			_ = tcp.CloseWrite()
+		if c, ok := origin.(interface{ CloseWrite() error }); ok {
+			_ = c.CloseWrite()
 		}
 		close(done)
 	}()
@@ -131,8 +162,8 @@ func (s *standIn) serve(client net.Conn) {
 // head of the first response, and its body when the stand-in is broken.
 func (s *standIn) relayResponse(client net.Conn, origin *bufio.Reader, path string) {
 	defer func() {
-		if tcp, ok := client.(*net.TCPConn); ok {
-			_ = tcp.CloseWrite()
+		if c, ok := client.(interface{ CloseWrite() error }); ok {
+			_ = c.CloseWrite()
 		}
 	}()
 	head, err := readHead(origin)
@@ -281,6 +312,14 @@ func swallowTrailer(w io.Writer, r *bufio.Reader) error {
 		}
 	}
 }
+
+// bufferedConn reads through r, which may hold bytes already read from Conn.
+type bufferedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 func readHead(r *bufio.Reader) ([]string, error) {
 	var lines []string

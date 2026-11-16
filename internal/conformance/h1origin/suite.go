@@ -43,9 +43,10 @@ func (s Suite) Name() string { return Name }
 // in the container launcher first.
 func (s Suite) Runs() []conformance.RunName { return []conformance.RunName{conformance.RunProxy} }
 
-// Approaches are absolute form and plain HTTP inside CONNECT.
+// Approaches are absolute form, plain HTTP inside CONNECT and TLS inside
+// CONNECT.
 func (s Suite) Approaches() []conformance.Approach {
-	return []conformance.Approach{conformance.ApproachAbsolute, conformance.ApproachConnectPlain}
+	return []conformance.Approach{conformance.ApproachAbsolute, conformance.ApproachConnectPlain, conformance.ApproachConnectTLS}
 }
 
 // Targets is the fixtures.
@@ -69,7 +70,7 @@ func (s Suite) Execute(ctx context.Context, job conformance.Job) (conformance.Re
 			if err := ctx.Err(); err != nil {
 				return recordings, err
 			}
-			recording, err := s.record(ctx, c, approach, job.Proxy)
+			recording, err := s.record(ctx, c, approach, job)
 			if err != nil {
 				return recordings, fmt.Errorf("case %s: %w", id, err)
 			}
