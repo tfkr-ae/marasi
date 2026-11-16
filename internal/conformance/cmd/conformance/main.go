@@ -25,10 +25,12 @@ import (
 	"github.com/tfkr-ae/marasi/internal/conformance/h2origin"
 )
 
-// narrowing are the flags that select less than everything. A run with
-// each of them at its default is full, and in a full run an entry that
-// matched nothing is stale.
-var narrowing = []string{"runs", "cases", "exclude", "approaches", "modes", "peers"}
+// narrowing are the flags that select less than every case. With each of
+// them at its default, an entry for a conformance run and target that ran
+// is stale when it matched nothing, whether or not it covers a case. -runs,
+// -modes and -peers do not count: the stale check covers only the runs and
+// targets that ran.
+var narrowing = []string{"cases", "exclude", "approaches"}
 
 func main() {
 	var (
@@ -46,7 +48,7 @@ func main() {
 	flag.StringVar(&container.Binary, "marasi-linux", "", "marasi binary for the container; empty means dist/marasi-linux-<linux-arch>")
 	flag.StringVar(&settings.OutDir, "out", "dist/conformance", "reports and tester working directories")
 	flag.StringVar(&settings.BaselineDir, "baselines", "internal/conformance/baselines", "committed baselines, one directory per suite")
-	flag.StringVar(&suites, "suites", autobahn.Name, "comma-separated suites")
+	flag.StringVar(&suites, "suites", h1origin.Name+","+h1client.Name, "comma-separated suites")
 	flag.StringVar(&runs, "runs", "proxy,checkpoint-forward,checkpoint-edit,extension", "comma-separated conformance runs; direct rewrites the baselines")
 	flag.StringVar(&cases, "cases", "*", "comma-separated case ID patterns, for example 3.*,7.9.*")
 	flag.StringVar(&exclude, "exclude", "", "comma-separated case ID patterns to skip")
@@ -68,11 +70,11 @@ func main() {
 	}
 	// Make passes every flag, so a flag narrows only when its value differs
 	// from the default.
-	settings.Full = true
+	settings.AllCases = true
 	for _, name := range narrowing {
 		f := flag.Lookup(name)
 		if strings.Join(split(f.Value.String()), ",") != strings.Join(split(f.DefValue), ",") {
-			settings.Full = false
+			settings.AllCases = false
 		}
 	}
 	autobahnSuite.Modes = split(modes)

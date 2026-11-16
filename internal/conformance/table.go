@@ -7,7 +7,7 @@ import (
 	"text/tabwriter"
 )
 
-// WriteTable prints one row per new deviation, then the known and allowed
+// WriteTable prints one row per new deviation, then the known ones and those on the allow-list
 // deviations, the entries that went away or are stale, and one summary line
 // per suite, run and target.
 func WriteTable(w io.Writer, outcome Outcome) {
@@ -32,16 +32,16 @@ func WriteTable(w io.Writer, outcome Outcome) {
 		}
 		_ = known.Flush()
 	}
-	if hasMatches(outcome.Results, func(r Result) []Match { return r.Allowed }) {
+	if hasMatches(outcome.Results, func(r Result) []Match { return r.OnAllowList }) {
 		fmt.Fprintln(w)
-		allowed := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(allowed, "RUN\tSUITE\tTARGET\tALLOWED\tFIELD\tREASON")
+		allowList := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(allowList, "RUN\tSUITE\tTARGET\tON ALLOW-LIST\tFIELD\tREASON")
 		for _, result := range outcome.Results {
-			for _, m := range result.Allowed {
-				fmt.Fprintf(allowed, "%s\t%s\t%s\t%s\t%s\t%s\n", result.Run, result.Suite, result.Target, m.Case, m.Field, m.Entry.Reason)
+			for _, m := range result.OnAllowList {
+				fmt.Fprintf(allowList, "%s\t%s\t%s\t%s\t%s\t%s\n", result.Run, result.Suite, result.Target, m.Case, m.Field, m.Entry.Reason)
 			}
 		}
-		_ = allowed.Flush()
+		_ = allowList.Flush()
 	}
 
 	if len(outcome.WentAway) > 0 || len(outcome.Stale) > 0 {
@@ -52,7 +52,7 @@ func WriteTable(w io.Writer, outcome Outcome) {
 			gone.Run, gone.Suite, gone.Entry.Cases, gone.Entry.Field, gone.Entry.Phase)
 	}
 	for _, stale := range outcome.Stale {
-		fmt.Fprintf(w, "%s  stale: %s entry %s %s matched nothing in a full run\n",
+		fmt.Fprintf(w, "%s  stale: %s entry %s %s matched nothing although a run and target it lists ran\n",
 			stale.Suite, stale.Entry.Kind, stale.Entry.Cases, stale.Entry.Field)
 	}
 
@@ -70,8 +70,8 @@ func WriteTable(w io.Writer, outcome Outcome) {
 		if len(result.Known) > 0 {
 			counts += fmt.Sprintf(", %d known", len(result.Known))
 		}
-		if len(result.Allowed) > 0 {
-			counts += fmt.Sprintf(", %d allowed", len(result.Allowed))
+		if len(result.OnAllowList) > 0 {
+			counts += fmt.Sprintf(", %d on the allow-list", len(result.OnAllowList))
 		}
 		if len(result.Warnings) > 0 {
 			counts += fmt.Sprintf(", %d leg-rule warnings", len(result.Warnings))

@@ -11,40 +11,48 @@ import (
 	"slices"
 )
 
-// Kind says whether a deviations entry is on the allow-list or a known deviation.
-type Kind string
+// EntryKind says whether a deviations entry is on the allow-list or a known deviation.
+type EntryKind string
 
 // Entry kinds. Accepted entries are the allow-list and are edited only by
 // hand; known entries are measured and rewritten by update-known.
 const (
-	KindAccepted Kind = "accepted"
-	KindKnown    Kind = "known"
+	KindAccepted EntryKind = "accepted"
+	KindKnown    EntryKind = "known"
 )
 
 // Entry is one entry of a suite's deviations.json.
 type Entry struct {
-	Cases  string    `json:"cases"`         // glob over case IDs, including the approach
-	Runs   []RunName `json:"runs"`          // conformance runs the entry applies to
-	Field  string    `json:"field"`         // field path in the recording, or a leg-rule ID
-	Got    string    `json:"got,omitempty"` // when set, the only proxied value the entry matches
-	Kind   Kind      `json:"kind"`
-	Reason string    `json:"reason"`
-	RFC    string    `json:"rfc,omitempty"`
-	Phase  int       `json:"phase,omitempty"` // the phase expected to remove a known entry
+	Cases string `json:"cases"` // glob over case IDs, including the approach
+	// Targets are globs over the suite's targets the entry applies to, such
+	// as "fuzzingserver-*"; empty means every target.
+	Targets []string  `json:"targets,omitempty"`
+	Runs    []RunName `json:"runs"`          // conformance runs the entry applies to
+	Field   string    `json:"field"`         // field path in the recording, or a leg-rule ID
+	Got     string    `json:"got,omitempty"` // when set, the only proxied value the entry matches
+	Kind    EntryKind `json:"kind"`
+	Reason  string    `json:"reason"`
+	RFC     string    `json:"rfc,omitempty"`
+	Phase   int       `json:"phase,omitempty"` // the phase expected to remove a known entry
 }
 
-// covers reports whether the entry applies to caseID in run.
-func (e Entry) covers(run RunName, caseID string) bool {
-	if !slices.Contains(e.Runs, run) {
+// appliesTo reports whether the entry applies to target in run.
+func (e Entry) appliesTo(run RunName, target string) bool {
+	return slices.Contains(e.Runs, run) && (len(e.Targets) == 0 || matchAny(e.Targets, target))
+}
+
+// covers reports whether the entry applies to caseID of target in run.
+func (e Entry) covers(run RunName, target, caseID string) bool {
+	if !e.appliesTo(run, target) {
 		return false
 	}
 	ok, _ := path.Match(e.Cases, caseID)
 	return ok
 }
 
-// matches reports whether the entry lists difference d in run.
-func (e Entry) matches(run RunName, d Difference) bool {
-	return e.covers(run, d.Case) && e.Field == d.Field && (e.Got == "" || e.Got == d.Got)
+// matches reports whether the entry lists difference d of target in run.
+func (e Entry) matches(run RunName, target string, d Difference) bool {
+	return e.covers(run, target, d.Case) && e.Field == d.Field && (e.Got == "" || e.Got == d.Got)
 }
 
 func (e Entry) validate() error {
@@ -62,8 +70,10 @@ func (e Entry) validate() error {
 	case e.Kind == KindKnown && e.Phase <= 0:
 		return errors.New("a known entry needs a phase")
 	}
-	if _, err := path.Match(e.Cases, ""); err != nil {
-		return fmt.Errorf("cases %q: %w", e.Cases, err)
+	for _, pattern := range append([]string{e.Cases}, e.Targets...) {
+		if _, err := path.Match(pattern, ""); err != nil {
+			return fmt.Errorf("matching pattern %q: %w", pattern, err)
+		}
 	}
 	return nil
 }
@@ -108,29 +118,29 @@ type Match struct {
 
 // Sorted is a run's differences sorted against the deviations file.
 type Sorted struct {
-	New      []Difference // listed nowhere: the gate fails
-	Known    []Match
-	Allowed  []Match
-	Warnings []Difference // broken SHOULD leg rules listed nowhere: reported, not failed
+	New         []Difference // listed nowhere: the gate fails
+	Known       []Match
+	OnAllowList []Match
+	Warnings    []Difference // broken SHOULD leg rules listed nowhere: reported, not failed
 }
 
-// Sort sorts the differences of run. An accepted entry wins over a known
-// one; a difference neither lists is new, or a warning when it is a broken
-// SHOULD leg rule.
-func (d Deviations) Sort(run RunName, differences []Difference) Sorted {
-	sorted, _ := d.sort(run, differences)
+// Sort sorts the differences of target in run. An accepted entry wins over
+// a known one; a difference neither lists is new, or a warning when it is a
+// broken SHOULD leg rule.
+func (d Deviations) Sort(run RunName, target string, differences []Difference) Sorted {
+	sorted, _ := d.sort(run, target, differences)
 	return sorted
 }
 
 // sort is Sort that also returns which entries matched something.
-func (d Deviations) sort(run RunName, differences []Difference) (Sorted, []bool) {
+func (d Deviations) sort(run RunName, target string, differences []Difference) (Sorted, []bool) {
 	matched := make([]bool, len(d))
 	var sorted Sorted
 	for _, difference := range differences {
-		if i := d.find(run, difference, KindAccepted); i >= 0 {
+		if i := d.find(run, target, difference, KindAccepted); i >= 0 {
 			matched[i] = true
-			sorted.Allowed = append(sorted.Allowed, Match{difference, d[i]})
-		} else if i := d.find(run, difference, KindKnown); i >= 0 {
+			sorted.OnAllowList = append(sorted.OnAllowList, Match{difference, d[i]})
+		} else if i := d.find(run, target, difference, KindKnown); i >= 0 {
 			matched[i] = true
 			sorted.Known = append(sorted.Known, Match{difference, d[i]})
 		} else if difference.Level == LevelShould {
@@ -142,9 +152,9 @@ func (d Deviations) sort(run RunName, differences []Difference) (Sorted, []bool)
 	return sorted, matched
 }
 
-func (d Deviations) find(run RunName, difference Difference, kind Kind) int {
+func (d Deviations) find(run RunName, target string, difference Difference, kind EntryKind) int {
 	for i, entry := range d {
-		if entry.Kind == kind && entry.matches(run, difference) {
+		if entry.Kind == kind && entry.matches(run, target, difference) {
 			return i
 		}
 	}

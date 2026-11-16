@@ -196,7 +196,7 @@ func (s Suite) Execute(ctx context.Context, job conformance.Job) (conformance.Re
 // Compare compares the recordings with the baseline, ordered by case ID,
 // and checks the leg rules on the responses Marasi sent the client.
 func (s Suite) Compare(_ string, baseline, got conformance.Recordings) (conformance.Comparison, error) {
-	return conformance.CompareCases(baseline, got, nil, func(a, b string) bool { return a < b }, h1.Compare, h1.Check)
+	return conformance.CompareCases(baseline, got, conformance.CaseComparison{Diff: h1.Compare, Legs: []conformance.LegChecker{h1.Check}})
 }
 
 // clientTLS is the shim's TLS client configuration: it trusts the harness

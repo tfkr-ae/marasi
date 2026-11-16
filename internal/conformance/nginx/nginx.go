@@ -157,7 +157,7 @@ func Start(ctx context.Context, c Config) (*Server, error) {
 		if err := conformance.AwaitListener(ctx, l.Address); err != nil {
 			logs, _ := exec.Command("docker", "logs", c.Name).CombinedOutput()
 			s.Stop("")
-			return nil, fmt.Errorf("nginx: %w\n%s", err, logs)
+			return nil, fmt.Errorf("starting nginx: %w\n%s", err, logs)
 		}
 	}
 	return s, nil

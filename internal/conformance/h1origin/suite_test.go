@@ -139,9 +139,9 @@ func TestTransparentRelay(t *testing.T) {
 		if len(result.Cases) != 12 || result.Matched() != 12 || len(result.New)+len(result.Known) != 0 {
 			t.Fatalf("\nwanted 12 of 12 matched and nothing new or known\ngot %d of %d:\n%+v", result.Matched(), len(result.Cases), result.Sorted)
 		}
-		for _, m := range result.Allowed {
+		for _, m := range result.OnAllowList {
 			if m.Field != "leg:via" {
-				t.Fatalf("wanted only Via allowed\ngot:\n%+v", m)
+				t.Fatalf("wanted only Via on the allow-list\ngot:\n%+v", m)
 			}
 		}
 		want := map[string][]string{}
@@ -253,9 +253,9 @@ func TestBrokenStandIn(t *testing.T) {
 		if got := differences(result.Known); !reflect.DeepEqual(got, wantKnown) {
 			t.Fatalf("\nwanted known:\n%+v\ngot:\n%+v", wantKnown, got)
 		}
-		wantAllowed := []conformance.Difference{requestCase(absolute), via(absolute), via(connectPlain), via(connectTLS)}
-		if got := differences(result.Allowed); !reflect.DeepEqual(got, wantAllowed) {
-			t.Fatalf("\nwanted allowed:\n%+v\ngot:\n%+v", wantAllowed, got)
+		wantOnAllowList := []conformance.Difference{requestCase(absolute), via(absolute), via(connectPlain), via(connectTLS)}
+		if got := differences(result.OnAllowList); !reflect.DeepEqual(got, wantOnAllowList) {
+			t.Fatalf("\nwanted on the allow-list:\n%+v\ngot:\n%+v", wantOnAllowList, got)
 		}
 		if len(outcome.WentAway) != 1 || outcome.WentAway[0].Entry.Field != knownGone.Field {
 			t.Fatalf("\nwanted the body entry to have gone away\ngot:\n%+v", outcome.WentAway)
@@ -307,8 +307,8 @@ func TestBrokenStandIn(t *testing.T) {
 		h.settings.UpdateKnown = false
 
 		result := onlyResult(t, runHarness(t, h.settings))
-		if len(result.New) != 0 || len(result.Allowed) != 4 || len(result.Known) != 8 {
-			t.Fatalf("\nwanted 8 known, 4 allowed, none new\ngot:\n%+v", result.Sorted)
+		if len(result.New) != 0 || len(result.OnAllowList) != 4 || len(result.Known) != 8 {
+			t.Fatalf("\nwanted 8 known, 4 on the allow-list, none new\ngot:\n%+v", result.Sorted)
 		}
 		deviations, err := conformance.ReadDeviations(h.settings.DeviationsFile(h1origin.Name))
 		if err != nil {

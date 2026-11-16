@@ -93,7 +93,8 @@ func (s Suite) Setup() conformance.Setup {
 }
 
 // Execute runs h2spec once per selected case through one shim, against
-// one nginx.
+// one nginx, after checkRoute has shown the shim's route reaches TLS from
+// the run's side: the proxy's in a proxied run, nginx's in the direct run.
 func (s Suite) Execute(ctx context.Context, job conformance.Job) (conformance.Recordings, error) {
 	if len(job.Approaches) > 0 && !slices.Contains(job.Approaches, conformance.ApproachConnectTLS) {
 		return conformance.Recordings{}, nil
@@ -161,6 +162,9 @@ func (s Suite) Execute(ctx context.Context, job conformance.Job) (conformance.Re
 		return nil, err
 	}
 	defer server.Stop(filepath.Join(job.Dir, "nginx.log"))
+	if err := checkRoute(ctx, sh.Address(), job); err != nil {
+		return nil, err
+	}
 
 	console, err := os.Create(filepath.Join(job.Dir, "h2spec-connect-tls.log"))
 	if err != nil {
@@ -251,13 +255,13 @@ func dryRun(ctx context.Context, h2spec string) ([]Test, error) {
 // Compare compares each case's verdict, error and end with the baseline,
 // in h2spec's order.
 func (s Suite) Compare(_ string, baseline, got conformance.Recordings) (conformance.Comparison, error) {
-	return conformance.CompareCases(baseline, got, nil, lessCase, compareCase)
+	return conformance.CompareCases(baseline, got, conformance.CaseComparison{Less: lessCase, Diff: compareCase})
 }
 
 func compareCase(caseID string, wantData, gotData json.RawMessage) ([]conformance.Difference, error) {
 	var want, got Recording
 	if err := json.Unmarshal(wantData, &want); err != nil {
-		return nil, fmt.Errorf("baseline: %w", err)
+		return nil, fmt.Errorf("decoding the baseline: %w", err)
 	}
 	if err := json.Unmarshal(gotData, &got); err != nil {
 		return nil, err

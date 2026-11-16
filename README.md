@@ -57,10 +57,10 @@ The source requires Go 1.26 or later. These commands run from the repository roo
 | `make windows-amd64` | Builds `dist/marasi-windows-amd64.exe`. |
 | `make all` | Builds the targets listed by `TARGETS` in [Makefile](Makefile). |
 | `make test` | Runs `go test ./...`. |
-| `make conformance` | Runs the conformance suites in Docker through Marasi and scores each case against its committed direct baseline and deviations file. It exits non-zero on a new deviation, a known deviation that went away, or, in a full run, a deviations entry that matched nothing. |
+| `make conformance` | Runs the conformance suites in Docker through Marasi and scores each case against its committed direct baseline and deviations file. With no `SUITES`, it runs the blocking HTTP/1.1 suites, `h1-origin` and `h1-client`. It exits non-zero on a new deviation, a known deviation that went away, or a stale deviations entry. |
 | `make conformance-baseline` | Runs the selected cases with no proxy and merges them into the direct baselines. For `h1-origin` it records each case twice and leaves out, with an error, a case whose two recordings differ. |
 | `make conformance-update-known PHASE=<n>` | Runs the selected cases, then rewrites the known entries in `deviations.json` and the suite's `score.json`. |
-| `make autobahn`, `make autobahn-baseline` | The same as `make conformance` and `make conformance-baseline`, restricted to the autobahn suite. |
+| `make autobahn`, `make autobahn-baseline` | `make conformance` and `make conformance-baseline` with `SUITES=autobahn`. |
 
 ### Conformance harness
 
@@ -114,7 +114,12 @@ suites:
   `CONNECT` (`connect-tls`). The harness runs h2spec once per case, and a
   case's recording is h2spec's verdict from its JUnit report (`not-run`, with
   h2spec's error, when h2spec could not start the case) plus how the shim saw
-  the connection end. It runs only `proxy` and is report only, like
+  the connection end. h2spec trusts any certificate, so before h2spec runs the
+  harness completes one TLS handshake through the same shim that trusts only
+  Marasi's CA (the harness CA in the direct run). A run whose shim does not go
+  through Marasi fails there. Each known entry names the value Marasi gave
+  (`got`), so a case that fails in another way is new. It runs only `proxy`
+  and is report only, like
   `h2-origin` (`make conformance SUITES=h2-client RUNS=proxy`).
 - `h2-origin` sends each h2 origin fixture case's requests as HTTP/2 streams
   inside `CONNECT` over TLS (`connect-tls`), offering ALPN `h2` then
@@ -144,7 +149,9 @@ Each suite keeps its committed files in `internal/conformance/baselines/<suite>/
 - One direct baseline file for each target, for example `fuzzingclient-strict.json`.
 - `deviations.json`. Each entry names the case IDs it covers (a glob), the
   conformance runs, the field that may differ, its kind, a reason, and an
-  optional RFC. An `accepted` entry is on the allow-list: Marasi keeps that
+  optional RFC. An entry may also name `targets` (globs over the suite's
+  targets, such as `fuzzingserver-*`; none means every target) and `got` (the
+  only value through Marasi it lists). An `accepted` entry is on the allow-list: Marasi keeps that
   difference on purpose, and only a person edits it. A `known` entry is a
   difference Marasi does not mean to keep, with the phase expected to remove it.
 - `score.json`: for each conformance run, target and client approach, the cases
@@ -171,7 +178,8 @@ make conformance SUITES=h2-client RUNS=proxy
 
 Reports are written to `dist/conformance/<suite>/<run>/`: a `summary.md` with
 the score, then new deviations, known deviations that went away, known
-deviations, allowed deviations and leg-rule results, a JSON diff with both recordings for each
+deviations, the differences on the allow-list, and leg-rule results, a JSON
+diff with both recordings for each
 failing case under `diffs/`, Marasi's log, and the tester's output for each
 target. The run log is `dist/conformance/conformance.log`. In GitHub Actions
 the summary is also added to the job summary. `RUNS=direct,proxy` refreshes the
@@ -196,9 +204,11 @@ fails the run, so the score only improves and the file stays true. It usually
 means your change fixed something: remove the entry, or run
 `make conformance-update-known`, which narrows or removes went-away known
 entries, adds a known entry for each new deviation, and rewrites `score.json`.
-It never touches `accepted` entries; only a person edits those. In a full run
-(no `RUNS`, `CASES`, `EXCLUDE`, `APPROACHES`, `MODES` or `PEERS` narrowing), an
-entry that matched nothing at all is stale and fails too. Review the diff of
+It never touches `accepted` entries; only a person edits those. An entry that
+matched nothing is stale and fails too, when a conformance run and target it
+lists ran. With `CASES`, `EXCLUDE` or `APPROACHES` set, only an entry that
+covers a case that ran can be stale. `RUNS`, `MODES` and `PEERS` do not turn
+the check off: an entry for a run or target that did not run is never stale. Review the diff of
 `deviations.json` and `score.json` before you commit it.
 
 The direct baseline changes only when a fixture, a pinned tester or image, or
@@ -216,7 +226,8 @@ make conformance SUITES=h2-origin RUNS=proxy
 make autobahn EXCLUDE='9.*,12.*,13.*'
 ```
 
-`make conformance` with no `SUITES` runs only autobahn. `h1-client` runs only
+`make conformance` with no `SUITES` runs `h1-origin` and `h1-client`, the
+suites that block a merge. `h1-client` runs only
 the Http11Probe tests that `CASES` names exactly (`ID@*` covers every
 approach); with a glob in the ID it runs all 213 tests and narrows afterwards.
 A narrowed run (`RUNS`, `CASES` and the like) checks only the entries its cases
