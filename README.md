@@ -67,7 +67,7 @@ The source requires Go 1.26 or later. These commands run from the repository roo
 The conformance harness measures what Marasi changes in the traffic between a
 client and an origin. It records every case twice: directly (the direct
 baseline) and through Marasi. A case passes when the two recordings match,
-apart from the entries in the suite's `deviations.json`. Today it has three
+apart from the entries in the suite's `deviations.json`. Today it has five
 suites:
 
 - `autobahn` runs the Autobahn WebSocket testsuite, with Marasi on the host.
@@ -106,6 +106,16 @@ suites:
   `Host` field, which names the shim's port, so nginx listens on that port at
   `127.0.0.2`, where Marasi resolves `nginx.test`. The first run builds the
   Http11Probe image, which takes a few minutes.
+- `h2-client` scores Marasi's HTTP/2 client leg with
+  [h2spec](https://github.com/summerwind/h2spec) v2.6.0, installed with
+  `go install` at a pinned version so it never enters `go.mod`, against nginx's
+  TLS listener that offers ALPN `h2`. h2spec does its own TLS (`-t -k`) and
+  connects to the shim, which only tunnels, directly or through Marasi with
+  `CONNECT` (`connect-tls`). The harness runs h2spec once per case, and a
+  case's recording is h2spec's verdict from its JUnit report (`not-run`, with
+  h2spec's error, when h2spec could not start the case) plus how the shim saw
+  the connection end. It runs only `proxy` and is report only, like
+  `h2-origin` (`make conformance SUITES=h2-client RUNS=proxy`).
 - `h2-origin` sends each h2 origin fixture case's requests as HTTP/2 streams
   inside `CONNECT` over TLS (`connect-tls`), offering ALPN `h2` then
   `http/1.1`, to fixtures that script frames and serve ALPN `h2`. Its
@@ -156,6 +166,7 @@ make conformance SUITES=autobahn CASES='3.*,7.9.*' RUNS=proxy MODES=fuzzingclien
 make autobahn EXCLUDE='9.*,12.*,13.*' VERBOSE=1
 make conformance SUITES=h1-origin APPROACHES=connect-plain
 make conformance SUITES=h2-origin RUNS=proxy
+make conformance SUITES=h2-client RUNS=proxy
 ```
 
 Reports are written to `dist/conformance/<suite>/<run>/`: a `summary.md` with

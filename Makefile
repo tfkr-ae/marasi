@@ -51,9 +51,10 @@ help:
 		'                     internal/conformance/baselines/<suite>/; exits non-zero on a new' \
 		'                     deviation, a known deviation that went away, or, in a full run,' \
 		'                     an entry that matched nothing. Suites: autobahn (Marasi on the' \
-		'                     host), h1-origin, h1-client and h2-origin (Marasi in a Linux' \
-		'                     container built for LINUX_ARCH, this machine by default;' \
-		'                     h2-origin is report only, proxy run only: run it on its own).' \
+		'                     host), h1-origin, h1-client, h2-client and h2-origin (Marasi' \
+		'                     in a Linux container built for LINUX_ARCH, this machine by' \
+		'                     default; the h2 suites are report only, proxy run only: run' \
+		'                     them on their own).' \
 		'                     Narrow with SUITES=autobahn' \
 		'                     RUNS=proxy CASES=3.*,7.9.* EXCLUDE=9.* APPROACHES=connect-tls,' \
 		'                     and for autobahn MODES=fuzzingclient PEERS=strict (runs: proxy' \
