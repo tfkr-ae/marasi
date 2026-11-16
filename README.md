@@ -67,8 +67,18 @@ The source requires Go 1.26 or later. These commands run from the repository roo
 The conformance harness measures what Marasi changes in the traffic between a
 client and an origin. It records every case twice: directly (the direct
 baseline) and through Marasi. A case passes when the two recordings match,
-apart from the entries in the suite's `deviations.json`. Today it has one
-suite, `autobahn`, which runs the Autobahn WebSocket testsuite.
+apart from the entries in the suite's `deviations.json`. Today it has two
+suites:
+
+- `autobahn` runs the Autobahn WebSocket testsuite, with Marasi on the host.
+- `h1-origin` sends each origin fixture case's HTTP/1.1 requests with the
+  harness's own client, as an absolute-form request (`absolute`) and as plain
+  HTTP inside `CONNECT` (`connect-plain`). Its recording holds the responses the
+  client received and the requests the origin received. Hop-by-hop fields and
+  framing are left out of the comparison. Marasi runs in a Linux container built
+  by `make linux-<arch>` for this machine's architecture (`LINUX_ARCH`), on the
+  host's network, and resolves the fixtures' name `origin.test` to loopback.
+  The `proxy` run is the only conformance run so far.
 
 Each suite keeps its committed files in `internal/conformance/baselines/<suite>/`:
 
@@ -93,6 +103,7 @@ Variables narrow a run:
 ```bash
 make conformance SUITES=autobahn CASES='3.*,7.9.*' RUNS=proxy MODES=fuzzingclient PEERS=strict
 make autobahn EXCLUDE='9.*,12.*,13.*' VERBOSE=1
+make conformance SUITES=h1-origin APPROACHES=connect-plain
 ```
 
 Reports are written to `dist/conformance/<suite>/<run>/`: a `summary.md` with

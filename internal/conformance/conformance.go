@@ -65,6 +65,7 @@ type TrafficKind string
 // Traffic kinds.
 const (
 	TrafficWebSocket TrafficKind = "websocket"
+	TrafficHTTP      TrafficKind = "http" // request/response pairs
 )
 
 // CheckpointKind is a Checkpoint item kind a suite needs held in the
@@ -81,6 +82,12 @@ type Setup struct {
 	Traffic    TrafficKind      // checked before and after each target
 	Checkpoint []CheckpointKind // held and resolved in the Checkpoint runs
 	Extension  string           // Lua appended to the workshop extension in the extension run
+	// Container runs Marasi in a Linux container (ContainerLauncher)
+	// rather than on the host.
+	Container bool
+	// Hosts are names Marasi in its container resolves to loopback, where
+	// the suite's in-process targets listen.
+	Hosts []string
 }
 
 // Recordings maps a case ID to a suite's recording of that case, as JSON.

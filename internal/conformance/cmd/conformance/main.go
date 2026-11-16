@@ -12,12 +12,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/tfkr-ae/marasi/internal/conformance"
 	"github.com/tfkr-ae/marasi/internal/conformance/autobahn"
+	"github.com/tfkr-ae/marasi/internal/conformance/h1origin"
 )
 
 // narrowing are the flags that select less than everything. A run with
@@ -34,8 +36,11 @@ func main() {
 		autobahnSuite            autobahn.Suite
 		modes, peers             string
 		verbose                  bool
+		container                conformance.ContainerSettings
 	)
 	flag.StringVar(&binary, "marasi", "dist/marasi", "marasi binary")
+	flag.StringVar(&container.Arch, "linux-arch", runtime.GOARCH, "architecture of Marasi's container")
+	flag.StringVar(&container.Binary, "marasi-linux", "", "marasi binary for the container; empty means dist/marasi-linux-<linux-arch>")
 	flag.StringVar(&settings.OutDir, "out", "dist/conformance", "reports and tester working directories")
 	flag.StringVar(&settings.BaselineDir, "baselines", "internal/conformance/baselines", "committed baselines, one directory per suite")
 	flag.StringVar(&suites, "suites", autobahn.Name, "comma-separated suites")
@@ -81,11 +86,16 @@ func main() {
 		switch name {
 		case autobahn.Name:
 			settings.Suites = append(settings.Suites, autobahnSuite)
+		case h1origin.Name:
+			settings.Suites = append(settings.Suites, h1origin.Suite{})
 		default:
 			fail(fmt.Errorf("unknown suite %q", name))
 		}
 	}
-	for _, dir := range []*string{&binary, &settings.OutDir, &settings.BaselineDir} {
+	if container.Binary == "" {
+		container.Binary = "dist/marasi-linux-" + container.Arch
+	}
+	for _, dir := range []*string{&binary, &container.Binary, &settings.OutDir, &settings.BaselineDir} {
 		abs, err := filepath.Abs(*dir)
 		if err != nil {
 			fail(err)
@@ -111,7 +121,8 @@ func main() {
 		defer summary.Close()
 		settings.Summary = summary
 	}
-	settings.Launch = conformance.MarasiLauncher(binary, settings.Log)
+	settings.Launch = conformance.Launchers(conformance.MarasiLauncher(binary, settings.Log),
+		conformance.ContainerLauncher(container, settings.Log))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
