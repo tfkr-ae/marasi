@@ -67,7 +67,7 @@ The source requires Go 1.26 or later. These commands run from the repository roo
 The conformance harness measures what Marasi changes in the traffic between a
 client and an origin. It records every case twice: directly (the direct
 baseline) and through Marasi. A case passes when the two recordings match,
-apart from the entries in the suite's `deviations.json`. Today it has two
+apart from the entries in the suite's `deviations.json`. Today it has three
 suites:
 
 - `autobahn` runs the Autobahn WebSocket testsuite, with Marasi on the host.
@@ -93,6 +93,19 @@ suites:
   machine's architecture (`LINUX_ARCH`), on the
   host's network, and resolves the fixtures' name `origin.test` to loopback.
   The harness drives it through a control listener on loopback.
+- `h1-client` scores Marasi's HTTP/1.1 client leg with
+  [Http11Probe](https://github.com/MDA2AV/Http11Probe), a third-party tester
+  built in Docker from a pinned commit, against nginx pinned by digest. Neither
+  has a proxy option, so Http11Probe connects to the harness's shim, which
+  splices each connection to nginx directly, or through Marasi with `CONNECT`
+  (`connect-plain`), and adds TLS itself for `connect-tls`. A case is an
+  Http11Probe test with the approach, and its recording is the test's verdict
+  plus the shim's capture of the connection, compared like `h1-origin`'s client
+  side. The leg rules run on the responses Marasi sent. Marasi runs in the same
+  container as for `h1-origin`. Martian routes a request inside `CONNECT` by its
+  `Host` field, which names the shim's port, so nginx listens on that port at
+  `127.0.0.2`, where Marasi resolves `nginx.test`. The first run builds the
+  Http11Probe image, which takes a few minutes.
 
 For TLS, the harness generates a CA on each run and never writes its key to
 disk. The fixtures serve certificates it issues. In Marasi's container,

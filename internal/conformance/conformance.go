@@ -109,7 +109,9 @@ type Setup struct {
 	// rather than on the host.
 	Container bool
 	// Hosts are names Marasi in its container resolves to loopback, where
-	// the suite's in-process targets listen.
+	// the suite's in-process targets listen. A "name:address" entry
+	// resolves the name to that IPv4 address instead, such as another
+	// loopback address.
 	Hosts []string
 }
 

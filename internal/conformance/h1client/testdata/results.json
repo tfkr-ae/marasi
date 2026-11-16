@@ -1,0 +1,94 @@
+{
+  "summary": {
+    "total": 213,
+    "scored": 4,
+    "passed": 4,
+    "failed": 0,
+    "warnings": 0,
+    "errors": 0,
+    "skipped": 209,
+    "durationMs": 4517.0313
+  },
+  "results": [
+    {
+      "id": "COMP-BASELINE",
+      "description": "Valid GET request — confirms server is reachable",
+      "category": "Compliance",
+      "scored": true,
+      "rfcLevel": "NotApplicable",
+      "expected": "2xx",
+      "verdict": "Pass",
+      "statusCode": 200,
+      "connectionState": "Open",
+      "durationMs": 168.7502,
+      "rawRequest": "GET / HTTP/1.1\r\nHost: 127.0.0.1:18087\r\n\r\n",
+      "rawResponse": "HTTP/1.1 200 OK\r\nServer: nginx/1.29.3\r\nDate: Mon, 16 Nov 2026 19:51:54 GMT\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nOK"
+    },
+    {
+      "id": "RFC9112-2.2-BARE-LF-REQUEST-LINE",
+      "description": "Bare LF in request line should be rejected, but MAY be accepted",
+      "category": "Compliance",
+      "rfcReference": "RFC 9112 §2.2",
+      "scored": true,
+      "rfcLevel": "May",
+      "expected": "400 or close (pass), 2xx (warn)",
+      "verdict": "Skip",
+      "connectionState": "Open",
+      "durationMs": 0
+    },
+    {
+      "id": "RFC9112-2.2-BARE-LF-HEADER",
+      "description": "Bare LF in header should be rejected, but MAY be accepted",
+      "category": "Compliance",
+      "rfcReference": "RFC 9112 §2.2",
+      "scored": true,
+      "rfcLevel": "May",
+      "expected": "400 or close (pass), 2xx (warn)",
+      "verdict": "Skip",
+      "connectionState": "Open",
+      "durationMs": 0
+    },
+    {
+      "id": "SMUG-CL-TE-BOTH",
+      "description": "Both Content-Length and Transfer-Encoding present — server MAY reject or process with TE alone",
+      "category": "Smuggling",
+      "rfcReference": "RFC 9112 §6.1",
+      "scored": true,
+      "rfcLevel": "OughtTo",
+      "expected": "400 or 2xx",
+      "verdict": "Pass",
+      "statusCode": 400,
+      "connectionState": "ClosedByServer",
+      "durationMs": 108.2995,
+      "rawRequest": "POST / HTTP/1.1\r\nHost: 127.0.0.1:18087\r\nContent-Length: 23\r\nTransfer-Encoding: chunked\r\n\r\nD\r\nhello-bananas\r\n0\r\n\r\n",
+      "rawResponse": "HTTP/1.1 400 Bad Request\r\nServer: nginx/1.29.3\r\nDate: Mon, 16 Nov 2026 19:51:54 GMT\r\nContent-Type: text/html\r\nContent-Length: 157\r\nConnection: close\r\n\r\n<html>\r\n<head><title>400 Bad Request</title></head>\r\n<body>\r\n<center><h1>400 Bad Request</h1></center>\r\n<hr><center>nginx/1.29.3</center>\r\n</body>\r\n</html>\r\n"
+    },
+    {
+      "id": "SMUG-TECL-PIPELINE",
+      "description": "TE.CL conflict — Transfer-Encoding: chunked + conflicting Content-Length",
+      "category": "Smuggling",
+      "rfcReference": "RFC 9112 §6.1",
+      "scored": true,
+      "rfcLevel": "May",
+      "expected": "400 or close preferred; 2xx acceptable",
+      "verdict": "Pass",
+      "statusCode": 400,
+      "connectionState": "Open",
+      "durationMs": 2225.0938,
+      "rawRequest": "POST / HTTP/1.1\r\nHost: 127.0.0.1:18087\r\nTransfer-Encoding: chunked\r\nContent-Length: 30\r\n\r\n0\r\n\r\n",
+      "rawResponse": "HTTP/1.1 400 Bad Request\r\nServer: nginx/1.29.3\r\nDate: Mon, 16 Nov 2026 19:51:54 GMT\r\nContent-Type: text/html\r\nContent-Length: 157\r\nConnection: close\r\n\r\n<html>\r\n<head><title>400 Bad Request</title></head>\r\n<body>\r\n<center><h1>400 Bad Request</h1></center>\r\n<hr><center>nginx/1.29.3</center>\r\n</body>\r\n</html>\r\n"
+    },
+    {
+      "id": "MAL-EMPTY-REQUEST",
+      "description": "Zero bytes — TCP connection established without sending any data",
+      "category": "MalformedInput",
+      "scored": true,
+      "rfcLevel": "NotApplicable",
+      "expected": "400/close/timeout",
+      "verdict": "Pass",
+      "connectionState": "TimedOut",
+      "durationMs": 2008.7619,
+      "rawRequest": ""
+    }
+  ]
+}
