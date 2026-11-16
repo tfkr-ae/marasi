@@ -1,0 +1,5 @@
+# Transparency keeps header case and order
+
+RFC 9110 §5.3 makes field names case-insensitive and lets the order of fields with different names change. It requires only that the order of field lines with the same name and their values are kept. Marasi's conformance comparison is stricter. Header name case, the order of all field lines, and the whitespace in values are compared too. We decided this because Marasi is a security testing tool: the exact shape of the origin's headers is evidence, used for fingerprinting and for odd casing that one parser accepts and another rejects. Keeping it is still RFC-conformant, since the RFC allows these changes but never requires them. Martian canonicalises header names today, which is a known deviation until the HTTP/1.1 library replaces it.
+
+**Consequences:** when the client leg is HTTP/2 and the origin leg HTTP/1.1, or the other way round, case cannot be kept, because HTTP/2 requires lowercase names. That needs an allow-list entry when HTTP/2 is built.
