@@ -46,11 +46,14 @@ help:
 		'make test            run tests' \
 		'make lint            check gofmt, run go vet and staticcheck' \
 		'make check           run lint, then the short tests; run it before you commit' \
-		'make conformance     run the conformance suites (Docker) through Marasi and score each' \
-		'                     case against its direct baseline and deviations.json in' \
-		'                     internal/conformance/baselines/<suite>/; exits non-zero on a new' \
-		'                     deviation, a known deviation that went away, or, in a full run,' \
-		'                     an entry that matched nothing. Suites: autobahn (Marasi on the' \
+		'make conformance     conformance harness: run the suites (Docker) directly and' \
+		'                     through Marasi, and score each case against its direct baseline' \
+		'                     and deviations.json in internal/conformance/baselines/<suite>/.' \
+		'                     Exits non-zero on a new deviation (listed in no entry), a known' \
+		'                     deviation that went away (its cases ran and Marasi now matches' \
+		'                     the baseline: remove the entry or run conformance-update-known)' \
+		'                     or, in a full run, an entry that matched nothing. SUITES' \
+		'                     defaults to autobahn. Suites: autobahn (Marasi on the' \
 		'                     host), h1-origin, h1-client, h2-client and h2-origin (Marasi' \
 		'                     in a Linux container built for LINUX_ARCH, this machine by' \
 		'                     default; the h2 suites are report only, proxy run only: run' \
@@ -60,10 +63,16 @@ help:
 		'                     and for autobahn MODES=fuzzingclient PEERS=strict (runs: proxy' \
 		'                     checkpoint-forward checkpoint-edit extension). VERBOSE=1 streams' \
 		'                     tester output. Reports land in dist/conformance/<suite>/<run>/.' \
+		'                     Quick runs: SUITES=h1-origin RUNS=proxy,' \
+		'                     SUITES=h1-client RUNS=proxy CASES=SMUG-CL-TE-BOTH@* (exact IDs run' \
+		'                     only those probes), SUITES=h2-origin RUNS=proxy. CI: the' \
+		'                     conformance workflow (h1 jobs are required checks).' \
 		'make conformance-baseline  rerun the selected cases with no proxy and merge them' \
 		'                     into the direct baselines' \
 		'make conformance-update-known PHASE=2  run, then rewrite the known entries of' \
-		'                     deviations.json and score.json; accepted entries are never touched' \
+		'                     deviations.json (adds new deviations with PHASE, narrows or removes' \
+		'                     went-away ones) and score.json; accepted entries are never touched.' \
+		'                     Review the diff before you commit it' \
 		'make autobahn        make conformance SUITES=autobahn' \
 		'make autobahn-baseline  make conformance-baseline SUITES=autobahn' \
 		'make install         build and install to $(BINDIR)/$(BIN)' \

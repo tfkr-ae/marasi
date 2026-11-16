@@ -180,23 +180,75 @@ under emulation, the Autobahn direct baseline takes about 20 minutes. The strict
 peers negotiate permessage-deflate, so 12.x and 13.x are most of a direct
 strict suite.
 
-A known deviation that went away fails the run: a change fixed it, so remove
-its entry, or run `make conformance-update-known PHASE=<n>`, which also adds a
-known entry for each new deviation with the phase you give. Review that diff
-before you commit it.
+#### Updating baselines and known entries
+
+A deviation is "new" when no entry in `deviations.json` lists it: the run
+fails. If the change meant it, or it is a Martian difference a later phase
+removes, record it as a known entry with the phase expected to remove it:
+
+```bash
+make conformance-update-known SUITES=h1-origin PHASE=2
+```
+
+A known deviation "went away" when a run covered its cases and the difference
+no longer appears: Marasi now matches the direct baseline there. That also
+fails the run, so the score only improves and the file stays true. It usually
+means your change fixed something: remove the entry, or run
+`make conformance-update-known`, which narrows or removes went-away known
+entries, adds a known entry for each new deviation, and rewrites `score.json`.
+It never touches `accepted` entries; only a person edits those. In a full run
+(no `RUNS`, `CASES`, `EXCLUDE`, `APPROACHES`, `MODES` or `PEERS` narrowing), an
+entry that matched nothing at all is stale and fails too. Review the diff of
+`deviations.json` and `score.json` before you commit it.
+
+The direct baseline changes only when a fixture, a pinned tester or image, or
+the harness changes. Refresh it with `make conformance-baseline SUITES=<suite>`
+(or `CASES=` for the cases you touched) and review its diff before you commit.
+
+#### Quick local runs
+
+Each command scores one suite and one run, the same as one CI job:
+
+```bash
+make conformance SUITES=h1-origin RUNS=proxy
+make conformance SUITES=h1-client RUNS=proxy CASES='SMUG-CL-TE-BOTH@*'
+make conformance SUITES=h2-origin RUNS=proxy
+make autobahn EXCLUDE='9.*,12.*,13.*'
+```
+
+`make conformance` with no `SUITES` runs only autobahn. `h1-client` runs only
+the Http11Probe tests that `CASES` names exactly (`ID@*` covers every
+approach); with a glob in the ID it runs all 213 tests and narrows afterwards.
+A narrowed run (`RUNS`, `CASES` and the like) checks only the entries its cases
+cover.
+
+### Conformance checks in CI
+
+The `conformance` workflow (`.github/workflows/conformance.yml`) runs on every
+pull request, every Monday, and when you start it manually. Every job runs on
+`ubuntu-24.04`, adds its summaries to the job summary, and uploads
+`dist/conformance/` as an artifact named after the job. On Linux, Marasi's
+container is built for amd64 and shares the runner's network, where all of
+`127.0.0.0/8` is loopback.
+
+- `h1-client (<run>)` and `h1-origin (<run>)`, one job for each of `proxy`,
+  `checkpoint-forward`, `checkpoint-edit` and `extension`, run on every pull
+  request with no path filter. They are the required checks.
+- `h2-client (proxy)` and `h2-origin (proxy)` are report only
+  (`continue-on-error`): their score is in the job summary, and a failure does
+  not block a merge.
+- `autobahn (<run>, <mode>)` runs only when the `autobahn paths` job's
+  `git diff` against the pull request's base shows a change to an Autobahn
+  path, and always on the schedule and on manual dispatch. The paths include
+  `db/` and `proxy.go` because a WebSocket relay waits on the database
+  writer's queue: a change that slows the writer can fail a case even though
+  it touches no WebSocket code. On a failure, the job's artifact holds the
+  per-case reports, Marasi's log, and a resource log, and the job log shows
+  kernel OOM messages.
 
 ### Autobahn checks
 
-The Autobahn workflow in GitHub Actions runs the autobahn suite on every pull
-request that changes a path in its `paths` filter, every Monday, and when you
-start it manually. The filter includes `db/` and `proxy.go` because a WebSocket
-relay waits on the database writer's queue: a change that slows the writer can
-fail a case even though it touches no WebSocket code. A job fails on any new
-deviation from the committed baseline. On a failure, the job's artifact holds
-the per-case reports, Marasi's log, and a resource log, and the job log shows
-kernel OOM messages.
-
-Run it locally on a change to the same paths:
+Run Autobahn locally on a change to its paths:
 
 1. Before you push, run the quick check. It skips the large-message (9.x) and
    compression (12.x, 13.x) sections and takes about 7 minutes:
