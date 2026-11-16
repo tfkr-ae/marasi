@@ -31,8 +31,8 @@ func (s Settings) writeReports(suite string, run RunName, dir string, results []
 }
 
 // WriteSummary writes the Markdown summary of one suite and run: the score,
-// then new deviations, known deviations that went away, known deviations
-// and allowed deviations, most urgent first.
+// then new deviations, known deviations that went away, known deviations,
+// allowed deviations and leg-rule results, most urgent first.
 func WriteSummary(w io.Writer, suite string, run RunName, results []Result, wentAway []WentAway) {
 	fmt.Fprintf(w, "## %s: %s\n\n", suite, run)
 
@@ -110,6 +110,58 @@ func WriteSummary(w io.Writer, suite string, run RunName, results []Result, went
 		}
 		return wrote
 	})
+	writeLegRules(w, results)
+}
+
+// writeLegRules writes each leg rule checked with its passed and broken
+// counts, then the broken SHOULD rules nothing lists. A suite with no leg
+// rules gets no section. Broken MUST rules are in the sections above.
+func writeLegRules(w io.Writer, results []Result) {
+	type count struct {
+		rule           LegRule
+		passed, broken int
+	}
+	var counts []*count
+	byID := map[string]*count{}
+	for _, result := range results {
+		for _, check := range result.LegChecks {
+			c := byID[check.Rule.ID]
+			if c == nil {
+				c = &count{rule: check.Rule}
+				byID[check.Rule.ID] = c
+				counts = append(counts, c)
+			}
+			if check.Broken {
+				c.broken++
+			} else {
+				c.passed++
+			}
+		}
+	}
+	if len(counts) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\n### Leg rules\n\n")
+	writeRow(w, "Rule", "RFC", "Level", "Passed", "Broken", "Asks")
+	writeRow(w, "---", "---", "---", "---:", "---:", "---")
+	for _, c := range counts {
+		writeRow(w, c.rule.ID, c.rule.RFC, string(c.rule.Level), strconv.Itoa(c.passed), strconv.Itoa(c.broken), c.rule.Text)
+	}
+	fmt.Fprintf(w, "\nWarnings (broken SHOULD rules nothing lists):\n\n")
+	wrote := false
+	for _, result := range results {
+		for _, d := range result.Warnings {
+			if !wrote {
+				writeRow(w, "Target", "Case", "Rule", "Got")
+				writeRow(w, "---", "---", "---", "---")
+				wrote = true
+			}
+			writeRow(w, result.Target, d.Case, d.Field, d.Got)
+		}
+	}
+	if !wrote {
+		fmt.Fprintln(w, "None.")
+	}
 }
 
 // section writes a heading and body, or "None." when body writes nothing.
@@ -163,6 +215,11 @@ func writeCaseDiffs(dir string, result *Result, baseline, got Recordings) error 
 		diff := caseDiff{Suite: result.Suite, Run: result.Run, Target: result.Target, Case: id,
 			Baseline: orNull(baseline[id]), Got: orNull(got[id])}
 		for _, d := range result.New {
+			if d.Case == id {
+				diff.Differences = append(diff.Differences, d)
+			}
+		}
+		for _, d := range result.Warnings {
 			if d.Case == id {
 				diff.Differences = append(diff.Differences, d)
 			}

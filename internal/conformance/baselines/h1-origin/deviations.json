@@ -1,5 +1,18 @@
 [
   {
+    "cases": "*",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "leg:via",
+    "kind": "accepted",
+    "reason": "a testing tool does not announce itself to the origin or add a header the user did not send (docs/adr/2026-11-16-the-proxy-follows-hop-by-hop-rules-but-sends-no-via.md)",
+    "rfc": "RFC 9110 §7.6.3"
+  },
+  {
     "cases": "chunked-trailers@absolute",
     "runs": [
       "proxy"
@@ -117,6 +130,66 @@
     "field": "origin[0].requests[0].fields.order",
     "kind": "known",
     "reason": "measured by conformance-update-known: baseline \"host, x-request-id, x-lower-case\", got \"host, x-lower-case, x-request-id\"",
+    "phase": 2
+  },
+  {
+    "cases": "connection-named-fields@absolute",
+    "runs": [
+      "proxy"
+    ],
+    "field": "leg:connection",
+    "kind": "known",
+    "reason": "Martian forwards the fields Connection names on both legs (docs/adr/2026-10-19-the-proxy-adds-no-headers-to-a-request.md forwards Connection lines as written): sent X-Hop to the origin and X-Back to the client",
+    "phase": 2
+  },
+  {
+    "cases": "connection-named-fields@connect-plain",
+    "runs": [
+      "proxy"
+    ],
+    "field": "leg:connection",
+    "kind": "known",
+    "reason": "Martian forwards the fields Connection names on both legs (docs/adr/2026-10-19-the-proxy-adds-no-headers-to-a-request.md forwards Connection lines as written): sent X-Hop to the origin and X-Back to the client",
+    "phase": 2
+  },
+  {
+    "cases": "same-name-fields@absolute",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].responses[0].fields.order",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"set-cookie, x-other, set-cookie, x-multi, x-multi\", got \"set-cookie, set-cookie, x-multi, x-multi, x-other\"",
+    "phase": 2
+  },
+  {
+    "cases": "same-name-fields@absolute",
+    "runs": [
+      "proxy"
+    ],
+    "field": "origin[0].requests[0].fields.order",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"host, x-multi, x-other, x-multi, x-multi\", got \"host, x-multi, x-multi, x-multi, x-other\"",
+    "phase": 2
+  },
+  {
+    "cases": "same-name-fields@connect-plain",
+    "runs": [
+      "proxy"
+    ],
+    "field": "client[0].responses[0].fields.order",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"set-cookie, x-other, set-cookie, x-multi, x-multi\", got \"set-cookie, set-cookie, x-multi, x-multi, x-other\"",
+    "phase": 2
+  },
+  {
+    "cases": "same-name-fields@connect-plain",
+    "runs": [
+      "proxy"
+    ],
+    "field": "origin[0].requests[0].fields.order",
+    "kind": "known",
+    "reason": "measured by conformance-update-known: baseline \"host, x-multi, x-other, x-multi, x-multi\", got \"host, x-multi, x-multi, x-multi, x-other\"",
     "phase": 2
   }
 ]

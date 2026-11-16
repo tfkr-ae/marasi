@@ -75,7 +75,15 @@ suites:
   harness's own client, as an absolute-form request (`absolute`) and as plain
   HTTP inside `CONNECT` (`connect-plain`). Its recording holds the responses the
   client received and the requests the origin received. Hop-by-hop fields and
-  framing are left out of the comparison. Marasi runs in a Linux container built
+  framing are left out of the comparison and checked by leg rules instead, on
+  what Marasi sent on each leg: `leg:connection` (remove `Connection` and the
+  fields it names, RFC 9110 §7.6.1), `leg:framing` (valid framing that matches
+  the body, RFC 9112 §6), `leg:cl-and-te` (never both `Content-Length` and
+  `Transfer-Encoding`, RFC 9112 §6.1), `leg:field-order` (keep the order of
+  same-name field lines, RFC 9110 §5.3) and `leg:via` (send `Via`, RFC 9110
+  §7.6.3, accepted: Marasi does not announce itself). A broken MUST rule fails
+  like a deviation unless `deviations.json` lists its ID as the field; a broken
+  SHOULD rule warns. Marasi runs in a Linux container built
   by `make linux-<arch>` for this machine's architecture (`LINUX_ARCH`), on the
   host's network, and resolves the fixtures' name `origin.test` to loopback.
   The `proxy` run is the only conformance run so far.
@@ -88,8 +96,9 @@ Each suite keeps its committed files in `internal/conformance/baselines/<suite>/
   optional RFC. An `accepted` entry is on the allow-list: Marasi keeps that
   difference on purpose, and only a person edits it. A `known` entry is a
   difference Marasi does not mean to keep, with the phase expected to remove it.
-- `score.json`: for each conformance run and target, the cases that matched the
-  baseline out of the cases run.
+- `score.json`: for each conformance run, target and client approach, the cases
+  that matched the baseline out of the cases run, and the leg rules that passed
+  and failed (one per rule and case).
 
 The suites need Docker with host networking. `make conformance` runs four
 conformance runs: `proxy` (no interception), `checkpoint-forward` (global
@@ -108,7 +117,7 @@ make conformance SUITES=h1-origin APPROACHES=connect-plain
 
 Reports are written to `dist/conformance/<suite>/<run>/`: a `summary.md` with
 the score, then new deviations, known deviations that went away, known
-deviations and allowed deviations, a JSON diff with both recordings for each
+deviations, allowed deviations and leg-rule results, a JSON diff with both recordings for each
 failing case under `diffs/`, Marasi's log, and the tester's output for each
 target. The run log is `dist/conformance/conformance.log`. In GitHub Actions
 the summary is also added to the job summary. `RUNS=direct,proxy` refreshes the

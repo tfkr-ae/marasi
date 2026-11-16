@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/textproto"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,9 +19,14 @@ import (
 
 // standIn is an in-process forward proxy for the harness's own tests. It
 // takes absolute-form requests and CONNECT, dials every origin on loopback,
-// and relays bytes. With broken set it canonicalises the field names of the
-// first request and response on each connection and swallows the first
-// trailer of a chunked response.
+// and relays bytes, removing Connection and the fields it names from the
+// first request and response on each connection. With broken set it instead
+// canonicalises the field names of that request and response and forwards
+// their Connection fields, and by request path:
+//   - /chunked: swallows the first trailer of the chunked response
+//   - any other path: adds Via to the request and response
+//   - /reframe: re-frames the chunked response to a matching Content-Length
+//   - /cl-te: sends Content-Length with the chunked response
 type standIn struct {
 	listener    net.Listener
 	broken      bool
@@ -97,8 +103,14 @@ func (s *standIn) serve(client net.Conn) {
 	}
 	defer origin.Close()
 
+	path := strings.Fields(head[0] + " -")[1]
 	if s.broken {
 		canonicalise(head)
+		if path != "/chunked" {
+			head = append(head, "Via: 1.1 standin")
+		}
+	} else {
+		head = stripConnection(head)
 	}
 	if _, err := io.WriteString(origin, strings.Join(head, "\r\n")+"\r\n\r\n"); err != nil {
 		return
@@ -111,34 +123,122 @@ func (s *standIn) serve(client net.Conn) {
 		}
 		close(done)
 	}()
-	s.relayResponse(client, bufio.NewReader(origin))
+	s.relayResponse(client, bufio.NewReader(origin), path)
 	<-done
 }
 
 // relayResponse copies the origin's bytes to the client, reworking the
-// first response when the stand-in is broken.
-func (s *standIn) relayResponse(client net.Conn, origin *bufio.Reader) {
+// head of the first response, and its body when the stand-in is broken.
+func (s *standIn) relayResponse(client net.Conn, origin *bufio.Reader, path string) {
 	defer func() {
 		if tcp, ok := client.(*net.TCPConn); ok {
 			_ = tcp.CloseWrite()
 		}
 	}()
-	if s.broken {
-		head, err := readHead(origin)
+	head, err := readHead(origin)
+	if err != nil {
+		return
+	}
+	writeHead := func(head []string) bool {
+		_, err := io.WriteString(client, strings.Join(head, "\r\n")+"\r\n\r\n")
+		return err == nil
+	}
+	if !s.broken {
+		if writeHead(stripConnection(head)) {
+			_, _ = io.Copy(client, origin)
+		}
+		return
+	}
+	canonicalise(head)
+	if path != "/chunked" {
+		head = append(head, "Via: 1.1 standin")
+	}
+	chunked := strings.Contains(strings.ToLower(strings.Join(head, "\n")), "transfer-encoding: chunked")
+	switch {
+	case chunked && path == "/chunked":
+		if !writeHead(head) || swallowTrailer(client, origin) != nil {
+			return
+		}
+	case chunked && (path == "/reframe" || path == "/cl-te"):
+		raw, body, err := readChunked(origin)
 		if err != nil {
 			return
 		}
-		canonicalise(head)
-		if _, err := io.WriteString(client, strings.Join(head, "\r\n")+"\r\n\r\n"); err != nil {
+		if path == "/reframe" {
+			head = slices.DeleteFunc(head, func(line string) bool {
+				return strings.HasPrefix(strings.ToLower(line), "transfer-encoding:")
+			})
+			raw = body
+		}
+		head = append(head, "Content-Length: "+strconv.Itoa(len(body)))
+		if !writeHead(head) {
 			return
 		}
-		if strings.Contains(strings.ToLower(strings.Join(head, "\n")), "transfer-encoding: chunked") {
-			if err := swallowTrailer(client, origin); err != nil {
-				return
-			}
+		if _, err := client.Write(raw); err != nil {
+			return
+		}
+	default:
+		if !writeHead(head) {
+			return
 		}
 	}
 	_, _ = io.Copy(client, origin)
+}
+
+// readChunked reads a chunked body with its trailer section and returns its
+// bytes as sent and de-framed.
+func readChunked(r *bufio.Reader) (raw, body []byte, err error) {
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return nil, nil, err
+		}
+		raw = append(raw, line...)
+		size, err := strconv.ParseInt(strings.TrimSpace(line), 16, 64)
+		if err != nil {
+			return nil, nil, err
+		}
+		if size == 0 {
+			break
+		}
+		chunk := make([]byte, size+2)
+		if _, err := io.ReadFull(r, chunk); err != nil {
+			return nil, nil, err
+		}
+		raw = append(raw, chunk...)
+		body = append(body, chunk[:size]...)
+	}
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return nil, nil, err
+		}
+		raw = append(raw, line...)
+		if strings.TrimSpace(line) == "" {
+			return raw, body, nil
+		}
+	}
+}
+
+// stripConnection removes Connection and the fields it names, as a proxy must.
+func stripConnection(head []string) []string {
+	named := map[string]bool{"connection": true}
+	for _, line := range head[1:] {
+		name, value, _ := strings.Cut(line, ":")
+		if strings.EqualFold(strings.TrimSpace(name), "connection") {
+			for _, option := range strings.Split(value, ",") {
+				named[strings.ToLower(strings.TrimSpace(option))] = true
+			}
+		}
+	}
+	kept := head[:1:1]
+	for _, line := range head[1:] {
+		name, _, _ := strings.Cut(line, ":")
+		if !named[strings.ToLower(strings.TrimSpace(name))] {
+			kept = append(kept, line)
+		}
+	}
+	return kept
 }
 
 // swallowTrailer copies a chunked body and drops its first trailer line.

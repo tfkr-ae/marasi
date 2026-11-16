@@ -31,6 +31,43 @@ var trailerCase = h1origin.Case{
 	},
 }
 
+// The leg-rule cases. The broken stand-in adds Via to each, forwards the
+// fields Connection names on /hop, re-frames the chunked body to a matching
+// Content-Length on /reframe, and sends Content-Length with chunked on /cl-te.
+var (
+	hopCase = h1origin.Case{
+		ID:  "hop-by-hop",
+		RFC: "RFC 9110 §7.6.1 Connection",
+		Requests: []string{
+			"GET /hop HTTP/1.1\r\nHost: {authority}\r\nConnection: X-Hop\r\nX-Hop: 1\r\n\r\n",
+		},
+		Script: []h1origin.Step{
+			h1origin.Await(),
+			h1origin.Send("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: X-Back\r\nX-Back: 1\r\n\r\nok"),
+		},
+	}
+	reframeCase = h1origin.Case{
+		ID:       "reframe",
+		RFC:      "RFC 9112 §6 framing",
+		Requests: []string{"GET /reframe HTTP/1.1\r\nHost: {authority}\r\n\r\n"},
+		Script: []h1origin.Step{
+			h1origin.Await(),
+			h1origin.Send("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n7\r\n, world\r\n0\r\n\r\n"),
+		},
+	}
+	clteCase = h1origin.Case{
+		ID:       "cl-te",
+		RFC:      "RFC 9112 §6.1 Content-Length with Transfer-Encoding",
+		Requests: []string{"GET /cl-te HTTP/1.1\r\nHost: {authority}\r\n\r\n"},
+		Script: []h1origin.Step{
+			h1origin.Await(),
+			h1origin.Send("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"),
+		},
+	}
+	acceptVia = conformance.Entry{Cases: "*", Runs: []conformance.RunName{conformance.RunProxy}, Field: "leg:via",
+		Kind: conformance.KindAccepted, Reason: "a testing tool does not announce itself to the origin", RFC: "RFC 9110 §7.6.3"}
+)
+
 type harness struct {
 	settings conformance.Settings
 	silent   *bool // the next stand-in reports no traffic
@@ -38,12 +75,16 @@ type harness struct {
 
 // newHarness records the direct baseline and returns settings for a proxy
 // run that launches a fresh stand-in each time, as a run launches Marasi.
-func newHarness(t *testing.T, broken bool, deviations conformance.Deviations) harness {
+// cases default to trailerCase alone.
+func newHarness(t *testing.T, broken bool, deviations conformance.Deviations, cases ...h1origin.Case) harness {
 	t.Helper()
+	if len(cases) == 0 {
+		cases = []h1origin.Case{trailerCase}
+	}
 	dir := t.TempDir()
 	silent := new(bool)
 	settings := conformance.Settings{
-		Suites:      []conformance.Suite{h1origin.Suite{Cases: []h1origin.Case{trailerCase}}},
+		Suites:      []conformance.Suite{h1origin.Suite{Cases: cases}},
 		Cases:       []string{"*"},
 		BaselineDir: filepath.Join(dir, "baselines"),
 		OutDir:      filepath.Join(dir, "out"),
@@ -84,22 +125,46 @@ func onlyResult(t *testing.T, outcome conformance.Outcome) conformance.Result {
 }
 
 func TestTransparentRelay(t *testing.T) {
-	t.Run("should score every case on every approach as matching", func(t *testing.T) {
-		h := newHarness(t, false, nil)
+	t.Run("should score every case on every approach as matching, with every leg rule but Via passing", func(t *testing.T) {
+		h := newHarness(t, false, conformance.Deviations{acceptVia}, trailerCase, hopCase, reframeCase, clteCase)
 		outcome := runHarness(t, h.settings)
 
 		result := onlyResult(t, outcome)
-		wantCases := []string{"chunked-trailers@absolute", "chunked-trailers@connect-plain"}
-		if !reflect.DeepEqual(result.Cases, wantCases) {
-			t.Fatalf("\nwanted cases:\n%v\ngot:\n%v", wantCases, result.Cases)
+		if len(result.Cases) != 8 || result.Matched() != 8 || len(result.New)+len(result.Known) != 0 {
+			t.Fatalf("\nwanted 8 of 8 matched and nothing new or known\ngot %d of %d:\n%+v", result.Matched(), len(result.Cases), result.Sorted)
 		}
-		if result.Matched() != 2 || len(result.New)+len(result.Known)+len(result.Allowed) != 0 {
-			t.Fatalf("\nwanted 2 matched and no differences\ngot %d matched:\n%+v", result.Matched(), result.Sorted)
+		for _, m := range result.Allowed {
+			if m.Field != "leg:via" {
+				t.Fatalf("wanted only Via allowed\ngot:\n%+v", m)
+			}
+		}
+		if got := brokenRules(result); !reflect.DeepEqual(got, map[string][]string{
+			"chunked-trailers@absolute": {"leg:via"}, "chunked-trailers@connect-plain": {"leg:via"},
+			"hop-by-hop@absolute": {"leg:via"}, "hop-by-hop@connect-plain": {"leg:via"},
+			"reframe@absolute": {"leg:via"}, "reframe@connect-plain": {"leg:via"},
+			"cl-te@absolute": {"leg:via"}, "cl-te@connect-plain": {"leg:via"},
+		}) {
+			t.Fatalf("\nwanted only Via broken\ngot:\n%v", got)
 		}
 		if outcome.Failed() {
 			t.Fatal("wanted the gate to pass")
 		}
 	})
+}
+
+// brokenRules maps each case to the leg rules broken on it, and fails
+// unless every rule was checked on every case.
+func brokenRules(result conformance.Result) map[string][]string {
+	broken := map[string][]string{}
+	for _, check := range result.LegChecks {
+		if _, ok := broken[check.Case]; !ok {
+			broken[check.Case] = []string{}
+		}
+		if check.Broken {
+			broken[check.Case] = append(broken[check.Case], check.Rule.ID)
+		}
+	}
+	return broken
 }
 
 // Every difference the broken stand-in makes, in case order.
@@ -110,6 +175,10 @@ var (
 	}
 	swallowed = func(id string) conformance.Difference {
 		return conformance.Difference{Case: id, Field: "client[0].responses[0].trailers", Want: "X-Checksum: abc"}
+	}
+	via = func(id string) conformance.Difference {
+		return conformance.Difference{Case: id, Field: "leg:via", Want: "send Via", Level: conformance.LevelMust,
+			Got: "origin[0].requests[0]: no Via; client[0].responses[0]: no Via"}
 	}
 	requestCase = func(id string) conformance.Difference {
 		return conformance.Difference{Case: id, Field: "origin[0].requests[0].fields.name-case",
@@ -133,7 +202,7 @@ var (
 
 func TestBrokenStandIn(t *testing.T) {
 	t.Run("should report exactly the differences it makes, sorted against deviations.json", func(t *testing.T) {
-		h := newHarness(t, true, conformance.Deviations{knownResponseCase, acceptedRequestCase, knownGone})
+		h := newHarness(t, true, conformance.Deviations{knownResponseCase, acceptedRequestCase, knownGone, acceptVia})
 		outcome := runHarness(t, h.settings)
 
 		result := onlyResult(t, outcome)
@@ -145,7 +214,7 @@ func TestBrokenStandIn(t *testing.T) {
 		if got := differences(result.Known); !reflect.DeepEqual(got, wantKnown) {
 			t.Fatalf("\nwanted known:\n%+v\ngot:\n%+v", wantKnown, got)
 		}
-		wantAllowed := []conformance.Difference{requestCase(absolute)}
+		wantAllowed := []conformance.Difference{requestCase(absolute), via(absolute), via(connectPlain)}
 		if got := differences(result.Allowed); !reflect.DeepEqual(got, wantAllowed) {
 			t.Fatalf("\nwanted allowed:\n%+v\ngot:\n%+v", wantAllowed, got)
 		}
@@ -193,21 +262,74 @@ func TestBrokenStandIn(t *testing.T) {
 	})
 
 	t.Run("should list nothing new after update-known, keeping accepted entries", func(t *testing.T) {
-		h := newHarness(t, true, conformance.Deviations{acceptedRequestCase})
+		h := newHarness(t, true, conformance.Deviations{acceptedRequestCase, acceptVia})
 		h.settings.UpdateKnown, h.settings.Phase = true, 2
 		runHarness(t, h.settings)
 		h.settings.UpdateKnown = false
 
 		result := onlyResult(t, runHarness(t, h.settings))
-		if len(result.New) != 0 || len(result.Allowed) != 1 || len(result.Known) != 5 {
-			t.Fatalf("\nwanted 5 known, 1 allowed, none new\ngot:\n%+v", result.Sorted)
+		if len(result.New) != 0 || len(result.Allowed) != 3 || len(result.Known) != 5 {
+			t.Fatalf("\nwanted 5 known, 3 allowed, none new\ngot:\n%+v", result.Sorted)
 		}
 		deviations, err := conformance.ReadDeviations(h.settings.DeviationsFile(h1origin.Name))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(deviations) != 6 || !reflect.DeepEqual(deviations[0], acceptedRequestCase) {
+		if len(deviations) != 7 || !reflect.DeepEqual(deviations[0], acceptedRequestCase) {
 			t.Fatalf("\nwanted the accepted entry first and unchanged\ngot:\n%+v", deviations[0])
+		}
+	})
+}
+
+func TestBrokenStandInLegRules(t *testing.T) {
+	t.Run("should break each leg rule the stand-in breaks and pass a matching re-frame", func(t *testing.T) {
+		h := newHarness(t, true, nil, hopCase, reframeCase, clteCase)
+		outcome := runHarness(t, h.settings)
+
+		result := onlyResult(t, outcome)
+		want := map[string][]string{
+			"hop-by-hop@absolute": {"leg:connection"}, "hop-by-hop@connect-plain": {"leg:connection"},
+			"reframe@absolute": {}, "reframe@connect-plain": {},
+			"cl-te@absolute": {"leg:cl-and-te"}, "cl-te@connect-plain": {"leg:cl-and-te"},
+		}
+		if got := brokenRules(result); !reflect.DeepEqual(got, want) {
+			t.Fatalf("\nwanted broken:\n%v\ngot:\n%v", want, got)
+		}
+		var newRules []string
+		for _, d := range result.New {
+			if d.Level != "" {
+				newRules = append(newRules, d.Case+" "+d.Field)
+			}
+		}
+		wantNew := []string{"hop-by-hop@absolute leg:connection", "hop-by-hop@connect-plain leg:connection",
+			"cl-te@absolute leg:cl-and-te", "cl-te@connect-plain leg:cl-and-te"}
+		if !reflect.DeepEqual(newRules, wantNew) {
+			t.Fatalf("\nwanted new leg-rule failures:\n%v\ngot:\n%v", wantNew, newRules)
+		}
+		if !outcome.Failed() {
+			t.Fatal("wanted the gate to fail")
+		}
+	})
+
+	t.Run("should count leg rules in score.json and list them in the summary", func(t *testing.T) {
+		h := newHarness(t, true, nil, hopCase, reframeCase, clteCase)
+		runHarness(t, h.settings)
+
+		score, err := conformance.ReadScore(filepath.Join(h.settings.OutDir, h1origin.Name, "score.json"), h1origin.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range score.Rows {
+			if row.LegRules == nil || *row.LegRules != (conformance.LegScore{Passed: 13, Failed: 2}) {
+				t.Fatalf("\nwanted 13 passed and 2 failed on each approach\ngot:\n%+v", row.LegRules)
+			}
+		}
+		summary, err := os.ReadFile(filepath.Join(h.settings.OutDir, h1origin.Name, string(conformance.RunProxy), "summary.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(summary), "| leg:connection | RFC 9110 §7.6.1 | MUST | 4 | 2 |") {
+			t.Fatalf("wanted the Connection rule's counts in the summary\ngot:\n%s", summary)
 		}
 	})
 }

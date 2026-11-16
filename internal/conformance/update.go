@@ -69,6 +69,9 @@ func updateKnown(deviations Deviations, outcome Outcome, phase int) Deviations {
 
 // measuredReason records what was measured, for the person who explains it.
 func measuredReason(d Difference) string {
+	if d.Level != "" {
+		return fmt.Sprintf("measured by conformance-update-known: broke %q, sent %q", d.Want, d.Got)
+	}
 	if d.Want == "" && d.Got == "" {
 		return "measured by conformance-update-known"
 	}
