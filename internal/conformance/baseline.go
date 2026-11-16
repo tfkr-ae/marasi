@@ -88,14 +88,25 @@ func mergeBaseline(file string, job Job, got Recordings) error {
 // difference for each broken rule and a check for each rule it checked.
 type LegChecker func(caseID string, got json.RawMessage) ([]Difference, []LegCheck, error)
 
-// CompareCases compares every case in baseline or got, in the order less
-// gives, skipping the cases skip names. A case on one side only is a
-// FieldMissing or FieldNoBaseline difference; diff compares the rest.
-// Each legs, such as h1.Check, then checks the leg rules on every case the
-// run recorded, after the case's comparison differences. Suites build
-// Compare on it.
-func CompareCases(baseline, got Recordings, skip func(caseID string) bool, less func(a, b string) bool,
-	diff func(caseID string, want, got json.RawMessage) ([]Difference, error), legs ...LegChecker) (Comparison, error) {
+// CaseComparison is how a suite compares one case with its baseline.
+type CaseComparison struct {
+	// Less orders the case IDs; nil means ID order.
+	Less func(a, b string) bool
+	// Diff compares a case recorded on both sides.
+	Diff func(caseID string, want, got json.RawMessage) ([]Difference, error)
+	// Legs, such as h1.Check, check the leg rules on every case the run
+	// recorded, after the case's comparison differences.
+	Legs []LegChecker
+}
+
+// CompareCases compares every case in baseline or got, in compare's order.
+// A case on one side only is a FieldMissing or FieldNoBaseline difference;
+// compare.Diff compares the rest. Suites build Compare on it.
+func CompareCases(baseline, got Recordings, compare CaseComparison) (Comparison, error) {
+	less := compare.Less
+	if less == nil {
+		less = func(a, b string) bool { return a < b }
+	}
 	ids := map[string]struct{}{}
 	for id := range baseline {
 		ids[id] = struct{}{}
@@ -105,9 +116,7 @@ func CompareCases(baseline, got Recordings, skip func(caseID string) bool, less 
 	}
 	var comparison Comparison
 	for id := range ids {
-		if skip == nil || !skip(id) {
-			comparison.Cases = append(comparison.Cases, id)
-		}
+		comparison.Cases = append(comparison.Cases, id)
 	}
 	slices.SortFunc(comparison.Cases, func(a, b string) int {
 		switch {
@@ -127,7 +136,7 @@ func CompareCases(baseline, got Recordings, skip func(caseID string) bool, less 
 		case !inBaseline:
 			comparison.Differences = append(comparison.Differences, Difference{Case: id, Field: FieldNoBaseline})
 		default:
-			differences, err := diff(id, want, recording)
+			differences, err := compare.Diff(id, want, recording)
 			if err != nil {
 				return Comparison{}, fmt.Errorf("comparing case %s: %w", id, err)
 			}
@@ -136,7 +145,7 @@ func CompareCases(baseline, got Recordings, skip func(caseID string) bool, less 
 		if !inRun {
 			continue
 		}
-		for _, check := range legs {
+		for _, check := range compare.Legs {
 			differences, checks, err := check(id, recording)
 			if err != nil {
 				return Comparison{}, fmt.Errorf("checking leg rules on case %s: %w", id, err)

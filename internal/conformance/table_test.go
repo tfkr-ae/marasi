@@ -28,15 +28,15 @@ func TestWriteTable(t *testing.T) {
 	}
 }
 
-func TestWriteTableListsAllowedDeviations(t *testing.T) {
+func TestWriteTableListsTheAllowList(t *testing.T) {
 	var out strings.Builder
 	WriteTable(&out, Outcome{Results: []Result{{
 		Suite: "autobahn", Run: RunCheckpointForward, Target: "fuzzingclient-strict", Cases: []string{"6.4.3", "6.4.4"},
-		Sorted: Sorted{Allowed: []Match{{Difference: Difference{Case: "6.4.3", Field: "behavior"}, Entry: Entry{Reason: "whole messages"}}}},
+		Sorted: Sorted{OnAllowList: []Match{{Difference: Difference{Case: "6.4.3", Field: "behavior"}, Entry: Entry{Reason: "whole messages"}}}},
 	}}})
-	if !strings.Contains(out.String(), "checkpoint-forward  autobahn  fuzzingclient-strict  6.4.3    behavior  whole messages") ||
-		!strings.Contains(out.String(), "2 cases, 1 match, 0 new, 1 allowed") {
-		t.Fatalf("\nwanted:\nthe allowed case and its reason\ngot:\n%s", out.String())
+	if !strings.Contains(out.String(), "checkpoint-forward  autobahn  fuzzingclient-strict  6.4.3          behavior  whole messages") ||
+		!strings.Contains(out.String(), "2 cases, 1 match, 0 new, 1 on the allow-list") {
+		t.Fatalf("\nwanted:\nthe case on the allow-list and its reason\ngot:\n%s", out.String())
 	}
 }
 
@@ -48,7 +48,7 @@ func TestWriteTableListsEntriesThatWentAwayOrAreStale(t *testing.T) {
 	})
 	for _, line := range []string{
 		"proxy  h1-origin  went away: known entry te-* connection (phase 2); remove it or run update-known",
-		"h1-origin  stale: accepted entry via-* via matched nothing in a full run",
+		"h1-origin  stale: accepted entry via-* via matched nothing although a run and target it lists ran",
 	} {
 		if !strings.Contains(out.String(), line) {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", line, out.String())

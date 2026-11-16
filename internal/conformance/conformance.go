@@ -26,6 +26,10 @@ const (
 	RunExtension         RunName = "extension"
 )
 
+// ErrUnknownRun reports a conformance run name that is neither direct nor
+// one of ProxiedRuns.
+var ErrUnknownRun = errors.New("unknown conformance run")
+
 // ProxiedRuns lists every conformance run that goes through Marasi, in report order.
 var ProxiedRuns = []RunName{RunProxy, RunCheckpointForward, RunCheckpointEdit, RunExtension}
 
@@ -74,6 +78,18 @@ const (
 	TrafficTLS TrafficKind = "tls"
 )
 
+// command is the marasi CLI command whose one-item list page is the newest
+// item of the kind, or false when the kind has none.
+func (k TrafficKind) command() (string, bool) {
+	switch k {
+	case TrafficWebSocket:
+		return "websocket", true
+	case TrafficHTTP:
+		return "traffic", true
+	}
+	return "", false
+}
+
 // CheckpointKind is a Checkpoint item kind a suite needs held in the
 // Checkpoint runs.
 type CheckpointKind string
@@ -83,6 +99,18 @@ const (
 	CheckpointWebSocket CheckpointKind = "websocket"
 	CheckpointHTTP      CheckpointKind = "http" // requests and their responses
 )
+
+// flag is the marasi checkpoint subcommand that holds the kind, or false
+// when there is none.
+func (k CheckpointKind) flag() (string, bool) {
+	switch k {
+	case CheckpointWebSocket:
+		return "websocket-intercept", true
+	case CheckpointHTTP:
+		return "intercept", true
+	}
+	return "", false
+}
 
 // HTTPExtension sets every HTTP request and response body to itself in
 // processRequest and processResponse, a no-op edit through the extension

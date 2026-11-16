@@ -109,11 +109,18 @@ func StartContainer(ctx context.Context, settings ContainerSettings, name, proje
 	return instance, nil
 }
 
+// listenerWait is how long AwaitListener waits for a listener, and
+// listenerPoll how often it tries to connect.
+const (
+	listenerWait = 15 * time.Second
+	listenerPoll = 100 * time.Millisecond
+)
+
 // AwaitListener waits until address takes connections from the host.
 // Docker Desktop forwards a port a host-network container listens on only
 // a moment after it starts listening.
 func AwaitListener(ctx context.Context, address string) error {
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(listenerWait)
 	for {
 		var dialer net.Dialer
 		conn, err := dialer.DialContext(ctx, "tcp", address)
@@ -123,7 +130,7 @@ func AwaitListener(ctx context.Context, address string) error {
 		if time.Now().After(deadline) || ctx.Err() != nil {
 			return fmt.Errorf("listener %s in the container never took a connection from the host: %w", address, err)
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(listenerPoll)
 	}
 }
 

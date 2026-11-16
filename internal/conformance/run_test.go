@@ -53,13 +53,12 @@ func (f *fakeSuite) Compare(_ string, baseline, got Recordings) (Comparison, err
 }
 
 func (f *fakeSuite) compare(baseline, got Recordings) (Comparison, error) {
-	return CompareCases(baseline, got, nil, func(a, b string) bool { return a < b },
-		func(id string, want, got json.RawMessage) ([]Difference, error) {
-			if string(want) == string(got) {
-				return nil, nil
-			}
-			return []Difference{{Case: id, Field: "value", Want: string(want), Got: string(got)}}, nil
-		})
+	return CompareCases(baseline, got, CaseComparison{Diff: func(id string, want, got json.RawMessage) ([]Difference, error) {
+		if string(want) == string(got) {
+			return nil, nil
+		}
+		return []Difference{{Case: id, Field: "value", Want: string(want), Got: string(got)}}, nil
+	}})
 }
 
 // standIn is an in-process proxy that counts the traffic the suite sends.
@@ -89,7 +88,7 @@ var (
 	knownZ   = Entry{Cases: "z*", Runs: []RunName{RunProxy}, Field: "value", Kind: KindKnown, Reason: "no such case", Phase: 2}
 	allowY   = Entry{Cases: "y", Runs: []RunName{RunProxy}, Field: "value", Kind: KindAccepted, Reason: "no such case"}
 	baseline = map[string]int{"a": 1, "b": 1, "c": 1, "d": 1, "e": 1}
-	// a and e match; b is allowed, c is known, d is new; e's known entry went away.
+	// a and e match; b is on the allow-list, c is known, d is new; e's known entry went away.
 	proxied = map[string]int{"a": 1, "b": 2, "c": 3, "d": 4, "e": 1}
 )
 
@@ -145,7 +144,7 @@ func matchCases(matches []Match) []string {
 }
 
 func TestRunSortsDifferences(t *testing.T) {
-	t.Run("should sort each difference into allowed, known or new", func(t *testing.T) {
+	t.Run("should sort each difference into on the allow-list, known or new", func(t *testing.T) {
 		f := newFixture(t, Deviations{allowB, knownC, knownE})
 		outcome := run(t, f.settings)
 
@@ -160,8 +159,8 @@ func TestRunSortsDifferences(t *testing.T) {
 		if got := matchCases(result.Known); !reflect.DeepEqual(got, []string{"c"}) {
 			t.Fatalf("\nwanted known:\n[c]\ngot:\n%v", got)
 		}
-		if got := matchCases(result.Allowed); !reflect.DeepEqual(got, []string{"b"}) {
-			t.Fatalf("\nwanted allowed:\n[b]\ngot:\n%v", got)
+		if got := matchCases(result.OnAllowList); !reflect.DeepEqual(got, []string{"b"}) {
+			t.Fatalf("\nwanted on the allow-list:\n[b]\ngot:\n%v", got)
 		}
 		if result.Matched() != 2 || len(result.Cases) != 5 {
 			t.Fatalf("\nwanted:\n2 of 5 cases matching\ngot:\n%d of %d", result.Matched(), len(result.Cases))
@@ -191,21 +190,88 @@ func TestRunSortsDifferences(t *testing.T) {
 		}
 	})
 
-	t.Run("should report an entry that matched nothing as stale only in a full run", func(t *testing.T) {
+	t.Run("should report an entry that covers no baseline case as stale in a run narrowed to one conformance run", func(t *testing.T) {
 		f := newFixture(t, Deviations{allowB, knownC, knownZ, allowY})
-		f.settings.Exclude = []string{"d"}
-		if outcome := run(t, f.settings); len(outcome.Stale) != 0 || outcome.Failed() {
-			t.Fatalf("\nwanted:\nno stale entries in a narrowed run\ngot:\n%+v", outcome.Stale)
-		}
-
-		f.settings.Full = true
+		f.settings.AllCases = true
 		outcome := run(t, f.settings)
+
 		want := []Stale{{Suite: "fake", Entry: knownZ}, {Suite: "fake", Entry: allowY}}
 		if !reflect.DeepEqual(outcome.Stale, want) {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, outcome.Stale)
 		}
 		if !outcome.Failed() {
 			t.Fatal("\nwanted:\na failed gate\ngot:\na pass")
+		}
+	})
+
+	t.Run("should not report an entry that covers no baseline case when the cases are narrowed", func(t *testing.T) {
+		f := newFixture(t, Deviations{allowB, knownC, allowY})
+		f.settings.Exclude = []string{"d", "e"}
+		if outcome := run(t, f.settings); len(outcome.Stale) != 0 || outcome.Failed() {
+			t.Fatalf("\nwanted:\nno stale entries\ngot:\n%+v", outcome.Stale)
+		}
+	})
+
+	t.Run("should report an entry that covered a case that ran and matched nothing as stale when the cases are narrowed", func(t *testing.T) {
+		unused := Entry{Cases: "a", Runs: []RunName{RunProxy}, Field: "value", Kind: KindAccepted, Reason: "a may differ"}
+		f := newFixture(t, Deviations{allowB, knownC, unused})
+		f.settings.Exclude = []string{"d", "e"}
+		outcome := run(t, f.settings)
+
+		want := []Stale{{Suite: "fake", Entry: unused}}
+		if !reflect.DeepEqual(outcome.Stale, want) {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, outcome.Stale)
+		}
+	})
+
+	t.Run("should not report an entry for a conformance run that did not run as stale", func(t *testing.T) {
+		extension := Entry{Cases: "a", Runs: []RunName{RunExtension}, Field: "value", Kind: KindAccepted, Reason: "a may differ"}
+		orphan := Entry{Cases: "z", Runs: []RunName{RunCheckpointEdit}, Field: "value", Kind: KindAccepted, Reason: "no such case"}
+		f := newFixture(t, Deviations{allowB, knownC, extension, orphan})
+		f.settings.AllCases = true
+		if outcome := run(t, f.settings); len(outcome.Stale) != 0 {
+			t.Fatalf("\nwanted:\nno stale entries\ngot:\n%+v", outcome.Stale)
+		}
+	})
+
+	t.Run("should not report an entry for a client approach that did not run as stale", func(t *testing.T) {
+		plain := Entry{Cases: "a@connect-plain", Runs: []RunName{RunProxy}, Field: "value", Kind: KindKnown, Reason: "a differs", Phase: 2}
+		f := newFixture(t, Deviations{plain})
+		f.settings.Approaches = []Approach{ApproachAbsolute}
+		f.suite.approaches = []Approach{ApproachAbsolute, ApproachConnectPlain}
+		both := recordings(map[string]int{"a@absolute": 1, "a@connect-plain": 1})
+		if err := WriteBaseline(f.settings.BaselineFile("fake", "t"), both); err != nil {
+			t.Fatal(err)
+		}
+		f.suite.got[RunProxy] = recordings(map[string]int{"a@absolute": 1, "a@connect-plain": 2})
+		if outcome := run(t, f.settings); len(outcome.Stale) != 0 || outcome.Failed() {
+			t.Fatalf("\nwanted:\na pass with no stale entries\ngot:\n%+v", outcome)
+		}
+	})
+
+	t.Run("should not report an entry for a target that did not run as stale", func(t *testing.T) {
+		other := Entry{Cases: "a", Targets: []string{"other-*"}, Runs: []RunName{RunProxy}, Field: "value", Kind: KindAccepted, Reason: "a may differ"}
+		f := newFixture(t, Deviations{allowB, knownC, other})
+		f.settings.AllCases = true
+		if outcome := run(t, f.settings); len(outcome.Stale) != 0 {
+			t.Fatalf("\nwanted:\nno stale entries\ngot:\n%+v", outcome.Stale)
+		}
+	})
+
+	t.Run("should list a difference only in the targets an entry names", func(t *testing.T) {
+		otherB := allowB
+		otherB.Targets = []string{"other-*"}
+		f := newFixture(t, Deviations{otherB})
+		outcome := run(t, f.settings)
+
+		if got := cases(outcome.Results[0].New, func(d Difference) string { return d.Case }); !reflect.DeepEqual(got, []string{"b", "c", "d"}) {
+			t.Fatalf("\nwanted new:\n[b c d]\ngot:\n%v", got)
+		}
+		otherB.Targets = []string{"t"}
+		f = newFixture(t, Deviations{otherB})
+		outcome = run(t, f.settings)
+		if got := matchCases(outcome.Results[0].OnAllowList); !reflect.DeepEqual(got, []string{"b"}) {
+			t.Fatalf("\nwanted on the allow-list:\n[b]\ngot:\n%v", got)
 		}
 	})
 
@@ -494,7 +560,7 @@ func TestRunWritesReports(t *testing.T) {
 		}
 		summary := string(data)
 		last := -1
-		for _, heading := range []string{"### Score", "### New deviations", "### Known deviations that went away", "### Known deviations\n", "### Allowed deviations"} {
+		for _, heading := range []string{"### Score", "### New deviations", "### Known deviations that went away", "### Known deviations\n", "### On the allow-list"} {
 			at := strings.Index(summary, heading)
 			if at <= last {
 				t.Fatalf("\nwanted %q after the previous section\ngot:\n%s", heading, summary)
@@ -564,8 +630,8 @@ func TestRunLegRules(t *testing.T) {
 		if !reflect.DeepEqual(result.Warnings, wantWarnings) {
 			t.Fatalf("\nwanted warnings:\n%+v\ngot:\n%+v", wantWarnings, result.Warnings)
 		}
-		if got := matchCases(result.Allowed); !reflect.DeepEqual(got, []string{"b", "a", "b"}) {
-			t.Fatalf("\nwanted allowed:\n[b a b]\ngot:\n%v", got)
+		if got := matchCases(result.OnAllowList); !reflect.DeepEqual(got, []string{"b", "a", "b"}) {
+			t.Fatalf("\nwanted on the allow-list:\n[b a b]\ngot:\n%v", got)
 		}
 		if !outcome.Failed() {
 			t.Fatal("\nwanted:\na failed gate\ngot:\na pass")
@@ -602,7 +668,7 @@ func TestRunLegRules(t *testing.T) {
 		}
 	})
 
-	t.Run("should list each rule and the warnings in the summary's leg-rule section, after allowed deviations", func(t *testing.T) {
+	t.Run("should list each rule and the warnings in the summary's leg-rule section, after the allow-list section", func(t *testing.T) {
 		f := newFixture(t, Deviations{allowB, acceptVia})
 		f.suite.legChecks = legChecks()
 		f.settings.Cases = []string{"a", "b"}
@@ -613,9 +679,9 @@ func TestRunLegRules(t *testing.T) {
 			t.Fatal(err)
 		}
 		summary := string(data)
-		allowed, legRules := strings.Index(summary, "### Allowed deviations"), strings.Index(summary, "### Leg rules")
-		if allowed < 0 || legRules < allowed {
-			t.Fatalf("\nwanted a leg-rule section after allowed deviations\ngot:\n%s", summary)
+		onAllowList, legRules := strings.Index(summary, "### On the allow-list"), strings.Index(summary, "### Leg rules")
+		if onAllowList < 0 || legRules < onAllowList {
+			t.Fatalf("\nwanted a leg-rule section after the allow-list section\ngot:\n%s", summary)
 		}
 		for _, row := range []string{
 			"| leg:must | RFC 9110 §7.6.1 | MUST | 1 | 1 |",

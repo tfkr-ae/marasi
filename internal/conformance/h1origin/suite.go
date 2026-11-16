@@ -5,9 +5,8 @@
 package h1origin
 
 import (
+	"cmp"
 	"context"
-	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/tfkr-ae/marasi/internal/conformance"
@@ -66,54 +65,31 @@ func (s Suite) Setup() conformance.Setup {
 
 // Execute runs every selected case on every selected approach, one at a time.
 func (s Suite) Execute(ctx context.Context, job conformance.Job) (conformance.Recordings, error) {
-	recordings := conformance.Recordings{}
-	for _, c := range s.cases() {
-		for _, approach := range s.Approaches() {
-			id := conformance.CaseID(c.ID, approach)
-			if !conformance.Selected(id, job.Cases, job.Exclude, job.Approaches) {
-				continue
-			}
-			if err := ctx.Err(); err != nil {
-				return recordings, err
-			}
-			recording, err := s.record(ctx, c, approach, job)
-			if err != nil {
-				return recordings, fmt.Errorf("case %s: %w", id, err)
-			}
-			data, err := json.Marshal(recording)
-			if err != nil {
-				return recordings, err
-			}
-			recordings[id] = data
-			if job.Log != nil {
-				fmt.Fprintf(job.Log, "%s: recorded\n", id)
-			}
-		}
-	}
-	return recordings, nil
+	approaches := s.Approaches()
+	return conformance.RecordCatalogue(ctx, job, s.caseIDs(), func(ctx context.Context, i int) (any, error) {
+		return s.record(ctx, s.cases()[i/len(approaches)], approaches[i%len(approaches)], job)
+	})
 }
 
 // Compare compares the recordings with the baseline in catalogue order and
 // checks the leg rules on what Marasi sent on both legs of each case.
 func (s Suite) Compare(_ string, baseline, got conformance.Recordings) (conformance.Comparison, error) {
-	order := map[string]int{}
-	for i, c := range s.cases() {
-		for j, approach := range s.Approaches() {
-			order[conformance.CaseID(c.ID, approach)] = i*len(s.Approaches()) + j
+	return conformance.CompareCases(baseline, got, conformance.CaseComparison{
+		Less: conformance.CatalogueOrder(s.caseIDs()),
+		Diff: h1.Compare,
+		Legs: []conformance.LegChecker{h1.Check},
+	})
+}
+
+// caseIDs lists every case on every approach, in catalogue order.
+func (s Suite) caseIDs() []string {
+	var ids []string
+	for _, c := range s.cases() {
+		for _, approach := range s.Approaches() {
+			ids = append(ids, conformance.CaseID(c.ID, approach))
 		}
 	}
-	rank := func(id string) int {
-		if i, ok := order[id]; ok {
-			return i
-		}
-		return len(order)
-	}
-	return conformance.CompareCases(baseline, got, nil, func(a, b string) bool {
-		if rank(a) != rank(b) {
-			return rank(a) < rank(b)
-		}
-		return a < b
-	}, h1.Compare, h1.Check)
+	return ids
 }
 
 func (s Suite) cases() []Case {
@@ -137,16 +113,6 @@ func (s Suite) listen() string {
 	return s.Listen
 }
 
-func (s Suite) timeout() time.Duration {
-	if s.Timeout == 0 {
-		return 5 * time.Second
-	}
-	return s.Timeout
-}
+func (s Suite) timeout() time.Duration { return cmp.Or(s.Timeout, conformance.CaseTimeout) }
 
-func (s Suite) settle() time.Duration {
-	if s.Settle == 0 {
-		return 250 * time.Millisecond
-	}
-	return s.Settle
-}
+func (s Suite) settle() time.Duration { return cmp.Or(s.Settle, conformance.CaseSettle) }

@@ -32,7 +32,7 @@ func (s Settings) writeReports(suite string, run RunName, dir string, results []
 
 // WriteSummary writes the Markdown summary of one suite and run: the score,
 // then new deviations, known deviations that went away, known deviations,
-// allowed deviations and leg-rule results, most urgent first.
+// the differences on the allow-list and leg-rule results, most urgent first.
 func WriteSummary(w io.Writer, suite string, run RunName, results []Result, wentAway []WentAway) {
 	fmt.Fprintf(w, "## %s: %s\n\n", suite, run)
 
@@ -96,10 +96,10 @@ func WriteSummary(w io.Writer, suite string, run RunName, results []Result, went
 		}
 		return wrote
 	})
-	section(w, "Allowed deviations", func() bool {
+	section(w, "On the allow-list", func() bool {
 		wrote := false
 		for _, result := range results {
-			for _, m := range result.Allowed {
+			for _, m := range result.OnAllowList {
 				if !wrote {
 					writeRow(w, "Target", "Case", "Field", "Baseline", "Got", "Reason", "RFC")
 					writeRow(w, "---", "---", "---", "---", "---", "---", "---")
@@ -224,7 +224,7 @@ func writeCaseDiffs(dir string, result *Result, baseline, got Recordings) error 
 				diff.Differences = append(diff.Differences, d)
 			}
 		}
-		for _, m := range slices.Concat(result.Known, result.Allowed) {
+		for _, m := range slices.Concat(result.Known, result.OnAllowList) {
 			if m.Case == id {
 				diff.Differences = append(diff.Differences, m.Difference)
 			}

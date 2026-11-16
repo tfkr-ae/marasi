@@ -14,21 +14,28 @@ import (
 // change after a target before it decides no traffic went through.
 const newestWait = 2 * time.Second
 
+// newestPoll is how often the run asks for the newest item while it waits.
+const newestPoll = 50 * time.Millisecond
+
 // Settings selects what Run runs and where it keeps its files.
 type Settings struct {
-	Suites      []Suite
-	Runs        []RunName  // conformance runs; a suite skips the proxied runs it does not support
-	Cases       []string   // case ID patterns
-	Exclude     []string   // case ID patterns to skip
-	Approaches  []Approach // client approaches; empty means all
-	Full        bool       // nothing was narrowed, so an entry that matched nothing is stale
-	BaselineDir string     // committed baselines: <dir>/<suite>/<target>.json, deviations.json, score.json
-	OutDir      string     // reports: <dir>/<suite>/<run>/
-	Launch      Launcher   // starts the proxy for each proxied run
-	UpdateKnown bool       // rewrite the known entries and score.json in BaselineDir
-	Phase       int        // phase given to the known entries UpdateKnown writes
-	Log         io.Writer  // progress output
-	Summary     io.Writer  // receives every Markdown summary too, such as $GITHUB_STEP_SUMMARY; may be nil
+	Suites     []Suite
+	Runs       []RunName  // conformance runs; a suite skips the proxied runs it does not support
+	Cases      []string   // case ID patterns
+	Exclude    []string   // case ID patterns to skip
+	Approaches []Approach // client approaches; empty means all
+	// AllCases says Cases, Exclude and Approaches select every case, so an
+	// entry for a conformance run and target that ran is stale when it
+	// matched nothing, even when its cases glob matches no case at all.
+	// Otherwise only an entry that covers a case that ran can be stale.
+	AllCases    bool
+	BaselineDir string    // committed baselines: <dir>/<suite>/<target>.json, deviations.json, score.json
+	OutDir      string    // reports: <dir>/<suite>/<run>/
+	Launch      Launcher  // starts the proxy for each proxied run
+	UpdateKnown bool      // rewrite the known entries and score.json in BaselineDir
+	Phase       int       // phase given to the known entries UpdateKnown writes
+	Log         io.Writer // progress output
+	Summary     io.Writer // receives every Markdown summary too, such as $GITHUB_STEP_SUMMARY; may be nil
 	// CA is the harness CA every Job gets. Nil means Run generates one; a
 	// launcher that must trust it (ContainerSettings.CA) needs the same CA,
 	// so the command generates it and sets both.
@@ -69,7 +76,7 @@ func (r Result) differing() map[string]bool {
 	for _, m := range r.Known {
 		add(m.Difference)
 	}
-	for _, m := range r.Allowed {
+	for _, m := range r.OnAllowList {
 		add(m.Difference)
 	}
 	return differing
@@ -83,7 +90,10 @@ type WentAway struct {
 	index int // the entry's position in the suite's deviations file
 }
 
-// Stale is an entry that matched nothing in a full run.
+// Stale is an entry that matched nothing although a conformance run and
+// target it applies to ran, and is not a known entry that went away: one
+// whose cases did not run when the cases were narrowed (see
+// Settings.AllCases) is not stale.
 type Stale struct {
 	Suite string
 	Entry Entry
@@ -148,7 +158,7 @@ func Run(ctx context.Context, settings Settings) (Outcome, error) {
 		outcome.WentAway = append(outcome.WentAway, suiteOutcome.WentAway...)
 		outcome.Stale = append(outcome.Stale, suiteOutcome.Stale...)
 		if err != nil {
-			return outcome, fmt.Errorf("%s suite: %w", suite.Name(), err)
+			return outcome, fmt.Errorf("running the %s suite: %w", suite.Name(), err)
 		}
 	}
 	return outcome, nil
@@ -161,10 +171,9 @@ func (s Settings) runSuite(ctx context.Context, suite Suite) (Outcome, error) {
 		return outcome, err
 	}
 	matchedAny := make([]bool, len(deviations))
-	ranProxied := false
 	for _, run := range s.Runs {
 		if run != RunDirect && !slices.Contains(ProxiedRuns, run) {
-			return outcome, fmt.Errorf("unknown conformance run %q", run)
+			return outcome, fmt.Errorf("%w %q", ErrUnknownRun, run)
 		}
 		if run != RunDirect && !slices.Contains(suite.Runs(), run) {
 			continue
@@ -174,11 +183,10 @@ func (s Settings) runSuite(ctx context.Context, suite Suite) (Outcome, error) {
 		if run == RunDirect {
 			results = s.direct(ctx, suite, dir)
 		} else {
-			ranProxied = true
 			var matched []bool
 			if results, matched, err = s.proxied(ctx, suite, run, deviations, dir); err != nil {
 				outcome.Results = append(outcome.Results, results...)
-				return outcome, fmt.Errorf("%s run: %w", run, err)
+				return outcome, fmt.Errorf("running the %s run: %w", run, err)
 			}
 			wentAway := s.wentAway(suite.Name(), run, deviations, results, matched)
 			outcome.WentAway = append(outcome.WentAway, wentAway...)
@@ -194,13 +202,7 @@ func (s Settings) runSuite(ctx context.Context, suite Suite) (Outcome, error) {
 			return outcome, ctx.Err()
 		}
 	}
-	if s.Full && ranProxied {
-		for i, entry := range deviations {
-			if !matchedAny[i] {
-				outcome.Stale = append(outcome.Stale, Stale{Suite: suite.Name(), Entry: entry})
-			}
-		}
-	}
+	outcome.Stale = s.stale(suite.Name(), deviations, matchedAny, outcome)
 	if err := s.writeScores(suite.Name(), outcome); err != nil {
 		return outcome, err
 	}
@@ -353,7 +355,7 @@ func (s Settings) compareTarget(ctx context.Context, suite Suite, run RunName, t
 		// Marasi stores what it captured in the background, so the newest
 		// item can lag the traffic by a moment.
 		for wait := time.Now().Add(newestWait); err == nil && checkProxied(before, after) != nil && time.Now().Before(wait); {
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(newestPoll)
 			after, err = proxy.Newest(ctx, kind)
 		}
 		if err != nil {
@@ -372,7 +374,7 @@ func (s Settings) compareTarget(ctx context.Context, suite Suite, run RunName, t
 	if err != nil {
 		return err
 	}
-	sorted, targetMatched := deviations.sort(run, comparison.Differences)
+	sorted, targetMatched := deviations.sort(run, target, comparison.Differences)
 	for i := range targetMatched {
 		matched[i] = matched[i] || targetMatched[i]
 	}
@@ -399,10 +401,32 @@ func (s Settings) wentAway(suite string, run RunName, deviations Deviations, res
 func covered(entry Entry, run RunName, results []Result) bool {
 	for _, result := range results {
 		for _, id := range result.Cases {
-			if entry.covers(run, id) {
+			if entry.covers(run, result.Target, id) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// stale lists the entries that matched nothing in any run although a
+// proxied run and target they apply to ran: with AllCases, every such
+// entry; otherwise those that cover a case that ran. A known entry that
+// went away is already reported, so it is left out.
+func (s Settings) stale(suite string, deviations Deviations, matched []bool, outcome Outcome) []Stale {
+	var stale []Stale
+	for i, entry := range deviations {
+		if matched[i] || slices.ContainsFunc(outcome.WentAway, func(gone WentAway) bool { return gone.index == i }) {
+			continue
+		}
+		if slices.ContainsFunc(outcome.Results, func(result Result) bool {
+			if result.Run == RunDirect || result.Err != nil || !entry.appliesTo(result.Run, result.Target) {
+				return false
+			}
+			return s.AllCases || covered(entry, result.Run, []Result{result})
+		}) {
+			stale = append(stale, Stale{Suite: suite, Entry: entry})
+		}
+	}
+	return stale
 }

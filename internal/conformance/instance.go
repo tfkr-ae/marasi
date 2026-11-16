@@ -116,14 +116,8 @@ func (i *Instance) Address() string {
 // Newest returns the ID of the newest item of kind the instance recorded,
 // or "" when there is none.
 func (i *Instance) Newest(ctx context.Context, kind TrafficKind) (string, error) {
-	var command string
-	switch kind {
-	case TrafficWebSocket:
-		command = "websocket"
-	case TrafficHTTP:
-		// A one-item page of traffic list is the newest pair.
-		command = "traffic"
-	default:
+	command, ok := kind.command()
+	if !ok {
 		return "", fmt.Errorf("no newest-item check for traffic kind %q", kind)
 	}
 	out, err := i.cli(ctx, nil, command, "list", "--limit", "1", "--json")
@@ -156,13 +150,8 @@ var _ Certifier = (*Instance)(nil)
 // that kind is held until something forwards or drops it. HTTP intercept
 // holds each request and, while it stays on, the request's response.
 func (i *Instance) EnableCheckpoint(ctx context.Context, kind CheckpointKind) error {
-	var flag string
-	switch kind {
-	case CheckpointWebSocket:
-		flag = "websocket-intercept"
-	case CheckpointHTTP:
-		flag = "intercept"
-	default:
+	flag, ok := kind.flag()
+	if !ok {
 		return fmt.Errorf("no Checkpoint setup for kind %q", kind)
 	}
 	_, err := i.cli(ctx, nil, "checkpoint", flag, "on", "--json")
@@ -237,11 +226,15 @@ func MarasiLauncher(binary string, log io.Writer) Launcher {
 }
 
 // prepare sets a started instance up for run and keeps its log in dir.
-func prepare(ctx context.Context, instance *Instance, suite Suite, run RunName, dir string, log io.Writer) (Proxy, error) {
+func prepare(ctx context.Context, instance *Instance, suite Suite, run RunName, dir string, log io.Writer) (_ Proxy, err error) {
 	launched := &launchedInstance{Instance: instance}
+	defer func() {
+		if err != nil {
+			launched.Stop()
+		}
+	}()
 	// The instance log goes into the reports, so a failed run keeps it.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		launched.Stop()
 		return nil, err
 	}
 	instance.LogCopy = filepath.Join(dir, "marasi.log")
@@ -251,13 +244,11 @@ func prepare(ctx context.Context, instance *Instance, suite Suite, run RunName, 
 	case RunCheckpointForward, RunCheckpointEdit:
 		for _, kind := range setup.Checkpoint {
 			if err := instance.EnableCheckpoint(ctx, kind); err != nil {
-				launched.Stop()
 				return nil, err
 			}
 		}
 		client, err := instance.client()
 		if err != nil {
-			launched.Stop()
 			return nil, err
 		}
 		resolver := &Resolver{Edit: run == RunCheckpointEdit}
@@ -275,12 +266,10 @@ func prepare(ctx context.Context, instance *Instance, suite Suite, run RunName, 
 		})
 	case RunExtension:
 		if err := instance.InstallExtension(ctx, setup.Extension); err != nil {
-			launched.Stop()
 			return nil, err
 		}
 	default:
-		launched.Stop()
-		return nil, fmt.Errorf("unknown conformance run %q", run)
+		return nil, fmt.Errorf("%w %q", ErrUnknownRun, run)
 	}
 	return launched, nil
 }
@@ -328,6 +317,10 @@ type Resolver struct {
 // covers an event stream that dropped or has not connected yet.
 const resolverPoll = 50 * time.Millisecond
 
+// subscribeWait is how long the resolver waits for its event subscription
+// before it starts listing; past it, the poll alone finds held items.
+const subscribeWait = 5 * time.Second
+
 // Run resolves items until ctx ends, then closes client. Every hold in a
 // suite waits for the resolver, so it lists again as soon as a
 // checkpoint.held event arrives instead of sleeping between polls.
@@ -339,7 +332,7 @@ func (r *Resolver) Run(ctx context.Context, client *service.Client) {
 	select {
 	case <-subscribed:
 	case <-ctx.Done():
-	case <-time.After(5 * time.Second):
+	case <-time.After(subscribeWait):
 	}
 	for ctx.Err() == nil {
 		items, err := r.pending(ctx, client)

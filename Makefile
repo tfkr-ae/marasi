@@ -25,7 +25,8 @@ STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
 .PHONY: build all test lint check clean install uninstall help conformance conformance-baseline conformance-update-known autobahn autobahn-baseline $(TARGETS)
 
 # Conformance harness (Docker). See `make help`.
-SUITES     ?= autobahn
+# The blocking HTTP/1.1 suites; the h2 suites and autobahn run on their own.
+SUITES     ?= h1-origin,h1-client
 CASES      ?= *
 EXCLUDE    ?=
 APPROACHES ?=
@@ -52,8 +53,10 @@ help:
 		'                     Exits non-zero on a new deviation (listed in no entry), a known' \
 		'                     deviation that went away (its cases ran and Marasi now matches' \
 		'                     the baseline: remove the entry or run conformance-update-known)' \
-		'                     or, in a full run, an entry that matched nothing. SUITES' \
-		'                     defaults to autobahn. Suites: autobahn (Marasi on the' \
+		'                     or a stale entry: one that matched nothing although a run' \
+		'                     and target it lists ran (with CASES, EXCLUDE or APPROACHES set,' \
+		'                     only one that covers a case that ran). SUITES defaults to the' \
+		'                     blocking h1-origin,h1-client. Suites: autobahn (Marasi on the' \
 		'                     host), h1-origin, h1-client, h2-client and h2-origin (Marasi' \
 		'                     in a Linux container built for LINUX_ARCH, this machine by' \
 		'                     default; the h2 suites are report only, proxy run only: run' \
@@ -115,11 +118,12 @@ conformance-baseline:
 conformance-update-known: build linux-$(LINUX_ARCH)
 	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites '$(SUITES)' -runs '$(RUNS)' -update-known $(if $(PHASE),-phase '$(PHASE)')
 
-autobahn: build
-	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites autobahn -runs '$(RUNS)'
+# The autobahn aliases are the conformance targets with SUITES=autobahn.
+autobahn: SUITES = autobahn
+autobahn: conformance
 
-autobahn-baseline:
-	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites autobahn -runs direct
+autobahn-baseline: SUITES = autobahn
+autobahn-baseline: conformance-baseline
 
 install: build
 	@mkdir -p $(BINDIR)

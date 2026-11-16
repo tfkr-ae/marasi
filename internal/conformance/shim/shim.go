@@ -103,16 +103,25 @@ type Shim struct {
 	conns    []*connection
 }
 
+// Option defaults.
+const (
+	// DefaultSettle is how long the shim watches the target after the
+	// tester leaves, to see whether the target closes the connection.
+	DefaultSettle = 250 * time.Millisecond
+	// DefaultTimeout bounds the dial, CONNECT and TLS handshake.
+	DefaultTimeout = 5 * time.Second
+)
+
 // Start listens and serves every connection in the background.
 func Start(options Options) (*Shim, error) {
 	if options.Listen == "" {
 		options.Listen = "127.0.0.1:0"
 	}
 	if options.Settle == 0 {
-		options.Settle = 250 * time.Millisecond
+		options.Settle = DefaultSettle
 	}
 	if options.Timeout == 0 {
-		options.Timeout = 5 * time.Second
+		options.Timeout = DefaultTimeout
 	}
 	if options.Dial == "" {
 		options.Dial = options.Target
