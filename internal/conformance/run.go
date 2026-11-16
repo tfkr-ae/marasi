@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -234,8 +235,19 @@ func (s Settings) direct(ctx context.Context, suite Suite, dir string) []Result 
 		result := Result{Suite: suite.Name(), Run: RunDirect, Target: target}
 		job := s.job(RunDirect, target, "", dir)
 		got, err := suite.Execute(ctx, job)
+		var unstable []string
+		if _, ok := suite.(Deterministic); ok && err == nil {
+			fmt.Fprintf(s.Log, "== %s %s %s: recording again to check every case is deterministic\n", suite.Name(), RunDirect, target)
+			var again Recordings
+			if again, err = suite.Execute(ctx, job); err == nil {
+				unstable = refuseUnstable(got, again)
+			}
+		}
 		if err == nil {
 			err = mergeBaseline(s.BaselineFile(suite.Name(), target), job, got)
+		}
+		if err == nil && len(unstable) > 0 {
+			err = fmt.Errorf("left out of the baseline, the two direct recordings differ: %q", unstable)
 		}
 		result.Err = err
 		for id := range got {
@@ -248,6 +260,27 @@ func (s Settings) direct(ctx context.Context, suite Suite, dir string) []Result 
 		}
 	}
 	return results
+}
+
+// refuseUnstable deletes from got every case whose recording in again is
+// missing or differs, and returns their IDs, sorted.
+func refuseUnstable(got, again Recordings) []string {
+	var unstable []string
+	for id, recording := range got {
+		if !bytes.Equal(recording, again[id]) {
+			unstable = append(unstable, id)
+		}
+	}
+	for id := range again {
+		if _, ok := got[id]; !ok {
+			unstable = append(unstable, id)
+		}
+	}
+	for _, id := range unstable {
+		delete(got, id)
+	}
+	slices.Sort(unstable)
+	return unstable
 }
 
 // proxied runs every target through a proxy launched for run, compares each

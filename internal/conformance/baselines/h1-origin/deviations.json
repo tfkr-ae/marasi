@@ -22,7 +22,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"Trailer: X-Checksum\", got \"\"",
+    "reason": "Martian drops the trailer section and the Trailer field that announces it",
     "phase": 2
   },
   {
@@ -35,7 +35,7 @@
     ],
     "field": "client[0].responses[0].fields.name-case",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"X-ORIGIN-case, x-lower\", got \"X-Origin-Case, X-Lower\"",
+    "reason": "Martian forwards fields through Go's http.Header, which canonicalises every name (textproto.CanonicalMIMEHeaderKey)",
     "phase": 2
   },
   {
@@ -48,7 +48,7 @@
     ],
     "field": "client[0].responses[0].fields.order",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"content-type, x-origin-case, x-lower\", got \"content-type, x-lower, x-origin-case\"",
+    "reason": "Go's http.Header is a map: Header.Write groups same-name lines and sends the names sorted",
     "phase": 2
   },
   {
@@ -61,7 +61,7 @@
     ],
     "field": "client[0].responses[0].trailers",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"X-Checksum: 42\", got \"\"",
+    "reason": "Martian drops the trailer section and the Trailer field that announces it",
     "phase": 2
   },
   {
@@ -74,7 +74,7 @@
     ],
     "field": "origin[0].requests[0].fields.name-case",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"X-Request-ID, x-lower-case\", got \"X-Request-Id, X-Lower-Case\"",
+    "reason": "Martian forwards fields through Go's http.Header, which canonicalises every name (textproto.CanonicalMIMEHeaderKey)",
     "phase": 2
   },
   {
@@ -87,7 +87,7 @@
     ],
     "field": "origin[0].requests[0].fields.order",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"host, x-request-id, x-lower-case\", got \"host, x-lower-case, x-request-id\"",
+    "reason": "Go's transport writes Host and User-Agent first, then the rest of the http.Header map grouped by name and sorted (Header.Write)",
     "phase": 2
   },
   {
@@ -100,7 +100,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"Trailer: X-Checksum\", got \"\"",
+    "reason": "Martian drops the trailer section and the Trailer field that announces it",
     "phase": 2
   },
   {
@@ -113,7 +113,7 @@
     ],
     "field": "client[0].responses[0].fields.name-case",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"X-ORIGIN-case, x-lower\", got \"X-Origin-Case, X-Lower\"",
+    "reason": "Martian forwards fields through Go's http.Header, which canonicalises every name (textproto.CanonicalMIMEHeaderKey)",
     "phase": 2
   },
   {
@@ -126,7 +126,7 @@
     ],
     "field": "client[0].responses[0].fields.order",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"content-type, x-origin-case, x-lower\", got \"content-type, x-lower, x-origin-case\"",
+    "reason": "Go's http.Header is a map: Header.Write groups same-name lines and sends the names sorted",
     "phase": 2
   },
   {
@@ -139,7 +139,7 @@
     ],
     "field": "client[0].responses[0].trailers",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"X-Checksum: 42\", got \"\"",
+    "reason": "Martian drops the trailer section and the Trailer field that announces it",
     "phase": 2
   },
   {
@@ -152,7 +152,7 @@
     ],
     "field": "origin[0].requests[0].fields.name-case",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"X-Request-ID, x-lower-case\", got \"X-Request-Id, X-Lower-Case\"",
+    "reason": "Martian forwards fields through Go's http.Header, which canonicalises every name (textproto.CanonicalMIMEHeaderKey)",
     "phase": 2
   },
   {
@@ -165,7 +165,7 @@
     ],
     "field": "origin[0].requests[0].fields.order",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"host, x-request-id, x-lower-case\", got \"host, x-lower-case, x-request-id\"",
+    "reason": "Go's transport writes Host and User-Agent first, then the rest of the http.Header map grouped by name and sorted (Header.Write)",
     "phase": 2
   },
   {
@@ -178,7 +178,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"Trailer: X-Checksum\", got \"\"",
+    "reason": "Martian drops the trailer section and the Trailer field that announces it",
     "phase": 2
   },
   {
@@ -191,7 +191,7 @@
     ],
     "field": "client[0].responses[0].fields.name-case",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"X-ORIGIN-case, x-lower\", got \"X-Origin-Case, X-Lower\"",
+    "reason": "Martian forwards fields through Go's http.Header, which canonicalises every name (textproto.CanonicalMIMEHeaderKey)",
     "phase": 2
   },
   {
@@ -204,7 +204,7 @@
     ],
     "field": "client[0].responses[0].fields.order",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"content-type, x-origin-case, x-lower\", got \"content-type, x-lower, x-origin-case\"",
+    "reason": "Go's http.Header is a map: Header.Write groups same-name lines and sends the names sorted",
     "phase": 2
   },
   {
@@ -217,7 +217,7 @@
     ],
     "field": "client[0].responses[0].trailers",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"X-Checksum: 42\", got \"\"",
+    "reason": "Martian drops the trailer section and the Trailer field that announces it",
     "phase": 2
   },
   {
@@ -230,7 +230,7 @@
     ],
     "field": "origin[0].requests[0].fields.name-case",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"X-Request-ID, x-lower-case\", got \"X-Request-Id, X-Lower-Case\"",
+    "reason": "Martian forwards fields through Go's http.Header, which canonicalises every name (textproto.CanonicalMIMEHeaderKey)",
     "phase": 2
   },
   {
@@ -243,7 +243,7 @@
     ],
     "field": "origin[0].requests[0].fields.order",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"host, x-request-id, x-lower-case\", got \"host, x-lower-case, x-request-id\"",
+    "reason": "Go's transport writes Host and User-Agent first, then the rest of the http.Header map grouped by name and sorted (Header.Write)",
     "phase": 2
   },
   {
@@ -293,7 +293,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"open\", got \"closed\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -304,7 +304,7 @@
     ],
     "field": "client[0].responses[0].body",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"\\\"ok\\\"\", got \"\\\"\\\"\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -315,7 +315,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"\", got \"Warning: 199 \\\"martian\\\" \\\"chunked line ends with bare LF\\\" \\\"Mon, 16 Nov 2026 19:39:13 GMT\\\"\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -326,7 +326,7 @@
     ],
     "field": "client[0].responses[0].reason",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"OK\", got \"Bad Gateway\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -337,7 +337,7 @@
     ],
     "field": "client[0].responses[0].status",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"200\", got \"502\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -348,7 +348,7 @@
     ],
     "field": "leg:framing",
     "kind": "known",
-    "reason": "measured by conformance-update-known: broke \"framing is valid and matches the body\", sent \"origin[0].requests[0]: message cut short after 0 body bytes\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -359,7 +359,7 @@
     ],
     "field": "origin[0].end",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"open\", got \"closed\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -370,7 +370,7 @@
     ],
     "field": "origin[0].requests[0].body",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"\\\"hello world\\\"\", got \"\\\"\\\"\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -381,7 +381,7 @@
     ],
     "field": "origin[0].requests[0].fields",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"\", got \"Warning: 199 \\\"martian\\\" \\\"failed to create proxyrequest: dumping request [1 161 229 222 231 166 117 27 151 66 83 183 4 51 228 126] body: reading request body: chunked line ends with bare LF\\\" \\\"Mon, 16 Nov 2026 19:39:13 GMT\\\"\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -392,7 +392,7 @@
     ],
     "field": "origin[0].requests[0].truncated",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"false\", got \"true\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -403,7 +403,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"open\", got \"closed\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -414,7 +414,7 @@
     ],
     "field": "client[0].responses[0].body",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"\\\"ok\\\"\", got \"\\\"\\\"\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -425,7 +425,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"\", got \"Warning: 199 \\\"martian\\\" \\\"chunked line ends with bare LF\\\" \\\"Mon, 16 Nov 2026 19:39:13 GMT\\\"\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -436,7 +436,7 @@
     ],
     "field": "client[0].responses[0].reason",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"OK\", got \"Bad Gateway\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -447,7 +447,7 @@
     ],
     "field": "client[0].responses[0].status",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"200\", got \"502\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -458,7 +458,7 @@
     ],
     "field": "leg:framing",
     "kind": "known",
-    "reason": "measured by conformance-update-known: broke \"framing is valid and matches the body\", sent \"origin[0].requests[0]: message cut short after 0 body bytes\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -469,7 +469,7 @@
     ],
     "field": "origin[0].end",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"open\", got \"closed\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -480,7 +480,7 @@
     ],
     "field": "origin[0].requests[0].body",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"\\\"hello world\\\"\", got \"\\\"\\\"\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -491,7 +491,7 @@
     ],
     "field": "origin[0].requests[0].fields",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"\", got \"Warning: 199 \\\"martian\\\" \\\"failed to create proxyrequest: dumping request [1 161 229 222 231 168 123 90 136 248 83 79 231 97 50 190] body: reading request body: chunked line ends with bare LF\\\" \\\"Mon, 16 Nov 2026 19:39:13 GMT\\\"\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -502,7 +502,7 @@
     ],
     "field": "origin[0].requests[0].truncated",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"false\", got \"true\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -513,7 +513,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"open\", got \"closed\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -524,7 +524,7 @@
     ],
     "field": "client[0].responses[0].body",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"\\\"ok\\\"\", got \"\\\"\\\"\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -535,7 +535,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"\", got \"Warning: 199 \\\"martian\\\" \\\"chunked line ends with bare LF\\\" \\\"Mon, 16 Nov 2026 19:39:13 GMT\\\"\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -546,7 +546,7 @@
     ],
     "field": "client[0].responses[0].reason",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"OK\", got \"Bad Gateway\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -557,7 +557,7 @@
     ],
     "field": "client[0].responses[0].status",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"200\", got \"502\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -568,7 +568,7 @@
     ],
     "field": "leg:framing",
     "kind": "known",
-    "reason": "measured by conformance-update-known: broke \"framing is valid and matches the body\", sent \"origin[0].requests[0]: message cut short after 0 body bytes\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -579,7 +579,7 @@
     ],
     "field": "origin[0].end",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"open\", got \"closed\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -590,7 +590,7 @@
     ],
     "field": "origin[0].requests[0].body",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"\\\"hello world\\\"\", got \"\\\"\\\"\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -601,7 +601,7 @@
     ],
     "field": "origin[0].requests[0].fields",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"\", got \"Warning: 199 \\\"martian\\\" \\\"failed to create proxyrequest: dumping request [1 161 229 222 231 172 120 24 170 52 147 92 217 5 38 20] body: reading request body: chunked line ends with bare LF\\\" \\\"Mon, 16 Nov 2026 19:39:13 GMT\\\"\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -612,7 +612,7 @@
     ],
     "field": "origin[0].requests[0].truncated",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"false\", got \"true\"",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
   },
   {
@@ -625,7 +625,7 @@
     ],
     "field": "client[0].responses[0].fields.order",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"set-cookie, x-other, set-cookie, x-multi, x-multi\", got \"set-cookie, set-cookie, x-multi, x-multi, x-other\"",
+    "reason": "Go's http.Header is a map: Header.Write groups same-name lines and sends the names sorted",
     "phase": 2
   },
   {
@@ -638,7 +638,7 @@
     ],
     "field": "origin[0].requests[0].fields.order",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"host, x-multi, x-other, x-multi, x-multi\", got \"host, x-multi, x-multi, x-multi, x-other\"",
+    "reason": "Go's transport writes Host and User-Agent first, then the rest of the http.Header map grouped by name and sorted (Header.Write)",
     "phase": 2
   },
   {
@@ -651,7 +651,7 @@
     ],
     "field": "client[0].responses[0].fields.order",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"set-cookie, x-other, set-cookie, x-multi, x-multi\", got \"set-cookie, set-cookie, x-multi, x-multi, x-other\"",
+    "reason": "Go's http.Header is a map: Header.Write groups same-name lines and sends the names sorted",
     "phase": 2
   },
   {
@@ -664,7 +664,7 @@
     ],
     "field": "origin[0].requests[0].fields.order",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"host, x-multi, x-other, x-multi, x-multi\", got \"host, x-multi, x-multi, x-multi, x-other\"",
+    "reason": "Go's transport writes Host and User-Agent first, then the rest of the http.Header map grouped by name and sorted (Header.Write)",
     "phase": 2
   },
   {
@@ -677,7 +677,7 @@
     ],
     "field": "client[0].responses[0].fields.order",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"set-cookie, x-other, set-cookie, x-multi, x-multi\", got \"set-cookie, set-cookie, x-multi, x-multi, x-other\"",
+    "reason": "Go's http.Header is a map: Header.Write groups same-name lines and sends the names sorted",
     "phase": 2
   },
   {
@@ -690,7 +690,1249 @@
     ],
     "field": "origin[0].requests[0].fields.order",
     "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"host, x-multi, x-other, x-multi, x-multi\", got \"host, x-multi, x-multi, x-multi, x-other\"",
+    "reason": "Go's transport writes Host and User-Agent first, then the rest of the http.Header map grouped by name and sorted (Header.Write)",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-odd-sizes@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "Martian drops the trailer section and the Trailer field that announces it",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-odd-sizes@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].trailers",
+    "kind": "known",
+    "reason": "Martian drops the trailer section and the Trailer field that announces it",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-odd-sizes@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "Martian drops the trailer section and the Trailer field that announces it",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-odd-sizes@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].trailers",
+    "kind": "known",
+    "reason": "Martian drops the trailer section and the Trailer field that announces it",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-odd-sizes@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "Martian drops the trailer section and the Trailer field that announces it",
+    "phase": 2
+  },
+  {
+    "cases": "chunked-odd-sizes@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].trailers",
+    "kind": "known",
+    "reason": "Martian drops the trailer section and the Trailer field that announces it",
+    "phase": 2
+  },
+  {
+    "cases": "early-close@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "early-close@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "early-close@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "early-close@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "early-close@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "early-close@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "early-close@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "early-close@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "early-close@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "field-name-case@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields.name-case",
+    "kind": "known",
+    "reason": "Martian forwards fields through Go's http.Header, which canonicalises every name (textproto.CanonicalMIMEHeaderKey)",
+    "phase": 2
+  },
+  {
+    "cases": "field-name-case@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields.order",
+    "kind": "known",
+    "reason": "Go's http.Header is a map: Header.Write groups same-name lines and sends the names sorted",
+    "phase": 2
+  },
+  {
+    "cases": "field-name-case@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields.name-case",
+    "kind": "known",
+    "reason": "Martian forwards fields through Go's http.Header, which canonicalises every name (textproto.CanonicalMIMEHeaderKey)",
+    "phase": 2
+  },
+  {
+    "cases": "field-name-case@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields.order",
+    "kind": "known",
+    "reason": "Go's http.Header is a map: Header.Write groups same-name lines and sends the names sorted",
+    "phase": 2
+  },
+  {
+    "cases": "field-name-case@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields.name-case",
+    "kind": "known",
+    "reason": "Martian forwards fields through Go's http.Header, which canonicalises every name (textproto.CanonicalMIMEHeaderKey)",
+    "phase": 2
+  },
+  {
+    "cases": "field-name-case@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields.order",
+    "kind": "known",
+    "reason": "Go's http.Header is a map: Header.Write groups same-name lines and sends the names sorted",
+    "phase": 2
+  },
+  {
+    "cases": "field-value-whitespace@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "Go's textproto reader trims the whitespace around each value and Header.Write rewrites each line as \"Name: value\"",
+    "phase": 2
+  },
+  {
+    "cases": "field-value-whitespace@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "Go's textproto reader trims the whitespace around each value and Header.Write rewrites each line as \"Name: value\"",
+    "phase": 2
+  },
+  {
+    "cases": "field-value-whitespace@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "Go's textproto reader trims the whitespace around each value and Header.Write rewrites each line as \"Name: value\"",
+    "phase": 2
+  },
+  {
+    "cases": "interim-100-continue@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses.count",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-100-continue@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-100-continue@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].reason",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-100-continue@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].status",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-100-continue@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses.count",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-100-continue@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-100-continue@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].reason",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-100-continue@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].status",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-100-continue@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses.count",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-100-continue@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-100-continue@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].reason",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-100-continue@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].status",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-103-early-hints@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses.count",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-103-early-hints@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-103-early-hints@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].reason",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-103-early-hints@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].status",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-103-early-hints@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses.count",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-103-early-hints@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-103-early-hints@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].reason",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-103-early-hints@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].status",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-103-early-hints@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses.count",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-103-early-hints@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-103-early-hints@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].reason",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "interim-103-early-hints@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].status",
+    "kind": "known",
+    "reason": "Go's transport consumes 1xx responses before it returns the final one, so Martian never forwards them",
+    "phase": 2
+  },
+  {
+    "cases": "keep-alive@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "leg:connection",
+    "kind": "known",
+    "reason": "Martian removes Connection but forwards the Keep-Alive field that Connection: keep-alive names, on both legs",
+    "phase": 2
+  },
+  {
+    "cases": "keep-alive@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "leg:connection",
+    "kind": "known",
+    "reason": "Martian removes Connection but forwards the Keep-Alive field that Connection: keep-alive names, on both legs",
+    "phase": 2
+  },
+  {
+    "cases": "keep-alive@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "leg:connection",
+    "kind": "known",
+    "reason": "Martian removes Connection but forwards the Keep-Alive field that Connection: keep-alive names, on both legs",
+    "phase": 2
+  },
+  {
+    "cases": "not-modified-304@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields.name-case",
+    "kind": "known",
+    "reason": "Martian forwards fields through Go's http.Header, which canonicalises every name (textproto.CanonicalMIMEHeaderKey)",
+    "phase": 2
+  },
+  {
+    "cases": "not-modified-304@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields.order",
+    "kind": "known",
+    "reason": "Go's http.Header is a map: Header.Write groups same-name lines and sends the names sorted",
+    "phase": 2
+  },
+  {
+    "cases": "not-modified-304@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields.name-case",
+    "kind": "known",
+    "reason": "Martian forwards fields through Go's http.Header, which canonicalises every name (textproto.CanonicalMIMEHeaderKey)",
+    "phase": 2
+  },
+  {
+    "cases": "not-modified-304@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields.order",
+    "kind": "known",
+    "reason": "Go's http.Header is a map: Header.Write groups same-name lines and sends the names sorted",
+    "phase": 2
+  },
+  {
+    "cases": "not-modified-304@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields.name-case",
+    "kind": "known",
+    "reason": "Martian forwards fields through Go's http.Header, which canonicalises every name (textproto.CanonicalMIMEHeaderKey)",
+    "phase": 2
+  },
+  {
+    "cases": "not-modified-304@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields.order",
+    "kind": "known",
+    "reason": "Go's http.Header is a map: Header.Write groups same-name lines and sends the names sorted",
+    "phase": 2
+  },
+  {
+    "cases": "request-fields-as-sent@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].requests[0].fields",
+    "kind": "known",
+    "reason": "Go's textproto reader trims the whitespace around each value and Header.Write rewrites each line as \"Name: value\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-fields-as-sent@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].requests[0].fields.name-case",
+    "kind": "known",
+    "reason": "Martian forwards fields through Go's http.Header, which canonicalises every name (textproto.CanonicalMIMEHeaderKey)",
+    "phase": 2
+  },
+  {
+    "cases": "request-fields-as-sent@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].requests[0].fields.order",
+    "kind": "known",
+    "reason": "Go's transport writes Host and User-Agent first, then the rest of the http.Header map grouped by name and sorted (Header.Write)",
+    "phase": 2
+  },
+  {
+    "cases": "request-fields-as-sent@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].requests[0].fields",
+    "kind": "known",
+    "reason": "Go's textproto reader trims the whitespace around each value and Header.Write rewrites each line as \"Name: value\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-fields-as-sent@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].requests[0].fields.name-case",
+    "kind": "known",
+    "reason": "Martian forwards fields through Go's http.Header, which canonicalises every name (textproto.CanonicalMIMEHeaderKey)",
+    "phase": 2
+  },
+  {
+    "cases": "request-fields-as-sent@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].requests[0].fields.order",
+    "kind": "known",
+    "reason": "Go's transport writes Host and User-Agent first, then the rest of the http.Header map grouped by name and sorted (Header.Write)",
+    "phase": 2
+  },
+  {
+    "cases": "request-fields-as-sent@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].requests[0].fields",
+    "kind": "known",
+    "reason": "Go's textproto reader trims the whitespace around each value and Header.Write rewrites each line as \"Name: value\"",
+    "phase": 2
+  },
+  {
+    "cases": "request-fields-as-sent@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].requests[0].fields.name-case",
+    "kind": "known",
+    "reason": "Martian forwards fields through Go's http.Header, which canonicalises every name (textproto.CanonicalMIMEHeaderKey)",
+    "phase": 2
+  },
+  {
+    "cases": "request-fields-as-sent@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].requests[0].fields.order",
+    "kind": "known",
+    "reason": "Go's transport writes Host and User-Agent first, then the rest of the http.Header map grouped by name and sorted (Header.Write)",
+    "phase": 2
+  },
+  {
+    "cases": "reset-mid-body@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "reset-mid-body@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "reset-mid-body@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "reset-mid-body@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "reset-mid-body@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "reset-mid-body@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "reset-mid-body@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "reset-mid-body@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "reset-mid-body@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@absolute",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "under Checkpoint Martian closes the client connection after its 502",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "Go's transport supports no transfer coding but chunked (\"unsupported transfer encoding\"), so Martian answers 502 with a Warning",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "Go's transport supports no transfer coding but chunked (\"unsupported transfer encoding\"), so Martian answers 502 with a Warning",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].reason",
+    "kind": "known",
+    "reason": "Go's transport supports no transfer coding but chunked (\"unsupported transfer encoding\"), so Martian answers 502 with a Warning",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].status",
+    "kind": "known",
+    "reason": "Go's transport supports no transfer coding but chunked (\"unsupported transfer encoding\"), so Martian answers 502 with a Warning",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "leg:connection",
+    "kind": "known",
+    "reason": "Martian forwards TE (as Te) although Connection: TE names it",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@absolute",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].end",
+    "kind": "known",
+    "reason": "Go's transport closes the origin connection after it rejects the transfer coding",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-plain",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "under Checkpoint Martian closes the client connection after its 502",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "Go's transport supports no transfer coding but chunked (\"unsupported transfer encoding\"), so Martian answers 502 with a Warning",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "Go's transport supports no transfer coding but chunked (\"unsupported transfer encoding\"), so Martian answers 502 with a Warning",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].reason",
+    "kind": "known",
+    "reason": "Go's transport supports no transfer coding but chunked (\"unsupported transfer encoding\"), so Martian answers 502 with a Warning",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].status",
+    "kind": "known",
+    "reason": "Go's transport supports no transfer coding but chunked (\"unsupported transfer encoding\"), so Martian answers 502 with a Warning",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "leg:connection",
+    "kind": "known",
+    "reason": "Martian forwards TE (as Te) although Connection: TE names it",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].end",
+    "kind": "known",
+    "reason": "Go's transport closes the origin connection after it rejects the transfer coding",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-tls",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "under Checkpoint Martian closes the client connection after its 502",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "Go's transport supports no transfer coding but chunked (\"unsupported transfer encoding\"), so Martian answers 502 with a Warning",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "Go's transport supports no transfer coding but chunked (\"unsupported transfer encoding\"), so Martian answers 502 with a Warning",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].reason",
+    "kind": "known",
+    "reason": "Go's transport supports no transfer coding but chunked (\"unsupported transfer encoding\"), so Martian answers 502 with a Warning",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].status",
+    "kind": "known",
+    "reason": "Go's transport supports no transfer coding but chunked (\"unsupported transfer encoding\"), so Martian answers 502 with a Warning",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "leg:connection",
+    "kind": "known",
+    "reason": "Martian forwards TE (as Te) although Connection: TE names it",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].end",
+    "kind": "known",
+    "reason": "Go's transport closes the origin connection after it rejects the transfer coding",
     "phase": 2
   }
 ]

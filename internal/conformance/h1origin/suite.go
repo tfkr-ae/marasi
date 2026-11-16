@@ -36,6 +36,10 @@ type Suite struct {
 
 var _ conformance.Suite = Suite{}
 
+// Deterministic asks the direct run to record every case twice and refuse
+// one whose two recordings differ.
+func (s Suite) Deterministic() {}
+
 // Name is "h1-origin".
 func (s Suite) Name() string { return Name }
 

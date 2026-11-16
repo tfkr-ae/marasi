@@ -237,6 +237,14 @@ type Launcher func(ctx context.Context, suite Suite, run RunName, dir string) (P
 // so its recordings say nothing about the proxy.
 var ErrNotProxied = errors.New("no traffic went through the proxy")
 
+// Deterministic is a suite whose every case must record the same bytes on
+// every direct run. Its direct run records each target twice and refuses
+// a case whose two recordings differ, so a case that depends on timing
+// never reaches a baseline.
+type Deterministic interface {
+	Deterministic()
+}
+
 // Holder is a proxy that can say how many Checkpoint items it has held and
 // resolved, so a Checkpoint run can show it took the Checkpoint path.
 type Holder interface {
