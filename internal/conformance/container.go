@@ -41,7 +41,8 @@ type ContainerSettings struct {
 
 // StartContainer starts a container on the host's network, copies the
 // binary in and launches a service instance there. Every name in hosts
-// resolves to 127.0.0.1 inside it, so Marasi reaches targets that listen on
+// resolves to 127.0.0.1 inside it, or to the address after it for a
+// "name:address" entry, so Marasi reaches targets that listen on
 // the host's loopback. The proxy listener is on loopback too, where the
 // harness reaches it: Docker Desktop shares the host network with the Mac
 // when host networking is on, as Autobahn needs too. With settings.CA set,
@@ -55,7 +56,10 @@ func StartContainer(ctx context.Context, settings ContainerSettings, name, proje
 	removeContainer(name)
 	args := []string{"run", "--detach", "--name", name, "--platform", "linux/" + settings.Arch, "--network", "host"}
 	for _, host := range hosts {
-		args = append(args, "--add-host", host+":127.0.0.1")
+		if !strings.Contains(host, ":") {
+			host += ":127.0.0.1"
+		}
+		args = append(args, "--add-host", host)
 	}
 	if settings.CA != nil {
 		args = append(args, "--env", "SSL_CERT_FILE="+containerBundle)
@@ -97,7 +101,7 @@ func StartContainer(ctx context.Context, settings ContainerSettings, name, proje
 	}
 	instance.Listener, instance.Control = started.ProxyListener, started.ControlListener
 	for _, address := range []string{instance.Listener, instance.Control} {
-		if err := awaitListener(ctx, address); err != nil {
+		if err := AwaitListener(ctx, address); err != nil {
 			instance.Stop()
 			return nil, err
 		}
@@ -105,10 +109,10 @@ func StartContainer(ctx context.Context, settings ContainerSettings, name, proje
 	return instance, nil
 }
 
-// awaitListener waits until address takes connections from the host.
+// AwaitListener waits until address takes connections from the host.
 // Docker Desktop forwards a port a host-network container listens on only
 // a moment after it starts listening.
-func awaitListener(ctx context.Context, address string) error {
+func AwaitListener(ctx context.Context, address string) error {
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		var dialer net.Dialer
