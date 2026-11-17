@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"compress/flate"
-	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -52,13 +51,8 @@ func deflateHandoff(t *testing.T, proxy *Proxy) (clientPeer, upstreamPeer net.Co
 	}
 	t.Cleanup(remove)
 
-	req = core.ContextWithRequestID(req, requestID)
+	// The hijackable session is Martian's until the upgrade handler replaces it.
 	req = core.ContextWithSession(req, martianContext.Session())
-	req = core.ContextWithWebSocketUpstream(req, upstreamConnection)
-	req = req.WithContext(context.WithValue(req.Context(), webSocketNegotiationKey{}, webSocketNegotiation{
-		accept:  []string{"permessage-deflate"},
-		deflate: &domain.WebSocketDeflate{ServerMaxWindowBits: 15, ClientMaxWindowBits: 15},
-	}))
 	res := &http.Response{
 		StatusCode: http.StatusSwitchingProtocols,
 		Proto:      "HTTP/1.1",
@@ -72,7 +66,14 @@ func deflateHandoff(t *testing.T, proxy *Proxy) (clientPeer, upstreamPeer net.Co
 		Body: http.NoBody,
 	}
 	res.Header.Set(marasiws.ExtensionsHeader, "permessage-deflate")
-	go func() { _ = WebSocketHandoffModifier(proxy, res) }()
+	pair := newResponsePair(res)
+	pair.ID = requestID
+	pair.webSocketUpstream = upstreamConnection
+	pair.webSocketNegotiation = &webSocketNegotiation{
+		accept:  []string{"permessage-deflate"},
+		deflate: &domain.WebSocketDeflate{ServerMaxWindowBits: 15, ClientMaxWindowBits: 15},
+	}
+	go func() { _ = WebSocketHandoffModifier(proxy, pair) }()
 
 	clientReader := bufio.NewReader(clientPeer)
 	for {

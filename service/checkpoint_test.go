@@ -15,10 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/martian"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
-	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
@@ -661,19 +659,8 @@ func startCheckpointHTTPHoldContext(t *testing.T, proxy *marasi.Proxy, ctx conte
 func startCheckpointHTTPResponseHold(t *testing.T, proxy *marasi.Proxy) (uuid.UUID, <-chan error) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-	_, remove, err := martian.TestContext(req, nil, nil)
-	if err != nil {
-		t.Fatalf("applying martian context: %v", err)
-	}
-	t.Cleanup(remove)
 	pair := marasi.NewTestPair(req)
-	if err := marasi.SetupRequestModifier(proxy, pair); err != nil {
-		t.Fatalf("running SetupRequestModifier: %v", err)
-	}
-	// The response modifiers still read the pair's values from the request context.
-	reqID := pair.ID
-	req = core.ContextWithMetadata(core.ContextWithRequestID(req, reqID), pair.Metadata)
-	res := &http.Response{
+	pair.Response = &http.Response{
 		Status:     "200 OK",
 		StatusCode: http.StatusOK,
 		Proto:      "HTTP/1.1",
@@ -685,9 +672,9 @@ func startCheckpointHTTPResponseHold(t *testing.T, proxy *marasi.Proxy) (uuid.UU
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- marasi.CheckpointResponseModifier(proxy, res)
+		done <- marasi.CheckpointResponseModifier(proxy, pair)
 	}()
-	return reqID, done
+	return pair.ID, done
 }
 
 // checkpointMessageHeldAt is the intercepted_at of the message startCheckpointWebSocketHold holds.

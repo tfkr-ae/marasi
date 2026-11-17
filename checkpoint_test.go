@@ -8,52 +8,36 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/martian"
 	"github.com/google/uuid"
-	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
-func startRequestHold(t *testing.T, proxy *Proxy) (*http.Request, uuid.UUID, <-chan error) {
+func startRequestHold(t *testing.T, proxy *Proxy) (*Pair, <-chan error) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-	if err := runRequestPairModifier(proxy, SetupRequestModifier, req); err != nil {
+	pair := NewTestPair(httptest.NewRequest(http.MethodGet, "https://marasi.app", nil))
+	if err := SetupRequestModifier(proxy, pair); err != nil {
 		t.Fatalf("running SetupRequestModifier : %v", err)
 	}
-	// The response modifiers still read the pair's values from req's context.
-	reqID := requestPair(req).ID
 	done := make(chan error, 1)
 	go func() {
-		done <- runRequestPairModifier(proxy, CheckpointRequestModifier, req)
+		done <- CheckpointRequestModifier(proxy, pair)
 	}()
-	return req, reqID, done
+	return pair, done
 }
 
 func startResponseHold(t *testing.T, proxy *Proxy) (uuid.UUID, <-chan error) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-	_, remove, err := martian.TestContext(req, nil, nil)
-	if err != nil {
-		t.Fatalf("applying martian context : %v", err)
-	}
-	t.Cleanup(remove)
-	if err := runRequestPairModifier(proxy, SetupRequestModifier, req); err != nil {
-		t.Fatalf("running SetupRequestModifier : %v", err)
-	}
-	reqID, ok := core.RequestIDFromContext(req.Context())
-	if !ok {
-		t.Fatalf("request id missing")
-	}
-	res := &http.Response{
+	pair := newResponsePair(&http.Response{
 		Header:  make(http.Header),
 		Request: req,
-	}
+	})
 	done := make(chan error, 1)
 	go func() {
-		done <- CheckpointResponseModifier(proxy, res)
+		done <- CheckpointResponseModifier(proxy, pair)
 	}()
-	return reqID, done
+	return pair.ID, done
 }
 
 func TestCheckpointPending(t *testing.T) {
@@ -61,9 +45,11 @@ func TestCheckpointPending(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])
 		proxy.SetIntercept(true)
 
-		_, firstID, firstDone := startRequestHold(t, proxy)
+		first, firstDone := startRequestHold(t, proxy)
+		firstID := first.ID
 		waitForCheckpoint(t, proxy, 1)
-		_, secondID, secondDone := startRequestHold(t, proxy)
+		second, secondDone := startRequestHold(t, proxy)
+		secondID := second.ID
 		waitForCheckpoint(t, proxy, 2)
 
 		if err := proxy.DropCheckpoint(secondID); err != nil {
@@ -97,7 +83,8 @@ func TestCheckpointPending(t *testing.T) {
 		if err != nil {
 			t.Fatalf("creating older id: %v", err)
 		}
-		_, requestID, requestDone := startRequestHold(t, proxy)
+		held, requestDone := startRequestHold(t, proxy)
+		requestID := held.ID
 		waitForCheckpoint(t, proxy, 1)
 
 		messageID, err := uuid.NewV7()
@@ -116,20 +103,15 @@ func TestCheckpointPending(t *testing.T) {
 		}()
 		waitForCheckpoint(t, proxy, 2)
 
-		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		t.Cleanup(remove)
-		if err := runRequestPairModifier(proxy, SetupRequestModifier, req); err != nil {
+		responsePair := NewTestPair(httptest.NewRequest(http.MethodGet, "https://marasi.app", nil))
+		if err := SetupRequestModifier(proxy, responsePair); err != nil {
 			t.Fatalf("running SetupRequestModifier : %v", err)
 		}
-		*req = *core.ContextWithRequestID(req, olderID)
-		res := &http.Response{Header: make(http.Header), Request: req}
+		responsePair.ID = olderID
+		responsePair.Response = &http.Response{Header: make(http.Header), Request: responsePair.Request}
 		responseDone := make(chan error, 1)
 		go func() {
-			responseDone <- CheckpointResponseModifier(proxy, res)
+			responseDone <- CheckpointResponseModifier(proxy, responsePair)
 		}()
 		items := waitForCheckpoint(t, proxy, 3)
 		responseID := olderID
@@ -175,7 +157,8 @@ func TestCheckpointPending(t *testing.T) {
 			return nil
 		}
 
-		req, reqID, requestDone := startRequestHold(t, proxy)
+		pair, requestDone := startRequestHold(t, proxy)
+		reqID := pair.ID
 		items := waitForCheckpoint(t, proxy, 1)
 		if !items[0].InterceptedAt.Equal(requestAt) {
 			t.Fatalf("\nwanted:\n%v\ngot:\n%v", requestAt, items[0].InterceptedAt)
@@ -190,10 +173,10 @@ func TestCheckpointPending(t *testing.T) {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		res := &http.Response{Header: make(http.Header), Request: req}
+		pair.Response = &http.Response{Header: make(http.Header), Request: pair.Request}
 		responseDone := make(chan error, 1)
 		go func() {
-			responseDone <- CheckpointResponseModifier(proxy, res)
+			responseDone <- CheckpointResponseModifier(proxy, pair)
 		}()
 		items = waitForCheckpoint(t, proxy, 1)
 		if items[0].ID != reqID || items[0].Type != domain.CheckpointTypeResponse {
@@ -294,31 +277,26 @@ func TestCheckpointPending(t *testing.T) {
 				return true
 			end
 		`)
-		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		t.Cleanup(remove)
-		if err := runRequestPairModifier(proxy, SetupRequestModifier, req); err != nil {
+		pair := NewTestPair(httptest.NewRequest(http.MethodGet, "https://marasi.app", nil))
+		if err := SetupRequestModifier(proxy, pair); err != nil {
 			t.Fatalf("running SetupRequestModifier : %v", err)
 		}
 		forwardOnHold(proxy, CheckpointForward{InterceptResponse: true})
-		if err := runRequestPairModifier(proxy, CheckpointRequestModifier, req); err != nil {
+		if err := CheckpointRequestModifier(proxy, pair); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		res := &http.Response{Header: make(http.Header), Request: req}
+		pair.Response = &http.Response{Header: make(http.Header), Request: pair.Request}
 		done := make(chan error, 1)
 		go func() {
-			done <- CheckpointResponseModifier(proxy, res)
+			done <- CheckpointResponseModifier(proxy, pair)
 		}()
 		items := waitForCheckpoint(t, proxy, 1)
 		if items[0].Type != domain.CheckpointTypeResponse {
 			t.Fatalf("wanted: %s\ngot: %s", domain.CheckpointTypeResponse, items[0].Type)
 		}
-		reqID, ok := core.RequestIDFromContext(req.Context())
-		if !ok || items[0].ID != reqID {
+		reqID := pair.ID
+		if items[0].ID != reqID {
 			t.Fatalf("wanted response id %s\ngot: %s", reqID, items[0].ID)
 		}
 		if err := proxy.DropCheckpoint(items[0].ID); err != nil {
@@ -365,7 +343,8 @@ func TestCheckpointPending(t *testing.T) {
 	t.Run("should not rebuild a dropped request", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])
 		proxy.SetIntercept(true)
-		req, reqID, done := startRequestHold(t, proxy)
+		pair, done := startRequestHold(t, proxy)
+		req, reqID := pair.Request, pair.ID
 		waitForCheckpoint(t, proxy, 1)
 		if !proxy.HasPendingCheckpoint() {
 			t.Fatalf("wanted http pending to count")

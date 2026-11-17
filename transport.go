@@ -15,7 +15,7 @@ import (
 )
 
 // marasiRoundTripper sends requests through the base RoundTripper without
-// adding a User-Agent or Connection header. Marasi's own pages never reach it
+// adding a User-Agent header. routedTransport adds no Connection header. Marasi's own pages never reach it
 // (see MarasiPagesModifier).
 type marasiRoundTripper struct {
 	base http.RoundTripper
@@ -26,20 +26,7 @@ func (m *marasiRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	if _, ok := req.Header["User-Agent"]; !ok {
 		req.Header.Set("User-Agent", "")
 	}
-	// The transport reads the request it sends until the response is done, while the
-	// response pipeline replaces *res.Request in place. Send a copy so they never share
-	// it, and hand back the original, whose address martian keys its context on.
-	sent := *req
-	// With Close set, the transport writes its own Connection: close unless the
-	// first Connection value already says close. The copy keeps the client's
-	// Connection lines as they are and adds none. The transport still closes the
-	// connection when the first Connection value or the origin's answer says close.
-	sent.Close = false
-	res, err := m.base.RoundTrip(&sent)
-	if res != nil {
-		res.Request = req
-	}
-	return res, err
+	return m.base.RoundTrip(req)
 }
 
 // routedTransport reaches the origin on the current route. It keeps one
@@ -150,7 +137,14 @@ func (rt *routedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 			}
 		}
 	}}
-	res, err := pool.transport.RoundTrip(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
+	sent := req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	// With Close set, the transport writes its own Connection: close unless the
+	// first Connection value already says close. The request sent keeps the
+	// client's Connection lines as they are and adds none. The transport still
+	// closes the connection when the first Connection value or the origin's
+	// answer says close. req keeps its Close, which the client leg reads.
+	sent.Close = false
+	res, err := pool.transport.RoundTrip(sent)
 	if res != nil {
 		res.Request = req
 		// A response without a body is already back in the idle pool. One

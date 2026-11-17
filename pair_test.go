@@ -196,7 +196,8 @@ func TestPairModifierAdapter(t *testing.T) {
 			})
 			proxy.AddResponseModifier(func(proxy *Proxy, res *http.Response) error {
 				record("old response")
-				return ResponseFilterModifier(proxy, res)
+				res.Request = core.ContextWithResponseTime(res.Request, time.Now())
+				return nil
 			})
 			proxy.AddResponsePairModifier(func(proxy *Proxy, pair *Pair) error {
 				record("new response")
