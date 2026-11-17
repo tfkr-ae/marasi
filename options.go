@@ -567,7 +567,8 @@ func WithWorkAdmission(admit func(context.Context, bool) (func(), uint64, error)
 // Work is admitted for the request modifiers and again, once the response body
 // has been buffered, for the response modifiers, never for the wait on the origin.
 // If a response is dropped the `martian.Session` is read from the context and hijacked to
-// close the `conn`
+// close the `conn`. A 101 that the response chain passes is handed to the
+// upgrade handler.
 func WithBasePipeline() func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		proxy.martianProxy.SetRequestModifier(
@@ -667,7 +668,10 @@ func WithBasePipeline() func(*Proxy) error {
 					return nil
 				}
 				err := proxy.Modifiers.ModifyResponse(res)
-				if err == nil || errors.Is(err, ErrSkipPipeline) {
+				if err == nil {
+					return proxy.handOffUpgrade(requestPair(res.Request))
+				}
+				if errors.Is(err, ErrSkipPipeline) {
 					return nil
 				}
 				if errors.Is(err, ErrDropped) {
@@ -764,7 +768,7 @@ func WithDefaultModifierPipeline() func(*Proxy) error {
 		proxy.AddResponsePairModifier(CheckpointResponseModifier)
 		proxy.AddResponsePairModifier(WebSocketNegotiationModifier)
 		proxy.AddResponsePairModifier(WriteResponseModifier)
-		proxy.AddResponsePairModifier(WebSocketHandoffModifier)
+		proxy.SetUpgradeHandler(WebSocketUpgradeHandler)
 		return nil
 	}
 

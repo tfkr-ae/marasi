@@ -1,7 +1,6 @@
 package marasi
 
 import (
-	"bufio"
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
@@ -18,10 +17,8 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
-	"github.com/google/martian"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/compass"
-	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
 	"github.com/tfkr-ae/marasi/rawhttp"
@@ -2134,7 +2131,7 @@ func TestProcessWebSocketMessageExtensions(t *testing.T) {
 	})
 }
 
-func TestWebSocketHandoffModifier(t *testing.T) {
+func TestWebSocketUpgradeHandler(t *testing.T) {
 	upgradeResponse := func(req *http.Request) *http.Response {
 		return &http.Response{
 			StatusCode: http.StatusSwitchingProtocols,
@@ -2157,50 +2154,21 @@ func TestWebSocketHandoffModifier(t *testing.T) {
 		return req
 	}
 
-	t.Run("non-websocket response should be ignored", func(t *testing.T) {
-		res := &http.Response{
-			StatusCode: http.StatusOK,
-			Request:    httptest.NewRequest(http.MethodGet, "https://marasi.app", nil),
-			Header:     make(http.Header),
-			Body:       http.NoBody,
-		}
-
-		err := WebSocketHandoffModifier(&Proxy{}, newResponsePair(res))
-		if err != nil {
-			t.Fatalf("wanted: nil\ngot: %v", err)
-		}
-	})
-
 	t.Run("missing request ID should return an error", func(t *testing.T) {
 		pair := newResponsePair(upgradeResponse(upgradeRequest()))
 		pair.ID = uuid.Nil
+		client, upstream := &trackingResponseBody{}, &trackingResponseBody{}
 
-		err := WebSocketHandoffModifier(&Proxy{}, pair)
+		err := WebSocketUpgradeHandler(&Proxy{}, pair, client, upstream)
 		if !errors.Is(err, ErrRequestIDNotFound) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrRequestIDNotFound, err)
 		}
-	})
-
-	t.Run("missing upstream should return an error", func(t *testing.T) {
-		pair := newResponsePair(upgradeResponse(upgradeRequest()))
-
-		err := WebSocketHandoffModifier(&Proxy{}, pair)
-		if !errors.Is(err, ErrWebSocketUpstreamUnavailable) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrWebSocketUpstreamUnavailable, err)
+		if !client.closed || !upstream.closed {
+			t.Fatalf("wanted both connections closed\ngot: client %v, upstream %v", client.closed, upstream.closed)
 		}
 	})
 
-	t.Run("missing session should return an error", func(t *testing.T) {
-		pair := newResponsePair(upgradeResponse(upgradeRequest()))
-		pair.webSocketUpstream = &trackingResponseBody{}
-
-		err := WebSocketHandoffModifier(&Proxy{}, pair)
-		if !errors.Is(err, ErrSessionContext) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrSessionContext, err)
-		}
-	})
-
-	t.Run("successful handoff should relay and persist lifecycle", func(t *testing.T) {
+	t.Run("should relay and persist the lifecycle", func(t *testing.T) {
 		requestID, requestIDErr := uuid.NewV7()
 		if requestIDErr != nil {
 			t.Fatalf("creating request UUID: %v", requestIDErr)
@@ -2220,44 +2188,16 @@ func TestWebSocketHandoffModifier(t *testing.T) {
 		}
 
 		req := upgradeRequest()
-		clientBuffer := bufio.NewReadWriter(bufio.NewReader(clientConnection), bufio.NewWriter(clientConnection))
-		martianContext, remove, contextErr := martian.TestContext(req, clientConnection, clientBuffer)
-		if contextErr != nil {
-			t.Fatalf("applying martian context: %v", contextErr)
-		}
-		defer remove()
-
-		// The hijackable session is Martian's until the upgrade handler replaces it.
-		req = core.ContextWithSession(req, martianContext.Session())
 		pair := newResponsePair(upgradeResponse(req))
 		pair.ID = requestID
-		pair.webSocketUpstream = upstreamConnection
 		proxy := &Proxy{
 			WebSocketRegistry: marasiws.NewRegistry(),
 			DBWriteChannel:    make(chan any, 4),
 		}
 		handoffResult := make(chan error, 1)
 		go func() {
-			handoffResult <- WebSocketHandoffModifier(proxy, pair)
+			handoffResult <- WebSocketUpgradeHandler(proxy, pair, clientConnection, upstreamConnection)
 		}()
-
-		clientReader := bufio.NewReader(clientPeer)
-		statusLine, readErr := clientReader.ReadString('\n')
-		if readErr != nil {
-			t.Fatalf("reading handshake status: %v", readErr)
-		}
-		if statusLine != "HTTP/1.1 101 Switching Protocols\r\n" {
-			t.Fatalf("wanted: %q\ngot: %q", "HTTP/1.1 101 Switching Protocols\r\n", statusLine)
-		}
-		for {
-			headerLine, headerErr := clientReader.ReadString('\n')
-			if headerErr != nil {
-				t.Fatalf("reading handshake header: %v", headerErr)
-			}
-			if headerLine == "\r\n" {
-				break
-			}
-		}
 
 		openItem := receiveSessionDBWrite(t, proxy.DBWriteChannel)
 		openRecord, ok := openItem.(*domain.WebSocketConnection)
@@ -2275,9 +2215,6 @@ func TestWebSocketHandoffModifier(t *testing.T) {
 		}
 		if openRecord.Path != "/socket?token=test" {
 			t.Fatalf("wanted: %q\ngot: %q", "/socket?token=test", openRecord.Path)
-		}
-		if !martianContext.Session().Hijacked() {
-			t.Fatalf("wanted: %v\ngot: %v", true, martianContext.Session().Hijacked())
 		}
 		if registered, exists := proxy.WebSocketRegistry.Get(openRecord.ID); !exists || registered == nil {
 			t.Fatalf("wanted registered connection: true\ngot: %v", exists)
@@ -2319,7 +2256,7 @@ func TestWebSocketHandoffModifier(t *testing.T) {
 		select {
 		case handoffErr := <-handoffResult:
 			if handoffErr != nil {
-				t.Fatalf("WebSocketHandoffModifier() returned unexpected error: %v", handoffErr)
+				t.Fatalf("WebSocketUpgradeHandler() returned unexpected error: %v", handoffErr)
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatalf("wanted handoff state: %q\ngot: %q", "returned", "blocked")

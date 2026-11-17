@@ -142,6 +142,7 @@ type Proxy struct {
 	webSocketLifecycleMu sync.RWMutex
 	webSocketSessions    sync.WaitGroup
 	webSocketsClosing    bool
+	upgradeHandler       UpgradeHandler // takes over a pair whose response switched protocols
 	martianCloseOnce     sync.Once
 	martianCloseDone     chan struct{}
 	connectionMu         sync.Mutex

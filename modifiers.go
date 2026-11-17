@@ -520,27 +520,17 @@ func processWebSocketMessageExtensions(proxy *Proxy, message *marasiws.Message) 
 	}
 }
 
-// WebSocketHandoffModifier hijacks the client connection after a successful upgrade,
-// writes the 101 response, and runs the bidirectional WebSocket session.
-func WebSocketHandoffModifier(proxy *Proxy, pair *Pair) error {
-	res, req := pair.Response, pair.Request
-	if !marasiws.IsUpgradeResponse(res) {
-		return nil
-	}
+// WebSocketUpgradeHandler is the upgrade handler for WebSocket: it relays the
+// session between the client and the origin and records it. The proxy has
+// already written the 101 to the client.
+func WebSocketUpgradeHandler(proxy *Proxy, pair *Pair, client, upstream io.ReadWriteCloser) error {
+	defer client.Close()
+	defer upstream.Close()
+	req := pair.Request
 
 	requestID := pair.ID
 	if requestID == uuid.Nil {
 		return ErrRequestIDNotFound
-	}
-
-	upstream := pair.webSocketUpstream
-	if upstream == nil {
-		return ErrWebSocketUpstreamUnavailable
-	}
-
-	session, ok := core.SessionFromContext(req.Context())
-	if !ok {
-		return ErrSessionContext
 	}
 
 	connectionID, err := uuid.NewV7()
@@ -548,33 +538,11 @@ func WebSocketHandoffModifier(proxy *Proxy, pair *Pair) error {
 		return fmt.Errorf("creating websocket connection ID: %w", err)
 	}
 
-	client, bufferedClient, err := session.Hijack()
-	if err != nil {
-		return fmt.Errorf("hijacking websocket client connection: %w", err)
-	}
-
-	defer client.Close()
-	defer upstream.Close()
-
-	if err := client.SetDeadline(time.Time{}); err != nil {
-		return fmt.Errorf("clearing websocket client deadline: %w", err)
-	}
-
 	deflate, removedExtensions := webSocketNegotiated(pair)
-	if err := res.Write(bufferedClient); err != nil {
-		return fmt.Errorf("writing websocket handshake response: %w", err)
-	}
-
-	if err := bufferedClient.Flush(); err != nil {
-		return fmt.Errorf("flushing websocket handshake response: %w", err)
-	}
 
 	// Both peers are read through a watch, above TLS and buffering, so a watch reads
 	// frames and can tell a peer that closes after its close frame from one that leaves.
-	watchedClient := marasiws.NewWatchedStream(&marasiws.HijackedConn{
-		Conn:       client,
-		ReadWriter: bufferedClient,
-	})
+	watchedClient := marasiws.NewWatchedStream(client)
 	watchedUpstream := marasiws.NewWatchedStream(upstream)
 	var connection *marasiws.Connection
 	process := func(message *marasiws.Message) error {
