@@ -38,6 +38,15 @@ var echoJS []byte
 //   - /echo: 200 with the request's header fields, one per line
 //   - /cookie: 200 with the Cookie pairs, one per line
 //   - /: 200 "OK", or the request body for POST
+//
+// lingering_close always makes nginx read and discard what the client still
+// sends before it closes. By default nginx answers some requests early, such
+// as a 414 for an over-long request line, and closes with the rest of the
+// request unread, so its kernel resets the connection. A client still
+// writing, such as Martian's Go transport, then races the response it read
+// against the reset, and gets the response or a 502 by timing. An early
+// response must never be lost to a reset, so a case's result depends on the
+// proxy, not on timing.
 var config = template.Must(template.New("nginx.conf").Parse(`load_module modules/ngx_http_js_module.so;
 
 worker_processes 1;
@@ -50,6 +59,7 @@ events {
 http {
     access_log /dev/stdout;
     absolute_redirect off;
+    lingering_close always;
     js_import echo from ` + configDir + `/echo.js;
 {{range .Listeners}}
     server {
