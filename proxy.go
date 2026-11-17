@@ -148,7 +148,7 @@ type Proxy struct {
 	connectionMu         sync.Mutex
 	connectionSessions   sync.WaitGroup
 	connections          map[net.Conn]struct{}
-	clientConnections    map[string]*listener.WatchedConn
+	clientConnections    map[string]*clientConnection
 	connectionsClosing   bool
 	transportContext     context.Context
 	cancelTransport      context.CancelFunc
@@ -338,7 +338,7 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 		transportContext:     transportContext,
 		cancelTransport:      cancelTransport,
 		connections:          make(map[net.Conn]struct{}),
-		clientConnections:    make(map[string]*listener.WatchedConn),
+		clientConnections:    make(map[string]*clientConnection),
 		martianProxy:         martian.NewProxy(),
 		Modifiers:            fifo.NewGroup(),
 		DBWriteChannel:       make(chan any, 10),
@@ -1006,16 +1006,16 @@ func (proxy *Proxy) close(ctx context.Context, closeDatabase bool) error {
 // also interrupts clients and upstreams that have not sent HTTP headers yet.
 // Inbound sockets are watched and indexed by client address so a client disconnect can cancel its request.
 func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
-	var watched *listener.WatchedConn
+	var client *clientConnection
 	clientAddress := conn.RemoteAddr().String()
 	if inbound {
-		watched = listener.NewWatchedConnection(conn)
-		conn = watched
+		client = &clientConnection{WatchedConn: listener.NewWatchedConnection(conn)}
+		conn = client.WatchedConn
 	}
 	proxy.connectionMu.Lock()
 	if inbound {
 		proxy.connectionSessions.Add(1)
-		proxy.clientConnections[clientAddress] = watched
+		proxy.clientConnections[clientAddress] = client
 	}
 	proxy.connections[conn] = struct{}{}
 	closing := proxy.connectionsClosing
@@ -1026,7 +1026,7 @@ func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
 	return listener.NewTrackedConnection(conn, func() {
 		proxy.connectionMu.Lock()
 		delete(proxy.connections, conn)
-		if inbound && proxy.clientConnections[clientAddress] == watched {
+		if inbound && proxy.clientConnections[clientAddress] == client {
 			delete(proxy.clientConnections, clientAddress)
 		}
 		proxy.connectionMu.Unlock()
@@ -1069,9 +1069,9 @@ func (proxy *Proxy) watchClient(req *http.Request) {
 	req.Body = &watchAtEOF{ReadCloser: req.Body, watch: func() { conn.Watch(cancel) }}
 }
 
-// clientConnection returns the watched client socket for remoteAddr, or nil when the
+// clientConnection returns the client connection for remoteAddr, or nil when the
 // client did not come through the proxy listener.
-func (proxy *Proxy) clientConnection(remoteAddr string) *listener.WatchedConn {
+func (proxy *Proxy) clientConnection(remoteAddr string) *clientConnection {
 	proxy.connectionMu.Lock()
 	defer proxy.connectionMu.Unlock()
 	return proxy.clientConnections[remoteAddr]

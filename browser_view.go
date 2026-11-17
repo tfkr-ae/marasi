@@ -49,9 +49,6 @@ func ownResponse(pair *Pair) (*http.Response, bool) {
 // (docs/adr/2026-10-20-a-browser-view-serves-the-stored-response-once-at-its-original-url.md).
 func MarasiPagesModifier(proxy *Proxy, pair *Pair) error {
 	req := pair.Request
-	if req.Method == http.MethodConnect {
-		return nil
-	}
 	if res := proxy.marasiPage(req); res != nil {
 		return respondFromProxy(pair, res)
 	}

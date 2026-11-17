@@ -431,33 +431,6 @@ func TestPreventLoopModifier(t *testing.T) {
 	})
 }
 
-func TestSkipConnectModifier(t *testing.T) {
-	t.Run("request with CONNECT method should be skipped by marasi", func(t *testing.T) {
-		proxy := &Proxy{}
-		req := httptest.NewRequest(http.MethodConnect, "https://marasi.app", nil)
-
-		pair := NewTestPair(req)
-		err := SkipConnectRequestModifier(proxy, pair)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
-	})
-
-	t.Run("request with method other than CONNECT should be processed", func(t *testing.T) {
-		proxy := &Proxy{}
-		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-
-		pair := NewTestPair(req)
-		err := SkipConnectRequestModifier(proxy, pair)
-		if err != nil {
-			t.Fatalf("wanted: nil\ngot: %q", err)
-		}
-	})
-}
-
 func TestCompassRequestModifier(t *testing.T) {
 	t.Run("request that matches blocked rule should be skipped", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["compass"])
@@ -1746,20 +1719,6 @@ func TestWriteRequestModifier(t *testing.T) {
 
 // Response Modifiers
 func TestResponseFilterModifier(t *testing.T) {
-	t.Run("response to CONNECT request should be skipped by marasi", func(t *testing.T) {
-		proxy := &Proxy{}
-		req := httptest.NewRequest(http.MethodConnect, "https://marasi.app", nil)
-		res := &http.Response{Request: req}
-
-		err := ResponseFilterModifier(proxy, res)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
-	})
-
 	t.Run("responses to requests that were marked as skipped should be skipped by marasi", func(t *testing.T) {
 		proxy := &Proxy{}
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)

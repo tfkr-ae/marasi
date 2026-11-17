@@ -183,39 +183,8 @@ func dropRequest(pair *Pair) error {
 // PreventLoopModifier skips processing a request if it is made to marasi's active listener address and port, preventing an infinite loop
 // It will normalize localhost & 127.0.0.1 when checking the host and port
 func PreventLoopModifier(proxy *Proxy, pair *Pair) error {
-	req := pair.Request
-	host, port, err := net.SplitHostPort(req.Host)
-	if err != nil {
-		// fallback to req.Host
-		host = req.Host
-
-		// if net.SplitHostPort fails the fallback is either 443 or 80 depending on the URL scheme or req.TLS
-		if req.URL.Scheme == "https" || req.TLS != nil {
-			port = "443"
-		} else {
-			port = "80"
-		}
-	}
-
-	if host == "localhost" {
-		host = "127.0.0.1"
-	}
-
-	listenerAddr := proxy.Addr
-	if listenerAddr == "localhost" {
-		listenerAddr = "127.0.0.1"
-	}
-
-	if host == listenerAddr && port == proxy.Port {
+	if proxy.targetsListener(pair.Request) {
 		pair.skipRoundTrip = true
-		return ErrSkipPipeline
-	}
-	return nil
-}
-
-// SkipConnectRequestModifier will skip processing for CONNECT requests
-func SkipConnectRequestModifier(proxy *Proxy, pair *Pair) error {
-	if pair.Request.Method == http.MethodConnect {
 		return ErrSkipPipeline
 	}
 	return nil
@@ -455,7 +424,7 @@ func WriteRequestModifier(proxy *Proxy, pair *Pair) error {
 // It will skip processing for responses to CONNECT requests, responses where the skip flag was set, or SkipRoundTrip is true.
 // It will also add the response time to the context
 func ResponseFilterModifier(proxy *Proxy, res *http.Response) error {
-	if res.Request.Method == http.MethodConnect || martian.NewContext(res.Request).SkippingRoundTrip() {
+	if martian.NewContext(res.Request).SkippingRoundTrip() {
 		return ErrSkipPipeline
 	}
 	if skip, ok := core.SkipFlagFromContext(res.Request.Context()); ok && skip {

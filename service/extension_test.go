@@ -1250,7 +1250,6 @@ func assertExtensionLuaOwnsProject(t *testing.T, id uuid.UUID, httpsNested bool,
 		if err := lifecycle.proxy.WithOptions(marasi.WithTLS()); err != nil {
 			t.Fatalf("configuring proxy TLS: %v", err)
 		}
-		lifecycle.proxy.AddRequestPairModifier(marasi.SkipConnectRequestModifier)
 		// Terminate client TLS at the proxy; the test origin speaks plain HTTP.
 		lifecycle.proxy.AddRequestModifier(func(_ *marasi.Proxy, req *http.Request) error {
 			req.URL.Scheme = "http"

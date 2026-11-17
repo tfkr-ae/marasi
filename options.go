@@ -576,25 +576,20 @@ func WithBasePipeline() func(*Proxy) error {
 				expected := "Basic " + base64.StdEncoding.EncodeToString([]byte("marasi:"+proxy.clientWorkToken))
 				internal := req.Header.Get("Proxy-Authorization") == expected
 				session := martian.NewContext(req).Session()
-				if req.Method == http.MethodConnect && internal {
-					session.Set("marasi.self-client", true)
-				}
-				if owned, _ := session.Get("marasi.self-client"); owned == true {
-					internal = true
-				}
 				req.Header.Del("Proxy-Authorization")
+				if req.Method == http.MethodConnect {
+					if err := proxy.admitTunnel(req, internal); err != nil {
+						return refuseConnection(session, err)
+					}
+					return nil
+				}
+				internal = internal || proxy.isSelfClientConnection(req.RemoteAddr)
 				// Only the proxy's own client may name a launch. The header never leaves the proxy.
 				launchID, launchErr := uuid.Parse(req.Header.Get(launchIDHeader))
 				req.Header.Del(launchIDHeader)
 				release, generation, err := proxy.admitWork(req.Context(), internal)
 				if err != nil {
-					// Martian sends a request upstream even when a modifier
-					// fails, so a refused request ends its connection instead.
-					conn, _, hijackErr := session.Hijack()
-					if hijackErr != nil {
-						return errors.Join(err, fmt.Errorf("hijacking session: %w", hijackErr))
-					}
-					return errors.Join(err, conn.Close())
+					return refuseConnection(session, err)
 				}
 				// The wait on the origin is not project work, so the request
 				// side releases its admission before the round trip (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
@@ -623,6 +618,11 @@ func WithBasePipeline() func(*Proxy) error {
 		)
 		proxy.martianProxy.SetResponseModifier(
 			martianResModifierFunc(func(res *http.Response) error {
+				// The tunnel was admitted with its CONNECT; the 200 that
+				// opens it is not a response of any pair.
+				if res.Request.Method == http.MethodConnect {
+					return nil
+				}
 				// A request the proxy answered itself is sent as answered,
 				// with no response modifier and no admission.
 				if own, ok := ownResponse(requestPair(res.Request)); ok {
@@ -687,6 +687,17 @@ func WithBasePipeline() func(*Proxy) error {
 	}
 }
 
+// refuseConnection ends the client connection of a refused request. Martian
+// sends a request upstream, or opens a tunnel, even when a modifier fails, so
+// a refusal closes the connection instead.
+func refuseConnection(session *martian.Session, err error) error {
+	conn, _, hijackErr := session.Hijack()
+	if hijackErr != nil {
+		return errors.Join(err, fmt.Errorf("hijacking session: %w", hijackErr))
+	}
+	return errors.Join(err, conn.Close())
+}
+
 // projectAdmission is how a request was admitted: whether by the proxy's own
 // client, and in which generation of the open project.
 type projectAdmission struct {
@@ -732,7 +743,6 @@ func WithDefaultModifierPipeline() func(*Proxy) error {
 		// Request Modifiers
 		proxy.AddRequestPairModifier(MarasiPagesModifier)
 		proxy.AddRequestPairModifier(PreventLoopModifier)
-		proxy.AddRequestPairModifier(SkipConnectRequestModifier)
 		proxy.AddRequestPairModifier(CompassRequestModifier)
 		proxy.AddRequestPairModifier(SetupRequestModifier)
 		proxy.AddRequestPairModifier(OverrideWaypointsModifier)
