@@ -13,7 +13,6 @@
 package marasi
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -1037,37 +1036,21 @@ func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
 	})
 }
 
-// maxEagerBody bounds the request body watchClient reads before the pipeline runs.
-const maxEagerBody = 1 << 20
-
 // watchClient cancels the request context when its client disconnects while the request
-// is in flight, which interrupts its hooks. The socket is watched only after the body has
-// been read, so the watch never takes body bytes. A small body of known length is read now,
-// so hooks are watched. A larger, chunked, or Expect: 100-continue body is watched once it
-// has been read through.
-func (proxy *Proxy) watchClient(req *http.Request) {
+// is in flight, which interrupts its hooks. The proxy has read the body whole by now, so
+// the watch never takes body bytes. A body cut short is not watched: what is left on the
+// socket is not a request, and the round trip fails on the body's read error instead.
+func (proxy *Proxy) watchClient(req *http.Request, ending BodyEnding) {
+	if ending == BodyCutShort {
+		return
+	}
 	conn := proxy.clientConnection(req.RemoteAddr)
 	if conn == nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(req.Context())
 	*req = *req.WithContext(ctx)
-
-	if req.Body == nil || req.Body == http.NoBody {
-		conn.Watch(cancel)
-		return
-	}
-	if req.ContentLength > 0 && req.ContentLength <= maxEagerBody && req.Header.Get("Expect") == "" {
-		body, err := io.ReadAll(req.Body)
-		req.Body = io.NopCloser(bytes.NewReader(body))
-		if err != nil {
-			cancel()
-			return
-		}
-		conn.Watch(cancel)
-		return
-	}
-	req.Body = &watchAtEOF{ReadCloser: req.Body, watch: func() { conn.Watch(cancel) }}
+	conn.Watch(cancel)
 }
 
 // clientConnection returns the client connection for remoteAddr, or nil when the
@@ -1076,21 +1059,6 @@ func (proxy *Proxy) clientConnection(remoteAddr string) *clientConnection {
 	proxy.connectionMu.Lock()
 	defer proxy.connectionMu.Unlock()
 	return proxy.clientConnections[remoteAddr]
-}
-
-// watchAtEOF starts watching the client once the request body has been read through.
-type watchAtEOF struct {
-	io.ReadCloser
-	once  sync.Once
-	watch func()
-}
-
-func (body *watchAtEOF) Read(p []byte) (int, error) {
-	n, err := body.ReadCloser.Read(p)
-	if err == io.EOF {
-		body.once.Do(body.watch)
-	}
-	return n, err
 }
 
 func (proxy *Proxy) dialTransport(ctx context.Context, network, address string) (net.Conn, error) {

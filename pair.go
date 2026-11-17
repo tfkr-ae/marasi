@@ -39,6 +39,11 @@ type Pair struct {
 	InterceptResponse bool
 	// ArmoryRunID is the Armory run that made the request, or uuid.Nil.
 	ArmoryRunID uuid.UUID
+	// RequestBodyEnding is how the proxy's read of the request body ended.
+	RequestBodyEnding BodyEnding
+	// ResponseBodyEnding is how the proxy's read of the response body
+	// ended, BodyUnread on the request chain.
+	ResponseBodyEnding BodyEnding
 
 	// webSocketUpstream is the upstream stream of a successful upgrade,
 	// detached from the response body by WebSocketPrepareModifier.

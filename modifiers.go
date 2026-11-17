@@ -699,29 +699,6 @@ func WebSocketHandoffModifier(proxy *Proxy, pair *Pair) error {
 	return proxy.runWebSocketSessionWithRelease(connection, record, pair.release)
 }
 
-// BufferStreamingBodyModifier reads the entire streaming response body into memory
-// and replaces the `res.Body` with a new `io.NopCloser` on the full body. It will
-// remove the `Transfer-Encoding` and update the `Content-Length` to reflect the new body.
-func BufferStreamingBodyModifier(proxy *Proxy, pair *Pair) error {
-	res := pair.Response
-	if marasiws.IsUpgradeResponse(res) {
-		return nil
-	}
-	defer res.Body.Close()
-
-	responseBody, err := io.ReadAll(res.Body)
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrReadBody, err)
-	}
-
-	res.Body = io.NopCloser(bytes.NewReader(responseBody))
-	res.ContentLength = int64(len(responseBody))
-	res.Header.Set("Content-Length", fmt.Sprintf("%d", len(responseBody)))
-	res.TransferEncoding = nil
-
-	return nil
-}
-
 // CompressedResponseModifier decompresses the response bodies and replaces the `res.Body`
 // with the decompressed data. It will remove the "Content-Encoding" header and update the "Content-Length" to the new length.
 // Currently the modifier handles gzip and br compressed bodies.
