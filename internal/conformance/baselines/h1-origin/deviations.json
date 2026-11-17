@@ -781,20 +781,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
-    "phase": 2
-  },
-  {
-    "cases": "early-close@absolute",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -807,7 +794,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -820,20 +807,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
-    "phase": 2
-  },
-  {
-    "cases": "early-close@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -846,7 +820,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -859,20 +833,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
-    "phase": 2
-  },
-  {
-    "cases": "early-close@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -885,7 +846,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -1561,20 +1522,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
-    "phase": 2
-  },
-  {
-    "cases": "reset-mid-body@absolute",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -1587,7 +1535,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -1600,20 +1548,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
-    "phase": 2
-  },
-  {
-    "cases": "reset-mid-body@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -1626,7 +1561,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -1639,20 +1574,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
-    "phase": 2
-  },
-  {
-    "cases": "reset-mid-body@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -1665,7 +1587,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
