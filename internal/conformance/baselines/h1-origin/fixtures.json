@@ -4757,6 +4757,240 @@
       }
     ]
   },
+  "loop-back@absolute": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /loop HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " PROXY"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 2"
+              }
+            ],
+            "body": "b2s=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9sb29wIEhUVFAvMS4xDQpIb3N0OiBQUk9YWQ0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LUxlbmd0aDogMg0KDQpvaw=="
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /loop HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " PROXY"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 2"
+              }
+            ],
+            "body": "b2s=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9sb29wIEhUVFAvMS4xDQpIb3N0OiBQUk9YWQ0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LUxlbmd0aDogMg0KDQpvaw=="
+        }
+      }
+    ]
+  },
+  "loop-back@connect-plain": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /loop HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " PROXY"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 2"
+              }
+            ],
+            "body": "b2s=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9sb29wIEhUVFAvMS4xDQpIb3N0OiBQUk9YWQ0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LUxlbmd0aDogMg0KDQpvaw=="
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /loop HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " PROXY"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 2"
+              }
+            ],
+            "body": "b2s=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9sb29wIEhUVFAvMS4xDQpIb3N0OiBQUk9YWQ0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LUxlbmd0aDogMg0KDQpvaw=="
+        }
+      }
+    ]
+  },
+  "loop-back@connect-tls": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /loop HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " PROXY"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 2"
+              }
+            ],
+            "body": "b2s=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9sb29wIEhUVFAvMS4xDQpIb3N0OiBQUk9YWQ0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LUxlbmd0aDogMg0KDQpvaw=="
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /loop HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " PROXY"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 2"
+              }
+            ],
+            "body": "b2s=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9sb29wIEhUVFAvMS4xDQpIb3N0OiBQUk9YWQ0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LUxlbmd0aDogMg0KDQpvaw=="
+        }
+      }
+    ]
+  },
   "no-content-204@absolute": {
     "client": [
       {

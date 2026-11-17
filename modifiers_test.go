@@ -257,6 +257,9 @@ func TestPreventLoopModifier(t *testing.T) {
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
 		assertControl(t, pair, err, controlRespond)
+		if pair.Response.StatusCode != http.StatusBadGateway || pair.Metadata["proxy_error"] != errLoop.Error() {
+			t.Fatalf("wanted a 502 proxy error response\ngot: %d, metadata %v", pair.Response.StatusCode, pair.Metadata)
+		}
 	})
 	t.Run("request to localhost:8080 with listener on 127.0.0.1:8080 should fail", func(t *testing.T) {
 		proxy := &Proxy{
@@ -1398,8 +1401,10 @@ func TestWriteRequestModifier(t *testing.T) {
 
 		err = WriteRequestModifier(proxy, pair)
 
-		if !errors.Is(err, ErrRequestHandlerUndefined) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrRequestHandlerUndefined, err)
+		// A missing handler is not an error: under fail-closed it would
+		// turn every pair into a proxy error response.
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
 		if len(proxy.DBWriteChannel) != 1 {
@@ -3303,8 +3308,10 @@ func TestWriteResponseModifier(t *testing.T) {
 
 		err := WriteResponseModifier(proxy, pair)
 
-		if !errors.Is(err, ErrResponseHandlerUndefined) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrResponseHandlerUndefined, err)
+		// A missing handler is not an error: under fail-closed it would
+		// turn every pair into a proxy error response.
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
 		if len(proxy.DBWriteChannel) != 1 {

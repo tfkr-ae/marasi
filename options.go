@@ -614,12 +614,12 @@ func WithBasePipeline() func(*Proxy) error {
 					// A stop ends only the request chain.
 					pair.control = controlNone
 				}
-				if err == nil {
-					return nil
+				if err != nil {
+					// A Go modifier failed: the request fails closed and
+					// never goes upstream half-modified.
+					proxy.failRequestChain(pair, err)
 				}
-				// TODO this should be handled through logging
-				log.Printf("request pipeline: %v", err)
-				return err
+				return nil
 			}),
 		)
 		proxy.martianProxy.SetResponseModifier(
@@ -631,9 +631,15 @@ func WithBasePipeline() func(*Proxy) error {
 				}
 				// A request the proxy answered itself (the round trip
 				// returned its response) or dropped is sent as it is, with
-				// no response modifier and no admission.
+				// no response modifier and no admission, unless the answer
+				// is a proxy error response to a captured request.
 				if pair := requestPair(res.Request); pair != nil && (pair.control == controlRespond || pair.Dropped()) {
-					return nil
+					if !pair.capturesProxyError() {
+						return nil
+					}
+					// A proxy error response is stored: the response chain
+					// runs, and its hooks skip what Marasi made.
+					pair.control = controlNone
 				}
 				// A launch whose client left was cancelled or interrupted. Its
 				// round trip was abandoned, so it has no response to process or store.

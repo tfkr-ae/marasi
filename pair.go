@@ -60,6 +60,11 @@ type Pair struct {
 	control control
 	// fromMarasi is set when Response is one Marasi made, not the origin's.
 	fromMarasi bool
+	// proxyError is the cause of the proxy error response Marasi answered
+	// the pair with, empty for any other response.
+	proxyError string
+	// requestCaptured is set once the request is queued for storage.
+	requestCaptured bool
 
 	// requestState is what the proxy knows of the request before the chain
 	// runs, and what the request chain leaves for the proxy.

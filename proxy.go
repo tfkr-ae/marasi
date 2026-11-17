@@ -535,7 +535,7 @@ func NewProxyRequest(pair *Pair) (*domain.ProxyRequest, error) {
 		req.URL.Host = currentURLHost
 
 		if err != nil {
-			return nil, fmt.Errorf("dumping request %d body: %w", requestId, err)
+			return nil, fmt.Errorf("dumping request %s body: %w", requestId, err)
 		}
 
 		proxyRequest.Raw = domain.RawField(rawReq)

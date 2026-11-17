@@ -234,20 +234,35 @@ func chainError(pair *Pair, err error) error {
 // returns a response from Respond. Everything that sets Martian's round
 // tripper goes through it, so Respond works whatever the transport.
 func (proxy *Proxy) setRoundTripper(base http.RoundTripper) {
-	proxy.martianProxy.SetRoundTripper(&respondRoundTripper{base: base})
+	proxy.martianProxy.SetRoundTripper(&respondRoundTripper{proxy: proxy, base: base})
 }
 
 // respondRoundTripper returns the response a request modifier answered a
 // pair with through Respond, in place of a round trip. Every other request
-// goes to base.
+// goes to base. A round trip that gets no response is answered with a proxy
+// error response, never with an error: Martian would answer that with an
+// empty 502 carrying a Warning header.
 type respondRoundTripper struct {
-	base http.RoundTripper
+	proxy *Proxy
+	base  http.RoundTripper
 }
 
 // RoundTrip satisfies http.RoundTripper.
 func (rt *respondRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	if pair := requestPair(req); pair != nil && pair.control == controlRespond {
+	pair := requestPair(req)
+	if pair != nil && pair.control == controlRespond {
 		return pair.Response, nil
 	}
-	return rt.base.RoundTrip(req)
+	res, err := rt.base.RoundTrip(req)
+	if err == nil {
+		return res, nil
+	}
+	if pair == nil {
+		res := plainTextResponse(req, http.StatusBadGateway, err.Error())
+		res.Close = true
+		return res, nil
+	}
+	rt.proxy.respondWithProxyError(pair, http.StatusBadGateway, err)
+	rt.proxy.logProxyError(pair, err)
+	return pair.Response, nil
 }

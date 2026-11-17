@@ -45,10 +45,10 @@ var (
 	// ErrRebuildResponse is returned when the response is malformed and cannot be rebuilt
 	ErrRebuildResponse = errors.New("cannot rebuild response")
 
-	// ErrRequestHandlerUndefined is returned when the request handler is undefined
+	// ErrRequestHandlerUndefined is no longer returned: a proxy with no request handler still captures.
 	ErrRequestHandlerUndefined = errors.New("no request handler defined")
 
-	// ErrResponseHandlerUndefined is returned when the response handler is undefined
+	// ErrResponseHandlerUndefined is no longer returned: a proxy with no response handler still captures.
 	ErrResponseHandlerUndefined = errors.New("no response handler defined")
 
 	// ErrProxyRequest is returned when ProxyRequest cannot be created
@@ -166,13 +166,11 @@ func hookRequest(pair *Pair) *extensions.Request {
 	return &extensions.Request{Request: pair.Request, ID: pair.ID, Metadata: pair.Metadata}
 }
 
-// PreventLoopModifier answers a request made to marasi's active listener address and port through Respond, so it never loops back through the proxy
+// PreventLoopModifier answers a request made to marasi's active listener address and port with a proxy error response, so it never loops back through the proxy
 // It will normalize localhost & 127.0.0.1 when checking the host and port
 func PreventLoopModifier(proxy *Proxy, pair *Pair) error {
 	if proxy.targetsListener(pair.Request) {
-		// The empty 200 Martian used to make. Ticket 06 makes it a proxy
-		// error response.
-		pair.Respond(newResponse(pair.Request, http.StatusOK, nil))
+		proxy.respondWithProxyError(pair, http.StatusBadGateway, errLoop)
 	}
 	return nil
 }
@@ -394,7 +392,7 @@ func CheckpointRequestModifier(proxy *Proxy, pair *Pair) error {
 // WriteRequestModifier is the final modifier in the default request pipeline.
 // It will create a `ProxyRequest` struct and queue it for database insertion.
 // If the request came from launchpad, it will create a `LaunchpadRequest` struct and queue it for database insertion as well.
-// If the `proxy.OnRequest` handler is defined, it will be called with the `ProxyRequest` otherwise the modifier will return `ErrRequestHandlerUndefined`
+// If the `proxy.OnRequest` handler is defined, it is called with the `ProxyRequest`. A proxy with no handler still captures the request.
 func WriteRequestModifier(proxy *Proxy, pair *Pair) error {
 	if pair.ID == uuid.Nil {
 		return ErrRequestIDNotFound
@@ -409,10 +407,10 @@ func WriteRequestModifier(proxy *Proxy, pair *Pair) error {
 		proxyRequest.Number = proxy.TrafficRepo.NextPairNumber()
 	}
 	proxy.DBWriteChannel <- proxyRequest
-	if proxy.OnRequest == nil {
-		return ErrRequestHandlerUndefined
+	pair.requestCaptured = true
+	if proxy.OnRequest != nil {
+		proxy.OnRequest(*proxyRequest)
 	}
-	proxy.OnRequest(*proxyRequest)
 	return nil
 }
 
@@ -811,6 +809,10 @@ func callResponseHook(pair *Pair, hook func(*http.Response) error) (responseHook
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
 // Compass's skip decision does not apply to a launch (see compassSkips).
 func CompassResponseModifier(proxy *Proxy, pair *Pair) error {
+	// Marasi made the response, so there is nothing for a hook to judge or edit.
+	if pair.FromMarasi() {
+		return nil
+	}
 	if compassExt, ok := proxy.GetExtension("compass"); ok {
 		if !compassExt.MetadataSnapshot().Enabled {
 			return nil
@@ -842,6 +844,10 @@ func CompassResponseModifier(proxy *Proxy, pair *Pair) error {
 // The modifier will check if the extension ID in request context matches the current extension and skip execution if it does.
 // After `processResponse`, it will check if the request is passed through (nil), stopped (Stop), or dropped (Drop).
 func ExtensionsResponseModifier(proxy *Proxy, pair *Pair) error {
+	// Marasi made the response, so there is nothing for a hook to judge or edit.
+	if pair.FromMarasi() {
+		return nil
+	}
 	for _, ext := range proxy.Extensions {
 		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" && ext.MetadataSnapshot().Enabled {
 			if pair.ExtensionID != ext.Data.ID {
@@ -875,6 +881,10 @@ func ExtensionsResponseModifier(proxy *Proxy, pair *Pair) error {
 // or the matching request was forwarded with intercept-response. A nil notify still holds until forward, drop, or drop-all.
 // A Lua error in interceptResponse does not skip either flag.
 func CheckpointResponseModifier(proxy *Proxy, pair *Pair) error {
+	// Marasi made the response, so there is nothing for a hook to judge or edit.
+	if pair.FromMarasi() {
+		return nil
+	}
 	if checkpointExt, ok := proxy.GetExtension("checkpoint"); ok {
 		if !checkpointExt.MetadataSnapshot().Enabled {
 			return nil
@@ -932,17 +942,15 @@ func CheckpointResponseModifier(proxy *Proxy, pair *Pair) error {
 
 // WriteResponseModifier is the final modifier in the default response pipeline.
 // It will create a `ProxyResponse` struct and queue it for database insertion.
-// If the `proxy.OnResponse` handler is defined, it will be called with the `ProxyResponse` otherwise the modifier will return `ErrResponseHandlerUndefined`
+// If the `proxy.OnResponse` handler is defined, it is called with the `ProxyResponse`. A proxy with no handler still captures the response.
 func WriteResponseModifier(proxy *Proxy, pair *Pair) error {
 	proxyResponse, err := NewProxyResponse(pair)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrProxyResponse, err)
 	}
 	proxy.DBWriteChannel <- proxyResponse
-	if proxy.OnResponse == nil {
-		return ErrResponseHandlerUndefined
-	} else {
+	if proxy.OnResponse != nil {
 		proxy.OnResponse(*proxyResponse)
-		return nil
 	}
+	return nil
 }
