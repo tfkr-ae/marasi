@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -70,6 +71,9 @@ type controlAddressRun struct {
 	server    *http.Server
 	served    chan error
 	suspended bool // listener closed for a restart handover
+	// handover keeps the socket bound while suspended, nil where the
+	// platform cannot hand a socket over.
+	handover *os.File
 }
 
 // controlRefusalBody is the standard JSON error body with a message.
@@ -258,17 +262,47 @@ func (c *ControlAddress) Start(ctx context.Context, settings ListenerSettings, a
 	if err := c.requirePassword(endpoint, access); err != nil {
 		return ControlListenerStatus{}, err
 	}
-	run, err := c.bind(ctx, endpoint)
+	listener, err := c.listen(ctx, endpoint)
 	if err != nil {
 		return ControlListenerStatus{}, err
 	}
+	c.startRun(ctx, listener, access)
+	return c.Status(), nil
+}
+
+// StartOn serves the control API on listener, a bound TCP socket that a
+// restart handed over, as Start does on the address it binds. It closes
+// listener if it refuses it.
+func (c *ControlAddress) StartOn(ctx context.Context, listener net.Listener, access ControlAccess) (ControlListenerStatus, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	refuse := func(err error) (ControlListenerStatus, error) {
+		_ = listener.Close()
+		return ControlListenerStatus{}, err
+	}
+	if c.closed {
+		return refuse(listenerFailure{kind: ErrListenerUnavailable, err: errControlAddressClosed})
+	}
+	if c.run != nil {
+		return refuse(ErrListenerAlreadyActive)
+	}
+	if err := c.requirePassword(listener.Addr().String(), access); err != nil {
+		return refuse(err)
+	}
+	c.startRun(ctx, listener, access)
+	return c.Status(), nil
+}
+
+// startRun serves the control API on listener and makes it the active run.
+// The caller holds mu.
+func (c *ControlAddress) startRun(ctx context.Context, listener net.Listener, access ControlAccess) {
+	run := c.serve(listener)
 	c.run = run
 	c.applyAccess(ctx, access)
 	c.warnNoPassword(run)
 	status := c.activeStatus(run)
 	c.setStatus(status)
 	c.events.publish("control_listener.started", status)
-	return status, nil
 }
 
 // Shutdown closes the network address when the instance stops. Requests in
@@ -287,6 +321,7 @@ func (c *ControlAddress) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	c.setStatus(ControlListenerStatus{Status: ListenerInactive})
+	handoverErr := run.closeHandover()
 	shutdownErr := run.server.Shutdown(ctx)
 	var closeErr error
 	if shutdownErr != nil {
@@ -297,43 +332,76 @@ func (c *ControlAddress) Shutdown(ctx context.Context) error {
 		serveErr = nil
 	}
 	return errors.Join(
+		handoverErr,
 		wrapError("shutting down control listener network address", shutdownErr),
 		wrapError("closing control listener network address", closeErr),
 		wrapError("serving control listener network address", serveErr),
 	)
 }
 
-// suspendForHandover stops accepting on the network address, freeing it for
-// a successor to bind, and returns the address it was on, or nil when it is
-// inactive. Connections already accepted keep being served, so a restart
+// suspendForHandover stops accepting on the network address and returns the
+// address it was on, or nil when it is inactive, with its socket still bound
+// for a successor to serve from. The socket stays owned by c until
+// resumeAfterHandover or endHandover. Where the platform cannot hand a
+// socket over, the file is nil and the address is freed for the successor
+// to bind. Connections already accepted keep being served, so a restart
 // requested over the network address still gets its response
 // (docs/adr/2026-10-18-restart-hands-over-and-rolls-back.md).
-func (c *ControlAddress) suspendForHandover() (*string, error) {
+func (c *ControlAddress) suspendForHandover() (*string, *os.File, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.run == nil || c.run.suspended {
-		return nil, nil
+		return nil, nil, nil
 	}
 	run := c.run
 	address := run.listener.Addr().String()
+	// The duplicate is taken before the listener closes, so the socket
+	// never leaves LISTEN.
+	file, err := listenerFile(run.listener)
+	if err != nil && !errors.Is(err, errSocketHandoverUnsupported) {
+		return nil, nil, err
+	}
 	closeErr := run.listener.Close()
 	// Serve returns once its listener closes, without touching the
 	// connections it accepted.
 	serveErr := <-run.served
 	run.served <- nil
 	run.suspended = true
+	run.handover = file
 	if errors.Is(serveErr, net.ErrClosed) {
 		serveErr = nil
 	}
-	return &address, errors.Join(
+	return &address, file, errors.Join(
 		wrapError("closing control listener network address", closeErr),
 		wrapError("serving control listener network address", serveErr),
 	)
 }
 
+// endHandover closes the socket that suspendForHandover kept bound, once a
+// successor serves it.
+func (c *ControlAddress) endHandover() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.run == nil {
+		return nil
+	}
+	return c.run.closeHandover()
+}
+
+// closeHandover closes the socket kept bound for a handover, if any.
+func (run *controlAddressRun) closeHandover() error {
+	if run.handover == nil {
+		return nil
+	}
+	err := run.handover.Close()
+	run.handover = nil
+	return wrapError("closing handed-over control listener network address", err)
+}
+
 // resumeAfterHandover accepts on the network address again after a failed
-// handover, at the address it was suspended on. If that address cannot be
-// bound, the network address becomes inactive.
+// handover, from the socket it kept bound, or by binding the address it was
+// suspended on where the platform cannot hand a socket over. If that address
+// cannot be bound, the network address becomes inactive.
 func (c *ControlAddress) resumeAfterHandover(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -342,7 +410,16 @@ func (c *ControlAddress) resumeAfterHandover(ctx context.Context) error {
 	}
 	run := c.run
 	endpoint := run.listener.Addr().String()
-	listener, err := (&net.ListenConfig{}).Listen(ctx, controlAddressNetwork(endpoint), endpoint)
+	var listener net.Listener
+	var err error
+	if run.handover != nil {
+		listener, err = fileListener(run.handover)
+		if closeErr := run.closeHandover(); closeErr != nil {
+			fmt.Fprintln(c.logWriter, closeErr)
+		}
+	} else {
+		listener, err = (&net.ListenConfig{}).Listen(ctx, controlAddressNetwork(endpoint), endpoint)
+	}
 	if err != nil {
 		fmt.Fprintf(c.logWriter, "binding control listener network address on %s: %v\n", endpoint, err)
 		c.run = nil
@@ -399,11 +476,25 @@ func (c *ControlAddress) warnNoPassword(run *controlAddressRun) {
 
 // bind listens on endpoint and starts serving the control API there.
 func (c *ControlAddress) bind(ctx context.Context, endpoint string) (*controlAddressRun, error) {
+	listener, err := c.listen(ctx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	return c.serve(listener), nil
+}
+
+// listen binds endpoint.
+func (c *ControlAddress) listen(ctx context.Context, endpoint string) (net.Listener, error) {
 	listener, err := (&net.ListenConfig{}).Listen(ctx, controlAddressNetwork(endpoint), endpoint)
 	if err != nil {
 		fmt.Fprintf(c.logWriter, "binding control listener network address on %s: %v\n", endpoint, err)
 		return nil, listenerFailure{kind: ErrListenerUnavailable, err: err}
 	}
+	return listener, nil
+}
+
+// serve starts serving the control API on listener, a bound socket.
+func (c *ControlAddress) serve(listener net.Listener) *controlAddressRun {
 	address := listener.Addr().String()
 	if warning := ControlAddressWarning(address); warning != "" {
 		fmt.Fprintln(c.logWriter, warning)
@@ -419,7 +510,7 @@ func (c *ControlAddress) bind(ctx context.Context, endpoint string) (*controlAdd
 		return c.trackConn(ctx, conn, run)
 	}
 	go func() { run.served <- server.Serve(listener) }()
-	return run, nil
+	return run
 }
 
 // controlAddressNetwork keeps an IPv4 host on IPv4, so 0.0.0.0 binds every

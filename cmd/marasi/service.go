@@ -146,6 +146,8 @@ var startCmd = &cobra.Command{
 			allowedOrigins: allowedOriginsOrNone(origins),
 		}
 		if serviceChild {
+			options.proxyListenerFD = proxyListenerFD
+			options.controlListenerFD = controlListenerFD
 			return runServiceChild(ctx, options)
 		}
 		return startServiceProcess(ctx, options, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput)
@@ -569,6 +571,11 @@ type serviceOptions struct {
 	password       string   // control password guarding the network address, "" for none
 	noPassword     bool     // --no-password: consent to no password beyond loopback
 	allowedOrigins []string // origins allowed without a password, as service.CheckAllowedOrigins returns them
+	// proxyListenerFD and controlListenerFD are inherited sockets a restarted
+	// child serves instead of binding proxyAddress and controlAddress, 0 for
+	// none (docs/adr/2026-10-18-restart-hands-over-and-rolls-back.md).
+	proxyListenerFD   int
+	controlListenerFD int
 }
 
 // startServiceInstance starts a proxy instance and calls ready with what it
@@ -705,7 +712,17 @@ func startServiceInstance(ctx context.Context, options serviceOptions, ready fun
 	controlNetwork = serviceServer.EnableControlAddress(options.password, options.allowedOrigins, logFile)
 
 	var started serviceStarted
-	if options.proxyListener {
+	if options.proxyListener && options.proxyListenerFD != 0 {
+		socket, err := inheritedListener(options.proxyListenerFD, "proxy listener")
+		if err != nil {
+			return err
+		}
+		listenerStatus, err := listenerLifecycle.StartOn(serviceCtx, socket)
+		if err != nil {
+			return fmt.Errorf("serving inherited proxy listener: %w", err)
+		}
+		started.proxyListener = *listenerStatus.ProxyListener
+	} else if options.proxyListener {
 		listenerStatus, err := listenerLifecycle.Start(serviceCtx, service.ListenerSettings{Address: &options.proxyAddress, Port: &options.proxyPort})
 		if err != nil {
 			return fmt.Errorf("binding proxy listener on address %s port %d: %w", options.proxyAddress, options.proxyPort, err)
@@ -721,9 +738,21 @@ func startServiceInstance(ctx context.Context, options serviceOptions, ready fun
 		if options.noPassword {
 			access.Password = service.RemovePassword()
 		}
-		controlStatus, err := controlNetwork.Start(serviceCtx, settings, access)
-		if err != nil {
-			return fmt.Errorf("binding control listener network address on %s: %w", options.controlAddress, err)
+		var controlStatus service.ControlListenerStatus
+		if options.controlListenerFD != 0 {
+			socket, err := inheritedListener(options.controlListenerFD, "control listener network address")
+			if err != nil {
+				return err
+			}
+			controlStatus, err = controlNetwork.StartOn(serviceCtx, socket, access)
+			if err != nil {
+				return fmt.Errorf("serving inherited control listener network address: %w", err)
+			}
+		} else {
+			controlStatus, err = controlNetwork.Start(serviceCtx, settings, access)
+			if err != nil {
+				return fmt.Errorf("binding control listener network address on %s: %w", options.controlAddress, err)
+			}
 		}
 		started.controlListener = *controlStatus.ControlListener
 	}
@@ -744,6 +773,21 @@ func startServiceInstance(ctx context.Context, options serviceOptions, ready fun
 	return serveControlAPIReady(serviceCtx, server, claim.listener, shutdownTimeout, func() error {
 		return ready(started)
 	})
+}
+
+// inheritedListener serves the listening socket a restarting instance passed
+// on descriptor fd. The descriptor closes; the listener holds its own copy.
+func inheritedListener(fd int, name string) (net.Listener, error) {
+	file := os.NewFile(uintptr(fd), name)
+	if file == nil {
+		return nil, fmt.Errorf("opening inherited %s on descriptor %d: invalid descriptor", name, fd)
+	}
+	defer file.Close()
+	listener, err := net.FileListener(file)
+	if err != nil {
+		return nil, fmt.Errorf("opening inherited %s on descriptor %d: %w", name, fd, err)
+	}
+	return listener, nil
 }
 
 // stopService stops the instance at instancePath. A missing socket and lock is success.

@@ -56,12 +56,14 @@ func newListenerTestProxy() *listenerTestProxy {
 	return &listenerTestProxy{served: make(chan net.Listener, 16)}
 }
 
-func (p *listenerTestProxy) GetListener(address, port string) (net.Listener, error) {
+func (p *listenerTestProxy) Listen(address, port string) (net.Listener, error) {
 	if p.bind != nil {
 		return p.bind(address, port)
 	}
 	return net.Listen("tcp", net.JoinHostPort(address, port))
 }
+
+func (p *listenerTestProxy) WrapListener(socket net.Listener) net.Listener { return socket }
 
 func (p *listenerTestProxy) Serve(listener net.Listener) error {
 	p.mu.Lock()

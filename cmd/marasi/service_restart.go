@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -32,10 +33,18 @@ const restartWarning = "warning: a restart ends Armory runs, held Checkpoint ite
 var restartForce bool
 var noProxyListener bool
 
+// proxyListenerFD and controlListenerFD are the descriptors a restarted
+// child inherits its listeners' sockets on, 0 for none.
+var proxyListenerFD, controlListenerFD int
+
 func init() {
 	restartCmd.Flags().BoolVar(&restartForce, "force", false, "Restart even when Checkpoint items are held, dropping them")
 	startCmd.Flags().BoolVar(&noProxyListener, "no-proxy-listener", false, "")
 	_ = startCmd.Flags().MarkHidden("no-proxy-listener")
+	startCmd.Flags().IntVar(&proxyListenerFD, "proxy-listener-fd", 0, "")
+	_ = startCmd.Flags().MarkHidden("proxy-listener-fd")
+	startCmd.Flags().IntVar(&controlListenerFD, "control-listener-fd", 0, "")
+	_ = startCmd.Flags().MarkHidden("control-listener-fd")
 	serviceCmd.AddCommand(restartCmd)
 }
 
@@ -284,6 +293,28 @@ func (c *instanceClaim) reclaim() error {
 	return nil
 }
 
+// firstExtraFile is the descriptor a child sees exec.Cmd.ExtraFiles[0] as,
+// after stdin, stdout and stderr.
+const firstExtraFile = 3
+
+// inheritedSocketArgs returns the sockets of handover to pass in
+// exec.Cmd.ExtraFiles and the hidden service start arguments that name the
+// descriptor each arrives on.
+func inheritedSocketArgs(handover service.Handover) ([]*os.File, []string) {
+	var files []*os.File
+	var args []string
+	add := func(flag string, socket *os.File) {
+		if socket == nil {
+			return
+		}
+		args = append(args, flag, strconv.Itoa(firstExtraFile+len(files)))
+		files = append(files, socket)
+	}
+	add("--proxy-listener-fd", handover.ProxyListenerSocket)
+	add("--control-listener-fd", handover.ControlListenerSocket)
+	return files, args
+}
+
 // successorStarter starts successors for one instance.
 type successorStarter struct {
 	claim        *instanceClaim
@@ -327,6 +358,11 @@ func (s successorStarter) start(ctx context.Context, handover service.Handover) 
 		controlListener = *handover.ControlListener
 	}
 	args = append(args, controlChildArgs(controlListener, handover.Password, handover.AllowedOrigins)...)
+	// The successor serves the sockets this instance kept bound rather than
+	// binding their addresses, which another socket may have taken
+	// (docs/adr/2026-10-18-restart-hands-over-and-rolls-back.md).
+	sockets, socketArgs := inheritedSocketArgs(handover)
+	args = append(args, socketArgs...)
 	logFile, err := openInstanceLog(logPath)
 	if err != nil {
 		return service.Successor{}, &service.RestartError{Log: logPath, Err: err}
@@ -339,6 +375,7 @@ func (s successorStarter) start(ctx context.Context, handover service.Handover) 
 	command := exec.Command(executable, args...)
 	command.Env = childEnvironment(handover.Password)
 	configureDetachedProcess(command)
+	command.ExtraFiles = sockets
 	// The successor's own failures before it logs anything still reach its log.
 	command.Stderr = logFile
 	childInput, startupResult, processResult, err := launchServiceChild(command)

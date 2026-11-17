@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/tfkr-ae/marasi/domain"
@@ -29,16 +30,22 @@ func (e *RestartError) Unwrap() error { return e.Err }
 
 // Handover is what a restart hands to its successor besides the instance name.
 type Handover struct {
-	Project         string   // project the successor opens
-	ProxyListener   *string  // proxy listener address to bind, none when nil
-	ControlListener *string  // control listener network address to bind, none when nil
-	Password        string   // control password the successor keeps, "" for none
-	AllowedOrigins  []string // origins the successor allows without a password
+	Project         string  // project the successor opens
+	ProxyListener   *string // proxy listener address, none when nil
+	ControlListener *string // control listener network address, none when nil
+	// ProxyListenerSocket and ControlListenerSocket are the listeners'
+	// sockets, still bound, for the successor to serve from. Each is nil
+	// where the platform cannot hand a socket over, and the successor binds
+	// the address instead. The Server owns them.
+	ProxyListenerSocket   *os.File
+	ControlListenerSocket *os.File
+	Password              string   // control password the successor keeps, "" for none
+	AllowedOrigins        []string // origins the successor allows without a password
 }
 
 // SuccessorStart hands the instance name to a successor started from the
-// installed build, with handover's project open and its listeners bound, and
-// waits for it to report ready. The Server has already stopped the proxy
+// installed build, with handover's project open and its listeners serving,
+// and waits for it to report ready. The Server has already stopped the proxy
 // listener, stopped accepting on the network address, and released the
 // project. On failure SuccessorStart has taken the instance name back before
 // it returns, and the error is a *RestartError.
@@ -155,23 +162,28 @@ func (s *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 		ProxyListener *string `json:"proxy_listener"`
 	}{Instance: s.instance, Project: s.projects.Path(), ProxyListener: proxyListener})
 
+	// The sockets are handed over, never released: no other socket on the
+	// host can take a port in between, so an instance started on port 0
+	// keeps the port its clients already use, and a connection that arrives
+	// meanwhile waits in the backlog.
 	var stepErr error
+	var proxySocket *os.File
 	if proxyListener != nil {
-		_, stepErr = s.listener.Stop(ctx)
+		proxySocket, stepErr = s.listener.StopForHandover(ctx)
 	}
+	defer closeSocket(proxySocket)
 	var release projectRelease
 	if stepErr == nil {
 		release, stepErr = s.projects.release(ctx, dropHeld)
 	}
-	// The successor gets the address actually bound, so an instance started
-	// on port 0 keeps the port its clients already use.
 	var controlListener *string
+	var controlSocket *os.File
 	if stepErr == nil && s.control != nil {
-		controlListener, stepErr = s.control.suspendForHandover()
+		controlListener, controlSocket, stepErr = s.control.suspendForHandover()
 	}
 	var successor Successor
 	if stepErr == nil {
-		handover := Handover{Project: release.path, ProxyListener: proxyListener, ControlListener: controlListener}
+		handover := Handover{Project: release.path, ProxyListener: proxyListener, ControlListener: controlListener, ProxyListenerSocket: proxySocket, ControlListenerSocket: controlSocket}
 		if s.control != nil {
 			handover.Password = s.control.Password()
 			handover.AllowedOrigins = s.control.AllowedOrigins()
@@ -179,11 +191,16 @@ func (s *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 		successor, stepErr = start(ctx, handover)
 	}
 	if stepErr != nil {
-		s.rollBackRestart(ctx, w, r, release, proxyListener, stepErr)
+		s.rollBackRestart(ctx, w, r, release, proxyListener, proxySocket, stepErr)
 		return
 	}
 
 	handedOver = true
+	if s.control != nil {
+		if err := s.control.endHandover(); err != nil {
+			fmt.Fprintln(s.control.logWriter, err)
+		}
+	}
 	release.abandon()
 	s.exit()
 	writeJSON(w, r, http.StatusOK, struct {
@@ -195,14 +212,16 @@ func (s *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 }
 
 // rollBackRestart takes the project and listener back after a failed
-// handover and reports the failure.
-func (s *Server) rollBackRestart(ctx context.Context, w http.ResponseWriter, r *http.Request, release projectRelease, proxyListener *string, cause error) {
+// handover and reports the failure. The proxy listener serves again from
+// proxySocket, the socket it kept bound, or binds proxyListener again where
+// the platform could not hand a socket over.
+func (s *Server) rollBackRestart(ctx context.Context, w http.ResponseWriter, r *http.Request, release projectRelease, proxyListener *string, proxySocket *os.File, cause error) {
 	var rollbackErr error
 	if release.reopen != nil {
 		rollbackErr = wrapError("reopening project", release.reopen(ctx))
 	}
 	if proxyListener != nil && s.listener.Status().ProxyListener == nil {
-		rollbackErr = errors.Join(rollbackErr, wrapError("restarting proxy listener", startListenerAt(ctx, s.listener, *proxyListener)))
+		rollbackErr = errors.Join(rollbackErr, wrapError("restarting proxy listener", resumeListener(ctx, s.listener, *proxyListener, proxySocket)))
 	}
 	if s.control != nil {
 		rollbackErr = errors.Join(rollbackErr, wrapError("taking back control listener network address", s.control.resumeAfterHandover(ctx)))
@@ -267,6 +286,27 @@ func wrapError(action string, err error) error {
 		return nil
 	}
 	return fmt.Errorf("%s: %w", action, err)
+}
+
+// closeSocket closes a socket kept bound for a handover, if any.
+func closeSocket(socket *os.File) {
+	if socket != nil {
+		_ = socket.Close()
+	}
+}
+
+// resumeListener starts the proxy listener from socket, or binds endpoint
+// when socket is nil.
+func resumeListener(ctx context.Context, listener ListenerLifecycle, endpoint string, socket *os.File) error {
+	if socket == nil {
+		return startListenerAt(ctx, listener, endpoint)
+	}
+	served, err := fileListener(socket)
+	if err != nil {
+		return err
+	}
+	_, err = listener.StartOn(ctx, served)
+	return err
 }
 
 // startListenerAt starts the proxy listener on endpoint, a host:port.
