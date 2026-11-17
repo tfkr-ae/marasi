@@ -6,6 +6,7 @@ import (
 	"io"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tfkr-ae/marasi/domain"
@@ -51,20 +52,27 @@ type InflateFailure struct {
 
 // frameSink receives the frames relayed toward one peer.
 type frameSink interface {
-	writeFrames(frames ...Frame) error
+	// forward writes the frames of one message. It reports false when it
+	// wrote nothing because the peer was already sent a close.
+	forward(frames ...Frame) (sent bool, err error)
+	// sentClose reports whether the peer was already sent a close. Only
+	// another close goes to it after that (RFC 6455 §5.5.1).
+	sentClose() bool
 }
 
 // frameFunc adapts a function to a frameSink.
 type frameFunc func(Frame) error
 
-func (f frameFunc) writeFrames(frames ...Frame) error {
+func (f frameFunc) forward(frames ...Frame) (bool, error) {
 	for _, frame := range frames {
 		if err := f(frame); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return nil
+	return true, nil
 }
+
+func (f frameFunc) sentClose() bool { return false }
 
 // leg writes frames to one peer. Each call writes its frames together, so
 // frames from different writers never interleave.
@@ -82,29 +90,53 @@ type leg struct {
 	// closed is set, with mu held, once the proxy sent its own close frame
 	// to the peer. No frame goes out after it (RFC 6455 §5.5.1).
 	closed bool
+	// closeSent is set, with mu held, once any close frame went to the
+	// peer: a peer's close the relay forwarded, or the proxy's own. Only
+	// another close goes out after it (RFC 6455 §5.5.1), so the peer is not
+	// sent data it may answer by resetting the connection.
+	closeSent atomic.Bool
 }
 
-// writeFrames writes frames to the peer. After the proxy's own close frame
-// went out, frames are dropped.
+// writeFrames writes frames to the peer. Frames the peer may no longer get
+// are dropped (see forward).
 func (l *leg) writeFrames(frames ...Frame) error {
+	_, err := l.forward(frames...)
+	return err
+}
+
+// forward writes the frames of one message to the peer. Nothing goes out
+// after the proxy's own close, and only a close after any other close; it
+// then reports false.
+func (l *leg) forward(frames ...Frame) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.writeLocked(frames...)
 }
+
+func (l *leg) sentClose() bool { return l.closeSent.Load() }
 
 // writeClose writes the proxy's own close frame. It is the last frame the
 // peer gets.
 func (l *leg) writeClose(frames ...Frame) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	err := l.writeLocked(frames...)
+	_, err := l.writeLocked(frames...)
 	l.closed = true
+	l.closeSent.Store(true)
 	return err
 }
 
-func (l *leg) writeLocked(frames ...Frame) error {
+func (l *leg) writeLocked(frames ...Frame) (sent bool, err error) {
 	if l.closed {
-		return nil
+		return false, nil
+	}
+	if len(frames) == 0 {
+		return true, nil
+	}
+	if frames[0].Opcode == OpClose {
+		l.closeSent.Store(true)
+	} else if l.closeSent.Load() {
+		return false, nil
 	}
 	for _, frame := range frames {
 		if frame.deflate {
@@ -114,10 +146,10 @@ func (l *leg) writeLocked(frames ...Frame) error {
 			}
 		}
 		if err := WriteFrame(l.w, frame, l.mask); err != nil {
-			return fmt.Errorf("%s: %w", l.errPrefix, err)
+			return false, fmt.Errorf("%s: %w", l.errPrefix, err)
 		}
 	}
-	return nil
+	return true, nil
 }
 
 // inbound is the state of one direction's relay.
@@ -283,9 +315,11 @@ func (in *inbound) finish(incomplete bool) error {
 			// What arrived cannot be inflated as a message, so no hook can
 			// see it as one. Forward its frames unchanged so the receiver
 			// sees the violation, and record the compressed bytes.
-			if err := in.out.writeFrames(message.frames...); err != nil {
+			sent, err := in.out.forward(message.frames...)
+			if err != nil {
 				return fmt.Errorf("%w: %w", errForwarding, err)
 			}
+			message.forwarded(sent)
 			message.Passthrough = true
 		} else {
 			payload, err := in.c.inflaters[in.source].inflate(message.Payload, in.c.maxMessageSize)
@@ -339,10 +373,13 @@ func (in *inbound) recordUnfinished() {
 	in.pending = nil
 	message.incomplete = true
 	message.Metadata["incomplete"] = true
-	_ = in.out.writeFrames(message.frames...)
+	sent, err := in.out.forward(message.frames...)
+	if err == nil {
+		message.forwarded(sent)
+	}
 	message.Passthrough = true
 	if in.c.process != nil {
-		_ = in.c.process(message)
+		_ = in.c.runProcess(message)
 	}
 }
 
@@ -446,7 +483,7 @@ func (in *inbound) recordTooLarge(frame Frame, pending *Message, size int64) {
 	message.Metadata["size_seen"] = size
 	message.Passthrough = true
 	if c.process != nil {
-		_ = c.process(message)
+		_ = c.runProcess(message)
 	}
 }
 
