@@ -565,7 +565,7 @@ func WithWorkAdmission(admit func(context.Context, bool) (func(), uint64, error)
 // It will define the main Request & Response modifiers that will execute the
 // attached modifiers and hande `ErrDropped` and `ErrSkipPipeline`.
 // Work is admitted for the request modifiers and again, once the response body
-// has been buffered, for the response modifiers, never for the wait on the origin.
+// has been read, for the response modifiers, never for the wait on the origin.
 // If a response is dropped the `martian.Session` is read from the context and hijacked to
 // close the `conn`
 func WithBasePipeline() func(*Proxy) error {
@@ -587,6 +587,9 @@ func WithBasePipeline() func(*Proxy) error {
 				// Only the proxy's own client may name a launch. The header never leaves the proxy.
 				launchID, launchErr := uuid.Parse(req.Header.Get(launchIDHeader))
 				req.Header.Del(launchIDHeader)
+				// The body is the wait on the client, so it is read before
+				// the request side is admitted.
+				bodyEnding := readRequestBody(req)
 				release, generation, err := proxy.admitWork(req.Context(), internal)
 				if err != nil {
 					return refuseConnection(session, err)
@@ -596,14 +599,14 @@ func WithBasePipeline() func(*Proxy) error {
 				defer release()
 				pair := &Pair{requestState: requestState{
 					admission: &projectAdmission{internal: internal, generation: generation},
-				}}
+				}, RequestBodyEnding: bodyEnding}
 				if internal && launchErr == nil {
 					pair.requestedLaunch = launchID
 				}
 				// The response side hijacks the connection through the session.
 				ctx := core.ContextWithSession(req, session).Context()
 				*req = *req.WithContext(context.WithValue(ctx, pairKey{}, pair))
-				proxy.watchClient(req)
+				proxy.watchClient(req, bodyEnding)
 				err = proxy.Modifiers.ModifyRequest(req)
 				if errors.Is(err, ErrDropped) {
 					proxy.recordLaunchDropped(pair)
@@ -638,7 +641,7 @@ func WithBasePipeline() func(*Proxy) error {
 				pair, loaded := loadPair(res.Request, res)
 				// The body is still the wait on the origin, so it is read
 				// before the response side is admitted (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
-				if err := BufferStreamingBodyModifier(proxy, pair); err != nil {
+				if err := readResponseBody(pair); err != nil {
 					log.Printf("response pipeline: %v", err)
 					return err
 				}
