@@ -242,16 +242,25 @@ pull request, every Monday, and when you start it manually. Every job runs on
 container is built for amd64 and shares the runner's network, where all of
 `127.0.0.0/8` is loopback.
 
+On a pull request, the `changed paths` job runs `git diff` against the base
+and decides which suites run. The schedule and manual dispatch run every
+suite. A suite runs when the pull request changes Marasi on the HTTP path (root
+`*.go`, `go.mod`, `go.sum`, `Makefile`, `cmd/`, `core/`, `domain/`,
+`listener/`, `rawhttp/`, `db/`, `extensions/`, `service/`), the shared harness,
+the workflow, or that suite's own package and baselines. A change only to docs,
+reports, Armory, Compass, wordlists or another suite skips it.
+
 - `h1-client (<run>)` and `h1-origin (<run>)`, one job for each of `proxy`,
-  `checkpoint-forward`, `checkpoint-edit` and `extension`, run on every pull
-  request with no path filter. They are the required checks.
+  `checkpoint-forward`, `checkpoint-edit` and `extension`, are the required
+  checks. When no HTTP/1.1 path changed they still run, skip their steps and
+  pass, because a skipped matrix job would never report under its check name.
 - `h2-client (proxy)` and `h2-origin (proxy)` are report only
   (`continue-on-error`): their score is in the job summary, and a failure does
-  not block a merge.
-- `autobahn (<run>, <mode>)` runs only when the `autobahn paths` job's
-  `git diff` against the pull request's base shows a change to an Autobahn
-  path, and always on the schedule and on manual dispatch. The paths include
-  `db/` and `proxy.go` because a WebSocket relay waits on the database
+  not block a merge. They are skipped when no HTTP/2 path changed.
+- `autobahn (<run>, <mode>)` takes hours, so its path list is narrower: the
+  WebSocket code, the autobahn suite and the shared harness, plus `db/`,
+  `proxy.go`, `modifiers.go`, `checkpoint.go` and `extensions/`. The paths
+  include `db/` and `proxy.go` because a WebSocket relay waits on the database
   writer's queue: a change that slows the writer can fail a case even though
   it touches no WebSocket code. On a failure, the job's artifact holds the
   per-case reports, Marasi's log, and a resource log, and the job log shows
