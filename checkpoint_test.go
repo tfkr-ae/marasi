@@ -18,21 +18,14 @@ import (
 func startRequestHold(t *testing.T, proxy *Proxy) (*http.Request, uuid.UUID, <-chan error) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-	_, remove, err := martian.TestContext(req, nil, nil)
-	if err != nil {
-		t.Fatalf("applying martian context : %v", err)
-	}
-	t.Cleanup(remove)
-	if err := SetupRequestModifier(proxy, req); err != nil {
+	if err := runRequestPairModifier(proxy, SetupRequestModifier, req); err != nil {
 		t.Fatalf("running SetupRequestModifier : %v", err)
 	}
-	reqID, ok := core.RequestIDFromContext(req.Context())
-	if !ok {
-		t.Fatalf("request id missing")
-	}
+	// The response modifiers still read the pair's values from req's context.
+	reqID := requestPair(req).ID
 	done := make(chan error, 1)
 	go func() {
-		done <- CheckpointRequestModifier(proxy, req)
+		done <- runRequestPairModifier(proxy, CheckpointRequestModifier, req)
 	}()
 	return req, reqID, done
 }
@@ -45,7 +38,7 @@ func startResponseHold(t *testing.T, proxy *Proxy) (uuid.UUID, <-chan error) {
 		t.Fatalf("applying martian context : %v", err)
 	}
 	t.Cleanup(remove)
-	if err := SetupRequestModifier(proxy, req); err != nil {
+	if err := runRequestPairModifier(proxy, SetupRequestModifier, req); err != nil {
 		t.Fatalf("running SetupRequestModifier : %v", err)
 	}
 	reqID, ok := core.RequestIDFromContext(req.Context())
@@ -129,7 +122,7 @@ func TestCheckpointPending(t *testing.T) {
 			t.Fatalf("applying martian context : %v", err)
 		}
 		t.Cleanup(remove)
-		if err := SetupRequestModifier(proxy, req); err != nil {
+		if err := runRequestPairModifier(proxy, SetupRequestModifier, req); err != nil {
 			t.Fatalf("running SetupRequestModifier : %v", err)
 		}
 		*req = *core.ContextWithRequestID(req, olderID)
@@ -307,11 +300,11 @@ func TestCheckpointPending(t *testing.T) {
 			t.Fatalf("applying martian context : %v", err)
 		}
 		t.Cleanup(remove)
-		if err := SetupRequestModifier(proxy, req); err != nil {
+		if err := runRequestPairModifier(proxy, SetupRequestModifier, req); err != nil {
 			t.Fatalf("running SetupRequestModifier : %v", err)
 		}
 		forwardOnHold(proxy, CheckpointForward{InterceptResponse: true})
-		if err := CheckpointRequestModifier(proxy, req); err != nil {
+		if err := runRequestPairModifier(proxy, CheckpointRequestModifier, req); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 

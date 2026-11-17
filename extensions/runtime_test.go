@@ -193,7 +193,7 @@ func TestRuntime_ShouldInterceptRequest(t *testing.T) {
 		ext, _ := setupTestExtension(t, luaCode)
 		req, _ := http.NewRequest("GET", "https://marasi.app", nil)
 
-		got, err := ext.ShouldInterceptRequest(req)
+		got, err := ext.ShouldInterceptRequest(&Request{Request: req})
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -211,7 +211,7 @@ func TestRuntime_ShouldInterceptRequest(t *testing.T) {
 		ext, _ := setupTestExtension(t, luaCode)
 		req, _ := http.NewRequest("GET", "https://marasi.app", nil)
 
-		got, err := ext.ShouldInterceptRequest(req)
+		got, err := ext.ShouldInterceptRequest(&Request{Request: req})
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -229,7 +229,7 @@ func TestRuntime_ShouldInterceptRequest(t *testing.T) {
 		ext, _ := setupTestExtension(t, luaCode)
 		req, _ := http.NewRequest("GET", "https://marasi.app", nil)
 
-		got, err := ext.ShouldInterceptRequest(req)
+		got, err := ext.ShouldInterceptRequest(&Request{Request: req})
 		if err == nil {
 			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
 		}
@@ -417,7 +417,7 @@ func TestRuntime_CallRequestHandler(t *testing.T) {
 		ext, _ := setupTestExtension(t, luaCode)
 		req, _ := http.NewRequest("GET", "https://marasi.app", nil)
 
-		err := ext.CallRequestHandler(req)
+		err := ext.CallRequestHandler(&Request{Request: req})
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -440,7 +440,7 @@ func TestRuntime_CallRequestHandler(t *testing.T) {
 		ext, _ := setupTestExtension(t, luaCode)
 		req, _ := http.NewRequest("GET", "https://marasi.app", nil)
 
-		err := ext.CallRequestHandler(req)
+		err := ext.CallRequestHandler(&Request{Request: req})
 		if err == nil {
 			t.Fatalf("\nwanted:\nerror\ngot:\nnil")
 		}

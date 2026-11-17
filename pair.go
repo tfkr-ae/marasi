@@ -27,11 +27,39 @@ type Pair struct {
 	Route *core.RouteRecord
 	// LaunchpadID is the launchpad a launch came from, or uuid.Nil.
 	LaunchpadID uuid.UUID
+	// ExtensionID is the extension that sent the request, or uuid.Nil. That
+	// extension's hooks do not run on its own pair.
+	ExtensionID uuid.UUID
+	// Skipped is set when an extension skipped the pair: it goes on with no
+	// further extension or Checkpoint and is not stored.
+	Skipped bool
+	// InterceptResponse is set when Checkpoint was asked, while holding the
+	// request, to hold the response too.
+	InterceptResponse bool
 	// ArmoryRunID is the Armory run that made the request, or uuid.Nil.
 	ArmoryRunID uuid.UUID
 
 	// ctx is used only for cancellation.
 	ctx context.Context
+
+	// requestState is what the proxy knows of the request before the chain
+	// runs, and what the request chain leaves for the proxy.
+	requestState
+}
+
+// requestState is the request-side state of a pair that only the proxy reads.
+type requestState struct {
+	// admission is how the request side was admitted, nil outside the proxy.
+	admission *projectAdmission
+	// requestedLaunch is the launch an internal request named, or uuid.Nil.
+	requestedLaunch uuid.UUID
+	// skipRoundTrip is set when the request must not go upstream.
+	skipRoundTrip bool
+	// ownResponse is the answer the proxy gives the request itself.
+	ownResponse *http.Response
+	// removedWebSocketExtensions are the extension offers removed from an
+	// upgrade request.
+	removedWebSocketExtensions []string
 }
 
 // PairTiming records when each half of a pair was read.

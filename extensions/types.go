@@ -129,8 +129,10 @@ func RegisterScopeType(extension *Runtime) {
 			scope := lua.CheckUserData(l, 1, "scope").(*compass.Scope)
 			input := l.ToUserData(2)
 
-			switch input.(type) {
-			case *http.Request, *http.Response:
+			switch v := input.(type) {
+			case *Request:
+				input = v.Request
+			case *http.Response:
 			default:
 				lua.ArgumentError(l, 2, "expected request / response object")
 			}
@@ -707,9 +709,9 @@ func RegisterRequestType(extension *Runtime) {
 	var funcs []APIFunction
 
 	funcs = append(funcs, APIFunction{Name: "id", Signature: "() -> string|nil", Summary: "Returns the request's unique ID.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
-		if requestId, ok := core.RequestIDFromContext(req.Context()); ok {
-			l.PushString(requestId.String())
+		hookReq := lua.CheckUserData(l, 1, "req").(*Request)
+		if hookReq.ID != uuid.Nil {
+			l.PushString(hookReq.ID.String())
 			return 1
 		}
 		l.PushNil()
@@ -717,40 +719,40 @@ func RegisterRequestType(extension *Runtime) {
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "method", Signature: "() -> string", Summary: "Returns the request's method.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		req := lua.CheckUserData(l, 1, "req").(*Request).Request
 		l.PushString(req.Method)
 		return 1
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "url", Signature: "() -> url", Summary: "Returns the request's URL object.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		req := lua.CheckUserData(l, 1, "req").(*Request).Request
 		l.PushUserData(req.URL)
 		lua.SetMetaTableNamed(l, "url")
 		return 1
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "path", Signature: "() -> string", Summary: "Returns the request's path.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		req := lua.CheckUserData(l, 1, "req").(*Request).Request
 		l.PushString(req.URL.Path)
 		return 1
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "host", Signature: "() -> string", Summary: "Returns the request's host.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		req := lua.CheckUserData(l, 1, "req").(*Request).Request
 		l.PushString(req.Host)
 		return 1
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "set_host", Signature: "(host: string)", Summary: "Sets the request's host.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		hookReq := lua.CheckUserData(l, 1, "req").(*Request)
+		req := hookReq.Request
 		newHost := lua.CheckString(l, 2)
 
-		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
+		if metadata := hookReq.Metadata; metadata != nil {
 			if _, exists := metadata["original_host_header"]; !exists {
 				metadata["original_host_header"] = req.Host
 			}
 			metadata["override_host_header"] = newHost
-			*req = *core.ContextWithMetadata(req, metadata)
 		}
 
 		req.Host = newHost
@@ -759,25 +761,25 @@ func RegisterRequestType(extension *Runtime) {
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "scheme", Signature: "() -> string", Summary: "Returns the request's scheme.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		req := lua.CheckUserData(l, 1, "req").(*Request).Request
 		l.PushString(req.URL.Scheme)
 		return 1
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "proto", Signature: "() -> string", Summary: "Returns the request's protocol.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		req := lua.CheckUserData(l, 1, "req").(*Request).Request
 		l.PushString(req.Proto)
 		return 1
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "remote_addr", Signature: "() -> string", Summary: "Returns the remote address of the client.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		req := lua.CheckUserData(l, 1, "req").(*Request).Request
 		l.PushString(req.RemoteAddr)
 		return 1
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "body", Signature: "() -> string", Summary: "Returns the request's body as a string.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		req := lua.CheckUserData(l, 1, "req").(*Request).Request
 
 		if req.Body == nil {
 			l.PushString("")
@@ -797,7 +799,7 @@ func RegisterRequestType(extension *Runtime) {
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "set_body", Signature: "(body: string)", Summary: "Sets the request's body.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		req := lua.CheckUserData(l, 1, "req").(*Request).Request
 		body := lua.CheckString(l, 2)
 
 		req.Body = io.NopCloser(bytes.NewBufferString(body))
@@ -807,7 +809,7 @@ func RegisterRequestType(extension *Runtime) {
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "headers", Signature: "() -> header", Summary: "Returns the request's headers.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		req := lua.CheckUserData(l, 1, "req").(*Request).Request
 
 		l.PushUserData(&req.Header)
 		lua.SetMetaTableNamed(l, "header")
@@ -815,7 +817,7 @@ func RegisterRequestType(extension *Runtime) {
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "content_type", Signature: "() -> string", Summary: "Returns the request's Content-Type.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		req := lua.CheckUserData(l, 1, "req").(*Request).Request
 		ct := req.Header.Get("Content-Type")
 		if ct == "" {
 			l.PushString("")
@@ -832,7 +834,7 @@ func RegisterRequestType(extension *Runtime) {
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "cookie", Signature: "(name: string) -> cookie|nil", Summary: "Returns a specific cookie from the request.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		req := lua.CheckUserData(l, 1, "req").(*Request).Request
 		name := lua.CheckString(l, 2)
 
 		cookie, err := req.Cookie(name)
@@ -847,7 +849,7 @@ func RegisterRequestType(extension *Runtime) {
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "set_cookie", Signature: "(cookie: cookie)", Summary: "Adds or replaces a cookie in the request.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		req := lua.CheckUserData(l, 1, "req").(*Request).Request
 		newCookie := lua.CheckUserData(l, 2, "cookie").(*http.Cookie)
 
 		cookies := req.Cookies()
@@ -871,7 +873,7 @@ func RegisterRequestType(extension *Runtime) {
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "cookies", Signature: "() -> table", Summary: "Returns all cookies from the request.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		req := lua.CheckUserData(l, 1, "req").(*Request).Request
 		cookies := req.Cookies()
 
 		l.CreateTable(len(cookies), 0)
@@ -887,7 +889,7 @@ func RegisterRequestType(extension *Runtime) {
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "set_cookies", Signature: "(cookies: table)", Summary: "Replaces all cookies in the request.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		req := lua.CheckUserData(l, 1, "req").(*Request).Request
 
 		if l.TypeOf(2) != lua.TypeTable {
 			lua.ArgumentError(l, 2, "expected table")
@@ -909,9 +911,9 @@ func RegisterRequestType(extension *Runtime) {
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "metadata", Signature: "() -> table|nil", Summary: "Returns the request's metadata.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		hookReq := lua.CheckUserData(l, 1, "req").(*Request)
 
-		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
+		if metadata := hookReq.Metadata; metadata != nil {
 			util.DeepPush(l, metadata)
 			return 1
 		}
@@ -921,11 +923,11 @@ func RegisterRequestType(extension *Runtime) {
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "set_metadata", Signature: "(metadata: table)", Summary: "Replaces this extension's metadata on the request.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		hookReq := lua.CheckUserData(l, 1, "req").(*Request)
 
-		metadata, ok := core.MetadataFromContext(req.Context())
-		if !ok {
-			lua.Errorf(l, "request context missing metadata")
+		metadata := hookReq.Metadata
+		if metadata == nil {
+			lua.Errorf(l, "request missing metadata")
 			return 0
 		}
 
@@ -938,30 +940,26 @@ func RegisterRequestType(extension *Runtime) {
 		}
 
 		metadata[extension.Data.Name] = dropNilMembers(extensionMetadata)
-		*req = *core.ContextWithMetadata(req, metadata)
 		return 0
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "drop", Signature: "()", Summary: "Marks the request to be dropped by the proxy.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
-		*req = *core.ContextWithDropFlag(req, true)
+		lua.CheckUserData(l, 1, "req").(*Request).drop()
 		return 0
 	}})
 
 	funcs = append(funcs, APIFunction{Name: "skip", Signature: "()", Summary: "Forwards the request without running later extensions or Checkpoint. A skipped request is not stored.", Function: func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
-		*req = *core.ContextWithSkipFlag(req, true)
+		lua.CheckUserData(l, 1, "req").(*Request).skip()
 		return 0
 	}})
 
 	RegisterType(extension, "req", "An HTTP request, passed to processRequest and interceptRequest.", funcs, func(l *lua.State) int {
-		req := lua.CheckUserData(l, 1, "req").(*http.Request)
+		hookReq := lua.CheckUserData(l, 1, "req").(*Request)
+		req := hookReq.Request
 
 		id := "unknown"
-		if val := req.Context().Value(core.RequestIDKey); val != nil {
-			if uuidVal, ok := val.(uuid.UUID); ok {
-				id = uuidVal.String()
-			}
+		if hookReq.ID != uuid.Nil {
+			id = hookReq.ID.String()
 		}
 
 		l.PushString(fmt.Sprintf(
@@ -1322,7 +1320,7 @@ func RegisterResponseType(extension *Runtime) {
 	funcs = append(funcs, APIFunction{Name: "request", Signature: "() -> req", Summary: "Returns the original request object associated with this response.", Function: func(l *lua.State) int {
 		res := lua.CheckUserData(l, 1, "res").(*http.Response)
 		if res.Request != nil {
-			l.PushUserData(res.Request)
+			l.PushUserData(requestOfResponse(res))
 			lua.SetMetaTableNamed(l, "req")
 			return 1
 		}

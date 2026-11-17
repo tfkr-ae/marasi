@@ -155,17 +155,35 @@ func hookInterrupted(ctx context.Context, extension *extensions.Runtime) bool {
 
 // hookLogOptions links a hook error to its extension. The request ID goes in the log context,
 // not the request link, because the request is stored later or, when dropped, never.
-func hookLogOptions(ctx context.Context, extension *extensions.Runtime) []func(*domain.Log) error {
+func hookLogOptions(requestID uuid.UUID, extension *extensions.Runtime) []func(*domain.Log) error {
 	options := []func(*domain.Log) error{core.LogWithExtensionID(extension.Data.ID)}
-	if reqID, ok := core.RequestIDFromContext(ctx); ok {
-		options = append(options, core.LogWithContext(map[string]any{"request_id": reqID.String()}))
+	if requestID != uuid.Nil {
+		options = append(options, core.LogWithContext(map[string]any{"request_id": requestID.String()}))
 	}
 	return options
 }
 
+// requestIDOf returns the pair UUID kept in req's context, or uuid.Nil.
+func requestIDOf(req *http.Request) uuid.UUID {
+	id, _ := core.RequestIDFromContext(req.Context())
+	return id
+}
+
+// hookRequest returns the `req` a Lua hook receives for pair.
+func hookRequest(pair *Pair) *extensions.Request {
+	return &extensions.Request{Request: pair.Request, ID: pair.ID, Metadata: pair.Metadata}
+}
+
+// dropRequest stops pair from going upstream and returns ErrDropped.
+func dropRequest(pair *Pair) error {
+	pair.skipRoundTrip = true
+	return ErrDropped
+}
+
 // PreventLoopModifier skips processing a request if it is made to marasi's active listener address and port, preventing an infinite loop
 // It will normalize localhost & 127.0.0.1 when checking the host and port
-func PreventLoopModifier(proxy *Proxy, req *http.Request) error {
+func PreventLoopModifier(proxy *Proxy, pair *Pair) error {
+	req := pair.Request
 	host, port, err := net.SplitHostPort(req.Host)
 	if err != nil {
 		// fallback to req.Host
@@ -189,50 +207,50 @@ func PreventLoopModifier(proxy *Proxy, req *http.Request) error {
 	}
 
 	if host == listenerAddr && port == proxy.Port {
-		martian.NewContext(req).SkipRoundTrip()
+		pair.skipRoundTrip = true
 		return ErrSkipPipeline
 	}
 	return nil
 }
 
 // SkipConnectRequestModifier will skip processing for CONNECT requests
-func SkipConnectRequestModifier(proxy *Proxy, req *http.Request) error {
-	if req.Method == http.MethodConnect {
+func SkipConnectRequestModifier(proxy *Proxy, pair *Pair) error {
+	if pair.Request.Method == http.MethodConnect {
 		return ErrSkipPipeline
 	}
 	return nil
 }
 
-// SetupRequestModifier initializes request IDs, timing, metadata, and the Martian session.
+// SetupRequestModifier sets up the pair: its UUID, request time, metadata and route record.
 // It also captures internal Launchpad and Armory correlation IDs. A claimed launch's id
 // becomes the pair's UUID, and a second claim of the same launch is dropped.
-func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
-	*req = *core.ContextWithRequestTime(req, time.Now())
+func SetupRequestModifier(proxy *Proxy, pair *Pair) error {
+	req := pair.Request
+	requested := time.Now()
 	metadata := make(map[string]any)
-	uuid, err := uuid.NewV7()
+	id, err := uuid.NewV7()
 	if err != nil {
 		return fmt.Errorf("generating uuid for request: %w", err)
 	}
 
 	// An internal request naming a pending, unclaimed launch becomes that
 	// launch's pair. Any other launch id is ignored and the request is ordinary traffic.
-	if launchID, ok := requestedLaunchID(req.Context()); ok {
+	if launchID := pair.requestedLaunch; launchID != uuid.Nil {
 		launch, claim := proxy.claimLaunch(launchID)
 		switch claim {
 		case launchClaimed:
-			uuid = launch.ID
+			id = launch.ID
 			setLaunchMetadata(metadata, launch)
-			*req = *core.ContextWithLaunchpadID(req, launch.LaunchpadID)
+			pair.LaunchpadID = launch.LaunchpadID
 		case launchAlreadyClaimed:
 			proxy.WriteLog("WARN", fmt.Sprintf("Dropped a second claim of launch %s", launchID))
-			martian.NewContext(req).SkipRoundTrip()
-			return ErrDropped
+			return dropRequest(pair)
 		}
 	}
 
 	if runID, exists := armoryRunID(req); exists {
 		metadata["armory_run_id"] = runID
-		*req = *core.ContextWithArmoryRunID(req, runID)
+		pair.ArmoryRunID = runID
 	}
 	req.Header.Del(armoryRunIDHeader)
 
@@ -251,15 +269,12 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 		metadata["websocket.state"] = "pending"
 	}
 
-	*req = *core.ContextWithRequestID(req, uuid)
-	*req = *core.ContextWithMetadata(req, metadata)
+	pair.ID = id
+	pair.Metadata = metadata
+	pair.Timing.Requested = requested
 	// The transport records the route the request goes out on, and the
 	// response writes it as the pair's route snapshot.
-	*req = *core.ContextWithRouteRecord(req, &core.RouteRecord{})
-
-	ctx := martian.NewContext(req)
-	session := ctx.Session()
-	*req = *core.ContextWithSession(req, session)
+	pair.Route = &core.RouteRecord{}
 	return nil
 }
 
@@ -286,27 +301,27 @@ func OverrideWaypointsModifier(proxy *Proxy, pair *Pair) error {
 // After `processRequest`, it will check if the request is passed through (nil), skipped (`ErrSkipPipeline`), or dropped (`ErrDropped`).
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
 // Compass's skip decision does not apply to a launch (see compassSkips).
-func CompassRequestModifier(proxy *Proxy, req *http.Request) error {
+func CompassRequestModifier(proxy *Proxy, pair *Pair) error {
 	if compassExt, ok := proxy.GetExtension("compass"); ok {
 		if !compassExt.MetadataSnapshot().Enabled {
 			return nil
 		}
-		err := compassExt.CallRequestHandler(req)
+		hookReq := hookRequest(pair)
+		err := compassExt.CallRequestHandler(hookReq)
+		pair.Skipped = pair.Skipped || hookReq.Skip
 		if err != nil {
 			proxy.WriteLog("ERROR", fmt.Sprintf("Running processRequest : %s", err.Error()), core.LogWithExtensionID(compassExt.Data.ID))
-			if hookInterrupted(req.Context(), compassExt) {
-				martian.NewContext(req).SkipRoundTrip()
-				return ErrDropped
+			if hookInterrupted(pair.Context(), compassExt) {
+				return dropRequest(pair)
 			}
 			// Continue as a err in Lua should not bring down the proxy
 		}
-		if proxy.compassSkips(req) {
+		if proxy.compassSkips(pair) {
 			return ErrSkipPipeline
 		}
 
-		if dropped, ok := core.DroppedFlagFromContext(req.Context()); ok && dropped {
-			martian.NewContext(req).SkipRoundTrip()
-			return ErrDropped
+		if hookReq.Drop {
+			return dropRequest(pair)
 		}
 		return nil
 	}
@@ -314,12 +329,13 @@ func CompassRequestModifier(proxy *Proxy, req *http.Request) error {
 }
 
 // ExtensionsRequestModifier will run the `processRequest` function (if it is defined) for all the loaded extensions (except compass and checkpoint).
-// Initially the modifier will check if the request originated from an extension by reading the "x-extension-id" header. This extension ID
-// will be set in the context so that the response modifier will be able to read it.
+// Initially the modifier will check if the request originated from an extension by reading the "x-extension-id" header. That
+// extension is recorded on the pair, so that its hooks run on neither half of its own pair.
 // After processRequest, it will check if the request is passed through (nil), skipped (`ErrSkipPipeline`), or dropped (`ErrDropped`).
-func ExtensionsRequestModifier(proxy *Proxy, req *http.Request) error {
+func ExtensionsRequestModifier(proxy *Proxy, pair *Pair) error {
+	req := pair.Request
 	extensionID := req.Header.Get("x-extension-id")
-	*req = *core.ContextWithExtensionID(req, extensionID)
+	pair.ExtensionID, _ = uuid.Parse(extensionID)
 
 	// header is removed after processing
 	req.Header.Del("x-extension-id")
@@ -327,23 +343,23 @@ func ExtensionsRequestModifier(proxy *Proxy, req *http.Request) error {
 	for _, ext := range proxy.Extensions {
 		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" && ext.MetadataSnapshot().Enabled {
 			if extensionID != ext.Data.ID.String() {
-				err := ext.CallRequestHandler(req)
+				hookReq := hookRequest(pair)
+				err := ext.CallRequestHandler(hookReq)
+				pair.Skipped = pair.Skipped || hookReq.Skip
 				if err != nil {
 					proxy.WriteLog("ERROR", fmt.Sprintf("Running processRequest : %s", err.Error()), core.LogWithExtensionID(ext.Data.ID))
-					if hookInterrupted(req.Context(), ext) {
-						martian.NewContext(req).SkipRoundTrip()
-						return ErrDropped
+					if hookInterrupted(pair.Context(), ext) {
+						return dropRequest(pair)
 					}
 					// Continue as a err in Lua should not bring down the proxy
 				}
 
-				if skip, ok := core.SkipFlagFromContext(req.Context()); ok && skip {
+				if pair.Skipped {
 					return ErrSkipPipeline
 				}
 
-				if dropped, ok := core.DroppedFlagFromContext(req.Context()); ok && dropped {
-					martian.NewContext(req).SkipRoundTrip()
-					return ErrDropped
+				if hookReq.Drop {
+					return dropRequest(pair)
 				}
 
 			}
@@ -355,17 +371,17 @@ func ExtensionsRequestModifier(proxy *Proxy, req *http.Request) error {
 // CheckpointRequestModifier holds requests when the global HTTP Checkpoint flag is set or interceptRequest returns true.
 // A nil notify still holds until forward, drop, or drop-all. Forward rebuilds from optional raw. Drop does not rebuild.
 // A Lua error in interceptRequest does not skip the global flag.
-func CheckpointRequestModifier(proxy *Proxy, req *http.Request) error {
+func CheckpointRequestModifier(proxy *Proxy, pair *Pair) error {
 	if checkpointExt, ok := proxy.GetExtension("checkpoint"); ok {
 		if !checkpointExt.MetadataSnapshot().Enabled {
 			return nil
 		}
-		shouldIntercept, err := checkpointExt.ShouldInterceptRequest(req)
+		req := pair.Request
+		shouldIntercept, err := checkpointExt.ShouldInterceptRequest(hookRequest(pair))
 		if err != nil {
-			proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptRequest : %s", err.Error()), hookLogOptions(req.Context(), checkpointExt)...)
-			if hookInterrupted(req.Context(), checkpointExt) {
-				martian.NewContext(req).SkipRoundTrip()
-				return ErrDropped
+			proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptRequest : %s", err.Error()), hookLogOptions(pair.ID, checkpointExt)...)
+			if hookInterrupted(pair.Context(), checkpointExt) {
+				return dropRequest(pair)
 			}
 			// A Lua error does not match the rule. The global flag still holds.
 		}
@@ -375,35 +391,32 @@ func CheckpointRequestModifier(proxy *Proxy, req *http.Request) error {
 			if err != nil {
 				return fmt.Errorf("getting raw request for intercept: %w", err)
 			}
-			reqID, ok := core.RequestIDFromContext(req.Context())
-			if !ok {
+			if pair.ID == uuid.Nil {
 				return ErrRequestIDNotFound
 			}
 
-			result, err := proxy.holdHTTPRequest(reqID, original, req)
+			result, err := proxy.holdHTTPRequest(pair.ID, original, req)
 			if err != nil {
 				return err
 			}
 
-			if metadata, ok := core.MetadataFromContext(req.Context()); ok {
-				metadata["intercepted"] = true
-				metadata["original-request"] = string(original)
-				if result.dropped {
-					metadata["dropped"] = true
-				}
-				*req = *core.ContextWithMetadata(req, metadata)
-			} else {
+			metadata := pair.Metadata
+			if metadata == nil {
 				return ErrMetadataNotFound
+			}
+			metadata["intercepted"] = true
+			metadata["original-request"] = string(original)
+			if result.dropped {
+				metadata["dropped"] = true
 			}
 
 			if result.dropped {
-				martian.NewContext(req).SkipRoundTrip()
-				return ErrDropped
+				return dropRequest(pair)
 			}
 
-			*req = *result.rebuiltReq
+			pair.Request = result.rebuiltReq
 			if result.interceptResponse {
-				*req = *core.ContextWithInterceptFlag(req, true)
+				pair.InterceptResponse = true
 			}
 
 			return nil
@@ -417,26 +430,25 @@ func CheckpointRequestModifier(proxy *Proxy, req *http.Request) error {
 // It will create a `ProxyRequest` struct and queue it for database insertion.
 // If the request came from launchpad, it will create a `LaunchpadRequest` struct and queue it for database insertion as well.
 // If the `proxy.OnRequest` handler is defined, it will be called with the `ProxyRequest` otherwise the modifier will return `ErrRequestHandlerUndefined`
-func WriteRequestModifier(proxy *Proxy, req *http.Request) error {
-	if reqID, ok := core.RequestIDFromContext(req.Context()); ok {
-		proxyRequest, err := NewProxyRequest(req, reqID)
-		if err != nil {
-			return fmt.Errorf("%w: %w", ErrProxyRequest, err)
-		}
-		// The number is taken here, not by the writer, so the request
-		// event already carries it (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md).
-		if proxy.TrafficRepo != nil {
-			proxyRequest.Number = proxy.TrafficRepo.NextPairNumber()
-		}
-		proxy.DBWriteChannel <- proxyRequest
-		if proxy.OnRequest == nil {
-			return ErrRequestHandlerUndefined
-		} else {
-			proxy.OnRequest(*proxyRequest)
-			return nil
-		}
+func WriteRequestModifier(proxy *Proxy, pair *Pair) error {
+	if pair.ID == uuid.Nil {
+		return ErrRequestIDNotFound
 	}
-	return ErrRequestIDNotFound
+	proxyRequest, err := NewProxyRequest(pair)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrProxyRequest, err)
+	}
+	// The number is taken here, not by the writer, so the request
+	// event already carries it (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md).
+	if proxy.TrafficRepo != nil {
+		proxyRequest.Number = proxy.TrafficRepo.NextPairNumber()
+	}
+	proxy.DBWriteChannel <- proxyRequest
+	if proxy.OnRequest == nil {
+		return ErrRequestHandlerUndefined
+	}
+	proxy.OnRequest(*proxyRequest)
+	return nil
 }
 
 // ResponseFilterModifier will perform an initial filtering round on responses.
@@ -817,7 +829,10 @@ func CompassResponseModifier(proxy *Proxy, res *http.Response) error {
 			}
 			// Continue as a err in Lua should not bring down the proxy
 		}
-		if proxy.compassSkips(res.Request) {
+		pair, loaded := loadPair(res.Request, res)
+		skips := proxy.compassSkips(pair)
+		storePair(pair, loaded, res.Request)
+		if skips {
 			return ErrSkipPipeline
 		}
 
@@ -869,7 +884,7 @@ func CheckpointResponseModifier(proxy *Proxy, res *http.Response) error {
 		}
 		shouldIntercept, err := checkpointExt.ShouldInterceptResponse(res)
 		if err != nil {
-			proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptResponse : %s", err.Error()), hookLogOptions(res.Request.Context(), checkpointExt)...)
+			proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptResponse : %s", err.Error()), hookLogOptions(requestIDOf(res.Request), checkpointExt)...)
 			if hookInterrupted(res.Request.Context(), checkpointExt) {
 				return ErrDropped
 			}

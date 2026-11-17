@@ -161,13 +161,15 @@ func (proxy *Proxy) startLaunch(raw string, launchpadID string, useHttps bool) (
 func launchedRequest(req *http.Request, launch domain.Launch) (*domain.ProxyRequest, error) {
 	metadata := make(map[string]any)
 	setLaunchMetadata(metadata, launch)
-	snapshot := core.ContextWithMetadata(core.ContextWithRequestTime(req, time.Now()), metadata)
-	launched, err := NewProxyRequest(snapshot, launch.ID)
+	launched, err := NewProxyRequest(&Pair{
+		Request:  req,
+		ID:       launch.ID,
+		Metadata: metadata,
+		Timing:   PairTiming{Requested: time.Now()},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("recording launched request: %w", err)
 	}
-	// NewProxyRequest buffers the body on the snapshot; hand it back to the request.
-	req.Body = snapshot.Body
 	return launched, nil
 }
 
@@ -413,28 +415,28 @@ func (proxy *Proxy) launchIs(id uuid.UUID, state func(*launchEntry) bool) bool {
 	return ok && state(entry)
 }
 
-// isLaunch reports whether req is a launch: claimed by the pipeline, or
+// isLaunch reports whether pair is a launch: claimed by the pipeline, or
 // naming a launch that waits for its claim, as it does before Setup runs.
-func (proxy *Proxy) isLaunch(req *http.Request) bool {
-	if _, ok := core.LaunchpadIDFromContext(req.Context()); ok {
+func (proxy *Proxy) isLaunch(pair *Pair) bool {
+	if pair.LaunchpadID != uuid.Nil {
 		return true
 	}
-	id, ok := requestedLaunchID(req.Context())
-	return ok && proxy.launchIs(id, func(entry *launchEntry) bool { return !entry.claimed })
+	id := pair.requestedLaunch
+	return id != uuid.Nil && proxy.launchIs(id, func(entry *launchEntry) bool { return !entry.claimed })
 }
 
-// compassSkips reports whether Compass marked req out of scope. A launch is
+// compassSkips reports whether Compass marked pair out of scope. A launch is
 // deliberate and must appear in its launchpad, so Compass runs on it but its
 // skip decision does not apply (docs/adr/2026-10-13-launches-are-tracked-and-cancellable.md): the mark is cleared and the launch
 // goes on through the pipeline. A Compass drop still applies to a launch.
-func (proxy *Proxy) compassSkips(req *http.Request) bool {
-	if skip, ok := core.SkipFlagFromContext(req.Context()); !ok || !skip {
+func (proxy *Proxy) compassSkips(pair *Pair) bool {
+	if !pair.Skipped {
 		return false
 	}
-	if !proxy.isLaunch(req) {
+	if !proxy.isLaunch(pair) {
 		return true
 	}
-	*req = *core.ContextWithSkipFlag(req, false)
+	pair.Skipped = false
 	return false
 }
 
@@ -457,11 +459,14 @@ func (proxy *Proxy) recordLaunchFailure(id uuid.UUID, reason domain.LaunchReason
 // Compass runs before Setup claims a launch, so a launch dropped there is
 // claimed here. A second claim of a launch was refused by Setup, so it cannot
 // claim the launch again here and cannot fail the launch it named.
-func (proxy *Proxy) recordLaunchDropped(req *http.Request) {
-	id, ok := core.RequestIDFromContext(req.Context())
-	if !ok {
-		launchID, named := requestedLaunchID(req.Context())
-		if !named {
+func (proxy *Proxy) recordLaunchDropped(pair *Pair) {
+	if pair == nil {
+		return
+	}
+	id := pair.ID
+	if id == uuid.Nil {
+		launchID := pair.requestedLaunch
+		if launchID == uuid.Nil {
 			return
 		}
 		if _, claim := proxy.claimLaunch(launchID); claim != launchClaimed {

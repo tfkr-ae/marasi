@@ -1,7 +1,6 @@
 package marasi
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -29,13 +28,12 @@ type webSocketNegotiation struct {
 // WebSocketOffersModifier removes every WebSocket extension offer except
 // permessage-deflate from an upgrade request and records the removed names.
 // It runs after Extensions and Checkpoint so their edits are filtered too.
-func WebSocketOffersModifier(proxy *Proxy, req *http.Request) error {
-	if !marasiws.IsUpgradeRequest(req) {
+func WebSocketOffersModifier(proxy *Proxy, pair *Pair) error {
+	if !marasiws.IsUpgradeRequest(pair.Request) {
 		return nil
 	}
 
-	removed := marasiws.FilterExtensionOffers(req.Header)
-	*req = *req.WithContext(context.WithValue(req.Context(), webSocketRemovedExtensionsKey{}, removed))
+	pair.removedWebSocketExtensions = marasiws.FilterExtensionOffers(pair.Request.Header)
 	return nil
 }
 

@@ -169,7 +169,7 @@ func TestScopeType(t *testing.T) {
 			options: []func(*Runtime) error{
 				func(r *Runtime) error {
 					req := httptest.NewRequest("GET", "https://marasi.app/path", nil)
-					r.LuaState.PushUserData(req)
+					r.LuaState.PushUserData(&Request{Request: req})
 					lua.SetMetaTableNamed(r.LuaState, "req")
 					r.LuaState.SetGlobal("test_req")
 					return nil
@@ -197,7 +197,7 @@ func TestScopeType(t *testing.T) {
 			options: []func(*Runtime) error{
 				func(r *Runtime) error {
 					req := httptest.NewRequest("GET", "https://marasi.app/admin/dashboard", nil)
-					r.LuaState.PushUserData(req)
+					r.LuaState.PushUserData(&Request{Request: req})
 					lua.SetMetaTableNamed(r.LuaState, "req")
 					r.LuaState.SetGlobal("test_req")
 					return nil
@@ -224,7 +224,7 @@ func TestScopeType(t *testing.T) {
 			options: []func(*Runtime) error{
 				func(r *Runtime) error {
 					req := httptest.NewRequest("GET", "https://marasi.app/public/home", nil)
-					r.LuaState.PushUserData(req)
+					r.LuaState.PushUserData(&Request{Request: req})
 					lua.SetMetaTableNamed(r.LuaState, "req")
 					r.LuaState.SetGlobal("test_req")
 					return nil
@@ -1681,10 +1681,8 @@ func TestRequestType(t *testing.T) {
 	withRequest := func(req *http.Request) func(*Runtime) error {
 		return func(r *Runtime) error {
 			id, _ := uuid.NewV7()
-			req = core.ContextWithRequestID(req, id)
-			req = core.ContextWithMetadata(req, make(map[string]any))
 
-			r.LuaState.PushUserData(req)
+			r.LuaState.PushUserData(&Request{Request: req, ID: id, Metadata: make(map[string]any)})
 			lua.SetMetaTableNamed(r.LuaState, "req")
 			r.LuaState.SetGlobal("r")
 			return nil
@@ -1814,10 +1812,10 @@ func TestRequestType(t *testing.T) {
 				}
 
 				ext.LuaState.Global("r")
-				req := ext.LuaState.ToUserData(-1).(*http.Request)
+				req := ext.LuaState.ToUserData(-1).(*Request)
 				ext.LuaState.Pop(1)
 
-				meta, _ := core.MetadataFromContext(req.Context())
+				meta := req.Metadata
 				if meta["original_host_header"] != "marasi.app" {
 					t.Errorf("\nwanted:\noriginal_host_header: marasi.app\ngot:\n%v", meta["original_host_header"])
 				}
@@ -2009,10 +2007,10 @@ func TestRequestType(t *testing.T) {
 			},
 			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
 				ext.LuaState.Global("r")
-				req := ext.LuaState.ToUserData(-1).(*http.Request)
+				req := ext.LuaState.ToUserData(-1).(*Request)
 				ext.LuaState.Pop(1)
 
-				meta, _ := core.MetadataFromContext(req.Context())
+				meta := req.Metadata
 				extMeta, ok := meta[ext.Data.Name].(map[string]any)
 				if !ok {
 					t.Fatalf("\nwanted:\nmetadata for extension %s\ngot:\nmissing", ext.Data.Name)
@@ -2050,10 +2048,10 @@ func TestRequestType(t *testing.T) {
 			},
 			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
 				ext.LuaState.Global("r")
-				req := ext.LuaState.ToUserData(-1).(*http.Request)
+				req := ext.LuaState.ToUserData(-1).(*Request)
 				ext.LuaState.Pop(1)
 
-				if dropped, _ := core.DroppedFlagFromContext(req.Context()); !dropped {
+				if dropped := req.Drop; !dropped {
 					t.Errorf("\nwanted:\ndropped=true\ngot:\n%v", dropped)
 				}
 			},
@@ -2066,10 +2064,10 @@ func TestRequestType(t *testing.T) {
 			},
 			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
 				ext.LuaState.Global("r")
-				req := ext.LuaState.ToUserData(-1).(*http.Request)
+				req := ext.LuaState.ToUserData(-1).(*Request)
 				ext.LuaState.Pop(1)
 
-				if skipped, _ := core.SkipFlagFromContext(req.Context()); !skipped {
+				if skipped := req.Skip; !skipped {
 					t.Errorf("\nwanted:\nskipped=true\ngot:\n%v", skipped)
 				}
 			},
@@ -2569,6 +2567,33 @@ func TestResponseType(t *testing.T) {
 				}
 				if body != "request payload" {
 					t.Errorf("\nwanted:\nrequest payload\ngot:\n%v", body)
+				}
+			},
+		},
+		{
+			name: "res:request():drop() and skip() should mark the response's request",
+			luaCode: `
+				r:request():drop()
+				r:request():skip()
+				return r:request():id()
+			`,
+			options: []func(*Runtime) error{
+				withResponse(basicRes()),
+			},
+			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
+				ext.LuaState.Global("r")
+				res := ext.LuaState.ToUserData(-1).(*http.Response)
+				ext.LuaState.Pop(1)
+
+				id, _ := core.RequestIDFromContext(res.Request.Context())
+				if got != id.String() {
+					t.Errorf("\nwanted:\nid %s\ngot:\n%v", id, got)
+				}
+				if dropped, _ := core.DroppedFlagFromContext(res.Request.Context()); !dropped {
+					t.Errorf("\nwanted:\ndropped=true\ngot:\n%v", dropped)
+				}
+				if skipped, _ := core.SkipFlagFromContext(res.Request.Context()); !skipped {
+					t.Errorf("\nwanted:\nskipped=true\ngot:\n%v", skipped)
 				}
 			},
 		},

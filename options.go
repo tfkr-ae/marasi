@@ -599,15 +599,19 @@ func WithBasePipeline() func(*Proxy) error {
 				// The wait on the origin is not project work, so the request
 				// side releases its admission before the round trip (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
 				defer release()
-				ctx := context.WithValue(req.Context(), projectAdmissionKey{}, projectAdmission{internal: internal, generation: generation})
+				pair := &Pair{requestState: requestState{
+					admission: &projectAdmission{internal: internal, generation: generation},
+				}}
 				if internal && launchErr == nil {
-					ctx = context.WithValue(ctx, launchIDKey{}, launchID)
+					pair.requestedLaunch = launchID
 				}
-				*req = *req.WithContext(ctx)
+				// The response side hijacks the connection through the session.
+				ctx := core.ContextWithSession(req, session).Context()
+				*req = *req.WithContext(context.WithValue(ctx, pairKey{}, pair))
 				proxy.watchClient(req)
 				err = proxy.Modifiers.ModifyRequest(req)
 				if errors.Is(err, ErrDropped) {
-					proxy.recordLaunchDropped(req)
+					proxy.recordLaunchDropped(pair)
 				}
 				if err == nil || errors.Is(err, ErrDropped) || errors.Is(err, ErrSkipPipeline) {
 					return nil
@@ -621,7 +625,7 @@ func WithBasePipeline() func(*Proxy) error {
 			martianResModifierFunc(func(res *http.Response) error {
 				// A request the proxy answered itself is sent as answered,
 				// with no response modifier and no admission.
-				if own, ok := ownResponse(res.Request); ok {
+				if own, ok := ownResponse(requestPair(res.Request)); ok {
 					own.Request = res.Request
 					*res = *own
 					return nil
@@ -637,7 +641,8 @@ func WithBasePipeline() func(*Proxy) error {
 					log.Printf("response pipeline: %v", err)
 					return err
 				}
-				if admission, ok := res.Request.Context().Value(projectAdmissionKey{}).(projectAdmission); ok {
+				if pair := requestPair(res.Request); pair != nil && pair.admission != nil {
+					admission := pair.admission
 					release, generation, err := proxy.admitWork(res.Request.Context(), admission.internal)
 					if err != nil {
 						// The client left while a handoff paused admission, or
@@ -658,7 +663,7 @@ func WithBasePipeline() func(*Proxy) error {
 					return nil
 				}
 				if errors.Is(err, ErrDropped) {
-					proxy.recordLaunchDropped(res.Request)
+					proxy.recordLaunchDropped(requestPair(res.Request))
 					proxy.markDroppedWebSocketHandshake(res, err)
 					if session, ok := core.SessionFromContext(res.Request.Context()); ok {
 						conn, _, err := session.Hijack()
@@ -681,9 +686,6 @@ func WithBasePipeline() func(*Proxy) error {
 		return nil
 	}
 }
-
-// projectAdmissionKey holds the projectAdmission of a request's request side.
-type projectAdmissionKey struct{}
 
 // projectAdmission is how a request was admitted: whether by the proxy's own
 // client, and in which generation of the open project.
@@ -722,31 +724,22 @@ func (proxy *Proxy) passStaleResponse(res *http.Response) error {
 	return nil
 }
 
-// launchIDKey holds the launch id an internal request named.
-type launchIDKey struct{}
-
-// requestedLaunchID returns the launch id an internal request named, if any.
-func requestedLaunchID(ctx context.Context) (uuid.UUID, bool) {
-	id, ok := ctx.Value(launchIDKey{}).(uuid.UUID)
-	return id, ok
-}
-
 // WithDefaultModifierPipeline adds the default request and response modifiers.
 // They run in the order they are added below. The base pipeline has already
 // buffered the response body.
 func WithDefaultModifierPipeline() func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		// Request Modifiers
-		proxy.AddRequestModifier(MarasiPagesModifier)
-		proxy.AddRequestModifier(PreventLoopModifier)
-		proxy.AddRequestModifier(SkipConnectRequestModifier)
-		proxy.AddRequestModifier(CompassRequestModifier)
-		proxy.AddRequestModifier(SetupRequestModifier)
+		proxy.AddRequestPairModifier(MarasiPagesModifier)
+		proxy.AddRequestPairModifier(PreventLoopModifier)
+		proxy.AddRequestPairModifier(SkipConnectRequestModifier)
+		proxy.AddRequestPairModifier(CompassRequestModifier)
+		proxy.AddRequestPairModifier(SetupRequestModifier)
 		proxy.AddRequestPairModifier(OverrideWaypointsModifier)
-		proxy.AddRequestModifier(ExtensionsRequestModifier)
-		proxy.AddRequestModifier(CheckpointRequestModifier)
-		proxy.AddRequestModifier(WebSocketOffersModifier)
-		proxy.AddRequestModifier(WriteRequestModifier)
+		proxy.AddRequestPairModifier(ExtensionsRequestModifier)
+		proxy.AddRequestPairModifier(CheckpointRequestModifier)
+		proxy.AddRequestPairModifier(WebSocketOffersModifier)
+		proxy.AddRequestPairModifier(WriteRequestModifier)
 
 		// Response Modifiers
 		proxy.AddResponseModifier(ResponseFilterModifier)

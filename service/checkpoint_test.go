@@ -647,23 +647,15 @@ func startCheckpointHTTPHold(t *testing.T, proxy *marasi.Proxy) (*http.Request, 
 func startCheckpointHTTPHoldContext(t *testing.T, proxy *marasi.Proxy, ctx context.Context) (*http.Request, uuid.UUID, <-chan error) {
 	t.Helper()
 	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "https://marasi.app", nil)
-	_, remove, err := martian.TestContext(req, nil, nil)
-	if err != nil {
-		t.Fatalf("applying martian context: %v", err)
-	}
-	t.Cleanup(remove)
-	if err := marasi.SetupRequestModifier(proxy, req); err != nil {
+	pair := marasi.NewTestPair(req)
+	if err := marasi.SetupRequestModifier(proxy, pair); err != nil {
 		t.Fatalf("running SetupRequestModifier: %v", err)
-	}
-	reqID, ok := core.RequestIDFromContext(req.Context())
-	if !ok {
-		t.Fatal("request id missing")
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- marasi.CheckpointRequestModifier(proxy, req)
+		done <- marasi.CheckpointRequestModifier(proxy, pair)
 	}()
-	return req, reqID, done
+	return req, pair.ID, done
 }
 
 func startCheckpointHTTPResponseHold(t *testing.T, proxy *marasi.Proxy) (uuid.UUID, <-chan error) {
@@ -674,13 +666,13 @@ func startCheckpointHTTPResponseHold(t *testing.T, proxy *marasi.Proxy) (uuid.UU
 		t.Fatalf("applying martian context: %v", err)
 	}
 	t.Cleanup(remove)
-	if err := marasi.SetupRequestModifier(proxy, req); err != nil {
+	pair := marasi.NewTestPair(req)
+	if err := marasi.SetupRequestModifier(proxy, pair); err != nil {
 		t.Fatalf("running SetupRequestModifier: %v", err)
 	}
-	reqID, ok := core.RequestIDFromContext(req.Context())
-	if !ok {
-		t.Fatal("request id missing")
-	}
+	// The response modifiers still read the pair's values from the request context.
+	reqID := pair.ID
+	req = core.ContextWithMetadata(core.ContextWithRequestID(req, reqID), pair.Metadata)
 	res := &http.Response{
 		Status:     "200 OK",
 		StatusCode: http.StatusOK,

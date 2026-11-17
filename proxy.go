@@ -485,13 +485,14 @@ type Waypoint struct {
 	Override string // The destination to redirect to
 }
 
-// NewProxyRequest creates a new domain.ProxyRequest from an http.Request.
-// It extracts metadata from the request context and dumps the raw request.
-func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyRequest, error) {
-	if metadata, ok := core.MetadataFromContext(req.Context()); ok {
-		requestTime, ok := core.RequestTimeFromContext(req.Context())
-		if !ok {
-			return nil, fmt.Errorf("timestamp not found for this context")
+// NewProxyRequest creates a new domain.ProxyRequest from the request of pair,
+// with the pair's UUID, metadata and request time, and dumps the raw request.
+func NewProxyRequest(pair *Pair) (*domain.ProxyRequest, error) {
+	req, requestId := pair.Request, pair.ID
+	if metadata := pair.Metadata; metadata != nil {
+		requestTime := pair.Timing.Requested
+		if requestTime.IsZero() {
+			return nil, fmt.Errorf("request time not set")
 		}
 
 		path := req.URL.Path

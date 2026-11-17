@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/martian"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
@@ -54,11 +53,14 @@ func awaitEntered(t *testing.T, entered <-chan struct{}, cancel context.CancelFu
 	}
 }
 
-// runRequestModifier runs modifier, then forwards req to its target unless the round trip
-// is skipped, as martian does after the base pipeline turns ErrDropped into nil.
-func runRequestModifier(proxy *Proxy, modifier RequestModifierFunc, req *http.Request) error {
-	err := modifier(proxy, req)
-	if !martian.NewContext(req).SkippingRoundTrip() {
+// runRequestModifier runs modifier on a pair for req, then forwards the request to its
+// target unless the round trip is skipped, as martian does after the base pipeline turns
+// ErrDropped into nil.
+func runRequestModifier(proxy *Proxy, modifier PairModifier, req *http.Request) error {
+	pair := NewTestPair(req)
+	err := modifier(proxy, pair)
+	req = pair.Request
+	if !pair.skipRoundTrip {
 		// The round trip ignores cancellation so the test sees the forwarding decision itself.
 		forwarded := req.Clone(context.WithoutCancel(req.Context()))
 		forwarded.RequestURI = ""
@@ -72,7 +74,7 @@ func runRequestModifier(proxy *Proxy, modifier RequestModifierFunc, req *http.Re
 func TestRequestModifiersFailClosedWhenInterrupted(t *testing.T) {
 	modifiers := []struct {
 		hookCase
-		modifier RequestModifierFunc
+		modifier PairModifier
 	}{
 		{hookCase{"compass", "processRequest"}, CompassRequestModifier},
 		{hookCase{"workshop", "processRequest"}, ExtensionsRequestModifier},
@@ -95,11 +97,7 @@ func TestRequestModifiersFailClosedWhenInterrupted(t *testing.T) {
 				reqCtx, cancelRequest := context.WithCancel(context.Background())
 				defer cancelRequest()
 				req := httptest.NewRequest(http.MethodGet, origin.URL, nil).WithContext(reqCtx)
-				_, remove, err := martian.TestContext(req, nil, nil)
-				if err != nil {
-					t.Fatalf("applying martian context : %v", err)
-				}
-				defer remove()
+				var err error
 
 				cancel := ext.CancelExecution
 				if source == "request context" {
@@ -131,11 +129,6 @@ func TestRequestModifiersFailClosedWhenInterrupted(t *testing.T) {
 			proxy := newTestProxy(t, testExtensions[tc.extension])
 			updateExtension(t, proxy, tc.extension, "function "+tc.function+`(request) error("boom") end`)
 			req := httptest.NewRequest(http.MethodGet, origin.URL, nil)
-			_, remove, err := martian.TestContext(req, nil, nil)
-			if err != nil {
-				t.Fatalf("applying martian context : %v", err)
-			}
-			defer remove()
 
 			if err := runRequestModifier(proxy, tc.modifier, req); err != nil {
 				t.Fatalf("wanted: nil\ngot: %v", err)

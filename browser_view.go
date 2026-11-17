@@ -3,7 +3,6 @@ package marasi
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -15,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/martian"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
 )
@@ -27,42 +25,42 @@ const marasiHost = "marasi"
 // browser to follow its redirect (docs/adr/2026-10-20-a-browser-view-serves-the-stored-response-once-at-its-original-url.md).
 const defaultBrowserViewExpiry = 10 * time.Second
 
-// ownResponseKey holds the response the proxy answers a request with itself.
-type ownResponseKey struct{}
-
-// respondFromProxy makes res the answer to req. The round trip is skipped,
+// respondFromProxy makes res the answer to pair. The round trip is skipped,
 // and the base pipeline sends res in place of martian's blank response without
 // running the response modifiers, so nothing is captured, held, or shown to an
 // extension. It returns ErrSkipPipeline for the request modifier to return.
-func respondFromProxy(req *http.Request, res *http.Response) error {
-	*req = *req.WithContext(context.WithValue(req.Context(), ownResponseKey{}, res))
-	martian.NewContext(req).SkipRoundTrip()
+func respondFromProxy(pair *Pair, res *http.Response) error {
+	pair.ownResponse = res
+	pair.skipRoundTrip = true
 	return ErrSkipPipeline
 }
 
-// ownResponse returns the response a request modifier answered req with.
-func ownResponse(req *http.Request) (*http.Response, bool) {
-	res, ok := req.Context().Value(ownResponseKey{}).(*http.Response)
-	return res, ok
+// ownResponse returns the response a request modifier answered pair with.
+func ownResponse(pair *Pair) (*http.Response, bool) {
+	if pair == nil || pair.ownResponse == nil {
+		return nil, false
+	}
+	return pair.ownResponse, true
 }
 
 // MarasiPagesModifier answers requests for Marasi's own pages and requests
 // that use a pending browser view. It runs first in the request pipeline, so
 // neither is ever captured, held by Checkpoint, or seen by an extension
 // (docs/adr/2026-10-20-a-browser-view-serves-the-stored-response-once-at-its-original-url.md).
-func MarasiPagesModifier(proxy *Proxy, req *http.Request) error {
+func MarasiPagesModifier(proxy *Proxy, pair *Pair) error {
+	req := pair.Request
 	if req.Method == http.MethodConnect {
 		return nil
 	}
 	if res := proxy.marasiPage(req); res != nil {
-		return respondFromProxy(req, res)
+		return respondFromProxy(pair, res)
 	}
-	if isSelfClient(req) {
+	if isSelfClient(pair) {
 		return nil
 	}
 	if res := proxy.browserViews.take(clientHost(req.RemoteAddr), requestURLKey(req)); res != nil {
 		res.Request = req
-		return respondFromProxy(req, res)
+		return respondFromProxy(pair, res)
 	}
 	return nil
 }
@@ -205,11 +203,10 @@ func clientHost(remoteAddr string) string {
 	return host
 }
 
-// isSelfClient reports whether req came from the proxy's own client, as
+// isSelfClient reports whether pair came from the proxy's own client, as
 // launches and Armory runs do.
-func isSelfClient(req *http.Request) bool {
-	admission, _ := req.Context().Value(projectAdmissionKey{}).(projectAdmission)
-	return admission.internal
+func isSelfClient(pair *Pair) bool {
+	return pair.admission != nil && pair.admission.internal
 }
 
 func newResponse(req *http.Request, status int, body []byte) *http.Response {

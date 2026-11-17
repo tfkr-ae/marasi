@@ -4,8 +4,10 @@ import (
 	"context"
 	"net/http"
 	"reflect"
+	"slices"
 	"time"
 
+	"github.com/google/martian"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/core"
 )
@@ -27,6 +29,11 @@ type pairValues struct {
 	route       *core.RouteRecord
 	launchpadID uuid.UUID
 	armoryRunID uuid.UUID
+
+	extensionID       uuid.UUID
+	skipped           bool
+	interceptResponse bool
+	removedOffers     []string
 }
 
 // values returns the context-backed fields of pair.
@@ -38,6 +45,11 @@ func (pair *Pair) values() pairValues {
 		route:       pair.Route,
 		launchpadID: pair.LaunchpadID,
 		armoryRunID: pair.ArmoryRunID,
+
+		extensionID:       pair.ExtensionID,
+		skipped:           pair.Skipped,
+		interceptResponse: pair.InterceptResponse,
+		removedOffers:     pair.removedWebSocketExtensions,
 	}
 }
 
@@ -51,6 +63,13 @@ func contextPairValues(ctx context.Context) pairValues {
 	values.route, _ = core.RouteRecordFromContext(ctx)
 	values.launchpadID, _ = core.LaunchpadIDFromContext(ctx)
 	values.armoryRunID, _ = core.ArmoryRunIDFromContext(ctx)
+
+	if id, ok := core.ExtensionIDFromContext(ctx); ok {
+		values.extensionID, _ = uuid.Parse(id)
+	}
+	values.skipped, _ = core.SkipFlagFromContext(ctx)
+	values.interceptResponse, _ = core.InterceptFlagFromContext(ctx)
+	values.removedOffers, _ = ctx.Value(webSocketRemovedExtensionsKey{}).([]string)
 	return values
 }
 
@@ -70,6 +89,11 @@ func loadPair(req *http.Request, res *http.Response) (*Pair, pairValues) {
 	pair.Route = values.route
 	pair.LaunchpadID = values.launchpadID
 	pair.ArmoryRunID = values.armoryRunID
+
+	pair.ExtensionID = values.extensionID
+	pair.Skipped = values.skipped
+	pair.InterceptResponse = values.interceptResponse
+	pair.removedWebSocketExtensions = values.removedOffers
 	pair.ctx = req.Context()
 	return pair, values
 }
@@ -108,12 +132,36 @@ func storePair(pair *Pair, loaded pairValues, req *http.Request) {
 	if now.armoryRunID != loaded.armoryRunID && now.armoryRunID != uuid.Nil {
 		out = core.ContextWithArmoryRunID(out, now.armoryRunID)
 	}
+	if now.extensionID != loaded.extensionID && now.extensionID != uuid.Nil {
+		out = core.ContextWithExtensionID(out, now.extensionID.String())
+	}
+	// A flag is written back when it changed either way: Compass clears
+	// the skip of a launch.
+	if now.skipped != loaded.skipped {
+		out = core.ContextWithSkipFlag(out, now.skipped)
+	}
+	if now.interceptResponse != loaded.interceptResponse {
+		out = core.ContextWithInterceptFlag(out, now.interceptResponse)
+	}
+	if now.removedOffers != nil && !slices.Equal(now.removedOffers, loaded.removedOffers) {
+		out = out.WithContext(context.WithValue(out.Context(), webSocketRemovedExtensionsKey{}, now.removedOffers))
+	}
 	// In place: Martian finds its context by the request's address.
 	if out != req {
 		*req = *out
 	}
 	pair.Request = req
 	pair.ctx = req.Context()
+}
+
+// requestPair returns the pair the proxy keeps for req, or nil when req did not
+// come through the proxy's base pipeline.
+func requestPair(req *http.Request) *Pair {
+	if req == nil {
+		return nil
+	}
+	pair, _ := req.Context().Value(pairKey{}).(*Pair)
+	return pair
 }
 
 // sameMap reports whether a and b are the same map.
@@ -133,6 +181,11 @@ func (proxy *Proxy) AddRequestPairModifier(modifier PairModifier) {
 		pair, loaded := loadPair(req, nil)
 		err := modifier(proxy, pair)
 		storePair(pair, loaded, req)
+		if pair.skipRoundTrip {
+			if ctx := martian.NewContext(req); ctx != nil {
+				ctx.SkipRoundTrip()
+			}
+		}
 		return err
 	})
 }

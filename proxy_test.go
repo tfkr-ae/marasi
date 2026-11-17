@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/martian"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/db"
@@ -477,17 +476,12 @@ func TestProxy_WriteToDBCheckpointHookLog(t *testing.T) {
 			function interceptResponse(response) error("response boom") end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-		if err := SetupRequestModifier(proxy, req); err != nil {
+		if err := runRequestPairModifier(proxy, SetupRequestModifier, req); err != nil {
 			t.Fatalf("running SetupRequestModifier : %v", err)
 		}
 		reqID, _ := core.RequestIDFromContext(req.Context())
 
-		if err := CheckpointRequestModifier(proxy, req); err != nil {
+		if err := runRequestPairModifier(proxy, CheckpointRequestModifier, req); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 		if err := CheckpointResponseModifier(proxy, &http.Response{Header: make(http.Header), Request: req}); err != nil {

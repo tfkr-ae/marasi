@@ -304,10 +304,10 @@ func (extension *Runtime) ExecuteLuaContext(ctx context.Context, code string) er
 
 // ShouldInterceptRequest calls the `interceptRequest` function in the Lua script
 // to determine if the given HTTP request should be intercepted.
-func (extension *Runtime) ShouldInterceptRequest(req *http.Request) (bool, error) {
+func (extension *Runtime) ShouldInterceptRequest(req *Request) (bool, error) {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
-	defer extension.beginExecution(req.Context())()
+	defer extension.beginExecution(req.Request.Context())()
 
 	extension.LuaState.Global(hookInterceptRequest)
 
@@ -448,10 +448,10 @@ func (extension *Runtime) CallResponseHandler(res *http.Response) error {
 
 // CallRequestHandler calls the `processRequest` function in the Lua script,
 // passing the HTTP request to be processed by the extension.
-func (extension *Runtime) CallRequestHandler(req *http.Request) error {
+func (extension *Runtime) CallRequestHandler(req *Request) error {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
-	defer extension.beginExecution(req.Context())()
+	defer extension.beginExecution(req.Request.Context())()
 
 	extension.LuaState.Global(hookProcessRequest)
 

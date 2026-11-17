@@ -167,7 +167,7 @@ func TestPairModifierAdapter(t *testing.T) {
 		client := servePairProxy(t, func(proxy *Proxy) {
 			proxy.AddRequestModifier(func(proxy *Proxy, req *http.Request) error {
 				record("old setup")
-				if err := SetupRequestModifier(proxy, req); err != nil {
+				if err := runRequestPairModifier(proxy, SetupRequestModifier, req); err != nil {
 					return err
 				}
 				setupID, _ = core.RequestIDFromContext(req.Context())
@@ -251,7 +251,7 @@ func TestPairModifierAdapter(t *testing.T) {
 
 		var oldSawID uuid.UUID
 		client := servePairProxy(t, func(proxy *Proxy) {
-			proxy.AddRequestModifier(SetupRequestModifier)
+			proxy.AddRequestPairModifier(SetupRequestModifier)
 			proxy.AddRequestPairModifier(func(proxy *Proxy, pair *Pair) error {
 				replaced := pair.Request.Clone(context.Background())
 				replaced.URL.Path = "/replaced"

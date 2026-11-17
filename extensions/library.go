@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"strings"
 
@@ -64,7 +63,8 @@ func registerMarasiLibrary(extension *Runtime, proxy ProxyService) {
 				builder := NewRequestBuilder(client)
 
 				if nargs >= 2 {
-					if req, ok := l.ToUserData(2).(*http.Request); ok {
+					if hookReq, ok := l.ToUserData(2).(*Request); ok {
+						req := hookReq.Request
 						builder.method = req.Method
 
 						if req.URL != nil {
