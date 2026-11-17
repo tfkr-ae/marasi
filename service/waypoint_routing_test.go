@@ -83,7 +83,7 @@ func TestProxiedTrafficFollowsPersistedWaypointDuringConcurrentUpdates(t *testin
 		t.Fatalf("creating proxy: %v", err)
 	}
 	proxy.AddRequestModifier(marasi.SetupRequestModifier)
-	proxy.AddRequestModifier(marasi.OverrideWaypointsModifier)
+	proxy.AddRequestPairModifier(marasi.OverrideWaypointsModifier)
 	listener, err := proxy.GetListener("127.0.0.1", "0")
 	if err != nil {
 		_ = proxy.Close()

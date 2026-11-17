@@ -860,107 +860,55 @@ func TestOverrideWaypointsModifier(t *testing.T) {
 		},
 	}
 
-	t.Run("request to host (HTTP) in waypoint map should be overriden and metadata is set", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "http://marasi.app", nil)
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context: %v", err)
-		}
-		defer remove()
+	for _, tc := range []struct {
+		name     string
+		url      string
+		original string
+		override string
+	}{
+		{name: "should override a request to an HTTP host in the waypoint map and set metadata", url: "http://marasi.app", original: "marasi.app:80", override: "127.0.0.1:9000"},
+		{name: "should override a request to an HTTPS host in the waypoint map and set metadata", url: "https://marasi.app", original: "marasi.app:443", override: "127.0.0.1:8000"},
+		{name: "should override a request to a non-standard port in the waypoint map and set metadata", url: "https://marasi.app:8000", original: "marasi.app:8000", override: "127.0.0.1:7000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pair := NewTestPair(httptest.NewRequest(http.MethodGet, tc.url, nil))
 
-		err = SetupRequestModifier(proxy, req)
-		if err != nil {
-			t.Fatalf("running SetupRequestModifier : %v", err)
-		}
-
-		err = OverrideWaypointsModifier(proxy, req)
-		if err != nil {
-			t.Fatalf("wanted: nil\ngot: %v", err)
-		}
-
-		if metadata, ok := core.MetadataFromContext(req.Context()); !ok {
-			t.Fatalf("expected metadata to be set on request")
-		} else if metadata["original_host"] != "marasi.app:80" || metadata["override_host"] != "127.0.0.1:9000" {
-			t.Fatalf("wanted:\noriginal_host: %q\noverride_host: %q\ngot:\noriginal_host: %q\noverride_host: %q", "marasi.app:80", "127.0.0.1:9000", metadata["original_host"], metadata["override_host"])
-		}
-	})
-
-	t.Run("request to host (HTTPS) in waypoint map should be overriden and metadata is set", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context: %v", err)
-		}
-		defer remove()
-
-		err = SetupRequestModifier(proxy, req)
-		if err != nil {
-			t.Fatalf("running SetupRequestModifier : %v", err)
-		}
-
-		err = OverrideWaypointsModifier(proxy, req)
-		if err != nil {
-			t.Fatalf("wanted: nil\ngot: %v", err)
-		}
-
-		if metadata, ok := core.MetadataFromContext(req.Context()); !ok {
-			t.Fatalf("expected metadata to be set on request")
-		} else if metadata["original_host"] != "marasi.app:443" || metadata["override_host"] != "127.0.0.1:8000" {
-			t.Fatalf("wanted:\noriginal_host: %q\noverride_host: %q\ngot:\noriginal_host: %q\noverride_host: %q", "marasi.app:443", "127.0.0.1:8000", metadata["original_host"], metadata["override_host"])
-		}
-	})
-
-	t.Run("request to host on non-standard port in waypoint map should be overriden and metadata is set", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "https://marasi.app:8000", nil)
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context: %v", err)
-		}
-		defer remove()
-
-		err = SetupRequestModifier(proxy, req)
-		if err != nil {
-			t.Fatalf("running SetupRequestModifier : %v", err)
-		}
-
-		err = OverrideWaypointsModifier(proxy, req)
-		if err != nil {
-			t.Fatalf("wanted: nil\ngot: %v", err)
-		}
-
-		if metadata, ok := core.MetadataFromContext(req.Context()); !ok {
-			t.Fatalf("expected metadata to be set on request")
-		} else if metadata["original_host"] != "marasi.app:8000" || metadata["override_host"] != "127.0.0.1:7000" {
-			t.Fatalf("wanted:\noriginal_host: %q\noverride_host: %q\ngot:\noriginal_host: %q\noverride_host: %q", "marasi.app:8000", "127.0.0.1:7000", metadata["original_host"], metadata["override_host"])
-		}
-	})
-
-	t.Run("request to host that is not on waypoint list should be processed normally", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "https://marasi2.app", nil)
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context: %v", err)
-		}
-		defer remove()
-
-		err = SetupRequestModifier(proxy, req)
-		if err != nil {
-			t.Fatalf("running SetupRequestModifier : %v", err)
-		}
-
-		err = OverrideWaypointsModifier(proxy, req)
-		if err != nil {
-			t.Fatalf("wanted: nil\ngot: %v", err)
-		}
-
-		if metadata, ok := core.MetadataFromContext(req.Context()); !ok {
-			t.Fatalf("expected metadata to be set on request")
-		} else {
-			host, originalHost := metadata["original_host"]
-			override, overrideHost := metadata["override_host"]
-			if originalHost || overrideHost {
-				t.Fatalf("wanted:\noriginal_host: %q\noverride_host: %q\ngot:\noriginal_host: %q\noverride_host: %q", "", "", host, override)
+			if err := OverrideWaypointsModifier(proxy, pair); err != nil {
+				t.Fatalf("wanted: nil\ngot: %v", err)
 			}
+
+			if pair.Metadata["original_host"] != tc.original || pair.Metadata["override_host"] != tc.override {
+				t.Fatalf("wanted:\noriginal_host: %q\noverride_host: %q\ngot:\noriginal_host: %q\noverride_host: %q", tc.original, tc.override, pair.Metadata["original_host"], pair.Metadata["override_host"])
+			}
+			if pair.Request.URL.Host != tc.override || pair.Request.Host != tc.override {
+				t.Fatalf("wanted the request sent to %s\ngot: URL host %q, Host %q", tc.override, pair.Request.URL.Host, pair.Request.Host)
+			}
+		})
+	}
+
+	t.Run("should leave a request to a host not on the waypoint list unchanged", func(t *testing.T) {
+		pair := NewTestPair(httptest.NewRequest(http.MethodGet, "https://marasi2.app", nil))
+
+		if err := OverrideWaypointsModifier(proxy, pair); err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
+		}
+
+		host, originalHost := pair.Metadata["original_host"]
+		override, overrideHost := pair.Metadata["override_host"]
+		if originalHost || overrideHost {
+			t.Fatalf("wanted:\noriginal_host: %q\noverride_host: %q\ngot:\noriginal_host: %q\noverride_host: %q", "", "", host, override)
+		}
+		if pair.Request.Host != "marasi2.app" {
+			t.Fatalf("wanted: marasi2.app\ngot: %s", pair.Request.Host)
+		}
+	})
+
+	t.Run("should return ErrMetadataNotFound for a pair with no metadata", func(t *testing.T) {
+		pair := NewTestPair(httptest.NewRequest(http.MethodGet, "http://marasi.app", nil))
+		pair.Metadata = nil
+
+		if err := OverrideWaypointsModifier(proxy, pair); !errors.Is(err, ErrMetadataNotFound) {
+			t.Fatalf("wanted: %v\ngot: %v", ErrMetadataNotFound, err)
 		}
 	})
 }
