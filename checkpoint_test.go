@@ -40,27 +40,15 @@ func startRequestHold(t *testing.T, proxy *Proxy) (*http.Request, uuid.UUID, <-c
 func startResponseHold(t *testing.T, proxy *Proxy) (uuid.UUID, <-chan error) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-	_, remove, err := martian.TestContext(req, nil, nil)
-	if err != nil {
-		t.Fatalf("applying martian context : %v", err)
-	}
-	t.Cleanup(remove)
-	if err := SetupRequestModifier(proxy, req); err != nil {
-		t.Fatalf("running SetupRequestModifier : %v", err)
-	}
-	reqID, ok := core.RequestIDFromContext(req.Context())
-	if !ok {
-		t.Fatalf("request id missing")
-	}
-	res := &http.Response{
+	pair := newResponsePair(&http.Response{
 		Header:  make(http.Header),
 		Request: req,
-	}
+	})
 	done := make(chan error, 1)
 	go func() {
-		done <- CheckpointResponseModifier(proxy, res)
+		done <- CheckpointResponseModifier(proxy, pair)
 	}()
-	return reqID, done
+	return pair.ID, done
 }
 
 func TestCheckpointPending(t *testing.T) {
@@ -136,7 +124,7 @@ func TestCheckpointPending(t *testing.T) {
 		res := &http.Response{Header: make(http.Header), Request: req}
 		responseDone := make(chan error, 1)
 		go func() {
-			responseDone <- CheckpointResponseModifier(proxy, res)
+			responseDone <- CheckpointResponseModifier(proxy, requestSidePair(res))
 		}()
 		items := waitForCheckpoint(t, proxy, 3)
 		responseID := olderID
@@ -200,7 +188,7 @@ func TestCheckpointPending(t *testing.T) {
 		res := &http.Response{Header: make(http.Header), Request: req}
 		responseDone := make(chan error, 1)
 		go func() {
-			responseDone <- CheckpointResponseModifier(proxy, res)
+			responseDone <- CheckpointResponseModifier(proxy, requestSidePair(res))
 		}()
 		items = waitForCheckpoint(t, proxy, 1)
 		if items[0].ID != reqID || items[0].Type != domain.CheckpointTypeResponse {
@@ -318,7 +306,7 @@ func TestCheckpointPending(t *testing.T) {
 		res := &http.Response{Header: make(http.Header), Request: req}
 		done := make(chan error, 1)
 		go func() {
-			done <- CheckpointResponseModifier(proxy, res)
+			done <- CheckpointResponseModifier(proxy, requestSidePair(res))
 		}()
 		items := waitForCheckpoint(t, proxy, 1)
 		if items[0].Type != domain.CheckpointTypeResponse {

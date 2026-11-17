@@ -2,6 +2,7 @@ package marasi
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"time"
 
@@ -29,6 +30,15 @@ type Pair struct {
 	LaunchpadID uuid.UUID
 	// ArmoryRunID is the Armory run that made the request, or uuid.Nil.
 	ArmoryRunID uuid.UUID
+
+	// webSocketUpstream is the upstream stream of a successful upgrade,
+	// detached from the response body by WebSocketPrepareModifier.
+	webSocketUpstream io.ReadWriteCloser
+	// webSocketNegotiation is the extension response mirrored to the client.
+	webSocketNegotiation *webSocketNegotiation
+	// release ends the response side's project admission. A WebSocket
+	// session calls it once registered.
+	release func()
 
 	// ctx is used only for cancellation.
 	ctx context.Context

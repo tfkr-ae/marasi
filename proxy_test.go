@@ -490,7 +490,7 @@ func TestProxy_WriteToDBCheckpointHookLog(t *testing.T) {
 		if err := CheckpointRequestModifier(proxy, req); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
-		if err := CheckpointResponseModifier(proxy, &http.Response{Header: make(http.Header), Request: req}); err != nil {
+		if err := CheckpointResponseModifier(proxy, requestSidePair(&http.Response{Header: make(http.Header), Request: req})); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 		close(proxy.DBWriteChannel)

@@ -562,17 +562,19 @@ func parseContentType(header string) (string, error) {
 	return strings.ToLower(mediaType), nil
 }
 
-// NewProxyResponse creates a new domain.ProxyResponse from an http.Response.
-// It extracts metadata from the response context and dumps the raw response.
-func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
-	requestId, ok := core.RequestIDFromContext(res.Request.Context())
-	if !ok {
-		return nil, fmt.Errorf("request id not found in context")
+// NewProxyResponse creates a new domain.ProxyResponse from the pair's response.
+// It takes the ID, response time, metadata and route from the pair and dumps
+// the raw response.
+func NewProxyResponse(pair *Pair) (*domain.ProxyResponse, error) {
+	res := pair.Response
+	requestId := pair.ID
+	if requestId == uuid.Nil {
+		return nil, fmt.Errorf("pair has no request id")
 	}
 
-	responseTime, ok := core.ResponseTimeFromContext(res.Request.Context())
-	if !ok {
-		return nil, fmt.Errorf("timestamp not found for this context")
+	responseTime := pair.Timing.Responded
+	if responseTime.IsZero() {
+		return nil, fmt.Errorf("pair has no response time")
 	}
 
 	rawRes, prettified, err := rawhttp.DumpResponse(res)
@@ -596,14 +598,14 @@ func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
 		}
 	}
 
-	metadata, ok := core.MetadataFromContext(res.Request.Context())
-	if !ok {
+	metadata := pair.Metadata
+	if metadata == nil {
 		metadata = make(map[string]any)
 	}
 
 	var route *domain.RouteSnapshot
-	if record, ok := core.RouteRecordFromContext(res.Request.Context()); ok {
-		route = record.Snapshot()
+	if pair.Route != nil {
+		route = pair.Route.Snapshot()
 	}
 
 	proxyResponse := &domain.ProxyResponse{

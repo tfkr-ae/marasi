@@ -631,9 +631,10 @@ func WithBasePipeline() func(*Proxy) error {
 				if _, launch := core.LaunchpadIDFromContext(res.Request.Context()); launch && res.Request.Context().Err() != nil {
 					return nil
 				}
+				pair, loaded := loadPair(res.Request, res)
 				// The body is still the wait on the origin, so it is read
 				// before the response side is admitted (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
-				if err := BufferStreamingBodyModifier(proxy, res); err != nil {
+				if err := BufferStreamingBodyModifier(proxy, pair); err != nil {
 					log.Printf("response pipeline: %v", err)
 					return err
 				}
@@ -650,8 +651,15 @@ func WithBasePipeline() func(*Proxy) error {
 						// open. It stays response-less there (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
 						return proxy.passStaleResponse(res)
 					}
-					// In place: martian finds its context by the request's address.
-					*res.Request = *res.Request.WithContext(context.WithValue(res.Request.Context(), projectReleaseKey{}, release))
+					pair.release = release
+				}
+				// The response chain finds this pair through the request.
+				storePair(pair, loaded, res.Request)
+				// A request whose round trip was skipped has only the blank
+				// 200 Martian made in place of a response, so no response
+				// modifier sees it.
+				if ctx := martian.NewContext(res.Request); ctx != nil && ctx.SkippingRoundTrip() {
+					return nil
 				}
 				err := proxy.Modifiers.ModifyResponse(res)
 				if err == nil || errors.Is(err, ErrSkipPipeline) {
@@ -691,10 +699,6 @@ type projectAdmission struct {
 	internal   bool
 	generation uint64
 }
-
-// projectReleaseKey holds the release of a response's admission, which a
-// WebSocket session calls once it is registered.
-type projectReleaseKey struct{}
 
 // passStaleResponse passes a response whose pair belongs to a project that is
 // no longer open straight to the client. A WebSocket upgrade cannot be relayed
@@ -749,15 +753,15 @@ func WithDefaultModifierPipeline() func(*Proxy) error {
 		proxy.AddRequestModifier(WriteRequestModifier)
 
 		// Response Modifiers
-		proxy.AddResponseModifier(ResponseFilterModifier)
-		proxy.AddResponseModifier(WebSocketPrepareModifier)
-		proxy.AddResponseModifier(CompressedResponseModifier)
-		proxy.AddResponseModifier(CompassResponseModifier)
-		proxy.AddResponseModifier(ExtensionsResponseModifier)
-		proxy.AddResponseModifier(CheckpointResponseModifier)
-		proxy.AddResponseModifier(WebSocketNegotiationModifier)
-		proxy.AddResponseModifier(WriteResponseModifier)
-		proxy.AddResponseModifier(WebSocketHandoffModifier)
+		proxy.AddResponsePairModifier(ResponseFilterModifier)
+		proxy.AddResponsePairModifier(WebSocketPrepareModifier)
+		proxy.AddResponsePairModifier(CompressedResponseModifier)
+		proxy.AddResponsePairModifier(CompassResponseModifier)
+		proxy.AddResponsePairModifier(ExtensionsResponseModifier)
+		proxy.AddResponsePairModifier(CheckpointResponseModifier)
+		proxy.AddResponsePairModifier(WebSocketNegotiationModifier)
+		proxy.AddResponsePairModifier(WriteResponseModifier)
+		proxy.AddResponsePairModifier(WebSocketHandoffModifier)
 		return nil
 	}
 

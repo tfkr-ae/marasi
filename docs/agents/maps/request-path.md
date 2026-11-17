@@ -10,8 +10,8 @@ In this map, bare "upstream" means the origin, as in `GLOSSARY.md`. An **upstrea
 2. **martian v2.1.0** reads the request and MITMs a `CONNECT`. It then runs every request modifier, then the round trip, then every response modifier. The whole request pipeline has run before anything goes upstream.
 3. **Request side.** `WithBasePipeline` wraps `proxy.Modifiers` for admission, internal-client checks and header stripping. `WithDefaultModifierPipeline` adds the modifiers, which run in the order they are added. `proxy.Modifiers` is a martian `fifo.Group`, so the first error stops the chain, and `ErrSkipPipeline` and `ErrDropped` are how a modifier ends it early.
 4. **Capture.** The request is captured by its write modifier, before the round trip, and the response by its write modifier, after it. Both queue on `DBWriteChannel`, and `(*Proxy).WriteToDB` stores them.
-5. **Round trip.** martian calls `launchFailureRoundTripper`, which wraps `marasiRoundTripper`. `(*Proxy).Serve` builds it once around a `routedTransport` from `newRoutedTransport`. `routedTransport.RoundTrip` brings the route up to date, then takes an idle connection from that route's pool or dials a new one through the route. See [Route](#route).
-6. **Response side.** `WithBasePipeline` buffers the body and admits project work again before the response modifiers run. A WebSocket upgrade is handed off by the last response modifier.
+5. **Round trip.** martian calls `launchFailureRoundTripper`, which wraps `marasiRoundTripper`. `(*Proxy).Serve` builds it once around a `routedTransport` from `newRoutedTransport`. `routedTransport.RoundTrip` brings the route up to date, then takes an idle connection from that route's pool or dials a new one through the route. The transport gets its own copy of the request with `Close` cleared, so it adds no `Connection` line, and the response points back at the request martian holds. See [Route](#route).
+6. **Response side.** `WithBasePipeline` buffers the body and admits project work again before the response modifiers run. It runs no response modifier for a request whose round trip a request modifier skipped. Response modifiers take the pair (`func(*Proxy, *Pair) error`) and reach its request through `pair.Request`, never `res.Request`. A response modifier that runs a Lua hook goes through `callResponseHook`, which hands Lua a copy of the request carrying the pair's ID and metadata. A WebSocket upgrade is handed off by the last response modifier.
 
 ## Route
 
@@ -27,7 +27,7 @@ The route says how a new connection reaches the origin: directly, or through the
   - `socks5`: no authentication, or username/password when the entry has credentials, with the hostname sent unresolved (`route_socks5.go`).
 - **Origin TLS.** For a TLS origin, the utls handshake then runs inside the connection that `Route.dial` returned. Both TLS legs verify against the system roots plus the entry's CA when it has one (`Route.rootCAs`, built once per route). Direct connections and other routes never trust that CA. A failed origin handshake through an upstream proxy is a `tls_verification` `*UpstreamProxyError`.
 - **Fail closed.** A route that cannot carry the connection, or a selection missing from this machine's list, returns an `*UpstreamProxyError` and never a direct connection. `launchFailureRoundTripper` writes one ERROR proxy log naming the pair, the upstream proxy and the cause, and martian answers the client with a 502.
-- **Snapshot.** `SetupRequestModifier` puts a `core.RouteRecord` on the request context. The `GotConn` trace in `routedTransport.RoundTrip` records the route of the connection that carried the request. A failed dial records the route its final attempt tried. `NewProxyResponse` copies the record into `ProxyResponse.Route`, and `InsertResponse` stores it in `request.upstream_proxy_name` and `request.upstream_proxy_address`.
+- **Snapshot.** `SetupRequestModifier` puts a `core.RouteRecord` on the request context. The `GotConn` trace in `routedTransport.RoundTrip` records the route of the connection that carried the request. A failed dial records the route its final attempt tried. `NewProxyResponse` copies the pair's record into `ProxyResponse.Route`, and `InsertResponse` stores it in `request.upstream_proxy_name` and `request.upstream_proxy_address`.
 - **Check.** `Proxy.CheckUpstreamProxy` (`route_check.go`) resolves a named entry with a resolver of its own and dials once through a separate `newRoutedTransport` fixed to that route. It sends no request and leaves the selection alone.
 
 ## Who reaches the origin
@@ -41,7 +41,7 @@ Only these touch the headers a request goes upstream with:
 - the sending client, which is `proxy.Client`'s transport for Marasi's own requests;
 - `WithBasePipeline`;
 - the request modifiers;
-- `marasiRoundTripper.RoundTrip`;
+- `marasiRoundTripper.RoundTrip` and `routedTransport.RoundTrip`;
 - Go's `http.Transport`.
 
 An HTTP or HTTPS upstream proxy sees only the `CONNECT` and its `Proxy-Authorization`, and a SOCKS5 upstream proxy sees only its handshake. The tunnelled request carries no proxy headers, because the transport's `Proxy` field stays unset.
