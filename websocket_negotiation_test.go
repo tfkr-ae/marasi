@@ -492,7 +492,7 @@ func TestFailWebSocketHandshake(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/socket", nil)
 		cause := errors.New("upstream accepted an extension no one offered")
 
-		err := failWebSocketHandshake(proxy, &http.Response{Request: req}, cause)
+		err := failWebSocketHandshake(proxy, NewTestPair(req), cause)
 
 		if !errors.Is(err, ErrWebSocketHandshakeFailed) || !errors.Is(err, ErrDropped) || !errors.Is(err, cause) {
 			t.Fatalf("\nwanted:\nan error matching ErrWebSocketHandshakeFailed, ErrDropped and the cause\ngot:\n%v", err)

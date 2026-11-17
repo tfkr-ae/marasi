@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
@@ -475,16 +474,17 @@ func TestProxy_WriteToDBCheckpointHookLog(t *testing.T) {
 			function interceptRequest(request) error("request boom") end
 			function interceptResponse(response) error("response boom") end
 		`)
-		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		if err := runRequestPairModifier(proxy, SetupRequestModifier, req); err != nil {
+		pair := NewTestPair(httptest.NewRequest(http.MethodGet, "https://marasi.app", nil))
+		if err := SetupRequestModifier(proxy, pair); err != nil {
 			t.Fatalf("running SetupRequestModifier : %v", err)
 		}
-		reqID, _ := core.RequestIDFromContext(req.Context())
+		reqID := pair.ID
 
-		if err := runRequestPairModifier(proxy, CheckpointRequestModifier, req); err != nil {
+		if err := CheckpointRequestModifier(proxy, pair); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
-		if err := CheckpointResponseModifier(proxy, &http.Response{Header: make(http.Header), Request: req}); err != nil {
+		pair.Response = &http.Response{Header: make(http.Header), Request: pair.Request}
+		if err := CheckpointResponseModifier(proxy, pair); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 		close(proxy.DBWriteChannel)

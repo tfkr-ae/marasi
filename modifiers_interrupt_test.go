@@ -143,7 +143,7 @@ func TestRequestModifiersFailClosedWhenInterrupted(t *testing.T) {
 func TestResponseModifiersFailClosedWhenInterrupted(t *testing.T) {
 	modifiers := []struct {
 		hookCase
-		modifier ResponseModifierFunc
+		modifier PairModifier
 	}{
 		{hookCase{"compass", "processResponse"}, CompassResponseModifier},
 		{hookCase{"workshop", "processResponse"}, ExtensionsResponseModifier},
@@ -170,7 +170,7 @@ func TestResponseModifiersFailClosedWhenInterrupted(t *testing.T) {
 				done := make(chan struct{})
 				go func() {
 					defer close(done)
-					err = tc.modifier(proxy, res)
+					err = tc.modifier(proxy, newResponsePair(res))
 				}()
 				awaitEntered(t, entered, cancel, done)
 
@@ -186,7 +186,7 @@ func TestResponseModifiersFailClosedWhenInterrupted(t *testing.T) {
 			res := testResponse("held")
 			res.Request = httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
-			if err := tc.modifier(proxy, res); err != nil {
+			if err := tc.modifier(proxy, newResponsePair(res)); err != nil {
 				t.Fatalf("wanted: nil\ngot: %v", err)
 			}
 		})

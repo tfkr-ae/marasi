@@ -1745,84 +1745,47 @@ func TestWriteRequestModifier(t *testing.T) {
 }
 
 // Response Modifiers
+
+// newResponsePair builds a test pair around res and the request it answers.
+func newResponsePair(res *http.Response) *Pair {
+	pair := NewTestPair(res.Request)
+	pair.Response = res
+	return pair
+}
+
 func TestResponseFilterModifier(t *testing.T) {
 	t.Run("response to CONNECT request should be skipped by marasi", func(t *testing.T) {
-		proxy := &Proxy{}
 		req := httptest.NewRequest(http.MethodConnect, "https://marasi.app", nil)
-		res := &http.Response{Request: req}
+		pair := newResponsePair(&http.Response{Request: req})
 
-		err := ResponseFilterModifier(proxy, res)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
+		err := ResponseFilterModifier(&Proxy{}, pair)
 		if !errors.Is(err, ErrSkipPipeline) {
 			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
 		}
 	})
 
-	t.Run("responses to requests that were marked as skipped should be skipped by marasi", func(t *testing.T) {
-		proxy := &Proxy{}
+	t.Run("should skip the response of a skipped pair", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		ctx, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-		ctx.SkipRoundTrip()
+		pair := newResponsePair(&http.Response{Request: req})
+		pair.Skipped = true
 
-		res := &http.Response{Request: req}
-
-		err = ResponseFilterModifier(proxy, res)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
-		if !ctx.SkippingRoundTrip() {
-			t.Fatalf("wanted: True\ngot: %t", ctx.SkippingRoundTrip())
-		}
-	})
-
-	t.Run("responses to requests that have SkipKey set in context should be skipped", func(t *testing.T) {
-		proxy := &Proxy{}
-		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-		*req = *core.ContextWithSkipFlag(req, true)
-		res := &http.Response{Request: req}
-
-		err = ResponseFilterModifier(proxy, res)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
+		err := ResponseFilterModifier(&Proxy{}, pair)
 		if !errors.Is(err, ErrSkipPipeline) {
 			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
 		}
 	})
 
 	t.Run("responses to standard requests should be processed and timestamped", func(t *testing.T) {
-		proxy := &Proxy{}
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		res := &http.Response{Request: req}
+		pair := newResponsePair(&http.Response{Request: req})
+		before := time.Now()
 
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-
-		err = ResponseFilterModifier(proxy, res)
+		err := ResponseFilterModifier(&Proxy{}, pair)
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
-
-		if _, ok := core.ResponseTimeFromContext(res.Request.Context()); !ok {
-			t.Fatalf("wanted response time to be set on ResponseTimeKey in context")
+		if pair.Timing.Responded.Before(before) {
+			t.Fatalf("wanted response time at or after %v\ngot: %v", before, pair.Timing.Responded)
 		}
 	})
 }
@@ -1837,7 +1800,6 @@ func TestWebSocketPrepareModifier(t *testing.T) {
 			"websocket.transport": "wss",
 			"websocket.state":     "pending",
 		}
-		req = core.ContextWithMetadata(req, requestMetadata)
 
 		body := &trackingResponseBody{}
 		res := &http.Response{
@@ -1853,15 +1815,14 @@ func TestWebSocketPrepareModifier(t *testing.T) {
 			Body: body,
 		}
 
-		err := WebSocketPrepareModifier(&Proxy{}, res)
+		pair := newResponsePair(res)
+		pair.Metadata = requestMetadata
+		err := WebSocketPrepareModifier(&Proxy{}, pair)
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		metadata, ok := core.MetadataFromContext(res.Request.Context())
-		if !ok {
-			t.Fatalf("wanted metadata to be set in context")
-		}
+		metadata := pair.Metadata
 		if metadata["websocket.state"] != "open" {
 			t.Fatalf("wanted: %q\ngot: %q", "open", metadata["websocket.state"])
 		}
@@ -1869,10 +1830,7 @@ func TestWebSocketPrepareModifier(t *testing.T) {
 			t.Fatalf("wanted request state: %q\ngot: %q", "pending", requestMetadata["websocket.state"])
 		}
 
-		upstream, ok := core.WebSocketUpstreamFromContext(res.Request.Context())
-		if !ok {
-			t.Fatalf("wanted upstream in context: true\ngot: %v", ok)
-		}
+		upstream := pair.webSocketUpstream
 		if upstream != body {
 			t.Fatalf("wanted upstream: %p\ngot: %p", body, upstream)
 		}
@@ -1898,9 +1856,6 @@ func TestWebSocketPrepareModifier(t *testing.T) {
 
 	t.Run("non-websocket response should leave metadata unchanged", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		req = core.ContextWithMetadata(req, map[string]any{
-			"websocket.state": "pending",
-		})
 		res := &http.Response{
 			StatusCode: http.StatusOK,
 			Request:    req,
@@ -1908,15 +1863,14 @@ func TestWebSocketPrepareModifier(t *testing.T) {
 			Body:       http.NoBody,
 		}
 
-		err := WebSocketPrepareModifier(&Proxy{}, res)
+		pair := newResponsePair(res)
+		pair.Metadata = map[string]any{"websocket.state": "pending"}
+		err := WebSocketPrepareModifier(&Proxy{}, pair)
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		metadata, ok := core.MetadataFromContext(res.Request.Context())
-		if !ok {
-			t.Fatalf("wanted metadata to be set in context")
-		}
+		metadata := pair.Metadata
 		if metadata["websocket.state"] != "pending" {
 			t.Fatalf("wanted: %q\ngot: %q", "pending", metadata["websocket.state"])
 		}
@@ -1936,7 +1890,9 @@ func TestWebSocketPrepareModifier(t *testing.T) {
 			Body: &trackingResponseBody{},
 		}
 
-		err := WebSocketPrepareModifier(&Proxy{}, res)
+		pair := newResponsePair(res)
+		pair.Metadata = nil
+		err := WebSocketPrepareModifier(&Proxy{}, pair)
 		if !errors.Is(err, ErrMetadataNotFound) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrMetadataNotFound, err)
 		}
@@ -2246,38 +2202,36 @@ func TestWebSocketHandoffModifier(t *testing.T) {
 			Body:       http.NoBody,
 		}
 
-		err := WebSocketHandoffModifier(&Proxy{}, res)
+		err := WebSocketHandoffModifier(&Proxy{}, newResponsePair(res))
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 	})
 
 	t.Run("missing request ID should return an error", func(t *testing.T) {
-		res := upgradeResponse(upgradeRequest())
+		pair := newResponsePair(upgradeResponse(upgradeRequest()))
+		pair.ID = uuid.Nil
 
-		err := WebSocketHandoffModifier(&Proxy{}, res)
+		err := WebSocketHandoffModifier(&Proxy{}, pair)
 		if !errors.Is(err, ErrRequestIDNotFound) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrRequestIDNotFound, err)
 		}
 	})
 
 	t.Run("missing upstream should return an error", func(t *testing.T) {
-		req := core.ContextWithRequestID(upgradeRequest(), uuid.New())
-		res := upgradeResponse(req)
+		pair := newResponsePair(upgradeResponse(upgradeRequest()))
 
-		err := WebSocketHandoffModifier(&Proxy{}, res)
+		err := WebSocketHandoffModifier(&Proxy{}, pair)
 		if !errors.Is(err, ErrWebSocketUpstreamUnavailable) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrWebSocketUpstreamUnavailable, err)
 		}
 	})
 
 	t.Run("missing session should return an error", func(t *testing.T) {
-		req := core.ContextWithRequestID(upgradeRequest(), uuid.New())
-		upstream := &trackingResponseBody{}
-		req = core.ContextWithWebSocketUpstream(req, upstream)
-		res := upgradeResponse(req)
+		pair := newResponsePair(upgradeResponse(upgradeRequest()))
+		pair.webSocketUpstream = &trackingResponseBody{}
 
-		err := WebSocketHandoffModifier(&Proxy{}, res)
+		err := WebSocketHandoffModifier(&Proxy{}, pair)
 		if !errors.Is(err, ErrSessionContext) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrSessionContext, err)
 		}
@@ -2310,17 +2264,18 @@ func TestWebSocketHandoffModifier(t *testing.T) {
 		}
 		defer remove()
 
-		req = core.ContextWithRequestID(req, requestID)
+		// The hijackable session is Martian's until the upgrade handler replaces it.
 		req = core.ContextWithSession(req, martianContext.Session())
-		req = core.ContextWithWebSocketUpstream(req, upstreamConnection)
-		res := upgradeResponse(req)
+		pair := newResponsePair(upgradeResponse(req))
+		pair.ID = requestID
+		pair.webSocketUpstream = upstreamConnection
 		proxy := &Proxy{
 			WebSocketRegistry: marasiws.NewRegistry(),
 			DBWriteChannel:    make(chan any, 4),
 		}
 		handoffResult := make(chan error, 1)
 		go func() {
-			handoffResult <- WebSocketHandoffModifier(proxy, res)
+			handoffResult <- WebSocketHandoffModifier(proxy, pair)
 		}()
 
 		clientReader := bufio.NewReader(clientPeer)
@@ -2435,7 +2390,7 @@ func TestBufferedStreamingResponseModifier(t *testing.T) {
 			Body:   &erroringReader{},
 		}
 
-		err := BufferStreamingBodyModifier(proxy, res)
+		err := BufferStreamingBodyModifier(proxy, &Pair{Response: res})
 		if !errors.Is(err, ErrReadBody) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrReadBody, err)
 		}
@@ -2459,7 +2414,7 @@ func TestBufferedStreamingResponseModifier(t *testing.T) {
 			testWriter.Write([]byte("treamed marasi"))
 		}()
 
-		err := BufferStreamingBodyModifier(proxy, res)
+		err := BufferStreamingBodyModifier(proxy, &Pair{Response: res})
 
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
@@ -2507,7 +2462,7 @@ func TestBufferedStreamingResponseModifier(t *testing.T) {
 			Body: body,
 		}
 
-		err := BufferStreamingBodyModifier(&Proxy{}, res)
+		err := BufferStreamingBodyModifier(&Proxy{}, &Pair{Response: res})
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -2538,7 +2493,7 @@ func TestCompressedResponseModifier(t *testing.T) {
 
 		res.Header.Set("Content-Encoding", "gzip")
 
-		err := CompressedResponseModifier(proxy, res)
+		err := CompressedResponseModifier(proxy, &Pair{Response: res})
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -2556,7 +2511,7 @@ func TestCompressedResponseModifier(t *testing.T) {
 		res := testResponse("")
 		res.Header.Set("Content-Encoding", "gzip")
 
-		err := CompressedResponseModifier(proxy, res)
+		err := CompressedResponseModifier(proxy, &Pair{Response: res})
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -2574,7 +2529,7 @@ func TestCompressedResponseModifier(t *testing.T) {
 		want := "test marasi response"
 		res := testResponse(want)
 
-		err := CompressedResponseModifier(proxy, res)
+		err := CompressedResponseModifier(proxy, &Pair{Response: res})
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -2590,7 +2545,7 @@ func TestCompressedResponseModifier(t *testing.T) {
 		res := testResponse(string(badGzip))
 		res.Header.Set("Content-Encoding", "gzip")
 
-		err := CompressedResponseModifier(proxy, res)
+		err := CompressedResponseModifier(proxy, &Pair{Response: res})
 
 		if err == nil {
 			t.Fatal("wanted: err\ngot: nil")
@@ -2616,7 +2571,7 @@ func TestCompressedResponseModifier(t *testing.T) {
 		}
 		res.Header.Set("Content-Encoding", "gzip")
 
-		err := CompressedResponseModifier(proxy, res)
+		err := CompressedResponseModifier(proxy, &Pair{Response: res})
 
 		if err == nil {
 			t.Fatal("wanted: error\ngot: nil")
@@ -2640,7 +2595,7 @@ func TestCompressedResponseModifier(t *testing.T) {
 		res.Header.Set("Content-Encoding", "gzip")
 		res.Header.Set("Content-Length", fmt.Sprintf("%d", length))
 
-		err := CompressedResponseModifier(proxy, res)
+		err := CompressedResponseModifier(proxy, &Pair{Response: res})
 
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
@@ -2673,7 +2628,7 @@ func TestCompressedResponseModifier(t *testing.T) {
 
 		res.Header.Set("Content-Encoding", "br")
 
-		err := CompressedResponseModifier(proxy, res)
+		err := CompressedResponseModifier(proxy, &Pair{Response: res})
 		if err == nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -2695,7 +2650,7 @@ func TestCompressedResponseModifier(t *testing.T) {
 		res.Header.Set("Content-Encoding", "br")
 		res.Header.Set("Content-Length", fmt.Sprintf("%d", length))
 
-		err := CompressedResponseModifier(proxy, res)
+		err := CompressedResponseModifier(proxy, &Pair{Response: res})
 
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
@@ -2724,7 +2679,7 @@ func TestCompressedResponseModifier(t *testing.T) {
 		res := testResponse(want)
 		res.Header.Set("Content-Encoding", "marasi")
 
-		err := CompressedResponseModifier(proxy, res)
+		err := CompressedResponseModifier(proxy, &Pair{Response: res})
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -2748,7 +2703,7 @@ func TestCompassResponseModifier(t *testing.T) {
 			Request: req,
 		}
 
-		err := CompassResponseModifier(proxy, res)
+		err := CompassResponseModifier(proxy, newResponsePair(res))
 		if !errors.Is(err, ErrExtensionNotFound) {
 			t.Fatalf("wanted: %q\ngot: %q", ErrExtensionNotFound, err)
 		}
@@ -2758,17 +2713,11 @@ func TestCompassResponseModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["compass"])
 		req := httptest.NewRequest(http.MethodGet, "https://www.blocked.com/examplePage", nil)
 
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-
 		res := &http.Response{
 			Request: req,
 		}
 
-		err = CompassResponseModifier(proxy, res)
+		err := CompassResponseModifier(proxy, newResponsePair(res))
 
 		if err == nil {
 			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
@@ -2778,9 +2727,6 @@ func TestCompassResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
 		}
 
-		if skip, ok := core.SkipFlagFromContext(res.Request.Context()); !ok || !skip {
-			t.Errorf("expected skipped flag to be set in context and true")
-		}
 	})
 
 	t.Run("responses matching rule should be dropped if :drop() is used", func(t *testing.T) {
@@ -2798,17 +2744,11 @@ func TestCompassResponseModifier(t *testing.T) {
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://www.blocked.com/examplePage", nil)
 
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-
 		res := &http.Response{
 			Request: req,
 		}
 
-		err = CompassResponseModifier(proxy, res)
+		err := CompassResponseModifier(proxy, newResponsePair(res))
 
 		if err == nil {
 			t.Fatalf("wanted: %q\ngot: nil", ErrDropped)
@@ -2817,34 +2757,22 @@ func TestCompassResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: %q\ngot: %v", ErrDropped, err)
 		}
 
-		if drop, ok := core.DroppedFlagFromContext(res.Request.Context()); !ok || !drop {
-			t.Errorf("expected dropped flag to be set in context and to be true")
-		}
 	})
 
 	t.Run("responses that don't match rule should be allowed when default policy is true", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["compass"])
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-
 		res := &http.Response{
 			Request: req,
 		}
 
-		err = CompassResponseModifier(proxy, res)
+		err := CompassResponseModifier(proxy, newResponsePair(res))
 
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
-		if skip, ok := core.SkipFlagFromContext(res.Request.Context()); ok && skip {
-			t.Errorf("expected skipflag to not be set and should not be true")
-		}
 	})
 
 	t.Run("responses that don't match rule should be skipped when default policy is false", func(t *testing.T) {
@@ -2852,17 +2780,11 @@ func TestCompassResponseModifier(t *testing.T) {
 		proxy.Scope.DefaultAllow = false
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-
 		res := &http.Response{
 			Request: req,
 		}
 
-		err = CompassResponseModifier(proxy, res)
+		err := CompassResponseModifier(proxy, newResponsePair(res))
 
 		if err == nil {
 			t.Fatalf("wanted: %v\ngot: nil", ErrSkipPipeline)
@@ -2872,9 +2794,6 @@ func TestCompassResponseModifier(t *testing.T) {
 			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
 		}
 
-		if skip, ok := core.SkipFlagFromContext(res.Request.Context()); !ok || !skip {
-			t.Errorf("expected skipflag to be set in context and to be equal to true")
-		}
 	})
 
 	t.Run("disabled compass should skip scope filtering without returning ErrExtensionNotFound", func(t *testing.T) {
@@ -2886,22 +2805,13 @@ func TestCompassResponseModifier(t *testing.T) {
 		compassExt.Data.Enabled = false
 		req := httptest.NewRequest(http.MethodGet, "https://www.blocked.com/examplePage", nil)
 
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-
 		res := &http.Response{
 			Request: req,
 		}
 
-		err = CompassResponseModifier(proxy, res)
+		err := CompassResponseModifier(proxy, newResponsePair(res))
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
-		}
-		if skip, ok := core.SkipFlagFromContext(res.Request.Context()); ok && skip {
-			t.Errorf("expected skipflag to not be set")
 		}
 	})
 }
@@ -2910,20 +2820,13 @@ func TestExtensionsResponseModifier(t *testing.T) {
 	t.Run("multiple extensions should run on and modify responses", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"])
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *core.ContextWithExtensionID(req, "")
-
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
 
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
 		}
 
-		err = ExtensionsResponseModifier(proxy, res)
+		err := ExtensionsResponseModifier(proxy, newResponsePair(res))
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -2944,20 +2847,13 @@ func TestExtensionsResponseModifier(t *testing.T) {
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *core.ContextWithExtensionID(req, "")
-
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
 
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
 		}
 
-		err = ExtensionsResponseModifier(proxy, res)
+		err := ExtensionsResponseModifier(proxy, newResponsePair(res))
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -2984,20 +2880,13 @@ func TestExtensionsResponseModifier(t *testing.T) {
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *core.ContextWithExtensionID(req, "")
-
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
 
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
 		}
 
-		err = ExtensionsResponseModifier(proxy, res)
+		err := ExtensionsResponseModifier(proxy, newResponsePair(res))
 		if err == nil {
 			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
 		}
@@ -3024,20 +2913,13 @@ func TestExtensionsResponseModifier(t *testing.T) {
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *core.ContextWithExtensionID(req, "")
-
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
 
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
 		}
 
-		err = ExtensionsResponseModifier(proxy, res)
+		err := ExtensionsResponseModifier(proxy, newResponsePair(res))
 		if err == nil {
 			t.Fatalf("wanted: %q\ngot: nil", ErrDropped)
 		}
@@ -3058,21 +2940,15 @@ func TestExtensionsResponseModifier(t *testing.T) {
 	t.Run("if response x-extension-id matches extensionID it should skip execution", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *core.ContextWithExtensionID(req, testExtensions["workshop"].ID.String())
-
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-
-		defer remove()
 
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
 		}
+		pair := newResponsePair(res)
+		pair.ExtensionID = testExtensions["workshop"].ID
 
-		err = ExtensionsResponseModifier(proxy, res)
+		err := ExtensionsResponseModifier(proxy, pair)
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -3090,21 +2966,13 @@ func TestExtensionsResponseModifier(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["workshop"], testExtensions["testExtension"], testExtensions["compass"])
 		updateExtension(t, proxy, "workshop", "processResponse = nil")
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *core.ContextWithExtensionID(req, "")
-
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-
-		defer remove()
 
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
 		}
 
-		err = ExtensionsResponseModifier(proxy, res)
+		err := ExtensionsResponseModifier(proxy, newResponsePair(res))
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -3127,21 +2995,13 @@ func TestExtensionsResponseModifier(t *testing.T) {
 			end
 		`)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *core.ContextWithExtensionID(req, "")
-
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-
-		defer remove()
 
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
 		}
 
-		err = ExtensionsResponseModifier(proxy, res)
+		err := ExtensionsResponseModifier(proxy, newResponsePair(res))
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -3163,20 +3023,13 @@ func TestExtensionsResponseModifier(t *testing.T) {
 		}
 		workshop.Data.Enabled = false
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *core.ContextWithExtensionID(req, "")
-
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
 
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
 		}
 
-		err = ExtensionsResponseModifier(proxy, res)
+		err := ExtensionsResponseModifier(proxy, newResponsePair(res))
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -3194,19 +3047,13 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		proxy := newTestProxy(t)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-
-		defer remove()
-
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
 		}
 
-		err = CheckpointResponseModifier(proxy, res)
+		pair := newResponsePair(res)
+		err := CheckpointResponseModifier(proxy, pair)
 
 		if !errors.Is(err, ErrExtensionNotFound) {
 			t.Fatalf("wanted: %v, got: %v", ErrExtensionNotFound, err)
@@ -3216,24 +3063,14 @@ func TestCheckpointResponseModifier(t *testing.T) {
 	t.Run("should not intercept if checkpoint returns false and the global flag is false (default)", func(t *testing.T) {
 		proxy := newTestProxy(t, testExtensions["checkpoint"])
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-
-		defer remove()
-
-		err = runRequestPairModifier(proxy, SetupRequestModifier, req)
-		if err != nil {
-			t.Fatalf("setting up request : %v", err)
-		}
 
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
 		}
 
-		err = CheckpointResponseModifier(proxy, res)
+		pair := newResponsePair(res)
+		err := CheckpointResponseModifier(proxy, pair)
 
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
@@ -3243,7 +3080,7 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("expected no pending checkpoint items")
 		}
 
-		if metadata, _ := core.MetadataFromContext(res.Request.Context()); metadata["intercepted"] == true {
+		if metadata := pair.Metadata; metadata["intercepted"] == true {
 			t.Fatalf("wanted: nil\ngot: %v", metadata["intercepted"])
 		}
 	})
@@ -3253,38 +3090,24 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		proxy.SetIntercept(true)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-
-		err = runRequestPairModifier(proxy, SetupRequestModifier, req)
-		if err != nil {
-			t.Fatalf("setting up request: %v", err)
-		}
-		reqID, ok := core.RequestIDFromContext(req.Context())
-		if !ok {
-			t.Fatalf("request id missing")
-		}
-
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
 		}
 
 		done := make(chan error, 1)
+		pair := newResponsePair(res)
 		go func() {
-			done <- CheckpointResponseModifier(proxy, res)
+			done <- CheckpointResponseModifier(proxy, pair)
 		}()
 		items := waitForCheckpoint(t, proxy, 1)
-		if items[0].ID != reqID {
-			t.Fatalf("wanted: %s\ngot: %s", reqID, items[0].ID)
+		if items[0].ID != pair.ID {
+			t.Fatalf("wanted: %s\ngot: %s", pair.ID, items[0].ID)
 		}
 		if items[0].Type != domain.CheckpointTypeResponse {
 			t.Fatalf("wanted: %s\ngot: %s", domain.CheckpointTypeResponse, items[0].Type)
 		}
-		if err := proxy.DropCheckpoint(reqID); err != nil {
+		if err := proxy.DropCheckpoint(pair.ID); err != nil {
 			t.Fatalf("dropping checkpoint: %v", err)
 		}
 		if err := receiveHoldResult(t, done); !errors.Is(err, ErrDropped) {
@@ -3305,17 +3128,6 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		dropOnHold(proxy)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-
-		err = runRequestPairModifier(proxy, SetupRequestModifier, req)
-		if err != nil {
-			t.Fatalf("setting up request: %v", err)
-		}
-
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
@@ -3326,7 +3138,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("dumping response : %v", err)
 		}
 
-		err = CheckpointResponseModifier(proxy, res)
+		pair := newResponsePair(res)
+		err = CheckpointResponseModifier(proxy, pair)
 
 		if !errors.Is(err, ErrDropped) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
@@ -3336,7 +3149,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 
-		if metadata, ok := core.MetadataFromContext(res.Request.Context()); ok {
+		{
+			metadata := pair.Metadata
 			if metadata["intercepted"] != true {
 				t.Fatalf("wanted: true\ngot: %v", metadata["intercepted"])
 			}
@@ -3357,17 +3171,6 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		dropOnHold(proxy)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-
-		err = runRequestPairModifier(proxy, SetupRequestModifier, req)
-		if err != nil {
-			t.Fatalf("setting up request: %v", err)
-		}
-
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
@@ -3378,7 +3181,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("dumping response : %v", err)
 		}
 
-		err = CheckpointResponseModifier(proxy, res)
+		pair := newResponsePair(res)
+		err = CheckpointResponseModifier(proxy, pair)
 
 		if !errors.Is(err, ErrDropped) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
@@ -3388,7 +3192,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 
-		if metadata, ok := core.MetadataFromContext(res.Request.Context()); ok {
+		{
+			metadata := pair.Metadata
 			if metadata["intercepted"] != true {
 				t.Fatalf("wanted: true\ngot: %v", metadata["intercepted"])
 			}
@@ -3410,28 +3215,18 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			dropOnHold(proxy)
 			req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
-			_, remove, err := martian.TestContext(req, nil, nil)
-			if err != nil {
-				t.Fatalf("applying martian context : %v", err)
-			}
-			defer remove()
-
-			err = runRequestPairModifier(proxy, SetupRequestModifier, req)
-			if err != nil {
-				t.Fatalf("setting up request: %v", err)
-			}
-			if flag == "global intercept flag" {
-				proxy.SetIntercept(true)
-			} else {
-				req = core.ContextWithInterceptFlag(req, true)
-			}
-
 			res := &http.Response{
 				Header:  make(http.Header),
 				Request: req,
 			}
 
-			err = CheckpointResponseModifier(proxy, res)
+			pair := newResponsePair(res)
+			if flag == "global intercept flag" {
+				proxy.SetIntercept(true)
+			} else {
+				pair.InterceptResponse = true
+			}
+			err := CheckpointResponseModifier(proxy, pair)
 
 			if !errors.Is(err, ErrDropped) {
 				t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
@@ -3445,17 +3240,6 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		dropOnHold(proxy)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-
-		err = runRequestPairModifier(proxy, SetupRequestModifier, req)
-		if err != nil {
-			t.Fatalf("setting up request: %v", err)
-		}
-
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
@@ -3466,7 +3250,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("dumping response : %v", err)
 		}
 
-		err = CheckpointResponseModifier(proxy, res)
+		pair := newResponsePair(res)
+		err = CheckpointResponseModifier(proxy, pair)
 
 		if !errors.Is(err, ErrDropped) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
@@ -3476,7 +3261,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 
-		if metadata, ok := core.MetadataFromContext(res.Request.Context()); ok {
+		{
+			metadata := pair.Metadata
 			if metadata["intercepted"] != true {
 				t.Fatalf("wanted: true\ngot: %v", metadata["intercepted"])
 			}
@@ -3506,16 +3292,6 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		}
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-
-		err = runRequestPairModifier(proxy, SetupRequestModifier, req)
-		if err != nil {
-			t.Fatalf("setting up request: %v", err)
-		}
 		originalBody := "original body"
 		res := &http.Response{
 			Header:        make(http.Header),
@@ -3532,7 +3308,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("dumping response : %v", err)
 		}
 
-		err = CheckpointResponseModifier(proxy, res)
+		pair := newResponsePair(res)
+		err = CheckpointResponseModifier(proxy, pair)
 
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
@@ -3542,7 +3319,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 
-		if metadata, ok := core.MetadataFromContext(req.Context()); ok {
+		{
+			metadata := pair.Metadata
 			if metadata["intercepted"] != true {
 				t.Fatalf("wanted: true\ngot: %v", metadata["intercepted"])
 			}
@@ -3584,16 +3362,6 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		}
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
 
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-
-		err = runRequestPairModifier(proxy, SetupRequestModifier, req)
-		if err != nil {
-			t.Fatalf("setting up request: %v", err)
-		}
 		originalBody := "marasi original body"
 		res := &http.Response{
 			Header:        make(http.Header),
@@ -3606,8 +3374,9 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		res.Header.Set("Content-Length", fmt.Sprintf("%d", res.ContentLength))
 
 		done := make(chan error, 1)
+		pair := newResponsePair(res)
 		go func() {
-			done <- CheckpointResponseModifier(proxy, res)
+			done <- CheckpointResponseModifier(proxy, pair)
 		}()
 		items := waitForCheckpoint(t, proxy, 1)
 		var forwardErr error
@@ -3644,22 +3413,14 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		checkpoint.Data.Enabled = false
 		proxy.SetIntercept(true)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
 
-		err = runRequestPairModifier(proxy, SetupRequestModifier, req)
-		if err != nil {
-			t.Fatalf("setting up request: %v", err)
-		}
 		res := &http.Response{
 			Header:  make(http.Header),
 			Request: req,
 		}
 
-		err = CheckpointResponseModifier(proxy, res)
+		pair := newResponsePair(res)
+		err := CheckpointResponseModifier(proxy, pair)
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -3677,7 +3438,8 @@ func TestWriteResponseModifier(t *testing.T) {
 			Header:  make(http.Header),
 			Request: req,
 		}
-		err := WriteResponseModifier(proxy, res)
+		// The pair has no response time.
+		err := WriteResponseModifier(proxy, newResponsePair(res))
 		if !errors.Is(err, ErrProxyResponse) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrProxyResponse, err)
 		}
@@ -3692,9 +3454,6 @@ func TestWriteResponseModifier(t *testing.T) {
 		proxy := newTestProxy(t)
 		proxy.OnResponse = func(res domain.ProxyResponse) error { return nil }
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		*req = *core.ContextWithRequestID(req, uuid.New())
-		*req = *core.ContextWithResponseTime(req, time.Now())
-		*req = *core.ContextWithMetadata(req, map[string]any{"source": "test"})
 		res := &http.Response{
 			Status: "200 OK", StatusCode: http.StatusOK, Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
 			Header:  http.Header{"Content-Type": {"application/json"}},
@@ -3702,7 +3461,10 @@ func TestWriteResponseModifier(t *testing.T) {
 			Body:    io.NopCloser(strings.NewReader(`{"b":2,"a":1}`)),
 		}
 
-		if err := WriteResponseModifier(proxy, res); err != nil {
+		pair := newResponsePair(res)
+		pair.Timing.Responded = time.Now()
+		pair.Metadata = map[string]any{"source": "test"}
+		if err := WriteResponseModifier(proxy, pair); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
@@ -3718,11 +3480,6 @@ func TestWriteResponseModifier(t *testing.T) {
 	t.Run("responses should still be written to the DB when onresponse is undefined", func(t *testing.T) {
 		proxy := newTestProxy(t)
 		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
 
 		res := &http.Response{
 			Header:  make(http.Header),
@@ -3730,13 +3487,10 @@ func TestWriteResponseModifier(t *testing.T) {
 			Body:    http.NoBody,
 		}
 
-		err = runRequestPairModifier(proxy, SetupRequestModifier, req)
-		if err != nil {
-			t.Fatalf("running SetupRequestModifier : %v", err)
-		}
-		res.Request = core.ContextWithResponseTime(res.Request, time.Now())
+		pair := newResponsePair(res)
+		pair.Timing.Responded = time.Now()
 
-		err = WriteResponseModifier(proxy, res)
+		err := WriteResponseModifier(proxy, pair)
 
 		if !errors.Is(err, ErrResponseHandlerUndefined) {
 			t.Fatalf("wanted: %v\ngot: %v", ErrResponseHandlerUndefined, err)
@@ -3786,12 +3540,12 @@ func TestWriteResponseModifier(t *testing.T) {
 		}
 		want.Raw = raw
 
-		*req = *core.ContextWithRequestID(req, wantID)
-		*req = *core.ContextWithRequestTime(req, wantTime)
-		*req = *core.ContextWithMetadata(req, make(map[string]any))
-		*req = *core.ContextWithResponseTime(req, wantTime)
+		pair := newResponsePair(res)
+		pair.ID = wantID
+		pair.Timing = PairTiming{Requested: wantTime, Responded: wantTime}
+		pair.Metadata = make(map[string]any)
 
-		err = WriteResponseModifier(proxy, res)
+		err = WriteResponseModifier(proxy, pair)
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -3847,12 +3601,12 @@ func TestWriteResponseModifier(t *testing.T) {
 		}
 		want.Raw = raw
 
-		*req = *core.ContextWithRequestID(req, wantID)
-		*req = *core.ContextWithRequestTime(req, wantTime)
-		*req = *core.ContextWithMetadata(req, make(map[string]any))
-		*req = *core.ContextWithResponseTime(req, wantTime)
+		pair := newResponsePair(res)
+		pair.ID = wantID
+		pair.Timing = PairTiming{Requested: wantTime, Responded: wantTime}
+		pair.Metadata = make(map[string]any)
 
-		err = WriteResponseModifier(proxy, res)
+		err = WriteResponseModifier(proxy, pair)
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -3887,20 +3641,13 @@ func TestExtensionsResponseModifierPutsNoNullInMetadata(t *testing.T) {
 		end
 	`)
 	req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-	*req = *core.ContextWithExtensionID(req, "")
-	*req = *core.ContextWithMetadata(req, map[string]any{})
-	_, remove, err := martian.TestContext(req, nil, nil)
-	if err != nil {
-		t.Fatalf("applying martian context : %v", err)
-	}
-	defer remove()
 	res := &http.Response{Header: make(http.Header), Request: req}
+	pair := newResponsePair(res)
 
-	if err := ExtensionsResponseModifier(proxy, res); err != nil {
+	if err := ExtensionsResponseModifier(proxy, pair); err != nil {
 		t.Fatalf("wanted: nil\ngot: %v", err)
 	}
-	metadata, _ := core.MetadataFromContext(res.Request.Context())
-	got, err := json.Marshal(metadata["workshop"])
+	got, err := json.Marshal(pair.Metadata["workshop"])
 	if err != nil {
 		t.Fatalf("marshalling metadata: %v", err)
 	}
