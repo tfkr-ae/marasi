@@ -55,6 +55,37 @@ type Message struct {
 	// itself sends compressed (an injection). Its stored Compressed then
 	// reports what goes on the wire, not what was asked for.
 	compressTo *deflater
+	// toward is where the relay forwards the message, or nil when it does
+	// not forward it as processed.
+	toward frameSink
+}
+
+// droppedAfterCloseKey is the metadata set on a message the relay did not
+// forward because its peer had already been sent a close.
+const droppedAfterCloseKey = "dropped_after_close"
+
+// afterClose reports whether the message goes to a peer that was already
+// sent a close, so the relay will not forward it. A close still goes.
+func (m *Message) afterClose() bool {
+	return m.toward != nil && !m.Dropped && m.Opcode != OpClose && m.toward.sentClose()
+}
+
+// noteDroppedAfterClose records on the message that it will not be
+// forwarded, when its peer was already sent a close.
+func (m *Message) noteDroppedAfterClose() {
+	if m.afterClose() {
+		m.Metadata[droppedAfterCloseKey] = true
+	}
+}
+
+// forwarded records the outcome of forwarding the message: when the leg did
+// not send it, the message is dropped after a close. The message is then no
+// longer on its way, so a close that goes out later does not change it.
+func (m *Message) forwarded(sent bool) {
+	m.toward = nil
+	if !sent {
+		m.Metadata[droppedAfterCloseKey] = true
+	}
 }
 
 // IsBinary reports whether the message carries a binary payload.
@@ -62,8 +93,17 @@ func (m *Message) IsBinary() bool {
 	return m.Opcode == OpBinary
 }
 
-// ToDomain returns a serializable domain snapshot of the message.
+// ToDomain returns a serializable domain snapshot of the message. A message
+// whose peer was sent a close since it was read, such as while it was held,
+// is marked dropped_after_close in the snapshot: the relay will not forward it.
 func (m *Message) ToDomain() domain.WebSocketMessage {
+	metadata := maps.Clone(m.Metadata)
+	if m.afterClose() {
+		if metadata == nil {
+			metadata = make(map[string]any)
+		}
+		metadata[droppedAfterCloseKey] = true
+	}
 	return domain.WebSocketMessage{
 		ID:           m.ID,
 		ConnectionID: m.ConnectionID,
@@ -75,7 +115,7 @@ func (m *Message) ToDomain() domain.WebSocketMessage {
 		Payload:      append([]byte(nil), m.Payload...),
 		IsBinary:     m.Opcode == OpBinary,
 		CreatedAt:    m.CreatedAt,
-		Metadata:     maps.Clone(m.Metadata),
+		Metadata:     metadata,
 	}
 }
 

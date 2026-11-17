@@ -248,9 +248,17 @@ func (c *Connection) handleFrame(
 }
 
 // handleMessage processes a whole message and forwards it unless it was
-// dropped or only recorded (Passthrough). It reports whether the message is a close.
+// dropped or only recorded (Passthrough). A message other than a close that
+// goes to a peer the relay already sent a close is processed and recorded
+// with metadata dropped_after_close, and not forwarded
+// (docs/adr/2026-11-17-the-relay-forwards-nothing-after-a-close.md). It
+// reports whether the message is a close.
 func (c *Connection) handleMessage(message *Message, out frameSink) (isClose bool, err error) {
 	received := message.Opcode
+	if !message.Passthrough {
+		message.toward = out
+		message.noteDroppedAfterClose()
+	}
 
 	if c.process != nil {
 		if err := c.runProcess(message); err != nil {
@@ -273,9 +281,14 @@ func (c *Connection) handleMessage(message *Message, out frameSink) (isClose boo
 		// then see a clean end, not a read error.
 		c.noteCloseRelayed()
 	}
-	if err := out.writeFrames(message.outgoing()...); err != nil {
+	// The peer may have been sent a close while this message was in
+	// process, such as held in Checkpoint. The leg decides, in the order
+	// frames go out.
+	sent, err := out.forward(message.outgoing()...)
+	if err != nil {
 		return false, fmt.Errorf("%w: %w", errForwarding, err)
 	}
+	message.forwarded(sent)
 
 	return isClose, nil
 }
@@ -522,22 +535,25 @@ func (c *Connection) Inject(direction string, opcode int, payload []byte, option
 	if message.Compressed {
 		message.compressTo = out.deflater
 	}
+	message.toward = out
+	message.noteDroppedAfterClose()
 
 	if c.process != nil {
 		if err := c.runProcess(message); err != nil {
 			return domain.WebSocketMessage{}, fmt.Errorf("processing injected websocket message: %w", err)
 		}
 	}
-	stored := message.ToDomain()
 	if message.Dropped {
-		return stored, nil
+		return message.ToDomain(), nil
 	}
 
-	if err := out.writeFrames(message.outgoing()...); err != nil {
+	sent, err := out.forward(message.outgoing()...)
+	if err != nil {
 		return domain.WebSocketMessage{}, fmt.Errorf("writing injected websocket frame: %w", err)
 	}
+	message.forwarded(sent)
 
-	return stored, nil
+	return message.ToDomain(), nil
 }
 
 // Close sends close frames to both peers and shuts the connection down.

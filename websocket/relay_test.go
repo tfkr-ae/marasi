@@ -452,8 +452,10 @@ func TestRelay_ReplyCloseSurvivesAFailedWriteAfterClose(t *testing.T) {
 	if err := WriteFrame(clientPeer, closeFrame, true); err != nil {
 		t.Fatalf("writing client close: %v", err)
 	}
-	if err := WriteFrame(clientPeer, Frame{Fin: true, Opcode: OpPing}, true); err != nil {
-		t.Fatalf("writing client ping after close: %v", err)
+	// Only another close is forwarded after a close, so a second close is
+	// the write that fails.
+	if err := WriteFrame(clientPeer, closeFrame, true); err != nil {
+		t.Fatalf("writing second client close: %v", err)
 	}
 
 	got, err := ReadFrame(clientPeer)
