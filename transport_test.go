@@ -42,7 +42,7 @@ func newDirectTransport(dial func(context.Context, string, string) (net.Conn, er
 }
 
 func TestMarasiRoundTripper(t *testing.T) {
-	t.Run("requests should go to the base RoundTrip as they are", func(t *testing.T) {
+	t.Run("should send requests to the base RoundTrip as they are", func(t *testing.T) {
 		want := &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(bytes.NewBufferString("Marasi Test")),
