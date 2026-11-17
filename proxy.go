@@ -1038,18 +1038,18 @@ func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
 
 // watchClient cancels the request context when its client disconnects while the request
 // is in flight, which interrupts its hooks. The proxy has read the body whole by now, so
-// the watch never takes body bytes. A client that cut its body short has already left.
+// the watch never takes body bytes. A body cut short is not watched: what is left on the
+// socket is not a request, and the round trip fails on the body's read error instead.
 func (proxy *Proxy) watchClient(req *http.Request, ending BodyEnding) {
+	if ending == BodyCutShort {
+		return
+	}
 	conn := proxy.clientConnection(req.RemoteAddr)
 	if conn == nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(req.Context())
 	*req = *req.WithContext(ctx)
-	if ending == BodyCutShort {
-		cancel()
-		return
-	}
 	conn.Watch(cancel)
 }
 
