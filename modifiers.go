@@ -264,23 +264,22 @@ func SetupRequestModifier(proxy *Proxy, req *http.Request) error {
 }
 
 // OverrideWaypointsModifier checks if a Waypoint (host override) is defined for this host:port.
-// If a waypoint exists it will write the "original_host" and "override_host" to the metadata
+// If a waypoint exists it will write the "original_host" and "override_host" to the pair's metadata
 // and rewrite the URL host to the destination, which the transport then dials as is.
-// If the metadata is not found the modifier will return `ErrMetadataNotFound`
+// If the pair has no metadata the modifier will return `ErrMetadataNotFound`
 // TODO should allow TLS -> Non TLS override
-func OverrideWaypointsModifier(proxy *Proxy, req *http.Request) error {
-	if metadata, ok := core.MetadataFromContext(req.Context()); ok {
-		if override, ok := proxy.waypointOverride(getHostPort(req)); ok {
-			metadata["original_host"] = getHostPort(req)
-			metadata["override_host"] = override
-			*req = *core.ContextWithMetadata(req, metadata)
-
-			req.URL.Host = override
-			req.Host = override
-		}
-		return nil
+func OverrideWaypointsModifier(proxy *Proxy, pair *Pair) error {
+	if pair.Metadata == nil {
+		return ErrMetadataNotFound
 	}
-	return ErrMetadataNotFound
+	req := pair.Request
+	if override, ok := proxy.waypointOverride(getHostPort(req)); ok {
+		pair.Metadata["original_host"] = getHostPort(req)
+		pair.Metadata["override_host"] = override
+		req.URL.Host = override
+		req.Host = override
+	}
+	return nil
 }
 
 // CompassRequestModifier will run the `processRequest` function in the compass extension to determine if the request is in scope.

@@ -742,7 +742,7 @@ func WithDefaultModifierPipeline() func(*Proxy) error {
 		proxy.AddRequestModifier(SkipConnectRequestModifier)
 		proxy.AddRequestModifier(CompassRequestModifier)
 		proxy.AddRequestModifier(SetupRequestModifier)
-		proxy.AddRequestModifier(OverrideWaypointsModifier)
+		proxy.AddRequestPairModifier(OverrideWaypointsModifier)
 		proxy.AddRequestModifier(ExtensionsRequestModifier)
 		proxy.AddRequestModifier(CheckpointRequestModifier)
 		proxy.AddRequestModifier(WebSocketOffersModifier)
