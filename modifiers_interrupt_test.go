@@ -54,13 +54,13 @@ func awaitEntered(t *testing.T, entered <-chan struct{}, cancel context.CancelFu
 }
 
 // runRequestModifier runs modifier on a pair for req, then forwards the request to its
-// target unless the round trip is skipped, as martian does after the base pipeline turns
-// ErrDropped into nil.
+// target unless the modifier dropped the pair, as the base pipeline does. It returns
+// errHoldDropped for a drop.
 func runRequestModifier(proxy *Proxy, modifier PairModifier, req *http.Request) error {
 	pair := NewTestPair(req)
 	err := modifier(proxy, pair)
 	req = pair.Request
-	if !pair.skipRoundTrip {
+	if !pair.Dropped() {
 		// The round trip ignores cancellation so the test sees the forwarding decision itself.
 		forwarded := req.Clone(context.WithoutCancel(req.Context()))
 		forwarded.RequestURI = ""
@@ -68,7 +68,7 @@ func runRequestModifier(proxy *Proxy, modifier PairModifier, req *http.Request) 
 			res.Body.Close()
 		}
 	}
-	return err
+	return holdResult(pair, err)
 }
 
 func TestRequestModifiersFailClosedWhenInterrupted(t *testing.T) {
@@ -113,8 +113,8 @@ func TestRequestModifiersFailClosedWhenInterrupted(t *testing.T) {
 				if got := hits.Load(); got != 0 {
 					t.Fatalf("origin received %d requests after an interrupted hook", got)
 				}
-				if !errors.Is(err, ErrDropped) {
-					t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+				if !errors.Is(err, errHoldDropped) {
+					t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 				}
 			})
 		}
@@ -170,12 +170,13 @@ func TestResponseModifiersFailClosedWhenInterrupted(t *testing.T) {
 				done := make(chan struct{})
 				go func() {
 					defer close(done)
-					err = tc.modifier(proxy, newResponsePair(res))
+					pair := newResponsePair(res)
+					err = holdResult(pair, tc.modifier(proxy, pair))
 				}()
 				awaitEntered(t, entered, cancel, done)
 
-				if !errors.Is(err, ErrDropped) {
-					t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+				if !errors.Is(err, errHoldDropped) {
+					t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 				}
 			})
 		}

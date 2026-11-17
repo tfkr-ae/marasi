@@ -25,39 +25,24 @@ const marasiHost = "marasi"
 // browser to follow its redirect (docs/adr/2026-10-20-a-browser-view-serves-the-stored-response-once-at-its-original-url.md).
 const defaultBrowserViewExpiry = 10 * time.Second
 
-// respondFromProxy makes res the answer to pair. The round trip is skipped,
-// and the base pipeline sends res in place of martian's blank response without
-// running the response modifiers, so nothing is captured, held, or shown to an
-// extension. It returns ErrSkipPipeline for the request modifier to return.
-func respondFromProxy(pair *Pair, res *http.Response) error {
-	pair.ownResponse = res
-	pair.skipRoundTrip = true
-	return ErrSkipPipeline
-}
-
-// ownResponse returns the response a request modifier answered pair with.
-func ownResponse(pair *Pair) (*http.Response, bool) {
-	if pair == nil || pair.ownResponse == nil {
-		return nil, false
-	}
-	return pair.ownResponse, true
-}
-
 // MarasiPagesModifier answers requests for Marasi's own pages and requests
-// that use a pending browser view. It runs first in the request pipeline, so
+// that use a pending browser view through Respond. It runs first in the
+// request pipeline, and a response from Respond skips the response chain, so
 // neither is ever captured, held by Checkpoint, or seen by an extension
 // (docs/adr/2026-10-20-a-browser-view-serves-the-stored-response-once-at-its-original-url.md).
 func MarasiPagesModifier(proxy *Proxy, pair *Pair) error {
 	req := pair.Request
 	if res := proxy.marasiPage(req); res != nil {
-		return respondFromProxy(pair, res)
+		pair.Respond(res)
+		return nil
 	}
 	if isSelfClient(pair) {
 		return nil
 	}
 	if res := proxy.browserViews.take(clientHost(req.RemoteAddr), requestURLKey(req)); res != nil {
 		res.Request = req
-		return respondFromProxy(pair, res)
+		pair.Respond(res)
+		return nil
 	}
 	return nil
 }

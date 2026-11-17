@@ -45,12 +45,21 @@ type Pair struct {
 	webSocketUpstream io.ReadWriteCloser
 	// webSocketNegotiation is the extension response mirrored to the client.
 	webSocketNegotiation *webSocketNegotiation
+	// webSocketFailed is set when the proxy dropped an upgrade whose
+	// handshake it could not complete, as opposed to one a user or extension
+	// dropped.
+	webSocketFailed bool
 	// release ends the response side's project admission. A WebSocket
 	// session calls it once registered.
 	release func()
 
 	// ctx is used only for cancellation.
 	ctx context.Context
+
+	// control is how a modifier ended the chain, if one did.
+	control control
+	// fromMarasi is set when Response is one Marasi made, not the origin's.
+	fromMarasi bool
 
 	// requestState is what the proxy knows of the request before the chain
 	// runs, and what the request chain leaves for the proxy.
@@ -63,10 +72,6 @@ type requestState struct {
 	admission *projectAdmission
 	// requestedLaunch is the launch an internal request named, or uuid.Nil.
 	requestedLaunch uuid.UUID
-	// skipRoundTrip is set when the request must not go upstream.
-	skipRoundTrip bool
-	// ownResponse is the answer the proxy gives the request itself.
-	ownResponse *http.Response
 	// removedWebSocketExtensions are the extension offers removed from an
 	// upgrade request.
 	removedWebSocketExtensions []string
@@ -87,8 +92,64 @@ func (pair *Pair) Context() context.Context {
 	return pair.ctx
 }
 
-// PairModifier edits a pair on the request chain or the response chain. A
-// returned error stops the chain.
+// control is how a modifier ended a chain.
+type control int
+
+const (
+	// controlNone: the chain goes on.
+	controlNone control = iota
+	// controlStop: the pair goes on with no further modifier in this chain.
+	controlStop
+	// controlDrop: the pair goes no further.
+	controlDrop
+	// controlRespond: Marasi answers the pair with its own response.
+	controlRespond
+)
+
+// Respond ends the chain and answers the pair with res, which Marasi made. On
+// the request chain the request never goes upstream and no response modifier
+// runs; on the response chain res replaces the origin's response. A res
+// without a request is given the pair's.
+func (pair *Pair) Respond(res *http.Response) {
+	if res.Request == nil {
+		res.Request = pair.Request
+	}
+	pair.Response = res
+	pair.fromMarasi = true
+	pair.control = controlRespond
+}
+
+// Drop ends the chain and the pair: a request does not go upstream, and a
+// response does not reach the client, whose connection is closed.
+func (pair *Pair) Drop() {
+	pair.control = controlDrop
+}
+
+// Stop ends the chain. The pair goes on, with no further modifier in this
+// chain.
+func (pair *Pair) Stop() {
+	pair.control = controlStop
+}
+
+// Dropped reports whether a modifier dropped the pair.
+func (pair *Pair) Dropped() bool {
+	return pair.control == controlDrop
+}
+
+// FromMarasi reports whether the pair's response is one Marasi made through
+// Respond, rather than one the origin sent.
+func (pair *Pair) FromMarasi() bool {
+	return pair.fromMarasi
+}
+
+// ended reports whether a modifier ended the chain with a control.
+func (pair *Pair) ended() bool {
+	return pair.control != controlNone
+}
+
+// PairModifier edits a pair on the request chain or the response chain. It
+// ends the chain with a control on the pair (Respond, Drop or Stop). A
+// returned error means only that something broke, and also stops the chain.
 type PairModifier func(proxy *Proxy, pair *Pair) error
 
 // ModifierGroup runs pair modifiers in the order they were added.
@@ -106,12 +167,15 @@ func (group *ModifierGroup) Add(modifier PairModifier) {
 	group.modifiers = append(group.modifiers, modifier)
 }
 
-// Modify runs every modifier in the order added and stops at the first error,
-// which it returns.
+// Modify runs every modifier in the order added. It stops at the first error,
+// which it returns, or at the first control a modifier sets on the pair.
 func (group *ModifierGroup) Modify(proxy *Proxy, pair *Pair) error {
 	for _, modifier := range group.modifiers {
 		if err := modifier(proxy, pair); err != nil {
 			return err
+		}
+		if pair.ended() {
+			return nil
 		}
 	}
 	return nil

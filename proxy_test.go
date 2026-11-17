@@ -2758,7 +2758,7 @@ func testProxyWebSocketIntegration(
 	}
 	serveResult := make(chan error, 1)
 	if secure {
-		proxy.martianProxy.SetRoundTripper(newDirectTransport(nil, true))
+		proxy.setRoundTripper(newDirectTransport(nil, true))
 		go proxy.WriteToDB()
 		go func() {
 			serveResult <- proxy.martianProxy.Serve(proxyListener)

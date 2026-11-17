@@ -3,11 +3,9 @@ package marasi
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
@@ -237,13 +235,11 @@ func (proxy *Proxy) runWebSocketSessionWithRelease(connection *marasiws.Connecti
 // markDroppedWebSocketHandshake records websocket.state dropped on an upgrade
 // request whose response a user or extension dropped. A handshake the proxy
 // rejected keeps the failed state it already recorded.
-func (proxy *Proxy) markDroppedWebSocketHandshake(res *http.Response, err error) {
-	if errors.Is(err, ErrWebSocketHandshakeFailed) || !marasiws.IsUpgradeRequest(res.Request) {
+func (proxy *Proxy) markDroppedWebSocketHandshake(pair *Pair) {
+	if pair.webSocketFailed || !marasiws.IsUpgradeRequest(pair.Request) || pair.ID == uuid.Nil {
 		return
 	}
-	if requestID, ok := core.RequestIDFromContext(res.Request.Context()); ok {
-		proxy.endWebSocketHandshake(requestID, "dropped")
-	}
+	proxy.endWebSocketHandshake(pair.ID, "dropped")
 }
 
 // endWebSocketHandshake stores websocket.state failed or dropped on an upgrade

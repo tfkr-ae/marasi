@@ -23,13 +23,12 @@ import (
 )
 
 var (
-	// ErrDropped is returned when the request / response should be dropped completely.
-	// The request / response will not be processed by any modifier and will not continue to the client / server
+	// ErrDropped is what Martian's modifier group returns when a pair
+	// modifier dropped the pair (see endChain). No modifier returns it.
+	//
+	// Deprecated: a modifier drops with Pair.Drop, and Pair.Dropped reports
+	// it. ErrDropped is kept for marasi-app's wrapper of Proxy.Modifiers.
 	ErrDropped = errors.New("item dropped by extension or user")
-
-	// ErrSkipPipeline is returned to stop the modifier pipeline for a request / response.
-	// The request / response will still continue but won't be processed by any future modifiers
-	ErrSkipPipeline = errors.New("stop processing item")
 
 	// ErrMetadata is returned when metadata is invalid or missing
 	ErrMetadataNotFound = errors.New("invalid or missing metadata")
@@ -167,18 +166,13 @@ func hookRequest(pair *Pair) *extensions.Request {
 	return &extensions.Request{Request: pair.Request, ID: pair.ID, Metadata: pair.Metadata}
 }
 
-// dropRequest stops pair from going upstream and returns ErrDropped.
-func dropRequest(pair *Pair) error {
-	pair.skipRoundTrip = true
-	return ErrDropped
-}
-
-// PreventLoopModifier skips processing a request if it is made to marasi's active listener address and port, preventing an infinite loop
+// PreventLoopModifier answers a request made to marasi's active listener address and port through Respond, so it never loops back through the proxy
 // It will normalize localhost & 127.0.0.1 when checking the host and port
 func PreventLoopModifier(proxy *Proxy, pair *Pair) error {
 	if proxy.targetsListener(pair.Request) {
-		pair.skipRoundTrip = true
-		return ErrSkipPipeline
+		// The empty 200 Martian used to make. Ticket 06 makes it a proxy
+		// error response.
+		pair.Respond(newResponse(pair.Request, http.StatusOK, nil))
 	}
 	return nil
 }
@@ -206,7 +200,8 @@ func SetupRequestModifier(proxy *Proxy, pair *Pair) error {
 			pair.LaunchpadID = launch.LaunchpadID
 		case launchAlreadyClaimed:
 			proxy.WriteLog("WARN", fmt.Sprintf("Dropped a second claim of launch %s", launchID))
-			return dropRequest(pair)
+			pair.Drop()
+			return nil
 		}
 	}
 
@@ -260,7 +255,7 @@ func OverrideWaypointsModifier(proxy *Proxy, pair *Pair) error {
 }
 
 // CompassRequestModifier will run the `processRequest` function in the compass extension to determine if the request is in scope.
-// After `processRequest`, it will check if the request is passed through (nil), skipped (`ErrSkipPipeline`), or dropped (`ErrDropped`).
+// After `processRequest`, it will check if the request is passed through (nil), stopped (Stop), or dropped (Drop).
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
 // Compass's skip decision does not apply to a launch (see compassSkips).
 func CompassRequestModifier(proxy *Proxy, pair *Pair) error {
@@ -274,16 +269,19 @@ func CompassRequestModifier(proxy *Proxy, pair *Pair) error {
 		if err != nil {
 			proxy.WriteLog("ERROR", fmt.Sprintf("Running processRequest : %s", err.Error()), core.LogWithExtensionID(compassExt.Data.ID))
 			if hookInterrupted(pair.Context(), compassExt) {
-				return dropRequest(pair)
+				pair.Drop()
+				return nil
 			}
 			// Continue as a err in Lua should not bring down the proxy
 		}
 		if proxy.compassSkips(pair) {
-			return ErrSkipPipeline
+			pair.Stop()
+			return nil
 		}
 
 		if hookReq.Drop {
-			return dropRequest(pair)
+			pair.Drop()
+			return nil
 		}
 		return nil
 	}
@@ -293,7 +291,7 @@ func CompassRequestModifier(proxy *Proxy, pair *Pair) error {
 // ExtensionsRequestModifier will run the `processRequest` function (if it is defined) for all the loaded extensions (except compass and checkpoint).
 // Initially the modifier will check if the request originated from an extension by reading the "x-extension-id" header. That
 // extension is recorded on the pair, so that its hooks run on neither half of its own pair.
-// After processRequest, it will check if the request is passed through (nil), skipped (`ErrSkipPipeline`), or dropped (`ErrDropped`).
+// After processRequest, it will check if the request is passed through (nil), stopped (Stop), or dropped (Drop).
 func ExtensionsRequestModifier(proxy *Proxy, pair *Pair) error {
 	req := pair.Request
 	extensionID := req.Header.Get("x-extension-id")
@@ -311,17 +309,20 @@ func ExtensionsRequestModifier(proxy *Proxy, pair *Pair) error {
 				if err != nil {
 					proxy.WriteLog("ERROR", fmt.Sprintf("Running processRequest : %s", err.Error()), core.LogWithExtensionID(ext.Data.ID))
 					if hookInterrupted(pair.Context(), ext) {
-						return dropRequest(pair)
+						pair.Drop()
+						return nil
 					}
 					// Continue as a err in Lua should not bring down the proxy
 				}
 
 				if pair.Skipped {
-					return ErrSkipPipeline
+					pair.Stop()
+					return nil
 				}
 
 				if hookReq.Drop {
-					return dropRequest(pair)
+					pair.Drop()
+					return nil
 				}
 
 			}
@@ -343,7 +344,8 @@ func CheckpointRequestModifier(proxy *Proxy, pair *Pair) error {
 		if err != nil {
 			proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptRequest : %s", err.Error()), hookLogOptions(pair.ID, checkpointExt)...)
 			if hookInterrupted(pair.Context(), checkpointExt) {
-				return dropRequest(pair)
+				pair.Drop()
+				return nil
 			}
 			// A Lua error does not match the rule. The global flag still holds.
 		}
@@ -373,7 +375,8 @@ func CheckpointRequestModifier(proxy *Proxy, pair *Pair) error {
 			}
 
 			if result.dropped {
-				return dropRequest(pair)
+				pair.Drop()
+				return nil
 			}
 
 			pair.Request = result.rebuiltReq
@@ -416,10 +419,11 @@ func WriteRequestModifier(proxy *Proxy, pair *Pair) error {
 // ResponseFilterModifier will perform an initial filtering round on responses.
 // It skips responses where the skip flag was set. It records when the response
 // was read on the pair. A CONNECT never reaches the chain (see admitTunnel), and
-// neither does a response to a request whose round trip was skipped (see WithBasePipeline).
+// neither does a response to a request a request modifier answered or dropped (see WithBasePipeline).
 func ResponseFilterModifier(proxy *Proxy, pair *Pair) error {
 	if pair.Skipped {
-		return ErrSkipPipeline
+		pair.Stop()
+		return nil
 	}
 	pair.Timing.Responded = time.Now()
 	return nil
@@ -443,7 +447,8 @@ func WebSocketPrepareModifier(proxy *Proxy, pair *Pair) error {
 	}
 	negotiation, err := negotiateWebSocketExtensions(pair)
 	if err != nil {
-		return failWebSocketHandshake(proxy, pair, err)
+		failWebSocketHandshake(proxy, pair, err)
+		return nil
 	}
 	if pair.Metadata == nil {
 		return ErrMetadataNotFound
@@ -802,7 +807,7 @@ func callResponseHook(pair *Pair, hook func(*http.Response) error) (responseHook
 }
 
 // CompassResponseModifier will run the `processResponse` function in the compass extension to determine if the response is in scope.
-// After `processResponse`, it will check if the response is passed through (nil), skipped (`ErrSkipPipeline`), or dropped (`ErrDropped`).
+// After `processResponse`, it will check if the response is passed through (nil), stopped (Stop), or dropped (Drop).
 // If the compass extension is not found the modifier will return `ErrExtensionNotFound` as "compass" is considered a core extension.
 // Compass's skip decision does not apply to a launch (see compassSkips).
 func CompassResponseModifier(proxy *Proxy, pair *Pair) error {
@@ -814,16 +819,19 @@ func CompassResponseModifier(proxy *Proxy, pair *Pair) error {
 		if err != nil {
 			proxy.WriteLog("ERROR", fmt.Sprintf("Running processResponse : %s", err.Error()), core.LogWithExtensionID(compassExt.Data.ID))
 			if hookInterrupted(pair.Context(), compassExt) {
-				return ErrDropped
+				pair.Drop()
+				return nil
 			}
 			// Continue as a err in Lua should not bring down the proxy
 		}
 		pair.Skipped = pair.Skipped || marks.skipped
 		if proxy.compassSkips(pair) {
-			return ErrSkipPipeline
+			pair.Stop()
+			return nil
 		}
 		if marks.dropped {
-			return ErrDropped
+			pair.Drop()
+			return nil
 		}
 		return nil
 	}
@@ -832,7 +840,7 @@ func CompassResponseModifier(proxy *Proxy, pair *Pair) error {
 
 // ExtensionsResponseModifier will run the `processResponse` function (if it is defined) for all the loaded extensions (except compass and checkpoint).
 // The modifier will check if the extension ID in request context matches the current extension and skip execution if it does.
-// After `processResponse`, it will check if the request is passed through (nil), skipped (`ErrSkipPipeline`), or dropped (`ErrDropped`).
+// After `processResponse`, it will check if the request is passed through (nil), stopped (Stop), or dropped (Drop).
 func ExtensionsResponseModifier(proxy *Proxy, pair *Pair) error {
 	for _, ext := range proxy.Extensions {
 		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" && ext.MetadataSnapshot().Enabled {
@@ -841,17 +849,20 @@ func ExtensionsResponseModifier(proxy *Proxy, pair *Pair) error {
 				if err != nil {
 					proxy.WriteLog("ERROR", fmt.Sprintf("Running processResponse : %s", err.Error()), core.LogWithExtensionID(ext.Data.ID))
 					if hookInterrupted(pair.Context(), ext) {
-						return ErrDropped
+						pair.Drop()
+						return nil
 					}
 					// Continue as a err in Lua should not bring down the proxy
 				}
 
 				if marks.skipped {
-					return ErrSkipPipeline
+					pair.Stop()
+					return nil
 				}
 
 				if marks.dropped {
-					return ErrDropped
+					pair.Drop()
+					return nil
 				}
 
 			}
@@ -877,7 +888,8 @@ func CheckpointResponseModifier(proxy *Proxy, pair *Pair) error {
 		if err != nil {
 			proxy.WriteLog("ERROR", fmt.Sprintf("Running shouldInterceptResponse : %s", err.Error()), hookLogOptions(pair.ID, checkpointExt)...)
 			if hookInterrupted(pair.Context(), checkpointExt) {
-				return ErrDropped
+				pair.Drop()
+				return nil
 			}
 			// A Lua error does not match the rule. The global and per-request flags still hold.
 		}
@@ -906,7 +918,8 @@ func CheckpointResponseModifier(proxy *Proxy, pair *Pair) error {
 			}
 
 			if result.dropped {
-				return ErrDropped
+				pair.Drop()
+				return nil
 			}
 
 			*pair.Response = *result.rebuiltRes
