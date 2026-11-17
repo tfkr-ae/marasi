@@ -906,7 +906,7 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 	}
 	routed := newRoutedTransport(proxy.resolveRoute, proxy.CurrentRoute, proxy.dialTransport)
 	proxy.transport.Store(routed)
-	proxy.martianProxy.SetRoundTripper(&launchFailureRoundTripper{proxy: proxy, base: &marasiRoundTripper{base: routed}})
+	proxy.setRoundTripper(&launchFailureRoundTripper{proxy: proxy, base: &marasiRoundTripper{base: routed}})
 	proxy.listenerMu.Lock()
 	proxy.activeListener = activeListener
 	serveDone := make(chan struct{})

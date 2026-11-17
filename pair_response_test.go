@@ -6,12 +6,10 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
-
-	"github.com/google/martian"
 )
 
 func TestResponseChainThroughProxy(t *testing.T) {
-	t.Run("should not run the response chain for a request whose round trip was skipped", func(t *testing.T) {
+	t.Run("should answer a dropped request with an empty 200 and no response chain", func(t *testing.T) {
 		var originHits atomic.Int32
 		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			originHits.Add(1)
@@ -20,9 +18,9 @@ func TestResponseChainThroughProxy(t *testing.T) {
 
 		var responseRuns atomic.Int32
 		client := servePairProxy(t, func(proxy *Proxy) {
-			proxy.AddRequestModifier(func(proxy *Proxy, req *http.Request) error {
-				martian.NewContext(req).SkipRoundTrip()
-				return ErrDropped
+			proxy.AddRequestPairModifier(func(proxy *Proxy, pair *Pair) error {
+				pair.Drop()
+				return nil
 			})
 			proxy.AddResponsePairModifier(func(proxy *Proxy, pair *Pair) error {
 				responseRuns.Add(1)

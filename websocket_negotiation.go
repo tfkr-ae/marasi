@@ -1,7 +1,6 @@
 package marasi
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -65,24 +64,17 @@ func pairLogOptions(pair *Pair) []func(*domain.Log) error {
 	return nil
 }
 
-// ErrWebSocketHandshakeFailed marks an upgrade the proxy rejected, such as an
-// upstream extension response it cannot honour. The error also matches
-// ErrDropped, as the client connection is closed; use errors.Is with this
-// sentinel to tell a failed handshake from a response a user or extension
-// dropped. The upgrade request's websocket.state is already "failed" when the
-// error is returned.
-var ErrWebSocketHandshakeFailed = errors.New("websocket handshake failed")
-
 // failWebSocketHandshake writes a proxy log for a handshake the proxy cannot
 // complete, marks the upgrade request's websocket.state failed so it is not
-// mistaken for a handshake still in flight, and returns an error that closes
+// mistaken for a handshake still in flight, and drops the pair, which closes
 // the client connection.
-func failWebSocketHandshake(proxy *Proxy, pair *Pair, cause error) error {
+func failWebSocketHandshake(proxy *Proxy, pair *Pair, cause error) {
 	_ = proxy.WriteLog("ERROR", fmt.Sprintf("WebSocket handshake failed: %v", cause), pairLogOptions(pair)...)
 	if pair.ID != uuid.Nil {
 		proxy.endWebSocketHandshake(pair.ID, "failed")
 	}
-	return fmt.Errorf("%w: %w: %w", ErrDropped, ErrWebSocketHandshakeFailed, cause)
+	pair.webSocketFailed = true
+	pair.Drop()
 }
 
 // WebSocketNegotiationModifier sets the client's extension response to

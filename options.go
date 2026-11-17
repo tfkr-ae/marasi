@@ -563,7 +563,7 @@ func WithWorkAdmission(admit func(context.Context, bool) (func(), uint64, error)
 
 // WithBasePipeline will setup the base modifier pipeline for marasi
 // It will define the main Request & Response modifiers that will execute the
-// attached modifiers and hande `ErrDropped` and `ErrSkipPipeline`.
+// attached modifiers and carry out the control a modifier set on the pair.
 // Work is admitted for the request modifiers and again, once the response body
 // has been read, for the response modifiers, never for the wait on the origin.
 // If a response is dropped the `martian.Session` is read from the context and hijacked to
@@ -607,11 +607,17 @@ func WithBasePipeline() func(*Proxy) error {
 				ctx := core.ContextWithSession(req, session).Context()
 				*req = *req.WithContext(context.WithValue(ctx, pairKey{}, pair))
 				proxy.watchClient(req, bodyEnding)
-				err = proxy.Modifiers.ModifyRequest(req)
-				if errors.Is(err, ErrDropped) {
+				err = chainError(pair, proxy.Modifiers.ModifyRequest(req))
+				switch pair.control {
+				case controlDrop:
+					// The client gets Martian's empty 200, as before.
 					proxy.recordLaunchDropped(pair)
+					martian.NewContext(req).SkipRoundTrip()
+				case controlStop:
+					// A stop ends only the request chain.
+					pair.control = controlNone
 				}
-				if err == nil || errors.Is(err, ErrDropped) || errors.Is(err, ErrSkipPipeline) {
+				if err == nil {
 					return nil
 				}
 				// TODO this should be handled through logging
@@ -626,11 +632,10 @@ func WithBasePipeline() func(*Proxy) error {
 				if res.Request.Method == http.MethodConnect {
 					return nil
 				}
-				// A request the proxy answered itself is sent as answered,
-				// with no response modifier and no admission.
-				if own, ok := ownResponse(requestPair(res.Request)); ok {
-					own.Request = res.Request
-					*res = *own
+				// A request the proxy answered itself (the round trip
+				// returned its response) or dropped is sent as it is, with
+				// no response modifier and no admission.
+				if pair := requestPair(res.Request); pair != nil && (pair.control == controlRespond || pair.Dropped()) {
 					return nil
 				}
 				// A launch whose client left was cancelled or interrupted. Its
@@ -663,19 +668,10 @@ func WithBasePipeline() func(*Proxy) error {
 				}
 				// The response chain finds this pair through the request.
 				storePair(pair, loaded, res.Request)
-				// A request whose round trip was skipped has only the blank
-				// 200 Martian made in place of a response, so no response
-				// modifier sees it.
-				if ctx := martian.NewContext(res.Request); ctx != nil && ctx.SkippingRoundTrip() {
-					return nil
-				}
-				err := proxy.Modifiers.ModifyResponse(res)
-				if err == nil || errors.Is(err, ErrSkipPipeline) {
-					return nil
-				}
-				if errors.Is(err, ErrDropped) {
-					proxy.recordLaunchDropped(requestPair(res.Request))
-					proxy.markDroppedWebSocketHandshake(res, err)
+				err := chainError(pair, proxy.Modifiers.ModifyResponse(res))
+				if pair.Dropped() {
+					proxy.recordLaunchDropped(pair)
+					proxy.markDroppedWebSocketHandshake(pair)
 					if session, ok := core.SessionFromContext(res.Request.Context()); ok {
 						conn, _, err := session.Hijack()
 						if err != nil {
@@ -688,6 +684,9 @@ func WithBasePipeline() func(*Proxy) error {
 					} else {
 						return ErrSessionContext
 					}
+				}
+				if err == nil {
+					return nil
 				}
 				// TODO this should be handled through logging
 				log.Printf("response pipeline: %v", err)
