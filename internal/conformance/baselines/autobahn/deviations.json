@@ -1,0 +1,16 @@
+[
+  {
+    "cases": "6.4.[1-4]",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "behavior",
+    "got": "NON-STRICT",
+    "kind": "accepted",
+    "reason": "the proxy forwards whole messages, so the peer sees the invalid UTF-8 only once the message completes; RFC 6455 does not require forwarding before then (spec: No streaming)",
+    "rfc": "RFC 6455 §8.1"
+  }
+]

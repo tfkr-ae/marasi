@@ -1,0 +1,93 @@
+{
+  "suite": "h1-client",
+  "rows": [
+    {
+      "run": "proxy",
+      "target": "nginx",
+      "approach": "connect-plain",
+      "matched": 4,
+      "cases": 213,
+      "leg_rules": {
+        "passed": 426,
+        "failed": 142
+      }
+    },
+    {
+      "run": "proxy",
+      "target": "nginx",
+      "approach": "connect-tls",
+      "matched": 4,
+      "cases": 213,
+      "leg_rules": {
+        "passed": 426,
+        "failed": 142
+      }
+    },
+    {
+      "run": "checkpoint-forward",
+      "target": "nginx",
+      "approach": "connect-plain",
+      "matched": 4,
+      "cases": 213,
+      "leg_rules": {
+        "passed": 426,
+        "failed": 142
+      }
+    },
+    {
+      "run": "checkpoint-forward",
+      "target": "nginx",
+      "approach": "connect-tls",
+      "matched": 4,
+      "cases": 213,
+      "leg_rules": {
+        "passed": 426,
+        "failed": 142
+      }
+    },
+    {
+      "run": "checkpoint-edit",
+      "target": "nginx",
+      "approach": "connect-plain",
+      "matched": 4,
+      "cases": 213,
+      "leg_rules": {
+        "passed": 426,
+        "failed": 142
+      }
+    },
+    {
+      "run": "checkpoint-edit",
+      "target": "nginx",
+      "approach": "connect-tls",
+      "matched": 4,
+      "cases": 213,
+      "leg_rules": {
+        "passed": 426,
+        "failed": 142
+      }
+    },
+    {
+      "run": "extension",
+      "target": "nginx",
+      "approach": "connect-plain",
+      "matched": 4,
+      "cases": 213,
+      "leg_rules": {
+        "passed": 426,
+        "failed": 142
+      }
+    },
+    {
+      "run": "extension",
+      "target": "nginx",
+      "approach": "connect-tls",
+      "matched": 4,
+      "cases": 213,
+      "leg_rules": {
+        "passed": 426,
+        "failed": 142
+      }
+    }
+  ]
+}

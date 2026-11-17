@@ -1,0 +1,11 @@
+# Conformance is scored against a direct baseline
+
+Marasi is leaving Martian for its own proxy library and then adding HTTP/2, so it needs a yardstick that every phase is scored against. A conformance case passes when the tester's recording through Marasi matches its direct baseline, the recording of the same case with no proxy in between. The suites score how much Marasi changed the traffic, not how well the target follows the RFC, so a broken target stays broken and that is a pass. Autobahn already works this way for WebSocket and becomes one suite of the shared harness, `internal/conformance`, beside h1-client, h1-origin, h2-client and h2-origin.
+
+A difference from the baseline fails unless it is listed in the suite's `deviations.json` in one of two ways. It is on the **allow-list**, a permanent exception Marasi keeps because it is a proxy, with a reason. Or it is a **known deviation**, a measured fault tagged with the phase expected to remove it. The first committed score is today's Martian-based Marasi. All of its differences are known deviations, so they are the measured "before". A known deviation that stops occurring also fails until it is removed, so the score in the committed `score.json` only improves. An entry that matches nothing in a full run is an error.
+
+Hop-by-hop fields and framing belong to one connection, so the direct run cannot show what Marasi should send. They are scored by **leg rules** instead: RFC 9110/9112 requirements on what Marasi itself sends on each leg. Breaking a MUST fails like a deviation, and breaking a SHOULD warns. See [The proxy follows hop-by-hop rules but sends no Via](2026-11-16-the-proxy-follows-hop-by-hop-rules-but-sends-no-via.md).
+
+The h1 suites block merges and run on every pull request. The h2 suites are report-only until HTTP/2 is built. Reports go to `dist/conformance/` and the job summary, and are not committed.
+
+**Considered options:** score Marasi against the RFC directly, as Http11Probe and h2spec do for servers; one allow-list holding both accepted and known differences; gate only on the previous score. These were rejected because RFC scoring would fail Marasi for its target's faults, a mixed list stops meaning "accepted on purpose", and a bare score records no reason.

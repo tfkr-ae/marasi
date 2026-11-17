@@ -299,3 +299,45 @@ _Avoid_: reload, relaunch
 **Successor**:
 The service instance a restart starts from the installed build to take over the restarting instance's name, open project, proxy listener address, and control listener network address. It becomes that instance once it reports ready.
 _Avoid_: child, replacement, new instance
+
+### Conformance
+
+**Transparent**:
+What the client receives through Marasi is what it receives going direct, down to header name case and order, unless the user intercepts or modifies the traffic. A correct origin stays correct and a broken origin stays broken; Marasi steps in only where keeping the origin's behaviour would corrupt another request/response pair.
+_Avoid_: pass-through, faithful, compliant (compliance is what a leg rule checks)
+
+**Conformance run**:
+One way of putting Marasi in a tester's path, such as plain proxying, a Checkpoint hold that is forwarded, or an extension that edits nothing. Every conformance run is expected to be transparent.
+_Avoid_: mode, profile; an Armory run is unrelated
+
+**Client approach**:
+How a client's traffic reaches the proxy listener: an absolute-form request, plain HTTP inside `CONNECT`, or TLS inside `CONNECT`.
+_Avoid_: route, which is how Marasi reaches the origin; entry
+
+**Leg rule**:
+An RFC requirement on what Marasi itself sends on one leg, such as removing the fields that `Connection` names, that a direct baseline cannot show because the direct run has no proxy.
+_Avoid_: hop-by-hop check, compliance test
+
+**Direct baseline**:
+A tester's recording of a case when it talks to the target with no proxy in between. Proxied recordings of the same case are scored against it.
+_Avoid_: golden file, expected output, reference run
+
+**Client leg**:
+The connection between a client and the proxy listener, on which Marasi acts as the server.
+_Avoid_: downstream, inbound side
+
+**Origin leg**:
+The connection between Marasi and the origin, or the upstream proxy on the way to it, on which Marasi acts as the client.
+_Avoid_: upstream leg, outbound side
+
+**Origin fixture**:
+A fake origin that sends exactly the bytes or frames one conformance case calls for, and names the RFC rule that case exercises.
+_Avoid_: mock server, stub, test server
+
+**Allow-list**:
+The documented exceptions to transparency that Marasi keeps on purpose, because it is a proxy. Each entry names what may differ from the direct baseline and gives the reason.
+_Avoid_: ignore list, exemptions, waivers
+
+**Known deviation**:
+A measured difference from the direct baseline that Marasi does not mean to keep, recorded with the phase expected to remove it. Removing one is required once it stops occurring, so the score only improves.
+_Avoid_: expected failure, xfail, allowed deviation

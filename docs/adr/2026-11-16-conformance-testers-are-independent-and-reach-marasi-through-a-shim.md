@@ -1,0 +1,11 @@
+# Conformance testers are independent and reach Marasi through a shim
+
+The client-leg testers are third-party tools, not ours, so the checker is not written by the people it checks. h1 uses Http11Probe (MIT, .NET), built in Docker from a pinned commit on a .NET SDK image pinned by digest. h2 uses h2spec, run with `go run github.com/summerwind/h2spec/cmd/h2spec@<version>` so it never enters go.mod. Both test against nginx pinned by digest, not a Go `net/http` server, because the new library builds on Go's standard library and quirks that Go and Marasi share would cancel out of the comparison. The origin leg has no third-party tester that checks what an intermediary forwards. It uses our own origin fixtures, written as Go tables, and the direct baseline does the checking there.
+
+Neither tester has a proxy option, so each dials a `conformance-shim` that sends `CONNECT` to Marasi and splices the connection. Rewriting the request line instead would corrupt the cases that send a malformed one on purpose. The shim is in the path of the direct run too, where it splices straight to the target, so both runs take the same path apart from Marasi. It also captures the bytes in each direction for every connection, so an h1 recording is the tester's verdict plus the parsed capture. A verdict alone would miss a proxy that replaced the target's error body with its own.
+
+Each h1 case runs on every client approach it can use, and the approach is part of its ID. Http11Probe uses plain HTTP inside `CONNECT` and TLS inside `CONNECT`. Fixtures also use absolute form. h2spec uses only TLS inside `CONNECT`.
+
+A launched Marasi verifies origin certificates against the system roots, and only on Linux can the harness add a root without changing proxy code (`SSL_CERT_FILE`). The new suites therefore run Marasi in a Linux container with a CA the harness generates for each run, on a developer's Mac as well as in CI. Autobahn keeps running Marasi on the host.
+
+**Considered options:** write our own h1 client-leg tester (rejected: the same people would write Marasi and its checker); h1spec (too immature, no licence); HTTP Garden (a research REPL, not a gate, and GPL-3.0; it is deferred as a fuzzer); a test-only flag in Marasi to skip origin verification (that changes proxy code, which Phase 0 does not do).

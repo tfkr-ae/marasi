@@ -22,15 +22,22 @@ STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
 
 .DEFAULT_GOAL := build
 
-.PHONY: build all test lint check clean install uninstall help autobahn autobahn-baseline $(TARGETS)
+.PHONY: build all test lint check clean install uninstall help conformance conformance-baseline conformance-update-known autobahn autobahn-baseline $(TARGETS)
 
-# Autobahn WebSocket testsuite (Docker). See `make help`.
-CASES   ?= *
-EXCLUDE ?=
-MODES   ?= fuzzingclient,fuzzingserver
-PEERS   ?= strict,lenient
-RUNS    ?= proxy,checkpoint-forward,checkpoint-edit,extension
-AUTOBAHN_FLAGS = -cases '$(CASES)' -exclude '$(EXCLUDE)' -modes '$(MODES)' -peers '$(PEERS)' $(if $(VERBOSE),-verbose)
+# Conformance harness (Docker). See `make help`.
+# The blocking HTTP/1.1 suites; the h2 suites and autobahn run on their own.
+SUITES     ?= h1-origin,h1-client
+CASES      ?= *
+EXCLUDE    ?=
+APPROACHES ?=
+MODES      ?= fuzzingclient,fuzzingserver
+PEERS      ?= strict,lenient
+RUNS       ?= proxy,checkpoint-forward,checkpoint-edit,extension
+PHASE      ?=
+# The HTTP suites run Marasi in a Linux container, built for this architecture.
+LINUX_ARCH ?= $(shell $(GO) env GOARCH)
+CONFORMANCE      = $(GO) run ./internal/conformance/cmd/conformance
+CONFORMANCE_FLAGS = -linux-arch '$(LINUX_ARCH)' -cases '$(CASES)' -exclude '$(EXCLUDE)' -approaches '$(APPROACHES)' -modes '$(MODES)' -peers '$(PEERS)' $(if $(VERBOSE),-verbose)
 
 help:
 	@printf '%s\n' \
@@ -40,13 +47,37 @@ help:
 		'make test            run tests' \
 		'make lint            check gofmt, run go vet and staticcheck' \
 		'make check           run lint, then the short tests; run it before you commit' \
-		'make autobahn        run the Autobahn suite through Marasi and diff it against the' \
-		'                     committed direct baseline; exits non-zero on a deviation outside 9.x.' \
-		'                     Narrow with CASES=3.*,7.9.* EXCLUDE=9.* MODES=fuzzingclient' \
-		'                     PEERS=strict RUNS=proxy (runs: proxy checkpoint-forward' \
-		'                     checkpoint-edit extension). Reports land in dist/autobahn/.' \
-		'make autobahn-baseline  rerun the selected cases with no proxy and merge them' \
-		'                     into internal/autobahn/baseline/' \
+		'make conformance     conformance harness: run the suites (Docker) directly and' \
+		'                     through Marasi, and score each case against its direct baseline' \
+		'                     and deviations.json in internal/conformance/baselines/<suite>/.' \
+		'                     Exits non-zero on a new deviation (listed in no entry), a known' \
+		'                     deviation that went away (its cases ran and Marasi now matches' \
+		'                     the baseline: remove the entry or run conformance-update-known)' \
+		'                     or a stale entry: one that matched nothing although a run' \
+		'                     and target it lists ran (with CASES, EXCLUDE or APPROACHES set,' \
+		'                     only one that covers a case that ran). SUITES defaults to the' \
+		'                     blocking h1-origin,h1-client. Suites: autobahn (Marasi on the' \
+		'                     host), h1-origin, h1-client, h2-client and h2-origin (Marasi' \
+		'                     in a Linux container built for LINUX_ARCH, this machine by' \
+		'                     default; the h2 suites are report only, proxy run only: run' \
+		'                     them on their own).' \
+		'                     Narrow with SUITES=autobahn' \
+		'                     RUNS=proxy CASES=3.*,7.9.* EXCLUDE=9.* APPROACHES=connect-tls,' \
+		'                     and for autobahn MODES=fuzzingclient PEERS=strict (runs: proxy' \
+		'                     checkpoint-forward checkpoint-edit extension). VERBOSE=1 streams' \
+		'                     tester output. Reports land in dist/conformance/<suite>/<run>/.' \
+		'                     Quick runs: SUITES=h1-origin RUNS=proxy,' \
+		'                     SUITES=h1-client RUNS=proxy CASES=SMUG-CL-TE-BOTH@* (exact IDs run' \
+		'                     only those probes), SUITES=h2-origin RUNS=proxy. CI: the' \
+		'                     conformance workflow (h1 jobs are required checks).' \
+		'make conformance-baseline  rerun the selected cases with no proxy and merge them' \
+		'                     into the direct baselines' \
+		'make conformance-update-known PHASE=2  run, then rewrite the known entries of' \
+		'                     deviations.json (adds new deviations with PHASE, narrows or removes' \
+		'                     went-away ones) and score.json; accepted entries are never touched.' \
+		'                     Review the diff before you commit it' \
+		'make autobahn        make conformance SUITES=autobahn' \
+		'make autobahn-baseline  make conformance-baseline SUITES=autobahn' \
 		'make install         build and install to $(BINDIR)/$(BIN)' \
 		'make uninstall       remove $(BINDIR)/$(BIN)' \
 		'make clean           remove dist/'
@@ -78,11 +109,21 @@ lint:
 check: lint
 	$(GO) test -short ./...
 
-autobahn: build
-	$(GO) run ./internal/autobahn/cmd/autobahn $(AUTOBAHN_FLAGS) -runs '$(RUNS)'
+conformance: build linux-$(LINUX_ARCH)
+	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites '$(SUITES)' -runs '$(RUNS)'
 
-autobahn-baseline:
-	$(GO) run ./internal/autobahn/cmd/autobahn $(AUTOBAHN_FLAGS) -runs direct
+conformance-baseline:
+	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites '$(SUITES)' -runs direct
+
+conformance-update-known: build linux-$(LINUX_ARCH)
+	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites '$(SUITES)' -runs '$(RUNS)' -update-known $(if $(PHASE),-phase '$(PHASE)')
+
+# The autobahn aliases are the conformance targets with SUITES=autobahn.
+autobahn: SUITES = autobahn
+autobahn: conformance
+
+autobahn-baseline: SUITES = autobahn
+autobahn-baseline: conformance-baseline
 
 install: build
 	@mkdir -p $(BINDIR)

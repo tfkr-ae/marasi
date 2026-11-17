@@ -1,0 +1,358 @@
+{
+  "data-padded-split@connect-tls": {
+    "client": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                },
+                {
+                  "name": "content-type",
+                  "value": "text/plain"
+                },
+                {
+                  "name": "x-origin",
+                  "value": "fixture"
+                }
+              ]
+            ],
+            "data": "aGVsbG8sIHdvcmxk",
+            "end_stream": "data"
+          }
+        ]
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/data"
+                },
+                {
+                  "name": "x-request-id",
+                  "value": "abc"
+                },
+                {
+                  "name": "accept",
+                  "value": "text/plain"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          }
+        ]
+      }
+    ]
+  },
+  "goaway@connect-tls": {
+    "client": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                }
+              ]
+            ],
+            "data": "Zmlyc3Q=",
+            "end_stream": "data"
+          },
+          {
+            "headers": []
+          }
+        ],
+        "goaway": {
+          "code": "NO_ERROR",
+          "processed": [
+            0
+          ]
+        }
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/first"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          },
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/second"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          }
+        ]
+      }
+    ]
+  },
+  "headers-with-data@connect-tls": {
+    "client": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                },
+                {
+                  "name": "content-type",
+                  "value": "text/plain"
+                },
+                {
+                  "name": "x-origin",
+                  "value": "fixture"
+                }
+              ]
+            ],
+            "data": "aGVsbG8sIHdvcmxk",
+            "end_stream": "data"
+          }
+        ]
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/data"
+                },
+                {
+                  "name": "x-request-id",
+                  "value": "abc"
+                },
+                {
+                  "name": "accept",
+                  "value": "text/plain"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          }
+        ]
+      }
+    ]
+  },
+  "rst-stream@connect-tls": {
+    "client": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                },
+                {
+                  "name": "content-type",
+                  "value": "text/plain"
+                }
+              ]
+            ],
+            "data": "cGFydGlhbA==",
+            "reset": "INTERNAL_ERROR"
+          }
+        ]
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/reset"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          }
+        ]
+      }
+    ]
+  },
+  "trailers@connect-tls": {
+    "client": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                },
+                {
+                  "name": "content-type",
+                  "value": "text/plain"
+                },
+                {
+                  "name": "trailer",
+                  "value": "x-checksum"
+                }
+              ]
+            ],
+            "data": "cG9uZw==",
+            "trailers": [
+              {
+                "name": "x-checksum",
+                "value": "abc"
+              },
+              {
+                "name": "x-trailer-two",
+                "value": "2"
+              }
+            ],
+            "end_stream": "trailers"
+          }
+        ]
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "POST"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/trailers"
+                },
+                {
+                  "name": "content-type",
+                  "value": "text/plain"
+                },
+                {
+                  "name": "te",
+                  "value": "trailers"
+                }
+              ]
+            ],
+            "data": "cGluZw==",
+            "trailers": [
+              {
+                "name": "x-request-checksum",
+                "value": "1"
+              }
+            ],
+            "end_stream": "trailers"
+          }
+        ]
+      }
+    ]
+  }
+}

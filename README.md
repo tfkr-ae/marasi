@@ -57,42 +57,218 @@ The source requires Go 1.26 or later. These commands run from the repository roo
 | `make windows-amd64` | Builds `dist/marasi-windows-amd64.exe`. |
 | `make all` | Builds the targets listed by `TARGETS` in [Makefile](Makefile). |
 | `make test` | Runs `go test ./...`. |
-| `make autobahn` | Runs the Autobahn WebSocket testsuite in Docker through a Marasi service instance. It prints each case whose verdict, close code, or clean close differs from the committed direct baseline, and exits non-zero on any deviation outside 9.x. |
-| `make autobahn-baseline` | Runs the selected cases with no proxy and merges them into `internal/autobahn/baseline/`. |
+| `make conformance` | Runs the conformance suites in Docker through Marasi and scores each case against its committed direct baseline and deviations file. With no `SUITES`, it runs the blocking HTTP/1.1 suites, `h1-origin` and `h1-client`. It exits non-zero on a new deviation, a known deviation that went away, or a stale deviations entry. |
+| `make conformance-baseline` | Runs the selected cases with no proxy and merges them into the direct baselines. For `h1-origin` it records each case twice and leaves out, with an error, a case whose two recordings differ. |
+| `make conformance-update-known PHASE=<n>` | Runs the selected cases, then rewrites the known entries in `deviations.json` and the suite's `score.json`. |
+| `make autobahn`, `make autobahn-baseline` | `make conformance` and `make conformance-baseline` with `SUITES=autobahn`. |
 
-The Autobahn targets need Docker with host networking. Both modes
-(`fuzzingclient`, `fuzzingserver`) run against two peers: Autobahn's strict
-testee and the harness's lenient echo peer. `make autobahn` runs four runs:
-`proxy` (no interception), `checkpoint-forward` (global WebSocket Checkpoint
-with an auto-resolver that forwards each item unchanged), `checkpoint-edit` (the
-resolver forwards each item as an edit with the same bytes), and `extension` (a
-workshop `processWebSocketMessage` sets each payload to itself). Variables narrow
-a run:
+### Conformance harness
+
+The conformance harness measures what Marasi changes in the traffic between a
+client and an origin. It records every case twice: directly (the direct
+baseline) and through Marasi. A case passes when the two recordings match,
+apart from the entries in the suite's `deviations.json`. Today it has five
+suites:
+
+- `autobahn` runs the Autobahn WebSocket testsuite, with Marasi on the host.
+- `h1-origin` sends each origin fixture case's HTTP/1.1 requests with the
+  harness's own client, as an absolute-form request (`absolute`), as plain
+  HTTP inside `CONNECT` (`connect-plain`) and as TLS inside `CONNECT`
+  (`connect-tls`). The fixtures, in `internal/conformance/h1origin/catalogue.go`,
+  cover chunked bodies and trailers, Content-Length and close-delimited bodies,
+  field name case, order and whitespace, `Connection`, `Keep-Alive`, transfer
+  codings, 1xx, HEAD, 204 and 304, an early close, a reset mid-body, several
+  requests on one connection, and request fields that must reach the origin
+  as sent. Its recording holds the responses the client received and
+  the requests the origin received. Hop-by-hop fields and framing are left out
+  of the comparison and checked by leg rules instead, on what Marasi sent on
+  each leg: `leg:connection` (remove `Connection` and the fields it names, RFC
+  9110 §7.6.1), `leg:framing` (valid framing that matches the body, RFC 9112
+  §6), `leg:cl-and-te` (never both `Content-Length` and `Transfer-Encoding`, RFC
+  9112 §6.1), `leg:field-order` (keep the order of same-name field lines, RFC
+  9110 §5.3) and `leg:via` (send `Via`, RFC 9110 §7.6.3, accepted: Marasi does
+  not announce itself). A broken MUST rule fails like a deviation unless
+  `deviations.json` lists its ID as the field; a broken SHOULD rule warns.
+  Marasi runs in a Linux container built by `make linux-<arch>` for this
+  machine's architecture (`LINUX_ARCH`), on the
+  host's network, and resolves the fixtures' name `origin.test` to loopback.
+  The harness drives it through a control listener on loopback.
+- `h1-client` scores Marasi's HTTP/1.1 client leg with
+  [Http11Probe](https://github.com/MDA2AV/Http11Probe), a third-party tester
+  built in Docker from a pinned commit, against nginx pinned by digest. Neither
+  has a proxy option, so Http11Probe connects to the harness's shim, which
+  splices each connection to nginx directly, or through Marasi with `CONNECT`
+  (`connect-plain`), and adds TLS itself for `connect-tls`. A case is an
+  Http11Probe test with the approach, and its recording is the test's verdict
+  plus the shim's capture of the connection, compared like `h1-origin`'s client
+  side. The leg rules run on the responses Marasi sent. Marasi runs in the same
+  container as for `h1-origin`. Martian routes a request inside `CONNECT` by its
+  `Host` field, which names the shim's port, so nginx listens on that port at
+  `127.0.0.2`, where Marasi resolves `nginx.test`. The first run builds the
+  Http11Probe image, which takes a few minutes.
+- `h2-client` scores Marasi's HTTP/2 client leg with
+  [h2spec](https://github.com/summerwind/h2spec) v2.6.0, installed with
+  `go install` at a pinned version so it never enters `go.mod`, against nginx's
+  TLS listener that offers ALPN `h2`. h2spec does its own TLS (`-t -k`) and
+  connects to the shim, which only tunnels, directly or through Marasi with
+  `CONNECT` (`connect-tls`). The harness runs h2spec once per case, and a
+  case's recording is h2spec's verdict from its JUnit report (`not-run`, with
+  h2spec's error, when h2spec could not start the case) plus how the shim saw
+  the connection end. h2spec trusts any certificate, so before h2spec runs the
+  harness completes one TLS handshake through the same shim that trusts only
+  Marasi's CA (the harness CA in the direct run). A run whose shim does not go
+  through Marasi fails there. Each known entry names the value Marasi gave
+  (`got`), so a case that fails in another way is new. It runs only `proxy`
+  and is report only, like
+  `h2-origin` (`make conformance SUITES=h2-client RUNS=proxy`).
+- `h2-origin` sends each h2 origin fixture case's requests as HTTP/2 streams
+  inside `CONNECT` over TLS (`connect-tls`), offering ALPN `h2` then
+  `http/1.1`, to fixtures that script frames and serve ALPN `h2`. Its
+  recording holds, for each side, the negotiated protocol, each stream's
+  decoded header blocks with pseudo-header fields, DATA bytes, trailers,
+  where END_STREAM fell and the RST_STREAM code, and the connection's GOAWAY
+  code and the streams it says were processed. SETTINGS, WINDOW_UPDATE, PING,
+  PRIORITY, DATA splitting, padding, HPACK encoding and stream IDs are not
+  recorded, so they never differ. It runs only `proxy`, has no leg rules yet,
+  and is report only: it exits non-zero like any suite, so run it on its own
+  (`make conformance SUITES=h2-origin RUNS=proxy`), and CI does not block a
+  merge on it. Through Marasi the client trusts only Marasi's CA, so a
+  recorded case shows Marasi in the path even though Marasi, answering ALPN
+  with `http/1.1`, records no HTTP/2 traffic. Marasi runs in the same
+  container as for `h1-origin`.
+
+For TLS, the harness generates a CA on each run and never writes its key to
+disk. The fixtures serve certificates it issues. In Marasi's container,
+`SSL_CERT_FILE` names the image's system roots plus that CA, so Marasi verifies
+the fixtures with no Marasi setting changed. The direct run's client trusts the
+harness CA. Through Marasi, the client trusts Marasi's CA certificate, fetched
+with `marasi certificate get`.
+
+Each suite keeps its committed files in `internal/conformance/baselines/<suite>/`:
+
+- One direct baseline file for each target, for example `fuzzingclient-strict.json`.
+- `deviations.json`. Each entry names the case IDs it covers (a glob), the
+  conformance runs, the field that may differ, its kind, a reason, and an
+  optional RFC. An entry may also name `targets` (globs over the suite's
+  targets, such as `fuzzingserver-*`; none means every target) and `got` (the
+  only value through Marasi it lists). An `accepted` entry is on the allow-list: Marasi keeps that
+  difference on purpose, and only a person edits it. A `known` entry is a
+  difference Marasi does not mean to keep, with the phase expected to remove it.
+- `score.json`: for each conformance run, target and client approach, the cases
+  that matched the baseline out of the cases run, and the leg rules that passed
+  and failed (one per rule and case).
+
+The suites need Docker with host networking. `make conformance` runs four
+conformance runs: `proxy` (no interception), `checkpoint-forward` (global
+Checkpoint with an auto-resolver that forwards each item unchanged),
+`checkpoint-edit` (the resolver forwards each item as an edit with the same
+bytes), and `extension` (a workshop hook sets each payload or body to itself:
+`processWebSocketMessage` for WebSocket, `processRequest` and
+`processResponse` for HTTP). Autobahn runs both modes (`fuzzingclient`, `fuzzingserver`) against
+two peers: Autobahn's strict testee and the harness's lenient echo peer.
+Variables narrow a run:
 
 ```bash
-make autobahn CASES='3.*,7.9.*' RUNS=proxy MODES=fuzzingclient PEERS=strict
+make conformance SUITES=autobahn CASES='3.*,7.9.*' RUNS=proxy MODES=fuzzingclient PEERS=strict
 make autobahn EXCLUDE='9.*,12.*,13.*' VERBOSE=1
+make conformance SUITES=h1-origin APPROACHES=connect-plain
+make conformance SUITES=h2-origin RUNS=proxy
+make conformance SUITES=h2-client RUNS=proxy
 ```
 
-Reports are written to `dist/autobahn/<run>/<mode>-<peer>/` and the run log to
-`dist/autobahn/autobahn.log`. `RUNS=direct,proxy` refreshes the baseline before
-comparing. On an arm64 Mac, where the amd64 image runs under emulation, the
-direct baseline takes about 20 minutes and a full `make autobahn` about 30. The
-strict peers negotiate permessage-deflate, so 12.x and 13.x are most of a direct
+Reports are written to `dist/conformance/<suite>/<run>/`: a `summary.md` with
+the score, then new deviations, known deviations that went away, known
+deviations, the differences on the allow-list, and leg-rule results, a JSON
+diff with both recordings for each
+failing case under `diffs/`, Marasi's log, and the tester's output for each
+target. The run log is `dist/conformance/conformance.log`. In GitHub Actions
+the summary is also added to the job summary. `RUNS=direct,proxy` refreshes the
+baseline before comparing. On an arm64 Mac, where the amd64 Autobahn image runs
+under emulation, the Autobahn direct baseline takes about 20 minutes. The strict
+peers negotiate permessage-deflate, so 12.x and 13.x are most of a direct
 strict suite.
+
+#### Updating baselines and known entries
+
+A deviation is "new" when no entry in `deviations.json` lists it: the run
+fails. If the change meant it, or it is a Martian difference a later phase
+removes, record it as a known entry with the phase expected to remove it:
+
+```bash
+make conformance-update-known SUITES=h1-origin PHASE=2
+```
+
+A known deviation "went away" when a run covered its cases and the difference
+no longer appears: Marasi now matches the direct baseline there. That also
+fails the run, so the score only improves and the file stays true. It usually
+means your change fixed something: remove the entry, or run
+`make conformance-update-known`, which narrows or removes went-away known
+entries, adds a known entry for each new deviation, and rewrites `score.json`.
+It never touches `accepted` entries; only a person edits those. An entry that
+matched nothing is stale and fails too, when a conformance run and target it
+lists ran. With `CASES`, `EXCLUDE` or `APPROACHES` set, only an entry that
+covers a case that ran can be stale. `RUNS`, `MODES` and `PEERS` do not turn
+the check off: an entry for a run or target that did not run is never stale. Review the diff of
+`deviations.json` and `score.json` before you commit it.
+
+The direct baseline changes only when a fixture, a pinned tester or image, or
+the harness changes. Refresh it with `make conformance-baseline SUITES=<suite>`
+(or `CASES=` for the cases you touched) and review its diff before you commit.
+
+#### Quick local runs
+
+Each command scores one suite and one run, the same as one CI job:
+
+```bash
+make conformance SUITES=h1-origin RUNS=proxy
+make conformance SUITES=h1-client RUNS=proxy CASES='SMUG-CL-TE-BOTH@*'
+make conformance SUITES=h2-origin RUNS=proxy
+make autobahn EXCLUDE='9.*,12.*,13.*'
+```
+
+`make conformance` with no `SUITES` runs `h1-origin` and `h1-client`, the
+suites that block a merge. `h1-client` runs only
+the Http11Probe tests that `CASES` names exactly (`ID@*` covers every
+approach); with a glob in the ID it runs all 213 tests and narrows afterwards.
+A narrowed run (`RUNS`, `CASES` and the like) checks only the entries its cases
+cover.
+
+### Conformance checks in CI
+
+The `conformance` workflow (`.github/workflows/conformance.yml`) runs on every
+pull request, every Monday, and when you start it manually. Every job runs on
+`ubuntu-24.04`, adds its summaries to the job summary, and uploads
+`dist/conformance/` as an artifact named after the job. On Linux, Marasi's
+container is built for amd64 and shares the runner's network, where all of
+`127.0.0.0/8` is loopback.
+
+On a pull request, the `changed paths` job runs `git diff` against the base
+and decides which suites run. The schedule and manual dispatch run every
+suite. A suite runs when the pull request changes Marasi on the HTTP path (root
+`*.go`, `go.mod`, `go.sum`, `Makefile`, `cmd/`, `core/`, `domain/`,
+`listener/`, `rawhttp/`, `db/`, `extensions/`, `service/`), the shared harness,
+the workflow, or that suite's own package and baselines. A change only to docs,
+reports, Armory, Compass, wordlists or another suite skips it.
+
+- `h1-client (<run>)` and `h1-origin (<run>)`, one job for each of `proxy`,
+  `checkpoint-forward`, `checkpoint-edit` and `extension`, are the required
+  checks. When no HTTP/1.1 path changed they still run, skip their steps and
+  pass, because a skipped matrix job would never report under its check name.
+- `h2-client (proxy)` and `h2-origin (proxy)` are report only
+  (`continue-on-error`): their score is in the job summary, and a failure does
+  not block a merge. They are skipped when no HTTP/2 path changed.
+- `autobahn (<run>, <mode>)` takes hours, so its path list is narrower: the
+  WebSocket code, the autobahn suite and the shared harness, plus `db/`,
+  `proxy.go`, `modifiers.go`, `checkpoint.go` and `extensions/`. The paths
+  include `db/` and `proxy.go` because a WebSocket relay waits on the database
+  writer's queue: a change that slows the writer can fail a case even though
+  it touches no WebSocket code. On a failure, the job's artifact holds the
+  per-case reports, Marasi's log, and a resource log, and the job log shows
+  kernel OOM messages.
 
 ### Autobahn checks
 
-The Autobahn workflow in GitHub Actions runs the full suite on every pull
-request that changes a path in its `paths` filter, every Monday, and when you
-start it manually. The filter includes `db/` and `proxy.go` because a WebSocket
-relay waits on the database writer's queue: a change that slows the writer can
-fail a case even though it touches no WebSocket code. A job fails on any
-deviation from the committed baseline. On a failure, the job's artifact holds
-the per-case reports, Marasi's log, and a resource log, and the job log shows
-kernel OOM messages.
-
-Run it locally on a change to the same paths:
+Run Autobahn locally on a change to its paths:
 
 1. Before you push, run the quick check. It skips the large-message (9.x) and
    compression (12.x, 13.x) sections and takes about 7 minutes:
@@ -108,11 +284,12 @@ Run it locally on a change to the same paths:
    make autobahn
    ```
 
-Both commands exit non-zero on a deviation from the committed baseline. The
-6.4.1 to 6.4.4 cases are allowed and listed separately. If a deviation looks
-unrelated to the change, run `make autobahn-baseline` and compare the
-baseline diff before you commit it: the baseline changes only with the pinned
-Autobahn image or the harness.
+Both commands exit non-zero on a new deviation from the committed baseline.
+The 6.4.1 to 6.4.4 cases are accepted entries in
+`internal/conformance/baselines/autobahn/deviations.json` and are listed
+separately. If a deviation looks unrelated to the change, run
+`make autobahn-baseline` and compare the baseline diff before you commit it:
+the baseline changes only with the pinned Autobahn image or the harness.
 
 A build without Make uses `go build -o marasi ./cmd/marasi`, or
 `go build -o marasi.exe ./cmd/marasi` on Windows. If a parent `go.work` excludes

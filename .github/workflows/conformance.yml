@@ -1,0 +1,237 @@
+name: Conformance
+
+# See "Conformance harness" in README.md. Every job runs one suite and
+# conformance run through Marasi, compares it to the committed direct
+# baseline and deviations.json, appends each Markdown summary to the job
+# summary (the harness writes to $GITHUB_STEP_SUMMARY), and uploads
+# dist/conformance/ as an artifact named after the job.
+on:
+  pull_request:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+# A new push to the same PR cancels the run still going on the old head.
+concurrency:
+  group: conformance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep in step with autobahn.Image in internal/conformance/autobahn/autobahn.go.
+  AUTOBAHN_IMAGE: crossbario/autobahn-testsuite@sha256:519915fb568b04c9383f70a1c405ae3ff44ab9e35835b085239c258b6fac3074
+
+jobs:
+  # Required checks, one job per suite and run. The check names are
+  # "h1-client (proxy)", "h1-origin (checkpoint-edit)" and so on. When no
+  # HTTP path changed the job still runs but skips its steps, so it passes
+  # in seconds: a matrix job skipped by a job-level `if` reports under its
+  # unexpanded name, and a required check would then never report.
+  # Marasi runs in a Linux container with host networking, built for the
+  # runner's architecture (make conformance builds dist/marasi-linux-amd64).
+  # On Linux all of 127.0.0.0/8 is loopback, so nginx on 127.0.0.2 and the
+  # unreachable test hosts on 127.0.0.3 need no setup.
+  h1:
+    name: ${{ matrix.suite }} (${{ matrix.run }})
+    needs: paths
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [h1-client, h1-origin]
+        run: [proxy, checkpoint-forward, checkpoint-edit, extension]
+    env:
+      RUN_SUITE: ${{ needs.paths.outputs.h1 }}
+    steps:
+      - if: env.RUN_SUITE != 'true'
+        run: echo 'No HTTP/1.1 path changed; the suite is skipped.'
+      - if: env.RUN_SUITE == 'true'
+        uses: actions/checkout@v4
+      - if: env.RUN_SUITE == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - if: env.RUN_SUITE == 'true'
+        run: make conformance SUITES=${{ matrix.suite }} RUNS=${{ matrix.run }}
+      - if: always() && env.RUN_SUITE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-${{ matrix.suite }}-${{ matrix.run }}
+          path: dist/conformance/
+          if-no-files-found: ignore
+
+  # Report only: HTTP/2 does not exist in Marasi yet, so the score shows in
+  # the job summary and never blocks a merge. h2-client installs h2spec with
+  # the Go toolchain set up here (go install, outside go.mod).
+  h2:
+    name: ${{ matrix.suite }} (proxy)
+    needs: paths
+    if: needs.paths.outputs.h2 == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [h2-client, h2-origin]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make conformance SUITES=${{ matrix.suite }} RUNS=proxy
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-${{ matrix.suite }}-proxy
+          path: dist/conformance/
+          if-no-files-found: ignore
+
+  # A pull request runs a suite only when it changes a path that suite
+  # depends on. The schedule and manual dispatch always run every suite.
+  # Each pathspec uses glob magic: * stops at /, ** crosses directories,
+  # as in a workflow paths filter.
+  paths:
+    name: changed paths
+    runs-on: ubuntu-24.04
+    outputs:
+      h1: ${{ steps.diff.outputs.h1 }}
+      h2: ${{ steps.diff.outputs.h2 }}
+      autobahn: ${{ steps.diff.outputs.autobahn }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            printf 'h1=true\nh2=true\nautobahn=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # check NAME PATHSPEC...: sets NAME=true when the pull request
+          # changes a file matching a pathspec.
+          check() {
+            name=$1
+            shift
+            changed=$(git diff --name-only "$BASE" HEAD -- "$@")
+            if [ -n "$changed" ]; then
+              printf '%s paths changed:\n%s\n' "$name" "$changed"
+              echo "$name=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "No $name path changed; its jobs are skipped."
+              echo "$name=false" >> "$GITHUB_OUTPUT"
+            fi
+          }
+          # Marasi on the HTTP path: the proxy and its modifiers, Checkpoint
+          # and transport (root *.go), the listener, raw HTTP, the database
+          # writer and migrations (which seed the built-in extensions),
+          # extensions, the service and its control API, the CLI, and the
+          # module and build.
+          marasi=(
+            ':(glob)*.go'
+            ':(glob)go.mod'
+            ':(glob)go.sum'
+            ':(glob)Makefile'
+            ':(glob)cmd/**'
+            ':(glob)core/**'
+            ':(glob)domain/**'
+            ':(glob)listener/**'
+            ':(glob)rawhttp/**'
+            ':(glob)db/**'
+            ':(glob)extensions/**'
+            ':(glob)service/**'
+            ':(glob).github/workflows/conformance.yml'
+          )
+          # The shared harness (files directly in internal/conformance), the
+          # command, and the pieces the HTTP suites share.
+          harness=(
+            ':(glob)internal/conformance/*'
+            ':(glob)internal/conformance/cmd/**'
+            ':(glob)internal/conformance/shim/**'
+            ':(glob)internal/conformance/nginx/**'
+          )
+          check h1 "${marasi[@]}" "${harness[@]}" \
+            ':(glob)internal/conformance/h1/**' \
+            ':(glob)internal/conformance/h1client/**' \
+            ':(glob)internal/conformance/h1origin/**' \
+            ':(glob)internal/conformance/baselines/h1-*/**'
+          check h2 "${marasi[@]}" "${harness[@]}" \
+            ':(glob)internal/conformance/h2/**' \
+            ':(glob)internal/conformance/h2client/**' \
+            ':(glob)internal/conformance/h2origin/**' \
+            ':(glob)internal/conformance/baselines/h2-*/**'
+          # Autobahn takes hours, so its list stays narrow: a relay waits on
+          # the database writer's queue, so a slower writer can fail a case
+          # (db/, proxy.go); the matrix runs WebSocket modifiers, Checkpoint
+          # holds and extensions.
+          check autobahn \
+            ':(glob)websocket/**' \
+            ':(glob)websocket*.go' \
+            ':(glob)internal/conformance/*' \
+            ':(glob)internal/conformance/cmd/**' \
+            ':(glob)internal/conformance/autobahn/**' \
+            ':(glob)internal/conformance/baselines/autobahn/**' \
+            ':(glob)db/**' \
+            ':(glob)proxy.go' \
+            ':(glob)modifiers.go' \
+            ':(glob)checkpoint.go' \
+            ':(glob)extensions/**' \
+            ':(glob).github/workflows/conformance.yml' \
+            ':(glob).github/scripts/autobahn-monitor.sh'
+
+  # The gate: every proxied run is compared to the committed direct baseline,
+  # and a job fails on any deviation the harness does not allow. Each run and
+  # mode is its own job, so they run in parallel and one failure does not
+  # stop the others.
+  autobahn:
+    name: autobahn (${{ matrix.run }}, ${{ matrix.mode }})
+    needs: paths
+    if: needs.paths.outputs.autobahn == 'true'
+    # Pinned: on ubuntu-26.04 every lenient suite fails "no WebSocket
+    # connection went through the proxy" while the same commit passes here.
+    runs-on: ubuntu-24.04
+    # Two suites, each ended by the harness's 75-minute -suite-limit, so
+    # the harness reports even when both hang.
+    timeout-minutes: 165
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [proxy, checkpoint-forward, checkpoint-edit, extension]
+        mode: [fuzzingclient, fuzzingserver]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: docker pull "$AUTOBAHN_IMAGE"
+      # VERBOSE streams the Autobahn output into the job log, so a run that
+      # stalls or loses its runner still shows how far it got. The resource
+      # monitor and the kernel log stream alongside it for the same reason.
+      - run: |
+          .github/scripts/autobahn-monitor.sh dist/conformance/monitor.log &
+          monitor=$!
+          sudo dmesg --follow-new --time-format iso | sed -u 's/^/[kernel] /' &
+          trap 'kill $monitor; sudo pkill -x dmesg' EXIT
+          make conformance SUITES=autobahn RUNS=${{ matrix.run }} MODES=${{ matrix.mode }} VERBOSE=1
+      - name: Kernel and memory state
+        if: always()
+        # Diagnostics only: a missing file or no match must not fail the job.
+        shell: bash {0}
+        run: |
+          free -m
+          swapon --show
+          grep -H . /proc/pressure/*
+          sudo dmesg --time-format iso | grep -iE 'oom|killed process|out of memory|hung task|blocked for more' || echo 'no OOM or hung-task messages'
+          docker ps -a
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autobahn-${{ matrix.run }}-${{ matrix.mode }}
+          path: dist/conformance/
+          if-no-files-found: ignore
