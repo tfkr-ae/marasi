@@ -825,11 +825,28 @@ func (proxy *Proxy) WriteLog(level string, message string, options ...func(log *
 	return nil
 }
 
+// GetListener binds address:port and wraps the socket with WrapListener.
 func (proxy *Proxy) GetListener(address string, port string) (net.Listener, error) {
+	rawListener, err := proxy.Listen(address, port)
+	if err != nil {
+		return nil, err
+	}
+	return proxy.WrapListener(rawListener), nil
+}
+
+// Listen binds the TCP socket a proxy listener serves from.
+func (proxy *Proxy) Listen(address string, port string) (net.Listener, error) {
 	rawListener, err := net.Listen("tcp", net.JoinHostPort(address, port))
 	if err != nil {
 		return nil, fmt.Errorf("setting up listener on address:port %s:%s: %w", address, port, err)
 	}
+	return rawListener, nil
+}
+
+// WrapListener makes rawListener, a bound TCP socket, the proxy listener:
+// it stacks the listener wrappers and points proxy.Client at its address.
+// The socket may come from Listen or from another process.
+func (proxy *Proxy) WrapListener(rawListener net.Listener) net.Listener {
 	addr := rawListener.Addr().(*net.TCPAddr)
 
 	if addr.IP.IsUnspecified() {
@@ -861,7 +878,7 @@ func (proxy *Proxy) GetListener(address string, port string) (net.Listener, erro
 		DisableCompression: true,
 	}
 	proxy.Client.Transport = transport
-	return marasiListener, nil
+	return marasiListener
 }
 
 // ActiveListenerAddress returns the bound address of the listener currently

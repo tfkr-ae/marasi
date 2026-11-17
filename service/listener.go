@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -44,7 +45,10 @@ type ListenerStatus struct {
 }
 
 type listenerProxy interface {
-	GetListener(string, string) (net.Listener, error)
+	// Listen binds the TCP socket a proxy listener serves from.
+	Listen(string, string) (net.Listener, error)
+	// WrapListener makes a bound TCP socket the proxy listener.
+	WrapListener(net.Listener) net.Listener
 	Serve(net.Listener) error
 	CloseWebSockets(int, string) error
 	CloseTransportContext(context.Context) error
@@ -59,7 +63,9 @@ type listenerOperation uint8
 
 const (
 	startListener listenerOperation = iota
+	startListenerOn
 	stopListener
+	handOverListener
 	updateListener
 	shutdownListener
 )
@@ -68,11 +74,13 @@ type listenerRequest struct {
 	ctx       context.Context
 	operation listenerOperation
 	settings  ListenerSettings
+	socket    net.Listener // bound TCP socket that startListenerOn serves
 	result    chan listenerResult
 }
 
 type listenerResult struct {
 	status ListenerStatus
+	file   *os.File // socket that handOverListener kept bound
 	err    error
 }
 
@@ -82,6 +90,7 @@ type listenerServeResult struct {
 }
 
 type listenerRun struct {
+	socket   net.Listener // the bound TCP socket beneath listener
 	listener net.Listener
 	started  chan struct{}
 	finished chan struct{}
@@ -99,7 +108,16 @@ const (
 type ListenerLifecycle interface {
 	Status() ListenerStatus
 	Start(context.Context, ListenerSettings) (ListenerStatus, error)
+	// StartOn serves the proxy listener from socket, a bound TCP socket,
+	// instead of binding one. It closes socket if it cannot serve it.
+	StartOn(context.Context, net.Listener) (ListenerStatus, error)
 	Stop(context.Context) (ListenerStatus, error)
+	// StopForHandover stops the proxy listener like Stop but keeps its
+	// socket bound, and returns a duplicate of it for a successor to serve
+	// from. The caller closes the file. It returns nil, with the socket
+	// closed, when the listener was inactive or the platform cannot hand a
+	// socket over (docs/adr/2026-10-18-restart-hands-over-and-rolls-back.md).
+	StopForHandover(context.Context) (*os.File, error)
 	Update(context.Context, ListenerSettings) (ListenerStatus, error)
 	Shutdown() error
 	controlEvents() (*eventBroadcaster, io.Writer)
@@ -152,9 +170,30 @@ func (l *listenerLifecycle) Start(ctx context.Context, settings ListenerSettings
 	return l.mutate(ctx, startListener, settings)
 }
 
+// StartOn serves socket, a bound TCP socket, as the proxy listener.
+func (l *listenerLifecycle) StartOn(ctx context.Context, socket net.Listener) (ListenerStatus, error) {
+	response, err := l.request(ctx, listenerRequest{operation: startListenerOn, socket: socket})
+	if err != nil {
+		_ = socket.Close()
+		return response.status, err
+	}
+	return response.status, response.err
+}
+
 // Stop closes the proxy listener and active WebSockets without closing the proxy.
 func (l *listenerLifecycle) Stop(ctx context.Context) (ListenerStatus, error) {
 	return l.mutate(ctx, stopListener, ListenerSettings{})
+}
+
+// StopForHandover stops the proxy listener and returns its socket, still
+// bound, so connections that arrive before a successor serves it wait in the
+// socket's backlog instead of being refused or meeting another socket.
+func (l *listenerLifecycle) StopForHandover(ctx context.Context) (*os.File, error) {
+	response, err := l.request(ctx, listenerRequest{operation: handOverListener})
+	if err != nil {
+		return nil, err
+	}
+	return response.file, response.err
 }
 
 // Update replaces an active proxy listener after first binding its replacement.
@@ -214,20 +253,29 @@ func (l *listenerLifecycle) ShutdownContext(ctx context.Context) error {
 }
 
 func (l *listenerLifecycle) mutate(ctx context.Context, operation listenerOperation, settings ListenerSettings) (ListenerStatus, error) {
+	response, err := l.request(ctx, listenerRequest{operation: operation, settings: settings})
+	if err != nil {
+		return response.status, err
+	}
+	return response.status, response.err
+}
+
+// request hands request to the actor and returns its result. The error is
+// set only when the actor never received the request.
+func (l *listenerLifecycle) request(ctx context.Context, request listenerRequest) (listenerResult, error) {
 	if err := ctx.Err(); err != nil {
-		return l.Status(), err
+		return listenerResult{status: l.Status()}, err
 	}
 	result := make(chan listenerResult, 1)
-	request := listenerRequest{operation: operation, settings: settings, result: result}
+	request.result = result
 	select {
 	case l.requests <- request:
 	case <-ctx.Done():
-		return l.Status(), ctx.Err()
+		return listenerResult{status: l.Status()}, ctx.Err()
 	case <-l.done:
-		return l.Status(), errListenerClosed
+		return listenerResult{status: l.Status()}, errListenerClosed
 	}
-	response := <-result
-	return response.status, response.err
+	return <-result, nil
 }
 
 func (l *listenerLifecycle) run() {
@@ -244,10 +292,29 @@ func (l *listenerLifecycle) run() {
 					l.events.publish("listener.started", status)
 				}
 				request.result <- listenerResult{status: l.Status(), err: err}
-			case stopListener:
+			case startListenerOn:
+				status, run, err := l.startOn(current, request.socket)
+				if err == nil {
+					current = run
+					l.setStatus(status)
+					l.events.publish("listener.started", status)
+				}
+				request.result <- listenerResult{status: l.Status(), err: err}
+			case stopListener, handOverListener:
 				if current == nil {
 					request.result <- listenerResult{status: l.Status()}
 					continue
+				}
+				// The duplicate is taken before the socket closes, so the
+				// socket never leaves LISTEN.
+				var file *os.File
+				if request.operation == handOverListener {
+					var err error
+					file, err = listenerFile(current.socket)
+					if err != nil && !errors.Is(err, errSocketHandoverUnsupported) {
+						request.result <- listenerResult{status: l.Status(), err: err}
+						continue
+					}
 				}
 				l.stopRun(current)
 				l.closeLiveWebSockets()
@@ -263,7 +330,7 @@ func (l *listenerLifecycle) run() {
 				} else {
 					l.publishStopped(status, "requested")
 				}
-				request.result <- listenerResult{status: l.Status()}
+				request.result <- listenerResult{status: l.Status(), file: file}
 			case updateListener:
 				status, run, changed, err := l.update(current, request.settings)
 				if changed {
@@ -330,12 +397,25 @@ func (l *listenerLifecycle) start(current *listenerRun, settings ListenerSetting
 	if err != nil {
 		return ListenerStatus{}, nil, err
 	}
-	listener, err := l.bind(endpoint)
+	socket, err := l.bind(endpoint)
 	if err != nil {
 		return ListenerStatus{}, nil, err
 	}
-	actual := listener.Addr().String()
-	run, err := l.serve(listener)
+	return l.serveSocket(socket)
+}
+
+func (l *listenerLifecycle) startOn(current *listenerRun, socket net.Listener) (ListenerStatus, *listenerRun, error) {
+	if current != nil {
+		_ = socket.Close()
+		return ListenerStatus{}, nil, ErrListenerAlreadyActive
+	}
+	return l.serveSocket(socket)
+}
+
+// serveSocket serves socket, a bound TCP socket, as the proxy listener.
+func (l *listenerLifecycle) serveSocket(socket net.Listener) (ListenerStatus, *listenerRun, error) {
+	actual := socket.Addr().String()
+	run, err := l.serve(socket, l.proxy.WrapListener(socket))
 	if err != nil {
 		return ListenerStatus{}, nil, err
 	}
@@ -354,14 +434,15 @@ func (l *listenerLifecycle) update(current *listenerRun, settings ListenerSettin
 	if endpoint == currentEndpoint {
 		return activeListenerStatus(currentEndpoint), current, false, nil
 	}
-	replacement, err := l.bind(endpoint)
+	socket, err := l.bind(endpoint)
 	if err != nil {
 		return ListenerStatus{}, current, false, err
 	}
-	actual := replacement.Addr().String()
+	replacement := l.proxy.WrapListener(socket)
+	actual := socket.Addr().String()
 	l.stopRun(current)
 	l.closeLiveWebSockets()
-	run, serveErr := l.serve(replacement)
+	run, serveErr := l.serve(socket, replacement)
 	if serveErr != nil {
 		return ListenerStatus{Status: ListenerInactive}, nil, true, serveErr
 	}
@@ -373,7 +454,7 @@ func (l *listenerLifecycle) bind(endpoint string) (net.Listener, error) {
 	if err != nil {
 		return nil, listenerFailure{kind: ErrListenerUnavailable, err: err}
 	}
-	listener, err := l.proxy.GetListener(address, port)
+	listener, err := l.proxy.Listen(address, port)
 	if err != nil {
 		fmt.Fprintf(l.logWriter, "binding proxy listener on %s: %v\n", endpoint, err)
 		return nil, listenerFailure{kind: ErrListenerUnavailable, err: err}
@@ -381,9 +462,10 @@ func (l *listenerLifecycle) bind(endpoint string) (net.Listener, error) {
 	return listener, nil
 }
 
-func (l *listenerLifecycle) serve(listener net.Listener) (*listenerRun, error) {
+// serve serves listener, the proxy listener wrapped around socket.
+func (l *listenerLifecycle) serve(socket, listener net.Listener) (*listenerRun, error) {
 	ready := &listenerReadyListener{Listener: listener, started: make(chan struct{})}
-	run := &listenerRun{listener: listener, started: ready.started, finished: make(chan struct{})}
+	run := &listenerRun{socket: socket, listener: listener, started: ready.started, finished: make(chan struct{})}
 	go func() {
 		err := l.proxy.Serve(ready)
 		run.serveErr = err

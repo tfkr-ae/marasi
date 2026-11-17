@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -48,6 +50,16 @@ func (l *restartListener) Stop(context.Context) (ListenerStatus, error) {
 	defer l.mu.Unlock()
 	l.status = ListenerStatus{Status: ListenerInactive}
 	return cloneListenerStatus(l.status), nil
+}
+
+func (l *restartListener) StartOn(context.Context, net.Listener) (ListenerStatus, error) {
+	panic("unexpected listener start from a socket")
+}
+
+// StopForHandover stops like a platform that cannot hand a socket over.
+func (l *restartListener) StopForHandover(ctx context.Context) (*os.File, error) {
+	_, err := l.Stop(ctx)
+	return nil, err
 }
 
 func (l *restartListener) Update(context.Context, ListenerSettings) (ListenerStatus, error) {

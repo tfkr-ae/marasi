@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -39,8 +40,14 @@ func (l *statusListener) Status() ListenerStatus { return cloneListenerStatus(l.
 func (l *statusListener) Start(context.Context, ListenerSettings) (ListenerStatus, error) {
 	panic("unexpected listener start")
 }
+func (l *statusListener) StartOn(context.Context, net.Listener) (ListenerStatus, error) {
+	panic("unexpected listener start from a socket")
+}
 func (l *statusListener) Stop(context.Context) (ListenerStatus, error) {
 	panic("unexpected listener stop")
+}
+func (l *statusListener) StopForHandover(context.Context) (*os.File, error) {
+	panic("unexpected listener handover")
 }
 func (l *statusListener) Update(context.Context, ListenerSettings) (ListenerStatus, error) {
 	panic("unexpected listener update")

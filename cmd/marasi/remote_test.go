@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -564,6 +566,27 @@ func TestRemoteChromePathOS(t *testing.T) {
 	})
 }
 
+// listenerAddresses are the addresses an instance's listeners are bound to.
+type listenerAddresses struct {
+	ProxyListener   string `json:"proxy_listener"`
+	ControlListener string `json:"control_listener"`
+}
+
+// restartListeners reads the addresses of instance's listeners over its
+// socket, and fails unless both are active.
+func restartListeners(t *testing.T, instance remoteInstance) listenerAddresses {
+	t.Helper()
+	stdout, stderr, err := instance.local("service", "status", "--json")
+	if err != nil {
+		t.Fatalf("reading service status: %v\n%s", err, stderr)
+	}
+	var addresses listenerAddresses
+	if err := json.Unmarshal([]byte(stdout), &addresses); err != nil || addresses.ProxyListener == "" || addresses.ControlListener == "" {
+		t.Fatalf("\nwanted:\nproxy and control listeners active\ngot:\n%s %v", stdout, err)
+	}
+	return addresses
+}
+
 func TestRemoteRestart(t *testing.T) {
 	t.Parallel()
 
@@ -576,22 +599,47 @@ func TestRemoteRestart(t *testing.T) {
 		next := buildMarasiVersion(t, "new-build")
 		instance := startRemoteInstance(t, binary)
 		installBuild(t, next, binary)
+		before := restartListeners(t, instance)
 
 		stdout, stderr, err := instance.remote("--json", "service", "restart")
 		if err != nil || stderr != "" {
 			t.Fatalf("restart: stdout %q, stderr %q, error %v", stdout, stderr, err)
 		}
 		var result struct {
-			Instance string `json:"instance"`
-			Status   string `json:"status"`
-			Version  string `json:"version"`
+			Instance      string  `json:"instance"`
+			Status        string  `json:"status"`
+			Version       string  `json:"version"`
+			ProxyListener *string `json:"proxy_listener"`
 		}
 		if err := json.Unmarshal([]byte(stdout), &result); err != nil || result.Instance != "work" || result.Status != "restarted" || result.Version != "new-build" {
 			t.Fatalf("\nwanted:\nwork restarted on new-build\ngot:\n%s %v", stdout, err)
 		}
+		if result.ProxyListener == nil || *result.ProxyListener != before.ProxyListener {
+			t.Fatalf("\nwanted:\nsuccessor on proxy listener %s\ngot:\n%s", before.ProxyListener, stdout)
+		}
 		stdout, stderr, err = instance.remote("--json", "service", "status")
 		if err != nil || !strings.Contains(stdout, `"version":"new-build"`) {
 			t.Fatalf("\nwanted:\nnew-build at the same address and password\ngot:\nstdout %q stderr %q error %v", stdout, stderr, err)
+		}
+		if after := restartListeners(t, instance); after != before {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", before, after)
+		}
+
+		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "origin") }))
+		defer origin.Close()
+		proxyURL, err := url.Parse("http://" + before.ProxyListener)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), DisableCompression: true}}
+		proxied, err := client.Get(origin.URL)
+		if err != nil {
+			t.Fatalf("\nwanted:\nthe successor's proxy listener on %s answers\ngot:\n%v", before.ProxyListener, err)
+		}
+		body, _ := io.ReadAll(proxied.Body)
+		proxied.Body.Close()
+		if proxied.StatusCode != http.StatusOK || string(body) != "origin" {
+			t.Fatalf("\nwanted:\n200 origin\ngot:\n%d %q", proxied.StatusCode, body)
 		}
 	})
 }

@@ -97,9 +97,16 @@ func TestControlAddressResumeAfterHandover(t *testing.T) {
 		}()
 		<-entered
 
-		if _, err := control.suspendForHandover(); err != nil {
+		if _, _, err := control.suspendForHandover(); err != nil {
 			t.Fatal(err)
 		}
+		// Free the address the way a platform that cannot hand a socket
+		// over does, so resuming has to bind it again.
+		control.mu.Lock()
+		if err := control.run.closeHandover(); err != nil {
+			t.Fatal(err)
+		}
+		control.mu.Unlock()
 		occupier, err := net.Listen("tcp4", address)
 		if err != nil {
 			t.Fatal(err)
