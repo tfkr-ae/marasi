@@ -27,9 +27,13 @@ const (
 	DirectionFromServer = "server"
 	// CloseHandshakeTimeout bounds the local close handshake.
 	CloseHandshakeTimeout = time.Second
-	// RelayedCloseTimeout bounds a close handshake between the peers. It runs
-	// from the first relayed close frame; the peers normally finish it by
-	// dropping TCP well before then.
+	// RelayedCloseTimeout bounds how long the peers may stay silent during a
+	// close handshake between them. It runs from the first relayed close
+	// frame; the peers normally finish by dropping TCP well before then. It
+	// pauses while any message is in process, held in Checkpoint or running
+	// in an extension, and restarts in full when processing ends, so time
+	// Marasi spends on a message never counts against the peers. A message
+	// held forever keeps the connection open.
 	RelayedCloseTimeout = 5 * time.Second
 )
 
@@ -87,9 +91,13 @@ type Connection struct {
 	started atomic.Bool
 	// closeRelayed is set once a peer's close frame has been relayed. The
 	// relay then keeps both directions open so the reply close reaches the
-	// other peer, and tears down when a peer drops TCP.
+	// other peer, and tears down when a peer drops TCP or when the peers
+	// stay silent for relayedCloseTimeout with no message in process.
 	closeRelayed        atomic.Bool
 	relayedCloseTimeout time.Duration
+	// inProcess counts the messages in c.process, so relayedCloseTimeout
+	// pauses while Marasi itself holds one.
+	inProcess processCount
 
 	mu          sync.RWMutex
 	closeCode   int
@@ -245,7 +253,7 @@ func (c *Connection) handleMessage(message *Message, out frameSink) (isClose boo
 	received := message.Opcode
 
 	if c.process != nil {
-		if err := c.process(message); err != nil {
+		if err := c.runProcess(message); err != nil {
 			return false, fmt.Errorf("processing websocket message: %w", err)
 		}
 	}
@@ -279,14 +287,107 @@ func (c *Connection) noteCloseRelayed() {
 		return
 	}
 	go func() {
-		timer := time.NewTimer(c.relayedCloseTimeout)
-		defer timer.Stop()
-		select {
-		case <-c.done:
-		case <-timer.C:
+		if c.awaitPeerSilence() {
 			_ = c.shutdown()
 		}
 	}()
+}
+
+// runProcess runs c.process on message and counts the message as in process
+// meanwhile.
+func (c *Connection) runProcess(message *Message) error {
+	c.inProcess.begin()
+	defer c.inProcess.end()
+	return c.process(message)
+}
+
+// awaitPeerSilence waits until relayedCloseTimeout passes with no message in
+// process and reports true, or reports false once the connection shuts down.
+// Processing that begins stops the wait, which restarts in full when no
+// message is in process again.
+func (c *Connection) awaitPeerSilence() bool {
+	for {
+		busy, changed := c.inProcess.state()
+		if busy {
+			select {
+			case <-c.done:
+				return false
+			case <-changed:
+				continue
+			}
+		}
+		timer := time.NewTimer(c.relayedCloseTimeout)
+		select {
+		case <-c.done:
+			timer.Stop()
+			return false
+		case <-changed:
+			timer.Stop()
+		case <-timer.C:
+			// Processing may have begun as the timer fired.
+			if busy, _ := c.inProcess.state(); !busy {
+				return true
+			}
+		}
+	}
+}
+
+// peerSilence returns a channel that is closed when awaitPeerSilence reports
+// silence. Its goroutine ends when the connection shuts down.
+func (c *Connection) peerSilence() <-chan struct{} {
+	silent := make(chan struct{})
+	go func() {
+		if c.awaitPeerSilence() {
+			close(silent)
+		}
+	}()
+	return silent
+}
+
+// processCount counts the messages in process and signals each change
+// between none and some.
+type processCount struct {
+	mu sync.Mutex
+	n  int
+	// changed is closed, and replaced, when n moves between zero and
+	// non-zero.
+	changed chan struct{}
+}
+
+func (p *processCount) begin() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.n++
+	if p.n == 1 {
+		p.signalLocked()
+	}
+}
+
+func (p *processCount) end() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.n--
+	if p.n == 0 {
+		p.signalLocked()
+	}
+}
+
+func (p *processCount) signalLocked() {
+	if p.changed != nil {
+		close(p.changed)
+	}
+	p.changed = make(chan struct{})
+}
+
+// state reports whether any message is in process, and a channel that is
+// closed when that next changes.
+func (p *processCount) state() (busy bool, changed <-chan struct{}) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.changed == nil {
+		p.changed = make(chan struct{})
+	}
+	return p.n > 0, p.changed
 }
 
 func (c *Connection) shutdown() error {
@@ -342,14 +443,13 @@ func (c *Connection) Run() error {
 		// The peer this direction wrote to is gone, but what it sent before
 		// it left, often its close, may still be unread by the other
 		// direction. That direction reads the gone peer, so it ends soon;
-		// let it relay the close before both legs are closed.
-		timer := time.NewTimer(c.relayedCloseTimeout)
+		// let it relay the close before both legs are closed. The wait
+		// pauses while the close is in process, as RelayedCloseTimeout does.
 		select {
 		case <-results:
 			drained = true
-		case <-timer.C:
+		case <-c.peerSilence():
 		}
-		timer.Stop()
 	}
 	closeHandshake := c.closing.Load() || c.closeRelayed.Load()
 
@@ -424,7 +524,7 @@ func (c *Connection) Inject(direction string, opcode int, payload []byte, option
 	}
 
 	if c.process != nil {
-		if err := c.process(message); err != nil {
+		if err := c.runProcess(message); err != nil {
 			return domain.WebSocketMessage{}, fmt.Errorf("processing injected websocket message: %w", err)
 		}
 	}
@@ -533,7 +633,7 @@ func (c *Connection) sendGeneratedClose(
 	message.Metadata["generated"] = true
 
 	if c.process != nil {
-		if err := c.process(message); err != nil {
+		if err := c.runProcess(message); err != nil {
 			return fmt.Errorf("processing generated websocket close message: %w", err)
 		}
 	}

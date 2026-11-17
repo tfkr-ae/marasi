@@ -200,6 +200,154 @@ func TestRelay_CompletesTheCloseHandshake(t *testing.T) {
 	})
 }
 
+// heldMessages is a process func that holds the messages it matches until
+// the test releases them, as Checkpoint does.
+type heldMessages struct {
+	matches func(*Message) bool
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func holdMessages(t *testing.T, matches func(*Message) bool) *heldMessages {
+	t.Helper()
+	held := &heldMessages{matches: matches, entered: make(chan struct{}, 16), release: make(chan struct{})}
+	t.Cleanup(held.releaseAll)
+	return held
+}
+
+func (h *heldMessages) process(message *Message) error {
+	if h.matches(message) {
+		h.entered <- struct{}{}
+		<-h.release
+	}
+	return nil
+}
+
+func (h *heldMessages) releaseAll() { h.once.Do(func() { close(h.release) }) }
+
+func (h *heldMessages) awaitHeld(t *testing.T) {
+	t.Helper()
+	select {
+	case <-h.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("\nwanted message state:\n%q\ngot:\n%q", "held", "not processed")
+	}
+}
+
+func TestRelay_RelayedCloseTimeoutCountsOnlyPeerSilence(t *testing.T) {
+	const timeout = time.Millisecond
+	closeFrame := Frame{Fin: true, Opcode: OpClose, Payload: []byte{0x03, 0xe8}}
+	ping := Frame{Fin: true, Opcode: OpPing}
+	fromServer := func(message *Message) bool { return message.Direction == DirectionFromServer }
+	clientPing := func(message *Message) bool {
+		return message.Direction == DirectionFromClient && message.Opcode == OpPing
+	}
+
+	t.Run("should relay the reply close that was held far longer than the timeout", func(t *testing.T) {
+		// Autobahn 7.1.6: the client sends a text, a close and a ping, and
+		// the server's echo and reply close are held in Checkpoint.
+		serverHeld := holdMessages(t, fromServer)
+		pingHeld := holdMessages(t, clientPing)
+		relay := startRelayWith(t, func(message *Message) error {
+			_ = serverHeld.process(message)
+			return pingHeld.process(message)
+		}, func(c *Connection) { c.relayedCloseTimeout = timeout })
+
+		text := Frame{Fin: true, Opcode: OpText, Payload: []byte("hello")}
+		relay.relayFromClient(t, text)
+		if err := WriteFrame(relay.upstream, text, false); err != nil {
+			t.Fatalf("writing server echo: %v", err)
+		}
+		serverHeld.awaitHeld(t)
+
+		relay.relayFromClient(t, closeFrame)
+		if err := WriteFrame(relay.client, ping, true); err != nil {
+			t.Fatalf("writing client ping after close: %v", err)
+		}
+		pingHeld.awaitHeld(t)
+		replyWritten := make(chan error, 1)
+		go func() { replyWritten <- WriteFrame(relay.upstream, closeFrame, false) }()
+
+		<-time.After(100 * timeout)
+		serverHeld.releaseAll()
+
+		for _, want := range []Frame{text, closeFrame} {
+			got, err := ReadFrame(relay.client)
+			if err != nil {
+				t.Fatalf("\nwanted frame at client:\n%+v\ngot error:\n%v", want, err)
+			}
+			assertSameFrame(t, want, got)
+		}
+		if err := <-replyWritten; err != nil {
+			t.Fatalf("writing server reply close: %v", err)
+		}
+
+		pingHeld.releaseAll()
+		_ = relay.upstream.Close()
+		relay.assertReturnsCleanly(t)
+	})
+
+	t.Run("should end the relay once the peers go silent after a held message is released", func(t *testing.T) {
+		pingHeld := holdMessages(t, clientPing)
+		relay := startRelayWith(t, pingHeld.process, func(c *Connection) { c.relayedCloseTimeout = timeout })
+
+		relay.relayFromClient(t, closeFrame)
+		if err := WriteFrame(relay.client, ping, true); err != nil {
+			t.Fatalf("writing client ping after close: %v", err)
+		}
+		pingHeld.awaitHeld(t)
+		pingHeld.releaseAll()
+
+		relay.assertReturnsCleanly(t)
+	})
+
+	t.Run("should relay a gone client's held close to the upstream", func(t *testing.T) {
+		var sent bytes.Buffer
+		if err := WriteFrame(&sent, closeFrame, true); err != nil {
+			t.Fatalf("encoding client close: %v", err)
+		}
+		client := &goneClient{sent: bytes.NewReader(sent.Bytes()), writeFailed: make(chan struct{})}
+		closeHeld := holdMessages(t, func(message *Message) bool {
+			return message.Opcode == OpClose && message.Direction == DirectionFromClient
+		})
+
+		upstreamConnection, upstreamPeer := net.Pipe()
+		defer upstreamPeer.Close()
+		if err := upstreamPeer.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatalf("setting upstream peer deadline: %v", err)
+		}
+		connection := NewConnection(uuid.Nil, uuid.Nil, client, client, upstreamConnection, closeHeld.process)
+		connection.relayedCloseTimeout = timeout
+		result := make(chan error, 1)
+		go func() { result <- connection.Run() }()
+		closeHeld.awaitHeld(t)
+
+		// The write of this text to the gone client fails, and Run waits
+		// for the held close.
+		if err := WriteFrame(upstreamPeer, Frame{Fin: true, Opcode: OpText, Payload: []byte("late")}, false); err != nil {
+			t.Fatalf("writing upstream text: %v", err)
+		}
+		<-client.writeFailed
+		<-time.After(100 * timeout)
+		closeHeld.releaseAll()
+
+		got, err := ReadFrame(upstreamPeer)
+		if err != nil {
+			t.Fatalf("\nwanted the client's close at the upstream\ngot error:\n%v", err)
+		}
+		assertSameFrame(t, closeFrame, got)
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatalf("Run() returned unexpected error: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("\nwanted Run state:\n%q\ngot:\n%q", "returned", "blocked")
+		}
+	})
+}
+
 // closingUpstream accepts writes until it has received a close frame, then
 // fails them, as a peer that dropped TCP does. Reads deliver reply only after
 // a write has failed, then EOF.

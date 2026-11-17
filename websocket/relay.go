@@ -342,7 +342,7 @@ func (in *inbound) recordUnfinished() {
 	_ = in.out.writeFrames(message.frames...)
 	message.Passthrough = true
 	if in.c.process != nil {
-		_ = in.c.process(message)
+		_ = in.c.runProcess(message)
 	}
 }
 
@@ -446,7 +446,7 @@ func (in *inbound) recordTooLarge(frame Frame, pending *Message, size int64) {
 	message.Metadata["size_seen"] = size
 	message.Passthrough = true
 	if c.process != nil {
-		_ = c.process(message)
+		_ = c.runProcess(message)
 	}
 }
 
