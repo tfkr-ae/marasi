@@ -64,8 +64,11 @@ func (c *h1Conn) exchange(head *h1.RequestHead) bool {
 	}
 	if err != nil && pair.ResponseBodyEnding == BodyCutShort {
 		// No response modifier ran: what arrived goes on as it arrived,
-		// and the connection ends as the origin's did (ticket 19).
-		wire.head.WriteTo(c.bw)
+		// less the hop-by-hop fields, and the connection ends as the
+		// origin's did (ticket 19).
+		head := wire.head.Clone()
+		head.Header.RemoveConnectionOptions(false)
+		head.WriteTo(c.bw)
 		wire.body.WriteTo(c.bw)
 		c.bw.Flush()
 		return false
@@ -229,13 +232,16 @@ func expectsContinue(head *h1.RequestHead, framing h1.Framing) bool {
 	return false
 }
 
-// relayInterim writes an origin's interim response to the client as read. A
-// 100 is not relayed: Marasi answers Expect itself. Nor is any 1xx sent to an
-// HTTP/1.0 client, which did not ask for one (RFC 9110 §15.2).
+// relayInterim writes an origin's interim response to the client as read,
+// less its hop-by-hop fields, as for every message on each leg. A 100 is not
+// relayed: Marasi answers Expect itself. Nor is any 1xx sent to an HTTP/1.0
+// client, which did not ask for one (RFC 9110 §15.2).
 func (c *h1Conn) relayInterim(req *http.Request, head *h1.ResponseHead) {
 	if head.StatusCode == http.StatusContinue || !req.ProtoAtLeast(1, 1) {
 		return
 	}
+	head = head.Clone()
+	head.Header.RemoveConnectionOptions(false)
 	head.WriteTo(c.bw)
 	c.bw.Flush()
 }

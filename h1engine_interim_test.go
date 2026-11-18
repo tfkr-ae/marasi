@@ -161,6 +161,17 @@ func TestH1Engine_InterimResponses(t *testing.T) {
 		expectCapturedResponse(t, captured, finalOK)
 	})
 
+	t.Run("should remove the hop-by-hop fields of a relayed 103", func(t *testing.T) {
+		const hints = "HTTP/1.1 103 Early Hints\r\nConnection: X-Hint\r\nX-Hint: 1\r\nlink: </style.css>; rel=preload\r\n\r\n"
+		origin := newScriptedOrigin(t, func(conn net.Conn) { io.WriteString(conn, hints+finalOK) })
+		addr, _ := serveH1EngineProxy(t)
+		conn, br := dialProxy(t, addr)
+
+		fmt.Fprintf(conn, "GET http://%s/hints HTTP/1.1\r\nHost: %s\r\n\r\n", origin.addr, origin.addr)
+
+		readExactly(t, br, earlyHints+finalOK)
+	})
+
 	t.Run("should relay a 102 and a 103 in the order the origin sent them", func(t *testing.T) {
 		processing := "HTTP/1.1 102 Processing\r\n\r\n"
 		origin := newScriptedOrigin(t, func(conn net.Conn) {

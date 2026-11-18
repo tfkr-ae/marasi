@@ -113,6 +113,18 @@ func TestH1Engine_OriginEndsTheConnection(t *testing.T) {
 		expectClosed(t, conn, br, 5*time.Second)
 	})
 
+	t.Run("should remove the hop-by-hop fields of a response the origin cut short", func(t *testing.T) {
+		const cut = "HTTP/1.1 200 OK\r\nConnection: X-Hop\r\nX-Hop: 1\r\nContent-Length: 20\r\n\r\nonly ten b"
+		origin := newScriptedOrigin(t, func(conn net.Conn) { io.WriteString(conn, cut) })
+		addr, _ := serveH1EngineProxy(t)
+		conn, br := dialProxy(t, addr)
+
+		fmt.Fprintf(conn, "GET http://%s/ HTTP/1.1\r\nHost: %s\r\n\r\n", origin.addr, origin.addr)
+
+		readExactly(t, br, "HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\nonly ten b")
+		expectClosed(t, conn, br, 5*time.Second)
+	})
+
 	t.Run("should store what arrived of a body the origin cut short, recording the cut-short ending", func(t *testing.T) {
 		const cut = "HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\nonly ten b"
 		origin := newScriptedOrigin(t, func(conn net.Conn) { io.WriteString(conn, cut) })
