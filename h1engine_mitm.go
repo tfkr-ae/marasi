@@ -4,15 +4,13 @@ import (
 	"bufio"
 	"crypto/tls"
 	"crypto/x509"
-	"net"
 	"net/http"
 	"time"
-
-	utls "github.com/refraction-networking/utls"
 )
 
-// MITM on Marasi's own engine: the client leg's TLS inside a CONNECT, and
-// the origin leg's TLS for an https request. TLS sent straight to the
+// MITM on Marasi's own engine: the client leg's TLS inside a CONNECT. The
+// origin leg's TLS for an https request is proxy.dialOrigin's
+// (h1engine_route.go), through the routed transport's utls handshake. TLS sent straight to the
 // listener is completed by the protocol mux (listener package) with the
 // config setMITM returns, before the engine sees the connection.
 
@@ -28,16 +26,11 @@ func (engine *h1Engine) setMITM(certificate *x509.Certificate, privateKey any) (
 	return issuer.config(""), nil
 }
 
-// setRoundTripper takes only whether the transport verifies origins: the
-// engine carries requests itself. Tests set a transport that skips
-// verification to reach a self-signed origin.
+// setRoundTripper takes the routed transport under base, if any, as the one
+// the engine dials origins through (proxy.dialOrigin): the engine carries
+// requests itself. Serve stores the same transport; tests that serve the
+// engine directly set one that trusts their self-signed origins.
 func (engine *h1Engine) setRoundTripper(base http.RoundTripper) {
-	engine.insecureOrigins = skipsOriginVerification(base)
-}
-
-// skipsOriginVerification reports whether base is a routed transport set to
-// trust any origin certificate.
-func skipsOriginVerification(base http.RoundTripper) bool {
 	for {
 		switch rt := base.(type) {
 		case *launchFailureRoundTripper:
@@ -45,9 +38,10 @@ func skipsOriginVerification(base http.RoundTripper) bool {
 		case *marasiRoundTripper:
 			base = rt.base
 		case *routedTransport:
-			return rt.insecureSkipVerify
+			engine.proxy.transport.Store(rt)
+			return
 		default:
-			return false
+			return
 		}
 	}
 }
@@ -76,23 +70,6 @@ func (c *h1Conn) intercept(connectHost string) bool {
 	c.br = bufio.NewReader(tlsConn)
 	c.bw.Reset(tlsConn)
 	return true
-}
-
-// dialOrigin opens the connection to the origin at addr, and for an https
-// request runs the utls handshake on it.
-func (c *h1Conn) dialOrigin(pair *Pair, addr string, secure bool) (net.Conn, error) {
-	ctx := pair.Context()
-	conn, err := c.engine.proxy.dialTransport(ctx, "tcp", addr)
-	if err != nil || !secure {
-		return conn, err
-	}
-	return handshakeOrigin(ctx, conn, addr, c.engine.proxy.CurrentRoute(), c.engine.insecureOrigins)
-}
-
-// overTLS reports whether an origin connection runs TLS.
-func overTLS(conn net.Conn) bool {
-	_, ok := conn.(*utls.UConn)
-	return ok
 }
 
 // carried reports whether the engine carries a request with scheme, and the

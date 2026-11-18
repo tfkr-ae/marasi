@@ -82,7 +82,9 @@ func serveH1EngineMITMProxy(t *testing.T, trustOrigin bool) (string, *capturedPa
 		t.Fatalf("creating proxy listener: %v", err)
 	}
 	// As Serve does, with the origin leg the test asks for.
-	proxy.setRoundTripper(newDirectTransport(proxy.dialTransport, trustOrigin))
+	routed := newRoutedTransport(proxy.resolveRoute, proxy.CurrentRoute, proxy.dialTransport)
+	routed.insecureSkipVerify = trustOrigin
+	proxy.setRoundTripper(&marasiRoundTripper{base: routed})
 	proxy.dbWriterStarted.Store(true)
 	go proxy.WriteToDB()
 	serveResult := make(chan error, 1)

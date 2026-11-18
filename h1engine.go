@@ -40,10 +40,8 @@ type h1Engine struct {
 	handlers sync.WaitGroup
 
 	// leaves issues the leaf certificates of intercepted TLS, nil until
-	// setMITM. insecureOrigins skips origin verification (tests only).
-	// Both are set before serving (h1engine_mitm.go).
-	leaves          *leafIssuer
-	insecureOrigins bool
+	// setMITM, which runs before serving (h1engine_mitm.go).
+	leaves *leafIssuer
 
 	mu sync.Mutex
 	// conns are the client connections being served, true while one waits
@@ -122,6 +120,7 @@ func (engine *h1Engine) idle(conn *h1Conn) bool {
 		return false
 	}
 	engine.conns[conn] = true
+	conn.retireOrigin()
 	return true
 }
 
