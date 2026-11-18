@@ -2,6 +2,7 @@ package marasi
 
 import (
 	"errors"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -21,6 +22,8 @@ import (
 //     flight when an origin closes is finished first (exchange);
 //   - a client that leaves closes the origin connection (end, and sendUpstream
 //     while the origin answers);
+//   - a body the origin cut short is forwarded as far as it got, then the
+//     client connection closes, or is reset when the origin reset its own;
 //   - a head the codec cannot read is answered 400 and the connection ends.
 const (
 	// headerTimeout bounds reading a request's head.
@@ -130,5 +133,23 @@ func (c *h1Conn) stopWatchingOrigin() {
 	origin.watch, origin.stopping = nil, false
 	if origin.ended || origin.retired {
 		c.closeOrigin()
+	}
+}
+
+// resetConnection makes conn's close send a reset rather than a FIN, as an
+// origin's reset is passed on to the client. Bytes not yet sent may be lost,
+// as they are at the origin. conn is unwrapped down to its TCP connection;
+// a connection that is not TCP closes as usual.
+func resetConnection(conn net.Conn) {
+	for {
+		switch c := conn.(type) {
+		case *net.TCPConn:
+			c.SetLinger(0)
+			return
+		case interface{ NetConn() net.Conn }:
+			conn = c.NetConn()
+		default:
+			return
+		}
 	}
 }

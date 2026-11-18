@@ -2,10 +2,12 @@ package marasi
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -71,6 +73,24 @@ func TestH1Engine_OriginEndsTheConnection(t *testing.T) {
 
 		readExactly(t, br, cut)
 		expectClosed(t, conn, br, 5*time.Second)
+	})
+
+	t.Run("should forward what arrived of a body the origin reset and then reset the client connection", func(t *testing.T) {
+		const cut = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n"
+		origin := newScriptedOrigin(t, func(conn net.Conn) {
+			io.WriteString(conn, cut)
+			time.Sleep(100 * time.Millisecond)
+			conn.(*net.TCPConn).SetLinger(0)
+		})
+		addr, _ := serveH1EngineProxy(t)
+		conn, br := dialProxy(t, addr)
+
+		fmt.Fprintf(conn, "GET http://%s/ HTTP/1.1\r\nHost: %s\r\n\r\n", origin.addr, origin.addr)
+
+		readExactly(t, br, cut)
+		if rest, err := io.ReadAll(br); !errors.Is(err, syscall.ECONNRESET) {
+			t.Fatalf("wanted the client connection reset, got %v (and %q)", err, rest)
+		}
 	})
 
 	t.Run("should close the client connection when the origin closes its connection between responses", func(t *testing.T) {

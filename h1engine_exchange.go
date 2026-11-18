@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"syscall"
 
 	"github.com/tfkr-ae/marasi/internal/h1"
 )
@@ -69,6 +70,9 @@ func (c *h1Conn) exchange(head *h1.RequestHead) bool {
 		wire.head.WriteTo(c.bw)
 		wire.body.WriteTo(c.bw)
 		c.bw.Flush()
+		if c.originReset {
+			resetConnection(c.conn)
+		}
 		return false
 	}
 	keep := keepAlive(head.Proto, &head.Header)
@@ -182,6 +186,7 @@ func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error)
 	switch {
 	case bodyErr != nil:
 		res.Body = cutShortBody(body.Payload(), bodyErr)
+		c.originReset = errors.Is(bodyErr, syscall.ECONNRESET)
 		c.closeOrigin()
 	case framing.Kind != h1.NoBody:
 		res.Body = io.NopCloser(bytes.NewReader(body.Payload()))

@@ -20,6 +20,9 @@ type connWrapper struct {
 	closeOnce sync.Once
 }
 
+// NetConn returns the wrapped connection.
+func (cw *connWrapper) NetConn() net.Conn { return cw.Conn }
+
 // connWrapper.Read method will read from the io.Reader instead of the net.Conn
 func (cw *connWrapper) Read(b []byte) (int, error) {
 	return cw.Reader.Read(b)

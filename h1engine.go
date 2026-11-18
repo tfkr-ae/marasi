@@ -166,6 +166,9 @@ type h1Conn struct {
 	// kept is set once the connection carried a request and stays open for
 	// another; the wait for that one is the idle timeout.
 	kept bool
+	// originReset is set when the origin reset its connection mid-body;
+	// the client connection is then reset too.
+	originReset bool
 	// hijacked is set once the base pipeline took the connection over.
 	hijacked bool
 	// origin is this client connection's origin connection, nil until its
