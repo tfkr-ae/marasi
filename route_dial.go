@@ -45,7 +45,8 @@ const (
 
 // UpstreamProxyError is a route's failure to carry a connection. Its text
 // names the upstream proxy by name and redacted address and never holds
-// credentials, because martian copies it into the client's Warning header.
+// credentials, because it is the body of the proxy error response the client
+// gets and is written to the proxy log.
 type UpstreamProxyError struct {
 	// Name is the selected upstream proxy's name.
 	Name string

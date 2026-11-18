@@ -45,6 +45,7 @@ func TestRequestRoundTrip(t *testing.T) {
 		raw  string
 	}{
 		{"should keep a plain GET", "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"},
+		{"should keep a higher HTTP/1 minor version as written", "GET / HTTP/1.2\r\nHost: example.com\r\n\r\n"},
 		{"should keep odd name case and value whitespace", "GET / HTTP/1.1\r\nhOsT:example.com  \r\nX-odd:\t a  b \t\r\ncontent-TYPE:x\r\n\r\n"},
 		{"should keep repeated names in order", "GET / HTTP/1.1\r\nCookie: a=1\r\nAccept: */*\r\ncookie: b=2\r\nCOOKIE:c=3\r\n\r\n"},
 		{"should keep obsolete line folding", "GET / HTTP/1.1\r\nX-Fold: one\r\n  two\r\n\tthree\r\nHost: h\r\n\r\n"},

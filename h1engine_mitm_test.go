@@ -58,7 +58,6 @@ func serveH1EngineMITMProxy(t *testing.T, trustOrigin bool) (string, *capturedPa
 	repository := db.NewProxyRepo(database)
 	captured := &capturedPair{request: make(chan domain.ProxyRequest, 16), response: make(chan domain.ProxyResponse, 16)}
 	proxy, err := New(
-		withH1Engine(),
 		WithLogger(logger),
 		WithConfigDir(t.TempDir()),
 		WithDefaultRepositories(repository),

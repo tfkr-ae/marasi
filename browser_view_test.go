@@ -1,6 +1,7 @@
 package marasi
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
@@ -10,8 +11,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/http/httputil"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -208,6 +209,11 @@ func startViewOrigin(t *testing.T, secure bool) *viewOrigin {
 		origin.mu.Unlock()
 		body, _ := io.ReadAll(r.Body)
 		switch r.URL.Path {
+		case "/chunked":
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprintf(w, "chunked, visit %d", visit)
+			w.(http.Flusher).Flush()
+			io.WriteString(w, " and more")
 		case "/moved":
 			w.Header().Set("Location", "/elsewhere")
 			w.WriteHeader(http.StatusFound)
@@ -259,17 +265,78 @@ func (h *viewHarness) storedResponse(t *testing.T, id uuid.UUID) []byte {
 	return stored.Raw
 }
 
-// assertServedStored checks that res is the stored raw response, byte for byte.
+// assertServedStored checks that res, as net/http read it, is the stored raw
+// response: its status, fields and body. TestProxy_BrowserViewServesTheStoredBytes
+// checks the bytes on the wire.
 func assertServedStored(t *testing.T, res *http.Response, body []byte, stored []byte) {
 	t.Helper()
-	res.Body = io.NopCloser(bytes.NewReader(body))
-	got, err := httputil.DumpResponse(res, true)
+	want, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(stored)), nil)
 	if err != nil {
-		t.Fatalf("dumping the served response: %v", err)
+		t.Fatalf("reading the stored response: %v", err)
 	}
-	if !bytes.Equal(got, stored) {
-		t.Errorf("served response\nwanted:\n%s\ngot:\n%s", stored, got)
+	wantBody, _ := io.ReadAll(want.Body)
+	want.Header.Del("Transfer-Encoding")
+	got := res.Header.Clone()
+	got.Del("Transfer-Encoding")
+	if res.Status != want.Status || !reflect.DeepEqual(got, want.Header) || !bytes.Equal(body, wantBody) {
+		t.Errorf("served response\nwanted:\n%s\n%v\n%s\ngot:\n%s\n%v\n%s", want.Status, want.Header, wantBody, res.Status, res.Header, body)
 	}
+}
+
+// getRaw sends a GET for target through the proxy listener on a connection
+// of its own and returns the response bytes up to the connection's end.
+func (h *viewHarness) getRaw(t *testing.T, target string) []byte {
+	t.Helper()
+	conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", h.proxy.Port))
+	if err != nil {
+		t.Fatalf("dialling the proxy: %v", err)
+	}
+	defer conn.Close()
+	u, _ := url.Parse(target)
+	fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", target, u.Host)
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	got, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatalf("reading the served response: %v", err)
+	}
+	return got
+}
+
+func TestProxy_BrowserViewServesTheStoredBytes(t *testing.T) {
+	t.Run("should serve a stored response with a length exactly as stored", func(t *testing.T) {
+		h := startViewHarness(t, viewHarnessConfig{})
+		origin := startViewOrigin(t, false)
+		browser := h.client(t, "127.0.0.1")
+		req, _ := http.NewRequest(http.MethodGet, origin.URL+"/page", nil)
+		pair := h.capture(t, browser, req)
+		stored := h.storedResponse(t, pair.ID)
+
+		got := h.getRaw(t, openView(t, browser, pair.ID))
+
+		if !bytes.Equal(got, stored) {
+			t.Fatalf("served response\nwanted:\n%q\ngot:\n%q", stored, got)
+		}
+	})
+
+	t.Run("should serve a stored chunked response in its stored order, chunked", func(t *testing.T) {
+		h := startViewHarness(t, viewHarnessConfig{})
+		origin := startViewOrigin(t, false)
+		browser := h.client(t, "127.0.0.1")
+		req, _ := http.NewRequest(http.MethodGet, origin.URL+"/chunked", nil)
+		pair := h.capture(t, browser, req)
+		stored := h.storedResponse(t, pair.ID)
+		head, payload, _ := bytes.Cut(stored, []byte("\r\n\r\n"))
+		if !bytes.Contains(head, []byte("Transfer-Encoding: chunked")) {
+			t.Fatalf("wanted a stored chunked response\ngot: %q", stored)
+		}
+
+		got := h.getRaw(t, openView(t, browser, pair.ID))
+
+		want := fmt.Sprintf("%s\r\n\r\n%x\r\n%s\r\n0\r\n\r\n", head, len(payload), payload)
+		if string(got) != want {
+			t.Fatalf("served response\nwanted:\n%q\ngot:\n%q", want, got)
+		}
+	})
 }
 
 func TestProxy_MarasiPages(t *testing.T) {

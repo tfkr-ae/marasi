@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 )
 
@@ -29,6 +30,10 @@ var (
 	// ErrMalformedHead is returned for a start line or field line that does
 	// not parse as HTTP/1.1.
 	ErrMalformedHead = errors.New("malformed message head")
+	// ErrUnsupportedVersion is returned, together with ErrMalformedHead,
+	// for a request line whose version is well formed but whose major
+	// version is not 1, which a server answers with 505 (RFC 9110 §15.6.6).
+	ErrUnsupportedVersion = errors.New("unsupported HTTP major version")
 	// ErrHeadTooLarge is returned when a head runs past MaxHeadBytes.
 	ErrHeadTooLarge = errors.New("message head too large")
 )
@@ -92,6 +97,9 @@ func ReadRequestHead(br *bufio.Reader) (*RequestHead, error) {
 	line := buf[lead:]
 	method, target, proto, ok := parseRequestLine(trimEOL(line))
 	if !ok {
+		if otherMajorVersion(trimEOL(line)) {
+			return nil, fmt.Errorf("parsing request line %q: %w: %w", trimEOL(line), ErrUnsupportedVersion, ErrMalformedHead)
+		}
 		return nil, fmt.Errorf("parsing request line %q: %w", trimEOL(line), ErrMalformedHead)
 	}
 	h.Method, h.Target, h.Proto = method, target, proto
@@ -148,26 +156,41 @@ func (h *ResponseHead) WriteTo(w io.Writer) (int64, error) {
 
 // Bytes returns the head as WriteTo would write it.
 func (h *RequestHead) Bytes() []byte {
-	var b bytes.Buffer
-	_, _ = h.WriteTo(&b)
-	return b.Bytes()
+	return appendParts(nil, h.Lead, h.Line, h.Header)
 }
 
 // Bytes returns the head as WriteTo would write it.
 func (h *ResponseHead) Bytes() []byte {
-	var b bytes.Buffer
-	_, _ = h.WriteTo(&b)
-	return b.Bytes()
+	return appendParts(nil, nil, h.Line, h.Header)
+}
+
+// Clone returns a copy of the head that Merge and the other editing methods
+// can change without changing h. The field bytes are shared: nothing in this
+// package writes into them.
+func (h *RequestHead) Clone() *RequestHead {
+	c := *h
+	c.Header.Fields = slices.Clone(h.Header.Fields)
+	return &c
+}
+
+// Clone returns a copy of the head that Merge and the other editing methods
+// can change without changing h, as RequestHead.Clone.
+func (h *ResponseHead) Clone() *ResponseHead {
+	c := *h
+	c.Header.Fields = slices.Clone(h.Header.Fields)
+	return &c
 }
 
 func writeParts(w io.Writer, lead, line []byte, header Header) (int64, error) {
-	size := len(lead) + len(line) + header.size()
-	b := make([]byte, 0, size)
+	n, err := w.Write(appendParts(nil, lead, line, header))
+	return int64(n), err
+}
+
+func appendParts(b, lead, line []byte, header Header) []byte {
+	b = slices.Grow(b, len(lead)+len(line)+header.size())
 	b = append(b, lead...)
 	b = append(b, line...)
-	b = header.appendTo(b)
-	n, err := w.Write(b)
-	return int64(n), err
+	return header.appendTo(b)
 }
 
 func headReadError(err error) error {
@@ -243,9 +266,33 @@ func parseStatusLine(line []byte) (proto string, code int, reason string, ok boo
 	return string(p), n, string(r), true
 }
 
-// validProto accepts HTTP/1.0 and HTTP/1.1, the versions this codec frames.
+// otherMajorVersion reports whether a request line is well formed apart from
+// a version of the form HTTP/DIGIT.DIGIT (RFC 9112 §2.3) whose major version
+// is not 1. The HTTP/2 connection preface is not: it is built to fail as an
+// HTTP/1.1 request (RFC 9113 §3.4).
+func otherMajorVersion(line []byte) bool {
+	if string(line) == "PRI * HTTP/2.0" {
+		return false
+	}
+	i := bytes.LastIndexByte(line, ' ')
+	if i < 0 {
+		return false
+	}
+	p := line[i+1:]
+	if len(p) != len("HTTP/1.1") || string(p[:5]) != "HTTP/" || p[6] != '.' ||
+		p[5] < '0' || p[5] > '9' || p[7] < '0' || p[7] > '9' || p[5] == '1' {
+		return false
+	}
+	head := append(append([]byte(nil), line[:i+1]...), "HTTP/1.1"...)
+	_, _, _, ok := parseRequestLine(head)
+	return ok
+}
+
+// validProto accepts HTTP/1.0, HTTP/1.1 and any later HTTP/1 minor version,
+// which a recipient processes as the highest minor version it implements
+// (RFC 9112 §2.3), so this codec frames it as HTTP/1.1.
 func validProto(p []byte) bool {
-	return string(p) == "HTTP/1.1" || string(p) == "HTTP/1.0"
+	return len(p) == len("HTTP/1.1") && string(p[:len("HTTP/1.")]) == "HTTP/1." && '0' <= p[7] && p[7] <= '9'
 }
 
 // isToken reports whether b is a non-empty RFC 9110 token.

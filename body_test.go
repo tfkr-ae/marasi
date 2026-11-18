@@ -68,8 +68,9 @@ func TestProxyReadsBodies(t *testing.T) {
 		if got := <-requestSeen; got != (seen{"chunked request", -1, BodyComplete}) {
 			t.Fatalf("\nwanted request chain to see:\n%+v\ngot:\n%+v", seen{"chunked request", -1, BodyComplete}, got)
 		}
-		if got := <-responseSeen; got != (seen{"streamed response", 17, BodyComplete}) {
-			t.Fatalf("\nwanted response chain to see:\n%+v\ngot:\n%+v", seen{"streamed response", 17, BodyComplete}, got)
+		// The view keeps the wire framing: a chunked response has no length.
+		if got := <-responseSeen; got != (seen{"streamed response", -1, BodyComplete}) {
+			t.Fatalf("\nwanted response chain to see:\n%+v\ngot:\n%+v", seen{"streamed response", -1, BodyComplete}, got)
 		}
 		if got := <-originBody; got != "chunked request" {
 			t.Fatalf("\nwanted origin body:\n%q\ngot:\n%q", "chunked request", got)

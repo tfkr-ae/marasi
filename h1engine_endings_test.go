@@ -18,7 +18,7 @@ import (
 // test can see them expire.
 func shortTimeouts(header, idle time.Duration) func(proxy *Proxy) {
 	return func(proxy *Proxy) {
-		engine := proxy.engine.(*h1Engine)
+		engine := proxy.engine
 		engine.headerTimeout, engine.idleTimeout = header, idle
 	}
 }
@@ -68,7 +68,6 @@ func serveDefaultH1EngineProxy(t *testing.T) string {
 		t.Fatalf("getting default extensions: %v", err)
 	}
 	proxy, err := New(
-		withH1Engine(),
 		WithLogger(logger),
 		WithConfigDir(t.TempDir()),
 		WithDefaultRepositories(repository),
@@ -333,6 +332,22 @@ func TestH1Engine_MalformedHead(t *testing.T) {
 		}
 		if !strings.HasPrefix(string(got), "HTTP/1.1 400 Bad Request\r\n") {
 			t.Fatalf("wanted a 400, got %q", got)
+		}
+	})
+
+	t.Run("should answer an HTTP major version other than 1 with a 505 and close the connection", func(t *testing.T) {
+		addr, _ := serveH1EngineProxy(t)
+		conn, br := dialProxy(t, addr)
+
+		io.WriteString(conn, "GET http://example.test/ HTTP/9.9\r\nHost: example.test\r\n\r\n")
+
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		got, err := io.ReadAll(br)
+		if err != nil {
+			t.Fatalf("wanted the proxy to answer and close: %v (got %q)", err, got)
+		}
+		if !strings.HasPrefix(string(got), "HTTP/1.1 505 HTTP Version Not Supported\r\n") {
+			t.Fatalf("wanted a 505, got %q", got)
 		}
 	})
 }

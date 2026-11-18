@@ -80,7 +80,7 @@ func (origin *wireOrigin) received(t *testing.T) string {
 // what the origin received.
 func launchOnH1Engine(t *testing.T, origin *wireOrigin, raw string) string {
 	t.Helper()
-	h := startLaunchHarnessWith(t, []func(*Proxy) error{withH1Engine()})
+	h := startLaunchHarness(t)
 	if _, err := h.proxy.Launch(raw, h.launchpadID.String(), false); err != nil {
 		t.Fatalf("Launch() returned unexpected error: %v", err)
 	}

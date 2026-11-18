@@ -62,7 +62,10 @@ func (c *h1Conn) readHead() (*h1.RequestHead, bool) {
 	head, err := h1.ReadRequestHead(c.br)
 	c.engine.busy(c)
 	if err != nil {
-		if errors.Is(err, h1.ErrMalformedHead) || errors.Is(err, h1.ErrHeadTooLarge) {
+		switch {
+		case errors.Is(err, h1.ErrUnsupportedVersion):
+			c.refuse(http.StatusHTTPVersionNotSupported, err)
+		case errors.Is(err, h1.ErrMalformedHead), errors.Is(err, h1.ErrHeadTooLarge):
 			c.refuse(http.StatusBadRequest, err)
 		}
 		return nil, false

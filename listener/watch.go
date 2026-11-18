@@ -16,7 +16,7 @@ const maxWatchedBytes = 4096
 var aLongTimeAgo = time.Unix(1, 0)
 
 // WatchedConn reports a client that closes its connection while nobody is reading it.
-// Martian stops reading a client connection while modifiers run, so a closed client
+// The engine stops reading a client connection while modifiers run, so a closed client
 // is not otherwise noticed until the next request read.
 type WatchedConn struct {
 	net.Conn

@@ -41,7 +41,6 @@ func serveRoutedH1Engine(t *testing.T, entries ...UpstreamProxyConfig) *routedH1
 		logs:     make(chan domain.Log, 16),
 	}
 	h.proxy, err = New(
-		withH1Engine(),
 		WithLogger(logger),
 		WithConfigDir(configDir),
 		WithDefaultRepositories(repository),

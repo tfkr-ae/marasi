@@ -3767,6 +3767,288 @@
       }
     ]
   },
+  "interim-100-continue-refused@absolute": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "POST /refuse HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Expect",
+                "value": " 100-continue"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 5"
+              }
+            ],
+            "body": "aGVsbG8=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 417 Expectation Failed",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 0"
+              }
+            ],
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "UE9TVCAvcmVmdXNlIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpFeHBlY3Q6IDEwMC1jb250aW51ZQ0KQ29udGVudC1MZW5ndGg6IDUNCg0KaGVsbG8=",
+          "to_client": "SFRUUC8xLjEgNDE3IEV4cGVjdGF0aW9uIEZhaWxlZA0KQ29udGVudC1MZW5ndGg6IDANCg0K"
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "POST /refuse HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Expect",
+                "value": " 100-continue"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 5"
+              }
+            ],
+            "body": "aGVsbG8=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 417 Expectation Failed",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 0"
+              }
+            ],
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "UE9TVCAvcmVmdXNlIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpFeHBlY3Q6IDEwMC1jb250aW51ZQ0KQ29udGVudC1MZW5ndGg6IDUNCg0KaGVsbG8=",
+          "to_client": "SFRUUC8xLjEgNDE3IEV4cGVjdGF0aW9uIEZhaWxlZA0KQ29udGVudC1MZW5ndGg6IDANCg0K"
+        }
+      }
+    ]
+  },
+  "interim-100-continue-refused@connect-plain": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "POST /refuse HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Expect",
+                "value": " 100-continue"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 5"
+              }
+            ],
+            "body": "aGVsbG8=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 417 Expectation Failed",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 0"
+              }
+            ],
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "UE9TVCAvcmVmdXNlIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpFeHBlY3Q6IDEwMC1jb250aW51ZQ0KQ29udGVudC1MZW5ndGg6IDUNCg0KaGVsbG8=",
+          "to_client": "SFRUUC8xLjEgNDE3IEV4cGVjdGF0aW9uIEZhaWxlZA0KQ29udGVudC1MZW5ndGg6IDANCg0K"
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "POST /refuse HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Expect",
+                "value": " 100-continue"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 5"
+              }
+            ],
+            "body": "aGVsbG8=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 417 Expectation Failed",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 0"
+              }
+            ],
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "UE9TVCAvcmVmdXNlIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpFeHBlY3Q6IDEwMC1jb250aW51ZQ0KQ29udGVudC1MZW5ndGg6IDUNCg0KaGVsbG8=",
+          "to_client": "SFRUUC8xLjEgNDE3IEV4cGVjdGF0aW9uIEZhaWxlZA0KQ29udGVudC1MZW5ndGg6IDANCg0K"
+        }
+      }
+    ]
+  },
+  "interim-100-continue-refused@connect-tls": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "POST /refuse HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Expect",
+                "value": " 100-continue"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 5"
+              }
+            ],
+            "body": "aGVsbG8=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 417 Expectation Failed",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 0"
+              }
+            ],
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "UE9TVCAvcmVmdXNlIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpFeHBlY3Q6IDEwMC1jb250aW51ZQ0KQ29udGVudC1MZW5ndGg6IDUNCg0KaGVsbG8=",
+          "to_client": "SFRUUC8xLjEgNDE3IEV4cGVjdGF0aW9uIEZhaWxlZA0KQ29udGVudC1MZW5ndGg6IDANCg0K"
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "POST /refuse HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Expect",
+                "value": " 100-continue"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 5"
+              }
+            ],
+            "body": "aGVsbG8=",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 417 Expectation Failed",
+            "fields": [
+              {
+                "name": "Content-Length",
+                "value": " 0"
+              }
+            ],
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "UE9TVCAvcmVmdXNlIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpFeHBlY3Q6IDEwMC1jb250aW51ZQ0KQ29udGVudC1MZW5ndGg6IDUNCg0KaGVsbG8=",
+          "to_client": "SFRUUC8xLjEgNDE3IEV4cGVjdGF0aW9uIEZhaWxlZA0KQ29udGVudC1MZW5ndGg6IDANCg0K"
+        }
+      }
+    ]
+  },
   "interim-100-continue@absolute": {
     "client": [
       {

@@ -15,7 +15,7 @@ func (h *Header) RemoveConnectionOptions(keepUpgrade bool) {
 	var named []string
 	upgrade := ""
 	for _, f := range h.Fields {
-		if !strings.EqualFold(f.Name(), "Connection") {
+		if !f.named("Connection") {
 			continue
 		}
 		for option := range strings.SplitSeq(f.Value(), ",") {
@@ -37,9 +37,8 @@ func (h *Header) RemoveConnectionOptions(keepUpgrade bool) {
 	fields := make([]Field, 0, len(h.Fields))
 	keptConnection := false
 	for _, f := range h.Fields {
-		name := f.Name()
 		switch {
-		case strings.EqualFold(name, "Connection"):
+		case f.named("Connection"):
 			if upgrade == "" || keptConnection {
 				continue
 			}
@@ -49,9 +48,9 @@ func (h *Header) RemoveConnectionOptions(keepUpgrade bool) {
 				if lineEnd == "" {
 					lineEnd = h.eol()
 				}
-				f = Field{Raw: []byte(name + ": " + upgrade + lineEnd)}
+				f = Field{Raw: []byte(f.Name() + ": " + upgrade + lineEnd)}
 			}
-		case slices.Contains(named, strings.ToLower(name)):
+		case len(named) > 0 && slices.ContainsFunc(named, f.named):
 			continue
 		}
 		fields = append(fields, f)

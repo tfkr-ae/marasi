@@ -106,7 +106,7 @@ func TestNewCertificateAuthority(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		serverConfig, err := newMartianEngine(nil).setMITM(ca, key)
+		serverConfig, err := newH1Engine(nil).setMITM(ca, key)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}

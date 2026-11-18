@@ -1,6 +1,7 @@
 package h1
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net/http"
@@ -41,44 +42,60 @@ func (h *Header) View() http.Header {
 // in case are one name, their values taken in key order. Merge changes
 // nothing and returns ErrInvalidField when an edited field cannot be written.
 func (h *Header) Merge(v http.Header) error {
+	if h.matches(v) {
+		return nil
+	}
 	keys := make([]string, 0, len(v))
 	for k := range v {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
 
+	// Names are matched in canonical form, which folds case for any token;
+	// a key that is not a token stays as written and fails as a new name.
+	names := make([]string, len(h.Fields))
 	original := make(map[string][]string, len(h.Fields))
-	for _, f := range h.Fields {
-		lower := strings.ToLower(f.Name())
-		original[lower] = append(original[lower], f.Value())
+	for i, f := range h.Fields {
+		names[i] = canonicalName(f.name())
+		original[names[i]] = append(original[names[i]], f.Value())
 	}
 	edited := make(map[string][]string, len(keys))
 	var fresh []string // keys of names the section does not have
 	for _, k := range keys {
-		lower := strings.ToLower(k)
-		edited[lower] = append(edited[lower], v[k]...)
-		if _, ok := original[lower]; !ok {
+		name := http.CanonicalHeaderKey(k)
+		edited[name] = append(edited[name], v[k]...)
+		if _, ok := original[name]; !ok {
 			fresh = append(fresh, k)
 		}
+	}
+
+	unchanged := len(fresh) == 0 && len(edited) == len(original)
+	if unchanged {
+		for name, values := range original {
+			if !slices.Equal(values, edited[name]) {
+				unchanged = false
+				break
+			}
+		}
+	}
+	if unchanged {
+		return nil
 	}
 
 	eol := h.eol()
 	fields := make([]Field, 0, len(h.Fields)+len(fresh))
 	done := make(map[string]bool)
-	changed := false
-	for _, f := range h.Fields {
-		lower := strings.ToLower(f.Name())
-		values, kept := edited[lower]
+	for i, f := range h.Fields {
+		name := names[i]
+		values, kept := edited[name]
 		switch {
 		case !kept || len(values) == 0:
-			changed = true
-		case slices.Equal(values, original[lower]):
+		case slices.Equal(values, original[name]):
 			fields = append(fields, f)
-		case done[lower]:
+		case done[name]:
 			// The name's new lines went in at its first line.
 		default:
-			changed = true
-			done[lower] = true
+			done[name] = true
 			lineEnd := string(eolOf(f.Raw))
 			if lineEnd == "" {
 				lineEnd = eol
@@ -99,13 +116,70 @@ func (h *Header) Merge(v http.Header) error {
 				return err
 			}
 			fields = append(fields, nf)
-			changed = true
 		}
 	}
-	if changed {
-		h.Fields = fields
-	}
+	h.Fields = fields
 	return nil
+}
+
+// matches reports, without allocating, whether v holds exactly the section's
+// values, the common case of a view nobody edited. It answers false when it
+// cannot tell cheaply, such as for a name not in canonical form on the wire,
+// and Merge then compares in full.
+func (h *Header) matches(v http.Header) bool {
+	total := 0
+	for _, values := range v {
+		total += len(values)
+	}
+	if total != len(h.Fields) {
+		return false
+	}
+	for i, f := range h.Fields {
+		name := f.name()
+		if !isCanonical(name) {
+			return false
+		}
+		values := v[string(name)]
+		occurrence := 0
+		for _, earlier := range h.Fields[:i] {
+			if bytes.Equal(earlier.name(), name) {
+				occurrence++
+			}
+		}
+		if occurrence >= len(values) || !f.hasValue(values[occurrence]) {
+			return false
+		}
+	}
+	return true
+}
+
+// hasValue reports whether the field's value is value, as Value would give
+// it.
+func (f Field) hasValue(value string) bool {
+	_, rest, _ := bytes.Cut(f.Raw, []byte(":"))
+	if line, next, _ := bytes.Cut(rest, []byte("\n")); len(next) == 0 {
+		return string(trimOWS(trimEOL(line))) == value
+	}
+	return f.Value() == value
+}
+
+func isCanonical(name []byte) bool {
+	upper := true
+	for _, c := range name {
+		if upper && 'a' <= c && c <= 'z' || !upper && 'A' <= c && c <= 'Z' {
+			return false
+		}
+		upper = c == '-'
+	}
+	return true
+}
+
+// canonicalName is a wire field name in http.CanonicalHeaderKey form.
+func canonicalName(name []byte) string {
+	if isCanonical(name) {
+		return string(name)
+	}
+	return http.CanonicalHeaderKey(string(name))
 }
 
 func newField(name, value, eol string) (Field, error) {

@@ -20,16 +20,20 @@ import (
 // connection gets its own origin connection
 // (docs/adr/2026-11-17-one-origin-connection-per-client-connection.md).
 //
-// It is chosen by the h1engine build tag or the withH1Engine option until the
-// switch. See .scratch/proxy-library/notes/engine-api.md for where each later
-// piece of work plugs in.
+// It is the only engine; docs/agents/maps/request-path.md is its map.
 //
 // Files:
 //   - h1engine.go: the engine, the accept loop, shutdown, and one client
 //     connection's loop, CONNECT and hijack (h1Conn);
 //   - h1engine_exchange.go: one request/response exchange through the base
 //     pipeline, and the round trip over the connection's origin connection;
-//   - h1engine_wire.go: views back to wire bytes, for the engine and capture.
+//   - h1engine_wire.go: views back to wire bytes, for the engine and capture;
+//   - h1engine_mitm.go: TLS inside a CONNECT, with leaf_issuer.go;
+//   - h1engine_route.go: the origin connection's dial and route swaps;
+//   - h1engine_endings.go: timeouts and how connections end;
+//   - h1engine_refuse.go: requests refused for ambiguous framing;
+//   - h1engine_encoding.go: compressed responses sent as the origin coded them;
+//   - h1engine_checkpoint.go: Checkpoint's raw text and edits.
 type h1Engine struct {
 	proxy    *Proxy
 	request  requestStep
@@ -100,8 +104,8 @@ func (engine *h1Engine) waitClosed() {
 }
 
 // setPipeline sets the steps run for each request and response. Without a
-// pipeline every request goes to the origin untouched, as under Martian: the
-// request gets a bare pair, and the response is written as read.
+// pipeline every request goes to the origin untouched: the request gets a
+// bare pair, and the response is written as read.
 func (engine *h1Engine) setPipeline(request requestStep, response responseStep) {
 	if request == nil {
 		request = func(req *http.Request, client clientHijacker, wire *wireRequest) error {
@@ -271,7 +275,9 @@ func (c *h1Conn) connect(head *h1.RequestHead) bool {
 // address, a scheme, the URL's host and the connection's context.
 func (c *h1Conn) prepare(req *http.Request) *http.Request {
 	req.RemoteAddr = c.conn.RemoteAddr().String()
-	if req.Method != http.MethodConnect {
+	// A CONNECT outside a tunnel opens one and is not sent on; inside a
+	// tunnel it is a request for the tunnel's origin like any other.
+	if req.Method != http.MethodConnect || c.tunnel != "" {
 		req.URL.Scheme = "http"
 		if tlsConn, ok := c.conn.(*tls.Conn); ok {
 			state := tlsConn.ConnectionState()

@@ -83,10 +83,10 @@ func readRequestBody(req *http.Request) BodyEnding {
 }
 
 // readResponseBody reads the pair's response body whole before the response
-// chain runs and records how it ended. On Martian a whole body is sent with
-// its length, not chunked; an engine that keeps the wire form writes the body
-// as it was framed, so its view is left alone. An upgrade's body is the connection and is left unread, and so
-// is a proxy error response, which Marasi made whole.
+// chain runs and records how it ended. The view keeps the wire framing: the
+// engine writes the body as it was framed unless a modifier changed it. An
+// upgrade's body is the connection and is left unread, and so is a proxy
+// error response, which Marasi made whole.
 func readResponseBody(pair *Pair) error {
 	res := pair.Response
 	if marasiws.IsUpgradeResponse(res) || pair.FromMarasi() {
@@ -99,11 +99,5 @@ func readResponseBody(pair *Pair) error {
 		return fmt.Errorf("%w: %w", ErrReadBody, err)
 	}
 	res.Body = io.NopCloser(bytes.NewReader(data))
-	if pair.responseWire != nil {
-		return nil
-	}
-	res.ContentLength = int64(len(data))
-	res.Header.Set("Content-Length", strconv.Itoa(len(data)))
-	res.TransferEncoding = nil
 	return nil
 }

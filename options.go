@@ -563,7 +563,6 @@ func WithWorkAdmission(admit func(context.Context, bool) (func(), uint64, error)
 func WithBasePipeline() func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		proxy.engine.setPipeline(proxy.baseRequest, proxy.baseResponse)
-		proxy.pipelineSet = true
 		return nil
 	}
 }
@@ -579,7 +578,9 @@ func (proxy *Proxy) baseRequest(req *http.Request, client clientHijacker, wire *
 	expected := "Basic " + base64.StdEncoding.EncodeToString([]byte("marasi:"+proxy.clientWorkToken))
 	internal := req.Header.Get("Proxy-Authorization") == expected
 	req.Header.Del("Proxy-Authorization")
-	if req.Method == http.MethodConnect {
+	// A CONNECT the engine read with a wire message was sent inside a
+	// tunnel: it is a request for the tunnel's origin, not a tunnel.
+	if req.Method == http.MethodConnect && wire == nil {
 		if err := proxy.admitTunnel(req, internal); err != nil {
 			return refuseConnection(client, err)
 		}
@@ -632,11 +633,12 @@ func (proxy *Proxy) baseRequest(req *http.Request, client clientHijacker, wire *
 }
 
 // baseResponse is the base pipeline's response step, run for every response
-// the engine is about to write, including the 200 that opens a tunnel.
+// the engine is about to write.
 func (proxy *Proxy) baseResponse(res *http.Response, wire *wireResponse) error {
-	// The tunnel was admitted with its CONNECT; the 200 that
-	// opens it is not a response of any pair.
-	if res.Request.Method == http.MethodConnect {
+	// A CONNECT that opened a tunnel has no pair, and the 200 that opens it
+	// is no pair's response. A CONNECT sent inside a tunnel is a request
+	// like any other.
+	if res.Request.Method == http.MethodConnect && requestPair(res.Request) == nil {
 		return nil
 	}
 	// A request the proxy answered itself (the round trip

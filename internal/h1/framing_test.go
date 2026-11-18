@@ -2,6 +2,7 @@ package h1_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/tfkr-ae/marasi/internal/h1"
@@ -85,6 +86,29 @@ func TestResponseFramingWithBothLengths(t *testing.T) {
 	})
 }
 
+func TestUnsupportedVersion(t *testing.T) {
+	for _, raw := range []string{"GET / HTTP/9.9\r\n\r\n", "GET / HTTP/2.0\r\n\r\n", "GET / HTTP/0.9\r\n\r\n"} {
+		t.Run("should report an unsupported major version in "+strings.TrimSpace(raw), func(t *testing.T) {
+			_, err := h1.ReadRequestHead(reader(raw))
+			if !errors.Is(err, h1.ErrUnsupportedVersion) || !errors.Is(err, h1.ErrMalformedHead) {
+				t.Fatalf("\nwanted:\n%v and %v\ngot:\n%v", h1.ErrUnsupportedVersion, h1.ErrMalformedHead, err)
+			}
+		})
+	}
+	t.Run("should not report the HTTP/2 connection preface as an unsupported version", func(t *testing.T) {
+		_, err := h1.ReadRequestHead(reader("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"))
+		if errors.Is(err, h1.ErrUnsupportedVersion) || !errors.Is(err, h1.ErrMalformedHead) {
+			t.Fatalf("\nwanted:\n%v only\ngot:\n%v", h1.ErrMalformedHead, err)
+		}
+	})
+	t.Run("should not report a malformed version as unsupported", func(t *testing.T) {
+		_, err := h1.ReadRequestHead(reader("GET / HTTP/1.10\r\n\r\n"))
+		if errors.Is(err, h1.ErrUnsupportedVersion) || !errors.Is(err, h1.ErrMalformedHead) {
+			t.Fatalf("\nwanted:\n%v only\ngot:\n%v", h1.ErrMalformedHead, err)
+		}
+	})
+}
+
 func TestMalformedHead(t *testing.T) {
 	cases := []struct {
 		name string
@@ -96,6 +120,8 @@ func TestMalformedHead(t *testing.T) {
 		{"should refuse a bare CR in a value", "GET / HTTP/1.1\r\nX: a\rb\r\n\r\n"},
 		{"should refuse a NUL in a value", "GET / HTTP/1.1\r\nX: a\x00b\r\n\r\n"},
 		{"should refuse an unknown version", "GET / HTTP/2.0\r\n\r\n"},
+		{"should refuse a version with two digits", "GET / HTTP/1.10\r\n\r\n"},
+		{"should refuse a lowercase protocol name", "GET / http/1.1\r\n\r\n"},
 		{"should refuse a request line with extra spaces", "GET  / HTTP/1.1\r\n\r\n"},
 	}
 	for _, c := range cases {

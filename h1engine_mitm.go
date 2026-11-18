@@ -33,8 +33,6 @@ func (engine *h1Engine) setMITM(certificate *x509.Certificate, privateKey any) (
 func (engine *h1Engine) setRoundTripper(base http.RoundTripper) {
 	for {
 		switch rt := base.(type) {
-		case *launchFailureRoundTripper:
-			base = rt.base
 		case *marasiRoundTripper:
 			base = rt.base
 		case *routedTransport:

@@ -3,9 +3,11 @@ package marasi
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -98,7 +100,6 @@ func serveFramingProxy(t *testing.T, configure func(proxy *Proxy)) (*Proxy, stri
 	repository := db.NewProxyRepo(database)
 	captured := &capturedPair{request: make(chan domain.ProxyRequest, 16), response: make(chan domain.ProxyResponse, 16)}
 	proxy, err := New(
-		withH1Engine(),
 		WithLogger(logger),
 		WithConfigDir(t.TempDir()),
 		WithDefaultRepositories(repository),
@@ -412,6 +413,27 @@ func TestH1Engine_CheckpointWireForm(t *testing.T) {
 		stored, storedResponse := storedPair(t, captured)
 		if stored != shownRequest || storedResponse != shownResponse {
 			t.Fatalf("wanted the stored pair to be what Checkpoint showed\ngot:\n%q\n%q", stored, storedResponse)
+		}
+	})
+
+	t.Run("should forward a CONNECT held inside a tunnel to the tunnel's origin", func(t *testing.T) {
+		const refusal = "HTTP/1.1 405 Not Allowed\r\nContent-Length: 0\r\n\r\n"
+		origin := newBodyOrigin(t, refusal)
+		proxy, addr, _ := serveCheckpointProxy(t)
+		conn, br := dialProxy(t, addr)
+		fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", origin.addr, origin.addr)
+		if res, err := http.ReadResponse(br, nil); err != nil || res.StatusCode != http.StatusOK {
+			t.Fatalf("wanted the tunnel opened with a 200\ngot: %v, %v", res, err)
+		}
+
+		request := "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"
+		io.WriteString(conn, request)
+		forwardHeld(t, proxy, request, request)
+		forwardHeld(t, proxy, refusal, refusal)
+
+		readExactly(t, br, refusal)
+		if got := origin.request(t); got != request {
+			t.Fatalf("wanted the origin to receive:\n%q\ngot:\n%q", request, got)
 		}
 	})
 

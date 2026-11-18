@@ -59,9 +59,9 @@ func (proxy *Proxy) handOffUpgrade(pair *Pair) error {
 	return proxy.upgradeHandler(proxy, pair, client, upstream)
 }
 
-// writeSwitch writes the 101 to the client. On the h1 engine it is the
-// origin's head with the response chain's edits merged, the same bytes
-// capture stored; on Martian, net/http's form of the view.
+// writeSwitch writes the 101 to the client: the origin's head with the
+// response chain's edits merged, the same bytes capture stored. A pair with
+// no wire form gets net/http's form of the view.
 func writeSwitch(pair *Pair, w io.Writer) error {
 	wire := pair.responseWire
 	if wire == nil {

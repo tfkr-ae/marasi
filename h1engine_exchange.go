@@ -83,6 +83,14 @@ func (c *h1Conn) exchange(head *h1.RequestHead) bool {
 		out.head.WriteTo(c.bw)
 		c.bw.Write(out.body)
 		keep = keep && c.origin != nil && wire.body.Framing.Kind != h1.UntilClose
+	} else if pair.storedWire != nil && res == pair.Response {
+		// A browser view: the stored response as stored.
+		out, err := outboundResponse(pair.storedWire, res)
+		if err != nil {
+			return false
+		}
+		out.head.WriteTo(c.bw)
+		c.bw.Write(out.body)
 	} else {
 		if err := res.Write(c.bw); err != nil {
 			return false
@@ -147,7 +155,13 @@ func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	origin, err := c.originFor(pair, route, hostPort(req.URL.Host, port))
+	addr := hostPort(req.URL.Host, port)
+	if req.Method == http.MethodConnect && c.tunnel != "" {
+		// A CONNECT inside a tunnel names another server, but it is the
+		// tunnel's origin that answers it, as without Marasi.
+		addr = c.tunnel
+	}
+	origin, err := c.originFor(pair, route, addr)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -203,7 +217,7 @@ func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error)
 // the request's body (RFC 9110 §10.1.1). An HTTP/1.0 request's expectation is
 // ignored, and a request without a body needs no 100.
 func expectsContinue(head *h1.RequestHead, framing h1.Framing) bool {
-	if head.Proto != "HTTP/1.1" || framing.Kind == h1.NoBody ||
+	if head.Proto == "HTTP/1.0" || framing.Kind == h1.NoBody ||
 		(framing.Kind == h1.LengthFramed && framing.Length == 0) {
 		return false
 	}

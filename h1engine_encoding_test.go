@@ -15,18 +15,12 @@ import (
 	"github.com/andybalholm/brotli"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/rawhttp"
 )
 
-// serveEncodingProxy serves a proxy on the new engine with the default
-// pipeline and the seeded extensions, and reports each stored response.
+// serveEncodingProxy serves a proxy with the default pipeline and the seeded
+// extensions, and reports each stored response.
 func serveEncodingProxy(t *testing.T) (*Proxy, string, chan domain.ProxyResponse) {
-	t.Helper()
-	return serveEncodingProxyOn(t, withH1Engine())
-}
-
-// serveEncodingProxyOn is serveEncodingProxy with the engine options first:
-// withH1Engine(), or none for the default engine.
-func serveEncodingProxyOn(t *testing.T, engine ...func(*Proxy) error) (*Proxy, string, chan domain.ProxyResponse) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	database, err := db.New(":memory:", logger)
@@ -40,7 +34,7 @@ func serveEncodingProxyOn(t *testing.T, engine ...func(*Proxy) error) (*Proxy, s
 		t.Fatalf("getting the seeded extensions: %v", err)
 	}
 	stored := make(chan domain.ProxyResponse, 16)
-	options := append(engine,
+	options := []func(*Proxy) error{
 		WithLogger(logger),
 		WithConfigDir(t.TempDir()),
 		WithDefaultRepositories(repository),
@@ -50,7 +44,7 @@ func serveEncodingProxyOn(t *testing.T, engine ...func(*Proxy) error) (*Proxy, s
 		WithResponseHandler(func(res domain.ProxyResponse) error { stored <- res; return nil }),
 		WithBasePipeline(),
 		WithDefaultModifierPipeline(),
-	)
+	}
 	proxy, err := New(options...)
 	if err != nil {
 		repository.Close()
@@ -159,6 +153,11 @@ func TestH1Engine_CompressedResponses(t *testing.T) {
 		if string(res.Raw) != want {
 			t.Fatalf("wanted the stored response:\n%q\ngot:\n%q", want, res.Raw)
 		}
+		// A chunked response has no Content-Length; the Length column is the
+		// stored payload's length, as for any other response.
+		if res.Length != fmt.Sprint(len(text)) {
+			t.Fatalf("wanted the stored length %d\ngot: %q", len(text), res.Length)
+		}
 		wantDecodingMetadata(t, res, "br", len(coded))
 	})
 
@@ -233,43 +232,41 @@ func TestCompressedResponses_StoredAsToday(t *testing.T) {
 	coded := gzipped(t, text)
 	response := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\nContent-Length: %d\r\n\r\n%s", len(coded), coded)
 
-	// What the default engine stores is what every reader shows today:
-	// search, prettify, the CLI, reports and the browser view all read the
-	// stored raw text, its prettified copy and its content type and length.
-	stored := func(t *testing.T, engine ...func(*Proxy) error) domain.ProxyResponse {
-		origin := newRawOrigin(t, response)
-		_, addr, responses := serveEncodingProxyOn(t, engine...)
-		conn, br := dialProxy(t, addr)
-		fmt.Fprintf(conn, "GET http://%s/coded HTTP/1.1\r\nHost: %s\r\n\r\n", origin.addr, origin.addr)
-		if _, err := http.ReadResponse(br, nil); err != nil {
-			t.Fatalf("reading the response: %v", err)
-		}
-		return storedResponse(t, responses)
+	// What Martian stored is what every reader shows: search, prettify, the
+	// CLI, reports and the browser view all read the stored raw text, its
+	// prettified copy and its content type and length.
+	origin := newRawOrigin(t, response)
+	_, addr, responses := serveEncodingProxy(t)
+	conn, br := dialProxy(t, addr)
+	fmt.Fprintf(conn, "GET http://%s/coded HTTP/1.1\r\nHost: %s\r\n\r\n", origin.addr, origin.addr)
+	if _, err := http.ReadResponse(br, nil); err != nil {
+		t.Fatalf("reading the response: %v", err)
 	}
-	today := stored(t)
-	h1engine := stored(t, withH1Engine())
+	stored := storedResponse(t, responses)
 
-	t.Run("should store the same decoded body", func(t *testing.T) {
-		if got, want := storedBody(t, h1engine.Raw), storedBody(t, today.Raw); got != want || got != text {
-			t.Fatalf("wanted the stored body %q\ngot: %q (default engine: %q)", text, got, want)
+	t.Run("should store the decoded body", func(t *testing.T) {
+		if got := storedBody(t, stored.Raw); got != text {
+			t.Fatalf("wanted the stored body %q\ngot: %q", text, got)
 		}
 	})
-	t.Run("should store the same prettified body", func(t *testing.T) {
-		got, want := storedBody(t, []byte(h1engine.Prettified)), storedBody(t, []byte(today.Prettified))
-		if got != want || want == "" {
+	t.Run("should store the prettified body", func(t *testing.T) {
+		want, err := rawhttp.Prettify([]byte(text))
+		if err != nil {
+			t.Fatalf("prettifying: %v", err)
+		}
+		if got := storedBody(t, []byte(stored.Prettified)); got != string(want) || got == "" {
 			t.Fatalf("wanted the prettified body %q\ngot: %q", want, got)
 		}
 	})
-	t.Run("should store the same content type, length and no Content-Encoding", func(t *testing.T) {
-		if h1engine.ContentType != today.ContentType || h1engine.Length != today.Length || h1engine.Length != fmt.Sprint(len(text)) {
-			t.Fatalf("wanted %q and %q\ngot: %q and %q", today.ContentType, today.Length, h1engine.ContentType, h1engine.Length)
+	t.Run("should store the content type, the decoded length and no Content-Encoding", func(t *testing.T) {
+		if stored.ContentType != "application/json" || stored.Length != fmt.Sprint(len(text)) {
+			t.Fatalf("wanted %q and %q\ngot: %q and %q", "application/json", fmt.Sprint(len(text)), stored.ContentType, stored.Length)
 		}
-		if strings.Contains(strings.ToLower(string(h1engine.Raw)), "content-encoding") {
-			t.Fatalf("wanted no Content-Encoding in the stored response\ngot: %q", h1engine.Raw)
+		if strings.Contains(strings.ToLower(string(stored.Raw)), "content-encoding") {
+			t.Fatalf("wanted no Content-Encoding in the stored response\ngot: %q", stored.Raw)
 		}
 	})
-	t.Run("should record the decoding on both engines", func(t *testing.T) {
-		wantDecodingMetadata(t, today, "gzip", len(coded))
-		wantDecodingMetadata(t, h1engine, "gzip", len(coded))
+	t.Run("should record the decoding", func(t *testing.T) {
+		wantDecodingMetadata(t, stored, "gzip", len(coded))
 	})
 }

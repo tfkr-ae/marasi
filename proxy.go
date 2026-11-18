@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -83,8 +84,7 @@ const (
 // extension management, database operations, and TLS handling. It serves as the central coordinator
 // for the Marasi proxy server.
 type Proxy struct {
-	engine         engine                               // serves the listener and runs the base pipeline
-	pipelineSet    bool                                 // WithBasePipeline has configured the engine
+	engine         *h1Engine                            // serves the listener and runs the base pipeline
 	ConfigDir      string                               // The configuration directory (defaults to the marasi folder under the user configuration directory)
 	Config         *Config                              // The marasi proxy configuration (separate from the GUI config)
 	DBWriteChannel chan any                             // DB Write Channel
@@ -353,7 +353,7 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 			return func() {}, 0, nil
 		},
 	}
-	proxy.engine = newEngine(proxy)
+	proxy.engine = newH1Engine(proxy)
 	proxy.route.Store(DirectRoute())
 	err := proxy.WithOptions(options...)
 	if err != nil {
@@ -515,8 +515,8 @@ func NewProxyRequest(pair *Pair) (*domain.ProxyRequest, error) {
 		}
 		proxyRequest.SitemapNode = domain.SitemapLeaf(proxyRequest.Scheme, proxyRequest.Host, proxyRequest.Path)
 
-		// The raw text is the request as it goes upstream: the wire form
-		// when the engine keeps one, a dump of the view otherwise.
+		// The raw text is the request as it goes upstream: the wire form,
+		// or a dump of the view for a pair built outside the engine.
 		var rawReq []byte
 		var prettified string
 		var err error
@@ -575,8 +575,14 @@ func NewProxyResponse(pair *Pair) (*domain.ProxyResponse, error) {
 	var rawRes []byte
 	var prettified string
 	var err error
+	// Length is the stored body's length. A response from the origin may
+	// have no Content-Length (chunked, or read until close), so it is the
+	// payload's length, which is what a Content-Length would say.
+	length := res.Header.Get("Content-Length")
 	if pair.responseWire != nil && !pair.FromMarasi() {
-		rawRes, prettified, err = dumpWireResponse(pair.responseWire, res)
+		var payload int
+		rawRes, prettified, payload, err = dumpWireResponse(pair.responseWire, res)
+		length = strconv.Itoa(payload)
 	} else {
 		rawRes, prettified, err = rawhttp.DumpResponse(res)
 	}
@@ -615,7 +621,7 @@ func NewProxyResponse(pair *Pair) (*domain.ProxyResponse, error) {
 		Status:      res.Status,
 		StatusCode:  res.StatusCode,
 		ContentType: contentType,
-		Length:      res.Header.Get("Content-Length"),
+		Length:      length,
 		Raw:         domain.RawField(rawRes),
 		Metadata:    metadata,
 		Prettified:  prettified,
@@ -909,7 +915,6 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 	}
 	routed := newRoutedTransport(proxy.resolveRoute, proxy.CurrentRoute, proxy.dialTransport)
 	proxy.transport.Store(routed)
-	proxy.setRoundTripper(&launchFailureRoundTripper{proxy: proxy, base: &marasiRoundTripper{base: routed}})
 	proxy.listenerMu.Lock()
 	proxy.activeListener = activeListener
 	serveDone := make(chan struct{})

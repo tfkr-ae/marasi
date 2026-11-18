@@ -1,7 +1,6 @@
 package marasi
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -37,10 +36,7 @@ func outboundRequest(wire *wireRequest, req *http.Request) (outbound[*h1.Request
 	if err != nil {
 		return out, err
 	}
-	head, err := h1.ReadRequestHead(bufio.NewReader(bytes.NewReader(wire.head.Bytes())))
-	if err != nil {
-		return out, fmt.Errorf("copying the request head: %w", err)
-	}
+	head := wire.head.Clone()
 	if err := head.Merge(req); err != nil {
 		return out, fmt.Errorf("merging the request: %w", err)
 	}
@@ -65,10 +61,7 @@ func outboundResponse(wire *wireResponse, res *http.Response) (outbound[*h1.Resp
 	if err != nil {
 		return out, err
 	}
-	head, err := h1.ReadResponseHead(bufio.NewReader(bytes.NewReader(wire.head.Bytes())))
-	if err != nil {
-		return out, fmt.Errorf("copying the response head: %w", err)
-	}
+	head := wire.head.Clone()
 	if err := head.Merge(res); err != nil {
 		return out, fmt.Errorf("merging the response: %w", err)
 	}
@@ -93,14 +86,14 @@ func dumpWireRequest(wire *wireRequest, req *http.Request) ([]byte, string, erro
 }
 
 // dumpWireResponse is the stored raw text of a response the engine read from
-// the origin, after the response modifiers.
-func dumpWireResponse(wire *wireResponse, res *http.Response) ([]byte, string, error) {
+// the origin, after the response modifiers, and its payload's length.
+func dumpWireResponse(wire *wireResponse, res *http.Response) ([]byte, string, int, error) {
 	out, err := outboundResponse(wire, res)
 	if err != nil {
-		return nil, "", err
+		return nil, "", 0, err
 	}
 	raw, prettified := rawhttp.Assemble(out.head.Bytes(), out.payload)
-	return raw, prettified, nil
+	return raw, prettified, len(out.payload), nil
 }
 
 // readViewBody reads a view's body whole and puts it back, so the next reader
@@ -120,8 +113,10 @@ func readViewBody(body *io.ReadCloser) ([]byte, error) {
 }
 
 // toOriginForm rewrites an absolute-form target into the origin form an
-// origin expects (RFC 9112 §3.2.1), adding Host when the request had none.
-// The path and query are kept as they were written.
+// origin expects (RFC 9112 §3.2.1). The Host field becomes the target's
+// authority, as a proxy must (RFC 9112 §3.2.2): added when the request had
+// none, its value rewritten in place when it named another. The path and
+// query are kept as they were written.
 func toOriginForm(head *h1.RequestHead) error {
 	if head.Method == http.MethodConnect || strings.HasPrefix(head.Target, "/") || head.Target == "*" {
 		return nil
@@ -130,11 +125,11 @@ func toOriginForm(head *h1.RequestHead) error {
 	if err != nil {
 		return fmt.Errorf("parsing the request target %q: %w", head.Target, err)
 	}
-	if !head.Header.Has("Host") {
+	if hosts := head.Header.Values("Host"); target.Host != "" && (len(hosts) != 1 || !strings.EqualFold(hosts[0], target.Host)) {
 		view := head.Header.View()
 		view["Host"] = []string{target.Host}
 		if err := head.Header.Merge(view); err != nil {
-			return fmt.Errorf("adding the Host field: %w", err)
+			return fmt.Errorf("setting the Host field: %w", err)
 		}
 	}
 	eol := "\n"

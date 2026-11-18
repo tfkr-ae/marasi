@@ -103,7 +103,6 @@ func serveH1EngineProxy(t *testing.T) (string, *capturedPair) {
 	repository := db.NewProxyRepo(database)
 	captured := &capturedPair{request: make(chan domain.ProxyRequest, 16), response: make(chan domain.ProxyResponse, 16)}
 	proxy, err := New(
-		withH1Engine(),
 		WithLogger(logger),
 		WithConfigDir(t.TempDir()),
 		WithDefaultRepositories(repository),
@@ -199,6 +198,44 @@ func TestH1Engine_CarriesTheWireForm(t *testing.T) {
 		}
 	})
 
+	t.Run("should replace a Host that differs from an absolute-form target's authority in place", func(t *testing.T) {
+		origin := newRawOrigin(t, originResponse)
+		addr, captured := serveH1EngineProxy(t)
+		conn, br := dialProxy(t, addr)
+
+		fmt.Fprintf(conn, "GET http://%s/m HTTP/1.1\r\nx-First: 1\r\nhOST: other.example:81\r\nX-Last: 2\r\n\r\n", origin.addr)
+
+		readExactly(t, br, originResponse)
+		want := "GET /m HTTP/1.1\r\nx-First: 1\r\nhOST: " + origin.addr + "\r\nX-Last: 2\r\n\r\n"
+		requests, _ := origin.received()
+		if len(requests) != 1 || requests[0] != want {
+			t.Fatalf("wanted the origin to receive:\n%q\ngot:\n%q", want, requests)
+		}
+		select {
+		case req := <-captured.request:
+			if string(req.Raw) != want {
+				t.Fatalf("wanted the stored request:\n%q\ngot:\n%q", want, req.Raw)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the request was not captured")
+		}
+	})
+
+	t.Run("should carry a request with a later HTTP/1 minor version as written", func(t *testing.T) {
+		origin := newRawOrigin(t, originResponse)
+		addr, _ := serveH1EngineProxy(t)
+		conn, br := dialProxy(t, addr)
+
+		head := "Host: " + origin.addr + "\r\n\r\n"
+		fmt.Fprintf(conn, "GET http://%s/v HTTP/1.2\r\n%s", origin.addr, head)
+
+		readExactly(t, br, originResponse)
+		requests, _ := origin.received()
+		if want := "GET /v HTTP/1.2\r\n" + head; len(requests) != 1 || requests[0] != want {
+			t.Fatalf("wanted the origin to receive:\n%q\ngot:\n%q", want, requests)
+		}
+	})
+
 	t.Run("should carry a GET inside CONNECT to the origin with the client's header case and order", func(t *testing.T) {
 		origin := newRawOrigin(t, originResponse)
 		addr, captured := serveH1EngineProxy(t)
@@ -229,6 +266,47 @@ func TestH1Engine_CarriesTheWireForm(t *testing.T) {
 		case res := <-captured.response:
 			if string(res.Raw) != originResponse {
 				t.Fatalf("wanted the stored response:\n%q\ngot:\n%q", originResponse, res.Raw)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the response was not captured")
+		}
+	})
+}
+
+func TestH1Engine_ConnectInsideATunnel(t *testing.T) {
+	t.Run("should forward a CONNECT sent inside a tunnel to the tunnel's origin as written", func(t *testing.T) {
+		const refusal = "HTTP/1.1 405 Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+		origin := newRawOrigin(t, refusal)
+		addr, captured := serveH1EngineProxy(t)
+		conn, br := dialProxy(t, addr)
+
+		fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", origin.addr, origin.addr)
+		res, err := http.ReadResponse(br, nil)
+		if err != nil || res.StatusCode != http.StatusOK {
+			t.Fatalf("wanted the tunnel opened with a 200\ngot: %v, %v", res, err)
+		}
+		// The Host names another server: the request is the tunnel origin's
+		// to answer, as it would be without Marasi.
+		request := "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"
+		io.WriteString(conn, request)
+
+		readExactly(t, br, "HTTP/1.1 405 Not Allowed\r\nContent-Length: 0\r\n\r\n")
+		requests, _ := origin.received()
+		if len(requests) != 1 || requests[0] != request {
+			t.Fatalf("wanted the origin to receive:\n%q\ngot:\n%q", request, requests)
+		}
+		select {
+		case req := <-captured.request:
+			if string(req.Raw) != request {
+				t.Fatalf("wanted the stored request:\n%q\ngot:\n%q", request, req.Raw)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the request was not captured")
+		}
+		select {
+		case res := <-captured.response:
+			if want := "HTTP/1.1 405 Not Allowed\r\nContent-Length: 0\r\n\r\n"; string(res.Raw) != want {
+				t.Fatalf("wanted the stored response:\n%q\ngot:\n%q", want, res.Raw)
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatal("the response was not captured")

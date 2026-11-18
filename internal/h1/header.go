@@ -17,14 +17,50 @@ type Field struct {
 
 // Name returns the field name as spelled on the wire.
 func (f Field) Name() string {
+	return string(f.name())
+}
+
+// name is the field name as spelled on the wire, sharing Raw's bytes.
+func (f Field) name() []byte {
 	name, _, _ := bytes.Cut(f.Raw, []byte(":"))
-	return string(name)
+	return name
+}
+
+// named reports whether the field's name is name, compared without regard
+// to case.
+func (f Field) named(name string) bool {
+	return equalFold(f.name(), name)
+}
+
+// equalFold reports whether b and s are the same ASCII text, compared
+// without regard to case. Field names are tokens, which are ASCII.
+func equalFold(b []byte, s string) bool {
+	if len(b) != len(s) {
+		return false
+	}
+	for i := range len(b) {
+		if lowerASCII(b[i]) != lowerASCII(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func lowerASCII(c byte) byte {
+	if 'A' <= c && c <= 'Z' {
+		return c + 'a' - 'A'
+	}
+	return c
 }
 
 // Value returns the field value without surrounding whitespace. Each obsolete
 // line fold becomes one space, as RFC 9112 §5.2 asks of a recipient.
 func (f Field) Value() string {
 	_, rest, _ := bytes.Cut(f.Raw, []byte(":"))
+	if line, next, _ := bytes.Cut(rest, []byte("\n")); len(next) == 0 {
+		// One line, the usual case: no fold to join.
+		return string(trimOWS(trimEOL(line)))
+	}
 	var parts []string
 	for len(rest) > 0 {
 		line, next, _ := bytes.Cut(rest, []byte("\n"))
@@ -50,7 +86,7 @@ type Header struct {
 func (h *Header) Values(name string) []string {
 	var vs []string
 	for _, f := range h.Fields {
-		if strings.EqualFold(f.Name(), name) {
+		if f.named(name) {
 			vs = append(vs, f.Value())
 		}
 	}
@@ -60,7 +96,7 @@ func (h *Header) Values(name string) []string {
 // Get returns the value of the first field named name, or "".
 func (h *Header) Get(name string) string {
 	for _, f := range h.Fields {
-		if strings.EqualFold(f.Name(), name) {
+		if f.named(name) {
 			return f.Value()
 		}
 	}
@@ -70,7 +106,7 @@ func (h *Header) Get(name string) string {
 // Has reports whether a field named name is present.
 func (h *Header) Has(name string) bool {
 	for _, f := range h.Fields {
-		if strings.EqualFold(f.Name(), name) {
+		if f.named(name) {
 			return true
 		}
 	}

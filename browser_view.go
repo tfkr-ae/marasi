@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/internal/h1"
 )
 
 // marasiHost is the host of Marasi's own pages.
@@ -39,9 +40,10 @@ func MarasiPagesModifier(proxy *Proxy, pair *Pair) error {
 	if isSelfClient(pair) {
 		return nil
 	}
-	if res := proxy.browserViews.take(clientHost(req.RemoteAddr), requestURLKey(req)); res != nil {
+	if res, wire := proxy.browserViews.take(clientHost(req.RemoteAddr), requestURLKey(req)); res != nil {
 		res.Request = req
 		pair.Respond(res)
+		pair.storedWire = wire
 		return nil
 	}
 	return nil
@@ -109,7 +111,7 @@ func (proxy *Proxy) browserViewPage(req *http.Request, rawID string) *http.Respo
 
 	// A copy of the stored response, so a use never reads the project.
 	stored := bytes.Clone(row.Response.Raw)
-	if _, err := readStoredResponse(stored); err != nil {
+	if _, _, err := readStoredResponse(stored); err != nil {
 		return plainTextResponse(req, http.StatusInternalServerError, fmt.Sprintf("reading the stored response of pair %s: %v", id, err))
 	}
 	target := pairURL(&row.Request)
@@ -250,27 +252,43 @@ func (views *browserViews) register(client, url string, response []byte) {
 
 // take uses up the pending browser view for client and url and returns its
 // stored response, or nil when there is none.
-func (views *browserViews) take(client, url string) *http.Response {
+func (views *browserViews) take(client, url string) (*http.Response, *wireResponse) {
 	views.mu.Lock()
 	defer views.mu.Unlock()
 	if len(views.pending) == 0 {
-		return nil
+		return nil, nil
 	}
 	views.sweep(time.Now())
 	key := browserViewKey{client: client, url: url}
 	view, ok := views.pending[key]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	delete(views.pending, key)
 	// register's caller has already read this response once.
-	res, _ := readStoredResponse(view.response)
-	return res
+	res, wire, _ := readStoredResponse(view.response)
+	return res, wire
 }
 
-// readStoredResponse parses a stored raw response.
-func readStoredResponse(raw []byte) (*http.Response, error) {
-	return http.ReadResponse(bufio.NewReader(bytes.NewReader(raw)), nil)
+// readStoredResponse reads a stored raw response with the codec: its head
+// as stored, and the rest as the payload, which storage keeps with any
+// chunked coding removed. The engine writes the head as stored and frames
+// the payload by it (outboundResponse).
+func readStoredResponse(raw []byte) (*http.Response, *wireResponse, error) {
+	br := bufio.NewReader(bytes.NewReader(raw))
+	head, err := h1.ReadResponseHead(br)
+	if err != nil {
+		return nil, nil, err
+	}
+	payload, err := io.ReadAll(br)
+	if err != nil {
+		return nil, nil, err
+	}
+	res := head.Response()
+	if len(payload) > 0 {
+		res.Body = io.NopCloser(bytes.NewReader(payload))
+	}
+	return res, &wireResponse{head: head}, nil
 }
 
 // clear drops every pending browser view.

@@ -75,8 +75,9 @@ type Pair struct {
 	requestCaptured bool
 
 	// requestWire and responseWire are the messages as the engine read
-	// them from the wire, nil when the engine keeps no wire form (Martian)
-	// or Marasi made the response. Request and Response are views of them.
+	// them from the wire, nil for a pair built outside the engine
+	// (NewTestPair) or when Marasi made the response. Request and Response
+	// are views of them.
 	requestWire  *wireRequest
 	responseWire *wireResponse
 	// decoded is what CompressedResponseModifier undid, nil when it decoded
@@ -101,6 +102,9 @@ type requestState struct {
 	// client is the connection the request came in on, which the proxy
 	// takes over to close a dropped response or to hand off an upgrade.
 	client clientHijacker
+	// storedWire is the stored response a browser view answers with, which
+	// the engine writes as stored rather than as net/http would.
+	storedWire *wireResponse
 }
 
 // clientHijacker takes over the client connection of a pair from the engine

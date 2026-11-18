@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"net/http"
 	"strconv"
-	"strings"
 )
 
 // FrameRequestBody gives the body bytes that carry payload as the body of
@@ -93,7 +92,7 @@ func chunk(payload []byte, original *Body) []byte {
 func (h *Header) remove(name string) {
 	fields := h.Fields[:0:0]
 	for _, f := range h.Fields {
-		if !strings.EqualFold(f.Name(), name) {
+		if !f.named(name) {
 			fields = append(fields, f)
 		}
 	}

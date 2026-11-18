@@ -217,6 +217,17 @@ var Catalogue = []Case{
 		},
 	},
 	{
+		ID:  "interim-100-continue-refused",
+		RFC: "RFC 9110 §10.1.1 an origin may refuse the body with 417",
+		Requests: []string{
+			"POST /refuse HTTP/1.1\r\nHost: {authority}\r\nExpect: 100-continue\r\nContent-Length: 5\r\n\r\nhello",
+		},
+		Script: []Step{
+			Await(),
+			Send("HTTP/1.1 417 Expectation Failed\r\nContent-Length: 0\r\n\r\n"),
+		},
+	},
+	{
 		ID:       "interim-103-early-hints",
 		RFC:      "RFC 8297 §2 103 Early Hints, forwarded as RFC 9110 §15.2 says",
 		Requests: []string{"GET /hints HTTP/1.1\r\nHost: {authority}\r\n\r\n"},

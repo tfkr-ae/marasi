@@ -43,11 +43,11 @@ func rebuildWireRequest(raw []byte, original *http.Request, wire *wireRequest) (
 	}
 	view.RemoteAddr = original.RemoteAddr
 	view.TLS = original.TLS
-	if view.Method != http.MethodConnect {
-		view.URL.Scheme = original.URL.Scheme
-		if view.URL.Host == "" {
-			view.URL.Host = view.Host
-		}
+	// Checkpoint holds only requests the engine carries, a CONNECT sent
+	// inside a tunnel included, so every one needs the scheme.
+	view.URL.Scheme = original.URL.Scheme
+	if view.URL.Host == "" {
+		view.URL.Host = view.Host
 	}
 	if len(payload) > 0 {
 		view.Body = io.NopCloser(bytes.NewReader(payload))

@@ -83,7 +83,6 @@ func serveHoldingH1EngineProxy(t *testing.T) (string, *Proxy) {
 	}
 	repository := db.NewProxyRepo(database)
 	proxy, err := New(
-		withH1Engine(),
 		WithLogger(logger),
 		WithConfigDir(t.TempDir()),
 		WithDefaultRepositories(repository),

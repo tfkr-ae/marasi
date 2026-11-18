@@ -36,13 +36,6 @@ type launchHarness struct {
 // Extra options are applied after the harness's own, before the pipelines.
 func startLaunchHarness(t *testing.T, extra ...func(*Proxy) error) *launchHarness {
 	t.Helper()
-	return startLaunchHarnessWith(t, nil, extra...)
-}
-
-// startLaunchHarnessWith is startLaunchHarness with leading options applied
-// before the harness's own, such as withH1Engine, which must come first.
-func startLaunchHarnessWith(t *testing.T, leading []func(*Proxy) error, extra ...func(*Proxy) error) *launchHarness {
-	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dbConnection, err := db.New(":memory:", logger)
 	if err != nil {
@@ -61,7 +54,7 @@ func startLaunchHarnessWith(t *testing.T, leading []func(*Proxy) error, extra ..
 	}
 	finished := make(chan domain.Launch, 16)
 	requests := make(chan domain.ProxyRequest, 16)
-	options := append([]func(*Proxy) error(nil), leading...)
+	var options []func(*Proxy) error
 	options = append(options,
 		WithConfigDir(t.TempDir()),
 		WithDefaultRepositories(repository),

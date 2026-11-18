@@ -147,7 +147,7 @@ func TestH1Engine_AmbiguousFramingIsRefused(t *testing.T) {
 		if err != nil {
 			t.Fatalf("creating in-memory database: %v", err)
 		}
-		proxy, err := New(withH1Engine(), WithConfigDir(t.TempDir()), WithDefaultRepositories(db.NewProxyRepo(database)))
+		proxy, err := New(WithConfigDir(t.TempDir()), WithDefaultRepositories(db.NewProxyRepo(database)))
 		if err != nil {
 			t.Fatalf("creating proxy: %v", err)
 		}

@@ -24,7 +24,7 @@ Start a local origin whose `/hung` handler does not answer until a release file 
 
 ### Switch that waits on a held Checkpoint item
 
-Run `checkpoint intercept on`. Start a background curl to `/held.txt` and retry `checkpoint list --kind http --json` until it holds a `request`; save its `id`. Start human `project open --name "$OTHER_PROJECT"` in the background with stderr to a file. Within 2 s, require that stderr contains `waiting for Checkpoint request $CHECKPOINT_ID: GET http://127.0.0.1:$ORIGIN_PORT/held.txt HTTP/1.1` and that `project open` is still running. Run `checkpoint intercept off`, then `checkpoint drop "$CHECKPOINT_ID"`. Require `project open` to exit 0 with stdout `project: <path ending in $OTHER_PROJECT.marasi>`.
+Run `checkpoint intercept on`. Start a background curl to `/held.txt` and retry `checkpoint list --kind http --json` until it holds a `request`; save its `id`. Start human `project open --name "$OTHER_PROJECT"` in the background with stderr to a file. Within 2 s, require that stderr contains `waiting for Checkpoint request $CHECKPOINT_ID: GET /held.txt HTTP/1.1` (the first line of the held request as it goes upstream, in origin form) and that `project open` is still running. Run `checkpoint intercept off`, then `checkpoint drop "$CHECKPOINT_ID"`. Require `project open` to exit 0 with stdout `project: <path ending in $OTHER_PROJECT.marasi>`.
 
 ## Gotchas
 

@@ -135,8 +135,8 @@ func (proxy *Proxy) setRoute(route *Route) {
 	if transport := proxy.transport.Load(); transport != nil {
 		transport.CloseIdleConnections()
 	}
-	if engine, ok := proxy.engine.(*h1Engine); ok {
-		engine.routeSwapped(route)
+	if proxy.engine != nil {
+		proxy.engine.routeSwapped(route)
 	}
 }
 

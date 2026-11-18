@@ -852,7 +852,7 @@ func CheckpointResponseModifier(proxy *Proxy, pair *Pair) error {
 			var original []byte
 			var edit *checkpointEdit
 			if pair.responseWire != nil {
-				original, _, err = dumpWireResponse(pair.responseWire, pair.Response)
+				original, _, _, err = dumpWireResponse(pair.responseWire, pair.Response)
 				edit = wireResponseEdit(pair.Response, pair.responseWire)
 			} else {
 				original, err = httputil.DumpResponse(pair.Response, true)
