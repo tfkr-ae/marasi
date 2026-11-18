@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"strconv"
 	"time"
 
 	"github.com/andybalholm/brotli"
@@ -627,51 +628,87 @@ func WebSocketUpgradeHandler(proxy *Proxy, pair *Pair, client, upstream io.ReadW
 	return proxy.runWebSocketSessionWithRelease(connection, record, pair.release)
 }
 
-// CompressedResponseModifier decompresses the response bodies and replaces the `res.Body`
-// with the decompressed data. It will remove the "Content-Encoding" header and update the "Content-Length" to the new length.
-// Currently the modifier handles gzip and br compressed bodies.
+// CompressedResponseModifier decodes a response whose Content-Encoding is
+// exactly gzip or br, on one field line, so the rest of the chain, Checkpoint
+// and storage see the body decoded with Content-Encoding removed and
+// Content-Length set to the decoded length (when the response is not
+// chunked). Every other coding is left as received. The pair's metadata
+// records the coding in decoded_content_encoding and the length of the
+// encoded body in wire_content_length.
+//
+// On the h1 engine the client still receives the origin's encoded bytes
+// unless the chain changed the decoded body
+// (docs/adr/2026-11-17-compressed-responses-are-transparent-on-the-wire-and-decoded-in-storage.md).
+// A body that does not decode is left as received and the error returned.
 func CompressedResponseModifier(proxy *Proxy, pair *Pair) error {
 	res := pair.Response
-	if res.Header.Get("Content-Encoding") != "" && res.Body != nil && res.ContentLength > 0 {
-		switch res.Header.Get("Content-Encoding") {
-		case "gzip":
-			defer res.Body.Close()
-
-			gzipReader, err := gzip.NewReader(res.Body)
-			if err != nil {
-				return fmt.Errorf("creating gzip reader: %w", err)
-			}
-
-			defer gzipReader.Close()
-
-			decompressedBody, err := io.ReadAll(gzipReader)
-			if err != nil {
-				return fmt.Errorf("reading gzip content: %w", err)
-			}
-
-			res.Body = io.NopCloser(bytes.NewReader(decompressedBody))
-			res.ContentLength = int64(len(decompressedBody))
-			res.Header.Set("Content-Length", fmt.Sprintf("%d", len(decompressedBody)))
-			res.Header.Del("Content-Encoding")
-		case "br":
-			defer res.Body.Close()
-
-			brotliReader := brotli.NewReader(res.Body)
-
-			decompressedBody, err := io.ReadAll(brotliReader)
-			if err != nil {
-				return fmt.Errorf("reading brotli content: %w", err)
-			}
-
-			res.Body = io.NopCloser(bytes.NewReader(decompressedBody))
-			res.ContentLength = int64(len(decompressedBody))
-			res.Header.Set("Content-Length", fmt.Sprintf("%d", len(decompressedBody)))
-			res.Header.Del("Content-Encoding")
-		default:
-			return nil
-		}
+	codings := res.Header.Values("Content-Encoding")
+	if len(codings) != 1 || (codings[0] != "gzip" && codings[0] != "br") {
+		return nil
 	}
+	if res.Body == nil || res.Body == http.NoBody {
+		return nil
+	}
+	coded, err := io.ReadAll(res.Body)
+	res.Body.Close()
+	res.Body = io.NopCloser(bytes.NewReader(coded))
+	if err != nil {
+		return fmt.Errorf("reading the coded body: %w", err)
+	}
+	if len(coded) == 0 {
+		return nil
+	}
+	decoded, err := decodeContent(codings[0], coded)
+	if err != nil {
+		return err
+	}
+	pair.decoded = &decodedResponse{
+		coded:   coded,
+		decoded: decoded,
+		framing: http.Header{"Content-Encoding": codings, "Content-Length": res.Header.Values("Content-Length")},
+	}
+	res.Body = io.NopCloser(bytes.NewReader(decoded))
+	res.ContentLength = int64(len(decoded))
+	if res.Header.Get("Transfer-Encoding") == "" {
+		res.Header.Set("Content-Length", strconv.Itoa(len(decoded)))
+	}
+	res.Header.Del("Content-Encoding")
+	if pair.Metadata == nil {
+		pair.Metadata = make(map[string]any)
+	}
+	pair.Metadata["decoded_content_encoding"] = codings[0]
+	pair.Metadata["wire_content_length"] = len(coded)
 	return nil
+}
+
+// decodedResponse is a response body CompressedResponseModifier decoded.
+type decodedResponse struct {
+	coded   []byte
+	decoded []byte
+	// framing holds the Content-Encoding and Content-Length values as the
+	// origin sent them.
+	framing http.Header
+}
+
+// decodeContent undoes the content coding gzip or br.
+func decodeContent(coding string, coded []byte) ([]byte, error) {
+	if coding == "br" {
+		decoded, err := io.ReadAll(brotli.NewReader(bytes.NewReader(coded)))
+		if err != nil {
+			return nil, fmt.Errorf("reading brotli content: %w", err)
+		}
+		return decoded, nil
+	}
+	gzipReader, err := gzip.NewReader(bytes.NewReader(coded))
+	if err != nil {
+		return nil, fmt.Errorf("creating gzip reader: %w", err)
+	}
+	defer gzipReader.Close()
+	decoded, err := io.ReadAll(gzipReader)
+	if err != nil {
+		return nil, fmt.Errorf("reading gzip content: %w", err)
+	}
+	return decoded, nil
 }
 
 // responseHookMarks are the marks a Lua response hook set.

@@ -1379,6 +1379,636 @@
       }
     ]
   },
+  "content-encoding-br@absolute": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /content-br HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Accept-Encoding",
+                "value": " br"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Content-Encoding",
+                "value": " br"
+              },
+              {
+                "name": "Transfer-Encoding",
+                "value": " chunked"
+              }
+            ],
+            "body": "GwsAAKRAWGqQSWrynB4B",
+            "framing": {
+              "kind": "chunked",
+              "chunks": [
+                15
+              ]
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jb250ZW50LWJyIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpBY2NlcHQtRW5jb2Rpbmc6IGJyDQoNCg==",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCkNvbnRlbnQtRW5jb2Rpbmc6IGJyDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KDQpmDQobCwAApEBYapBJavKcHgENCjANCg0K"
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /content-br HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Accept-Encoding",
+                "value": " br"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Content-Encoding",
+                "value": " br"
+              },
+              {
+                "name": "Transfer-Encoding",
+                "value": " chunked"
+              }
+            ],
+            "body": "GwsAAKRAWGqQSWrynB4B",
+            "framing": {
+              "kind": "chunked",
+              "chunks": [
+                15
+              ]
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jb250ZW50LWJyIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpBY2NlcHQtRW5jb2Rpbmc6IGJyDQoNCg==",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCkNvbnRlbnQtRW5jb2Rpbmc6IGJyDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KDQpmDQobCwAApEBYapBJavKcHgENCjANCg0K"
+        }
+      }
+    ]
+  },
+  "content-encoding-br@connect-plain": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /content-br HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Accept-Encoding",
+                "value": " br"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Content-Encoding",
+                "value": " br"
+              },
+              {
+                "name": "Transfer-Encoding",
+                "value": " chunked"
+              }
+            ],
+            "body": "GwsAAKRAWGqQSWrynB4B",
+            "framing": {
+              "kind": "chunked",
+              "chunks": [
+                15
+              ]
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jb250ZW50LWJyIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpBY2NlcHQtRW5jb2Rpbmc6IGJyDQoNCg==",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCkNvbnRlbnQtRW5jb2Rpbmc6IGJyDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KDQpmDQobCwAApEBYapBJavKcHgENCjANCg0K"
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /content-br HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Accept-Encoding",
+                "value": " br"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Content-Encoding",
+                "value": " br"
+              },
+              {
+                "name": "Transfer-Encoding",
+                "value": " chunked"
+              }
+            ],
+            "body": "GwsAAKRAWGqQSWrynB4B",
+            "framing": {
+              "kind": "chunked",
+              "chunks": [
+                15
+              ]
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jb250ZW50LWJyIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpBY2NlcHQtRW5jb2Rpbmc6IGJyDQoNCg==",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCkNvbnRlbnQtRW5jb2Rpbmc6IGJyDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KDQpmDQobCwAApEBYapBJavKcHgENCjANCg0K"
+        }
+      }
+    ]
+  },
+  "content-encoding-br@connect-tls": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /content-br HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Accept-Encoding",
+                "value": " br"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Content-Encoding",
+                "value": " br"
+              },
+              {
+                "name": "Transfer-Encoding",
+                "value": " chunked"
+              }
+            ],
+            "body": "GwsAAKRAWGqQSWrynB4B",
+            "framing": {
+              "kind": "chunked",
+              "chunks": [
+                15
+              ]
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jb250ZW50LWJyIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpBY2NlcHQtRW5jb2Rpbmc6IGJyDQoNCg==",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCkNvbnRlbnQtRW5jb2Rpbmc6IGJyDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KDQpmDQobCwAApEBYapBJavKcHgENCjANCg0K"
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /content-br HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Accept-Encoding",
+                "value": " br"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Content-Encoding",
+                "value": " br"
+              },
+              {
+                "name": "Transfer-Encoding",
+                "value": " chunked"
+              }
+            ],
+            "body": "GwsAAKRAWGqQSWrynB4B",
+            "framing": {
+              "kind": "chunked",
+              "chunks": [
+                15
+              ]
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jb250ZW50LWJyIEhUVFAvMS4xDQpIb3N0OiBvcmlnaW4udGVzdDpQT1JUDQpBY2NlcHQtRW5jb2Rpbmc6IGJyDQoNCg==",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCkNvbnRlbnQtRW5jb2Rpbmc6IGJyDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KDQpmDQobCwAApEBYapBJavKcHgENCjANCg0K"
+        }
+      }
+    ]
+  },
+  "content-encoding-gzip@absolute": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /content-gzip HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Accept-Encoding",
+                "value": " gzip"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Content-Encoding",
+                "value": " gzip"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 36"
+              }
+            ],
+            "body": "H4sIAAAAAAAC/8pIzcnJ11Eozy/KSQEEAAD//zpyq/8MAAAA",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jb250ZW50LWd6aXAgSFRUUC8xLjENCkhvc3Q6IG9yaWdpbi50ZXN0OlBPUlQNCkFjY2VwdC1FbmNvZGluZzogZ3ppcA0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCkNvbnRlbnQtRW5jb2Rpbmc6IGd6aXANCkNvbnRlbnQtTGVuZ3RoOiAzNg0KDQofiwgAAAAAAAL/ykjNycnXUSjPL8pJAQQAAP//OnKr/wwAAAA="
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /content-gzip HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Accept-Encoding",
+                "value": " gzip"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Content-Encoding",
+                "value": " gzip"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 36"
+              }
+            ],
+            "body": "H4sIAAAAAAAC/8pIzcnJ11Eozy/KSQEEAAD//zpyq/8MAAAA",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jb250ZW50LWd6aXAgSFRUUC8xLjENCkhvc3Q6IG9yaWdpbi50ZXN0OlBPUlQNCkFjY2VwdC1FbmNvZGluZzogZ3ppcA0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCkNvbnRlbnQtRW5jb2Rpbmc6IGd6aXANCkNvbnRlbnQtTGVuZ3RoOiAzNg0KDQofiwgAAAAAAAL/ykjNycnXUSjPL8pJAQQAAP//OnKr/wwAAAA="
+        }
+      }
+    ]
+  },
+  "content-encoding-gzip@connect-plain": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /content-gzip HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Accept-Encoding",
+                "value": " gzip"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Content-Encoding",
+                "value": " gzip"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 36"
+              }
+            ],
+            "body": "H4sIAAAAAAAC/8pIzcnJ11Eozy/KSQEEAAD//zpyq/8MAAAA",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jb250ZW50LWd6aXAgSFRUUC8xLjENCkhvc3Q6IG9yaWdpbi50ZXN0OlBPUlQNCkFjY2VwdC1FbmNvZGluZzogZ3ppcA0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCkNvbnRlbnQtRW5jb2Rpbmc6IGd6aXANCkNvbnRlbnQtTGVuZ3RoOiAzNg0KDQofiwgAAAAAAAL/ykjNycnXUSjPL8pJAQQAAP//OnKr/wwAAAA="
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /content-gzip HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Accept-Encoding",
+                "value": " gzip"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Content-Encoding",
+                "value": " gzip"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 36"
+              }
+            ],
+            "body": "H4sIAAAAAAAC/8pIzcnJ11Eozy/KSQEEAAD//zpyq/8MAAAA",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jb250ZW50LWd6aXAgSFRUUC8xLjENCkhvc3Q6IG9yaWdpbi50ZXN0OlBPUlQNCkFjY2VwdC1FbmNvZGluZzogZ3ppcA0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCkNvbnRlbnQtRW5jb2Rpbmc6IGd6aXANCkNvbnRlbnQtTGVuZ3RoOiAzNg0KDQofiwgAAAAAAAL/ykjNycnXUSjPL8pJAQQAAP//OnKr/wwAAAA="
+        }
+      }
+    ]
+  },
+  "content-encoding-gzip@connect-tls": {
+    "client": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /content-gzip HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Accept-Encoding",
+                "value": " gzip"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Content-Encoding",
+                "value": " gzip"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 36"
+              }
+            ],
+            "body": "H4sIAAAAAAAC/8pIzcnJ11Eozy/KSQEEAAD//zpyq/8MAAAA",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jb250ZW50LWd6aXAgSFRUUC8xLjENCkhvc3Q6IG9yaWdpbi50ZXN0OlBPUlQNCkFjY2VwdC1FbmNvZGluZzogZ3ppcA0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCkNvbnRlbnQtRW5jb2Rpbmc6IGd6aXANCkNvbnRlbnQtTGVuZ3RoOiAzNg0KDQofiwgAAAAAAAL/ykjNycnXUSjPL8pJAQQAAP//OnKr/wwAAAA="
+        }
+      }
+    ],
+    "origin": [
+      {
+        "requests": [
+          {
+            "start_line": "GET /content-gzip HTTP/1.1",
+            "fields": [
+              {
+                "name": "Host",
+                "value": " origin.test:PORT"
+              },
+              {
+                "name": "Accept-Encoding",
+                "value": " gzip"
+              }
+            ],
+            "framing": {
+              "kind": "none"
+            }
+          }
+        ],
+        "responses": [
+          {
+            "start_line": "HTTP/1.1 200 OK",
+            "fields": [
+              {
+                "name": "Content-Type",
+                "value": " text/plain"
+              },
+              {
+                "name": "Content-Encoding",
+                "value": " gzip"
+              },
+              {
+                "name": "Content-Length",
+                "value": " 36"
+              }
+            ],
+            "body": "H4sIAAAAAAAC/8pIzcnJ11Eozy/KSQEEAAD//zpyq/8MAAAA",
+            "framing": {
+              "kind": "content-length"
+            }
+          }
+        ],
+        "end": "open",
+        "raw": {
+          "to_server": "R0VUIC9jb250ZW50LWd6aXAgSFRUUC8xLjENCkhvc3Q6IG9yaWdpbi50ZXN0OlBPUlQNCkFjY2VwdC1FbmNvZGluZzogZ3ppcA0KDQo=",
+          "to_client": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCkNvbnRlbnQtRW5jb2Rpbmc6IGd6aXANCkNvbnRlbnQtTGVuZ3RoOiAzNg0KDQofiwgAAAAAAAL/ykjNycnXUSjPL8pJAQQAAP//OnKr/wwAAAA="
+        }
+      }
+    ]
+  },
   "content-length-and-transfer-encoding@absolute": {
     "client": [
       {

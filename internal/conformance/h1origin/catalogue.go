@@ -16,6 +16,16 @@ var gzipHello = func() string {
 	return string(b)
 }()
 
+// brHello is "hello, world" brotli-compressed, kept as bytes for the same
+// reason.
+var brHello = func() string {
+	b, err := hex.DecodeString("1b0b0000a440586a90496af29c1e01")
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}()
+
 // resetSettle is how long an origin waits after the bytes it sends before
 // a reset, so the peer has read them before the reset can discard them.
 const resetSettle = 100 * time.Millisecond
@@ -160,6 +170,26 @@ var Catalogue = []Case{
 			Await(),
 			Send("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: gzip, chunked\r\n\r\n" +
 				"24\r\n" + gzipHello + "\r\n0\r\n\r\n"),
+		},
+	},
+	// Content codings, which a proxy passes on as the origin sent them.
+	{
+		ID:       "content-encoding-gzip",
+		RFC:      "RFC 9110 §8.4 a content coding is end to end",
+		Requests: []string{"GET /content-gzip HTTP/1.1\r\nHost: {authority}\r\nAccept-Encoding: gzip\r\n\r\n"},
+		Script: []Step{
+			Await(),
+			Send("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: 36\r\n\r\n" + gzipHello),
+		},
+	},
+	{
+		ID:       "content-encoding-br",
+		RFC:      "RFC 9110 §8.4 a content coding is end to end",
+		Requests: []string{"GET /content-br HTTP/1.1\r\nHost: {authority}\r\nAccept-Encoding: br\r\n\r\n"},
+		Script: []Step{
+			Await(),
+			Send("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: br\r\nTransfer-Encoding: chunked\r\n\r\n" +
+				"f\r\n" + brHello + "\r\n0\r\n\r\n"),
 		},
 	},
 	{

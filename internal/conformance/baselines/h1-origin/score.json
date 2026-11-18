@@ -6,10 +6,10 @@
       "target": "fixtures",
       "approach": "absolute",
       "matched": 11,
-      "cases": 24,
+      "cases": 26,
       "leg_rules": {
-        "passed": 92,
-        "failed": 27
+        "passed": 100,
+        "failed": 29
       }
     },
     {
@@ -17,10 +17,10 @@
       "target": "fixtures",
       "approach": "connect-plain",
       "matched": 11,
-      "cases": 24,
+      "cases": 26,
       "leg_rules": {
-        "passed": 92,
-        "failed": 27
+        "passed": 100,
+        "failed": 29
       }
     },
     {
@@ -28,10 +28,10 @@
       "target": "fixtures",
       "approach": "connect-tls",
       "matched": 11,
-      "cases": 24,
+      "cases": 26,
       "leg_rules": {
-        "passed": 92,
-        "failed": 27
+        "passed": 100,
+        "failed": 29
       }
     },
     {
@@ -39,10 +39,10 @@
       "target": "fixtures",
       "approach": "absolute",
       "matched": 10,
-      "cases": 24,
+      "cases": 26,
       "leg_rules": {
-        "passed": 91,
-        "failed": 27
+        "passed": 99,
+        "failed": 29
       }
     },
     {
@@ -50,10 +50,10 @@
       "target": "fixtures",
       "approach": "connect-plain",
       "matched": 10,
-      "cases": 24,
+      "cases": 26,
       "leg_rules": {
-        "passed": 91,
-        "failed": 27
+        "passed": 99,
+        "failed": 29
       }
     },
     {
@@ -61,10 +61,10 @@
       "target": "fixtures",
       "approach": "connect-tls",
       "matched": 10,
-      "cases": 24,
+      "cases": 26,
       "leg_rules": {
-        "passed": 91,
-        "failed": 27
+        "passed": 99,
+        "failed": 29
       }
     },
     {
@@ -72,10 +72,10 @@
       "target": "fixtures",
       "approach": "absolute",
       "matched": 10,
-      "cases": 24,
+      "cases": 26,
       "leg_rules": {
-        "passed": 91,
-        "failed": 27
+        "passed": 99,
+        "failed": 29
       }
     },
     {
@@ -83,10 +83,10 @@
       "target": "fixtures",
       "approach": "connect-plain",
       "matched": 10,
-      "cases": 24,
+      "cases": 26,
       "leg_rules": {
-        "passed": 91,
-        "failed": 27
+        "passed": 99,
+        "failed": 29
       }
     },
     {
@@ -94,10 +94,10 @@
       "target": "fixtures",
       "approach": "connect-tls",
       "matched": 10,
-      "cases": 24,
+      "cases": 26,
       "leg_rules": {
-        "passed": 91,
-        "failed": 27
+        "passed": 99,
+        "failed": 29
       }
     },
     {
@@ -105,10 +105,10 @@
       "target": "fixtures",
       "approach": "absolute",
       "matched": 11,
-      "cases": 24,
+      "cases": 26,
       "leg_rules": {
-        "passed": 92,
-        "failed": 27
+        "passed": 100,
+        "failed": 29
       }
     },
     {
@@ -116,10 +116,10 @@
       "target": "fixtures",
       "approach": "connect-plain",
       "matched": 11,
-      "cases": 24,
+      "cases": 26,
       "leg_rules": {
-        "passed": 92,
-        "failed": 27
+        "passed": 100,
+        "failed": 29
       }
     },
     {
@@ -127,10 +127,10 @@
       "target": "fixtures",
       "approach": "connect-tls",
       "matched": 11,
-      "cases": 24,
+      "cases": 26,
       "leg_rules": {
-        "passed": 92,
-        "failed": 27
+        "passed": 100,
+        "failed": 29
       }
     }
   ]
