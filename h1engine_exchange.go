@@ -112,27 +112,28 @@ func (c *h1Conn) roundTrip(pair *Pair) (*http.Response, *wireResponse) {
 }
 
 // errRouteNotCarried is the cause of the proxy error response to a request
-// whose route the skeleton cannot carry yet: ticket 15 carries upstream
-// proxies, ticket 14 TLS to the origin.
-var errRouteNotCarried = errors.New("the h1 engine carries only plain HTTP over a direct route")
+// the skeleton cannot carry yet: ticket 14 carries TLS to the origin.
+var errRouteNotCarried = errors.New("the h1 engine carries only plain HTTP")
 
 // sendUpstream writes the pair's request to the connection's origin
 // connection and reads the origin's response. The route is resolved for
-// every request; anything but a direct route fails closed.
+// every request, and a request never goes out on a connection of another
+// route.
 func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error) {
 	req := pair.Request
 	if pair.RequestBodyEnding == BodyCutShort {
 		_, err := io.ReadAll(req.Body)
 		return nil, nil, fmt.Errorf("reading the request body: %w", err)
 	}
-	if !c.engine.proxy.resolveRoute().Direct() || req.URL.Scheme != "http" {
+	route := c.engine.proxy.resolveRoute()
+	if req.URL.Scheme != "http" {
 		return nil, nil, errRouteNotCarried
 	}
 	out, err := outboundRequest(pair.requestWire, req)
 	if err != nil {
 		return nil, nil, err
 	}
-	origin, err := c.originFor(pair, hostPort(req.URL.Host, "80"))
+	origin, err := c.originFor(pair, route, hostPort(req.URL.Host, "80"))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -191,22 +192,25 @@ type originConn struct {
 	conn net.Conn
 	br   *bufio.Reader
 	bw   *bufio.Writer
+
+	// route is the route that opened conn.
+	route *Route
 }
 
-// originFor returns the client connection's origin connection to addr. The
-// first request dials it; a request for another origin closes the old one
-// and dials anew.
-func (c *h1Conn) originFor(pair *Pair, addr string) (*originConn, error) {
-	if c.origin != nil && c.origin.addr == addr {
-		return c.origin, nil
+// originFor returns the client connection's origin connection to addr on
+// route, and records its route on the pair. The first request dials it; a
+// request for another origin or on another route closes the old one and
+// dials anew through the route (h1engine_route.go).
+func (c *h1Conn) originFor(pair *Pair, route *Route, addr string) (*originConn, error) {
+	if c.origin == nil || c.origin.addr != addr || c.origin.route != route {
+		c.closeOrigin()
+		conn, err := c.engine.proxy.dialOrigin(pair.Request.Context(), pair.Request.URL.Scheme, addr)
+		if err != nil {
+			return nil, err
+		}
+		c.origin = &originConn{addr: addr, route: conn.route, conn: conn, br: bufio.NewReader(conn), bw: bufio.NewWriter(conn)}
 	}
-	c.closeOrigin()
-	// Ticket 15 dials through the route here.
-	conn, err := c.engine.proxy.dialTransport(pair.Context(), "tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-	c.origin = &originConn{addr: addr, conn: conn, br: bufio.NewReader(conn), bw: bufio.NewWriter(conn)}
+	recordRoute(pair, c.origin)
 	return c.origin, nil
 }
 
