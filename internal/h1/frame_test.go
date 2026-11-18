@@ -154,11 +154,25 @@ func TestFrameResponseBody(t *testing.T) {
 			want:     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n0\r\n\r\n",
 		},
 		{
-			name:     "should send an edited body that runs until close as it is",
+			name:     "should send an edited body that ran until close chunked without its coding",
 			response: "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nzzz",
 			method:   "GET",
 			payload:  "yy",
-			want:     "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nyy",
+			want:     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nyy\r\n0\r\n\r\n",
+		},
+		{
+			name:     "should send an unchanged body that runs until close as it was read",
+			response: "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nzzz",
+			method:   "GET",
+			payload:  "zzz",
+			want:     "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nzzz",
+		},
+		{
+			name:     "should keep the spelling of an edited gzip, chunked body's Transfer-Encoding line and its trailers",
+			response: "HTTP/1.1 200 OK\r\ntransfer-ENCODING:gzip, chunked\r\nX-A: a\r\n\r\n1\r\nz\r\n0\r\nX-T: t\r\n\r\n",
+			method:   "GET",
+			payload:  "yy",
+			want:     "HTTP/1.1 200 OK\r\ntransfer-ENCODING: chunked\r\nX-A: a\r\n\r\n2\r\nyy\r\n0\r\nX-T: t\r\n\r\n",
 		},
 		{
 			name:     "should send no body for a response to HEAD",

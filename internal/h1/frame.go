@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 // FrameRequestBody gives the body bytes that carry payload as the body of
@@ -29,11 +30,13 @@ func FrameResponseBody(head *ResponseHead, method string, original *Body, payloa
 //     removed, as an intermediary must before forwarding (RFC 9112 §6.3);
 //   - a body nobody changed, still framed the way it was read, goes out
 //     exactly as it was read;
-//   - otherwise a chunked body is re-chunked as one chunk, keeping the
-//     original's trailers; a Content-Length value is rewritten in place;
-//     and a message with neither that now has a body gets Content-Length
-//     appended at the end. A transfer coding other than chunked runs until
-//     the connection closes, so its payload goes out as it is.
+//   - otherwise a message with a Transfer-Encoding goes out chunked as one
+//     chunk, keeping a chunked original's trailers. Marasi decodes no
+//     transfer coding but chunked, so an edited payload is not in the others
+//     (gzip, a coding it does not know): they are dropped, and the
+//     Transfer-Encoding value becomes chunked in place (RFC 9112 §6.1). A
+//     Content-Length value is rewritten in place, and a message with neither
+//     that now has a body gets Content-Length appended at the end.
 func frameBody(h *Header, request, bodyless bool, original *Body, payload []byte) []byte {
 	if original == nil {
 		original = &Body{}
@@ -55,10 +58,14 @@ func frameBody(h *Header, request, bodyless bool, original *Body, payload []byte
 		return body.Bytes()
 	}
 	switch {
-	case coded && f.Kind == Chunked:
-		return chunk(payload, original)
 	case coded:
-		return payload
+		if codings := h.Values("Transfer-Encoding"); len(codings) != 1 || !strings.EqualFold(codings[0], "chunked") {
+			v := h.View()
+			v["Transfer-Encoding"] = []string{"chunked"}
+			// The value is a token, so the merge cannot fail.
+			h.Merge(v)
+		}
+		return chunk(payload, original)
 	case h.Has("Content-Length"), len(payload) > 0:
 		v := h.View()
 		v["Content-Length"] = []string{strconv.Itoa(len(payload))}
