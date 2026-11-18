@@ -76,9 +76,9 @@ func startViewHarness(t *testing.T, config viewHarnessConfig) *viewHarness {
 	}
 	serveResult := make(chan error, 1)
 	if config.secureOrigin {
-		// As Serve does, with an upstream transport that trusts the origin's
+		// As Serve does, with an origin dialer that trusts the origin's
 		// self-signed certificate.
-		proxy.setRoundTripper(newDirectTransport(proxy.dialTransport, true))
+		proxy.dialer.Store(newDirectDialer(proxy.dialTransport, true))
 		proxy.dbWriterStarted.Store(true)
 		go proxy.WriteToDB()
 		go func() { serveResult <- proxy.engine.serve(proxyListener) }()

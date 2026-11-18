@@ -50,10 +50,3 @@ type wireResponse struct {
 	head *h1.ResponseHead
 	body *h1.Body
 }
-
-// setRoundTripper makes the routed transport under base the one the engine
-// dials origins through. Serve sets the proxy's own; tests that serve the
-// engine directly set one that trusts their self-signed origins.
-func (proxy *Proxy) setRoundTripper(base http.RoundTripper) {
-	proxy.engine.setRoundTripper(base)
-}

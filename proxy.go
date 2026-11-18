@@ -149,10 +149,10 @@ type Proxy struct {
 	connectionsClosing   bool
 	transportContext     context.Context
 	cancelTransport      context.CancelFunc
-	route                atomic.Pointer[Route]           // the route new connections to the origin use
-	transport            atomic.Pointer[routedTransport] // the transport the latest Serve built
-	routes               routeResolver                   // turns the upstream proxy selection into routes
-	routeMu              sync.Mutex                      // serializes route swaps from the resolver
+	route                atomic.Pointer[Route]        // the route new connections to the origin use
+	dialer               atomic.Pointer[originDialer] // the origin dialer the latest Serve built
+	routes               routeResolver                // turns the upstream proxy selection into routes
+	routeMu              sync.Mutex                   // serializes route swaps from the resolver
 	listenerMu           sync.Mutex
 	activeListener       net.Listener
 	activeServeDone      chan struct{}
@@ -913,8 +913,7 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 	if err := proxy.flushDBWrites(); err != nil {
 		return err
 	}
-	routed := newRoutedTransport(proxy.resolveRoute, proxy.CurrentRoute, proxy.dialTransport)
-	proxy.transport.Store(routed)
+	proxy.dialer.Store(newOriginDialer(proxy.resolveRoute, proxy.CurrentRoute, proxy.dialTransport))
 	proxy.listenerMu.Lock()
 	proxy.activeListener = activeListener
 	serveDone := make(chan struct{})

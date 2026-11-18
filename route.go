@@ -2,7 +2,6 @@ package marasi
 
 import (
 	"crypto/x509"
-	"io"
 	"net"
 	"net/url"
 	"strconv"
@@ -109,55 +108,18 @@ type routedConn struct {
 	route *Route
 }
 
-// connectionRoute returns the route that opened a connection the transport
-// handed out, such as httptrace.GotConnInfo.Conn.
-func connectionRoute(conn net.Conn) (*Route, bool) {
-	routed, ok := conn.(*routedConn)
-	if !ok {
-		return nil, false
-	}
-	return routed.route, true
-}
-
 // CurrentRoute returns the route new connections to the origin use.
 func (proxy *Proxy) CurrentRoute() *Route {
 	return proxy.route.Load()
 }
 
-// setRoute makes route the one new connections to the origin use. It closes
-// the old route's idle connections at once, on either engine (the new
-// engine's are in h1engine_route.go). Connections carrying a request
-// keep it until it finishes and are never reused afterwards, since the next
-// request takes its connection from the new route's pool (see
-// routedTransport). The listener keeps running.
+// setRoute makes route the one new connections to the origin use. The
+// engine closes the old route's origin connections of client connections
+// waiting for their next request at once, and a busy one closes its own after
+// its request/response pair (h1engine_route.go). The listener keeps running.
 func (proxy *Proxy) setRoute(route *Route) {
 	proxy.route.Store(route)
-	if transport := proxy.transport.Load(); transport != nil {
-		transport.CloseIdleConnections()
-	}
 	if proxy.engine != nil {
 		proxy.engine.routeSwapped(route)
 	}
-}
-
-// retiringBody runs done once, after the transport has finished with the
-// body's connection: on the first error, including io.EOF, or on Close.
-type retiringBody struct {
-	io.ReadCloser
-	once sync.Once
-	done func()
-}
-
-func (body *retiringBody) Read(p []byte) (int, error) {
-	n, err := body.ReadCloser.Read(p)
-	if err != nil {
-		body.once.Do(body.done)
-	}
-	return n, err
-}
-
-func (body *retiringBody) Close() error {
-	err := body.ReadCloser.Close()
-	body.once.Do(body.done)
-	return err
 }

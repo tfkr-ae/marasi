@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"crypto/tls"
 	"crypto/x509"
-	"net/http"
 	"time"
 )
 
@@ -24,24 +23,6 @@ func (engine *h1Engine) setMITM(certificate *x509.Certificate, privateKey any) (
 	}
 	engine.leaves = issuer
 	return issuer.config(""), nil
-}
-
-// setRoundTripper takes the routed transport under base, if any, as the one
-// the engine dials origins through (proxy.dialOrigin): the engine carries
-// requests itself. Serve stores the same transport; tests that serve the
-// engine directly set one that trusts their self-signed origins.
-func (engine *h1Engine) setRoundTripper(base http.RoundTripper) {
-	for {
-		switch rt := base.(type) {
-		case *marasiRoundTripper:
-			base = rt.base
-		case *routedTransport:
-			engine.proxy.transport.Store(rt)
-			return
-		default:
-			return
-		}
-	}
 }
 
 // tlsHandshakeTimeout bounds the client's handshake inside a tunnel, as the

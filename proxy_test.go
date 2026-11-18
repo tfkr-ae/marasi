@@ -2691,7 +2691,7 @@ func testProxyWebSocketIntegration(
 	}
 	serveResult := make(chan error, 1)
 	if secure {
-		proxy.setRoundTripper(newDirectTransport(nil, true))
+		proxy.dialer.Store(newDirectDialer(nil, true))
 		go proxy.WriteToDB()
 		go func() {
 			serveResult <- proxy.engine.serve(proxyListener)

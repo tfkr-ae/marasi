@@ -14,9 +14,9 @@ import (
 // request/response pair that a swap overtook closes its own once the response is read.
 // The client connection stays open either way.
 
-// errNoTransport is the cause when the proxy is not serving, so no route
-// dial is set up.
-var errNoTransport = errors.New("the proxy is not serving")
+// errNotServing is the cause when the proxy is not serving, so no origin
+// dialer is set up.
+var errNotServing = errors.New("the proxy is not serving")
 
 // dialOrigin opens a connection to addr on the current route: through the
 // route's upstream proxy when there is one, with a utls handshake inside it
@@ -24,16 +24,16 @@ var errNoTransport = errors.New("the proxy is not serving")
 // and a failed one records the route it tried on the request's route record
 // (see dialOnCurrentRoute). ctx carries the request's values.
 func (proxy *Proxy) dialOrigin(ctx context.Context, scheme, addr string) (*routedConn, error) {
-	transport := proxy.transport.Load()
-	if transport == nil {
-		return nil, errNoTransport
+	dialer := proxy.dialer.Load()
+	if dialer == nil {
+		return nil, errNotServing
 	}
 	var conn net.Conn
 	var err error
 	if scheme == "https" {
-		conn, err = transport.dialTLS(ctx, "tcp", addr)
+		conn, err = dialer.dialTLS(ctx, "tcp", addr)
 	} else {
-		conn, err = transport.dialPlain(ctx, "tcp", addr)
+		conn, err = dialer.dialPlain(ctx, "tcp", addr)
 	}
 	if err != nil {
 		return nil, err
