@@ -153,6 +153,7 @@ func frameBody(wire *h1.Body, payload []byte, header http.Header) ([]byte, http.
 
 // toOriginForm rewrites an absolute-form target into the origin form an
 // origin expects (RFC 9112 §3.2.1), adding Host when the request had none.
+// The path and query are kept as they were written.
 func toOriginForm(head *h1.RequestHead) error {
 	if head.Method == http.MethodConnect || strings.HasPrefix(head.Target, "/") || head.Target == "*" {
 		return nil
@@ -172,7 +173,22 @@ func toOriginForm(head *h1.RequestHead) error {
 	if bytes.HasSuffix(head.Line, []byte("\r\n")) {
 		eol = "\r\n"
 	}
-	head.Target = target.RequestURI()
+	head.Target = originForm(head.Target)
 	head.Line = []byte(head.Method + " " + head.Target + " " + head.Proto + eol)
 	return nil
+}
+
+// originForm is the path and query of an absolute-form target exactly as
+// written, "/" when it has no path.
+func originForm(target string) string {
+	_, rest, _ := strings.Cut(target, "://")
+	if i := strings.IndexAny(rest, "/?"); i >= 0 {
+		rest = rest[i:]
+	} else {
+		rest = ""
+	}
+	if !strings.HasPrefix(rest, "/") {
+		rest = "/" + rest
+	}
+	return rest
 }
