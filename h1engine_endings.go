@@ -9,7 +9,7 @@ import (
 	"github.com/tfkr-ae/marasi/internal/h1"
 )
 
-// How a client connection ends on the new engine
+// How a client connection ends on the engine
 // (docs/adr/2026-11-17-one-origin-connection-per-client-connection.md):
 //
 //   - a request's head must arrive within headerTimeout, and the next

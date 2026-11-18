@@ -16,7 +16,7 @@ import (
 	"github.com/tfkr-ae/marasi/internal/upstreamtest"
 )
 
-// routedH1Engine is a proxy on the new engine whose config directory lists
+// routedH1Engine is a proxy on the engine whose config directory lists
 // upstream proxies, with what it stored and logged.
 type routedH1Engine struct {
 	proxy    *Proxy
@@ -25,7 +25,7 @@ type routedH1Engine struct {
 	logs     chan domain.Log
 }
 
-// serveRoutedH1Engine serves the new engine with the base pipeline and the
+// serveRoutedH1Engine serves the engine with the base pipeline and the
 // setup, filter and write modifiers, with entries listed as upstream proxies.
 func serveRoutedH1Engine(t *testing.T, entries ...UpstreamProxyConfig) *routedH1Engine {
 	t.Helper()

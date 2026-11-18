@@ -76,7 +76,7 @@ func (origin *wireOrigin) received(t *testing.T) string {
 	}
 }
 
-// launchOnH1Engine launches raw through a proxy on the new engine and returns
+// launchOnH1Engine launches raw through a proxy on the engine and returns
 // what the origin received.
 func launchOnH1Engine(t *testing.T, origin *wireOrigin, raw string) string {
 	t.Helper()

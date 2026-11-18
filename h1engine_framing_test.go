@@ -88,7 +88,7 @@ func (origin *bodyOrigin) request(t *testing.T) string {
 	return origin.requests[0]
 }
 
-// serveFramingProxy serves a proxy on the new engine with the base pipeline,
+// serveFramingProxy serves a proxy on the engine with the base pipeline,
 // capture, and the modifiers configure adds between setup and capture.
 func serveFramingProxy(t *testing.T, configure func(proxy *Proxy)) (*Proxy, string, *capturedPair) {
 	t.Helper()

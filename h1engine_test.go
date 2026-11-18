@@ -90,7 +90,7 @@ type capturedPair struct {
 	response chan domain.ProxyResponse
 }
 
-// serveH1EngineProxy serves a proxy on the new engine with the base pipeline
+// serveH1EngineProxy serves a proxy on the engine with the base pipeline
 // and the setup, filter and write modifiers, so pairs are captured. It returns
 // the proxy listener's address and the captures.
 func serveH1EngineProxy(t *testing.T) (string, *capturedPair) {

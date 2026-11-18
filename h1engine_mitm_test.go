@@ -44,7 +44,7 @@ func newRawTLSOrigin(t *testing.T, response string) *rawOrigin {
 	return origin
 }
 
-// serveH1EngineMITMProxy serves the new engine as serveH1EngineProxy does,
+// serveH1EngineMITMProxy serves the engine as serveH1EngineProxy does,
 // with the proxy's CA loaded. trustOrigin makes the origin leg trust any
 // certificate.
 // It returns the listener's address, the captures and the CA.

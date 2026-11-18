@@ -52,7 +52,7 @@ func isTimeout(err error) bool {
 	return ok && netErr.Timeout()
 }
 
-// serveDefaultH1EngineProxy serves the new engine with the default modifier
+// serveDefaultH1EngineProxy serves the engine with the default modifier
 // pipeline and the default extensions, as the app runs it.
 func serveDefaultH1EngineProxy(t *testing.T) string {
 	t.Helper()

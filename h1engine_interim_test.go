@@ -72,7 +72,7 @@ func (origin *scriptedOrigin) received(t *testing.T) string {
 	}
 }
 
-// serveHoldingH1EngineProxy serves a proxy on the new engine like
+// serveHoldingH1EngineProxy serves a proxy on the engine like
 // serveH1EngineProxy, with Checkpoint holding every request.
 func serveHoldingH1EngineProxy(t *testing.T) (string, *Proxy) {
 	t.Helper()

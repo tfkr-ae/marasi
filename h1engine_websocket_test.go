@@ -74,7 +74,7 @@ func (origin *webSocketOrigin) serve(conn net.Conn) {
 	}
 }
 
-// serveH1EngineWebSocketProxy serves a proxy on the new engine with the base
+// serveH1EngineWebSocketProxy serves a proxy on the engine with the base
 // pipeline, capture, WebSocketPrepareModifier and the relay, and any response
 // modifiers in after, which run after Prepare.
 func serveH1EngineWebSocketProxy(t *testing.T, after ...PairModifier) (*Proxy, string, *capturedPair) {
