@@ -2,12 +2,14 @@ package marasi
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -190,6 +192,11 @@ func assertStoredProxyError(t *testing.T, stored *domain.ProxyResponse, cause st
 	got, _ := stored.Metadata["proxy_error"].(string)
 	if !strings.Contains(got, cause) {
 		t.Fatalf("wanted metadata.proxy_error to hold %q\ngot: %v", cause, stored.Metadata)
+	}
+	// The stored length is the body's length, as for an origin response.
+	_, body, _ := bytes.Cut(stored.Raw, []byte("\r\n\r\n"))
+	if stored.Length != strconv.Itoa(len(body)) {
+		t.Fatalf("wanted the stored length %d\ngot: %q", len(body), stored.Length)
 	}
 }
 

@@ -577,7 +577,9 @@ func NewProxyResponse(pair *Pair) (*domain.ProxyResponse, error) {
 	var err error
 	// Length is the stored body's length. A response from the origin may
 	// have no Content-Length (chunked, or read until close), so it is the
-	// payload's length, which is what a Content-Length would say.
+	// payload's length, which is what a Content-Length would say. A response
+	// Marasi made carries its length in ContentLength, not in the header, and
+	// the dump writes it out.
 	length := res.Header.Get("Content-Length")
 	if pair.responseWire != nil && !pair.FromMarasi() {
 		var payload int
@@ -585,6 +587,9 @@ func NewProxyResponse(pair *Pair) (*domain.ProxyResponse, error) {
 		length = strconv.Itoa(payload)
 	} else {
 		rawRes, prettified, err = rawhttp.DumpResponse(res)
+		if length == "" && res.ContentLength >= 0 {
+			length = strconv.FormatInt(res.ContentLength, 10)
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("dumping response %s: %w", requestId, err)
