@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/tfkr-ae/marasi/internal/h1"
@@ -42,15 +41,14 @@ func outboundRequest(wire *wireRequest, req *http.Request) (outbound[*h1.Request
 	if err != nil {
 		return out, fmt.Errorf("copying the request head: %w", err)
 	}
-	body, view := frameBody(wire.body, payload, req.Header)
-	merged := *req
-	merged.Header = view
-	if err := head.Merge(&merged); err != nil {
+	if err := head.Merge(req); err != nil {
 		return out, fmt.Errorf("merging the request: %w", err)
 	}
 	if err := toOriginForm(head); err != nil {
 		return out, err
 	}
+	head.Header.RemoveConnectionOptions(true)
+	body := h1.FrameRequestBody(head, wire.body, payload)
 	return outbound[*h1.RequestHead]{head: head, body: body, payload: payload}, nil
 }
 
@@ -66,12 +64,15 @@ func outboundResponse(wire *wireResponse, res *http.Response) (outbound[*h1.Resp
 	if err != nil {
 		return out, fmt.Errorf("copying the response head: %w", err)
 	}
-	body, view := frameBody(wire.body, payload, res.Header)
-	merged := *res
-	merged.Header = view
-	if err := head.Merge(&merged); err != nil {
+	if err := head.Merge(res); err != nil {
 		return out, fmt.Errorf("merging the response: %w", err)
 	}
+	head.Header.RemoveConnectionOptions(head.StatusCode == http.StatusSwitchingProtocols)
+	method := ""
+	if res.Request != nil {
+		method = res.Request.Method
+	}
+	body := h1.FrameResponseBody(head, method, wire.body, payload)
 	return outbound[*h1.ResponseHead]{head: head, body: body, payload: payload}, nil
 }
 
@@ -111,44 +112,6 @@ func readViewBody(body *io.ReadCloser) ([]byte, error) {
 	}
 	*body = io.NopCloser(bytes.NewReader(data))
 	return data, nil
-}
-
-// frameBody gives the body bytes that go out for payload, and the header the
-// head is merged with. A body nobody changed goes out exactly as it was read.
-//
-// An edited body is framed here only well enough for the walking skeleton:
-// a chunked body goes out as one chunk with its trailers, any other gets its
-// Content-Length set. Ticket 17 owns edited-body framing and replaces this.
-func frameBody(wire *h1.Body, payload []byte, header http.Header) ([]byte, http.Header) {
-	if wire == nil {
-		wire = &h1.Body{}
-	}
-	if bytes.Equal(payload, wire.Payload()) {
-		var body bytes.Buffer
-		wire.WriteTo(&body)
-		return body.Bytes(), header
-	}
-	switch wire.Framing.Kind {
-	case h1.Chunked:
-		var body bytes.Buffer
-		if len(payload) > 0 {
-			fmt.Fprintf(&body, "%x\r\n", len(payload))
-			body.Write(payload)
-			body.WriteString("\r\n")
-		}
-		body.WriteString("0\r\n")
-		wire.Trailer.WriteTo(&body)
-		if wire.Trailer.End == nil {
-			body.WriteString("\r\n")
-		}
-		return body.Bytes(), header
-	case h1.UntilClose:
-		return payload, header
-	default:
-		header = header.Clone()
-		header.Set("Content-Length", strconv.Itoa(len(payload)))
-		return payload, header
-	}
 }
 
 // toOriginForm rewrites an absolute-form target into the origin form an

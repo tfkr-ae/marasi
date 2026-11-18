@@ -803,8 +803,9 @@ func RegisterRequestType(extension *Runtime) {
 		body := lua.CheckString(l, 2)
 
 		req.Body = io.NopCloser(bytes.NewBufferString(body))
+		// The proxy frames the body from its final bytes; set_body sets
+		// no framing header. ContentLength is for net/http writers.
 		req.ContentLength = int64(len(body))
-		req.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
 		return 0
 	}})
 
@@ -1180,8 +1181,9 @@ func RegisterResponseType(extension *Runtime) {
 		body := lua.CheckString(l, 2)
 
 		res.Body = io.NopCloser(bytes.NewBufferString(body))
+		// The proxy frames the body from its final bytes; set_body sets
+		// no framing header. ContentLength is for net/http writers.
 		res.ContentLength = int64(len(body))
-		res.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
 		return 0
 	}})
 

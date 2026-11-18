@@ -296,7 +296,16 @@ func CheckpointRequestModifier(proxy *Proxy, pair *Pair) error {
 		}
 
 		if shouldIntercept || proxy.GetIntercept() {
-			original, err := httputil.DumpRequest(req, true)
+			// A request read from the wire shows as it goes upstream and
+			// is edited through the codec (h1engine_checkpoint.go).
+			var original []byte
+			var edit *checkpointEdit
+			if pair.requestWire != nil {
+				original, _, err = dumpWireRequest(pair.requestWire, req)
+				edit = wireRequestEdit(req, pair.requestWire)
+			} else {
+				original, err = httputil.DumpRequest(req, true)
+			}
 			if err != nil {
 				return fmt.Errorf("getting raw request for intercept: %w", err)
 			}
@@ -304,7 +313,7 @@ func CheckpointRequestModifier(proxy *Proxy, pair *Pair) error {
 				return ErrRequestIDNotFound
 			}
 
-			result, err := proxy.holdHTTPRequest(pair.ID, original, req)
+			result, err := proxy.holdHTTPRequest(pair.ID, original, req, edit)
 			if err != nil {
 				return err
 			}
@@ -324,7 +333,11 @@ func CheckpointRequestModifier(proxy *Proxy, pair *Pair) error {
 				return nil
 			}
 
-			pair.Request = result.rebuiltReq
+			if edit != nil {
+				edit.apply(pair)
+			} else {
+				pair.Request = result.rebuiltReq
+			}
 			if result.interceptResponse {
 				pair.InterceptResponse = true
 			}
@@ -797,7 +810,16 @@ func CheckpointResponseModifier(proxy *Proxy, pair *Pair) error {
 		}
 
 		if pair.InterceptResponse || shouldIntercept || proxy.GetIntercept() {
-			original, err := httputil.DumpResponse(pair.Response, true)
+			// A response read from the wire shows as it goes to the
+			// client and is edited through the codec (h1engine_checkpoint.go).
+			var original []byte
+			var edit *checkpointEdit
+			if pair.responseWire != nil {
+				original, _, err = dumpWireResponse(pair.responseWire, pair.Response)
+				edit = wireResponseEdit(pair.Response, pair.responseWire)
+			} else {
+				original, err = httputil.DumpResponse(pair.Response, true)
+			}
 			if err != nil {
 				return fmt.Errorf("getting raw response for intercept: %w", err)
 			}
@@ -805,7 +827,7 @@ func CheckpointResponseModifier(proxy *Proxy, pair *Pair) error {
 				return ErrRequestIDNotFound
 			}
 
-			result, err := proxy.holdHTTPResponse(pair.ID, original, pair.Response)
+			result, err := proxy.holdHTTPResponse(pair.ID, original, pair.Response, edit)
 			if err != nil {
 				return err
 			}
@@ -824,7 +846,11 @@ func CheckpointResponseModifier(proxy *Proxy, pair *Pair) error {
 				return nil
 			}
 
-			*pair.Response = *result.rebuiltRes
+			if edit != nil {
+				edit.apply(pair)
+			} else {
+				*pair.Response = *result.rebuiltRes
+			}
 			return nil
 		}
 		return nil
