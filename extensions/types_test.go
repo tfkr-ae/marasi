@@ -1861,6 +1861,18 @@ func TestRequestType(t *testing.T) {
 			},
 		},
 		{
+			name:    "req:set_body should set no Content-Length",
+			luaCode: `r:set_body("new body"); return r:headers():get("Content-Length")`,
+			options: []func(*Runtime) error{
+				withRequest(basicReq()),
+			},
+			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
+				if got != nil && got != "" {
+					t.Errorf("\nwanted:\nno Content-Length\ngot:\n%v", got)
+				}
+			},
+		},
+		{
 			name:    "req:set_body should update body content",
 			luaCode: `r:set_body("new body"); return r:body()`,
 			options: []func(*Runtime) error{
@@ -2294,6 +2306,18 @@ func TestResponseType(t *testing.T) {
 				}
 				if !strings.Contains(errStr, "reading body : forced error") {
 					t.Errorf("\nwanted:\nerror containing 'reading body : forced error'\ngot:\n%q", errStr)
+				}
+			},
+		},
+		{
+			name:    "res:set_body should set no Content-Length",
+			luaCode: `r:set_body("new body"); return r:headers():get("Content-Length")`,
+			options: []func(*Runtime) error{
+				withResponse(basicRes()),
+			},
+			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
+				if got != nil && got != "" {
+					t.Errorf("\nwanted:\nno Content-Length\ngot:\n%v", got)
 				}
 			},
 		},

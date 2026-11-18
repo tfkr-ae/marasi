@@ -1,7 +1,6 @@
 package marasi
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -15,7 +14,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
-	"github.com/tfkr-ae/marasi/rawhttp"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
@@ -57,9 +55,11 @@ type launchOutcomeWrite struct {
 	id uuid.UUID
 }
 
-// Launch sends a raw HTTP request from a launchpad through the proxy client.
-// It returns the launch id once the launch is accepted. The launch id is the
-// UUID of the request/response pair the launch creates.
+// Launch sends a raw HTTP request from a launchpad through the proxy's own
+// listener, as bytes on a new connection, so its header case, order and
+// whitespace reach the origin as typed. Only the Content-Length value is
+// recalculated. It returns the launch id once the launch is accepted. The
+// launch id is the UUID of the request/response pair the launch creates.
 //
 // Malformed raw requests and a missing Host fail at once and create no launch.
 // A normal HTTP launch completes once its response is drained. A WebSocket
@@ -100,31 +100,9 @@ func (proxy *Proxy) startLaunch(raw string, launchpadID string, useHttps bool) (
 	if err != nil {
 		return nil, fmt.Errorf("parsing launchpad id: %w", err)
 	}
-	updated, err := rawhttp.RecalculateContentLength([]byte(raw))
+	request, err := readRawRequest(raw, useHttps)
 	if err != nil {
-		return nil, fmt.Errorf("recalculating content length: %w", err)
-	}
-	req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(updated)))
-	if err != nil {
-		return nil, fmt.Errorf("reading http request: %w", err)
-	}
-
-	scheme := "http"
-	if req.TLS != nil {
-		scheme = "https"
-	}
-	if useHttps {
-		scheme = "https"
-	}
-	host := req.Host
-	if host == "" {
-		return nil, fmt.Errorf("host header not found or is empty")
-	}
-
-	req.RequestURI, req.URL.Scheme, req.URL.Host = "", scheme, host
-
-	if _, ok := req.Header["User-Agent"]; !ok {
-		req.Header.Set("User-Agent", "")
+		return nil, err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -133,7 +111,7 @@ func (proxy *Proxy) startLaunch(raw string, launchpadID string, useHttps bool) (
 		cancel()
 		return nil, err
 	}
-	launched, err := launchedRequest(req, entry.launch)
+	launched, err := launchedRequest(request, entry.launch)
 	if err != nil {
 		proxy.removeLaunch(entry.launch.ID)
 		cancel()
@@ -143,29 +121,31 @@ func (proxy *Proxy) startLaunch(raw string, launchpadID string, useHttps bool) (
 	entry.launched = launched
 	proxy.launchMu.Unlock()
 
-	if marasiws.IsUpgradeRequest(req) {
-		req.Header.Set("x-marasi-metadata", `{"websocket.held_by":"launchpad"}`)
+	var internal [][2]string
+	if marasiws.IsUpgradeRequest(request.view) {
+		internal = append(internal, [2]string{"x-marasi-metadata", `{"websocket.held_by":"launchpad"}`})
 	}
-	req.Header.Set(launchIDHeader, entry.launch.ID.String())
-	req = req.WithContext(ctx)
+	internal = append(internal, [2]string{launchIDHeader, entry.launch.ID.String()})
 
 	if proxy.OnLaunchStarted != nil {
 		proxy.OnLaunchStarted(entry.launch)
 	}
-	go proxy.runLaunch(entry.launch.ID, proxy.launchClient(), req)
+	go proxy.runLaunch(ctx, entry.launch.ID, request, internal)
 	return entry, nil
 }
 
-// launchedRequest records a launch's request as the proxy client sends it,
-// before any internal header is added, under the launch id.
-func launchedRequest(req *http.Request, launch domain.Launch) (*domain.ProxyRequest, error) {
+// launchedRequest records a launch's request as it was typed, with its
+// Content-Length recalculated and before any internal field is added, under
+// the launch id.
+func launchedRequest(request *rawRequest, launch domain.Launch) (*domain.ProxyRequest, error) {
 	metadata := make(map[string]any)
 	setLaunchMetadata(metadata, launch)
 	launched, err := NewProxyRequest(&Pair{
-		Request:  req,
-		ID:       launch.ID,
-		Metadata: metadata,
-		Timing:   PairTiming{Requested: time.Now()},
+		Request:     request.view,
+		requestWire: request.wire(),
+		ID:          launch.ID,
+		Metadata:    metadata,
+		Timing:      PairTiming{Requested: time.Now()},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("recording launched request: %w", err)
@@ -477,50 +457,19 @@ func (proxy *Proxy) recordLaunchDropped(pair *Pair) {
 	proxy.recordLaunchFailure(id, domain.LaunchReasonDropped)
 }
 
-// launchClient returns a client with a transport of its own, so a launch is
-// always the first request on a new connection and the transport cannot retry
-// it on a reused one. It does not set DisableKeepAlives, which would add
-// Connection: close to the request; runLaunch closes the connection instead.
-// Compression stays off so the request gains no Accept-Encoding. Like
-// proxy.Client, it sends through the proxy's own listener.
-func (proxy *Proxy) launchClient() *http.Client {
-	base := proxy.Client
-	if base == nil {
-		base = &http.Client{}
-	}
-	client := *base
-	transport, ok := client.Transport.(*http.Transport)
-	if client.Transport == nil {
-		transport, ok = http.DefaultTransport.(*http.Transport)
-	}
-	if ok {
-		transport = transport.Clone()
-		transport.DisableCompression = true
-		client.Transport = transport
-	}
-	return &client
-}
-
-// runLaunch sends a launch and reports how it ended.
-func (proxy *Proxy) runLaunch(id uuid.UUID, client *http.Client, req *http.Request) {
-	// The launch's transport is its own, so closing its idle connections once
-	// the response is read closes the launch's connection.
-	defer client.CloseIdleConnections()
-	res, err := client.Do(req)
+// runLaunch sends a launch on a connection of its own and reports how it
+// ended. The connection is closed when the launch ends, so a launch is never
+// retried on a reused connection.
+func (proxy *Proxy) runLaunch(ctx context.Context, id uuid.UUID, request *rawRequest, internal [][2]string) {
+	res, err := proxy.sendRaw(ctx, request, internal)
 	if err != nil {
 		log.Printf("launch %s : %v", id, err)
 		proxy.endLaunch(id, domain.LaunchFailed, domain.LaunchReasonNetworkError)
 		return
 	}
-
-	if marasiws.IsUpgradeResponse(res) {
-		proxy.holdLaunchpadWebSocket(res.Body)
-		proxy.endLaunch(id, domain.LaunchCompleted, "")
-		return
+	if res.upgrade != nil {
+		proxy.holdLaunchpadWebSocket(res.upgrade)
 	}
-
-	_, _ = io.Copy(io.Discard, res.Body)
-	_ = res.Body.Close()
 	proxy.endLaunch(id, domain.LaunchCompleted, "")
 }
 

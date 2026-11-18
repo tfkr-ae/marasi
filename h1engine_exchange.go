@@ -18,13 +18,17 @@ import (
 // the request step, the round trip and the response step, and writes the
 // response. It reports whether the connection carries another request.
 func (c *h1Conn) exchange(head *h1.RequestHead) bool {
-	framing, err := h1.RequestFraming(head)
-	if err != nil {
-		// Ticket 20 answers this with a stored 400 proxy error response.
-		c.refuse(http.StatusBadRequest, err)
-		return false
+	framing, refused := h1.RequestFraming(head)
+	if refused == nil && expectsContinue(head, framing) {
+		// Marasi answers 100 itself, so the chains see the whole request
+		// (docs/adr/2026-11-17-marasi-answers-100-continue-itself.md).
+		io.WriteString(c.bw, "HTTP/1.1 100 Continue\r\n\r\n")
+		c.bw.Flush()
 	}
-	body, bodyErr := h1.ReadBody(c.br, framing)
+	body, bodyErr := readWireBody(c.br, framing, &refused)
+	if refused != nil {
+		defer c.drain()
+	}
 	req, err := head.Request()
 	if err != nil {
 		c.refuse(http.StatusBadRequest, err)
@@ -32,12 +36,13 @@ func (c *h1Conn) exchange(head *h1.RequestHead) bool {
 	}
 	req = c.prepare(req)
 	switch {
+	case refused != nil:
 	case bodyErr != nil:
 		req.Body = cutShortBody(body.Payload(), bodyErr)
 	case framing.Kind != h1.NoBody:
 		req.Body = io.NopCloser(bytes.NewReader(body.Payload()))
 	}
-	if err := c.engine.request(req, c, &wireRequest{head: head, body: body}); err != nil || c.hijacked {
+	if err := c.engine.request(req, c, &wireRequest{head: head, body: body, refused: refused}); err != nil || c.hijacked {
 		return false
 	}
 	pair := requestPair(req)
@@ -67,7 +72,11 @@ func (c *h1Conn) exchange(head *h1.RequestHead) bool {
 	}
 	keep := keepAlive(head.Proto, &head.Header)
 	if wire != nil && !pair.FromMarasi() {
-		out, err := outboundResponse(wire, res)
+		client, err := encodedForClient(pair, res)
+		if err != nil {
+			return false
+		}
+		out, err := outboundResponse(wire, client)
 		if err != nil {
 			return false
 		}
@@ -90,6 +99,10 @@ func (c *h1Conn) exchange(head *h1.RequestHead) bool {
 func (c *h1Conn) roundTrip(pair *Pair) (*http.Response, *wireResponse) {
 	switch {
 	case pair.control == controlRespond:
+		return pair.Response, nil
+	case pair.requestWire != nil && pair.requestWire.refused != nil:
+		// Without the base pipeline nothing answered the refusal yet.
+		c.engine.proxy.respondWithProxyError(pair, http.StatusBadRequest, pair.requestWire.refused)
 		return pair.Response, nil
 	case pair.Dropped():
 		// The same empty 200 Martian answered a dropped request with.
@@ -150,8 +163,7 @@ func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error)
 
 	head, err := h1.ReadResponseHead(origin.br)
 	for err == nil && head.Interim() {
-		// Ticket 18 relays interim responses; until then they are
-		// read and dropped, as Go's transport did.
+		c.relayInterim(req, head)
 		head, err = h1.ReadResponseHead(origin.br)
 	}
 	if err != nil {
@@ -187,6 +199,33 @@ func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error)
 	return res, wire, nil
 }
 
+// expectsContinue reports whether the client waits for a 100 before it sends
+// the request's body (RFC 9110 §10.1.1). An HTTP/1.0 request's expectation is
+// ignored, and a request without a body needs no 100.
+func expectsContinue(head *h1.RequestHead, framing h1.Framing) bool {
+	if head.Proto != "HTTP/1.1" || framing.Kind == h1.NoBody ||
+		(framing.Kind == h1.LengthFramed && framing.Length == 0) {
+		return false
+	}
+	for _, value := range head.Header.Values("Expect") {
+		if strings.EqualFold(strings.TrimSpace(value), "100-continue") {
+			return true
+		}
+	}
+	return false
+}
+
+// relayInterim writes an origin's interim response to the client as read. A
+// 100 is not relayed: Marasi answers Expect itself. Nor is any 1xx sent to an
+// HTTP/1.0 client, which did not ask for one (RFC 9110 §15.2).
+func (c *h1Conn) relayInterim(req *http.Request, head *h1.ResponseHead) {
+	if head.StatusCode == http.StatusContinue || !req.ProtoAtLeast(1, 1) {
+		return
+	}
+	head.WriteTo(c.bw)
+	c.bw.Flush()
+}
+
 // originConn is the origin connection of one client connection.
 type originConn struct {
 	addr string
@@ -198,6 +237,16 @@ type originConn struct {
 	route *Route
 	// scheme is http, or https when conn runs TLS with the origin.
 	scheme string
+
+	// While the client connection is idle (h1engine_endings.go): watch is
+	// closed when the watch's read returns, stopping is set while the
+	// client connection ends it, ended once the origin closed or sent
+	// unasked bytes, and retired once a route swap closed conn. All but
+	// ended are guarded by engine.mu.
+	watch    chan struct{}
+	stopping bool
+	ended    bool
+	retired  bool
 }
 
 // originFor returns the client connection's origin connection to addr on

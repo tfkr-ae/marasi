@@ -47,6 +47,9 @@ type pendingHTTP struct {
 	interceptResponse bool
 	rebuiltReq        *http.Request
 	rebuiltRes        *http.Response
+	// edit reads an edit through the codec for a message the engine read
+	// from the wire; nil rebuilds it with net/http.
+	edit *checkpointEdit
 }
 
 type httpHoldResult struct {
@@ -265,23 +268,26 @@ func (proxy *Proxy) DropAllCheckpoint() []domain.CheckpointItem {
 	return removed
 }
 
-func (proxy *Proxy) holdHTTPRequest(id uuid.UUID, raw []byte, req *http.Request) (httpHoldResult, error) {
+// holdHTTPRequest holds a request until it is forwarded or dropped. edit
+// reads a forward's raw text, or is nil to rebuild it with net/http.
+func (proxy *Proxy) holdHTTPRequest(id uuid.UUID, raw []byte, req *http.Request, edit *checkpointEdit) (httpHoldResult, error) {
 	return proxy.holdHTTP(domain.CheckpointItem{
 		ID:   id,
 		Type: domain.CheckpointTypeRequest,
 		Raw:  bytes.Clone(raw),
-	}, req, nil)
+	}, req, nil, edit)
 }
 
-func (proxy *Proxy) holdHTTPResponse(id uuid.UUID, raw []byte, res *http.Response) (httpHoldResult, error) {
+// holdHTTPResponse is holdHTTPRequest for a response.
+func (proxy *Proxy) holdHTTPResponse(id uuid.UUID, raw []byte, res *http.Response, edit *checkpointEdit) (httpHoldResult, error) {
 	return proxy.holdHTTP(domain.CheckpointItem{
 		ID:   id,
 		Type: domain.CheckpointTypeResponse,
 		Raw:  bytes.Clone(raw),
-	}, nil, res)
+	}, nil, res, edit)
 }
 
-func (proxy *Proxy) holdHTTP(item domain.CheckpointItem, req *http.Request, res *http.Response) (httpHoldResult, error) {
+func (proxy *Proxy) holdHTTP(item domain.CheckpointItem, req *http.Request, res *http.Response, edit *checkpointEdit) (httpHoldResult, error) {
 	if proxy.checkpoint == nil {
 		proxy.checkpoint = newCheckpointState()
 	}
@@ -292,6 +298,7 @@ func (proxy *Proxy) holdHTTP(item domain.CheckpointItem, req *http.Request, res 
 		req:  req,
 		res:  res,
 		done: make(chan struct{}),
+		edit: edit,
 	}
 
 	proxy.checkpoint.mu.Lock()
@@ -392,13 +399,21 @@ func (proxy *Proxy) forwardHTTP(id uuid.UUID, fwd CheckpointForward) error {
 	var err error
 	switch pending.item.Type {
 	case domain.CheckpointTypeRequest:
-		pending.rebuiltReq, err = rawhttp.RebuildRequest(raw, pending.req)
+		if pending.edit != nil {
+			err = pending.edit.rebuild(raw)
+		} else {
+			pending.rebuiltReq, err = rawhttp.RebuildRequest(raw, pending.req)
+		}
 		if err != nil {
 			proxy.checkpoint.mu.Unlock()
 			return fmt.Errorf("%w: %w", ErrRebuildRequest, err)
 		}
 	case domain.CheckpointTypeResponse:
-		pending.rebuiltRes, err = rawhttp.RebuildResponse(raw, pending.res.Request)
+		if pending.edit != nil {
+			err = pending.edit.rebuild(raw)
+		} else {
+			pending.rebuiltRes, err = rawhttp.RebuildResponse(raw, pending.res.Request)
+		}
 		if err != nil {
 			proxy.checkpoint.mu.Unlock()
 			return fmt.Errorf("%w: %w", ErrRebuildResponse, err)

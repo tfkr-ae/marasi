@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httputil"
+	"strconv"
 	"strings"
 
 	"github.com/beevik/etree"
@@ -95,13 +96,22 @@ func DumpResponse(res *http.Response) (rawDump []byte, prettyDump string, error 
 // DumpRequest takes a *http.Request, dumps the raw request and resets the body so it can be consumed
 // Returns the full dump, prettified dump and an error
 func DumpRequest(req *http.Request) (rawDump []byte, prettyDump string, err error) {
-	requestDump, err := httputil.DumpRequest(req, false)
-	if err != nil {
-		return []byte{}, "", fmt.Errorf("dumping request: %w", err)
-	}
 	bodyBytes, err := io.ReadAll(req.Body)
 	if err != nil {
 		return []byte{}, "", fmt.Errorf("reading request body: %w", err)
+	}
+	head := req
+	if length := strconv.Itoa(len(bodyBytes)); req.Header.Get("Content-Length") != "" && req.Header.Get("Content-Length") != length {
+		// A modifier changed the body without the header, which the
+		// writer frames from ContentLength: dump the length that is sent.
+		copied := *req
+		copied.Header = req.Header.Clone()
+		copied.Header.Set("Content-Length", length)
+		head = &copied
+	}
+	requestDump, err := httputil.DumpRequest(head, false)
+	if err != nil {
+		return []byte{}, "", fmt.Errorf("dumping request: %w", err)
 	}
 	// An empty body goes back as http.NoBody, or net/http sends it chunked.
 	if len(bodyBytes) == 0 {

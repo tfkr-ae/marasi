@@ -64,6 +64,10 @@ type responseStep func(res *http.Response, wire *wireResponse) error
 type wireRequest struct {
 	head *h1.RequestHead
 	body *h1.Body
+	// refused is why the request's length cannot be framed safely, nil
+	// for any other request. A refused request has no body and never goes
+	// upstream (docs/adr/2026-11-17-ambiguous-request-framing-is-refused-with-a-400.md).
+	refused error
 }
 
 // wireResponse is a response as it was read from the origin. The pair's

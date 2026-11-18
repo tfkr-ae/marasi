@@ -86,12 +86,13 @@ func (c *WatchedConn) Read(b []byte) (int, error) {
 	c.mu.Lock()
 	if done := c.done; done != nil {
 		c.done = nil
-		deadline := c.readDeadline
 		c.mu.Unlock()
 		c.Conn.SetReadDeadline(aLongTimeAgo)
 		<-done
-		c.Conn.SetReadDeadline(deadline)
 		c.mu.Lock()
+		// The deadline as it is now: one set while the watch ended, such
+		// as a close's, must not be lost.
+		c.Conn.SetReadDeadline(c.readDeadline)
 	}
 	if len(c.pending) > 0 {
 		n := copy(b, c.pending)

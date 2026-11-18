@@ -53,6 +53,7 @@ func recordRoute(pair *Pair, origin *originConn) {
 // old. The next request finds the route changed and dials anew.
 func (c *h1Conn) retireOrigin() {
 	if c.origin != nil && c.origin.route != c.engine.proxy.CurrentRoute() {
+		c.origin.retired = true
 		c.origin.conn.Close()
 	}
 }
@@ -66,6 +67,7 @@ func (engine *h1Engine) routeSwapped(route *Route) {
 	for conn, idle := range engine.conns {
 		// While idle, the connection's goroutine is not touching origin.
 		if idle && conn.origin != nil && conn.origin.route != route {
+			conn.origin.retired = true
 			conn.origin.conn.Close()
 		}
 	}
