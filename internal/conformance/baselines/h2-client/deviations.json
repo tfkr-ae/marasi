@@ -4,17 +4,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-1-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -37,17 +26,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-2-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -70,17 +48,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-2-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -103,17 +70,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-2-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -136,17 +92,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-2-4@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -169,17 +114,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-2-5@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -202,17 +136,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.1-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -235,17 +158,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.1-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -268,17 +180,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.1-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -301,17 +202,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.10-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -334,17 +224,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.10-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -367,17 +246,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.2-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -400,17 +268,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.2-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -433,17 +290,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.2-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -466,17 +312,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.3-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -499,17 +334,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.3-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -532,17 +356,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.3-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -565,17 +378,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.3-4@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -598,17 +400,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.3-5@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -631,17 +422,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.4-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -664,17 +444,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.5-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -697,17 +466,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.7-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -730,17 +488,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.8-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -763,17 +510,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.9-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -796,17 +532,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-3.9-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -829,17 +554,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-4-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -862,17 +576,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-4-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -895,17 +598,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-4-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -928,17 +620,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-4-4@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -961,17 +642,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-5-10@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -994,17 +664,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-5-11@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1027,17 +686,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-5-12@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1060,17 +708,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-5-13@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1093,17 +730,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-5-14@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1126,17 +752,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-5-15@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1159,17 +774,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-5-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1192,17 +796,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-5-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1225,17 +818,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-5-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1258,17 +840,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-5-4@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1291,17 +862,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-5-5@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1324,17 +884,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-5-6@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1357,17 +906,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-5-7@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1390,17 +928,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-5-8@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1423,17 +950,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "generic-5-9@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1456,17 +972,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "hpack-2.3.3-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1489,17 +994,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "hpack-2.3.3-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1522,17 +1016,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "hpack-4.2-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1555,17 +1038,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "hpack-5.2-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1588,17 +1060,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "hpack-5.2-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1621,17 +1082,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "hpack-5.2-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1654,17 +1104,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "hpack-6.1-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1687,17 +1126,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "hpack-6.3-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1720,17 +1148,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-3.5-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1753,17 +1170,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-3.5-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1786,17 +1192,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-4.1-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1819,17 +1214,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-4.1-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1852,17 +1236,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-4.1-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1885,17 +1258,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-4.2-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1918,17 +1280,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-4.2-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1951,17 +1302,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-4.2-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -1984,17 +1324,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-4.3-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2017,17 +1346,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-4.3-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2050,17 +1368,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-4.3-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2083,17 +1390,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1-10@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2116,17 +1412,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1-11@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2149,17 +1434,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1-12@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2182,17 +1456,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1-13@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2215,17 +1478,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2248,17 +1500,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2281,17 +1522,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2314,17 +1544,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1-4@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2347,17 +1566,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1-5@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2380,17 +1588,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1-6@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2413,17 +1610,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1-7@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2446,17 +1632,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1-8@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2479,17 +1654,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1-9@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2512,17 +1676,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1.1-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2545,17 +1698,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1.1-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2578,17 +1720,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.1.2-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2611,17 +1742,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.3.1-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2644,17 +1764,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.3.1-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2677,17 +1786,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.4.1-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2710,17 +1808,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.5-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2743,17 +1830,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-5.5-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2776,17 +1852,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.1-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2809,17 +1874,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.1-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2842,17 +1896,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.1-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2875,17 +1918,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.10-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2908,17 +1940,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.10-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2941,17 +1962,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.10-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -2974,17 +1984,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.10-4@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3007,17 +2006,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.10-5@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3040,17 +2028,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.10-6@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3073,17 +2050,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.2-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3106,17 +2072,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.2-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3139,17 +2094,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.2-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3172,17 +2116,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.2-4@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3205,17 +2138,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.3-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3238,17 +2160,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.3-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3271,17 +2182,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.4-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3304,17 +2204,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.4-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3337,17 +2226,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.4-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3370,17 +2248,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.5-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3403,17 +2270,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.5-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3436,17 +2292,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.5-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3469,17 +2314,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.5.2-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3502,17 +2336,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.5.2-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3535,17 +2358,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.5.2-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3568,17 +2380,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.5.2-4@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3601,17 +2402,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.5.2-5@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3634,17 +2424,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.5.3-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3667,17 +2446,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.5.3-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3700,17 +2468,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.7-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3733,17 +2490,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.7-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3766,17 +2512,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.7-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3799,17 +2534,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.7-4@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3832,17 +2556,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.8-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3865,17 +2578,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.9-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3898,17 +2600,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.9-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3931,17 +2622,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.9-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3964,17 +2644,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.9.1-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -3997,17 +2666,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.9.1-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4030,17 +2688,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.9.1-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4063,17 +2710,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.9.2-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4096,17 +2732,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.9.2-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4129,17 +2754,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-6.9.2-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4162,17 +2776,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-7-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4195,17 +2798,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-7-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4228,17 +2820,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4261,17 +2842,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4294,17 +2864,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2.1-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4327,17 +2886,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2.1-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4360,17 +2908,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2.1-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4393,17 +2930,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2.1-4@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4426,17 +2952,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2.2-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4459,17 +2974,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2.2-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4492,17 +2996,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2.3-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4525,17 +3018,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2.3-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4558,17 +3040,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2.3-3@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4591,17 +3062,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2.3-4@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4624,17 +3084,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2.3-5@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4657,17 +3106,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2.3-6@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4690,17 +3128,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2.3-7@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4723,17 +3150,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2.6-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4756,17 +3172,6 @@
     "runs": [
       "proxy"
     ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.1.2.6-2@connect-tls",
-    "runs": [
-      "proxy"
-    ],
     "field": "error",
     "got": "remote error: tls: no application protocol",
     "kind": "known",
@@ -4782,17 +3187,6 @@
     "got": "not-run",
     "kind": "known",
     "reason": "Martian answers ALPN only with http/1.1, so h2spec, which offers only h2, cannot start the case",
-    "phase": 5
-  },
-  {
-    "cases": "http2-8.2-1@connect-tls",
-    "runs": [
-      "proxy"
-    ],
-    "field": "end",
-    "got": "open",
-    "kind": "known",
-    "reason": "after the failed handshake Martian keeps the client connection open once h2spec leaves; nginx closes it",
     "phase": 5
   },
   {
