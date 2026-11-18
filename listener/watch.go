@@ -81,9 +81,6 @@ func (c *WatchedConn) watch(done chan struct{}, onClosed func()) {
 	}
 }
 
-// NetConn returns the wrapped connection.
-func (c *WatchedConn) NetConn() net.Conn { return c.Conn }
-
 // Read ends a pending watch, then returns watched bytes, the watch's error, or a socket read.
 func (c *WatchedConn) Read(b []byte) (int, error) {
 	c.mu.Lock()
