@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tfkr-ae/marasi/internal/h1"
+	"github.com/tfkr-ae/marasi/listener"
 )
 
 // A request whose length cannot be framed safely is refused with a 400 proxy
@@ -45,9 +46,9 @@ func (c *h1Conn) drain() {
 	if c.hijacked {
 		return
 	}
-	if conn, ok := c.conn.(interface{ CloseWrite() error }); ok {
-		conn.CloseWrite()
-	}
+	// Every wrapper beneath the engine passes the half-close through
+	// (listener.CloseWriter); an in-memory connection cannot half-close.
+	listener.CloseWrite(c.conn)
 	c.conn.SetReadDeadline(time.Now().Add(refusalLinger))
 	io.CopyN(io.Discard, c.br, refusalDrain)
 }

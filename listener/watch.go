@@ -131,3 +131,8 @@ func (c *WatchedConn) Close() error {
 	c.mu.Unlock()
 	return c.Conn.Close()
 }
+
+// CloseWrite half-closes the watched connection.
+func (c *WatchedConn) CloseWrite() error {
+	return CloseWrite(c.Conn)
+}

@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/tfkr-ae/marasi/listener"
 )
 
 // DefaultUpstreamProxyTimeout bounds reaching an upstream proxy and opening a
@@ -234,3 +236,11 @@ type bufferedConn struct {
 func (conn *bufferedConn) Read(p []byte) (int, error) {
 	return conn.reader.Read(p)
 }
+
+// CloseWrite half-closes the wrapped connection.
+func (conn *bufferedConn) CloseWrite() error {
+	return listener.CloseWrite(conn.Conn)
+}
+
+// A TLS connection over bufferedConn half-closes through it.
+var _ listener.CloseWriter = (*bufferedConn)(nil)

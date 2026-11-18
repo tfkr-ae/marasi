@@ -118,6 +118,25 @@ func TestH1Engine_AmbiguousFramingIsRefused(t *testing.T) {
 		})
 	}
 
+	t.Run("should half-close a plain-HTTP connection after the 400, before the linger ends", func(t *testing.T) {
+		origin := newRawOrigin(t, originResponse)
+		addr, _ := serveH1EngineProxy(t)
+		conn, br := dialProxy(t, addr)
+
+		fmt.Fprintf(conn, "POST http://%s/ HTTP/1.1\r\nHost: %s\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab", origin.addr, origin.addr)
+		res, err := http.ReadResponse(br, nil)
+		if err != nil || res.StatusCode != http.StatusBadRequest {
+			t.Fatalf("\nwanted:\na 400\ngot:\n%v, %v", res, err)
+		}
+		io.ReadAll(res.Body)
+		// The client keeps its side open, so only a half-close ends the
+		// read before refusalLinger.
+		conn.SetReadDeadline(time.Now().Add(refusalLinger / 2))
+		if _, err := br.ReadByte(); !errors.Is(err, io.EOF) {
+			t.Fatalf("\nwanted:\nEOF from the half-close\ngot:\n%v", err)
+		}
+	})
+
 	t.Run("should refuse ambiguous framing inside a CONNECT tunnel", func(t *testing.T) {
 		origin := newRawOrigin(t, originResponse)
 		addr, _ := serveH1EngineProxy(t)
