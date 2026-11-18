@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"strings"
 	"testing"
@@ -744,6 +745,21 @@ func TestRebuildResponse(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "reading raw response") {
 			t.Errorf("expected error to contain 'reading raw response', got %v", err)
+		}
+	})
+}
+
+func TestDumpRequestLength(t *testing.T) {
+	t.Run("should dump the length of the body a modifier set, not the length the client sent", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "http://example.com/", strings.NewReader("hello"))
+		req.Header.Set("Content-Length", "3")
+
+		raw, _, err := DumpRequest(req)
+		if err != nil {
+			t.Fatalf("dumping: %v", err)
+		}
+		if !strings.Contains(string(raw), "Content-Length: 5\r\n") || strings.Contains(string(raw), "Content-Length: 3") {
+			t.Fatalf("wanted Content-Length: 5 in the dump\ngot:\n%q", raw)
 		}
 	})
 }

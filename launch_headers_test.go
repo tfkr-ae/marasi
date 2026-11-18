@@ -82,6 +82,12 @@ func TestProxy_LaunchAddsNoHeaders(t *testing.T) {
 				t.Fatalf("Launch() returned unexpected error: %v", err)
 			}
 
+			if _, ok := h.proxy.engine.(*h1Engine); ok {
+				// The h1 engine removes Connection on each leg; the
+				// Connection rule of the 2026-10-19 ADR is superseded
+				// (docs/adr/2026-11-16-the-proxy-follows-hop-by-hop-rules-but-sends-no-via.md).
+				tt.want = nil
+			}
 			stored := storedRaw(t, h)
 			if got := headerLines(stored, "Connection"); !slices.Equal(got, tt.want) {
 				t.Errorf("stored Connection lines\nwanted:\n%q\ngot:\n%q\nraw:\n%s", tt.want, got, stored)
