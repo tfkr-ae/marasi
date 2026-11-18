@@ -34,13 +34,13 @@ The route says how a new connection reaches the origin: directly, or through the
 
 ## Who reaches the origin
 
-Only the transport that `newRoutedTransport` builds connects to the origin. Tests build one whose route is always direct with `newDirectTransport`. `proxy.Client` sends through Marasi's own listener, so its requests run the whole path above and are captured. Launches clone it (`launchClient`), and Armory and extensions use it as is. Every other `http.Client` in the repo is not proxy traffic: it reads a local CDP endpoint, fetches updates, or calls the control API.
+Only the transport that `newRoutedTransport` builds connects to the origin. Tests build one whose route is always direct with `newDirectTransport`. `proxy.Client` sends through Marasi's own listener, so its requests run the whole path above and are captured; extensions use it. Launches and Armory requests do not go through an `http.Client`: `(*Proxy).sendRaw` (`launch_raw.go`) writes their raw text as bytes to the same listener on a new connection each (absolute form with the proxy's credentials for `http`, a `CONNECT` with them and then TLS for `https`), so the origin gets the header case, order and whitespace that were typed. `readRawRequest` reads the text with the `internal/h1` codec and rewrites only the value of each `Content-Length` line, adds one at the end only when there is none, no `Transfer-Encoding` and a body, and leaves the body's bytes alone. Every other `http.Client` in the repo is not proxy traffic: it reads a local CDP endpoint, fetches updates, or calls the control API.
 
 ## Where an outbound header comes from
 
 Only these touch the headers a request goes upstream with:
 
-- the sending client, which is `proxy.Client`'s transport for Marasi's own requests;
+- the sending client, which is `proxy.Client`'s transport for an extension's requests, and for a launch or Armory request the raw text as typed plus the internal fields `sendRaw` appends (`Proxy-Authorization`, `x-marasi-launch-id`, `x-armory-run-id`, `x-marasi-metadata`), which the base pipeline and `SetupRequestModifier` remove;
 - the base pipeline (`baseRequest`);
 - the request modifiers;
 - `marasiRoundTripper.RoundTrip` and `routedTransport.RoundTrip`;

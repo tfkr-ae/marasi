@@ -794,17 +794,19 @@ func TestLaunchpadControlAPI(t *testing.T) {
 
 	t.Run("should launch a working copy and return its launch id", func(t *testing.T) {
 		received := make(chan *http.Request, 1)
-		origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			received <- r
 			w.WriteHeader(http.StatusNoContent)
 		}))
 		defer origin.Close()
-		host := strings.TrimPrefix(origin.URL, "https://")
+		host := strings.TrimPrefix(origin.URL, "http://")
 		raw := "POST /login HTTP/1.1\r\nHost: " + host + "\r\nContent-Length: 4\r\n\r\nbody"
 		repo := &stubLaunchpadRepository{items: map[uuid.UUID]*domain.Launchpad{id: {ID: id, Name: "Login"}}}
-		server := newTestServer(&marasi.Proxy{LaunchpadRepo: repo, Client: origin.Client()}, func() {})
+		proxy := newListeningProxy(t)
+		proxy.LaunchpadRepo = repo
+		server := newTestServer(proxy, func() {})
 
-		body := `{"raw":"` + base64.StdEncoding.EncodeToString([]byte(raw)) + `","scheme":"https"}`
+		body := `{"raw":"` + base64.StdEncoding.EncodeToString([]byte(raw)) + `","scheme":"http"}`
 		response := requestLaunchpad(server, http.MethodPost, "/launchpad/"+id.String()+"/launch", body)
 		var started struct {
 			LaunchID string `json:"launch_id"`
@@ -813,14 +815,14 @@ func TestLaunchpadControlAPI(t *testing.T) {
 			t.Fatalf("\nwanted:\n200 pending launch\ngot:\n%d %s", response.Code, response.Body.String())
 		}
 		request := <-received
-		if request.Method != http.MethodPost || request.URL.Path != "/login" || request.Header.Get("x-marasi-launch-id") != started.LaunchID {
-			t.Fatalf("\nwanted:\nPOST /login with launch %s\ngot:\n%s %s with launch %s", started.LaunchID, request.Method, request.URL.Path, request.Header.Get("x-marasi-launch-id"))
+		if request.Method != http.MethodPost || request.URL.Path != "/login" || request.Header.Get("x-marasi-launch-id") != "" {
+			t.Fatalf("\nwanted:\nPOST /login with no launch id field\ngot:\n%s %s with launch %s", request.Method, request.URL.Path, request.Header.Get("x-marasi-launch-id"))
 		}
 	})
 
 	t.Run("should reject invalid launches before sending", func(t *testing.T) {
 		repo := &stubLaunchpadRepository{items: map[uuid.UUID]*domain.Launchpad{id: {ID: id}}}
-		server := newTestServer(&marasi.Proxy{LaunchpadRepo: repo, Client: http.DefaultClient}, func() {})
+		server := newTestServer(&marasi.Proxy{LaunchpadRepo: repo}, func() {})
 		invalidRaw := base64.StdEncoding.EncodeToString([]byte("not an HTTP request"))
 		missingHost := base64.StdEncoding.EncodeToString([]byte("GET / HTTP/1.1\r\n\r\n"))
 		for _, body := range []string{

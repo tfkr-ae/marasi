@@ -34,7 +34,8 @@ func TestControlAPIRefusesPendingLaunch(t *testing.T) {
 			t.Fatalf("creating launchpad: %v", err)
 		}
 		finished := make(chan domain.Launch, 1)
-		proxy := &marasi.Proxy{LaunchpadRepo: repo, TrafficRepo: repo, ReportingRepo: repo, Client: origin.Client()}
+		proxy := newListeningProxy(t)
+		proxy.LaunchpadRepo, proxy.TrafficRepo, proxy.ReportingRepo = repo, repo, repo
 		if err := proxy.WithOptions(marasi.WithLaunchFinishedHandler(func(launch domain.Launch) { finished <- launch })); err != nil {
 			t.Fatalf("installing launch handler: %v", err)
 		}
