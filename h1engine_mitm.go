@@ -1,0 +1,108 @@
+package marasi
+
+import (
+	"bufio"
+	"crypto/tls"
+	"crypto/x509"
+	"net"
+	"net/http"
+	"time"
+
+	utls "github.com/refraction-networking/utls"
+)
+
+// MITM on Marasi's own engine: the client leg's TLS inside a CONNECT, and
+// the origin leg's TLS for an https request. TLS sent straight to the
+// listener is completed by the protocol mux (listener package) with the
+// config setMITM returns, before the engine sees the connection.
+
+// setMITM makes the engine intercept TLS, issuing leaf certificates from the
+// CA. The config it returns is the one TLS sent straight to the listener
+// gets; a CONNECT gets one that falls back on its host (intercept).
+func (engine *h1Engine) setMITM(certificate *x509.Certificate, privateKey any) (*tls.Config, error) {
+	issuer, err := newLeafIssuer(certificate, privateKey)
+	if err != nil {
+		return nil, err
+	}
+	engine.leaves = issuer
+	return issuer.config(""), nil
+}
+
+// setRoundTripper takes only whether the transport verifies origins: the
+// engine carries requests itself. Tests set a transport that skips
+// verification to reach a self-signed origin.
+func (engine *h1Engine) setRoundTripper(base http.RoundTripper) {
+	engine.insecureOrigins = skipsOriginVerification(base)
+}
+
+// skipsOriginVerification reports whether base is a routed transport set to
+// trust any origin certificate.
+func skipsOriginVerification(base http.RoundTripper) bool {
+	for {
+		switch rt := base.(type) {
+		case *launchFailureRoundTripper:
+			base = rt.base
+		case *marasiRoundTripper:
+			base = rt.base
+		case *routedTransport:
+			return rt.insecureSkipVerify
+		default:
+			return false
+		}
+	}
+}
+
+// tlsHandshakeTimeout bounds the client's handshake inside a tunnel, as the
+// protocol mux bounds one sent straight to the listener.
+const tlsHandshakeTimeout = 10 * time.Second
+
+// intercept runs the TLS handshake a client started inside the tunnel to
+// connectHost, as the server, with a leaf for the client's SNI or else
+// connectHost. The connection then carries the client's requests over TLS,
+// which prepare marks https. It reports whether the handshake succeeded.
+func (c *h1Conn) intercept(connectHost string) bool {
+	if c.engine.leaves == nil {
+		return false
+	}
+	tlsConn := tls.Server(&bufferedConn{Conn: c.conn, reader: c.br}, c.engine.leaves.config(connectHost))
+	tlsConn.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
+	if err := tlsConn.Handshake(); err != nil {
+		return false
+	}
+	tlsConn.SetDeadline(time.Time{})
+	// The TLS records are read through the old reader, which may already
+	// hold some of them; requests are read from the decrypted stream.
+	c.conn = tlsConn
+	c.br = bufio.NewReader(tlsConn)
+	c.bw.Reset(tlsConn)
+	return true
+}
+
+// dialOrigin opens the connection to the origin at addr, and for an https
+// request runs the utls handshake on it.
+func (c *h1Conn) dialOrigin(pair *Pair, addr string, secure bool) (net.Conn, error) {
+	ctx := pair.Context()
+	conn, err := c.engine.proxy.dialTransport(ctx, "tcp", addr)
+	if err != nil || !secure {
+		return conn, err
+	}
+	return handshakeOrigin(ctx, conn, addr, c.engine.proxy.CurrentRoute(), c.engine.insecureOrigins)
+}
+
+// overTLS reports whether an origin connection runs TLS.
+func overTLS(conn net.Conn) bool {
+	_, ok := conn.(*utls.UConn)
+	return ok
+}
+
+// carried reports whether the engine carries a request with scheme, and the
+// port it defaults to.
+func carried(scheme string) (port string, ok bool) {
+	switch scheme {
+	case "http":
+		return "80", true
+	case "https":
+		return "443", true
+	}
+	return "", false
+}

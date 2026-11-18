@@ -112,9 +112,9 @@ func (c *h1Conn) roundTrip(pair *Pair) (*http.Response, *wireResponse) {
 }
 
 // errRouteNotCarried is the cause of the proxy error response to a request
-// whose route the skeleton cannot carry yet: ticket 15 carries upstream
-// proxies, ticket 14 TLS to the origin.
-var errRouteNotCarried = errors.New("the h1 engine carries only plain HTTP over a direct route")
+// whose route the engine cannot carry yet: ticket 15 carries upstream
+// proxies.
+var errRouteNotCarried = errors.New("the h1 engine carries only HTTP and HTTPS over a direct route")
 
 // sendUpstream writes the pair's request to the connection's origin
 // connection and reads the origin's response. The route is resolved for
@@ -125,14 +125,15 @@ func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error)
 		_, err := io.ReadAll(req.Body)
 		return nil, nil, fmt.Errorf("reading the request body: %w", err)
 	}
-	if !c.engine.proxy.resolveRoute().Direct() || req.URL.Scheme != "http" {
+	port, ok := carried(req.URL.Scheme)
+	if !c.engine.proxy.resolveRoute().Direct() || !ok {
 		return nil, nil, errRouteNotCarried
 	}
 	out, err := outboundRequest(pair.requestWire, req)
 	if err != nil {
 		return nil, nil, err
 	}
-	origin, err := c.originFor(pair, hostPort(req.URL.Host, "80"))
+	origin, err := c.originFor(pair, hostPort(req.URL.Host, port))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -193,16 +194,17 @@ type originConn struct {
 	bw   *bufio.Writer
 }
 
-// originFor returns the client connection's origin connection to addr. The
-// first request dials it; a request for another origin closes the old one
-// and dials anew.
+// originFor returns the client connection's origin connection to addr, over
+// TLS for an https request. The first request dials it; a request for another
+// origin closes the old one and dials anew.
 func (c *h1Conn) originFor(pair *Pair, addr string) (*originConn, error) {
-	if c.origin != nil && c.origin.addr == addr {
+	secure := pair.Request.URL.Scheme == "https"
+	if c.origin != nil && c.origin.addr == addr && overTLS(c.origin.conn) == secure {
 		return c.origin, nil
 	}
 	c.closeOrigin()
 	// Ticket 15 dials through the route here.
-	conn, err := c.engine.proxy.dialTransport(pair.Context(), "tcp", addr)
+	conn, err := c.dialOrigin(pair, addr, secure)
 	if err != nil {
 		return nil, err
 	}

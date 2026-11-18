@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"net"
 	"net/http"
@@ -39,6 +38,12 @@ type h1Engine struct {
 	closing atomic.Bool
 	// handlers counts the client connections being served.
 	handlers sync.WaitGroup
+
+	// leaves issues the leaf certificates of intercepted TLS, nil until
+	// setMITM. insecureOrigins skips origin verification (tests only).
+	// Both are set before serving (h1engine_mitm.go).
+	leaves          *leafIssuer
+	insecureOrigins bool
 
 	mu sync.Mutex
 	// conns are the client connections being served, true while one waits
@@ -89,18 +94,6 @@ func (engine *h1Engine) waitClosed() {
 	engine.handlers.Wait()
 }
 
-// setMITM records the CA. Ticket 14 gives the engine its own leaf issuer;
-// until then it intercepts nothing, and a TLS handshake to the listener or
-// inside a tunnel fails.
-func (engine *h1Engine) setMITM(*x509.Certificate, any) (*tls.Config, error) {
-	return &tls.Config{GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-		return nil, errNoLeafIssuer
-	}}, nil
-}
-
-// errNoLeafIssuer is the TLS handshake failure until ticket 14.
-var errNoLeafIssuer = errors.New("the h1 engine issues no leaf certificates yet")
-
 // setPipeline sets the steps run for each request and response. Without a
 // pipeline every request goes to the origin untouched, as under Martian: the
 // request gets a bare pair, and the response is written as read.
@@ -119,9 +112,6 @@ func (engine *h1Engine) setPipeline(request requestStep, response responseStep) 
 	}
 	engine.request, engine.response = request, response
 }
-
-// setRoundTripper does nothing: the engine carries requests itself.
-func (engine *h1Engine) setRoundTripper(http.RoundTripper) {}
 
 // idle marks conn as waiting for its next request. It reports false when the
 // engine is closing, and the connection should end.
@@ -231,8 +221,8 @@ func (c *h1Conn) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 }
 
 // connect opens a tunnel for a CONNECT the admission hook lets through. A
-// refused tunnel closes the connection. Plain HTTP inside the tunnel is read
-// as more requests on this connection; TLS inside it is ticket 14's.
+// refused tunnel closes the connection. What the tunnel carries is read as
+// more requests on this connection, after intercepting TLS.
 func (c *h1Conn) connect(head *h1.RequestHead) bool {
 	req, err := head.Request()
 	if err != nil {
@@ -260,8 +250,7 @@ func (c *h1Conn) connect(head *h1.RequestHead) bool {
 	if err != nil {
 		return false
 	}
-	if first[0] == 0x16 {
-		// A TLS handshake: ticket 14 intercepts it here.
+	if first[0] == 0x16 && !c.intercept(req.URL.Host) {
 		return false
 	}
 	c.tunnel = req.URL.Host

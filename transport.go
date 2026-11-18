@@ -179,6 +179,14 @@ func (rt *routedTransport) openTLS(ctx context.Context, network, addr string, ro
 	if err != nil {
 		return nil, err
 	}
+	return handshakeOrigin(ctx, tcpConn, addr, route, rt.insecureSkipVerify)
+}
+
+// handshakeOrigin runs a utls handshake that mimics Chrome with the origin
+// at addr over conn, opened through route, offering http/1.1 only. It
+// verifies the origin against the system roots plus the route's CA, unless
+// insecure is set (tests only). It closes conn when the handshake fails.
+func handshakeOrigin(ctx context.Context, conn net.Conn, addr string, route *Route, insecure bool) (net.Conn, error) {
 	sniHost, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		sniHost = addr
@@ -186,7 +194,7 @@ func (rt *routedTransport) openTLS(ctx context.Context, network, addr string, ro
 
 	roots, err := route.rootCAs()
 	if err != nil {
-		tcpConn.Close()
+		conn.Close()
 		return nil, route.fail(UpstreamProxyInvalid, err.Error(), err)
 	}
 	// Only connections through this route trust its CA. Direct
@@ -194,15 +202,15 @@ func (rt *routedTransport) openTLS(ctx context.Context, network, addr string, ro
 	uTlsConfig := &utls.Config{
 		ServerName:         sniHost,
 		RootCAs:            roots,
-		InsecureSkipVerify: rt.insecureSkipVerify,
+		InsecureSkipVerify: insecure,
 	}
 
-	uConn := utls.UClient(tcpConn, uTlsConfig, utls.HelloChrome_Auto)
+	uConn := utls.UClient(conn, uTlsConfig, utls.HelloChrome_Auto)
 
-	// Every failure below closes tcpConn: when the route is a tunnel
+	// Every failure below closes conn: when the route is a tunnel
 	// through an upstream proxy, nothing else would.
 	if err := uConn.BuildHandshakeState(); err != nil {
-		tcpConn.Close()
+		conn.Close()
 		return nil, fmt.Errorf("building handshake state: %w", err)
 	}
 
@@ -219,12 +227,12 @@ func (rt *routedTransport) openTLS(ctx context.Context, network, addr string, ro
 	}
 
 	if !foundALPN {
-		tcpConn.Close()
+		conn.Close()
 		return nil, errors.New("could not find ALPNExtension")
 	}
 
 	if err := uConn.HandshakeContext(ctx); err != nil {
-		tcpConn.Close()
+		conn.Close()
 		return nil, route.originHandshakeFailure(err)
 	}
 
