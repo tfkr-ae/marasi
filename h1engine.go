@@ -132,6 +132,7 @@ func (engine *h1Engine) idle(conn *h1Conn) bool {
 		return false
 	}
 	engine.conns[conn] = true
+	conn.retireOrigin()
 	return true
 }
 
