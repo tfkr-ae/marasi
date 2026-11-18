@@ -218,6 +218,9 @@ func (c *h1Conn) end() {
 	c.cancel()
 	c.closeOrigin()
 	if !c.hijacked {
+		if c.originReset {
+			resetConnection(c.conn)
+		}
 		c.conn.Close()
 	}
 }

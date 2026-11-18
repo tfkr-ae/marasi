@@ -70,9 +70,6 @@ func (c *h1Conn) exchange(head *h1.RequestHead) bool {
 		wire.head.WriteTo(c.bw)
 		wire.body.WriteTo(c.bw)
 		c.bw.Flush()
-		if c.originReset {
-			resetConnection(c.conn)
-		}
 		return false
 	}
 	keep := keepAlive(head.Proto, &head.Header)

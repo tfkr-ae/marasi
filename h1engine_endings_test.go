@@ -5,11 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/tfkr-ae/marasi/db"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // shortTimeouts gives the proxy's engine short header and idle timeouts, so a
@@ -50,6 +54,55 @@ func isTimeout(err error) bool {
 	return ok && netErr.Timeout()
 }
 
+// serveDefaultH1EngineProxy serves the new engine with the default modifier
+// pipeline and the default extensions, as the app runs it.
+func serveDefaultH1EngineProxy(t *testing.T) string {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	database, err := db.New(":memory:", logger)
+	if err != nil {
+		t.Fatalf("creating in-memory database: %v", err)
+	}
+	repository := db.NewProxyRepo(database)
+	defaults, err := repository.GetExtensions()
+	if err != nil {
+		repository.Close()
+		t.Fatalf("getting default extensions: %v", err)
+	}
+	proxy, err := New(
+		withH1Engine(),
+		WithLogger(logger),
+		WithConfigDir(t.TempDir()),
+		WithDefaultRepositories(repository),
+		WithExtensions(defaults),
+		WithRequestHandler(func(domain.ProxyRequest) error { return nil }),
+		WithResponseHandler(func(domain.ProxyResponse) error { return nil }),
+		WithLogHandler(func(domain.Log) error { return nil }),
+		WithBasePipeline(),
+		WithDefaultModifierPipeline(),
+	)
+	if err != nil {
+		repository.Close()
+		t.Fatalf("creating proxy: %v", err)
+	}
+	listener, err := proxy.GetListener("127.0.0.1", "0")
+	if err != nil {
+		proxy.Close()
+		t.Fatalf("creating proxy listener: %v", err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- proxy.Serve(listener) }()
+	t.Cleanup(func() {
+		proxy.Close()
+		select {
+		case <-served:
+		case <-time.After(5 * time.Second):
+			t.Error("proxy serve did not stop")
+		}
+	})
+	return net.JoinHostPort(proxy.Addr, proxy.Port)
+}
+
 func TestH1Engine_OriginEndsTheConnection(t *testing.T) {
 	t.Run("should forward what arrived of a Content-Length body the origin cut short and then close the client connection", func(t *testing.T) {
 		const cut = "HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\nonly ten b"
@@ -75,23 +128,27 @@ func TestH1Engine_OriginEndsTheConnection(t *testing.T) {
 		expectClosed(t, conn, br, 5*time.Second)
 	})
 
-	t.Run("should forward what arrived of a body the origin reset and then reset the client connection", func(t *testing.T) {
-		const cut = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n"
-		origin := newScriptedOrigin(t, func(conn net.Conn) {
-			io.WriteString(conn, cut)
-			time.Sleep(100 * time.Millisecond)
-			conn.(*net.TCPConn).SetLinger(0)
+	for name, serve := range map[string]func(t *testing.T) string{
+		"base pipeline":    func(t *testing.T) string { addr, _ := serveH1EngineProxy(t); return addr },
+		"default pipeline": serveDefaultH1EngineProxy,
+	} {
+		t.Run("should forward what arrived of a body the origin reset and then reset the client connection, with the "+name, func(t *testing.T) {
+			const cut = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n"
+			origin := newScriptedOrigin(t, func(conn net.Conn) {
+				io.WriteString(conn, cut)
+				time.Sleep(100 * time.Millisecond)
+				conn.(*net.TCPConn).SetLinger(0)
+			})
+			conn, br := dialProxy(t, serve(t))
+
+			fmt.Fprintf(conn, "GET http://%s/ HTTP/1.1\r\nHost: %s\r\n\r\n", origin.addr, origin.addr)
+
+			readExactly(t, br, cut)
+			if rest, err := io.ReadAll(br); !errors.Is(err, syscall.ECONNRESET) {
+				t.Fatalf("wanted the client connection reset, got %v (and %q)", err, rest)
+			}
 		})
-		addr, _ := serveH1EngineProxy(t)
-		conn, br := dialProxy(t, addr)
-
-		fmt.Fprintf(conn, "GET http://%s/ HTTP/1.1\r\nHost: %s\r\n\r\n", origin.addr, origin.addr)
-
-		readExactly(t, br, cut)
-		if rest, err := io.ReadAll(br); !errors.Is(err, syscall.ECONNRESET) {
-			t.Fatalf("wanted the client connection reset, got %v (and %q)", err, rest)
-		}
-	})
+	}
 
 	t.Run("should close the client connection when the origin closes its connection between responses", func(t *testing.T) {
 		origin := newScriptedOrigin(t, func(conn net.Conn) { io.WriteString(conn, finalOK) })
