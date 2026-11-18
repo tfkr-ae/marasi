@@ -79,6 +79,10 @@ type Pair struct {
 	// or Marasi made the response. Request and Response are views of them.
 	requestWire  *wireRequest
 	responseWire *wireResponse
+	// decoded is what CompressedResponseModifier undid, nil when it decoded
+	// nothing. The h1 engine sends the origin's encoded body while the
+	// view's body still equals the decoded one.
+	decoded *decodedResponse
 
 	// requestState is what the proxy knows of the request before the chain
 	// runs, and what the request chain leaves for the proxy.

@@ -73,7 +73,11 @@ func (c *h1Conn) exchange(head *h1.RequestHead) bool {
 	}
 	keep := keepAlive(head.Proto, &head.Header)
 	if wire != nil && !pair.FromMarasi() {
-		out, err := outboundResponse(wire, res)
+		client, err := encodedForClient(pair, res)
+		if err != nil {
+			return false
+		}
+		out, err := outboundResponse(wire, client)
 		if err != nil {
 			return false
 		}
