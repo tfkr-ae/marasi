@@ -22,7 +22,9 @@ import (
 
 // newListeningProxy serves a proxy with the base pipeline and no modifiers,
 // so a launch reaches the origin through the listener as it does in a service.
-func newListeningProxy(t *testing.T) *marasi.Proxy {
+// The options apply after the defaults and before the proxy serves, since the
+// writer reads the repositories while it runs.
+func newListeningProxy(t *testing.T, options ...func(*marasi.Proxy) error) *marasi.Proxy {
 	t.Helper()
 	database, err := db.New(":memory:", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -30,12 +32,12 @@ func newListeningProxy(t *testing.T) *marasi.Proxy {
 	}
 	repo := db.NewProxyRepo(database)
 	t.Cleanup(func() { repo.Close() })
-	proxy, err := marasi.New(
+	proxy, err := marasi.New(append([]func(*marasi.Proxy) error{
 		marasi.WithConfigDir(t.TempDir()),
 		marasi.WithDefaultRepositories(repo),
 		marasi.WithLogHandler(func(domain.Log) error { return nil }),
 		marasi.WithBasePipeline(),
-	)
+	}, options...)...)
 	if err != nil {
 		t.Fatalf("creating proxy: %v", err)
 	}
