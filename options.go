@@ -563,6 +563,7 @@ func WithWorkAdmission(admit func(context.Context, bool) (func(), uint64, error)
 func WithBasePipeline() func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		proxy.engine.setPipeline(proxy.baseRequest, proxy.baseResponse)
+		proxy.pipelineSet = true
 		return nil
 	}
 }
@@ -573,7 +574,7 @@ var errNoClientConnection = errors.New("no client connection for the pair")
 
 // baseRequest is the base pipeline's request step, run for every request the
 // engine reads from client, including a CONNECT.
-func (proxy *Proxy) baseRequest(req *http.Request, client clientHijacker) error {
+func (proxy *Proxy) baseRequest(req *http.Request, client clientHijacker, wire *wireRequest) error {
 	// Proxy credentials must not reach the origin or extension scripts.
 	expected := "Basic " + base64.StdEncoding.EncodeToString([]byte("marasi:"+proxy.clientWorkToken))
 	internal := req.Header.Get("Proxy-Authorization") == expected
@@ -601,7 +602,7 @@ func (proxy *Proxy) baseRequest(req *http.Request, client clientHijacker) error 
 	pair := &Pair{requestState: requestState{
 		admission: &projectAdmission{internal: internal, generation: generation},
 		client:    client,
-	}, RequestBodyEnding: bodyEnding}
+	}, RequestBodyEnding: bodyEnding, requestWire: wire}
 	if internal && launchErr == nil {
 		pair.requestedLaunch = launchID
 	}
@@ -628,7 +629,7 @@ func (proxy *Proxy) baseRequest(req *http.Request, client clientHijacker) error 
 
 // baseResponse is the base pipeline's response step, run for every response
 // the engine is about to write, including the 200 that opens a tunnel.
-func (proxy *Proxy) baseResponse(res *http.Response) error {
+func (proxy *Proxy) baseResponse(res *http.Response, wire *wireResponse) error {
 	// The tunnel was admitted with its CONNECT; the 200 that
 	// opens it is not a response of any pair.
 	if res.Request.Method == http.MethodConnect {
@@ -656,6 +657,7 @@ func (proxy *Proxy) baseResponse(res *http.Response) error {
 		pair = &Pair{}
 	}
 	loadPair(pair, res.Request, res)
+	pair.responseWire = wire
 	// The body is still the wait on the origin, so it is read
 	// before the response side is admitted (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
 	if err := readResponseBody(pair); err != nil {

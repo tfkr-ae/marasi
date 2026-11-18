@@ -74,6 +74,12 @@ type Pair struct {
 	// requestCaptured is set once the request is queued for storage.
 	requestCaptured bool
 
+	// requestWire and responseWire are the messages as the engine read
+	// them from the wire, nil when the engine keeps no wire form (Martian)
+	// or Marasi made the response. Request and Response are views of them.
+	requestWire  *wireRequest
+	responseWire *wireResponse
+
 	// requestState is what the proxy knows of the request before the chain
 	// runs, and what the request chain leaves for the proxy.
 	requestState

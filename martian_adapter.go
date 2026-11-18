@@ -22,13 +22,14 @@ import (
 
 // martianEngine is the Martian proxy that serves Marasi's listener.
 type martianEngine struct {
+	owner     *Proxy
 	proxy     *martian.Proxy
 	closeOnce sync.Once
 	closeDone chan struct{}
 }
 
-func newMartianEngine() *martianEngine {
-	return &martianEngine{proxy: martian.NewProxy()}
+func newMartianEngine(owner *Proxy) *martianEngine {
+	return &martianEngine{owner: owner, proxy: martian.NewProxy()}
 }
 
 // serve serves connections from l until the engine closes.
@@ -72,24 +73,23 @@ func (engine *martianEngine) setMITM(certificate *x509.Certificate, privateKey a
 // setPipeline makes request and response the steps Martian runs for every
 // request and response. Martian runs request on a CONNECT too, and response
 // on the 200 it makes to open the tunnel.
-func (engine *martianEngine) setPipeline(
-	request func(req *http.Request, client clientHijacker) error,
-	response func(res *http.Response) error,
-) {
+// Martian keeps no wire message, so both steps get a nil one.
+func (engine *martianEngine) setPipeline(request requestStep, response responseStep) {
 	engine.proxy.SetRequestModifier(martian.RequestModifierFunc(func(req *http.Request) error {
 		// Martian keeps one session per connection and finds a request's
 		// context by its address, which is why the pipeline edits requests
 		// in place.
-		return request(req, martian.NewContext(req).Session())
+		return request(req, martian.NewContext(req).Session(), nil)
 	}))
-	engine.proxy.SetResponseModifier(martian.ResponseModifierFunc(response))
+	engine.proxy.SetResponseModifier(martian.ResponseModifierFunc(func(res *http.Response) error {
+		return response(res, nil)
+	}))
 }
 
 // setRoundTripper makes base Martian's round tripper, behind the step that
-// returns a response from Respond. Everything that sets Martian's round
-// tripper goes through it, so Respond works whatever the transport.
-func (proxy *Proxy) setRoundTripper(base http.RoundTripper) {
-	proxy.engine.proxy.SetRoundTripper(&respondRoundTripper{proxy: proxy, base: base})
+// returns a response from Respond.
+func (engine *martianEngine) setRoundTripper(base http.RoundTripper) {
+	engine.proxy.SetRoundTripper(&respondRoundTripper{proxy: engine.owner, base: base})
 }
 
 // respondRoundTripper returns the response a request modifier answered a

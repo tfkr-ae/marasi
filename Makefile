@@ -19,6 +19,9 @@ LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.buildChannel=$(CHANNEL)' -X 'ma
 # Pinned so every machine and CI run the same checks; v0.8.2 is built for go 1.26.
 # `go run pkg@version` keeps it out of go.mod.
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
+# Build tags. Internal only: TAGS=h1engine builds Marasi on its own HTTP/1.1
+# engine instead of Martian, for `make conformance TAGS=h1engine` until the switch.
+TAGS ?=
 
 .DEFAULT_GOAL := build
 
@@ -68,7 +71,8 @@ help:
 		'                     tester output. Reports land in dist/conformance/<suite>/<run>/.' \
 		'                     Quick runs: SUITES=h1-origin RUNS=proxy,' \
 		'                     SUITES=h1-client RUNS=proxy CASES=SMUG-CL-TE-BOTH@* (exact IDs run' \
-		'                     only those probes), SUITES=h2-origin RUNS=proxy. CI: the' \
+		'                     only those probes), SUITES=h2-origin RUNS=proxy. TAGS=h1engine' \
+		'                     runs Marasi on its own HTTP/1.1 engine instead of Martian. CI: the' \
 		'                     conformance workflow (h1 jobs are required checks).' \
 		'make conformance-baseline  rerun the selected cases with no proxy and merge them' \
 		'                     into the direct baselines' \
@@ -84,12 +88,12 @@ help:
 
 build:
 	@mkdir -p $(DIST)
-	CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BIN) $(PKG)
+	CGO_ENABLED=0 $(GO) build -tags '$(TAGS)' -ldflags "$(LDFLAGS)" -o $(DIST)/$(BIN) $(PKG)
 
 $(TARGETS):
 	@mkdir -p $(DIST)
 	CGO_ENABLED=0 GOOS=$(word 1,$(subst -, ,$@)) GOARCH=$(word 2,$(subst -, ,$@)) \
-		$(GO) build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BIN)-$@$(if $(findstring windows,$@),.exe) $(PKG)
+		$(GO) build -tags '$(TAGS)' -ldflags "$(LDFLAGS)" -o $(DIST)/$(BIN)-$@$(if $(findstring windows,$@),.exe) $(PKG)
 
 all: $(TARGETS)
 

@@ -83,7 +83,8 @@ const (
 // extension management, database operations, and TLS handling. It serves as the central coordinator
 // for the Marasi proxy server.
 type Proxy struct {
-	engine         *martianEngine                       // serves the listener and runs the base pipeline
+	engine         engine                               // serves the listener and runs the base pipeline
+	pipelineSet    bool                                 // WithBasePipeline has configured the engine
 	ConfigDir      string                               // The configuration directory (defaults to the marasi folder under the user configuration directory)
 	Config         *Config                              // The marasi proxy configuration (separate from the GUI config)
 	DBWriteChannel chan any                             // DB Write Channel
@@ -335,7 +336,6 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 		cancelTransport:      cancelTransport,
 		connections:          make(map[net.Conn]struct{}),
 		clientConnections:    make(map[string]*clientConnection),
-		engine:               newMartianEngine(),
 		requestModifiers:     NewModifierGroup(),
 		responseModifiers:    NewModifierGroup(),
 		DBWriteChannel:       make(chan any, 10),
@@ -353,6 +353,7 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 			return func() {}, 0, nil
 		},
 	}
+	proxy.engine = newEngine(proxy)
 	proxy.route.Store(DirectRoute())
 	err := proxy.WithOptions(options...)
 	if err != nil {
@@ -514,8 +515,16 @@ func NewProxyRequest(pair *Pair) (*domain.ProxyRequest, error) {
 		}
 		proxyRequest.SitemapNode = domain.SitemapLeaf(proxyRequest.Scheme, proxyRequest.Host, proxyRequest.Path)
 
-		// TODO Check prettified error
-		rawReq, prettified, err := rawhttp.DumpRequest(req)
+		// The raw text is the request as it goes upstream: the wire form
+		// when the engine keeps one, a dump of the view otherwise.
+		var rawReq []byte
+		var prettified string
+		var err error
+		if pair.requestWire != nil {
+			rawReq, prettified, err = dumpWireRequest(pair.requestWire, req)
+		} else {
+			rawReq, prettified, err = rawhttp.DumpRequest(req)
+		}
 
 		req.Host = currentHost
 		req.URL.Host = currentURLHost
@@ -563,7 +572,14 @@ func NewProxyResponse(pair *Pair) (*domain.ProxyResponse, error) {
 		return nil, fmt.Errorf("pair has no response time")
 	}
 
-	rawRes, prettified, err := rawhttp.DumpResponse(res)
+	var rawRes []byte
+	var prettified string
+	var err error
+	if pair.responseWire != nil && !pair.FromMarasi() {
+		rawRes, prettified, err = dumpWireResponse(pair.responseWire, res)
+	} else {
+		rawRes, prettified, err = rawhttp.DumpResponse(res)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("dumping response %s: %w", requestId, err)
 	}

@@ -620,15 +620,22 @@ type launchFailureRoundTripper struct {
 func (rt *launchFailureRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	res, err := rt.base.RoundTrip(req)
 	if err != nil {
-		if id, ok := core.RequestIDFromContext(req.Context()); ok {
-			rt.proxy.recordLaunchFailure(id, domain.LaunchReasonUpstreamError)
-		}
-		var routeErr *UpstreamProxyError
-		if errors.As(err, &routeErr) {
-			rt.proxy.logUpstreamProxyFailure(req, routeErr)
-		}
+		rt.proxy.roundTripFailed(req, err)
 	}
 	return res, err
+}
+
+// roundTripFailed records a round trip that got no response from the origin:
+// a launch finishes failed, and an upstream proxy failure is logged. Every
+// engine calls it before answering with a proxy error response.
+func (proxy *Proxy) roundTripFailed(req *http.Request, err error) {
+	if id, ok := core.RequestIDFromContext(req.Context()); ok {
+		proxy.recordLaunchFailure(id, domain.LaunchReasonUpstreamError)
+	}
+	var routeErr *UpstreamProxyError
+	if errors.As(err, &routeErr) {
+		proxy.logUpstreamProxyFailure(req, routeErr)
+	}
 }
 
 // logUpstreamProxyFailure writes one ERROR proxy log naming req's pair, the
