@@ -24,6 +24,12 @@ func (c *h1Conn) exchange(head *h1.RequestHead) bool {
 		c.refuse(http.StatusBadRequest, err)
 		return false
 	}
+	if expectsContinue(head, framing) {
+		// Marasi answers 100 itself, so the chains see the whole request
+		// (docs/adr/2026-11-17-marasi-answers-100-continue-itself.md).
+		io.WriteString(c.bw, "HTTP/1.1 100 Continue\r\n\r\n")
+		c.bw.Flush()
+	}
 	body, bodyErr := h1.ReadBody(c.br, framing)
 	req, err := head.Request()
 	if err != nil {
@@ -150,8 +156,7 @@ func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error)
 
 	head, err := h1.ReadResponseHead(origin.br)
 	for err == nil && head.Interim() {
-		// Ticket 18 relays interim responses; until then they are
-		// read and dropped, as Go's transport did.
+		c.relayInterim(req, head)
 		head, err = h1.ReadResponseHead(origin.br)
 	}
 	if err != nil {
@@ -185,6 +190,33 @@ func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error)
 		c.closeOrigin()
 	}
 	return res, wire, nil
+}
+
+// expectsContinue reports whether the client waits for a 100 before it sends
+// the request's body (RFC 9110 §10.1.1). An HTTP/1.0 request's expectation is
+// ignored, and a request without a body needs no 100.
+func expectsContinue(head *h1.RequestHead, framing h1.Framing) bool {
+	if head.Proto != "HTTP/1.1" || framing.Kind == h1.NoBody ||
+		(framing.Kind == h1.LengthFramed && framing.Length == 0) {
+		return false
+	}
+	for _, value := range head.Header.Values("Expect") {
+		if strings.EqualFold(strings.TrimSpace(value), "100-continue") {
+			return true
+		}
+	}
+	return false
+}
+
+// relayInterim writes an origin's interim response to the client as read. A
+// 100 is not relayed: Marasi answers Expect itself. Nor is any 1xx sent to an
+// HTTP/1.0 client, which did not ask for one (RFC 9110 §15.2).
+func (c *h1Conn) relayInterim(req *http.Request, head *h1.ResponseHead) {
+	if head.StatusCode == http.StatusContinue || !req.ProtoAtLeast(1, 1) {
+		return
+	}
+	head.WriteTo(c.bw)
+	c.bw.Flush()
 }
 
 // originConn is the origin connection of one client connection.
