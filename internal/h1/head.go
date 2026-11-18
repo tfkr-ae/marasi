@@ -164,6 +164,18 @@ func (h *ResponseHead) Bytes() []byte {
 	return appendParts(nil, nil, h.Line, h.Header)
 }
 
+// SetTarget sets the request target and rebuilds the request line around it,
+// keeping the method, the version and the line end as read. A line read
+// without an end gets a bare LF.
+func (h *RequestHead) SetTarget(target string) {
+	eol := eolOf(h.Line)
+	if eol == nil {
+		eol = []byte("\n")
+	}
+	h.Target = target
+	h.Line = []byte(h.Method + " " + target + " " + h.Proto + string(eol))
+}
+
 // Clone returns a copy of the head that Merge and the other editing methods
 // can change without changing h. The field bytes are shared: nothing in this
 // package writes into them.

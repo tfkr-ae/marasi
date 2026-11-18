@@ -138,3 +138,23 @@ func TestResponseRoundTrip(t *testing.T) {
 func bufioReader(b []byte) *bufio.Reader {
 	return bufio.NewReader(bytes.NewReader(b))
 }
+
+func TestRequestHead_SetTarget(t *testing.T) {
+	for _, test := range []struct{ name, raw, want string }{
+		{"a CRLF line", "GET http://example.com/a?b HTTP/1.1\r\nHost: example.com\r\n\r\n", "GET /a?b HTTP/1.1\r\n"},
+		{"a bare LF line", "GET http://example.com/a?b HTTP/1.0\nHost: example.com\n\n", "GET /a?b HTTP/1.0\n"},
+	} {
+		t.Run("should rebuild "+test.name+" with the new target, keeping method, version and line end", func(t *testing.T) {
+			head, err := h1.ReadRequestHead(reader(test.raw))
+			if err != nil {
+				t.Fatalf("reading request head: %v", err)
+			}
+
+			head.SetTarget("/a?b")
+
+			if string(head.Line) != test.want || head.Target != "/a?b" {
+				t.Fatalf("\nwanted:\n%q\ngot:\n%q (target %q)", test.want, head.Line, head.Target)
+			}
+		})
+	}
+}

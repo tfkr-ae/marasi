@@ -279,11 +279,9 @@ func absoluteForm(head *h1.RequestHead, host string) []byte {
 	if !strings.HasPrefix(head.Target, "/") {
 		return head.Line
 	}
-	eol := "\n"
-	if bytes.HasSuffix(head.Line, []byte("\r\n")) {
-		eol = "\r\n"
-	}
-	return []byte(head.Method + " http://" + host + head.Target + " " + head.Proto + eol)
+	absolute := head.Clone()
+	absolute.SetTarget("http://" + host + head.Target)
+	return absolute.Line
 }
 
 // upgradeStream reads a connection through the reader that already holds

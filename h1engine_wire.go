@@ -132,12 +132,7 @@ func toOriginForm(head *h1.RequestHead) error {
 			return fmt.Errorf("setting the Host field: %w", err)
 		}
 	}
-	eol := "\n"
-	if bytes.HasSuffix(head.Line, []byte("\r\n")) {
-		eol = "\r\n"
-	}
-	head.Target = originForm(head.Target)
-	head.Line = []byte(head.Method + " " + head.Target + " " + head.Proto + eol)
+	head.SetTarget(originForm(head.Target))
 	return nil
 }
 
