@@ -113,6 +113,28 @@ func TestH1Engine_OriginEndsTheConnection(t *testing.T) {
 		expectClosed(t, conn, br, 5*time.Second)
 	})
 
+	t.Run("should store what arrived of a body the origin cut short, recording the cut-short ending", func(t *testing.T) {
+		const cut = "HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\nonly ten b"
+		origin := newScriptedOrigin(t, func(conn net.Conn) { io.WriteString(conn, cut) })
+		addr, captured := serveH1EngineProxy(t)
+		conn, br := dialProxy(t, addr)
+
+		fmt.Fprintf(conn, "GET http://%s/ HTTP/1.1\r\nHost: %s\r\n\r\n", origin.addr, origin.addr)
+
+		readExactly(t, br, cut)
+		select {
+		case res := <-captured.response:
+			if string(res.Raw) != cut {
+				t.Fatalf("\nwanted:\n%q\ngot:\n%q", cut, res.Raw)
+			}
+			if got := res.Metadata["response_body_ending"]; got != "cut short" {
+				t.Fatalf("\nwanted:\nmetadata.response_body_ending \"cut short\"\ngot:\n%v", res.Metadata)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the cut-short response was not stored")
+		}
+	})
+
 	t.Run("should forward what arrived of a chunked body the origin cut short and then close the client connection", func(t *testing.T) {
 		const cut = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n"
 		origin := newScriptedOrigin(t, func(conn net.Conn) { io.WriteString(conn, cut) })

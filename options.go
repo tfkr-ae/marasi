@@ -1,6 +1,7 @@
 package marasi
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -667,7 +668,10 @@ func (proxy *Proxy) baseResponse(res *http.Response, wire *wireResponse) error {
 	// The body is still the wait on the origin, so it is read
 	// before the response side is admitted (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
 	if err := readResponseBody(pair); err != nil {
-		log.Printf("response pipeline: %v", err)
+		// No response modifier runs on a body cut short: what arrived
+		// goes to the client as it arrived (h1Conn.exchange). It is
+		// still stored, with how it ended.
+		proxy.captureCutShortResponse(pair)
 		return err
 	}
 	if admission := pair.admission; admission != nil {
@@ -713,6 +717,40 @@ func (proxy *Proxy) baseResponse(res *http.Response, wire *wireResponse) error {
 		return proxy.handOffUpgrade(pair)
 	}
 	return err
+}
+
+// responseBodyEndingMetadataKey is the metadata field that records a response
+// body that did not arrive whole, as BodyEnding's words.
+const responseBodyEndingMetadataKey = "response_body_ending"
+
+// captureCutShortResponse stores what arrived of a response whose body the
+// origin cut short, with metadata.response_body_ending, when its request was
+// stored. It is admitted as project work like any response.
+func (proxy *Proxy) captureCutShortResponse(pair *Pair) {
+	if pair.ID == uuid.Nil || !pair.requestCaptured || pair.Skipped {
+		return
+	}
+	if admission := pair.admission; admission != nil {
+		release, generation, err := proxy.admitWork(pair.Request.Context(), admission.internal)
+		if err != nil {
+			return
+		}
+		defer release()
+		if generation != admission.generation {
+			return
+		}
+	}
+	// The view's body fails after what arrived; capture stores only that.
+	arrived, _ := io.ReadAll(pair.Response.Body)
+	pair.Response.Body = io.NopCloser(bytes.NewReader(arrived))
+	pair.Timing.Responded = time.Now()
+	if pair.Metadata == nil {
+		pair.Metadata = make(map[string]any)
+	}
+	pair.Metadata[responseBodyEndingMetadataKey] = pair.ResponseBodyEnding.String()
+	if err := WriteResponseModifier(proxy, pair); err != nil {
+		log.Printf("capturing a cut-short response: %v", err)
+	}
 }
 
 // refuseConnection ends the client connection of a refused request. The
