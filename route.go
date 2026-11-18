@@ -125,7 +125,8 @@ func (proxy *Proxy) CurrentRoute() *Route {
 }
 
 // setRoute makes route the one new connections to the origin use. It closes
-// the old route's idle connections at once. Connections carrying a request
+// the old route's idle connections at once, on either engine (the new
+// engine's are in h1engine_route.go). Connections carrying a request
 // keep it until it finishes and are never reused afterwards, since the next
 // request takes its connection from the new route's pool (see
 // routedTransport). The listener keeps running.
@@ -133,6 +134,9 @@ func (proxy *Proxy) setRoute(route *Route) {
 	proxy.route.Store(route)
 	if transport := proxy.transport.Load(); transport != nil {
 		transport.CloseIdleConnections()
+	}
+	if engine, ok := proxy.engine.(*h1Engine); ok {
+		engine.routeSwapped(route)
 	}
 }
 
