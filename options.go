@@ -610,6 +610,10 @@ func (proxy *Proxy) baseRequest(req *http.Request, client clientHijacker, wire *
 	proxy.watchClient(req, bodyEnding)
 	pair.Request = req
 	pair.ctx = req.Context()
+	if wire != nil && wire.refused != nil {
+		proxy.refuseRequest(pair, wire.refused)
+		return nil
+	}
 	err = proxy.requestModifiers.Modify(proxy, pair)
 	switch pair.control {
 	case controlDrop:

@@ -18,19 +18,17 @@ import (
 // the request step, the round trip and the response step, and writes the
 // response. It reports whether the connection carries another request.
 func (c *h1Conn) exchange(head *h1.RequestHead) bool {
-	framing, err := h1.RequestFraming(head)
-	if err != nil {
-		// Ticket 20 answers this with a stored 400 proxy error response.
-		c.refuse(http.StatusBadRequest, err)
-		return false
-	}
-	if expectsContinue(head, framing) {
+	framing, refused := h1.RequestFraming(head)
+	if refused == nil && expectsContinue(head, framing) {
 		// Marasi answers 100 itself, so the chains see the whole request
 		// (docs/adr/2026-11-17-marasi-answers-100-continue-itself.md).
 		io.WriteString(c.bw, "HTTP/1.1 100 Continue\r\n\r\n")
 		c.bw.Flush()
 	}
-	body, bodyErr := h1.ReadBody(c.br, framing)
+	body, bodyErr := readWireBody(c.br, framing, &refused)
+	if refused != nil {
+		defer c.drain()
+	}
 	req, err := head.Request()
 	if err != nil {
 		c.refuse(http.StatusBadRequest, err)
@@ -38,12 +36,13 @@ func (c *h1Conn) exchange(head *h1.RequestHead) bool {
 	}
 	req = c.prepare(req)
 	switch {
+	case refused != nil:
 	case bodyErr != nil:
 		req.Body = cutShortBody(body.Payload(), bodyErr)
 	case framing.Kind != h1.NoBody:
 		req.Body = io.NopCloser(bytes.NewReader(body.Payload()))
 	}
-	if err := c.engine.request(req, c, &wireRequest{head: head, body: body}); err != nil || c.hijacked {
+	if err := c.engine.request(req, c, &wireRequest{head: head, body: body, refused: refused}); err != nil || c.hijacked {
 		return false
 	}
 	pair := requestPair(req)
@@ -96,6 +95,10 @@ func (c *h1Conn) exchange(head *h1.RequestHead) bool {
 func (c *h1Conn) roundTrip(pair *Pair) (*http.Response, *wireResponse) {
 	switch {
 	case pair.control == controlRespond:
+		return pair.Response, nil
+	case pair.requestWire != nil && pair.requestWire.refused != nil:
+		// Without the base pipeline nothing answered the refusal yet.
+		c.engine.proxy.respondWithProxyError(pair, http.StatusBadRequest, pair.requestWire.refused)
 		return pair.Response, nil
 	case pair.Dropped():
 		// The same empty 200 Martian answered a dropped request with.

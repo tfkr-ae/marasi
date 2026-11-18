@@ -60,6 +60,34 @@ func (pair *Pair) capturesProxyError() bool {
 	return pair.control == controlRespond && pair.proxyError != "" && pair.requestCaptured
 }
 
+// refuseRequest answers a request whose length cannot be framed safely with a
+// 400 proxy error response giving cause, and stores the pair
+// (docs/adr/2026-11-17-ambiguous-request-framing-is-refused-with-a-400.md).
+// No request modifier runs: the request never goes upstream, so there is
+// nothing to scope, hold or edit. The pair is only set up and captured, so
+// the refusal is stored whatever the scope, as a tester studying smuggling
+// wants to see it.
+func (proxy *Proxy) refuseRequest(pair *Pair, cause error) {
+	// The same context sync a chain modifier gets, so the response side
+	// loads what was set up here.
+	req := pair.Request
+	defer storePair(pair, loadPair(pair, req, nil), req)
+	if err := SetupRequestModifier(proxy, pair); err != nil {
+		log.Printf("setting up a refused request: %v", err)
+	}
+	if pair.Dropped() {
+		// A second claim of the same launch.
+		return
+	}
+	proxy.respondWithProxyError(pair, http.StatusBadRequest, cause)
+	if pair.ID != uuid.Nil {
+		if err := WriteRequestModifier(proxy, pair); err != nil {
+			log.Printf("capturing a refused request: %v", err)
+		}
+	}
+	proxy.logProxyError(pair, cause)
+}
+
 // failRequestChain ends a request whose Go request modifier returned err. A
 // dropped pair stays dropped. Any other is answered with a 502 proxy error
 // response, and its request is captured first when the chain had set the pair

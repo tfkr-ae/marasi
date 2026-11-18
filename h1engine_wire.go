@@ -48,6 +48,11 @@ func outboundRequest(wire *wireRequest, req *http.Request) (outbound[*h1.Request
 		return out, err
 	}
 	head.Header.RemoveConnectionOptions(true)
+	if wire.refused != nil {
+		// Stored as read: its framing fields are the evidence, and it
+		// never goes out to be framed.
+		return outbound[*h1.RequestHead]{head: head}, nil
+	}
 	body := h1.FrameRequestBody(head, wire.body, payload)
 	return outbound[*h1.RequestHead]{head: head, body: body, payload: payload}, nil
 }
