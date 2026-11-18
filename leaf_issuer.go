@@ -90,6 +90,16 @@ func (issuer *leafIssuer) leaf(host string) (*tls.Certificate, error) {
 	return leaf, nil
 }
 
+// A leaf's serial is random below 2^leafSerialBits, more than the 64 bits of
+// entropy the CA/Browser Forum baseline requirements ask for. A leaf is valid
+// for leafValidityYears, from leafBackdate before it was issued, so a client
+// whose clock runs behind still accepts it.
+const (
+	leafSerialBits    = 128
+	leafValidityYears = 1
+	leafBackdate      = 24 * time.Hour
+)
+
 // issue makes host's leaf: organisation Marasi, an ECDSA P-256 key, valid
 // from a day before now until a year after, or until the CA expires if that
 // is sooner. An IP host is named in an IP SAN, any other in a DNS SAN.
@@ -98,18 +108,18 @@ func (issuer *leafIssuer) issue(host string, now time.Time) (*tls.Certificate, e
 	if err != nil {
 		return nil, err
 	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), leafSerialBits))
 	if err != nil {
 		return nil, err
 	}
-	notAfter := now.AddDate(1, 0, 0)
+	notAfter := now.AddDate(leafValidityYears, 0, 0)
 	if issuer.ca.NotAfter.Before(notAfter) {
 		notAfter = issuer.ca.NotAfter
 	}
 	template := &x509.Certificate{
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: host, Organization: []string{"Marasi"}},
-		NotBefore:             now.Add(-24 * time.Hour),
+		NotBefore:             now.Add(-leafBackdate),
 		NotAfter:              notAfter,
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},

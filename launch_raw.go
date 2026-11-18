@@ -235,6 +235,12 @@ func (proxy *Proxy) sendRaw(ctx context.Context, r *rawRequest, internal [][2]st
 	}
 }
 
+// tunnelHeadBuffer is the read buffer for the 200 that opens a launch's
+// tunnel: the smallest bufio allows. The 200 has no body and the client
+// speaks first inside the tunnel, so nothing past its head is buffered and
+// lost.
+const tunnelHeadBuffer = 16
+
 // connectRaw opens a tunnel to host through the proxy's listener and starts
 // TLS inside it, as a proxy client does for an HTTPS request.
 func (proxy *Proxy) connectRaw(ctx context.Context, conn net.Conn, host, credentials string) (net.Conn, error) {
@@ -246,9 +252,7 @@ func (proxy *Proxy) connectRaw(ctx context.Context, conn net.Conn, host, credent
 	if _, err := io.WriteString(conn, connect); err != nil {
 		return nil, fmt.Errorf("opening the tunnel: %w", err)
 	}
-	// The 200 that opens the tunnel has no body, so nothing past its head
-	// is buffered.
-	head, err := h1.ReadResponseHead(bufio.NewReaderSize(conn, 16))
+	head, err := h1.ReadResponseHead(bufio.NewReaderSize(conn, tunnelHeadBuffer))
 	if err != nil {
 		return nil, fmt.Errorf("opening the tunnel: %w", err)
 	}

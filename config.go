@@ -295,7 +295,7 @@ func initializeCertificateAuthority(ctx context.Context, configDir string, logge
 	}
 
 	logger.Info("Certificate does not exist, creating a new one")
-	certificate, privateKey, err = newCertificateAuthority("Marasi", "Marasi Authority", 365*3*24*time.Hour)
+	certificate, privateKey, err = newCertificateAuthority("Marasi", "Marasi Authority", caValidity)
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating new certificate authority: %w", err)
 	}
@@ -305,12 +305,21 @@ func initializeCertificateAuthority(ctx context.Context, configDir string, logge
 	return certificate, privateKey, nil
 }
 
+// The CA certificate Marasi makes is the one Martian's mitm.NewAuthority
+// made, so its shape stays: an RSA key of caKeyBits, a random serial below
+// 2^caSerialBits, and caValidity either side of now.
+const (
+	caValidity   = 3 * 365 * 24 * time.Hour
+	caKeyBits    = 2048
+	caSerialBits = 160
+)
+
 // newCertificateAuthority makes a self-signed CA certificate and its RSA 2048
 // key, valid from validity ago until validity from now. It makes the same
 // certificate Martian's mitm.NewAuthority made, so a CA from either is the same
 // to the browsers that trust it.
 func newCertificateAuthority(name, organization string, validity time.Duration) (*x509.Certificate, *rsa.PrivateKey, error) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := rsa.GenerateKey(rand.Reader, caKeyBits)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -320,7 +329,7 @@ func newCertificateAuthority(name, organization string, validity time.Duration) 
 	}
 	// RFC 5280 4.2.1.2 method (1) takes the SHA-1 of the whole encoded key.
 	keyID := sha1.Sum(publicKey)
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 160))
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), caSerialBits))
 	if err != nil {
 		return nil, nil, err
 	}
