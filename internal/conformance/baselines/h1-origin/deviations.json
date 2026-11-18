@@ -1835,5 +1835,31 @@
     "kind": "known",
     "reason": "Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
     "phase": 2
+  },
+  {
+    "cases": "content-encoding-*@*",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "Martian decodes a gzip or br response for the client and removes its Content-Encoding; the h1 engine sends the origin's encoded bytes (docs/adr/2026-11-17-compressed-responses-are-transparent-on-the-wire-and-decoded-in-storage.md)",
+    "phase": 2
+  },
+  {
+    "cases": "content-encoding-*@*",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "known",
+    "reason": "Martian decodes a gzip or br response for the client and removes its Content-Encoding; the h1 engine sends the origin's encoded bytes (docs/adr/2026-11-17-compressed-responses-are-transparent-on-the-wire-and-decoded-in-storage.md)",
+    "phase": 2
   }
 ]

@@ -505,7 +505,9 @@ func (p *planner) planSessionPair(plan *pairPlan, i int, host int32, outage bool
 			case r < 1.8:
 				plan.codings = []string{"deflate", "gzip"}
 			case r < 2.3:
-				// Chunked gzip has no Content-Length, so the proxy stores it encoded.
+				// The proxy decodes gzip under any framing and stores it
+				// decoded. This row stays encoded on purpose, so the
+				// search index's decoding of stored bodies is measured.
 				plan.codings = []string{"gzip"}
 				plan.chunked = true
 			}
