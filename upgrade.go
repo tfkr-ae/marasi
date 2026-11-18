@@ -50,11 +50,30 @@ func (proxy *Proxy) handOffUpgrade(pair *Pair) error {
 	if err := conn.SetDeadline(time.Time{}); err != nil {
 		return closeBoth(fmt.Errorf("clearing upgraded client deadline: %w", err))
 	}
-	if err := pair.Response.Write(buffered); err != nil {
+	if err := writeSwitch(pair, buffered); err != nil {
 		return closeBoth(fmt.Errorf("writing switching protocols response: %w", err))
 	}
 	if err := buffered.Flush(); err != nil {
 		return closeBoth(fmt.Errorf("flushing switching protocols response: %w", err))
 	}
 	return proxy.upgradeHandler(proxy, pair, client, upstream)
+}
+
+// writeSwitch writes the 101 to the client. On the h1 engine it is the
+// origin's head with the response chain's edits merged, the same bytes
+// capture stored; on Martian, net/http's form of the view.
+func writeSwitch(pair *Pair, w io.Writer) error {
+	wire := pair.responseWire
+	if wire == nil {
+		return pair.Response.Write(w)
+	}
+	out, err := outboundResponse(wire, pair.Response)
+	if err != nil {
+		return err
+	}
+	if _, err := out.head.WriteTo(w); err != nil {
+		return err
+	}
+	_, err = w.Write(out.body)
+	return err
 }

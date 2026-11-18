@@ -46,15 +46,15 @@ func (c *h1Conn) exchange(head *h1.RequestHead) bool {
 	}
 
 	res, wire := c.roundTrip(pair)
+	stream, _ := res.Body.(*originStream)
 	err = c.engine.response(res, wire)
-	if c.hijacked {
-		return false
+	if stream != nil {
+		// The upgrade handler has returned, having closed it, or the
+		// 101 never reached it (a drop, a skip, a failed handshake, or
+		// a stale project's 502, which is still written below).
+		stream.Close()
 	}
-	if wire != nil && res.StatusCode == http.StatusSwitchingProtocols {
-		// No upgrade handler took the connection: ticket 16 relays it.
-		if stream, ok := res.Body.(*originStream); ok {
-			stream.Close()
-		}
+	if c.hijacked || (stream != nil && res.StatusCode == http.StatusSwitchingProtocols) {
 		return false
 	}
 	if err != nil && pair.ResponseBodyEnding == BodyCutShort {
