@@ -2215,23 +2215,22 @@ func TestCompressedResponseModifier(t *testing.T) {
 		}
 	})
 
-	t.Run("should return an error if the modifier fails to create a GzipReader", func(t *testing.T) {
-		badGzip := []byte("marasi")
-		res := testResponse(string(badGzip))
+	t.Run("should record why a body that is not gzip did not decode, and return no error", func(t *testing.T) {
+		res := testResponse("marasi")
 		res.Header.Set("Content-Encoding", "gzip")
+		pair := &Pair{Response: res}
 
-		err := CompressedResponseModifier(proxy, &Pair{Response: res})
+		err := CompressedResponseModifier(proxy, pair)
 
-		if err == nil {
-			t.Fatal("wanted: err\ngot: nil")
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-
-		if !strings.Contains(err.Error(), "creating gzip reader") {
-			t.Fatalf("wanted message to contain : %q\ngot: %v", "creating gzip reader", err)
+		if got, _ := pair.Metadata["content_decoding_error"].(string); !strings.Contains(got, "creating gzip reader") {
+			t.Fatalf("\nwanted:\ncontent_decoding_error containing %q\ngot:\n%v", "creating gzip reader", pair.Metadata)
 		}
 	})
 
-	t.Run("should return an error and leave a cut gzip body as received", func(t *testing.T) {
+	t.Run("should leave a cut gzip body as received and record why it did not decode", func(t *testing.T) {
 		gzipBody, _ := testGzipBody(t, "marasi")
 		coded, _ := io.ReadAll(gzipBody)
 		cut := coded[:12]
@@ -2241,14 +2240,20 @@ func TestCompressedResponseModifier(t *testing.T) {
 
 		err := CompressedResponseModifier(proxy, pair)
 
-		if err == nil || !strings.Contains(err.Error(), "reading gzip content") {
-			t.Fatalf("wanted an error containing %q\ngot: %v", "reading gzip content", err)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
 		if got, _ := io.ReadAll(res.Body); !bytes.Equal(got, cut) {
-			t.Fatalf("wanted the body as received %q\ngot: %q", cut, got)
+			t.Fatalf("\nwanted:\n%q\ngot:\n%q", cut, got)
 		}
-		if res.Header.Get("Content-Encoding") != "gzip" || pair.Metadata != nil {
-			t.Fatalf("wanted the response untouched\ngot: %v, %v", res.Header, pair.Metadata)
+		if res.Header.Get("Content-Encoding") != "gzip" || pair.decoded != nil {
+			t.Fatalf("\nwanted:\nthe response untouched\ngot:\n%v, %v", res.Header, pair.decoded)
+		}
+		if got, _ := pair.Metadata["content_decoding_error"].(string); !strings.Contains(got, "reading gzip content") {
+			t.Fatalf("\nwanted:\ncontent_decoding_error containing %q\ngot:\n%v", "reading gzip content", pair.Metadata)
+		}
+		if _, ok := pair.Metadata["decoded_content_encoding"]; ok {
+			t.Fatalf("\nwanted:\nno decoded_content_encoding\ngot:\n%v", pair.Metadata)
 		}
 	})
 
@@ -2288,13 +2293,19 @@ func TestCompressedResponseModifier(t *testing.T) {
 		}
 	})
 
-	t.Run("should return an error if the brotli content does not decode", func(t *testing.T) {
+	t.Run("should record why a brotli body did not decode, and return no error", func(t *testing.T) {
 		res := testResponse("\xff\xff\xff\xff not brotli")
 		res.Header.Set("Content-Encoding", "br")
 
-		err := CompressedResponseModifier(proxy, &Pair{Response: res})
-		if err == nil || !strings.Contains(err.Error(), "reading brotli content") {
-			t.Fatalf("wanted an error containing %q\ngot: %v", "reading brotli content", err)
+		pair := &Pair{Response: res}
+
+		err := CompressedResponseModifier(proxy, pair)
+
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if got, _ := pair.Metadata["content_decoding_error"].(string); !strings.Contains(got, "reading brotli content") {
+			t.Fatalf("\nwanted:\ncontent_decoding_error containing %q\ngot:\n%v", "reading brotli content", pair.Metadata)
 		}
 	})
 

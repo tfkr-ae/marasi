@@ -700,16 +700,18 @@ func (proxy *Proxy) baseResponse(res *http.Response, wire *wireResponse) error {
 			return fmt.Errorf("closing connection: %w", err)
 		}
 	}
+	if err != nil && !pair.Dropped() {
+		// A Go modifier failed: the response may be half-edited, so it
+		// fails closed like a request (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md).
+		proxy.failResponseChain(pair, err)
+		*res = *pair.Response
+		return nil
+	}
 	// A 101 goes to the upgrade handler only once the whole chain
 	// has run, so the pair is captured.
 	if err == nil && pair.control == controlNone {
 		return proxy.handOffUpgrade(pair)
 	}
-	if err == nil {
-		return nil
-	}
-	// TODO this should be handled through logging
-	log.Printf("response pipeline: %v", err)
 	return err
 }
 

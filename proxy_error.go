@@ -113,3 +113,23 @@ func (proxy *Proxy) failRequestChain(pair *Pair, err error) {
 	proxy.respondWithProxyError(pair, http.StatusBadGateway, cause)
 	proxy.logProxyError(pair, cause)
 }
+
+// failResponseChain ends a response whose Go response modifier returned err.
+// The origin's response, which the chain may have half-edited, never reaches
+// the client: the pair is answered with a 502 proxy error response, stored
+// with it unless the chain had already captured the origin's, and the cause
+// is logged.
+func (proxy *Proxy) failResponseChain(pair *Pair, err error) {
+	if pair.webSocketUpstream != nil {
+		pair.webSocketUpstream.Close()
+		pair.webSocketUpstream = nil
+	}
+	cause := fmt.Errorf("running the response chain: %w", err)
+	proxy.respondWithProxyError(pair, http.StatusBadGateway, cause)
+	if pair.ID != uuid.Nil && pair.requestCaptured && !pair.responseCaptured && !pair.Skipped {
+		if err := WriteResponseModifier(proxy, pair); err != nil {
+			log.Printf("capturing a proxy error response: %v", err)
+		}
+	}
+	proxy.logProxyError(pair, cause)
+}

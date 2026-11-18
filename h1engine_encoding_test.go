@@ -270,3 +270,28 @@ func TestCompressedResponses_StoredAsToday(t *testing.T) {
 		wantDecodingMetadata(t, stored, "gzip", len(coded))
 	})
 }
+
+func TestH1Engine_UndecodableResponses(t *testing.T) {
+	t.Run("should send a gzip body that does not decode as received, and store it coded with the decoding error", func(t *testing.T) {
+		const corrupt = "not gzip at all"
+		response := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: %d\r\n\r\n%s", len(corrupt), corrupt)
+		origin := newRawOrigin(t, response)
+		_, addr, stored := serveEncodingProxy(t)
+
+		exchangeThrough(t, addr, origin, response)
+
+		res := storedResponse(t, stored)
+		if string(res.Raw) != response {
+			t.Fatalf("\nwanted:\n%q\ngot:\n%q", response, res.Raw)
+		}
+		if got, _ := res.Metadata["content_decoding_error"].(string); got == "" {
+			t.Fatalf("\nwanted:\nmetadata.content_decoding_error set\ngot:\n%v", res.Metadata)
+		}
+		if _, ok := res.Metadata["decoded_content_encoding"]; ok {
+			t.Fatalf("\nwanted:\nno decoded_content_encoding\ngot:\n%v", res.Metadata)
+		}
+		if _, ok := res.Metadata["proxy_error"]; ok {
+			t.Fatalf("\nwanted:\nno proxy_error\ngot:\n%v", res.Metadata)
+		}
+	})
+}

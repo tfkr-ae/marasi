@@ -71,8 +71,10 @@ type Pair struct {
 	// proxyError is the cause of the proxy error response Marasi answered
 	// the pair with, empty for any other response.
 	proxyError string
-	// requestCaptured is set once the request is queued for storage.
-	requestCaptured bool
+	// requestCaptured and responseCaptured are set once the request or the
+	// response is queued for storage.
+	requestCaptured  bool
+	responseCaptured bool
 
 	// requestWire and responseWire are the messages as the engine read
 	// them from the wire, nil for a pair built outside the engine

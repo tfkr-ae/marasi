@@ -639,7 +639,9 @@ func WebSocketUpgradeHandler(proxy *Proxy, pair *Pair, client, upstream io.ReadW
 // On the h1 engine the client still receives the origin's encoded bytes
 // unless the chain changed the decoded body
 // (docs/adr/2026-11-17-compressed-responses-are-transparent-on-the-wire-and-decoded-in-storage.md).
-// A body that does not decode is left as received and the error returned.
+// A body that does not decode is not something that broke: it is left as
+// received, so the client and storage get the origin's coded bytes, and
+// metadata.content_decoding_error holds why it did not decode.
 func CompressedResponseModifier(proxy *Proxy, pair *Pair) error {
 	res := pair.Response
 	codings := res.Header.Values("Content-Encoding")
@@ -658,9 +660,13 @@ func CompressedResponseModifier(proxy *Proxy, pair *Pair) error {
 	if len(coded) == 0 {
 		return nil
 	}
+	if pair.Metadata == nil {
+		pair.Metadata = make(map[string]any)
+	}
 	decoded, err := decodeContent(codings[0], coded)
 	if err != nil {
-		return err
+		pair.Metadata[contentDecodingErrorMetadataKey] = err.Error()
+		return nil
 	}
 	pair.decoded = &decodedResponse{
 		coded:   coded,
@@ -673,13 +679,14 @@ func CompressedResponseModifier(proxy *Proxy, pair *Pair) error {
 		res.Header.Set("Content-Length", strconv.Itoa(len(decoded)))
 	}
 	res.Header.Del("Content-Encoding")
-	if pair.Metadata == nil {
-		pair.Metadata = make(map[string]any)
-	}
 	pair.Metadata["decoded_content_encoding"] = codings[0]
 	pair.Metadata["wire_content_length"] = len(coded)
 	return nil
 }
+
+// contentDecodingErrorMetadataKey is the metadata field that holds why a gzip
+// or br body did not decode, so a stored pair whose body is still coded says so.
+const contentDecodingErrorMetadataKey = "content_decoding_error"
 
 // decodedResponse is a response body CompressedResponseModifier decoded.
 type decodedResponse struct {
@@ -904,6 +911,7 @@ func WriteResponseModifier(proxy *Proxy, pair *Pair) error {
 		return fmt.Errorf("%w: %w", ErrProxyResponse, err)
 	}
 	proxy.DBWriteChannel <- proxyResponse
+	pair.responseCaptured = true
 	if proxy.OnResponse != nil {
 		proxy.OnResponse(*proxyResponse)
 	}

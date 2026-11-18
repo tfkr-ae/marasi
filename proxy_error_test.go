@@ -358,3 +358,46 @@ func TestProxyErrorResponse_Loop(t *testing.T) {
 		assertProxyError(t, res, body, "loops back to the proxy listener")
 	})
 }
+
+// halfEditingModifier is a Go response modifier that edits the response and
+// then breaks.
+func halfEditingModifier(_ *Proxy, pair *Pair) error {
+	pair.Response.Header.Set("X-Half", "edited")
+	return errors.New("the response modifier broke")
+}
+
+func TestProxyErrorResponse_GoResponseModifierError(t *testing.T) {
+	t.Run("should answer a 502 naming the cause, store it and log it when a Go response modifier fails", func(t *testing.T) {
+		h := startProxyErrorHarness(t, func(proxy *Proxy) error {
+			proxy.AddRequestPairModifier(SetupRequestModifier)
+			proxy.AddRequestPairModifier(WriteRequestModifier)
+			proxy.AddResponsePairModifier(ResponseFilterModifier)
+			proxy.AddResponsePairModifier(halfEditingModifier)
+			proxy.AddResponsePairModifier(WriteResponseModifier)
+			return nil
+		})
+
+		res, body := h.get(t, h.originAddress(), "/half")
+
+		assertProxyError(t, res, body, "the response modifier broke")
+		if got := res.Header.Get("X-Half"); got != "" {
+			t.Fatalf("\nwanted:\nno half-edited header\ngot:\nX-Half: %q", got)
+		}
+		assertStoredProxyError(t, h.stored(t), "the response modifier broke")
+		if logs := h.errorLogs(t, "the response modifier broke"); len(logs) != 1 {
+			t.Fatalf("\nwanted:\n1 ERROR proxy log naming the cause\ngot:\n%d", len(logs))
+		}
+	})
+
+	t.Run("should answer a 502 when a Go response modifier fails after the default chain", func(t *testing.T) {
+		h := startProxyErrorHarness(t, WithDefaultModifierPipeline())
+		h.proxy.AddResponsePairModifier(halfEditingModifier)
+
+		res, body := h.get(t, h.originAddress(), "/late")
+
+		assertProxyError(t, res, body, "the response modifier broke")
+		if logs := h.errorLogs(t, "the response modifier broke"); len(logs) != 1 {
+			t.Fatalf("\nwanted:\n1 ERROR proxy log naming the cause\ngot:\n%d", len(logs))
+		}
+	})
+}
