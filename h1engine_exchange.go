@@ -77,11 +77,11 @@ func (c *h1Conn) exchange(head *h1.RequestHead) bool {
 	if wire != nil && !pair.FromMarasi() {
 		client, err := encodedForClient(pair, res)
 		if err != nil {
-			return false
+			return c.failClientLeg(pair, err)
 		}
 		out, err := outboundResponse(wire, client)
 		if err != nil {
-			return false
+			return c.failClientLeg(pair, err)
 		}
 		out.head.WriteTo(c.bw)
 		c.bw.Write(out.body)
@@ -90,7 +90,7 @@ func (c *h1Conn) exchange(head *h1.RequestHead) bool {
 		// A browser view: the stored response as stored.
 		out, err := outboundResponse(pair.storedWire, res)
 		if err != nil {
-			return false
+			return c.failClientLeg(pair, err)
 		}
 		out.head.WriteTo(c.bw)
 		c.bw.Write(out.body)
@@ -101,6 +101,19 @@ func (c *h1Conn) exchange(head *h1.RequestHead) bool {
 		keep = keep && !res.Close
 	}
 	return c.bw.Flush() == nil && keep
+}
+
+// failClientLeg answers a pair whose response could not be made into bytes
+// for the client, before any of it was written, with a 502 proxy error
+// response naming the cause, and logs the cause. The connection ends.
+func (c *h1Conn) failClientLeg(pair *Pair, err error) bool {
+	cause := fmt.Errorf("writing the response for the client: %w", err)
+	proxy := c.engine.proxy
+	proxy.respondWithProxyError(pair, http.StatusBadGateway, cause)
+	proxy.logProxyError(pair, cause)
+	pair.Response.Write(c.bw)
+	c.bw.Flush()
+	return false
 }
 
 // roundTrip gets the pair's response: the one a request modifier gave

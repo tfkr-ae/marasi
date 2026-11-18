@@ -401,3 +401,27 @@ func TestProxyErrorResponse_GoResponseModifierError(t *testing.T) {
 		}
 	})
 }
+
+func TestProxyErrorResponse_ClientLegFailure(t *testing.T) {
+	t.Run("should answer a 502 naming the cause and log it when the response cannot be written for the client", func(t *testing.T) {
+		h := startProxyErrorHarness(t, func(proxy *Proxy) error {
+			proxy.AddRequestPairModifier(SetupRequestModifier)
+			proxy.AddRequestPairModifier(WriteRequestModifier)
+			proxy.AddResponsePairModifier(ResponseFilterModifier)
+			// A modifier that leaves a body nobody can read, and
+			// reports nothing.
+			proxy.AddResponsePairModifier(func(_ *Proxy, pair *Pair) error {
+				pair.Response.Body = io.NopCloser(failingReader{errors.New("the body went away")})
+				return nil
+			})
+			return nil
+		})
+
+		res, body := h.get(t, h.originAddress(), "/unwritable")
+
+		assertProxyError(t, res, body, "the body went away")
+		if logs := h.errorLogs(t, "the body went away"); len(logs) != 1 {
+			t.Fatalf("\nwanted:\n1 ERROR proxy log naming the cause\ngot:\n%d", len(logs))
+		}
+	})
+}
