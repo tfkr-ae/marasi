@@ -29,6 +29,7 @@ A rule marked _(checked by `internal/repolint`)_ is enforced by `go test ./inter
 ## Proxy traffic
 
 - **Add no headers.** Every transport that sends captured, proxied, launched or Armory traffic sets `DisableCompression`. Marasi's own code adds no header to a request (`docs/adr/2026-10-19-the-proxy-adds-no-headers-to-a-request.md`, `docs/agents/maps/request-path.md`). _(`DisableCompression` on every `http.Transport` literal in non-test code checked by `internal/repolint`, with reviewed exemptions for non-proxy traffic.)_
+- **Martian stays in one file.** Only `martian_adapter.go` imports `github.com/google/martian`, and no test does. The rest of marasi works on `*Pair` and standard library types, so the engine can be replaced without touching it. _(checked by `internal/repolint`)_
 
 ## Comments
 

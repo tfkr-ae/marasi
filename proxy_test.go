@@ -2761,7 +2761,7 @@ func testProxyWebSocketIntegration(
 		proxy.setRoundTripper(newDirectTransport(nil, true))
 		go proxy.WriteToDB()
 		go func() {
-			serveResult <- proxy.martianProxy.Serve(proxyListener)
+			serveResult <- proxy.engine.serve(proxyListener)
 		}()
 	} else {
 		go func() {

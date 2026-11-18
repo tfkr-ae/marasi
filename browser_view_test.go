@@ -80,7 +80,7 @@ func startViewHarness(t *testing.T, config viewHarnessConfig) *viewHarness {
 		proxy.setRoundTripper(newDirectTransport(proxy.dialTransport, true))
 		proxy.dbWriterStarted.Store(true)
 		go proxy.WriteToDB()
-		go func() { serveResult <- proxy.martianProxy.Serve(proxyListener) }()
+		go func() { serveResult <- proxy.engine.serve(proxyListener) }()
 	} else {
 		go func() { serveResult <- proxy.Serve(proxyListener) }()
 	}

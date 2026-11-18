@@ -31,8 +31,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/martian"
-	"github.com/google/martian/fifo"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/compass"
 	"github.com/tfkr-ae/marasi/domain"
@@ -85,10 +83,9 @@ const (
 // extension management, database operations, and TLS handling. It serves as the central coordinator
 // for the Marasi proxy server.
 type Proxy struct {
-	martianProxy   *martian.Proxy                       // The underlying martian.Proxy
+	engine         *martianEngine                       // serves the listener and runs the base pipeline
 	ConfigDir      string                               // The configuration directory (defaults to the marasi folder under the user configuration directory)
 	Config         *Config                              // The marasi proxy configuration (separate from the GUI config)
-	Modifiers      *fifo.Group                          // Modifier group pipeline
 	DBWriteChannel chan any                             // DB Write Channel
 	OnRequest      func(req domain.ProxyRequest) error  // Function to be ran on each request - used by the GUI application to handle the new requests
 	OnResponse     func(res domain.ProxyResponse) error // Function to be ran on each response - used by the GUI application to handle the new responses
@@ -126,7 +123,7 @@ type Proxy struct {
 	WordlistManager       wordlist.Provider     // Provider for available wordlists.
 	SPKIHash              string                // SPKI Hash of the current certificate
 	Cert                  *x509.Certificate     // The proxy's TLS certificate.
-	mitmConfig            *tls.Config           // Martian Proxy MITM config
+	mitmConfig            *tls.Config           // The TLS config that intercepted tunnels serve clients
 	MarasiClientTLSConfig *tls.Config           // TLSConfig for the proxy.Client
 	Scope                 *compass.Scope        // Proxy scope configuration through Compass
 	Waypoints             map[string]string     // Published host:port overrides. Replaced, never mutated.
@@ -142,8 +139,8 @@ type Proxy struct {
 	webSocketSessions    sync.WaitGroup
 	webSocketsClosing    bool
 	upgradeHandler       UpgradeHandler // takes over a pair whose response switched protocols
-	martianCloseOnce     sync.Once
-	martianCloseDone     chan struct{}
+	requestModifiers     *ModifierGroup // the request chain
+	responseModifiers    *ModifierGroup // the response chain
 	connectionMu         sync.Mutex
 	connectionSessions   sync.WaitGroup
 	connections          map[net.Conn]struct{}
@@ -322,7 +319,7 @@ func (proxy *Proxy) GetArmory() (ArmoryService, error) {
 }
 
 // New creates a new Proxy instance with default configuration and applies any provided options.
-// It initializes the underlying martian proxy, database write channel, extensions map, HTTP client,
+// It initializes the proxy engine, database write channel, extensions map, HTTP client,
 // scope, waypoints, and sets up default log modifiers.
 //
 // Parameters:
@@ -338,8 +335,9 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 		cancelTransport:      cancelTransport,
 		connections:          make(map[net.Conn]struct{}),
 		clientConnections:    make(map[string]*clientConnection),
-		martianProxy:         martian.NewProxy(),
-		Modifiers:            fifo.NewGroup(),
+		engine:               newMartianEngine(),
+		requestModifiers:     NewModifierGroup(),
+		responseModifiers:    NewModifierGroup(),
 		DBWriteChannel:       make(chan any, 10),
 		Extensions:           make([]*extensions.Runtime, 0),
 		Client:               &http.Client{},
@@ -388,18 +386,6 @@ func (proxy *Proxy) SetProjectResources(resources ProjectResources) {
 	proxy.Armory = resources.Armory
 	proxy.ReportGenerator = resources.ReportGenerator
 	proxy.SelectUpstreamProxy(resources.UpstreamProxy)
-}
-
-// AddRequestModifier accepts RequestModifierFunc and wraps it in a reqAdapter
-func (proxy *Proxy) AddRequestModifier(modifier RequestModifierFunc) {
-	adapter := &reqAdapter{proxy: proxy, modifier: modifier}
-	proxy.Modifiers.AddRequestModifier(adapter)
-}
-
-// AddResponseModifier accepts ResponseModifierFunc and wraps it in a resAdapter
-func (proxy *Proxy) AddResponseModifier(modifier ResponseModifierFunc) {
-	adapter := &resAdapter{proxy: proxy, modifier: modifier}
-	proxy.Modifiers.AddResponseModifier(adapter)
 }
 
 // ApplyWaypointChange persists a waypoint change and publishes the resulting
@@ -922,10 +908,7 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 		proxy.listenerMu.Unlock()
 	}()
 
-	return proxy.martianProxy.Serve(listener.NewClosingListener(
-		activeListener,
-		proxy.martianProxy.Closing,
-	))
+	return proxy.engine.serve(activeListener)
 }
 
 // Close shuts down the proxy and closes the database connection.
@@ -955,16 +938,7 @@ func (proxy *Proxy) close(ctx context.Context, closeDatabase bool) error {
 	proxy.webSocketsClosing = true
 	proxy.webSocketLifecycleMu.Unlock()
 
-	proxy.martianCloseOnce.Do(func() {
-		proxy.martianCloseDone = make(chan struct{})
-		go func() {
-			proxy.martianProxy.Close()
-			close(proxy.martianCloseDone)
-		}()
-	})
-	for !proxy.martianProxy.Closing() {
-		time.Sleep(time.Millisecond)
-	}
+	proxy.engine.startClose()
 
 	var listenerErr error
 	proxy.listenerMu.Lock()
@@ -986,8 +960,7 @@ func (proxy *Proxy) close(ctx context.Context, closeDatabase bool) error {
 	if serveDone != nil {
 		<-serveDone
 	}
-	<-proxy.martianCloseDone
-	// Martian increments its handler wait count inside the new goroutine.
+	proxy.engine.waitClosed()
 	// Join accepted sockets too, including not-yet-scheduled handlers.
 	proxy.connectionSessions.Wait()
 	proxy.ForceCloseTransport()

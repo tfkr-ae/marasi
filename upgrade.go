@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tfkr-ae/marasi/core"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
@@ -33,11 +32,10 @@ func (proxy *Proxy) handOffUpgrade(pair *Pair) error {
 	if upstream == nil {
 		return nil
 	}
-	session, ok := core.SessionFromContext(pair.Request.Context())
-	if !ok {
-		return errors.Join(ErrSessionContext, upstream.Close())
+	if pair.client == nil {
+		return errors.Join(errNoClientConnection, upstream.Close())
 	}
-	conn, buffered, err := session.Hijack()
+	conn, buffered, err := pair.client.Hijack()
 	if err != nil {
 		return errors.Join(fmt.Errorf("hijacking upgraded client connection: %w", err), upstream.Close())
 	}
@@ -48,7 +46,7 @@ func (proxy *Proxy) handOffUpgrade(pair *Pair) error {
 	if proxy.upgradeHandler == nil {
 		return closeBoth(errors.New("no upgrade handler is registered"))
 	}
-	// Martian's per-connection deadline would cut a long session off.
+	// The engine's per-connection deadline would cut a long session off.
 	if err := conn.SetDeadline(time.Time{}); err != nil {
 		return closeBoth(fmt.Errorf("clearing upgraded client deadline: %w", err))
 	}

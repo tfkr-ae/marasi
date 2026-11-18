@@ -17,8 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/martian"
-	"github.com/google/martian/mitm"
 	"github.com/google/uuid"
 	"github.com/spf13/viper"
 	"github.com/tfkr-ae/marasi/chrome"
@@ -51,11 +49,6 @@ type RepositoryProvider interface {
 	// have marked them due (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md). The database writer calls it when idle.
 	RefreshStatisticsIfDue()
 }
-
-var (
-	// ErrSessionContext is returned when the session could not be fetch from context
-	ErrSessionContext = errors.New("failed to get session from context")
-)
 
 // WithOptions applies a series of configuration functions to the proxy instance.
 // Each option function can modify the proxy configuration and return an error if it fails.
@@ -357,12 +350,11 @@ func WithTLSContext(ctx context.Context) func(*Proxy) error {
 		if err != nil {
 			return fmt.Errorf("setting spki hash %s: %w", proxy.SPKIHash, err)
 		}
-		mitmConfig, err := mitm.NewConfig(certificate, privateKey)
+		mitmConfig, err := proxy.engine.setMITM(certificate, privateKey)
 		if err != nil {
-			return fmt.Errorf("creating new mitm config: %w", err)
+			return err
 		}
-		proxy.martianProxy.SetMITM(mitmConfig)
-		proxy.mitmConfig = mitmConfig.TLS()
+		proxy.mitmConfig = mitmConfig
 
 		// Add system certificates + marasi cert
 		systemPool, err := x509.SystemCertPool()
@@ -562,160 +554,164 @@ func WithWorkAdmission(admit func(context.Context, bool) (func(), uint64, error)
 }
 
 // WithBasePipeline will setup the base modifier pipeline for marasi
-// It will define the main Request & Response modifiers that will execute the
+// It will define the main Request & Response steps that will execute the
 // attached modifiers and carry out the control a modifier set on the pair.
 // Work is admitted for the request modifiers and again, once the response body
 // has been read, for the response modifiers, never for the wait on the origin.
-// If a response is dropped the `martian.Session` is read from the context and hijacked to
-// close the `conn`. A 101 that the response chain passes is handed to the
-// upgrade handler.
+// If a response is dropped the client connection is taken over and closed. A
+// 101 that the response chain passes is handed to the upgrade handler.
 func WithBasePipeline() func(*Proxy) error {
 	return func(proxy *Proxy) error {
-		proxy.martianProxy.SetRequestModifier(
-			martianReqModifierFunc(func(req *http.Request) error {
-				// Proxy credentials must not reach the origin or extension scripts.
-				expected := "Basic " + base64.StdEncoding.EncodeToString([]byte("marasi:"+proxy.clientWorkToken))
-				internal := req.Header.Get("Proxy-Authorization") == expected
-				session := martian.NewContext(req).Session()
-				req.Header.Del("Proxy-Authorization")
-				if req.Method == http.MethodConnect {
-					if err := proxy.admitTunnel(req, internal); err != nil {
-						return refuseConnection(session, err)
-					}
-					return nil
-				}
-				internal = internal || proxy.isSelfClientConnection(req.RemoteAddr)
-				// Only the proxy's own client may name a launch. The header never leaves the proxy.
-				launchID, launchErr := uuid.Parse(req.Header.Get(launchIDHeader))
-				req.Header.Del(launchIDHeader)
-				// The body is the wait on the client, so it is read before
-				// the request side is admitted.
-				bodyEnding := readRequestBody(req)
-				release, generation, err := proxy.admitWork(req.Context(), internal)
-				if err != nil {
-					return refuseConnection(session, err)
-				}
-				// The wait on the origin is not project work, so the request
-				// side releases its admission before the round trip (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
-				defer release()
-				pair := &Pair{requestState: requestState{
-					admission: &projectAdmission{internal: internal, generation: generation},
-				}, RequestBodyEnding: bodyEnding}
-				if internal && launchErr == nil {
-					pair.requestedLaunch = launchID
-				}
-				// The response side hijacks the connection through the session.
-				ctx := core.ContextWithSession(req, session).Context()
-				*req = *req.WithContext(context.WithValue(ctx, pairKey{}, pair))
-				proxy.watchClient(req, bodyEnding)
-				err = chainError(pair, proxy.Modifiers.ModifyRequest(req))
-				switch pair.control {
-				case controlDrop:
-					// The client gets Martian's empty 200, as before.
-					proxy.recordLaunchDropped(pair)
-					martian.NewContext(req).SkipRoundTrip()
-				case controlStop:
-					// A stop ends only the request chain.
-					pair.control = controlNone
-				}
-				if err != nil {
-					// A Go modifier failed: the request fails closed and
-					// never goes upstream half-modified.
-					proxy.failRequestChain(pair, err)
-				}
-				return nil
-			}),
-		)
-		proxy.martianProxy.SetResponseModifier(
-			martianResModifierFunc(func(res *http.Response) error {
-				// The tunnel was admitted with its CONNECT; the 200 that
-				// opens it is not a response of any pair.
-				if res.Request.Method == http.MethodConnect {
-					return nil
-				}
-				// A request the proxy answered itself (the round trip
-				// returned its response) or dropped is sent as it is, with
-				// no response modifier and no admission, unless the answer
-				// is a proxy error response to a captured request.
-				if pair := requestPair(res.Request); pair != nil && (pair.control == controlRespond || pair.Dropped()) {
-					if !pair.capturesProxyError() {
-						return nil
-					}
-					// A proxy error response is stored: the response chain
-					// runs, and its hooks skip what Marasi made.
-					pair.control = controlNone
-				}
-				// A launch whose client left was cancelled or interrupted. Its
-				// round trip was abandoned, so it has no response to process or store.
-				if _, launch := core.LaunchpadIDFromContext(res.Request.Context()); launch && res.Request.Context().Err() != nil {
-					return nil
-				}
-				pair, loaded := loadPair(res.Request, res)
-				// The body is still the wait on the origin, so it is read
-				// before the response side is admitted (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
-				if err := readResponseBody(pair); err != nil {
-					log.Printf("response pipeline: %v", err)
-					return err
-				}
-				if pair := requestPair(res.Request); pair != nil && pair.admission != nil {
-					admission := pair.admission
-					release, generation, err := proxy.admitWork(res.Request.Context(), admission.internal)
-					if err != nil {
-						// The client left while a handoff paused admission, or
-						// the instance handed its project to a restart's successor.
-						return nil
-					}
-					defer release()
-					if generation != admission.generation {
-						// The pair was captured in a project that is no longer
-						// open. It stays response-less there (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
-						return proxy.passStaleResponse(res)
-					}
-					pair.release = release
-				}
-				// The response chain finds this pair through the request.
-				storePair(pair, loaded, res.Request)
-				err := chainError(pair, proxy.Modifiers.ModifyResponse(res))
-				if pair.Dropped() {
-					proxy.recordLaunchDropped(pair)
-					proxy.markDroppedWebSocketHandshake(pair)
-					if session, ok := core.SessionFromContext(res.Request.Context()); ok {
-						conn, _, err := session.Hijack()
-						if err != nil {
-							return fmt.Errorf("hijacking session: %w", err)
-						}
-						err = conn.Close()
-						if err != nil {
-							return fmt.Errorf("closing connection: %w", err)
-						}
-					} else {
-						return ErrSessionContext
-					}
-				}
-				// A 101 goes to the upgrade handler only once the whole chain
-				// has run, so the pair is captured.
-				if err == nil && pair.control == controlNone {
-					return proxy.handOffUpgrade(pair)
-				}
-				if err == nil {
-					return nil
-				}
-				// TODO this should be handled through logging
-				log.Printf("response pipeline: %v", err)
-				return err
-			}),
-		)
+		proxy.engine.setPipeline(proxy.baseRequest, proxy.baseResponse)
 		return nil
 	}
 }
 
-// refuseConnection ends the client connection of a refused request. Martian
-// sends a request upstream, or opens a tunnel, even when a modifier fails, so
-// a refusal closes the connection instead.
-func refuseConnection(session *martian.Session, err error) error {
-	conn, _, hijackErr := session.Hijack()
+// errNoClientConnection is returned when the proxy cannot take over the client
+// connection of a pair.
+var errNoClientConnection = errors.New("no client connection for the pair")
+
+// baseRequest is the base pipeline's request step, run for every request the
+// engine reads from client, including a CONNECT.
+func (proxy *Proxy) baseRequest(req *http.Request, client clientHijacker) error {
+	// Proxy credentials must not reach the origin or extension scripts.
+	expected := "Basic " + base64.StdEncoding.EncodeToString([]byte("marasi:"+proxy.clientWorkToken))
+	internal := req.Header.Get("Proxy-Authorization") == expected
+	req.Header.Del("Proxy-Authorization")
+	if req.Method == http.MethodConnect {
+		if err := proxy.admitTunnel(req, internal); err != nil {
+			return refuseConnection(client, err)
+		}
+		return nil
+	}
+	internal = internal || proxy.isSelfClientConnection(req.RemoteAddr)
+	// Only the proxy's own client may name a launch. The header never leaves the proxy.
+	launchID, launchErr := uuid.Parse(req.Header.Get(launchIDHeader))
+	req.Header.Del(launchIDHeader)
+	// The body is the wait on the client, so it is read before
+	// the request side is admitted.
+	bodyEnding := readRequestBody(req)
+	release, generation, err := proxy.admitWork(req.Context(), internal)
+	if err != nil {
+		return refuseConnection(client, err)
+	}
+	// The wait on the origin is not project work, so the request
+	// side releases its admission before the round trip (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
+	defer release()
+	pair := &Pair{requestState: requestState{
+		admission: &projectAdmission{internal: internal, generation: generation},
+		client:    client,
+	}, RequestBodyEnding: bodyEnding}
+	if internal && launchErr == nil {
+		pair.requestedLaunch = launchID
+	}
+	*req = *req.WithContext(context.WithValue(req.Context(), pairKey{}, pair))
+	proxy.watchClient(req, bodyEnding)
+	pair.Request = req
+	pair.ctx = req.Context()
+	err = proxy.requestModifiers.Modify(proxy, pair)
+	switch pair.control {
+	case controlDrop:
+		// The round trip answers a dropped request with an empty 200, as before.
+		proxy.recordLaunchDropped(pair)
+	case controlStop:
+		// A stop ends only the request chain.
+		pair.control = controlNone
+	}
+	if err != nil {
+		// A Go modifier failed: the request fails closed and
+		// never goes upstream half-modified.
+		proxy.failRequestChain(pair, err)
+	}
+	return nil
+}
+
+// baseResponse is the base pipeline's response step, run for every response
+// the engine is about to write, including the 200 that opens a tunnel.
+func (proxy *Proxy) baseResponse(res *http.Response) error {
+	// The tunnel was admitted with its CONNECT; the 200 that
+	// opens it is not a response of any pair.
+	if res.Request.Method == http.MethodConnect {
+		return nil
+	}
+	// A request the proxy answered itself (the round trip
+	// returned its response) or dropped is sent as it is, with
+	// no response modifier and no admission, unless the answer
+	// is a proxy error response to a captured request.
+	pair := requestPair(res.Request)
+	if pair != nil && (pair.control == controlRespond || pair.Dropped()) {
+		if !pair.capturesProxyError() {
+			return nil
+		}
+		// A proxy error response is stored: the response chain
+		// runs, and its hooks skip what Marasi made.
+		pair.control = controlNone
+	}
+	// A launch whose client left was cancelled or interrupted. Its
+	// round trip was abandoned, so it has no response to process or store.
+	if _, launch := core.LaunchpadIDFromContext(res.Request.Context()); launch && res.Request.Context().Err() != nil {
+		return nil
+	}
+	if pair == nil {
+		pair = &Pair{}
+	}
+	loadPair(pair, res.Request, res)
+	// The body is still the wait on the origin, so it is read
+	// before the response side is admitted (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
+	if err := readResponseBody(pair); err != nil {
+		log.Printf("response pipeline: %v", err)
+		return err
+	}
+	if admission := pair.admission; admission != nil {
+		release, generation, err := proxy.admitWork(res.Request.Context(), admission.internal)
+		if err != nil {
+			// The client left while a handoff paused admission, or
+			// the instance handed its project to a restart's successor.
+			return nil
+		}
+		defer release()
+		if generation != admission.generation {
+			// The pair was captured in a project that is no longer
+			// open. It stays response-less there (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
+			return proxy.passStaleResponse(res)
+		}
+		pair.release = release
+	}
+	err := proxy.responseModifiers.Modify(proxy, pair)
+	if pair.Dropped() {
+		proxy.recordLaunchDropped(pair)
+		proxy.markDroppedWebSocketHandshake(pair)
+		if pair.client == nil {
+			return errNoClientConnection
+		}
+		conn, _, err := pair.client.Hijack()
+		if err != nil {
+			return fmt.Errorf("hijacking client connection: %w", err)
+		}
+		if err := conn.Close(); err != nil {
+			return fmt.Errorf("closing connection: %w", err)
+		}
+	}
+	// A 101 goes to the upgrade handler only once the whole chain
+	// has run, so the pair is captured.
+	if err == nil && pair.control == controlNone {
+		return proxy.handOffUpgrade(pair)
+	}
+	if err == nil {
+		return nil
+	}
+	// TODO this should be handled through logging
+	log.Printf("response pipeline: %v", err)
+	return err
+}
+
+// refuseConnection ends the client connection of a refused request. The
+// engine sends a request upstream, or opens a tunnel, even when the request
+// step fails, so a refusal closes the connection instead.
+func refuseConnection(client clientHijacker, err error) error {
+	conn, _, hijackErr := client.Hijack()
 	if hijackErr != nil {
-		return errors.Join(err, fmt.Errorf("hijacking session: %w", hijackErr))
+		return errors.Join(err, fmt.Errorf("hijacking client connection: %w", hijackErr))
 	}
 	return errors.Join(err, conn.Close())
 }

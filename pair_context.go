@@ -2,7 +2,6 @@ package marasi
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"reflect"
 	"slices"
@@ -12,11 +11,11 @@ import (
 	"github.com/tfkr-ae/marasi/core"
 )
 
-// This file is the expand step of the move to the pair: pair modifiers run in
-// the same Martian chain as the old modifiers, which still keep the pair's
-// values in the request context. Before a pair modifier runs, its pair is
-// loaded from the context; after, what it changed is written back, so either
-// kind sees the other's edits. It goes away once no modifier reads the context.
+// The pair modifiers keep the pair's values in the request context too, for
+// the code that still reads them there: the transport's route record, the
+// launch failure log and the Lua response hooks. Before a pair modifier runs,
+// its pair is loaded from the context; after, what it changed is written back.
+// It goes away once nothing reads the context.
 
 // pairKey holds a request's in-flight *Pair, so both chains share one.
 type pairKey struct{}
@@ -73,12 +72,12 @@ func contextPairValues(ctx context.Context) pairValues {
 	return values
 }
 
-// loadPair returns the pair of req, loaded from its context, with res as its
-// response. It returns the values loaded, for storePair to compare against.
-func loadPair(req *http.Request, res *http.Response) (*Pair, pairValues) {
-	pair, ok := req.Context().Value(pairKey{}).(*Pair)
-	if !ok {
-		pair = &Pair{}
+// loadPair loads pair from the context of req, with res as its response, and
+// returns the values loaded, for storePair to compare against. A pair the
+// context does not hold yet is put there first, with every value it has.
+func loadPair(pair *Pair, req *http.Request, res *http.Response) pairValues {
+	if req.Context().Value(pairKey{}) != pair {
+		storePair(pair, pairValues{}, req)
 	}
 	values := contextPairValues(req.Context())
 	pair.Request = req
@@ -95,11 +94,12 @@ func loadPair(req *http.Request, res *http.Response) (*Pair, pairValues) {
 	pair.InterceptResponse = values.interceptResponse
 	pair.removedWebSocketExtensions = values.removedOffers
 	pair.ctx = req.Context()
-	return pair, values
+	return values
 }
 
-// storePair writes the pair back onto the Martian request in place, with the
-// fields a modifier changed since loaded put in its context.
+// storePair writes the pair back onto req in place, with the fields a
+// modifier changed since loaded put in its context. In place, because the
+// engine and the response side find the pair through req's address.
 func storePair(pair *Pair, loaded pairValues, req *http.Request) {
 	out := req
 	if pair.Request != nil && pair.Request != req {
@@ -146,7 +146,6 @@ func storePair(pair *Pair, loaded pairValues, req *http.Request) {
 	if now.removedOffers != nil && !slices.Equal(now.removedOffers, loaded.removedOffers) {
 		out = out.WithContext(context.WithValue(out.Context(), webSocketRemovedExtensionsKey{}, now.removedOffers))
 	}
-	// In place: Martian finds its context by the request's address.
 	if out != req {
 		*req = *out
 	}
@@ -174,95 +173,31 @@ func setTime(now, loaded time.Time) bool {
 	return !now.IsZero() && !now.Equal(loaded)
 }
 
-// AddRequestPairModifier adds modifier to the end of the request chain, after
-// every modifier added before it, old or new.
+// AddRequestPairModifier adds modifier to the end of the request chain.
 func (proxy *Proxy) AddRequestPairModifier(modifier PairModifier) {
-	proxy.AddRequestModifier(func(proxy *Proxy, req *http.Request) error {
-		pair, loaded := loadPair(req, nil)
+	proxy.requestModifiers.Add(func(proxy *Proxy, pair *Pair) error {
+		req := pair.Request
+		loaded := loadPair(pair, req, nil)
 		err := modifier(proxy, pair)
 		storePair(pair, loaded, req)
-		return endChain(pair, err)
-	})
-}
-
-// AddResponsePairModifier adds modifier to the end of the response chain,
-// after every modifier added before it, old or new.
-func (proxy *Proxy) AddResponsePairModifier(modifier PairModifier) {
-	proxy.AddResponseModifier(func(proxy *Proxy, res *http.Response) error {
-		pair, loaded := loadPair(res.Request, res)
-		err := modifier(proxy, pair)
-		if pair.Response != nil && pair.Response != res {
-			request := res.Request
-			*res = *pair.Response
-			res.Request = request
-		}
-		storePair(pair, loaded, res.Request)
-		pair.Response = res
-		return endChain(pair, err)
-	})
-}
-
-// errChainEnded stops Martian's group after a pair modifier set a control.
-// The base pipeline reads the control from the pair, not from the error.
-var errChainEnded = errors.New("chain ended by a control on the pair")
-
-// endChain returns err, or, when a modifier set a control on pair, the error
-// that stops Martian's group there. A drop stops it with ErrDropped, which
-// marasi-app's wrapper of Proxy.Modifiers still reads to announce a dropped
-// WebSocket upgrade.
-func endChain(pair *Pair, err error) error {
-	if err != nil || !pair.ended() {
 		return err
-	}
-	if pair.Dropped() {
-		return ErrDropped
-	}
-	return errChainEnded
+	})
 }
 
-// chainError returns what is left of err, the error Martian's group returned
-// for pair, once the control signal endChain sent is taken out: nil when the
-// chain ended by a control, err otherwise.
-func chainError(pair *Pair, err error) error {
-	if pair != nil && pair.ended() && (errors.Is(err, errChainEnded) || errors.Is(err, ErrDropped)) {
-		return nil
-	}
-	return err
-}
-
-// setRoundTripper makes base Martian's round tripper, behind the step that
-// returns a response from Respond. Everything that sets Martian's round
-// tripper goes through it, so Respond works whatever the transport.
-func (proxy *Proxy) setRoundTripper(base http.RoundTripper) {
-	proxy.martianProxy.SetRoundTripper(&respondRoundTripper{proxy: proxy, base: base})
-}
-
-// respondRoundTripper returns the response a request modifier answered a
-// pair with through Respond, in place of a round trip. Every other request
-// goes to base. A round trip that gets no response is answered with a proxy
-// error response, never with an error: Martian would answer that with an
-// empty 502 carrying a Warning header.
-type respondRoundTripper struct {
-	proxy *Proxy
-	base  http.RoundTripper
-}
-
-// RoundTrip satisfies http.RoundTripper.
-func (rt *respondRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	pair := requestPair(req)
-	if pair != nil && pair.control == controlRespond {
-		return pair.Response, nil
-	}
-	res, err := rt.base.RoundTrip(req)
-	if err == nil {
-		return res, nil
-	}
-	if pair == nil {
-		res := plainTextResponse(req, http.StatusBadGateway, err.Error())
-		res.Close = true
-		return res, nil
-	}
-	rt.proxy.respondWithProxyError(pair, http.StatusBadGateway, err)
-	rt.proxy.logProxyError(pair, err)
-	return pair.Response, nil
+// AddResponsePairModifier adds modifier to the end of the response chain.
+func (proxy *Proxy) AddResponsePairModifier(modifier PairModifier) {
+	proxy.responseModifiers.Add(func(proxy *Proxy, pair *Pair) error {
+		req, res := pair.Request, pair.Response
+		loaded := loadPair(pair, req, res)
+		err := modifier(proxy, pair)
+		// The engine writes the response it handed to the chain, so a
+		// replaced response is copied into it.
+		if pair.Response != nil && pair.Response != res {
+			*res = *pair.Response
+			res.Request = req
+		}
+		storePair(pair, loaded, req)
+		pair.Response = res
+		return err
+	})
 }

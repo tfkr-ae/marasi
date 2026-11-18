@@ -139,8 +139,8 @@ func servePairProxy(t *testing.T, configure func(*Proxy)) *http.Client {
 	return &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}, Timeout: 10 * time.Second}
 }
 
-func TestPairModifierAdapter(t *testing.T) {
-	t.Run("should run old and new modifiers in one chain in their registered order, sharing the pair's values", func(t *testing.T) {
+func TestPairContextSync(t *testing.T) {
+	t.Run("should run modifiers in their registered order, with the pair's values kept in the request context too", func(t *testing.T) {
 		originSaw := make(chan http.Header, 1)
 		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			originSaw <- r.Header.Clone()
@@ -165,12 +165,12 @@ func TestPairModifierAdapter(t *testing.T) {
 		}
 
 		client := servePairProxy(t, func(proxy *Proxy) {
-			proxy.AddRequestModifier(func(proxy *Proxy, req *http.Request) error {
-				record("old setup")
-				if err := runRequestPairModifier(proxy, SetupRequestModifier, req); err != nil {
+			proxy.AddRequestPairModifier(func(proxy *Proxy, pair *Pair) error {
+				record("setup")
+				if err := SetupRequestModifier(proxy, pair); err != nil {
 					return err
 				}
-				setupID, _ = core.RequestIDFromContext(req.Context())
+				setupID = pair.ID
 				return nil
 			})
 			proxy.AddRequestPairModifier(func(proxy *Proxy, pair *Pair) error {
@@ -184,8 +184,12 @@ func TestPairModifierAdapter(t *testing.T) {
 				pair.Request.Header.Set("X-New-Request", "true")
 				return nil
 			})
-			proxy.AddRequestModifier(func(proxy *Proxy, req *http.Request) error {
-				record("old request")
+			proxy.AddRequestPairModifier(func(proxy *Proxy, pair *Pair) error {
+				record("context request")
+				req := pair.Request
+				if got, _ := core.RequestIDFromContext(req.Context()); got != setupID {
+					fail("context request ID: %v", got)
+				}
 				if metadata, _ := core.MetadataFromContext(req.Context()); metadata["new"] != "request" {
 					fail("old modifier metadata: %v", metadata)
 				}
@@ -194,9 +198,11 @@ func TestPairModifierAdapter(t *testing.T) {
 				}
 				return nil
 			})
-			proxy.AddResponseModifier(func(proxy *Proxy, res *http.Response) error {
-				record("old response")
-				res.Request = core.ContextWithResponseTime(res.Request, time.Now())
+			proxy.AddResponsePairModifier(func(proxy *Proxy, pair *Pair) error {
+				record("context response")
+				// A value written straight into the context is loaded
+				// into the pair for the next modifier.
+				*pair.Request = *core.ContextWithResponseTime(pair.Request, time.Now())
 				return nil
 			})
 			proxy.AddResponsePairModifier(func(proxy *Proxy, pair *Pair) error {
@@ -208,8 +214,8 @@ func TestPairModifierAdapter(t *testing.T) {
 				pair.Response.Header.Set("X-New-Response", "true")
 				return nil
 			})
-			proxy.AddResponseModifier(func(proxy *Proxy, res *http.Response) error {
-				record("old response after")
+			proxy.AddResponsePairModifier(func(proxy *Proxy, pair *Pair) error {
+				record("response after")
 				return nil
 			})
 		})
@@ -234,7 +240,7 @@ func TestPairModifierAdapter(t *testing.T) {
 		if len(requestErrs) > 0 {
 			t.Fatalf("modifiers saw the wrong values:\n%s", strings.Join(requestErrs, "\n"))
 		}
-		want := []string{"old setup", "new request", "old request", "old response", "new response", "old response after"}
+		want := []string{"setup", "new request", "context request", "context response", "new response", "response after"}
 		if !reflect.DeepEqual(want, ran) {
 			t.Fatalf("wanted:\n%v\ngot:\n%v", want, ran)
 		}
@@ -250,7 +256,7 @@ func TestPairModifierAdapter(t *testing.T) {
 		}))
 		defer origin.Close()
 
-		var oldSawID uuid.UUID
+		var contextID uuid.UUID
 		client := servePairProxy(t, func(proxy *Proxy) {
 			proxy.AddRequestPairModifier(SetupRequestModifier)
 			proxy.AddRequestPairModifier(func(proxy *Proxy, pair *Pair) error {
@@ -259,8 +265,8 @@ func TestPairModifierAdapter(t *testing.T) {
 				pair.Request = replaced
 				return nil
 			})
-			proxy.AddRequestModifier(func(proxy *Proxy, req *http.Request) error {
-				oldSawID, _ = core.RequestIDFromContext(req.Context())
+			proxy.AddRequestPairModifier(func(proxy *Proxy, pair *Pair) error {
+				contextID, _ = core.RequestIDFromContext(pair.Request.Context())
 				return nil
 			})
 		})
@@ -273,7 +279,7 @@ func TestPairModifierAdapter(t *testing.T) {
 		if got := <-originSaw; got != "/replaced" {
 			t.Fatalf("wanted: /replaced\ngot: %s", got)
 		}
-		if oldSawID == uuid.Nil {
+		if contextID == uuid.Nil {
 			t.Fatalf("wanted the pair UUID kept on the replaced request")
 		}
 	})

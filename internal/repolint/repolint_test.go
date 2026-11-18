@@ -41,13 +41,17 @@ const (
 	ruleTransportCompression rule = "transport-disable-compression"
 	ruleContextFirst         rule = "context-first"
 	ruleSentinelName         rule = "sentinel-err-name"
+	ruleMartianImport        rule = "martian-import"
 )
+
+// martianAdapter is the one file that may import Martian.
+const martianAdapter = "martian_adapter.go"
 
 // baselined reports whether violations of r may be listed in baselineFile.
 // A transport without DisableCompression is never baselined: it is either
 // fixed or exempted with a reviewed reason in transportExemptions.
 func (r rule) baselined() bool {
-	return r != ruleTransportCompression
+	return r != ruleTransportCompression && r != ruleMartianImport
 }
 
 // transportExemptions lists the http.Transport literals in non-test code that
@@ -229,6 +233,7 @@ func lintFile(file string, src []byte) ([]violation, error) {
 		isTest:  strings.HasSuffix(file, "_test.go"),
 		imports: importNames(parsed),
 	}
+	l.checkMartianImport(parsed)
 	for _, decl := range parsed.Decls {
 		switch decl := decl.(type) {
 		case *ast.FuncDecl:
@@ -462,6 +467,23 @@ func (l *linter) checkGenDecl(decl *ast.GenDecl) {
 	}
 }
 
+// checkMartianImport applies "Martian stays in one file": only
+// martianAdapter imports Martian, and no test file does.
+func (l *linter) checkMartianImport(file *ast.File) {
+	if l.file == martianAdapter {
+		return
+	}
+	for _, spec := range file.Imports {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err != nil || (importPath != "github.com/google/martian" && !strings.HasPrefix(importPath, "github.com/google/martian/")) {
+			continue
+		}
+		l.report(ruleMartianImport, spec.Pos(), importPath,
+			fmt.Sprintf("%s imports Martian (%s)", l.file, importPath),
+			"move the Martian code into "+martianAdapter+"; outside it, use *Pair and standard library types")
+	}
+}
+
 // importNames maps each import path of file to the name the file uses for it.
 func importNames(file *ast.File) map[string]string {
 	names := map[string]string{}
@@ -632,6 +654,23 @@ func TestLintFile(t *testing.T) {
 			file: "a.go",
 			src:  `package a; import "errors"; var notFound = errors.New("not found"); var ErrGone, errLost = errors.New("gone"), errors.New("lost")`,
 			want: []string{`sentinel-err-name "notFound"`},
+		},
+		{
+			name: "should report a Martian import outside the adapter file",
+			file: "options.go",
+			src:  `package marasi; import ("github.com/google/martian"; "github.com/google/martian/mitm"; "github.com/google/martianish"); var _, _ = martian.NewProxy, mitm.NewConfig`,
+			want: []string{`martian-import "github.com/google/martian"`, `martian-import "github.com/google/martian/mitm"`},
+		},
+		{
+			name: "should report a Martian import in a test file",
+			file: "martian_adapter_test.go",
+			src:  `package marasi; import "github.com/google/martian"; var _ = martian.NewProxy`,
+			want: []string{`martian-import "github.com/google/martian"`},
+		},
+		{
+			name: "should allow Martian in the adapter file",
+			file: "martian_adapter.go",
+			src:  `package marasi; import ("github.com/google/martian"; "github.com/google/martian/mitm"); var _, _ = martian.NewProxy, mitm.NewConfig`,
 		},
 	}
 	for _, c := range cases {

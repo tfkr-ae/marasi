@@ -23,13 +23,6 @@ import (
 )
 
 var (
-	// ErrDropped is what Martian's modifier group returns when a pair
-	// modifier dropped the pair (see endChain). No modifier returns it.
-	//
-	// Deprecated: a modifier drops with Pair.Drop, and Pair.Dropped reports
-	// it. ErrDropped is kept for marasi-app's wrapper of Proxy.Modifiers.
-	ErrDropped = errors.New("item dropped by extension or user")
-
 	// ErrMetadata is returned when metadata is invalid or missing
 	ErrMetadataNotFound = errors.New("invalid or missing metadata")
 
@@ -63,52 +56,6 @@ var (
 	// ErrWebSocketUpstreamUnavailable is returned when an upgrade response does not expose a bidirectional upstream stream.
 	ErrWebSocketUpstreamUnavailable = errors.New("websocket upstream stream unavailable")
 )
-
-// RequestModifierFunc is a signature for HTTP request modifiers, it takes in the request and *Proxy
-type RequestModifierFunc func(proxy *Proxy, req *http.Request) error
-
-// ResponseModifierFunc is a signature for HTTP response modifiers, it takes in the response and *Proxy
-type ResponseModifierFunc func(proxy *Proxy, res *http.Response) error
-
-// reqAdapter adapts the `RequestModifierFunc` and implements the `martian.RequestModifier` interface.
-// This allows custom modifiers to be added with access to the *Proxy while satisfying the `martian.RequestModifier` interface
-type reqAdapter struct {
-	proxy    *Proxy
-	modifier RequestModifierFunc
-}
-
-// ModifyRequest implements the `martian.RequestModifier` interface and allows the modifier to access the *Proxy
-func (adapter *reqAdapter) ModifyRequest(req *http.Request) error {
-	return adapter.modifier(adapter.proxy, req)
-}
-
-// resAdapter adapts the `ResponseModifierFunc` and implements the `martian.ResponseModifier` interface.
-// This allows custom modifiers to be added with access to the *Proxy while satisfying the `martian.ResponseModifier` interface
-type resAdapter struct {
-	proxy    *Proxy
-	modifier ResponseModifierFunc
-}
-
-// ModifyResponse implements the `martian.ResponseModifier` interface and allows the modifier to access the *Proxy
-func (adapter *resAdapter) ModifyResponse(res *http.Response) error {
-	return adapter.modifier(adapter.proxy, res)
-}
-
-// martianReqModifierFunc allows functions with "func(*http.Request) error" signature to satisfy the `martian.RequestModifier` interface
-type martianReqModifierFunc func(*http.Request) error
-
-// ModifyRequest implements the `martian.RequestModifier` interface
-func (f martianReqModifierFunc) ModifyRequest(req *http.Request) error {
-	return f(req)
-}
-
-// martianResModifierFunc allows functions with "func(*http.Response) error" signature to satisfy the `martian.ResponseModifier` interface
-type martianResModifierFunc func(*http.Response) error
-
-// ModifyResponse implements the `martian.ResponseModifier` interface
-func (f martianResModifierFunc) ModifyResponse(res *http.Response) error {
-	return f(res)
-}
 
 // armoryRunID returns the Armory run ID carried by an internal request header.
 func armoryRunID(req *http.Request) (uuid.UUID, bool) {

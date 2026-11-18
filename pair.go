@@ -1,9 +1,12 @@
 package marasi
 
 import (
+	"bufio"
 	"context"
 	"io"
+	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -85,6 +88,15 @@ type requestState struct {
 	// removedWebSocketExtensions are the extension offers removed from an
 	// upgrade request.
 	removedWebSocketExtensions []string
+	// client is the connection the request came in on, which the proxy
+	// takes over to close a dropped response or to hand off an upgrade.
+	client clientHijacker
+}
+
+// clientHijacker takes over the client connection of a pair from the engine
+// that serves it. After Hijack, the engine no longer reads or writes it.
+type clientHijacker interface {
+	Hijack() (net.Conn, *bufio.ReadWriter, error)
 }
 
 // PairTiming records when each half of a pair was read.
@@ -164,6 +176,7 @@ type PairModifier func(proxy *Proxy, pair *Pair) error
 
 // ModifierGroup runs pair modifiers in the order they were added.
 type ModifierGroup struct {
+	mu        sync.RWMutex
 	modifiers []PairModifier
 }
 
@@ -174,13 +187,18 @@ func NewModifierGroup() *ModifierGroup {
 
 // Add appends modifier to the end of the group.
 func (group *ModifierGroup) Add(modifier PairModifier) {
+	group.mu.Lock()
+	defer group.mu.Unlock()
 	group.modifiers = append(group.modifiers, modifier)
 }
 
 // Modify runs every modifier in the order added. It stops at the first error,
 // which it returns, or at the first control a modifier sets on the pair.
 func (group *ModifierGroup) Modify(proxy *Proxy, pair *Pair) error {
-	for _, modifier := range group.modifiers {
+	group.mu.RLock()
+	modifiers := group.modifiers
+	group.mu.RUnlock()
+	for _, modifier := range modifiers {
 		if err := modifier(proxy, pair); err != nil {
 			return err
 		}
