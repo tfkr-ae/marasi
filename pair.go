@@ -51,6 +51,10 @@ type Pair struct {
 	// webSocketUpstream is the upstream stream of a successful upgrade,
 	// detached from the response body by WebSocketPrepareModifier.
 	webSocketUpstream io.ReadWriteCloser
+	// upgradeUpstream is the origin connection of a 101 to any protocol but
+	// WebSocket, detached from the response body by the base pipeline
+	// before the chain runs, and relayed as opaque bytes.
+	upgradeUpstream io.ReadWriteCloser
 	// webSocketNegotiation is the extension response mirrored to the client.
 	webSocketNegotiation *webSocketNegotiation
 	// webSocketFailed is set when the proxy dropped an upgrade whose

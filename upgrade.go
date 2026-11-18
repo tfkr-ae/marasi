@@ -21,14 +21,22 @@ func (proxy *Proxy) SetUpgradeHandler(handler UpgradeHandler) {
 	proxy.upgradeHandler = handler
 }
 
-// handOffUpgrade hands a pair whose response switched protocols to the upgrade
-// handler. It does nothing for any other pair. Only the proxy takes the client
-// connection: no modifier touches a socket.
+// handOffUpgrade hands a pair whose response switched protocols on: a
+// WebSocket upgrade to the registered upgrade handler, any other protocol to
+// relayOpaque. It does nothing for any other pair. Only the proxy takes the
+// client connection: no modifier touches a socket.
 func (proxy *Proxy) handOffUpgrade(pair *Pair) error {
 	if pair == nil || pair.Response == nil || pair.Response.StatusCode != http.StatusSwitchingProtocols {
 		return nil
 	}
-	upstream := pair.webSocketUpstream
+	upstream, handler := pair.upgradeUpstream, UpgradeHandler(relayOpaque)
+	if upstream == nil {
+		if pair.control != controlNone {
+			// A WebSocket pair the chain stopped early was never prepared.
+			return nil
+		}
+		upstream, handler = pair.webSocketUpstream, proxy.upgradeHandler
+	}
 	if upstream == nil {
 		return nil
 	}
@@ -43,7 +51,7 @@ func (proxy *Proxy) handOffUpgrade(pair *Pair) error {
 	closeBoth := func(err error) error {
 		return errors.Join(err, client.Close(), upstream.Close())
 	}
-	if proxy.upgradeHandler == nil {
+	if handler == nil {
 		return closeBoth(errors.New("no upgrade handler is registered"))
 	}
 	// The engine's per-connection deadline would cut a long session off.
@@ -56,7 +64,41 @@ func (proxy *Proxy) handOffUpgrade(pair *Pair) error {
 	if err := buffered.Flush(); err != nil {
 		return closeBoth(fmt.Errorf("flushing switching protocols response: %w", err))
 	}
-	return proxy.upgradeHandler(proxy, pair, client, upstream)
+	return handler(proxy, pair, client, upstream)
+}
+
+// detachOpaqueUpgrade takes the origin connection out of the body of a 101 to
+// any protocol but WebSocket, such as h2c, before the response chain runs, so
+// no modifier reads the connection as a body. WebSocketPrepareModifier
+// detaches a WebSocket upgrade's.
+func detachOpaqueUpgrade(pair *Pair) {
+	res := pair.Response
+	if res == nil || res.StatusCode != http.StatusSwitchingProtocols || marasiws.IsUpgradeResponse(res) {
+		return
+	}
+	upstream, ok := res.Body.(io.ReadWriteCloser)
+	if !ok {
+		return
+	}
+	pair.upgradeUpstream = upstream
+	res.Body = http.NoBody
+}
+
+// relayOpaque carries the bytes of an upgrade to a protocol Marasi does not
+// read, both ways and unchanged, as a tunnel would, until either side ends.
+// The pair holds only the 101.
+func relayOpaque(_ *Proxy, _ *Pair, client, upstream io.ReadWriteCloser) error {
+	done := make(chan struct{}, 2)
+	relay := func(dst io.Writer, src io.Reader) {
+		io.Copy(dst, src)
+		done <- struct{}{}
+	}
+	go relay(upstream, client)
+	go relay(client, upstream)
+	<-done
+	err := errors.Join(client.Close(), upstream.Close())
+	<-done
+	return err
 }
 
 // writeSwitch writes the 101 to the client: the origin's head with the

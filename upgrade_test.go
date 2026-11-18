@@ -2,6 +2,7 @@ package marasi
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -126,4 +127,49 @@ func TestUpgradeHandler(t *testing.T) {
 			t.Fatalf("wanted: %q\ngot: %q", "response chain, handler", got)
 		}
 	})
+}
+
+// h2cSwitch is an origin's 101 to a protocol that is not WebSocket.
+const h2cSwitch = "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: h2c\r\n\r\n"
+
+func TestOpaqueUpgrade(t *testing.T) {
+	for name, serve := range map[string]func(t *testing.T) (string, func(*testing.T) string){
+		"base pipeline": func(t *testing.T) (string, func(*testing.T) string) {
+			addr, captured := serveH1EngineProxy(t)
+			return addr, func(t *testing.T) string {
+				t.Helper()
+				select {
+				case res := <-captured.response:
+					return string(res.Raw)
+				case <-time.After(5 * time.Second):
+					t.Fatal("the 101 was not stored")
+					return ""
+				}
+			}
+		},
+		"default pipeline": func(t *testing.T) (string, func(*testing.T) string) {
+			return serveDefaultH1EngineProxy(t), nil
+		},
+	} {
+		t.Run("should write a 101 that is not WebSocket and relay bytes both ways, with the "+name, func(t *testing.T) {
+			origin := newScriptedOrigin(t, func(conn net.Conn) {
+				io.WriteString(conn, h2cSwitch)
+				io.Copy(conn, conn)
+			})
+			addr, stored := serve(t)
+			conn, br := dialProxy(t, addr)
+
+			fmt.Fprintf(conn, "GET http://%s/ HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade, HTTP2-Settings\r\nUpgrade: h2c\r\nHTTP2-Settings: AAMAAABkAAQAAP__\r\n\r\n", origin.addr, origin.addr)
+			readExactly(t, br, h2cSwitch)
+			io.WriteString(conn, "opaque bytes")
+			readExactly(t, br, "opaque bytes")
+
+			if stored != nil {
+				if got := stored(t); got != h2cSwitch {
+					t.Fatalf("\nwanted:\n%q\ngot:\n%q", h2cSwitch, got)
+				}
+			}
+			conn.Close()
+		})
+	}
 }

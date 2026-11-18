@@ -3,6 +3,7 @@ package marasi
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 
@@ -120,9 +121,11 @@ func (proxy *Proxy) failRequestChain(pair *Pair, err error) {
 // with it unless the chain had already captured the origin's, and the cause
 // is logged.
 func (proxy *Proxy) failResponseChain(pair *Pair, err error) {
-	if pair.webSocketUpstream != nil {
-		pair.webSocketUpstream.Close()
-		pair.webSocketUpstream = nil
+	for _, upstream := range []*io.ReadWriteCloser{&pair.webSocketUpstream, &pair.upgradeUpstream} {
+		if *upstream != nil {
+			(*upstream).Close()
+			*upstream = nil
+		}
 	}
 	cause := fmt.Errorf("running the response chain: %w", err)
 	proxy.respondWithProxyError(pair, http.StatusBadGateway, cause)

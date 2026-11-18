@@ -6,8 +6,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-
-	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
 // BodyEnding is how the proxy's read of a body ended. The proxy reads each
@@ -84,12 +82,12 @@ func readRequestBody(req *http.Request) BodyEnding {
 
 // readResponseBody reads the pair's response body whole before the response
 // chain runs and records how it ended. The view keeps the wire framing: the
-// engine writes the body as it was framed unless a modifier changed it. An
-// upgrade's body is the connection and is left unread, and so is a proxy
+// engine writes the body as it was framed unless a modifier changed it. A
+// 101's body is the connection and is left unread, whatever the protocol, and so is a proxy
 // error response, which Marasi made whole.
 func readResponseBody(pair *Pair) error {
 	res := pair.Response
-	if marasiws.IsUpgradeResponse(res) || pair.FromMarasi() {
+	if res.StatusCode == http.StatusSwitchingProtocols || pair.FromMarasi() {
 		return nil
 	}
 	data, ending, err := readBody(res.Body)

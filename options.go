@@ -24,7 +24,6 @@ import (
 	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
-	marasiws "github.com/tfkr-ae/marasi/websocket"
 	"github.com/tfkr-ae/marasi/wordlist"
 )
 
@@ -674,6 +673,7 @@ func (proxy *Proxy) baseResponse(res *http.Response, wire *wireResponse) error {
 		proxy.captureCutShortResponse(pair)
 		return err
 	}
+	detachOpaqueUpgrade(pair)
 	if admission := pair.admission; admission != nil {
 		release, generation, err := proxy.admitWork(res.Request.Context(), admission.internal)
 		if err != nil {
@@ -685,7 +685,7 @@ func (proxy *Proxy) baseResponse(res *http.Response, wire *wireResponse) error {
 		if generation != admission.generation {
 			// The pair was captured in a project that is no longer
 			// open. It stays response-less there (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
-			return proxy.passStaleResponse(res)
+			return proxy.passStaleResponse(pair, res)
 		}
 		pair.release = release
 	}
@@ -711,9 +711,10 @@ func (proxy *Proxy) baseResponse(res *http.Response, wire *wireResponse) error {
 		*res = *pair.Response
 		return nil
 	}
-	// A 101 goes to the upgrade handler only once the whole chain
-	// has run, so the pair is captured.
-	if err == nil && pair.control == controlNone {
+	// A 101 is handed off only once the whole chain has run, so the
+	// pair is captured. A chain stopped early (a pair out of scope)
+	// still relays an opaque upgrade, which records nothing.
+	if err == nil && (pair.control == controlNone || pair.control == controlStop) {
 		return proxy.handOffUpgrade(pair)
 	}
 	return err
@@ -772,16 +773,20 @@ type projectAdmission struct {
 }
 
 // passStaleResponse passes a response whose pair belongs to a project that is
-// no longer open straight to the client. A WebSocket upgrade cannot be relayed
-// without recording it, so it is refused instead.
-func (proxy *Proxy) passStaleResponse(res *http.Response) error {
-	if !marasiws.IsUpgradeResponse(res) {
+// no longer open straight to the client. An upgrade cannot be relayed without
+// recording it, so it is refused instead.
+func (proxy *Proxy) passStaleResponse(pair *Pair, res *http.Response) error {
+	if res.StatusCode != http.StatusSwitchingProtocols {
 		return nil
 	}
 	if res.Body != nil {
 		res.Body.Close()
 	}
-	body := "the open project changed while the WebSocket handshake was in flight\n"
+	if pair.upgradeUpstream != nil {
+		pair.upgradeUpstream.Close()
+		pair.upgradeUpstream = nil
+	}
+	body := "the open project changed while the upgrade handshake was in flight\n"
 	*res = http.Response{
 		Status:        http.StatusText(http.StatusBadGateway),
 		StatusCode:    http.StatusBadGateway,
