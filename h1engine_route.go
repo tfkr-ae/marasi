@@ -10,8 +10,8 @@ import (
 // client connection's origin connection carries the route that opened it.
 // The route is resolved before each request: a request whose origin
 // connection is on another route gets a new one. A swap closes the origin
-// connections of client connections waiting for their next request, and an
-// exchange that a swap overtook closes its own once the response is read.
+// connections of client connections waiting for their next request, and a
+// request/response pair that a swap overtook closes its own once the response is read.
 // The client connection stays open either way.
 
 // errNoTransport is the cause when the proxy is not serving, so no route
@@ -60,7 +60,7 @@ func (c *h1Conn) retireOrigin() {
 
 // routeSwapped closes the origin connections, on a route other than route,
 // of the client connections waiting for their next request. A busy one
-// retires its own after its exchange.
+// retires its own after its request/response pair.
 func (engine *h1Engine) routeSwapped(route *Route) {
 	engine.mu.Lock()
 	defer engine.mu.Unlock()

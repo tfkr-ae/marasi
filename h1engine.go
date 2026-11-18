@@ -25,7 +25,7 @@ import (
 // Files:
 //   - h1engine.go: the engine, the accept loop, shutdown, and one client
 //     connection's loop, CONNECT and hijack (h1Conn);
-//   - h1engine_exchange.go: one request/response exchange through the base
+//   - h1engine_pair.go: one request/response pair through the base
 //     pipeline, and the round trip over the connection's origin connection;
 //   - h1engine_wire.go: views back to wire bytes, for the engine and capture;
 //   - h1engine_mitm.go: TLS inside a CONNECT, with leaf_issuer.go;
@@ -86,7 +86,7 @@ func (engine *h1Engine) serve(l net.Listener) error {
 }
 
 // startClose stops the engine taking new requests. A connection waiting for
-// its next request is closed now, and a busy one after its exchange.
+// its next request is closed now, and a busy one after its request/response pair.
 func (engine *h1Engine) startClose() {
 	engine.closing.Store(true)
 	engine.mu.Lock()
@@ -189,7 +189,7 @@ func newH1Conn(engine *h1Engine, conn net.Conn) *h1Conn {
 	}
 }
 
-// serve reads requests until the connection ends, one exchange at a time, so
+// serve reads requests until the connection ends, one request/response pair at a time, so
 // pipelined requests are answered in order.
 func (c *h1Conn) serve() {
 	defer c.end()
@@ -203,7 +203,7 @@ func (c *h1Conn) serve() {
 			keep = c.connect(head)
 			c.kept = false
 		} else {
-			keep = c.exchange(head)
+			keep = c.carryPair(head)
 			c.kept = true
 		}
 		if !keep || c.hijacked {

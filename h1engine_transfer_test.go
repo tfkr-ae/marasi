@@ -62,7 +62,7 @@ func TestH1Engine_UnknownTransferCodings(t *testing.T) {
 		origin := newBodyOrigin(t, response)
 		_, addr, captured := serveFramingProxy(t, nil)
 
-		exchangeRaw(t, addr, "GET http://"+origin.addr+"/ HTTP/1.1\r\nHost: "+origin.addr+"\r\n\r\n", response)
+		roundTripRaw(t, addr, "GET http://"+origin.addr+"/ HTTP/1.1\r\nHost: "+origin.addr+"\r\n\r\n", response)
 
 		_, stored := storedPair(t, captured)
 		if want := head + gzipCoded; stored != want {
@@ -92,7 +92,7 @@ func TestH1Engine_UnknownTransferCodings(t *testing.T) {
 		})
 
 		const head = "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\nX-After: a\r\n\r\n"
-		exchangeRaw(t, addr, "GET http://"+origin.addr+"/ HTTP/1.1\r\nHost: "+origin.addr+"\r\n\r\n",
+		roundTripRaw(t, addr, "GET http://"+origin.addr+"/ HTTP/1.1\r\nHost: "+origin.addr+"\r\n\r\n",
 			head+"5\r\nplain\r\n0\r\nX-Sum: 1\r\n\r\n")
 
 		_, stored := storedPair(t, captured)
@@ -125,7 +125,7 @@ func TestH1Engine_UnknownTransferCodings(t *testing.T) {
 		})
 
 		host := "Host: " + origin.addr + "\r\n"
-		exchangeRaw(t, addr, "POST http://"+origin.addr+"/ HTTP/1.1\r\n"+host+"Transfer-Encoding: gzip\r\nTransfer-Encoding: chunked\r\nX-After: a\r\n\r\n9\r\n"+gzipCoded+"\r\n0\r\n\r\n",
+		roundTripRaw(t, addr, "POST http://"+origin.addr+"/ HTTP/1.1\r\n"+host+"Transfer-Encoding: gzip\r\nTransfer-Encoding: chunked\r\nX-After: a\r\n\r\n9\r\n"+gzipCoded+"\r\n0\r\n\r\n",
 			"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
 
 		want := "POST / HTTP/1.1\r\n" + host + "Transfer-Encoding: chunked\r\nX-After: a\r\n\r\n5\r\nplain\r\n0\r\n\r\n"

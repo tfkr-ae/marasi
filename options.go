@@ -668,7 +668,7 @@ func (proxy *Proxy) baseResponse(res *http.Response, wire *wireResponse) error {
 	// before the response side is admitted (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
 	if err := readResponseBody(pair); err != nil {
 		// No response modifier runs on a body cut short: what arrived
-		// goes to the client as it arrived (h1Conn.exchange). It is
+		// goes to the client as it arrived (h1Conn.carryPair). It is
 		// still stored, with how it ended.
 		proxy.captureCutShortResponse(pair)
 		return err

@@ -14,10 +14,10 @@ import (
 	"github.com/tfkr-ae/marasi/internal/h1"
 )
 
-// exchange carries one request and its response: it reads the body, runs
-// the request step, the round trip and the response step, and writes the
+// carryPair carries one request/response pair: it reads the request's body,
+// runs the request step, the round trip and the response step, and writes the
 // response. It reports whether the connection carries another request.
-func (c *h1Conn) exchange(head *h1.RequestHead) bool {
+func (c *h1Conn) carryPair(head *h1.RequestHead) bool {
 	framing, refused := h1.RequestFraming(head)
 	if refused == nil && expectsContinue(head, framing) {
 		// Marasi answers 100 itself, so the chains see the whole request
@@ -181,7 +181,7 @@ func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	// A client that leaves mid-exchange closes the origin connection, as a
+	// A client that leaves while its pair is in flight closes the origin connection, as a
 	// direct client leaving would (docs/adr/2026-11-17-one-origin-connection-per-client-connection.md).
 	stop := context.AfterFunc(pair.Context(), func() { origin.conn.Close() })
 	defer stop()

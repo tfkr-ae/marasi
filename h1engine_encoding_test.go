@@ -102,9 +102,9 @@ func storedResponse(t *testing.T, stored chan domain.ProxyResponse) domain.Proxy
 	}
 }
 
-// exchangeThrough sends one GET for origin through the proxy and reads
+// roundTripThrough sends one GET for origin through the proxy and reads
 // exactly len(want) bytes back.
-func exchangeThrough(t *testing.T, addr string, origin *rawOrigin, want string) {
+func roundTripThrough(t *testing.T, addr string, origin *rawOrigin, want string) {
 	t.Helper()
 	conn, br := dialProxy(t, addr)
 	fmt.Fprintf(conn, "GET http://%s/coded HTTP/1.1\r\nHost: %s\r\nAccept-Encoding: gzip, br\r\n\r\n", origin.addr, origin.addr)
@@ -130,7 +130,7 @@ func TestH1Engine_CompressedResponses(t *testing.T) {
 		origin := newRawOrigin(t, response)
 		_, addr, stored := serveEncodingProxy(t)
 
-		exchangeThrough(t, addr, origin, response)
+		roundTripThrough(t, addr, origin, response)
 
 		res := storedResponse(t, stored)
 		want := "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 12\r\nX-Last: 1\r\n\r\n" + text
@@ -146,7 +146,7 @@ func TestH1Engine_CompressedResponses(t *testing.T) {
 		origin := newRawOrigin(t, response)
 		_, addr, stored := serveEncodingProxy(t)
 
-		exchangeThrough(t, addr, origin, response)
+		roundTripThrough(t, addr, origin, response)
 
 		res := storedResponse(t, stored)
 		want := "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n" + text
@@ -173,7 +173,7 @@ func TestH1Engine_CompressedResponses(t *testing.T) {
 		`)
 
 		want := "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\n" + text + "!"
-		exchangeThrough(t, addr, origin, want)
+		roundTripThrough(t, addr, origin, want)
 
 		res := storedResponse(t, stored)
 		if string(res.Raw) != want {
@@ -190,7 +190,7 @@ func TestH1Engine_CompressedResponses(t *testing.T) {
 				origin := newRawOrigin(t, response)
 				_, addr, stored := serveEncodingProxy(t)
 
-				exchangeThrough(t, addr, origin, response)
+				roundTripThrough(t, addr, origin, response)
 
 				res := storedResponse(t, stored)
 				if string(res.Raw) != response {
@@ -209,7 +209,7 @@ func TestH1Engine_CompressedResponses(t *testing.T) {
 		origin := newRawOrigin(t, response)
 		_, addr, stored := serveEncodingProxy(t)
 
-		exchangeThrough(t, addr, origin, response)
+		roundTripThrough(t, addr, origin, response)
 
 		if res := storedResponse(t, stored); !strings.HasSuffix(string(res.Raw), coded) {
 			t.Fatalf("wanted the stored body as received\ngot:\n%q", res.Raw)
@@ -278,7 +278,7 @@ func TestH1Engine_UndecodableResponses(t *testing.T) {
 		origin := newRawOrigin(t, response)
 		_, addr, stored := serveEncodingProxy(t)
 
-		exchangeThrough(t, addr, origin, response)
+		roundTripThrough(t, addr, origin, response)
 
 		res := storedResponse(t, stored)
 		if string(res.Raw) != response {

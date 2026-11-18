@@ -18,7 +18,7 @@ import (
 //     Checkpoint hold is never cut off;
 //   - an origin that closes its connection while the client connection waits
 //     for its next request closes the client connection too. The response in
-//     flight when an origin closes is finished first (exchange);
+//     flight when an origin closes is finished first (carryPair);
 //   - a client that leaves closes the origin connection (end, and sendUpstream
 //     while the origin answers);
 //   - a body the origin cut short is forwarded as far as it got, then the

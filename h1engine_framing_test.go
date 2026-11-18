@@ -172,8 +172,8 @@ func setResponseBody(body string) PairModifier {
 	}
 }
 
-// exchangeRaw sends raw to the proxy and reads len(want) bytes back.
-func exchangeRaw(t *testing.T, addr, raw, want string) {
+// roundTripRaw sends raw to the proxy and reads len(want) bytes back.
+func roundTripRaw(t *testing.T, addr, raw, want string) {
 	t.Helper()
 	conn, br := dialProxy(t, addr)
 	io.WriteString(conn, raw)
@@ -186,7 +186,7 @@ func TestH1Engine_HopByHopFields(t *testing.T) {
 		_, addr, captured := serveFramingProxy(t, nil)
 
 		host := "Host: " + origin.addr + "\r\n"
-		exchangeRaw(t, addr,
+		roundTripRaw(t, addr,
 			"GET http://"+origin.addr+"/ HTTP/1.1\r\n"+host+"connection: X-Hop, keep-alive,TE\r\nX-Hop: 1\r\nKeep-Alive: timeout=5\r\nTE: trailers\r\nX-Kept: y\r\n\r\n",
 			"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nx-End: e\r\n\r\nok")
 
@@ -205,7 +205,7 @@ func TestH1Engine_HopByHopFields(t *testing.T) {
 		_, addr, _ := serveFramingProxy(t, nil)
 
 		host := "Host: " + origin.addr + "\r\n"
-		exchangeRaw(t, addr,
+		roundTripRaw(t, addr,
 			"GET http://"+origin.addr+"/ HTTP/1.1\r\n"+host+"Connection: keep-alive, Upgrade\r\nUpgrade: websocket\r\n\r\n",
 			"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
 
@@ -229,7 +229,7 @@ func TestH1Engine_EditedBodyFraming(t *testing.T) {
 		})
 
 		head := "POST http://" + origin.addr + "/ HTTP/1.1\r\nHost: " + origin.addr + "\r\ntransfer-encoding: chunked\r\n\r\n"
-		exchangeRaw(t, addr, head+"3;x=1\r\nabc\r\n0\r\nX-Trail: t\r\n\r\n", "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+		roundTripRaw(t, addr, head+"3;x=1\r\nabc\r\n0\r\nX-Trail: t\r\n\r\n", "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
 
 		want := "POST / HTTP/1.1\r\nHost: " + origin.addr + "\r\ntransfer-encoding: chunked\r\n\r\n7\r\nedited!\r\n0\r\nX-Trail: t\r\n\r\n"
 		if got := origin.request(t); got != want {
@@ -247,7 +247,7 @@ func TestH1Engine_EditedBodyFraming(t *testing.T) {
 			proxy.AddResponsePairModifier(setResponseBody("changed"))
 		})
 
-		exchangeRaw(t, addr, "GET http://"+origin.addr+"/ HTTP/1.1\r\nHost: "+origin.addr+"\r\n\r\n",
+		roundTripRaw(t, addr, "GET http://"+origin.addr+"/ HTTP/1.1\r\nHost: "+origin.addr+"\r\n\r\n",
 			"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7\r\nchanged\r\n0\r\nX-Sum: 1\r\n\r\n")
 	})
 
@@ -258,7 +258,7 @@ func TestH1Engine_EditedBodyFraming(t *testing.T) {
 		})
 
 		host := "Host: " + origin.addr + "\r\n"
-		exchangeRaw(t, addr, "POST http://"+origin.addr+"/ HTTP/1.1\r\n"+host+"content-LENGTH:3\r\nX-After: a\r\n\r\nabc",
+		roundTripRaw(t, addr, "POST http://"+origin.addr+"/ HTTP/1.1\r\n"+host+"content-LENGTH:3\r\nX-After: a\r\n\r\nabc",
 			"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
 
 		want := "POST / HTTP/1.1\r\n" + host + "content-LENGTH: 5\r\nX-After: a\r\n\r\nhello"
@@ -274,7 +274,7 @@ func TestH1Engine_EditedBodyFraming(t *testing.T) {
 		})
 
 		host := "Host: " + origin.addr + "\r\n"
-		exchangeRaw(t, addr, "GET http://"+origin.addr+"/ HTTP/1.1\r\n"+host+"X-Last: l\r\n\r\n",
+		roundTripRaw(t, addr, "GET http://"+origin.addr+"/ HTTP/1.1\r\n"+host+"X-Last: l\r\n\r\n",
 			"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
 
 		want := "GET / HTTP/1.1\r\n" + host + "X-Last: l\r\nContent-Length: 2\r\n\r\nhi"
@@ -290,7 +290,7 @@ func TestH1Engine_EditedBodyFraming(t *testing.T) {
 		})
 
 		request := "POST / HTTP/1.1\r\nHost: " + origin.addr + "\r\nTransfer-Encoding: chunked\r\n\r\n2;e\r\nab\r\n1\r\nc\r\n0\r\n\r\n"
-		exchangeRaw(t, addr, strings.Replace(request, "POST /", "POST http://"+origin.addr+"/", 1), "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+		roundTripRaw(t, addr, strings.Replace(request, "POST /", "POST http://"+origin.addr+"/", 1), "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
 
 		if got := origin.request(t); got != request {
 			t.Fatalf("wanted the origin to receive:\n%q\ngot:\n%q", request, got)
@@ -301,7 +301,7 @@ func TestH1Engine_EditedBodyFraming(t *testing.T) {
 		origin := newBodyOrigin(t, "HTTP/1.1 200 OK\r\nContent-Length: 99\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n0\r\n\r\n")
 		_, addr, _ := serveFramingProxy(t, nil)
 
-		exchangeRaw(t, addr, "GET http://"+origin.addr+"/ HTTP/1.1\r\nHost: "+origin.addr+"\r\n\r\n",
+		roundTripRaw(t, addr, "GET http://"+origin.addr+"/ HTTP/1.1\r\nHost: "+origin.addr+"\r\n\r\n",
 			"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n0\r\n\r\n")
 	})
 }
@@ -322,7 +322,7 @@ func TestH1Engine_LuaSetBody(t *testing.T) {
 		})
 
 		host := "Host: " + origin.addr + "\r\n"
-		exchangeRaw(t, addr, "POST http://"+origin.addr+"/ HTTP/1.1\r\n"+host+"Transfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n",
+		roundTripRaw(t, addr, "POST http://"+origin.addr+"/ HTTP/1.1\r\n"+host+"Transfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n",
 			"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n8\r\nfrom lua\r\n0\r\n\r\n")
 
 		want := "POST / HTTP/1.1\r\n" + host + "Transfer-Encoding: chunked\r\n\r\n4\r\nlua!\r\n0\r\n\r\n"
@@ -349,7 +349,7 @@ func TestH1Engine_LuaSetBodyUnchanged(t *testing.T) {
 		})
 
 		request := "GET / HTTP/1.1\r\nHost: " + origin.addr + "\r\n\r\n"
-		exchangeRaw(t, addr, strings.Replace(request, "GET /", "GET http://"+origin.addr+"/", 1), response)
+		roundTripRaw(t, addr, strings.Replace(request, "GET /", "GET http://"+origin.addr+"/", 1), response)
 
 		if got := origin.request(t); got != request {
 			t.Fatalf("wanted the origin to receive:\n%q\ngot:\n%q", request, got)
