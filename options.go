@@ -563,9 +563,9 @@ func WithWorkAdmission(admit func(context.Context, bool) (func(), uint64, error)
 
 // WithBasePipeline will setup the base modifier pipeline for marasi
 // It will define the main Request & Response modifiers that will execute the
-// attached modifiers and hande `ErrDropped` and `ErrSkipPipeline`.
+// attached modifiers and carry out the control a modifier set on the pair.
 // Work is admitted for the request modifiers and again, once the response body
-// has been buffered, for the response modifiers, never for the wait on the origin.
+// has been read, for the response modifiers, never for the wait on the origin.
 // If a response is dropped the `martian.Session` is read from the context and hijacked to
 // close the `conn`. A 101 that the response chain passes is handed to the
 // upgrade handler.
@@ -588,6 +588,9 @@ func WithBasePipeline() func(*Proxy) error {
 				// Only the proxy's own client may name a launch. The header never leaves the proxy.
 				launchID, launchErr := uuid.Parse(req.Header.Get(launchIDHeader))
 				req.Header.Del(launchIDHeader)
+				// The body is the wait on the client, so it is read before
+				// the request side is admitted.
+				bodyEnding := readRequestBody(req)
 				release, generation, err := proxy.admitWork(req.Context(), internal)
 				if err != nil {
 					return refuseConnection(session, err)
@@ -597,24 +600,30 @@ func WithBasePipeline() func(*Proxy) error {
 				defer release()
 				pair := &Pair{requestState: requestState{
 					admission: &projectAdmission{internal: internal, generation: generation},
-				}}
+				}, RequestBodyEnding: bodyEnding}
 				if internal && launchErr == nil {
 					pair.requestedLaunch = launchID
 				}
 				// The response side hijacks the connection through the session.
 				ctx := core.ContextWithSession(req, session).Context()
 				*req = *req.WithContext(context.WithValue(ctx, pairKey{}, pair))
-				proxy.watchClient(req)
-				err = proxy.Modifiers.ModifyRequest(req)
-				if errors.Is(err, ErrDropped) {
+				proxy.watchClient(req, bodyEnding)
+				err = chainError(pair, proxy.Modifiers.ModifyRequest(req))
+				switch pair.control {
+				case controlDrop:
+					// The client gets Martian's empty 200, as before.
 					proxy.recordLaunchDropped(pair)
+					martian.NewContext(req).SkipRoundTrip()
+				case controlStop:
+					// A stop ends only the request chain.
+					pair.control = controlNone
 				}
-				if err == nil || errors.Is(err, ErrDropped) || errors.Is(err, ErrSkipPipeline) {
-					return nil
+				if err != nil {
+					// A Go modifier failed: the request fails closed and
+					// never goes upstream half-modified.
+					proxy.failRequestChain(pair, err)
 				}
-				// TODO this should be handled through logging
-				log.Printf("request pipeline: %v", err)
-				return err
+				return nil
 			}),
 		)
 		proxy.martianProxy.SetResponseModifier(
@@ -624,12 +633,17 @@ func WithBasePipeline() func(*Proxy) error {
 				if res.Request.Method == http.MethodConnect {
 					return nil
 				}
-				// A request the proxy answered itself is sent as answered,
-				// with no response modifier and no admission.
-				if own, ok := ownResponse(requestPair(res.Request)); ok {
-					own.Request = res.Request
-					*res = *own
-					return nil
+				// A request the proxy answered itself (the round trip
+				// returned its response) or dropped is sent as it is, with
+				// no response modifier and no admission, unless the answer
+				// is a proxy error response to a captured request.
+				if pair := requestPair(res.Request); pair != nil && (pair.control == controlRespond || pair.Dropped()) {
+					if !pair.capturesProxyError() {
+						return nil
+					}
+					// A proxy error response is stored: the response chain
+					// runs, and its hooks skip what Marasi made.
+					pair.control = controlNone
 				}
 				// A launch whose client left was cancelled or interrupted. Its
 				// round trip was abandoned, so it has no response to process or store.
@@ -639,7 +653,7 @@ func WithBasePipeline() func(*Proxy) error {
 				pair, loaded := loadPair(res.Request, res)
 				// The body is still the wait on the origin, so it is read
 				// before the response side is admitted (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
-				if err := BufferStreamingBodyModifier(proxy, pair); err != nil {
+				if err := readResponseBody(pair); err != nil {
 					log.Printf("response pipeline: %v", err)
 					return err
 				}
@@ -661,22 +675,10 @@ func WithBasePipeline() func(*Proxy) error {
 				}
 				// The response chain finds this pair through the request.
 				storePair(pair, loaded, res.Request)
-				// A request whose round trip was skipped has only the blank
-				// 200 Martian made in place of a response, so no response
-				// modifier sees it.
-				if ctx := martian.NewContext(res.Request); ctx != nil && ctx.SkippingRoundTrip() {
-					return nil
-				}
-				err := proxy.Modifiers.ModifyResponse(res)
-				if err == nil {
-					return proxy.handOffUpgrade(requestPair(res.Request))
-				}
-				if errors.Is(err, ErrSkipPipeline) {
-					return nil
-				}
-				if errors.Is(err, ErrDropped) {
-					proxy.recordLaunchDropped(requestPair(res.Request))
-					proxy.markDroppedWebSocketHandshake(res, err)
+				err := chainError(pair, proxy.Modifiers.ModifyResponse(res))
+				if pair.Dropped() {
+					proxy.recordLaunchDropped(pair)
+					proxy.markDroppedWebSocketHandshake(pair)
 					if session, ok := core.SessionFromContext(res.Request.Context()); ok {
 						conn, _, err := session.Hijack()
 						if err != nil {
@@ -689,6 +691,14 @@ func WithBasePipeline() func(*Proxy) error {
 					} else {
 						return ErrSessionContext
 					}
+				}
+				// A 101 goes to the upgrade handler only once the whole chain
+				// has run, so the pair is captured.
+				if err == nil && pair.control == controlNone {
+					return proxy.handOffUpgrade(pair)
+				}
+				if err == nil {
+					return nil
 				}
 				// TODO this should be handled through logging
 				log.Printf("response pipeline: %v", err)

@@ -2,12 +2,12 @@ package marasi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"reflect"
 	"slices"
 	"time"
 
-	"github.com/google/martian"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/core"
 )
@@ -181,12 +181,7 @@ func (proxy *Proxy) AddRequestPairModifier(modifier PairModifier) {
 		pair, loaded := loadPair(req, nil)
 		err := modifier(proxy, pair)
 		storePair(pair, loaded, req)
-		if pair.skipRoundTrip {
-			if ctx := martian.NewContext(req); ctx != nil {
-				ctx.SkipRoundTrip()
-			}
-		}
-		return err
+		return endChain(pair, err)
 	})
 }
 
@@ -203,6 +198,71 @@ func (proxy *Proxy) AddResponsePairModifier(modifier PairModifier) {
 		}
 		storePair(pair, loaded, res.Request)
 		pair.Response = res
-		return err
+		return endChain(pair, err)
 	})
+}
+
+// errChainEnded stops Martian's group after a pair modifier set a control.
+// The base pipeline reads the control from the pair, not from the error.
+var errChainEnded = errors.New("chain ended by a control on the pair")
+
+// endChain returns err, or, when a modifier set a control on pair, the error
+// that stops Martian's group there. A drop stops it with ErrDropped, which
+// marasi-app's wrapper of Proxy.Modifiers still reads to announce a dropped
+// WebSocket upgrade.
+func endChain(pair *Pair, err error) error {
+	if err != nil || !pair.ended() {
+		return err
+	}
+	if pair.Dropped() {
+		return ErrDropped
+	}
+	return errChainEnded
+}
+
+// chainError returns what is left of err, the error Martian's group returned
+// for pair, once the control signal endChain sent is taken out: nil when the
+// chain ended by a control, err otherwise.
+func chainError(pair *Pair, err error) error {
+	if pair != nil && pair.ended() && (errors.Is(err, errChainEnded) || errors.Is(err, ErrDropped)) {
+		return nil
+	}
+	return err
+}
+
+// setRoundTripper makes base Martian's round tripper, behind the step that
+// returns a response from Respond. Everything that sets Martian's round
+// tripper goes through it, so Respond works whatever the transport.
+func (proxy *Proxy) setRoundTripper(base http.RoundTripper) {
+	proxy.martianProxy.SetRoundTripper(&respondRoundTripper{proxy: proxy, base: base})
+}
+
+// respondRoundTripper returns the response a request modifier answered a
+// pair with through Respond, in place of a round trip. Every other request
+// goes to base. A round trip that gets no response is answered with a proxy
+// error response, never with an error: Martian would answer that with an
+// empty 502 carrying a Warning header.
+type respondRoundTripper struct {
+	proxy *Proxy
+	base  http.RoundTripper
+}
+
+// RoundTrip satisfies http.RoundTripper.
+func (rt *respondRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	pair := requestPair(req)
+	if pair != nil && pair.control == controlRespond {
+		return pair.Response, nil
+	}
+	res, err := rt.base.RoundTrip(req)
+	if err == nil {
+		return res, nil
+	}
+	if pair == nil {
+		res := plainTextResponse(req, http.StatusBadGateway, err.Error())
+		res.Close = true
+		return res, nil
+	}
+	rt.proxy.respondWithProxyError(pair, http.StatusBadGateway, err)
+	rt.proxy.logProxyError(pair, err)
+	return pair.Response, nil
 }

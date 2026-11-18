@@ -283,8 +283,8 @@ func TestProjectOpen(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("response drop waited for project handoff")
 		}
-		if err := receiveCheckpointHold(t, holdDone); !errors.Is(err, marasi.ErrDropped) {
-			t.Fatalf("\nwanted:\n%v\ngot:\n%v", marasi.ErrDropped, err)
+		if err := receiveCheckpointHold(t, holdDone); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", errHoldDropped, err)
 		}
 		select {
 		case response := <-openResult:

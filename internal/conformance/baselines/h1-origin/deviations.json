@@ -341,61 +341,6 @@
     "phase": 2
   },
   {
-    "cases": "request-body-chunked@absolute",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "leg:framing",
-    "kind": "known",
-    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
-    "phase": 2
-  },
-  {
-    "cases": "request-body-chunked@absolute",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "origin[0].end",
-    "kind": "known",
-    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
-    "phase": 2
-  },
-  {
-    "cases": "request-body-chunked@absolute",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "origin[0].requests[0].body",
-    "kind": "known",
-    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
-    "phase": 2
-  },
-  {
-    "cases": "request-body-chunked@absolute",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "origin[0].requests[0].fields",
-    "kind": "known",
-    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
-    "phase": 2
-  },
-  {
-    "cases": "request-body-chunked@absolute",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "origin[0].requests[0].truncated",
-    "kind": "known",
-    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
-    "phase": 2
-  },
-  {
     "cases": "request-body-chunked@connect-plain",
     "runs": [
       "checkpoint-forward",
@@ -451,61 +396,6 @@
     "phase": 2
   },
   {
-    "cases": "request-body-chunked@connect-plain",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "leg:framing",
-    "kind": "known",
-    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
-    "phase": 2
-  },
-  {
-    "cases": "request-body-chunked@connect-plain",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "origin[0].end",
-    "kind": "known",
-    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
-    "phase": 2
-  },
-  {
-    "cases": "request-body-chunked@connect-plain",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "origin[0].requests[0].body",
-    "kind": "known",
-    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
-    "phase": 2
-  },
-  {
-    "cases": "request-body-chunked@connect-plain",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "origin[0].requests[0].fields",
-    "kind": "known",
-    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
-    "phase": 2
-  },
-  {
-    "cases": "request-body-chunked@connect-plain",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "origin[0].requests[0].truncated",
-    "kind": "known",
-    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
-    "phase": 2
-  },
-  {
     "cases": "request-body-chunked@connect-tls",
     "runs": [
       "checkpoint-forward",
@@ -556,61 +446,6 @@
       "checkpoint-edit"
     ],
     "field": "client[0].responses[0].status",
-    "kind": "known",
-    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
-    "phase": 2
-  },
-  {
-    "cases": "request-body-chunked@connect-tls",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "leg:framing",
-    "kind": "known",
-    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
-    "phase": 2
-  },
-  {
-    "cases": "request-body-chunked@connect-tls",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "origin[0].end",
-    "kind": "known",
-    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
-    "phase": 2
-  },
-  {
-    "cases": "request-body-chunked@connect-tls",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "origin[0].requests[0].body",
-    "kind": "known",
-    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
-    "phase": 2
-  },
-  {
-    "cases": "request-body-chunked@connect-tls",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "origin[0].requests[0].fields",
-    "kind": "known",
-    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
-    "phase": 2
-  },
-  {
-    "cases": "request-body-chunked@connect-tls",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "origin[0].requests[0].truncated",
     "kind": "known",
     "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"), cuts the request short at the origin and answers 502",
     "phase": 2
@@ -781,20 +616,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
-    "phase": 2
-  },
-  {
-    "cases": "early-close@absolute",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -807,7 +629,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -820,20 +642,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
-    "phase": 2
-  },
-  {
-    "cases": "early-close@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -846,7 +655,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -859,20 +668,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
-    "phase": 2
-  },
-  {
-    "cases": "early-close@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -885,7 +681,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -1561,20 +1357,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
-    "phase": 2
-  },
-  {
-    "cases": "reset-mid-body@absolute",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -1587,7 +1370,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -1600,20 +1383,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
-    "phase": 2
-  },
-  {
-    "cases": "reset-mid-body@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -1626,7 +1396,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -1639,20 +1409,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
-    "phase": 2
-  },
-  {
-    "cases": "reset-mid-body@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -1665,7 +1422,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "BufferStreamingBodyModifier reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and no body, and the client waits for a body that never comes",
+    "reason": "The proxy reads the whole origin body before Martian answers; when the origin cuts it short, Martian sends the head with a Warning 199 and the bytes that arrived, and the client waits for the rest, which never comes",
     "phase": 2
   },
   {
@@ -1933,6 +1690,150 @@
     "field": "origin[0].end",
     "kind": "known",
     "reason": "Go's transport closes the origin connection after it rejects the transfer coding",
+    "phase": 2
+  },
+  {
+    "cases": "loop-back@*",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].status",
+    "kind": "accepted",
+    "reason": "a request that loops back to the proxy listener gets a 502 proxy error response that names the cause, never goes upstream and closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md); the direct run has no proxy, so its origin answers",
+    "rfc": "RFC 9110 §7.6"
+  },
+  {
+    "cases": "loop-back@*",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].reason",
+    "kind": "accepted",
+    "reason": "a request that loops back to the proxy listener gets a 502 proxy error response that names the cause, never goes upstream and closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md); the direct run has no proxy, so its origin answers",
+    "rfc": "RFC 9110 §7.6"
+  },
+  {
+    "cases": "loop-back@*",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].fields",
+    "kind": "accepted",
+    "reason": "a request that loops back to the proxy listener gets a 502 proxy error response that names the cause, never goes upstream and closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md); the direct run has no proxy, so its origin answers",
+    "rfc": "RFC 9110 §7.6"
+  },
+  {
+    "cases": "loop-back@*",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "accepted",
+    "reason": "a request that loops back to the proxy listener gets a 502 proxy error response that names the cause, never goes upstream and closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md); the direct run has no proxy, so its origin answers",
+    "rfc": "RFC 9110 §7.6"
+  },
+  {
+    "cases": "loop-back@*",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "accepted",
+    "reason": "a request that loops back to the proxy listener gets a 502 proxy error response that names the cause, never goes upstream and closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md); the direct run has no proxy, so its origin answers",
+    "rfc": "RFC 9110 §7.6"
+  },
+  {
+    "cases": "loop-back@*",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin.count",
+    "kind": "accepted",
+    "reason": "a request that loops back to the proxy listener gets a 502 proxy error response that names the cause, never goes upstream and closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md); the direct run has no proxy, so its origin answers",
+    "rfc": "RFC 9110 §7.6"
+  },
+  {
+    "cases": "request-body-chunked@absolute",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "origin.count",
+    "kind": "known",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"); the request fails closed with a 502 proxy error response and never reaches the origin (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-plain",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "origin.count",
+    "kind": "known",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"); the request fails closed with a 502 proxy error response and never reaches the origin (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
+    "phase": 2
+  },
+  {
+    "cases": "request-body-chunked@connect-tls",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "origin.count",
+    "kind": "known",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"); the request fails closed with a 502 proxy error response and never reaches the origin (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@absolute",
+    "runs": [
+      "proxy",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-plain",
+    "runs": [
+      "proxy",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
+    "phase": 2
+  },
+  {
+    "cases": "transfer-encoding-gzip@connect-tls",
+    "runs": [
+      "proxy",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
     "phase": 2
   }
 ]

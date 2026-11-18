@@ -159,12 +159,15 @@ func TestSOCKS5UpstreamProxyFailsClosed(t *testing.T) {
 				func(fake *upstreamtest.Proxy) string { return fake.URL("socks5", tc.username, "s3cret-pw") },
 				upstreamtest.WithBehaviour(tc.behaviour), upstreamtest.WithCredentials("right", "pass"))
 
-			response, _ := service.get(t, "http://"+service.internalHost()+"/blocked")
+			response, body := service.get(t, "http://"+service.internalHost()+"/blocked")
 			if response.StatusCode != http.StatusBadGateway {
 				t.Fatalf("\nwanted:\n502\ngot:\n%d", response.StatusCode)
 			}
-			if warning := response.Header.Get("Warning"); !strings.Contains(warning, `upstream proxy \"jump\"`) || strings.Contains(warning, "s3cret-pw") {
-				t.Fatalf("\nwanted:\na Warning naming jump without credentials\ngot:\n%s", warning)
+			if warning := response.Header.Get("Warning"); warning != "" {
+				t.Fatalf("\nwanted:\nno Warning header\ngot:\n%s", warning)
+			}
+			if !strings.Contains(body, `upstream proxy "jump"`) || strings.Contains(body, "s3cret-pw") {
+				t.Fatalf("\nwanted:\na proxy error response naming jump without credentials\ngot:\n%s", body)
 			}
 			if hits := service.originHits.Load(); hits != 0 || len(fake.Targets()) != 0 {
 				t.Fatalf("\nwanted:\nthe origin never reached\ngot:\n%d hits, targets %v", hits, fake.Targets())

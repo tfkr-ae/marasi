@@ -22,7 +22,9 @@ type Case struct {
 	// Requests are raw origin-form requests, sent in order, each after the
 	// response to the one before. "{authority}" is replaced by the origin's
 	// host:port. The client rewrites the request target to absolute form
-	// for the absolute approach through a proxy.
+	// for the absolute approach through a proxy. "{proxy}" is replaced by
+	// the proxy listener's host:port; a request that names it is sent to
+	// that address in absolute form, and inside a tunnel by its Host.
 	Requests []string
 	Script   []Step
 }

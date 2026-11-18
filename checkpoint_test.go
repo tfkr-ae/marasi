@@ -21,7 +21,7 @@ func startRequestHold(t *testing.T, proxy *Proxy) (*Pair, <-chan error) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- CheckpointRequestModifier(proxy, pair)
+		done <- holdResult(pair, CheckpointRequestModifier(proxy, pair))
 	}()
 	return pair, done
 }
@@ -35,7 +35,7 @@ func startResponseHold(t *testing.T, proxy *Proxy) (uuid.UUID, <-chan error) {
 	})
 	done := make(chan error, 1)
 	go func() {
-		done <- CheckpointResponseModifier(proxy, pair)
+		done <- holdResult(pair, CheckpointResponseModifier(proxy, pair))
 	}()
 	return pair.ID, done
 }
@@ -55,8 +55,8 @@ func TestCheckpointPending(t *testing.T) {
 		if err := proxy.DropCheckpoint(secondID); err != nil {
 			t.Fatalf("dropping second checkpoint: %v", err)
 		}
-		if err := receiveHoldResult(t, secondDone); !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+		if err := receiveHoldResult(t, secondDone); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 		items := proxy.CheckpointItems()
 		if len(items) != 1 || items[0].ID != firstID {
@@ -70,8 +70,8 @@ func TestCheckpointPending(t *testing.T) {
 		if err := proxy.DropCheckpoint(firstID); err != nil {
 			t.Fatalf("dropping first checkpoint: %v", err)
 		}
-		if err := receiveHoldResult(t, firstDone); !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+		if err := receiveHoldResult(t, firstDone); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 	})
 
@@ -111,7 +111,7 @@ func TestCheckpointPending(t *testing.T) {
 		responsePair.Response = &http.Response{Header: make(http.Header), Request: responsePair.Request}
 		responseDone := make(chan error, 1)
 		go func() {
-			responseDone <- CheckpointResponseModifier(proxy, responsePair)
+			responseDone <- holdResult(responsePair, CheckpointResponseModifier(proxy, responsePair))
 		}()
 		items := waitForCheckpoint(t, proxy, 3)
 		responseID := olderID
@@ -126,11 +126,11 @@ func TestCheckpointPending(t *testing.T) {
 		}
 
 		proxy.DropAllCheckpoint()
-		if err := receiveHoldResult(t, requestDone); !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted request drop: %v\ngot: %v", ErrDropped, err)
+		if err := receiveHoldResult(t, requestDone); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted request drop: %v\ngot: %v", errHoldDropped, err)
 		}
-		if err := receiveHoldResult(t, responseDone); !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted response drop: %v\ngot: %v", ErrDropped, err)
+		if err := receiveHoldResult(t, responseDone); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted response drop: %v\ngot: %v", errHoldDropped, err)
 		}
 		if err := receiveHoldResult(t, wsDone); err != nil {
 			t.Fatalf("wanted websocket drop: nil\ngot: %v", err)
@@ -176,7 +176,7 @@ func TestCheckpointPending(t *testing.T) {
 		pair.Response = &http.Response{Header: make(http.Header), Request: pair.Request}
 		responseDone := make(chan error, 1)
 		go func() {
-			responseDone <- CheckpointResponseModifier(proxy, pair)
+			responseDone <- holdResult(pair, CheckpointResponseModifier(proxy, pair))
 		}()
 		items = waitForCheckpoint(t, proxy, 1)
 		if items[0].ID != reqID || items[0].Type != domain.CheckpointTypeResponse {
@@ -215,8 +215,8 @@ func TestCheckpointPending(t *testing.T) {
 		if !got[reqID].Equal(responseAt) || !got[messageID].Equal(messageAt) {
 			t.Fatalf("\nwanted:\n%v %v\ngot:\n%v", responseAt, messageAt, got)
 		}
-		if err := receiveHoldResult(t, responseDone); !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+		if err := receiveHoldResult(t, responseDone); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 		if err := receiveHoldResult(t, wsDone); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
@@ -242,8 +242,8 @@ func TestCheckpointPending(t *testing.T) {
 		if err := proxy.DropCheckpoint(responseID); err != nil {
 			t.Fatalf("dropping response: %v", err)
 		}
-		if err := receiveHoldResult(t, done); !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+		if err := receiveHoldResult(t, done); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 	})
 
@@ -289,7 +289,7 @@ func TestCheckpointPending(t *testing.T) {
 		pair.Response = &http.Response{Header: make(http.Header), Request: pair.Request}
 		done := make(chan error, 1)
 		go func() {
-			done <- CheckpointResponseModifier(proxy, pair)
+			done <- holdResult(pair, CheckpointResponseModifier(proxy, pair))
 		}()
 		items := waitForCheckpoint(t, proxy, 1)
 		if items[0].Type != domain.CheckpointTypeResponse {
@@ -302,8 +302,8 @@ func TestCheckpointPending(t *testing.T) {
 		if err := proxy.DropCheckpoint(items[0].ID); err != nil {
 			t.Fatalf("dropping response: %v", err)
 		}
-		if err := receiveHoldResult(t, done); !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+		if err := receiveHoldResult(t, done); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 	})
 
@@ -356,8 +356,8 @@ func TestCheckpointPending(t *testing.T) {
 		if err := proxy.DropCheckpoint(reqID); err != nil {
 			t.Fatalf("dropping request: %v", err)
 		}
-		if err := receiveHoldResult(t, done); !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+		if err := receiveHoldResult(t, done); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 		after, err := httputil.DumpRequest(req, true)
 		if err != nil {

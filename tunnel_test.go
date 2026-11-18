@@ -55,7 +55,8 @@ func startTunnelHarness(t *testing.T, configure func(*Proxy)) *tunnelHarness {
 		h.seen = append(h.seen, "request "+pair.Request.Method)
 		h.self = append(h.self, isSelfClient(pair))
 		h.mu.Unlock()
-		return respondFromProxy(pair, newResponse(pair.Request, http.StatusOK, []byte("inside")))
+		pair.Respond(newResponse(pair.Request, http.StatusOK, []byte("inside")))
+		return nil
 	})
 	proxy.AddResponseModifier(func(_ *Proxy, res *http.Response) error {
 		h.mu.Lock()

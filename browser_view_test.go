@@ -77,7 +77,7 @@ func startViewHarness(t *testing.T, config viewHarnessConfig) *viewHarness {
 	if config.secureOrigin {
 		// As Serve does, with an upstream transport that trusts the origin's
 		// self-signed certificate.
-		proxy.martianProxy.SetRoundTripper(newDirectTransport(proxy.dialTransport, true))
+		proxy.setRoundTripper(newDirectTransport(proxy.dialTransport, true))
 		proxy.dbWriterStarted.Store(true)
 		go proxy.WriteToDB()
 		go func() { serveResult <- proxy.martianProxy.Serve(proxyListener) }()

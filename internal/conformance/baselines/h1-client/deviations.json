@@ -1772,17 +1772,6 @@
     "cases": "COMP-HOST-EMPTY-VALUE@connect-plain",
     "runs": [
       "proxy",
-      "extension"
-    ],
-    "field": "client[0].end",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"closed\", got \"open\"",
-    "phase": 2
-  },
-  {
-    "cases": "COMP-HOST-EMPTY-VALUE@connect-plain",
-    "runs": [
-      "proxy",
       "checkpoint-forward",
       "checkpoint-edit",
       "extension"
@@ -1842,17 +1831,6 @@
     "field": "verdict",
     "kind": "known",
     "reason": "measured by conformance-update-known: baseline \"Pass\", got \"Fail\"",
-    "phase": 2
-  },
-  {
-    "cases": "COMP-HOST-EMPTY-VALUE@connect-tls",
-    "runs": [
-      "proxy",
-      "extension"
-    ],
-    "field": "client[0].end",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"closed\", got \"open\"",
     "phase": 2
   },
   {
@@ -1924,17 +1902,6 @@
     "cases": "COMP-HOST-WITH-PATH@connect-plain",
     "runs": [
       "proxy",
-      "extension"
-    ],
-    "field": "client[0].end",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"closed\", got \"open\"",
-    "phase": 2
-  },
-  {
-    "cases": "COMP-HOST-WITH-PATH@connect-plain",
-    "runs": [
-      "proxy",
       "checkpoint-forward",
       "checkpoint-edit",
       "extension"
@@ -1994,17 +1961,6 @@
     "field": "verdict",
     "kind": "known",
     "reason": "measured by conformance-update-known: baseline \"Pass\", got \"Fail\"",
-    "phase": 2
-  },
-  {
-    "cases": "COMP-HOST-WITH-PATH@connect-tls",
-    "runs": [
-      "proxy",
-      "extension"
-    ],
-    "field": "client[0].end",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"closed\", got \"open\"",
     "phase": 2
   },
   {
@@ -5339,10 +5295,8 @@
   {
     "cases": "NORM-SP-BEFORE-COLON-CL@connect-plain",
     "runs": [
-      "proxy",
       "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
+      "checkpoint-edit"
     ],
     "field": "client[0].end",
     "kind": "known",
@@ -5415,10 +5369,8 @@
   {
     "cases": "NORM-SP-BEFORE-COLON-CL@connect-tls",
     "runs": [
-      "proxy",
       "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
+      "checkpoint-edit"
     ],
     "field": "client[0].end",
     "kind": "known",
@@ -5621,10 +5573,8 @@
   {
     "cases": "RFC9110-5.6.2-SP-BEFORE-COLON@connect-plain",
     "runs": [
-      "proxy",
       "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
+      "checkpoint-edit"
     ],
     "field": "client[0].end",
     "kind": "known",
@@ -5710,10 +5660,8 @@
   {
     "cases": "RFC9110-5.6.2-SP-BEFORE-COLON@connect-tls",
     "runs": [
-      "proxy",
       "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
+      "checkpoint-edit"
     ],
     "field": "client[0].end",
     "kind": "known",
@@ -6658,17 +6606,6 @@
     "cases": "RFC9112-7.1-MISSING-HOST@connect-plain",
     "runs": [
       "proxy",
-      "extension"
-    ],
-    "field": "client[0].end",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"closed\", got \"open\"",
-    "phase": 2
-  },
-  {
-    "cases": "RFC9112-7.1-MISSING-HOST@connect-plain",
-    "runs": [
-      "proxy",
       "checkpoint-forward",
       "checkpoint-edit",
       "extension"
@@ -6728,17 +6665,6 @@
     "field": "verdict",
     "kind": "known",
     "reason": "measured by conformance-update-known: baseline \"Pass\", got \"Fail\"",
-    "phase": 2
-  },
-  {
-    "cases": "RFC9112-7.1-MISSING-HOST@connect-tls",
-    "runs": [
-      "proxy",
-      "extension"
-    ],
-    "field": "client[0].end",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"closed\", got \"open\"",
     "phase": 2
   },
   {
@@ -12044,17 +11970,6 @@
     "cases": "SMUG-MULTIPLE-HOST-COMMA@connect-plain",
     "runs": [
       "proxy",
-      "extension"
-    ],
-    "field": "client[0].end",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"closed\", got \"open\"",
-    "phase": 2
-  },
-  {
-    "cases": "SMUG-MULTIPLE-HOST-COMMA@connect-plain",
-    "runs": [
-      "proxy",
       "checkpoint-forward",
       "checkpoint-edit",
       "extension"
@@ -12114,17 +12029,6 @@
     "field": "verdict",
     "kind": "known",
     "reason": "measured by conformance-update-known: baseline \"Pass\", got \"Fail\"",
-    "phase": 2
-  },
-  {
-    "cases": "SMUG-MULTIPLE-HOST-COMMA@connect-tls",
-    "runs": [
-      "proxy",
-      "extension"
-    ],
-    "field": "client[0].end",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"closed\", got \"open\"",
     "phase": 2
   },
   {
@@ -13079,10 +12983,8 @@
   {
     "cases": "SMUG-TE-SP-BEFORE-COLON@connect-plain",
     "runs": [
-      "proxy",
       "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
+      "checkpoint-edit"
     ],
     "field": "client[0].end",
     "kind": "known",
@@ -13168,10 +13070,8 @@
   {
     "cases": "SMUG-TE-SP-BEFORE-COLON@connect-tls",
     "runs": [
-      "proxy",
       "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
+      "checkpoint-edit"
     ],
     "field": "client[0].end",
     "kind": "known",
@@ -15180,6 +15080,116 @@
     "field": "client[0].responses[0].fields.order",
     "kind": "known",
     "reason": "measured by conformance-update-known: baseline \"server, date, content-type\", got \"content-type, date, server\"",
+    "phase": 2
+  },
+  {
+    "cases": "COMP-CHUNKED-EMPTY@connect-plain",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"); the 502 proxy error response names the cause (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
+    "phase": 2
+  },
+  {
+    "cases": "COMP-CHUNKED-EMPTY@connect-tls",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit"
+    ],
+    "field": "client[0].responses[0].body",
+    "kind": "known",
+    "reason": "under Checkpoint Martian fails to re-read the held chunked request body (\"chunked line ends with bare LF\"); the 502 proxy error response names the cause (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
+    "phase": 2
+  },
+  {
+    "cases": "COMP-HOST-WITH-USERINFO@connect-plain",
+    "runs": [
+      "proxy",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
+    "phase": 2
+  },
+  {
+    "cases": "COMP-HOST-WITH-USERINFO@connect-tls",
+    "runs": [
+      "proxy",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
+    "phase": 2
+  },
+  {
+    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-plain",
+    "runs": [
+      "proxy",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
+    "phase": 2
+  },
+  {
+    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-tls",
+    "runs": [
+      "proxy",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
+    "phase": 2
+  },
+  {
+    "cases": "SMUG-TRAILER-CL@connect-plain",
+    "runs": [
+      "proxy",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
+    "phase": 2
+  },
+  {
+    "cases": "SMUG-TRAILER-CL@connect-tls",
+    "runs": [
+      "proxy",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
+    "phase": 2
+  },
+  {
+    "cases": "SMUG-TRAILER-TE@connect-plain",
+    "runs": [
+      "proxy",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
+    "phase": 2
+  },
+  {
+    "cases": "SMUG-TRAILER-TE@connect-tls",
+    "runs": [
+      "proxy",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "kind": "known",
+    "reason": "Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md)",
     "phase": 2
   }
 ]

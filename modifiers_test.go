@@ -207,6 +207,19 @@ func waitForCheckpoint(t *testing.T, proxy *Proxy, n int) []domain.CheckpointIte
 	return nil
 }
 
+// errHoldDropped is what a hold's result channel carries when Checkpoint
+// dropped the pair.
+var errHoldDropped = errors.New("checkpoint dropped the pair")
+
+// holdResult is the result of a Checkpoint modifier: its error, or
+// errHoldDropped when it dropped the pair.
+func holdResult(pair *Pair, err error) error {
+	if err == nil && pair.Dropped() {
+		return errHoldDropped
+	}
+	return err
+}
+
 func receiveHoldResult(t *testing.T, result <-chan error) error {
 	t.Helper()
 	select {
@@ -240,14 +253,9 @@ func TestPreventLoopModifier(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
-		if !pair.skipRoundTrip {
-			t.Fatalf("wanted: True\ngot: %t", pair.skipRoundTrip)
+		assertControl(t, pair, err, controlRespond)
+		if pair.Response.StatusCode != http.StatusBadGateway || pair.Metadata["proxy_error"] != errLoop.Error() {
+			t.Fatalf("wanted a 502 proxy error response\ngot: %d, metadata %v", pair.Response.StatusCode, pair.Metadata)
 		}
 	})
 	t.Run("request to localhost:8080 with listener on 127.0.0.1:8080 should fail", func(t *testing.T) {
@@ -258,15 +266,7 @@ func TestPreventLoopModifier(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://localhost:8080/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
-		if !pair.skipRoundTrip {
-			t.Fatalf("wanted: True\ngot: %t", pair.skipRoundTrip)
-		}
+		assertControl(t, pair, err, controlRespond)
 	})
 	t.Run("request to localhost:8080 with listener on localhost:8080 should fail", func(t *testing.T) {
 		proxy := &Proxy{
@@ -276,15 +276,7 @@ func TestPreventLoopModifier(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://localhost:8080/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
-		if !pair.skipRoundTrip {
-			t.Fatalf("wanted: True\ngot: %t", pair.skipRoundTrip)
-		}
+		assertControl(t, pair, err, controlRespond)
 	})
 	t.Run("request to 127.0.0.1:8080 with listener on localhost:8080 should fail", func(t *testing.T) {
 		proxy := &Proxy{
@@ -294,15 +286,7 @@ func TestPreventLoopModifier(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
-		if !pair.skipRoundTrip {
-			t.Fatalf("wanted: True\ngot: %t", pair.skipRoundTrip)
-		}
+		assertControl(t, pair, err, controlRespond)
 	})
 	t.Run("request to [::1]:8080 with listener on [::1]:8080 should fail", func(t *testing.T) {
 		proxy := &Proxy{
@@ -312,15 +296,7 @@ func TestPreventLoopModifier(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://[::1]:8080/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
-		if !pair.skipRoundTrip {
-			t.Fatalf("wanted: True\ngot: %t", pair.skipRoundTrip)
-		}
+		assertControl(t, pair, err, controlRespond)
 	})
 	t.Run("request to 192.168.1.10:8080 with listener on 192.168.1.10:8080 should fail", func(t *testing.T) {
 		proxy := &Proxy{
@@ -330,15 +306,7 @@ func TestPreventLoopModifier(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://192.168.1.10:8080/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
-		if !pair.skipRoundTrip {
-			t.Fatalf("wanted: True\ngot: %t", pair.skipRoundTrip)
-		}
+		assertControl(t, pair, err, controlRespond)
 	})
 	t.Run("request to 192.168.1.10:8080 with listener on localhost:8080 should work", func(t *testing.T) {
 		proxy := &Proxy{
@@ -351,8 +319,8 @@ func TestPreventLoopModifier(t *testing.T) {
 		if err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
-		if pair.skipRoundTrip {
-			t.Fatalf("wanted: False\ngot: %t", pair.skipRoundTrip)
+		if pair.ended() {
+			t.Fatalf("wanted no control\ngot: %d", pair.control)
 		}
 	})
 
@@ -364,15 +332,7 @@ func TestPreventLoopModifier(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "https://localhost/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
-		if !pair.skipRoundTrip {
-			t.Fatalf("wanted: True\ngot: %t", pair.skipRoundTrip)
-		}
+		assertControl(t, pair, err, controlRespond)
 	})
 	t.Run("request to http://localhost with listener on localhost:80 should fail", func(t *testing.T) {
 		proxy := &Proxy{
@@ -382,15 +342,7 @@ func TestPreventLoopModifier(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://localhost/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
-		if !pair.skipRoundTrip {
-			t.Fatalf("wanted: True\ngot: %t", pair.skipRoundTrip)
-		}
+		assertControl(t, pair, err, controlRespond)
 	})
 	t.Run("request to 192.168.1.10:8081 with listener on 192.168.1.10:8080 should work", func(t *testing.T) {
 		proxy := &Proxy{
@@ -401,10 +353,10 @@ func TestPreventLoopModifier(t *testing.T) {
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
 		if err != nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
+			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
-		if pair.skipRoundTrip {
-			t.Fatalf("wanted: False\ngot: %t", pair.skipRoundTrip)
+		if pair.ended() {
+			t.Fatalf("wanted no control\ngot: %d", pair.control)
 		}
 	})
 
@@ -416,15 +368,7 @@ func TestPreventLoopModifier(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://marasi.app:8080/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
-		if !pair.skipRoundTrip {
-			t.Fatalf("wanted: True\ngot: %t", pair.skipRoundTrip)
-		}
+		assertControl(t, pair, err, controlRespond)
 	})
 }
 
@@ -437,12 +381,7 @@ func TestCompassRequestModifier(t *testing.T) {
 
 		err := CompassRequestModifier(proxy, pair)
 
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
+		assertControl(t, pair, err, controlStop)
 
 		if skip := pair.Skipped; !skip {
 			t.Errorf("expected skipped flag to be set in context and true")
@@ -475,13 +414,7 @@ func TestCompassRequestModifier(t *testing.T) {
 
 		err := CompassRequestModifier(proxy, pair)
 
-		if err == nil {
-			t.Fatalf("wanted: %v\ngot: nil", ErrSkipPipeline)
-		}
-
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
+		assertControl(t, pair, err, controlStop)
 
 		if skip := pair.Skipped; !skip {
 			t.Errorf("expected skipflag to be set in context and to be equal to true")
@@ -507,16 +440,8 @@ func TestCompassRequestModifier(t *testing.T) {
 
 		err := CompassRequestModifier(proxy, pair)
 
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrDropped)
-		}
-		if !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrDropped, err)
-		}
+		assertControl(t, pair, err, controlDrop)
 
-		if drop := pair.skipRoundTrip; !drop {
-			t.Errorf("expected dropped flag to be set in context and to be true")
-		}
 	})
 
 	t.Run("CompassRequestModifier should return an error if the proxy has no compass extension configured", func(t *testing.T) {
@@ -833,13 +758,7 @@ func TestExtensionsRequestModifier(t *testing.T) {
 
 		pair := NewTestPair(req)
 		err := ExtensionsRequestModifier(proxy, pair)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
+		assertControl(t, pair, err, controlStop)
 
 		if req.Header.Get("x-workshop-ran") != "true" {
 			t.Errorf("expected x-workshop-ran header to be set to true but got %q", req.Header.Get("x-workshop-ran"))
@@ -863,13 +782,7 @@ func TestExtensionsRequestModifier(t *testing.T) {
 		pair := NewTestPair(req)
 
 		err := ExtensionsRequestModifier(proxy, pair)
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrDropped)
-		}
-
-		if !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrDropped, err)
-		}
+		assertControl(t, pair, err, controlDrop)
 
 		if req.Header.Get("x-workshop-ran") != "true" {
 			t.Errorf("expected x-workshop-ran header to be set to true but got %q", req.Header.Get("x-workshop-ran"))
@@ -879,9 +792,6 @@ func TestExtensionsRequestModifier(t *testing.T) {
 			t.Errorf("expected x-testExtension-ran header to not be set but got %q", req.Header.Get("x-testExtension-ran"))
 		}
 
-		if !pair.skipRoundTrip {
-			t.Fatalf("wanted: true\ngot: %t", pair.skipRoundTrip)
-		}
 	})
 
 	t.Run("if request x-extension-id matches extensionID it should skip execution", func(t *testing.T) {
@@ -1058,7 +968,7 @@ func TestCheckpointRequestModifier(t *testing.T) {
 
 		done := make(chan error, 1)
 		go func() {
-			done <- CheckpointRequestModifier(proxy, pair)
+			done <- holdResult(pair, CheckpointRequestModifier(proxy, pair))
 		}()
 		items := waitForCheckpoint(t, proxy, 1)
 		if items[0].ID != reqID {
@@ -1073,11 +983,8 @@ func TestCheckpointRequestModifier(t *testing.T) {
 		if err := proxy.DropCheckpoint(reqID); err != nil {
 			t.Fatalf("dropping checkpoint: %v", err)
 		}
-		if err := receiveHoldResult(t, done); !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
-		}
-		if !pair.skipRoundTrip {
-			t.Fatalf("wanted: True\ngot: %t", pair.skipRoundTrip)
+		if err := receiveHoldResult(t, done); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 		if proxy.HasPendingCheckpoint() {
 			t.Fatalf("expected checkpoint item to be dequeued")
@@ -1108,16 +1015,10 @@ func TestCheckpointRequestModifier(t *testing.T) {
 
 		err = CheckpointRequestModifier(proxy, pair)
 
-		if !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
-		}
+		assertControl(t, pair, err, controlDrop)
 
 		if proxy.HasPendingCheckpoint() {
 			t.Fatalf("expected checkpoint item to be dequeued")
-		}
-
-		if !pair.skipRoundTrip {
-			t.Fatalf("wanted: True\ngot: %t", pair.skipRoundTrip)
 		}
 
 		if metadata := pair.Metadata; metadata != nil {
@@ -1155,17 +1056,12 @@ func TestCheckpointRequestModifier(t *testing.T) {
 
 		err = CheckpointRequestModifier(proxy, pair)
 
-		if !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
-		}
+		assertControl(t, pair, err, controlDrop)
 
 		if proxy.HasPendingCheckpoint() {
 			t.Fatalf("expected checkpoint item to be dequeued")
 		}
 
-		if !pair.skipRoundTrip {
-			t.Fatalf("wanted: True\ngot: %t", pair.skipRoundTrip)
-		}
 		if metadata := pair.Metadata; metadata != nil {
 			if metadata["intercepted"] != true {
 				t.Fatalf("wanted: true\ngot: %v", metadata["intercepted"])
@@ -1197,12 +1093,7 @@ func TestCheckpointRequestModifier(t *testing.T) {
 
 		err = CheckpointRequestModifier(proxy, pair)
 
-		if !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
-		}
-		if !pair.skipRoundTrip {
-			t.Fatalf("wanted: True\ngot: %t", pair.skipRoundTrip)
-		}
+		assertControl(t, pair, err, controlDrop)
 	})
 
 	t.Run("should drop request the request if the resume action is false", func(t *testing.T) {
@@ -1225,13 +1116,7 @@ func TestCheckpointRequestModifier(t *testing.T) {
 
 		err = CheckpointRequestModifier(proxy, pair)
 
-		if !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
-		}
-
-		if !pair.skipRoundTrip {
-			t.Fatalf("wanted: True\ngot: %t", pair.skipRoundTrip)
-		}
+		assertControl(t, pair, err, controlDrop)
 
 		if proxy.HasPendingCheckpoint() {
 			t.Fatalf("expected checkpoint item to be dequeued")
@@ -1430,7 +1315,7 @@ func TestCheckpointRequestModifier(t *testing.T) {
 
 		done := make(chan error, 1)
 		go func() {
-			done <- CheckpointRequestModifier(proxy, pair)
+			done <- holdResult(pair, CheckpointRequestModifier(proxy, pair))
 		}()
 		items := waitForCheckpoint(t, proxy, 1)
 		var forwardErr error
@@ -1445,8 +1330,8 @@ func TestCheckpointRequestModifier(t *testing.T) {
 		if err := proxy.DropCheckpoint(items[0].ID); err != nil {
 			t.Fatalf("dropping checkpoint after rebuild failure: %v", err)
 		}
-		if err := receiveHoldResult(t, done); !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+		if err := receiveHoldResult(t, done); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 		if proxy.HasPendingCheckpoint() {
 			t.Fatalf("expected checkpoint item to be dequeued")
@@ -1513,8 +1398,10 @@ func TestWriteRequestModifier(t *testing.T) {
 
 		err = WriteRequestModifier(proxy, pair)
 
-		if !errors.Is(err, ErrRequestHandlerUndefined) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrRequestHandlerUndefined, err)
+		// A missing handler is not an error: under fail-closed it would
+		// turn every pair into a proxy error response.
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
 		if len(proxy.DBWriteChannel) != 1 {
@@ -1730,9 +1617,7 @@ func TestResponseFilterModifier(t *testing.T) {
 		pair.Skipped = true
 
 		err := ResponseFilterModifier(&Proxy{}, pair)
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
+		assertControl(t, pair, err, controlStop)
 	})
 
 	t.Run("responses to standard requests should be processed and timestamped", func(t *testing.T) {
@@ -2282,105 +2167,6 @@ func TestWebSocketUpgradeHandler(t *testing.T) {
 	})
 }
 
-func TestBufferedStreamingResponseModifier(t *testing.T) {
-	proxy := &Proxy{}
-	t.Run("chunked response modifier should return an error if it fails to read the body", func(t *testing.T) {
-		res := &http.Response{
-			Header: make(http.Header),
-			Body:   &erroringReader{},
-		}
-
-		err := BufferStreamingBodyModifier(proxy, &Pair{Response: res})
-		if !errors.Is(err, ErrReadBody) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrReadBody, err)
-		}
-	})
-
-	t.Run("should read the entire body and set the content length + remove TransferEncoding", func(t *testing.T) {
-
-		testReader, testWriter := io.Pipe()
-
-		res := &http.Response{
-			Header:           make(http.Header),
-			TransferEncoding: []string{"chunked"},
-			Body:             testReader,
-		}
-
-		want := "this is streamed marasi"
-		go func() {
-			defer testWriter.Close()
-			testWriter.Write([]byte("this is s"))
-			time.Sleep(10 * time.Millisecond)
-			testWriter.Write([]byte("treamed marasi"))
-		}()
-
-		err := BufferStreamingBodyModifier(proxy, &Pair{Response: res})
-
-		if err != nil {
-			t.Fatalf("wanted: nil\ngot: %v", err)
-		}
-
-		got, err := io.ReadAll(res.Body)
-		if err != nil {
-			t.Fatalf("wanted: nil\ngot: %v", err)
-		}
-
-		if string(got) != want {
-			t.Fatalf("wanted: %q\ngot: %q", want, string(got))
-		}
-
-		if res.ContentLength != int64(len(want)) {
-			t.Fatalf("wanted: %d\ngot: %d", len(want), len(got))
-		}
-
-		if res.Header.Get("Content-Length") != fmt.Sprintf("%d", len(want)) {
-			t.Fatalf("wanted: %d\ngot: %s", len(want), res.Header.Get("Content-Length"))
-		}
-
-		if res.TransferEncoding != nil {
-			t.Fatalf("wanted: nil\ngot: %v", res.TransferEncoding)
-		}
-	})
-	t.Run("websocket upgrade should not read or close the response body", func(t *testing.T) {
-		req := httptest.NewRequest(
-			http.MethodGet,
-			"https://marasi.app/socket",
-			nil,
-		)
-		req.Header.Set("Connection", "Upgrade")
-		req.Header.Set("Upgrade", "websocket")
-
-		body := &trackingResponseBody{}
-
-		res := &http.Response{
-			StatusCode: http.StatusSwitchingProtocols,
-			Request:    req,
-			Header: http.Header{
-				"Connection": []string{"Upgrade"},
-				"Upgrade":    []string{"websocket"},
-			},
-			Body: body,
-		}
-
-		err := BufferStreamingBodyModifier(&Proxy{}, &Pair{Response: res})
-		if err != nil {
-			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
-		}
-
-		if body.read {
-			t.Fatalf("\nwanted body read:\n%v\ngot:\n%v", false, body.read)
-		}
-
-		if body.closed {
-			t.Fatalf("\nwanted body closed:\n%v\ngot:\n%v", false, body.closed)
-		}
-
-		if res.Body != body {
-			t.Fatalf("\nwanted body:\n%p\ngot:\n%p", body, res.Body)
-		}
-	})
-}
-
 func TestCompressedResponseModifier(t *testing.T) {
 	proxy := &Proxy{}
 
@@ -2617,15 +2403,10 @@ func TestCompassResponseModifier(t *testing.T) {
 			Request: req,
 		}
 
-		err := CompassResponseModifier(proxy, newResponsePair(res))
+		pair := newResponsePair(res)
+		err := CompassResponseModifier(proxy, pair)
 
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
+		assertControl(t, pair, err, controlStop)
 
 	})
 
@@ -2648,14 +2429,10 @@ func TestCompassResponseModifier(t *testing.T) {
 			Request: req,
 		}
 
-		err := CompassResponseModifier(proxy, newResponsePair(res))
+		pair := newResponsePair(res)
+		err := CompassResponseModifier(proxy, pair)
 
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrDropped)
-		}
-		if !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrDropped, err)
-		}
+		assertControl(t, pair, err, controlDrop)
 
 	})
 
@@ -2684,15 +2461,10 @@ func TestCompassResponseModifier(t *testing.T) {
 			Request: req,
 		}
 
-		err := CompassResponseModifier(proxy, newResponsePair(res))
+		pair := newResponsePair(res)
+		err := CompassResponseModifier(proxy, pair)
 
-		if err == nil {
-			t.Fatalf("wanted: %v\ngot: nil", ErrSkipPipeline)
-		}
-
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
+		assertControl(t, pair, err, controlStop)
 
 	})
 
@@ -2786,14 +2558,9 @@ func TestExtensionsResponseModifier(t *testing.T) {
 			Request: req,
 		}
 
-		err := ExtensionsResponseModifier(proxy, newResponsePair(res))
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrSkipPipeline)
-		}
-
-		if !errors.Is(err, ErrSkipPipeline) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrSkipPipeline, err)
-		}
+		pair := newResponsePair(res)
+		err := ExtensionsResponseModifier(proxy, pair)
+		assertControl(t, pair, err, controlStop)
 
 		if res.Header.Get("x-workshop-ran-response") != "true" {
 			t.Errorf("expected x-workshop-ran header to be set to true but got %q", res.Header.Get("x-workshop-ran-response"))
@@ -2819,14 +2586,9 @@ func TestExtensionsResponseModifier(t *testing.T) {
 			Request: req,
 		}
 
-		err := ExtensionsResponseModifier(proxy, newResponsePair(res))
-		if err == nil {
-			t.Fatalf("wanted: %q\ngot: nil", ErrDropped)
-		}
-
-		if !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %q\ngot: %v", ErrDropped, err)
-		}
+		pair := newResponsePair(res)
+		err := ExtensionsResponseModifier(proxy, pair)
+		assertControl(t, pair, err, controlDrop)
 
 		if res.Header.Get("x-workshop-ran-response") != "true" {
 			t.Errorf("expected x-workshop-ran header to be set to true but got %q", res.Header.Get("x-workshop-ran-response"))
@@ -2998,7 +2760,7 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		done := make(chan error, 1)
 		pair := newResponsePair(res)
 		go func() {
-			done <- CheckpointResponseModifier(proxy, pair)
+			done <- holdResult(pair, CheckpointResponseModifier(proxy, pair))
 		}()
 		items := waitForCheckpoint(t, proxy, 1)
 		if items[0].ID != pair.ID {
@@ -3010,8 +2772,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		if err := proxy.DropCheckpoint(pair.ID); err != nil {
 			t.Fatalf("dropping checkpoint: %v", err)
 		}
-		if err := receiveHoldResult(t, done); !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+		if err := receiveHoldResult(t, done); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 		if proxy.HasPendingCheckpoint() {
 			t.Fatalf("expected checkpoint item to be dequeued")
@@ -3041,9 +2803,7 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		pair := newResponsePair(res)
 		err = CheckpointResponseModifier(proxy, pair)
 
-		if !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
-		}
+		assertControl(t, pair, err, controlDrop)
 
 		if proxy.HasPendingCheckpoint() {
 			t.Fatalf("expected checkpoint item to be dequeued")
@@ -3084,9 +2844,7 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		pair := newResponsePair(res)
 		err = CheckpointResponseModifier(proxy, pair)
 
-		if !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
-		}
+		assertControl(t, pair, err, controlDrop)
 
 		if proxy.HasPendingCheckpoint() {
 			t.Fatalf("expected checkpoint item to be dequeued")
@@ -3128,9 +2886,7 @@ func TestCheckpointResponseModifier(t *testing.T) {
 			}
 			err := CheckpointResponseModifier(proxy, pair)
 
-			if !errors.Is(err, ErrDropped) {
-				t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
-			}
+			assertControl(t, pair, err, controlDrop)
 		})
 	}
 
@@ -3153,9 +2909,7 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		pair := newResponsePair(res)
 		err = CheckpointResponseModifier(proxy, pair)
 
-		if !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
-		}
+		assertControl(t, pair, err, controlDrop)
 
 		if proxy.HasPendingCheckpoint() {
 			t.Fatalf("expected checkpoint item to be dequeued")
@@ -3276,7 +3030,7 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		done := make(chan error, 1)
 		pair := newResponsePair(res)
 		go func() {
-			done <- CheckpointResponseModifier(proxy, pair)
+			done <- holdResult(pair, CheckpointResponseModifier(proxy, pair))
 		}()
 		items := waitForCheckpoint(t, proxy, 1)
 		var forwardErr error
@@ -3291,8 +3045,8 @@ func TestCheckpointResponseModifier(t *testing.T) {
 		if err := proxy.DropCheckpoint(items[0].ID); err != nil {
 			t.Fatalf("dropping checkpoint after rebuild failure: %v", err)
 		}
-		if err := receiveHoldResult(t, done); !errors.Is(err, ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrDropped, err)
+		if err := receiveHoldResult(t, done); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 		if proxy.HasPendingCheckpoint() {
 			t.Fatalf("expected checkpoint item to be dequeued")
@@ -3392,8 +3146,10 @@ func TestWriteResponseModifier(t *testing.T) {
 
 		err := WriteResponseModifier(proxy, pair)
 
-		if !errors.Is(err, ErrResponseHandlerUndefined) {
-			t.Fatalf("wanted: %v\ngot: %v", ErrResponseHandlerUndefined, err)
+		// A missing handler is not an error: under fail-closed it would
+		// turn every pair into a proxy error response.
+		if err != nil {
+			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 
 		if len(proxy.DBWriteChannel) != 1 {
@@ -3554,5 +3310,17 @@ func TestExtensionsResponseModifierPutsNoNullInMetadata(t *testing.T) {
 	want := `{"kept":"x","list":[1,2],"nested":{"n":1}}`
 	if string(got) != want {
 		t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, got)
+	}
+}
+
+// assertControl fails t unless the modifier returned no error and ended the
+// chain with want.
+func assertControl(t *testing.T, pair *Pair, err error, want control) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("wanted: nil\ngot: %v", err)
+	}
+	if pair.control != want {
+		t.Fatalf("wanted control %d\ngot: %d", want, pair.control)
 	}
 }

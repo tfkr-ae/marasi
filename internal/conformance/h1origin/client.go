@@ -2,6 +2,7 @@ package h1origin
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -19,6 +20,11 @@ import (
 // PortPlaceholder replaces the origin's port in every recording, so a case
 // records the same bytes whichever port its origin listened on.
 const PortPlaceholder = "PORT"
+
+// ProxyPlaceholder stands for the proxy listener's host:port in every
+// recording. A request's "{proxy}" is the listener's address through a
+// proxy, and this placeholder in the direct run, where there is no proxy.
+const ProxyPlaceholder = "PROXY"
 
 // record runs one case on one client approach, directly when job.Proxy is
 // empty, and returns its recording. On connect-tls the origin serves TLS
@@ -41,8 +47,13 @@ func (s Suite) record(ctx context.Context, c Case, approach conformance.Approach
 	defer o.stop()
 	authority := net.JoinHostPort(s.originHost(), o.port())
 	normalise := func(raw h1.Raw) h1.Raw {
-		return raw.Replace(authority, net.JoinHostPort(s.originHost(), PortPlaceholder))
+		raw = raw.Replace(authority, net.JoinHostPort(s.originHost(), PortPlaceholder))
+		if proxy != "" {
+			raw = raw.Replace(proxy, ProxyPlaceholder)
+		}
+		return raw
 	}
+	proxyAuthority := cmp.Or(proxy, ProxyPlaceholder)
 
 	address := net.JoinHostPort(s.listen(), o.port())
 	if proxy != "" {
@@ -70,9 +81,14 @@ func (s Suite) record(ctx context.Context, c Case, approach conformance.Approach
 	}
 	if tunnelled {
 		cl.exchange(c.Requests, func(request string) string {
+			target := authority
+			if strings.Contains(request, "{proxy}") {
+				target = proxyAuthority
+			}
 			request = strings.ReplaceAll(request, "{authority}", authority)
+			request = strings.ReplaceAll(request, "{proxy}", proxyAuthority)
 			if proxy != "" && approach == conformance.ApproachAbsolute {
-				request = absoluteForm(request, authority)
+				request = absoluteForm(request, target)
 			}
 			return request
 		})

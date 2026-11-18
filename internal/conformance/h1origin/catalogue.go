@@ -268,6 +268,17 @@ var Catalogue = []Case{
 		},
 	},
 
+	// A request that names the proxy itself.
+	{
+		ID:       "loop-back",
+		RFC:      "RFC 9110 §7.6 a proxy must not forward a request back to itself",
+		Requests: []string{"GET /loop HTTP/1.1\r\nHost: {proxy}\r\n\r\n"},
+		Script: []Step{
+			Await(),
+			Send("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"),
+		},
+	},
+
 	// Request fields.
 	{
 		ID:       "request-fields-not-added",
