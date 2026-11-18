@@ -90,28 +90,24 @@ func (proxy *Proxy) refuseRequest(pair *Pair, cause error) {
 }
 
 // failRequestChain ends a request whose Go request modifier returned err. A
-// dropped pair stays dropped. Any other is answered with a 502 proxy error
-// response, and its request is captured first when the chain had set the pair
-// up but not yet captured it, so the pair is stored with the response.
+// dropped pair stays dropped, and the cause is logged. Any other is answered
+// with a 502 proxy error response, and its request is captured when the chain
+// had set the pair up but not yet captured it, so the pair is stored with the
+// response and the request already holds metadata.proxy_error.
 func (proxy *Proxy) failRequestChain(pair *Pair, err error) {
+	cause := fmt.Errorf("running the request chain: %w", err)
 	if pair.Dropped() {
-		if logErr := proxy.WriteLog("ERROR", fmt.Sprintf("request pipeline: %v", err), pairLogOptions(pair)...); logErr != nil {
-			log.Printf("writing request pipeline log: %v", logErr)
+		if logErr := proxy.WriteLog("ERROR", cause.Error(), pairLogOptions(pair)...); logErr != nil {
+			log.Printf("writing the request chain's log: %v", logErr)
 		}
 		return
 	}
-	pair.control = controlNone
-	cause := fmt.Errorf("a request modifier failed: %w", err)
-	pair.proxyError = cause.Error()
-	if pair.Metadata != nil {
-		pair.Metadata[proxyErrorMetadataKey] = pair.proxyError
-	}
+	proxy.respondWithProxyError(pair, http.StatusBadGateway, cause)
 	if pair.ID != uuid.Nil && !pair.Skipped && !pair.requestCaptured {
 		if err := WriteRequestModifier(proxy, pair); err != nil {
 			log.Printf("capturing the request of a proxy error response: %v", err)
 		}
 	}
-	proxy.respondWithProxyError(pair, http.StatusBadGateway, cause)
 	proxy.logProxyError(pair, cause)
 }
 
