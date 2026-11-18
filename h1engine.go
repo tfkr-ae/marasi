@@ -39,6 +39,10 @@ type h1Engine struct {
 	// handlers counts the client connections being served.
 	handlers sync.WaitGroup
 
+	// headerTimeout bounds reading a request's head, and idleTimeout the wait
+	// for the next request on a kept-alive connection (h1engine_endings.go).
+	headerTimeout, idleTimeout time.Duration
+
 	// leaves issues the leaf certificates of intercepted TLS, nil until
 	// setMITM, which runs before serving (h1engine_mitm.go).
 	leaves *leafIssuer
@@ -50,7 +54,10 @@ type h1Engine struct {
 }
 
 func newH1Engine(proxy *Proxy) *h1Engine {
-	engine := &h1Engine{proxy: proxy, conns: make(map[*h1Conn]bool)}
+	engine := &h1Engine{
+		proxy: proxy, conns: make(map[*h1Conn]bool),
+		headerTimeout: headerTimeout, idleTimeout: idleTimeout,
+	}
 	engine.setPipeline(nil, nil)
 	return engine
 }
@@ -111,9 +118,10 @@ func (engine *h1Engine) setPipeline(request requestStep, response responseStep) 
 	engine.request, engine.response = request, response
 }
 
-// idle marks conn as waiting for its next request. It reports false when the
-// engine is closing, and the connection should end.
-func (engine *h1Engine) idle(conn *h1Conn) bool {
+// idle marks conn as waiting for its next request, for up to wait, and
+// watches its origin connection meanwhile (h1engine_endings.go). It reports
+// false when the engine is closing, and the connection should end.
+func (engine *h1Engine) idle(conn *h1Conn, wait time.Duration) bool {
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
 	if engine.closing.Load() {
@@ -121,6 +129,8 @@ func (engine *h1Engine) idle(conn *h1Conn) bool {
 	}
 	engine.conns[conn] = true
 	conn.retireOrigin()
+	conn.conn.SetReadDeadline(time.Now().Add(wait))
+	conn.watchOrigin()
 	return true
 }
 
@@ -153,6 +163,9 @@ type h1Conn struct {
 	// tunnel is the authority of the CONNECT this connection is inside,
 	// "" before one.
 	tunnel string
+	// kept is set once the connection carried a request and stays open for
+	// another; the wait for that one is the idle timeout.
+	kept bool
 	// hijacked is set once the base pipeline took the connection over.
 	hijacked bool
 	// origin is this client connection's origin connection, nil until its
@@ -176,21 +189,18 @@ func newH1Conn(engine *h1Engine, conn net.Conn) *h1Conn {
 // pipelined requests are answered in order.
 func (c *h1Conn) serve() {
 	defer c.end()
-	for c.engine.idle(c) {
-		// Ticket 19 adds the 60-second header and 5-minute idle
-		// timeouts here.
-		head, err := h1.ReadRequestHead(c.br)
-		c.engine.busy(c)
-		if err != nil {
-			// A clean close, a timeout or a head the codec cannot
-			// parse ends the connection, as under Martian.
+	for {
+		head, ok := c.readHead()
+		if !ok {
 			return
 		}
 		var keep bool
 		if head.Method == http.MethodConnect && c.tunnel == "" {
 			keep = c.connect(head)
+			c.kept = false
 		} else {
 			keep = c.exchange(head)
+			c.kept = true
 		}
 		if !keep || c.hijacked {
 			return
@@ -245,6 +255,7 @@ func (c *h1Conn) connect(head *h1.RequestHead) bool {
 	if err := res.Write(c.bw); err != nil || c.bw.Flush() != nil {
 		return false
 	}
+	c.engine.setReadDeadline(c, c.engine.headerTimeout)
 	first, err := c.br.Peek(1)
 	if err != nil {
 		return false

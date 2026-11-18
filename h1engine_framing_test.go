@@ -357,10 +357,13 @@ func TestH1Engine_LuaSetBodyUnchanged(t *testing.T) {
 }
 
 // serveCheckpointProxy serves a framing proxy that holds every request and
-// response in Checkpoint.
-func serveCheckpointProxy(t *testing.T) (*Proxy, string, *capturedPair) {
+// response in Checkpoint, configured further by each of extra.
+func serveCheckpointProxy(t *testing.T, extra ...func(proxy *Proxy)) (*Proxy, string, *capturedPair) {
 	t.Helper()
 	return serveFramingProxy(t, func(proxy *Proxy) {
+		for _, configure := range extra {
+			configure(proxy)
+		}
 		ext := *testExtensions["checkpoint"]
 		ext.Enabled = true
 		if err := proxy.WithOptions(WithExtension(&ext)); err != nil {

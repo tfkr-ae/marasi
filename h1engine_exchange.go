@@ -230,6 +230,16 @@ type originConn struct {
 	route *Route
 	// scheme is http, or https when conn runs TLS with the origin.
 	scheme string
+
+	// While the client connection is idle (h1engine_endings.go): watch is
+	// closed when the watch's read returns, stopping is set while the
+	// client connection ends it, ended once the origin closed or sent
+	// unasked bytes, and retired once a route swap closed conn. All but
+	// ended are guarded by engine.mu.
+	watch    chan struct{}
+	stopping bool
+	ended    bool
+	retired  bool
 }
 
 // originFor returns the client connection's origin connection to addr on
