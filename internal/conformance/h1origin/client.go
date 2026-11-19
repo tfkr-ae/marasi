@@ -98,7 +98,13 @@ func (s Suite) record(ctx context.Context, c Case, approach conformance.Approach
 	}
 	// The origin's view is taken before the client closes, so a connection
 	// the proxy keeps for reuse and one the client is about to close both
-	// record what the origin saw while the case ran.
+	// record what the origin saw while the case ran. A client connection
+	// its peer ended takes the proxy's origin connections with it, and how
+	// soon the origin sees that is timing, not behaviour: each one still
+	// open gets the settle time to end first.
+	if cl.end == h1.EndClosed || cl.end == h1.EndReset {
+		o.awaitEnds(s.settle())
+	}
 	recording := h1.Recording{Origin: o.snapshot(normalise)}
 	client := h1.NewConnection(normalise(h1.Raw{ToServer: cl.sent, ToClient: cl.received}), cl.end)
 	client.Tunnel = tunnel
