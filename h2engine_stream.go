@@ -185,16 +185,15 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 func (h *h2Conn) awaitResponse(st *h2Stream, req *http.Request, os *h2OriginStream) (*http.Response, *wireResponse, *http2.ErrCode, error) {
 	for done := false; !done; {
 		select {
-		case fields := <-os.interim:
-			h.relayInterim(st, fields)
+		case <-os.moreInterim:
 		case <-os.done:
 			done = true
 		case <-st.ctx.Done():
 			return nil, nil, nil, errStreamGone
 		}
-	}
-	for len(os.interim) > 0 {
-		h.relayInterim(st, <-os.interim)
+		for _, fields := range os.takeInterim() {
+			h.relayInterim(st, fields)
+		}
 	}
 	switch {
 	case errors.Is(os.err, errStreamGone), h.gone(st):

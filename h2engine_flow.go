@@ -9,18 +9,77 @@ import (
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
+
+	"github.com/tfkr-ae/marasi/internal/h1"
 )
 
 // Each HTTP/2 leg has its own SETTINGS, flow-control windows, HPACK tables
 // and stream IDs (docs/adr/2026-11-19-http2-transparency-is-end-to-end-for-messages-and-per-leg-for-frames.md).
 // This file is what the two legs share: the writer, which owns the leg's
-// framer and HPACK encoder, and the send side of flow control.
+// framer and HPACK encoder, the reading of header blocks, and the send side
+// of flow control.
 
 // h2DefaultWindow is the initial flow-control window of RFC 9113 §6.9.2.
 const h2DefaultWindow = 65535
 
 // h2MaxWindow is the largest flow-control window (RFC 9113 §6.9.1).
 const h2MaxWindow = math.MaxInt32
+
+// h2MaxBlock bounds a header block the peer sends, both as read and as
+// decoded (each field counted as its name, its value and 32 octets, as RFC
+// 9113 §6.5.2 does). It is the HTTP/1.1 head limit, so Marasi refuses no
+// header section Go's own servers take.
+const h2MaxBlock = h1.MaxHeadBytes
+
+// errH2BlockTooLarge is the connection error for a header block past
+// h2MaxBlock. A block is either decoded whole or the connection ends, since
+// the HPACK table cannot be kept in step otherwise.
+var errH2BlockTooLarge = http2.ConnectionError(http2.ErrCodeEnhanceYourCalm)
+
+// h2Block is a header block being read, from its HEADERS frame to the
+// CONTINUATION that ends it. Each leg reads one at a time (RFC 9113 §6.10).
+type h2Block struct {
+	buf       []byte
+	id        uint32
+	endStream bool
+}
+
+// start begins the block of HEADERS frame f.
+func (b *h2Block) start(f *http2.HeadersFrame) error {
+	b.buf, b.id, b.endStream = b.buf[:0], f.StreamID, f.StreamEnded()
+	return b.add(f.HeaderBlockFragment())
+}
+
+// add appends a fragment, refusing a block that runs past h2MaxBlock.
+func (b *h2Block) add(fragment []byte) error {
+	if len(b.buf)+len(fragment) > h2MaxBlock {
+		return errH2BlockTooLarge
+	}
+	b.buf = append(b.buf, fragment...)
+	return nil
+}
+
+// decode decodes the whole block, which keeps the leg's HPACK table in step
+// whatever becomes of the block.
+func (b *h2Block) decode(decoder *hpack.Decoder) (h2Fields, error) {
+	var fields h2Fields
+	size := 0
+	decoder.SetEmitFunc(func(f hpack.HeaderField) {
+		if size += int(f.Size()); size <= h2MaxBlock {
+			fields = append(fields, h2Field{Name: f.Name, Value: f.Value, Sensitive: f.Sensitive})
+		}
+	})
+	if _, err := decoder.Write(b.buf); err != nil {
+		return nil, http2.ConnectionError(http2.ErrCodeCompression)
+	}
+	if err := decoder.Close(); err != nil {
+		return nil, http2.ConnectionError(http2.ErrCodeCompression)
+	}
+	if size > h2MaxBlock {
+		return nil, errH2BlockTooLarge
+	}
+	return fields, nil
+}
 
 // h2Writer writes one leg's frames. Every write goes through it, so the
 // HPACK encoder's state follows the order header blocks go out in.

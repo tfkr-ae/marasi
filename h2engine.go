@@ -61,9 +61,7 @@ type h2Conn struct {
 	dialMu     sync.Mutex
 
 	// The header block being read, until its END_HEADERS.
-	block         []byte
-	blockID       uint32
-	blockEnd      bool
+	block         h2Block
 	blockSelfDeps bool
 	sawSettings   bool
 
@@ -314,14 +312,17 @@ func (h *h2Conn) frame(frame http2.Frame) error {
 		if f.StreamID%2 == 0 {
 			return http2.ConnectionError(http2.ErrCodeProtocol)
 		}
-		h.block = append(h.block[:0], f.HeaderBlockFragment()...)
-		h.blockID, h.blockEnd = f.StreamID, f.StreamEnded()
 		h.blockSelfDeps = f.HasPriority() && f.Priority.StreamDep == f.StreamID
+		if err := h.block.start(f); err != nil {
+			return err
+		}
 		if f.HeadersEnded() {
 			return h.headerBlock()
 		}
 	case *http2.ContinuationFrame:
-		h.block = append(h.block, f.HeaderBlockFragment()...)
+		if err := h.block.add(f.HeaderBlockFragment()); err != nil {
+			return err
+		}
 		if f.HeadersEnded() {
 			return h.headerBlock()
 		}
@@ -406,15 +407,11 @@ func (h *h2Conn) rstStream(f *http2.RSTStreamFrame) error {
 // becomes of it, to keep the HPACK table in step. Its fields are not
 // checked: a malformed request goes to the origin as it came.
 func (h *h2Conn) headerBlock() error {
-	decoded, err := h.decoder.DecodeFull(h.block)
+	fields, err := h.block.decode(h.decoder)
 	if err != nil {
-		return http2.ConnectionError(http2.ErrCodeCompression)
+		return err
 	}
-	fields := make(h2Fields, len(decoded))
-	for i, f := range decoded {
-		fields[i] = h2Field{Name: f.Name, Value: f.Value, Sensitive: f.Sensitive}
-	}
-	id, end := h.blockID, h.blockEnd
+	id, end := h.block.id, h.block.endStream
 	h.mu.Lock()
 	if st := h.streams[id]; st != nil {
 		switch {
