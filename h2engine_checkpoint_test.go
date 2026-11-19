@@ -2,6 +2,7 @@ package marasi
 
 import (
 	"testing"
+	"time"
 
 	"github.com/tfkr-ae/marasi/domain"
 )
@@ -125,7 +126,10 @@ func TestH2Engine_Checkpoint(t *testing.T) {
 		expectCapturedResponse(t, captured, "HTTP/2 403\r\nX-Edited: Yes\r\nTransfer-Encoding: chunked\r\ncontent-length: 2\r\n\r\nchanged")
 	})
 
-	t.Run("should hold only its own stream", func(t *testing.T) {
+	t.Run("should hold only its own stream, giving up its turn before the origin however long streams wait for theirs", func(t *testing.T) {
+		wait := h2OrderWait
+		h2OrderWait = time.Minute
+		t.Cleanup(func() { h2OrderWait = wait })
 		origin := newH2TestOrigin(t)
 		addr, _, ca := serveH1EngineMITMProxy(t, true, holdEverything(t))
 		proxy := proxyOf(t, addr)

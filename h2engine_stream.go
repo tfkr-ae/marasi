@@ -87,7 +87,9 @@ func (h *h2Conn) prepare(req *http.Request, st *h2Stream) *http.Request {
 		req.URL.Scheme = "http"
 	}
 	req.URL.Host = cmp.Or(withoutDefaultPort(h.c.tunnel, req.URL.Scheme), req.Host)
-	return req.WithContext(st.ctx)
+	// A held stream gives up its turn before the origin as its hold
+	// starts, so streams the client opened after it do not wait on it.
+	return req.WithContext(withHoldStarts(st.ctx, func() { h.passTurn(st) }))
 }
 
 // roundTrip gets the pair's response, as h1Conn.roundTrip does. A nil

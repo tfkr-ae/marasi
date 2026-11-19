@@ -155,13 +155,15 @@ type h2Stream struct {
 }
 
 // h2OrderWait bounds how long a stream waits for the streams the client
-// opened before it to go to the origin first. A stream that is held, by
-// Checkpoint or a slow hook, lets the others pass once it runs out.
-const h2OrderWait = 250 * time.Millisecond
+// opened before it to go to the origin first. A stream Checkpoint holds
+// gives up its turn as the hold starts; one a slow hook holds lets the
+// others pass once the wait runs out.
+var h2OrderWait = 250 * time.Millisecond
 
 // waitTurn waits until every stream the client opened before st was sent
 // to the origin or ended, or h2OrderWait passed, so origin streams open in
-// the client's order as they would going direct.
+// the client's order as they would going direct. A stream that gave up its
+// turn already waits for none.
 func (h *h2Conn) waitTurn(st *h2Stream) {
 	h.mu.Lock()
 	var before []chan struct{}
@@ -170,6 +172,9 @@ func (h *h2Conn) waitTurn(st *h2Stream) {
 			break
 		}
 		before = append(before, other.turn)
+	}
+	if !slices.Contains(h.unsent, st) {
+		before = nil
 	}
 	h.mu.Unlock()
 	timeout := time.NewTimer(h2OrderWait)

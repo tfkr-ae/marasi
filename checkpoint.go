@@ -315,6 +315,9 @@ func (proxy *Proxy) holdHTTP(item domain.CheckpointItem, req *http.Request, res 
 	if notify != nil {
 		_ = notify(cloneCheckpointItem(item))
 	}
+	if req != nil {
+		holdStarts(req.Context())
+	}
 
 	select {
 	case <-pending.done:
@@ -328,6 +331,24 @@ func (proxy *Proxy) holdHTTP(item domain.CheckpointItem, req *http.Request, res 
 		rebuiltReq:        pending.rebuiltReq,
 		rebuiltRes:        pending.rebuiltRes,
 	}, nil
+}
+
+// holdStartsKey holds what a request's engine runs as Checkpoint starts to
+// hold the request: an HTTP/2 stream gives up its turn before the origin,
+// so the hold blocks only its own stream.
+type holdStartsKey struct{}
+
+// withHoldStarts returns ctx with started run when a hold of its request
+// starts.
+func withHoldStarts(ctx context.Context, started func()) context.Context {
+	return context.WithValue(ctx, holdStartsKey{}, started)
+}
+
+// holdStarts runs what ctx's request runs as its hold starts, if anything.
+func holdStarts(ctx context.Context) {
+	if started, ok := ctx.Value(holdStartsKey{}).(func()); ok {
+		started()
+	}
 }
 
 // checkpointHoldContext returns the context that ends an HTTP hold: the request's,
