@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/internal/h1"
 )
 
@@ -303,6 +304,7 @@ func (c *h1Conn) originFor(pair *Pair, route *Route, addr string) (*originConn, 
 		c.origin = &originConn{addr: addr, scheme: scheme, route: conn.route, conn: conn, br: bufio.NewReader(conn), bw: bufio.NewWriter(conn)}
 	}
 	recordRoute(pair, c.origin)
+	pair.originProtocol = domain.ProtocolHTTP1
 	return c.origin, nil
 }
 

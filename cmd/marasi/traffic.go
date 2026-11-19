@@ -42,6 +42,11 @@ number, its # in capture order, then its id.
       upstream_proxy = "" matches pairs sent directly. Pairs with no
       response yet, or captured before routes were recorded, match
       neither.
+  client_protocol, origin_protocol
+      = and != against the protocol the pair used between the client and
+      Marasi, or between Marasi and the origin: "http/1.1" or "h2", for
+      example client_protocol = "h2". They differ only when Marasi
+      translated the pair between versions.
   number
       = != < <= > >= against the pair's number in capture order, for
       example number = 10 or number > 500. Numbers start at 1, never
@@ -104,11 +109,12 @@ type yet are never hidden.
 
 Sorting: --order-by takes one field and an optional desc, for example
 --order-by 'length desc'. The fields are requested_at, number, method,
-host, path, status_code, content_type and length. The default is
-'requested_at desc', newest first. number is capture order; under
-concurrent capture it can differ from requested_at by a few places. Text sorts in byte order, as stored:
-host includes its port and path its ?query. Equal values list oldest
-first ascending and newest first with desc. Pairs with no response yet
+host, path, status_code, content_type, length, client_protocol and
+origin_protocol. The default is 'requested_at desc', newest first.
+number is capture order; under concurrent capture it can differ from
+requested_at by a few places. Text sorts in byte order, as stored: host
+includes its port and path its ?query. Equal values list oldest first
+ascending and newest first with desc. Pairs with no response yet
 have no status_code, content_type or length, and sort last either way.
 
 The same query and exclusion work in traffic count, traffic sitemap and
@@ -297,6 +303,9 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 			Path       string `json:"path"`
 			StatusCode int    `json:"status_code"`
 			Length     string `json:"length"`
+
+			ClientProtocol string `json:"client_protocol"`
+			OriginProtocol string `json:"origin_protocol"`
 		} `json:"items"`
 		NextCursor *string `json:"next_cursor"`
 		PrevCursor *string `json:"prev_cursor"`
@@ -309,14 +318,15 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 		return fmt.Errorf("decoding traffic list: %w", err)
 	}
 
-	table := newListTable(stdout, "#", "ID", "METHOD", "HOST", "PATH", "STATUS", "LENGTH")
+	table := newListTable(stdout, "#", "ID", "METHOD", "HOST", "PATH", "STATUS", "LENGTH", "PROTOCOL")
 	for _, item := range page.Items {
 		path := item.Path
 		pathRunes := []rune(path)
 		if len(pathRunes) > trafficPathDisplayLimit {
 			path = string(pathRunes[:trafficPathDisplayLimit-3]) + "..."
 		}
-		table.row(item.Number, item.ID, item.Method, item.Host, path, item.StatusCode, item.Length)
+		table.row(item.Number, item.ID, item.Method, item.Host, path, item.StatusCode, item.Length,
+			protocolCell(item.ClientProtocol, item.OriginProtocol))
 	}
 	if err := table.flush(); err != nil {
 		return err
@@ -334,6 +344,15 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stderr, "notice: the traffic index is still building; text results may be incomplete")
 	}
 	return nil
+}
+
+// protocolCell is a pair's protocol in a list: the one protocol when both
+// legs used it, otherwise the client's and the origin's.
+func protocolCell(client, origin string) string {
+	if client == origin || origin == "" {
+		return client
+	}
+	return client + "->" + origin
 }
 
 // getTraffic prints one request/response pair.
@@ -442,6 +461,8 @@ func writeTrafficGetHuman(body []byte, stdout io.Writer) error {
 			Name    string `json:"name"`
 			Address string `json:"address"`
 		} `json:"upstream_proxy"`
+		ClientProtocol string `json:"client_protocol"`
+		OriginProtocol string `json:"origin_protocol"`
 	}
 	if err := json.Unmarshal(body, &detail); err != nil {
 		return fmt.Errorf("decoding traffic: %w", err)
@@ -450,6 +471,11 @@ func writeTrafficGetHuman(body []byte, stdout io.Writer) error {
 	fmt.Fprintf(stdout, "id: %s\n", detail.ID)
 	fmt.Fprintf(stdout, "number: %d\n", detail.Number)
 	fmt.Fprintf(stdout, "scheme: %s\n", detail.Request.Scheme)
+	// An instance from before HTTP/2 sends no protocols.
+	if detail.ClientProtocol != "" {
+		fmt.Fprintf(stdout, "client_protocol: %s\n", detail.ClientProtocol)
+		fmt.Fprintf(stdout, "origin_protocol: %s\n", detail.OriginProtocol)
+	}
 	fmt.Fprintf(stdout, "method: %s\n", detail.Request.Method)
 	fmt.Fprintf(stdout, "host: %s\n", detail.Request.Host)
 	fmt.Fprintf(stdout, "path: %s\n", detail.Request.Path)

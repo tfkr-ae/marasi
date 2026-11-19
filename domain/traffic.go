@@ -234,6 +234,12 @@ type ProxyRequest struct {
 	Metadata    map[string]any // Additional metadata and extension data
 	Prettified  string         // Prettified copy of Raw, or "" when the body could not be prettified
 	RequestedAt time.Time      // Timestamp when request was made
+	// ClientProtocol and OriginProtocol are the pair's protocol on each leg
+	// (GLOSSARY Protocol): ProtocolHTTP1 or ProtocolHTTP2. They differ only
+	// when Marasi translated the pair between versions. Empty is stored as
+	// ProtocolHTTP1.
+	ClientProtocol string
+	OriginProtocol string
 	// SitemapNode names the pair's leaf node in the sitemap, from
 	// SitemapLeaf. It is not stored: the repository computes the leaf from
 	// Scheme, Host and Path.
@@ -254,7 +260,18 @@ type ProxyResponse struct {
 	// Route is the route that carried the request, or the one tried when
 	// the round trip failed reaching it. It is nil when unknown.
 	Route *RouteSnapshot
+	// OriginProtocol is the protocol the request went to the origin in. It
+	// replaces the one stored with the request; empty leaves that as it is,
+	// as for a pair that never reached the origin.
+	OriginProtocol string
 }
+
+// The protocols a pair can use on each leg, as stored and as queries name
+// them: the ALPN identifiers.
+const (
+	ProtocolHTTP1 = "http/1.1"
+	ProtocolHTTP2 = "h2"
+)
 
 // RouteSnapshot records how a pair reached its origin: the upstream proxy's
 // name and its address as scheme://host:port without credentials, or an
@@ -308,6 +325,9 @@ type RequestResponseSummary struct {
 	// Route is the route snapshot written with the response, or nil for a
 	// pair with no response or one captured before snapshots existed.
 	Route *RouteSnapshot
+	// ClientProtocol and OriginProtocol are as in ProxyRequest.
+	ClientProtocol string
+	OriginProtocol string
 }
 
 // ContentTypeCount is the number of request-response pairs with one response

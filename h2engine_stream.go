@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/tfkr-ae/marasi/domain"
+
 	"golang.org/x/net/http2"
 )
 
@@ -139,6 +141,7 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 	if pair.Route != nil {
 		pair.Route.Connected(origin.conn.route.Snapshot())
 	}
+	pair.originProtocol = domain.ProtocolHTTP2
 	out, err := h2OutboundRequest(pair.requestWire.h2, req)
 	if err != nil {
 		return nil, nil, nil, err
