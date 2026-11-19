@@ -13,6 +13,7 @@
 package marasi
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -511,6 +512,12 @@ func NewProxyRequest(pair *Pair) (*domain.ProxyRequest, error) {
 			Host:        req.Host,
 			Path:        path,
 			RequestedAt: requestTime,
+
+			ClientProtocol: pair.clientProtocol(),
+			// The request is stored before it goes out, so the origin
+			// protocol is the client's until the response names the one
+			// that carried it.
+			OriginProtocol: cmp.Or(pair.originProtocol, pair.clientProtocol()),
 		}
 		proxyRequest.SitemapNode = domain.SitemapLeaf(proxyRequest.Scheme, proxyRequest.Host, proxyRequest.Path)
 
@@ -631,6 +638,9 @@ func NewProxyResponse(pair *Pair) (*domain.ProxyResponse, error) {
 		Prettified:  prettified,
 		RespondedAt: responseTime,
 		Route:       route,
+		// Empty for a pair that never reached the origin, which keeps the
+		// origin protocol stored with the request.
+		OriginProtocol: pair.originProtocol,
 	}
 	return proxyResponse, nil
 }

@@ -1436,6 +1436,9 @@ func TestWriteRequestModifier(t *testing.T) {
 			Metadata:    make(map[string]any),
 			RequestedAt: wantTime,
 			SitemapNode: "https://marasi.app/blog",
+			// A pair built outside the engine is HTTP/1.1.
+			ClientProtocol: domain.ProtocolHTTP1,
+			OriginProtocol: domain.ProtocolHTTP1,
 		}
 		proxy := newTestProxy(t)
 		proxy.OnRequest = func(req domain.ProxyRequest) error {
@@ -1550,6 +1553,9 @@ func TestWriteRequestModifier(t *testing.T) {
 			Metadata:    make(map[string]any),
 			RequestedAt: wantTime,
 			SitemapNode: "https://marasi.app/blog",
+			// A pair built outside the engine is HTTP/1.1.
+			ClientProtocol: domain.ProtocolHTTP1,
+			OriginProtocol: domain.ProtocolHTTP1,
 		}
 		proxy := newTestProxy(t)
 		proxy.OnRequest = func(req domain.ProxyRequest) error {

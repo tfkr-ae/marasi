@@ -784,6 +784,7 @@ func (repo *Repository) GetTestCaseRequests(id uuid.UUID) ([]*domain.RequestResp
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
 			  r.upstream_proxy_name, r.upstream_proxy_address,
+			  r.client_protocol, r.origin_protocol,
 			  r.metadata,
 			  h.highlight, pn.number
 		      FROM request r
@@ -847,6 +848,7 @@ func (repo *Repository) GetFindingRequests(id uuid.UUID) ([]*domain.RequestRespo
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
 			  r.upstream_proxy_name, r.upstream_proxy_address,
+			  r.client_protocol, r.origin_protocol,
 			  r.metadata,
 			  h.highlight, pn.number
 		      FROM request r
@@ -881,6 +883,7 @@ func (repo *Repository) listLinkedRequests(junction, parentColumn string) (map[u
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
 			  r.upstream_proxy_name, r.upstream_proxy_address,
+			  r.client_protocol, r.origin_protocol,
 			  r.metadata,
 			  h.highlight, pn.number
 		      FROM request r
