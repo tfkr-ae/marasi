@@ -1,4 +1,219 @@
 {
+  "concurrent-streams@connect-tls": {
+    "client": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                },
+                {
+                  "name": "x-stream",
+                  "value": "0"
+                }
+              ]
+            ],
+            "data": "emVybw==",
+            "end_stream": "data"
+          },
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                },
+                {
+                  "name": "x-stream",
+                  "value": "1"
+                }
+              ]
+            ],
+            "data": "b25lIGRvbmU=",
+            "end_stream": "data"
+          },
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "201"
+                },
+                {
+                  "name": "x-stream",
+                  "value": "2"
+                }
+              ]
+            ],
+            "data": "dHdvIGRvbmU=",
+            "end_stream": "data"
+          },
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                },
+                {
+                  "name": "x-stream",
+                  "value": "3"
+                }
+              ]
+            ],
+            "data": "dGhyZWUgZG9uZQ==",
+            "end_stream": "data"
+          },
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "204"
+                },
+                {
+                  "name": "x-stream",
+                  "value": "4"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          }
+        ]
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/s0"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          },
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/s1"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          },
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "POST"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/s2"
+                },
+                {
+                  "name": "content-type",
+                  "value": "text/plain"
+                }
+              ]
+            ],
+            "data": "dHdv",
+            "end_stream": "data"
+          },
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/s3"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          },
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/s4"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          }
+        ]
+      }
+    ]
+  },
   "content-length-mismatch@connect-tls": {
     "client": [
       {
@@ -386,6 +601,99 @@
       }
     ]
   },
+  "goaway-in-flight@connect-tls": {
+    "client": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                }
+              ]
+            ],
+            "data": "Zmlyc3Q=",
+            "end_stream": "data"
+          },
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                }
+              ]
+            ],
+            "data": "c2Vjb25k",
+            "end_stream": "data"
+          }
+        ],
+        "goaway": {
+          "code": "NO_ERROR",
+          "processed": [
+            0,
+            1
+          ]
+        }
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/first"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          },
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/second"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          }
+        ]
+      }
+    ]
+  },
   "goaway@connect-tls": {
     "client": [
       {
@@ -662,6 +970,80 @@
               ]
             ],
             "end_stream": "headers"
+          }
+        ]
+      }
+    ]
+  },
+  "trailers-no-data@connect-tls": {
+    "client": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                },
+                {
+                  "name": "trailer",
+                  "value": "grpc-status"
+                }
+              ]
+            ],
+            "trailers": [
+              {
+                "name": "grpc-status",
+                "value": "0"
+              },
+              {
+                "name": "grpc-message",
+                "value": "ok"
+              }
+            ],
+            "end_stream": "trailers"
+          }
+        ]
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/trailers-only"
+                },
+                {
+                  "name": "te",
+                  "value": "trailers"
+                }
+              ]
+            ],
+            "trailers": [
+              {
+                "name": "x-request-trailer",
+                "value": "1"
+              }
+            ],
+            "end_stream": "trailers"
           }
         ]
       }

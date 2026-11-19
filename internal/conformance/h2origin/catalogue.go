@@ -159,6 +159,67 @@ var Catalogue = []Case{
 			Data(0, true, gzipped("response body, compressed")),
 		},
 	},
+	{
+		// Trailers straight after the header block, with no DATA between.
+		ID:  "trailers-no-data",
+		RFC: "RFC 9113 §8.1 trailer section",
+		Requests: []Request{{
+			Method: "GET", Path: "/trailers-only",
+			Fields:   h2.Fields("te", "trailers"),
+			Trailers: h2.Fields("x-request-trailer", "1"),
+		}},
+		Script: []Step{
+			Await(),
+			Headers(0, false, ":status", "200", "trailer", "grpc-status"),
+			Headers(0, true, "grpc-status", "0", "grpc-message", "ok"),
+		},
+	},
+	{
+		// Five streams open at once, answered out of order with their
+		// DATA interleaved.
+		ID:  "concurrent-streams",
+		RFC: "RFC 9113 §5 streams and multiplexing",
+		Requests: []Request{
+			{Method: "GET", Path: "/s0"},
+			{Method: "GET", Path: "/s1"},
+			{Method: "POST", Path: "/s2", Fields: h2.Fields("content-type", "text/plain"), Body: "two"},
+			{Method: "GET", Path: "/s3"},
+			{Method: "GET", Path: "/s4"},
+		},
+		Script: []Step{
+			Await(), Await(), Await(), Await(), Await(),
+			Headers(3, false, ":status", "200", "x-stream", "3"),
+			Headers(1, false, ":status", "200", "x-stream", "1"),
+			Data(3, false, "three "),
+			Headers(4, true, ":status", "204", "x-stream", "4"),
+			Data(1, false, "one "),
+			Headers(0, false, ":status", "200", "x-stream", "0"),
+			Headers(2, false, ":status", "201", "x-stream", "2"),
+			Data(3, true, "done"),
+			Data(0, true, "zero"),
+			Data(2, true, "two done"),
+			Data(1, true, "done"),
+		},
+	},
+	{
+		// GOAWAY that names every open stream as processed: they finish
+		// after it, and no new stream may open.
+		ID:  "goaway-in-flight",
+		RFC: "RFC 9113 §6.8 GOAWAY: graceful shutdown",
+		Requests: []Request{
+			{Method: "GET", Path: "/first"},
+			{Method: "GET", Path: "/second"},
+		},
+		Script: []Step{
+			Await(),
+			Await(),
+			Headers(0, false, ":status", "200"),
+			GoAway(2, http2.ErrCodeNo),
+			Data(0, true, "first"),
+			Headers(1, false, ":status", "200"),
+			Data(1, true, "second"),
+		},
+	},
 }
 
 // gzipped compresses s with gzip. The header carries no name or time, so
