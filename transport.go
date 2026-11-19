@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"github.com/tfkr-ae/marasi/core"
+	"github.com/tfkr-ae/marasi/domain"
 
 	utls "github.com/refraction-networking/utls"
 )
@@ -82,7 +83,7 @@ func originALPN(ctx context.Context) []string {
 	if protocols, _ := ctx.Value(originALPNKey{}).([]string); len(protocols) > 0 {
 		return protocols
 	}
-	return []string{"http/1.1"}
+	return []string{domain.ProtocolHTTP1}
 }
 
 // handshakeOrigin runs a utls handshake that mimics Chrome with the origin

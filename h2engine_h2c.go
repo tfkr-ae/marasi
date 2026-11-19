@@ -59,12 +59,13 @@ func (h *h2Conn) cleartext() bool {
 	return h.c.protocol == protocolH2C
 }
 
-// defaultPort is the port an origin named without one listens on.
-func (h *h2Conn) defaultPort() string {
+// scheme is the scheme of the connection's requests, and the port an origin
+// named without one listens on.
+func (h *h2Conn) scheme() (scheme, defaultPort string) {
 	if h.cleartext() {
-		return "80"
+		return "http", "80"
 	}
-	return "443"
+	return "https", "443"
 }
 
 // openOriginFor opens the origin leg for a request to addr, when the client

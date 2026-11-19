@@ -61,18 +61,18 @@ func (h *h2Conn) sendRedirected(pair *Pair, st *h2Stream, addr string) (*http.Re
 	if pair.Route != nil {
 		pair.Route.Connected(conn.route.Snapshot())
 	}
-	if conn.protocol() == "h2" {
+	if conn.protocol() == domain.ProtocolHTTP2 {
 		pair.originProtocol = domain.ProtocolHTTP2
 		origin, err := startH2Origin(conn, addr, nil, nil)
 		if err != nil {
 			return nil, nil, nil, err
 		}
 		defer origin.close()
-		os, err := origin.send(out)
+		sent, err := origin.send(out)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		return h.awaitResponse(st, req, os)
+		return h.awaitResponse(st, req, sent)
 	}
 	pair.originProtocol = domain.ProtocolHTTP1
 	return h.sendTranslated(st, req, conn, out)

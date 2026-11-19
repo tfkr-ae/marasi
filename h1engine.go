@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/internal/h1"
 )
 
@@ -215,7 +216,7 @@ func (c *h1Conn) serve() {
 		c.protocol = protocolH2C
 	}
 	for {
-		if c.protocol == "h2" || c.protocol == protocolH2C {
+		if c.protocol == domain.ProtocolHTTP2 || c.protocol == protocolH2C {
 			c.serveH2()
 			return
 		}

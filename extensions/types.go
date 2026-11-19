@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/compass"
 	"github.com/tfkr-ae/marasi/core"
+	"github.com/tfkr-ae/marasi/domain"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
@@ -703,18 +704,18 @@ func RegisterURLType(extension *Runtime) {
 	})
 }
 
-// RegisterRequestType registers the `http.Request` type and its methods with the Lua state.
-// This allows Lua scripts to read and modify incoming HTTP requests.
 // protocolName is the name of the protocol of a message with HTTP major
 // version major, as the protocol columns record it: h2 for HTTP/2,
 // http/1.1 otherwise.
 func protocolName(major int) string {
 	if major == 2 {
-		return "h2"
+		return domain.ProtocolHTTP2
 	}
-	return "http/1.1"
+	return domain.ProtocolHTTP1
 }
 
+// RegisterRequestType registers the `http.Request` type and its methods with the Lua state.
+// This allows Lua scripts to read and modify incoming HTTP requests.
 func RegisterRequestType(extension *Runtime) {
 	var funcs []APIFunction
 
