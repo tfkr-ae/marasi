@@ -75,6 +75,31 @@ func TestH2Engine_Checkpoint(t *testing.T) {
 		}
 	})
 
+	t.Run("should send a compressed response forwarded as shown with its coded body and its fields in the origin's order", func(t *testing.T) {
+		origin := newH2TestOrigin(t)
+		decode := func(proxy *Proxy) { proxy.AddResponsePairModifier(CompressedResponseModifier) }
+		addr, _, ca := serveH1EngineMITMProxy(t, true, decode, holdEverything(t))
+		proxy := proxyOf(t, addr)
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		upstream := origin.accept(t)
+
+		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/")
+		shown := "GET / HTTP/2\r\n:scheme: https\r\n:authority: " + origin.addr + "\r\n\r\n"
+		forwardHeld(t, proxy, shown, shown)
+		id := upstream.nthStream(t, 0)
+		coded := gzipped(t, "hello")
+		upstream.headers(id, false, ":status", "200", "content-type", "text/plain", "content-encoding", "gzip", "vary", "accept-encoding")
+		upstream.data(id, true, coded)
+		shownResponse := "HTTP/2 200\r\ncontent-type: text/plain\r\nvary: accept-encoding\r\ncontent-length: 5\r\n\r\nhello"
+		forwardHeld(t, proxy, shownResponse, shownResponse)
+
+		response := client.stream(t, 1)
+		want := h2Fields{{":status", "200", false}, {"content-type", "text/plain", false}, {"content-encoding", "gzip", false}, {"vary", "accept-encoding", false}}
+		if len(response.headers) != 1 || !equalFields(response.headers[0], want) || string(response.data) != coded {
+			t.Fatalf("the client's response\nwanted:\n%v %q\ngot:\n%v %q", want, coded, response.headers, response.data)
+		}
+	})
+
 	t.Run("should send an edited response as typed", func(t *testing.T) {
 		origin := newH2TestOrigin(t)
 		addr, captured, ca := serveH1EngineMITMProxy(t, true, holdEverything(t))

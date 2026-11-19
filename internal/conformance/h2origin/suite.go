@@ -4,9 +4,7 @@
 // the client received and what the origin received, decoded to stream
 // meaning (package h2).
 //
-// The suite is report only in Phase 0: it gates like any suite when run, so
-// its own job shows a new deviation, and CI runs it in jobs that do not
-// block a merge (continue-on-error). Run it apart from the h1 suites.
+// The suite is a required check on all four conformance runs.
 package h2origin
 
 import (
@@ -59,12 +57,16 @@ func (s Suite) Targets() []string { return []string{Target} }
 // loopback. The went-through check is the intercepted TLS: through the
 // proxy the client trusts only the proxy's CA, which a proxy speaking only
 // HTTP/1.1, and so recording no h2 traffic, still shows. The Checkpoint
-// and extension runs hold and edit HTTP as an HTTP/1.1 suite does.
+// and extension runs hold and edit HTTP as an HTTP/1.1 suite does. Every
+// run has the Lua that redirects a request naming RedirectField, which the
+// extension run's Lua calls before setting each body to itself.
 func (s Suite) Setup() conformance.Setup {
 	setup := conformance.HTTPSetup()
 	setup.Traffic = conformance.TrafficTLS
 	setup.Container = true
 	setup.Hosts = []string{s.originHost()}
+	setup.Lua = redirectLua
+	setup.Extension = extensionLua
 	return setup
 }
 
@@ -77,7 +79,8 @@ func (s Suite) Execute(ctx context.Context, job conformance.Job) (conformance.Re
 }
 
 // Compare compares the recordings with the baseline in catalogue order.
-// h2 has no leg rules yet (Phase 5).
+// What belongs to one leg (SETTINGS, flow control, frame boundaries,
+// padding, HPACK, stream IDs) is never recorded, so it needs no leg rule.
 func (s Suite) Compare(_ string, baseline, got conformance.Recordings) (conformance.Comparison, error) {
 	return conformance.CompareCases(baseline, got, conformance.CaseComparison{
 		Less: conformance.CatalogueOrder(s.caseIDs()),

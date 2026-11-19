@@ -139,6 +139,9 @@ type Setup struct {
 	Traffic    TrafficKind      // checked before and after each target
 	Checkpoint []CheckpointKind // held and resolved in the Checkpoint runs
 	Extension  string           // Lua appended to the workshop extension in the extension run
+	// Lua is appended to the workshop extension in every proxied run,
+	// before Extension in the extension run, so Extension can call it.
+	Lua string
 	// Container runs Marasi in a Linux container (ContainerLauncher)
 	// rather than on the host.
 	Container bool

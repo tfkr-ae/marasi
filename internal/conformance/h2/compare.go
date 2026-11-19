@@ -75,8 +75,8 @@ func (c *comparer) stream(path string, want, got Stream) {
 			c.add(fmt.Sprintf("%s.headers[%d]", path, i), w, g)
 		}
 	}
-	if string(want.Data) != string(got.Data) {
-		c.add(path+".data", quote(want.Data), quote(got.Data))
+	if w, g := renderData(want), renderData(got); w != g {
+		c.add(path+".data", w, g)
 	}
 	if w, g := render(want.Trailers), render(got.Trailers); w != g {
 		c.add(path+".trailers", w, g)
@@ -125,6 +125,15 @@ func render(fields []Field) string {
 		lines[i] = f.Name + ": " + f.Value
 	}
 	return strings.Join(lines, "\n")
+}
+
+// renderData renders a stream's DATA: its bytes, or the length and digest
+// that stand for a large body.
+func renderData(s Stream) string {
+	if s.DataSHA256 != "" {
+		return fmt.Sprintf("%d bytes, sha256 %s", s.DataLength, s.DataSHA256)
+	}
+	return quote(s.Data)
 }
 
 // quote renders DATA bytes for a difference, cut at 200 bytes.

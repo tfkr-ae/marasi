@@ -2041,6 +2041,74 @@
     "rfc": "RFC 9112 §2.2"
   },
   {
+    "cases": "MAL-H2-PREFACE@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].status",
+    "got": "0",
+    "kind": "accepted",
+    "reason": "A client that opens a plain CONNECT tunnel with the HTTP/2 preface gets prior-knowledge HTTP/2 from Marasi, so it gets Marasi's SETTINGS and the connection stays open, where nginx, which speaks only HTTP/1.1, answers 400 and closes; each request on it would get a 502 naming the origin's refusal (docs/adr/2026-11-19-marasi-gives-the-client-the-origins-protocol.md)",
+    "rfc": "RFC 9113 §3.3"
+  },
+  {
+    "cases": "MAL-H2-PREFACE@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].reason",
+    "kind": "accepted",
+    "reason": "A client that opens a plain CONNECT tunnel with the HTTP/2 preface gets prior-knowledge HTTP/2 from Marasi, so it gets Marasi's SETTINGS and the connection stays open, where nginx, which speaks only HTTP/1.1, answers 400 and closes; each request on it would get a 502 naming the origin's refusal (docs/adr/2026-11-19-marasi-gives-the-client-the-origins-protocol.md)",
+    "rfc": "RFC 9113 §3.3"
+  },
+  {
+    "cases": "MAL-H2-PREFACE@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].responses[0].truncated",
+    "got": "true",
+    "kind": "accepted",
+    "reason": "A client that opens a plain CONNECT tunnel with the HTTP/2 preface gets prior-knowledge HTTP/2 from Marasi, so it gets Marasi's SETTINGS and the connection stays open, where nginx, which speaks only HTTP/1.1, answers 400 and closes; each request on it would get a 502 naming the origin's refusal (docs/adr/2026-11-19-marasi-gives-the-client-the-origins-protocol.md)",
+    "rfc": "RFC 9113 §3.3"
+  },
+  {
+    "cases": "MAL-H2-PREFACE@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].end",
+    "got": "open",
+    "kind": "accepted",
+    "reason": "A client that opens a plain CONNECT tunnel with the HTTP/2 preface gets prior-knowledge HTTP/2 from Marasi, so it gets Marasi's SETTINGS and the connection stays open, where nginx, which speaks only HTTP/1.1, answers 400 and closes; each request on it would get a 502 naming the origin's refusal (docs/adr/2026-11-19-marasi-gives-the-client-the-origins-protocol.md)",
+    "rfc": "RFC 9113 §3.3"
+  },
+  {
+    "cases": "MAL-H2-PREFACE@connect-plain",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "leg:framing",
+    "kind": "accepted",
+    "reason": "A client that opens a plain CONNECT tunnel with the HTTP/2 preface gets prior-knowledge HTTP/2 from Marasi, so it gets Marasi's SETTINGS and the connection stays open, where nginx, which speaks only HTTP/1.1, answers 400 and closes; each request on it would get a 502 naming the origin's refusal (docs/adr/2026-11-19-marasi-gives-the-client-the-origins-protocol.md)",
+    "rfc": "RFC 9113 §3.3"
+  },
+  {
     "cases": "MAL-NON-ASCII-HEADER-NAME@*",
     "runs": [
       "proxy",

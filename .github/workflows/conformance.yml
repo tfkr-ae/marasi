@@ -21,9 +21,10 @@ env:
   AUTOBAHN_IMAGE: crossbario/autobahn-testsuite@sha256:519915fb568b04c9383f70a1c405ae3ff44ab9e35835b085239c258b6fac3074
 
 jobs:
-  # Required checks, one job per suite and run. The check names are
-  # "h1-client (proxy)", "h1-origin (checkpoint-edit)" and so on. When no
-  # HTTP path changed the job still runs but skips its steps, so it passes
+  # Required checks, one job per suite and run, for the h1 suites here and
+  # the h2 suites below. The check names are "h1-client (proxy)",
+  # "h2-origin (checkpoint-edit)" and so on. When none of a suite's paths
+  # changed the job still runs but skips its steps, so it passes
   # in seconds: a matrix job skipped by a job-level `if` reports under its
   # unexpanded name, and a required check would then never report.
   # Marasi runs in a Linux container with host networking, built for the
@@ -61,29 +62,34 @@ jobs:
           path: dist/conformance/
           if-no-files-found: ignore
 
-  # Report only until the h2 suites become required checks: the score shows
-  # in the job summary and never blocks a merge. h2-client installs h2spec
-  # with the Go toolchain set up here (go install, outside go.mod).
+  # Required checks, as the h1 jobs are, for the HTTP/2 suites. h2-client
+  # installs h2spec with the Go toolchain set up here (go install, outside
+  # go.mod).
   h2:
     name: ${{ matrix.suite }} (${{ matrix.run }})
     needs: paths
-    if: needs.paths.outputs.h2 == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
         suite: [h2-client, h2-origin]
         run: [proxy, checkpoint-forward, checkpoint-edit, extension]
+    env:
+      RUN_SUITE: ${{ needs.paths.outputs.h2 }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - if: env.RUN_SUITE != 'true'
+        run: echo 'No HTTP/2 path changed; the suite is skipped.'
+      - if: env.RUN_SUITE == 'true'
+        uses: actions/checkout@v4
+      - if: env.RUN_SUITE == 'true'
+        uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-      - run: make conformance SUITES=${{ matrix.suite }} RUNS=${{ matrix.run }}
-      - if: always()
+      - if: env.RUN_SUITE == 'true'
+        run: make conformance SUITES=${{ matrix.suite }} RUNS=${{ matrix.run }}
+      - if: always() && env.RUN_SUITE == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: conformance-${{ matrix.suite }}-${{ matrix.run }}

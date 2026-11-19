@@ -57,7 +57,7 @@ The source requires Go 1.26 or later. These commands run from the repository roo
 | `make windows-amd64` | Builds `dist/marasi-windows-amd64.exe`. |
 | `make all` | Builds the targets listed by `TARGETS` in [Makefile](Makefile). |
 | `make test` | Runs `go test ./...`. |
-| `make conformance` | Runs the conformance suites in Docker through Marasi and scores each case against its committed direct baseline and deviations file. With no `SUITES`, it runs the blocking HTTP/1.1 suites, `h1-origin` and `h1-client`. It exits non-zero on a new deviation, a known deviation that went away, or a stale deviations entry. |
+| `make conformance` | Runs the conformance suites in Docker through Marasi and scores each case against its committed direct baseline and deviations file. With no `SUITES`, it runs the four HTTP suites, `h1-origin`, `h1-client`, `h2-client` and `h2-origin`, which all block a merge. It exits non-zero on a new deviation, a known deviation that went away, or a stale deviations entry. |
 | `make conformance-baseline` | Runs the selected cases with no proxy and merges them into the direct baselines. For `h1-origin` it records each case twice and leaves out, with an error, a case whose two recordings differ. |
 | `make conformance-update-known PHASE=<n>` | Runs the selected cases, then rewrites the known entries in `deviations.json` and the suite's `score.json`. |
 | `make autobahn`, `make autobahn-baseline` | `make conformance` and `make conformance-baseline` with `SUITES=autobahn`. |
@@ -118,9 +118,9 @@ suites:
   harness completes one TLS handshake through the same shim that trusts only
   Marasi's CA (the harness CA in the direct run). A run whose shim does not go
   through Marasi fails there. Each known entry names the value Marasi gave
-  (`got`), so a case that fails in another way is new. It runs only `proxy`
-  and is report only, like
-  `h2-origin` (`make conformance SUITES=h2-client RUNS=proxy`).
+  (`got`), so a case that fails in another way is new. It runs all four
+  conformance runs (`make conformance SUITES=h2-client RUNS=proxy` for a
+  quick one).
 - `h2-origin` sends each h2 origin fixture case's requests as HTTP/2 streams
   inside `CONNECT` over TLS (`connect-tls`), offering ALPN `h2` then
   `http/1.1`, to fixtures that script frames and serve ALPN `h2`. Its
@@ -129,13 +129,20 @@ suites:
   where END_STREAM fell and the RST_STREAM code, and the connection's GOAWAY
   code and the streams it says were processed. SETTINGS, WINDOW_UPDATE, PING,
   PRIORITY, DATA splitting, padding, HPACK encoding and stream IDs are not
-  recorded, so they never differ. It runs only `proxy`, has no leg rules yet,
-  and is report only: it exits non-zero like any suite, so run it on its own
-  (`make conformance SUITES=h2-origin RUNS=proxy`), and CI does not block a
-  merge on it. Through Marasi the client trusts only Marasi's CA, so a
-  recorded case shows Marasi in the path even though Marasi, answering ALPN
-  with `http/1.1`, records no HTTP/2 traffic. Marasi runs in the same
-  container as for `h1-origin`.
+  recorded, so they never differ; the client and the fixtures keep to each
+  other's flow-control windows, and a body over 4 KiB is recorded by its
+  length and SHA-256. The catalogue covers field order, cookie crumbs, 103
+  Early Hints, a mismatched `content-length`, CONTINUATION, bodies larger
+  than the flow-control window, concurrent streams, trailers, `RST_STREAM`
+  partway through a body, `GOAWAY`, a gzip body, and a request redirected to
+  an origin that speaks only HTTP/1.1. That case's requests carry
+  `x-conformance-redirect` through Marasi, and the Lua the suite installs in
+  every run (`Setup.Lua`) sends them to the HTTP/1.1 origin; directly, the
+  client speaks HTTP/1.1 to that origin itself. It runs all four conformance
+  runs. Through Marasi the client trusts only Marasi's CA, so a recorded case
+  shows Marasi in the path even if Marasi answered ALPN with `http/1.1` and
+  recorded no HTTP/2 traffic. Marasi runs in the same container as for
+  `h1-origin`.
 
 For TLS, the harness generates a CA on each run and never writes its key to
 disk. The fixtures serve certificates it issues. In Marasi's container,
@@ -164,7 +171,8 @@ Checkpoint with an auto-resolver that forwards each item unchanged),
 `checkpoint-edit` (the resolver forwards each item as an edit with the same
 bytes), and `extension` (a workshop hook sets each payload or body to itself:
 `processWebSocketMessage` for WebSocket, `processRequest` and
-`processResponse` for HTTP). Autobahn runs both modes (`fuzzingclient`, `fuzzingserver`) against
+`processResponse` for HTTP). A suite can also install Lua in every run:
+`h2-origin` installs the rule that redirects its `redirect-to-http1` case. Autobahn runs both modes (`fuzzingclient`, `fuzzingserver`) against
 two peers: Autobahn's strict testee and the harness's lenient echo peer.
 Variables narrow a run:
 
@@ -226,8 +234,8 @@ make conformance SUITES=h2-origin RUNS=proxy
 make autobahn EXCLUDE='9.*,12.*,13.*'
 ```
 
-`make conformance` with no `SUITES` runs `h1-origin` and `h1-client`, the
-suites that block a merge. `h1-client` runs only
+`make conformance` with no `SUITES` runs `h1-origin`, `h1-client`,
+`h2-client` and `h2-origin`, the suites that block a merge. `h1-client` runs only
 the Http11Probe tests that `CASES` names exactly (`ID@*` covers every
 approach); with a glob in the ID it runs all 213 tests and narrows afterwards.
 A narrowed run (`RUNS`, `CASES` and the like) checks only the entries its cases
@@ -250,13 +258,11 @@ suite. A suite runs when the pull request changes Marasi on the HTTP path (root
 the workflow, or that suite's own package and baselines. A change only to docs,
 reports, Armory, Compass, wordlists or another suite skips it.
 
-- `h1-client (<run>)` and `h1-origin (<run>)`, one job for each of `proxy`,
-  `checkpoint-forward`, `checkpoint-edit` and `extension`, are the required
-  checks. When no HTTP/1.1 path changed they still run, skip their steps and
-  pass, because a skipped matrix job would never report under its check name.
-- `h2-client (proxy)` and `h2-origin (proxy)` are report only
-  (`continue-on-error`): their score is in the job summary, and a failure does
-  not block a merge. They are skipped when no HTTP/2 path changed.
+- `h1-client (<run>)`, `h1-origin (<run>)`, `h2-client (<run>)` and
+  `h2-origin (<run>)`, one job for each of `proxy`, `checkpoint-forward`,
+  `checkpoint-edit` and `extension`, are the required checks. When none of a
+  suite's paths changed they still run, skip their steps and pass, because a
+  skipped matrix job would never report under its check name.
 - `autobahn (<run>, <mode>)` takes hours, so its path list is narrower: the
   WebSocket code, the autobahn suite and the shared harness, plus `db/`,
   `proxy.go`, `modifiers.go`, `checkpoint.go` and `extensions/`. The paths

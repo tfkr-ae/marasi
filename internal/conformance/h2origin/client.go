@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -48,6 +49,16 @@ func (s Suite) record(ctx context.Context, c Case, job conformance.Job) (h2.Reco
 	normalise := func(value string) string { return strings.ReplaceAll(value, authority, placeholder) }
 
 	address := net.JoinHostPort(s.listen(), o.port())
+	requests := c.Requests
+	var redirect *http1Origin
+	if c.Redirect != "" {
+		if redirect, err = startHTTP1Origin(s.listen(), c.Redirect, s.timeout(), serverTLS); err != nil {
+			return h2.Recording{}, fmt.Errorf("starting the HTTP/1.1 origin: %w", err)
+		}
+		defer redirect.stop()
+		address = net.JoinHostPort(s.listen(), redirect.port())
+		requests = redirected(requests, net.JoinHostPort(s.originHost(), redirect.port()))
+	}
 	if job.Proxy != "" {
 		address = job.Proxy
 	}
@@ -70,21 +81,45 @@ func (s Suite) record(ctx context.Context, c Case, job conformance.Job) (h2.Reco
 	}
 	protocol := conn.ConnectionState().NegotiatedProtocol
 	recorder := h2.NewRecorder(protocol)
-	if protocol == "h2" {
-		if err := s.exchange(conn, recorder, c.Requests, authority); err != nil {
+	client := recorder.Connection(normalise)
+	switch {
+	case protocol == "h2":
+		if err := s.exchange(conn, recorder, requests, authority); err != nil {
 			return h2.Recording{}, err
 		}
+		client = recorder.Connection(normalise)
+	case redirect != nil && job.Proxy == "":
+		streams, err := s.exchangeHTTP1(conn, c.Requests, authority)
+		if err != nil {
+			return h2.Recording{}, err
+		}
+		client.Streams = normaliseStreams(streams, normalise)
 	}
 	// The origin's view is taken before the client closes, as in h1-origin.
-	return h2.Recording{
-		Client: []h2.Connection{recorder.Connection(normalise)},
-		Origin: o.snapshot(normalise),
-	}, nil
+	// A redirected case records only the origin its requests went to.
+	origins := o.snapshot(normalise)
+	if redirect != nil {
+		origins = redirect.snapshot(normalise)
+	}
+	return h2.Recording{Client: []h2.Connection{client}, Origin: origins}, nil
+}
+
+// redirected is requests, each with RedirectField naming target last.
+func redirected(requests []Request, target string) []Request {
+	out := make([]Request, len(requests))
+	for i, r := range requests {
+		r.Fields = append(slices.Clone(r.Fields), h2.Field{Name: RedirectField, Value: target})
+		out[i] = r
+	}
+	return out
 }
 
 // exchange sends every request on its own stream, then records what comes
 // back until every stream ended or the peer went away, and a moment more.
 // A peer that stops answering is recorded as it is when the time runs out.
+// Request bodies keep to the peer's flow-control windows, reading what
+// comes back while they wait, and every DATA received is acknowledged with
+// WINDOW_UPDATE.
 func (s Suite) exchange(conn net.Conn, recorder *h2.Recorder, requests []Request, authority string) error {
 	if _, err := io.WriteString(conn, http2.ClientPreface); err != nil {
 		return fmt.Errorf("sending the connection preface: %w", err)
@@ -102,20 +137,48 @@ func (s Suite) exchange(conn net.Conn, recorder *h2.Recorder, requests []Request
 		}
 		return bytes.Clone(block.Bytes())
 	}
+	windows := newWindows()
+	// handle answers, accounts and records one frame received.
+	handle := func(frame http2.Frame) error {
+		if err := answer(framer, frame); err != nil {
+			return err
+		}
+		windows.received(frame)
+		if err := replenish(framer, frame); err != nil {
+			return err
+		}
+		return recorder.Frame(frame)
+	}
+	deadline := time.Now().Add(s.timeout())
+	readOne := func() error {
+		_ = conn.SetReadDeadline(deadline)
+		frame, err := framer.ReadFrame()
+		if err != nil {
+			return err
+		}
+		return handle(frame)
+	}
 	for i, r := range requests {
 		id := uint32(2*i + 1)
 		recorder.Open(id)
 		fields := append(h2.Fields(":method", r.Method, ":scheme", "https", ":authority", authority, ":path", r.Path), r.Fields...)
 		hasBody, hasTrailers := r.Body != "", len(r.Trailers) > 0
-		if err := framer.WriteHeaders(http2.HeadersFrameParam{
-			StreamID: id, BlockFragment: encode(fields), EndStream: !hasBody && !hasTrailers, EndHeaders: true,
-		}); err != nil {
+		if err := writeBlock(framer, id, encode(fields), !hasBody && !hasTrailers, r.Fragment); err != nil {
 			return fmt.Errorf("sending request %d: %w", i, err)
 		}
-		if hasBody {
-			if err := framer.WriteData(id, !hasTrailers, []byte(r.Body)); err != nil {
+		for body := []byte(r.Body); len(body) > 0; {
+			n := windows.allowed(id, len(body))
+			if n == 0 {
+				if err := readOne(); err != nil {
+					return fmt.Errorf("waiting for window to send request %d body: %w", i, err)
+				}
+				continue
+			}
+			windows.spend(id, n)
+			if err := framer.WriteData(id, n == len(body) && !hasTrailers, body[:n]); err != nil {
 				return fmt.Errorf("sending request %d body: %w", i, err)
 			}
+			body = body[n:]
 		}
 		if hasTrailers {
 			if err := framer.WriteHeaders(http2.HeadersFrameParam{
@@ -135,17 +198,10 @@ func (s Suite) exchange(conn net.Conn, recorder *h2.Recorder, requests []Request
 		}
 		return true
 	}
-	readUntil := func(deadline time.Time, stop func() bool) {
+	readUntil := func(until time.Time, stop func() bool) {
+		deadline = until
 		for !stop() {
-			_ = conn.SetReadDeadline(deadline)
-			frame, err := framer.ReadFrame()
-			if err != nil {
-				return
-			}
-			if err := answer(framer, frame); err != nil {
-				return
-			}
-			if err := recorder.Frame(frame); err != nil {
+			if readOne() != nil {
 				return
 			}
 		}
@@ -168,6 +224,22 @@ func answer(framer *http2.Framer, frame http2.Frame) error {
 		}
 	}
 	return nil
+}
+
+// replenish gives back the flow-control window a DATA frame took, on the
+// connection and, while it is open, on its stream.
+func replenish(framer *http2.Framer, frame http2.Frame) error {
+	f, ok := frame.(*http2.DataFrame)
+	if !ok || f.Length == 0 {
+		return nil
+	}
+	if err := framer.WriteWindowUpdate(0, f.Length); err != nil {
+		return err
+	}
+	if f.StreamEnded() {
+		return nil
+	}
+	return framer.WriteWindowUpdate(f.StreamID, f.Length)
 }
 
 // connect sends CONNECT and reads the proxy's answer, which must be 200
