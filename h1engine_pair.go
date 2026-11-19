@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/internal/h1"
 )
 
@@ -49,7 +50,6 @@ func (c *h1Conn) carryPair(head *h1.RequestHead) bool {
 	if pair == nil {
 		return false
 	}
-	pair.ClientProtocol = "http/1.1"
 
 	res, wire := c.roundTrip(pair)
 	stream, _ := res.Body.(*originStream)
@@ -182,7 +182,6 @@ func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	pair.OriginProtocol = "http/1.1"
 	// A client that leaves while its pair is in flight closes the origin connection, as a
 	// direct client leaving would (docs/adr/2026-11-17-one-origin-connection-per-client-connection.md).
 	stop := context.AfterFunc(pair.Context(), func() { origin.conn.Close() })
@@ -305,6 +304,7 @@ func (c *h1Conn) originFor(pair *Pair, route *Route, addr string) (*originConn, 
 		c.origin = &originConn{addr: addr, scheme: scheme, route: conn.route, conn: conn, br: bufio.NewReader(conn), bw: bufio.NewWriter(conn)}
 	}
 	recordRoute(pair, c.origin)
+	pair.originProtocol = domain.ProtocolHTTP1
 	return c.origin, nil
 }
 

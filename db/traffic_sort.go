@@ -45,6 +45,9 @@ var sortKeys = map[string]sortKey{
 		hasValue: "status_code > -1", noValue: "(status_code IS NULL OR status_code <= -1)"},
 	"content_type": {expr: "content_type",
 		hasValue: "content_type > ''", noValue: "(content_type IS NULL OR content_type = '')"},
+	// Every pair has both protocols (db/migrations/00028_pair_protocols.sql).
+	"client_protocol": {expr: "client_protocol"},
+	"origin_protocol": {expr: "origin_protocol"},
 	"length": {expr: lengthKey, integer: true, expression: true,
 		hasValue: lengthKey + " IS NOT NULL", noValue: lengthKey + " IS NULL"},
 	// The pair number's own primary key, not id: under concurrent capture
@@ -129,7 +132,7 @@ func parseTrafficOrderBy(orderBy string) (trafficSort, error) {
 	key, ok := sortKeys[field.text]
 	if !ok {
 		return trafficSort{}, sortError(orderBy, field.offset,
-			fmt.Sprintf("cannot sort by %q; sort by requested_at, number, method, host, path, status_code, content_type or length", field.text))
+			fmt.Sprintf("cannot sort by %q; sort by requested_at, number, method, host, path, status_code, content_type, length, client_protocol or origin_protocol", field.text))
 	}
 	sort := trafficSort{name: field.text, key: key}
 	if len(words) > 1 {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/core"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // Pair is a request/response pair in flight: one request and its matching
@@ -47,12 +48,6 @@ type Pair struct {
 	// ResponseBodyEnding is how the proxy's read of the response body
 	// ended, BodyUnread on the request chain.
 	ResponseBodyEnding BodyEnding
-	// ClientProtocol is the protocol the client sent the request in, and
-	// OriginProtocol the one it went to the origin in: "http/1.1" or "h2".
-	// They differ when a redirected request was translated between them.
-	// OriginProtocol is empty until the request went out.
-	ClientProtocol string
-	OriginProtocol string
 
 	// webSocketUpstream is the upstream stream of a successful upgrade,
 	// detached from the response body by WebSocketPrepareModifier.
@@ -92,6 +87,9 @@ type Pair struct {
 	// are views of them.
 	requestWire  *wireRequest
 	responseWire *wireResponse
+	// originProtocol is the protocol the engine sent the request to the
+	// origin in (GLOSSARY Protocol), empty until it is sent.
+	originProtocol string
 	// decoded is what CompressedResponseModifier undid, nil when it decoded
 	// nothing. The h1 engine sends the origin's encoded body while the
 	// view's body still equals the decoded one.
@@ -129,6 +127,15 @@ type clientHijacker interface {
 type PairTiming struct {
 	Requested time.Time
 	Responded time.Time
+}
+
+// clientProtocol is the protocol the client sent the request in (GLOSSARY
+// Protocol). A pair built outside the engine is HTTP/1.1.
+func (pair *Pair) clientProtocol() string {
+	if pair.requestWire != nil && pair.requestWire.h2 != nil {
+		return domain.ProtocolHTTP2
+	}
+	return domain.ProtocolHTTP1
 }
 
 // Context returns the pair's context. It is done when the client leaves or the

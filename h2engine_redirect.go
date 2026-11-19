@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/net/http2"
 
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/internal/h1"
 )
 
@@ -55,7 +56,7 @@ func (h *h2Conn) sendRedirected(pair *Pair, st *h2Stream, addr string) (*http.Re
 		pair.Route.Connected(conn.route.Snapshot())
 	}
 	if conn.protocol() == "h2" {
-		pair.OriginProtocol = "h2"
+		pair.originProtocol = domain.ProtocolHTTP2
 		origin, err := startH2Origin(conn, addr, nil, nil)
 		if err != nil {
 			return nil, nil, nil, err
@@ -67,7 +68,7 @@ func (h *h2Conn) sendRedirected(pair *Pair, st *h2Stream, addr string) (*http.Re
 		}
 		return h.awaitResponse(st, req, os)
 	}
-	pair.OriginProtocol = "http/1.1"
+	pair.originProtocol = domain.ProtocolHTTP1
 	return h.sendTranslated(st, req, conn, out)
 }
 

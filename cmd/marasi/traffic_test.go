@@ -30,10 +30,10 @@ func TestTrafficListCommand(t *testing.T) {
 		if got.Method != http.MethodGet || got.Path != "/traffic" || got.RawQuery != "limit=200" {
 			t.Fatalf("\nwanted:\nGET /traffic?limit=200\ngot:\n%s %s?%s", got.Method, got.Path, got.RawQuery)
 		}
-		header := "#   ID                                    METHOD  HOST         PATH    STATUS  LENGTH\n"
+		header := "#   ID                                    METHOD  HOST         PATH    STATUS  LENGTH  PROTOCOL\n"
 		want := header +
-			"9   01938032-1b17-7243-b035-e6a9f4645904  POST    example.com  /login  401     45\n" +
-			"10  0193802f-f0e7-73d9-a764-06d21e367809  GET     example.com  /a      200     12\n" +
+			"9   01938032-1b17-7243-b035-e6a9f4645904  POST    example.com  /login  401     45      \n" +
+			"10  0193802f-f0e7-73d9-a764-06d21e367809  GET     example.com  /a      200     12      \n" +
 			header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
@@ -51,10 +51,10 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		header := "#  ID                                    METHOD  HOST         PATH                                      STATUS  LENGTH\n"
+		header := "#  ID                                    METHOD  HOST         PATH                                      STATUS  LENGTH  PROTOCOL\n"
 		want := header +
-			"0  0193802f-f0e7-73d9-a764-06d21e367809  GET     example.com  /123456789012345678901234567890123456...  200     12\n" +
-			"0  01938032-1b17-7243-b035-e6a9f4645904  POST    example.com  /short                                    404     45\n" +
+			"0  0193802f-f0e7-73d9-a764-06d21e367809  GET     example.com  /123456789012345678901234567890123456...  200     12      \n" +
+			"0  01938032-1b17-7243-b035-e6a9f4645904  POST    example.com  /short                                    404     45      \n" +
 			header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
@@ -69,8 +69,8 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		header := "#  ID                                    METHOD  HOST         PATH                                      STATUS  LENGTH\n"
-		want := header + "0  0193802f-f0e7-73d9-a764-06d21e367809  GET     example.com  /12345678901234567890123456789012345😀...  200     12\n" + header
+		header := "#  ID                                    METHOD  HOST         PATH                                      STATUS  LENGTH  PROTOCOL\n"
+		want := header + "0  0193802f-f0e7-73d9-a764-06d21e367809  GET     example.com  /12345678901234567890123456789012345😀...  200     12      \n" + header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -87,8 +87,8 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		header := "#  ID                                    METHOD  HOST         PATH  STATUS  LENGTH\n"
-		want := header + "0  01938032-1b17-7243-b035-e6a9f4645904  GET     example.com  /a    200     12\n" + header
+		header := "#  ID                                    METHOD  HOST         PATH  STATUS  LENGTH  PROTOCOL\n"
+		want := header + "0  01938032-1b17-7243-b035-e6a9f4645904  GET     example.com  /a    200     12      \n" + header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -136,8 +136,8 @@ func TestTrafficListCommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		header := "#  ID                                    METHOD  HOST         PATH  STATUS  LENGTH\n"
-		want := header + "0  01938032-1b17-7243-b035-e6a9f4645904  GET     example.com  /a    200     12\n" + header
+		header := "#  ID                                    METHOD  HOST         PATH  STATUS  LENGTH  PROTOCOL\n"
+		want := header + "0  01938032-1b17-7243-b035-e6a9f4645904  GET     example.com  /a    200     12      \n" + header
 		if stdout != want {
 			t.Fatalf("\nwanted:\n%s\ngot:\n%s", want, stdout)
 		}
@@ -819,9 +819,9 @@ func TestLaunchpadCommands(t *testing.T) {
 		body := `{"id":"` + id + `","name":"Login","description":"Try variants","items":[{"id":"` + requestID + `","method":"POST","host":"example.com","path":"/login","status_code":200,"length":"2"}]}` + "\n"
 		startCannedControlAPI(t, configDir, "work", http.StatusOK, body)
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "launchpad", "get", id)
-		members := "#  ID                                    METHOD  HOST         PATH    STATUS  LENGTH\n"
+		members := "#  ID                                    METHOD  HOST         PATH    STATUS  LENGTH  PROTOCOL\n"
 		want := "id: " + id + "\nname: Login\ndescription: Try variants\n" +
-			members + "0  " + requestID + "  POST    example.com  /login  200     2\n" + members
+			members + "0  " + requestID + "  POST    example.com  /login  200     2       \n" + members
 		if err != nil || stdout != want || stderr != "" {
 			t.Fatalf("\nwanted:\nstdout %q, empty stderr, nil error\ngot:\nstdout %q, stderr %q, error %v", want, stdout, stderr, err)
 		}

@@ -210,6 +210,9 @@ type trafficSummary struct {
 	// UpstreamProxy is the route that carried the pair, as in
 	// trafficDetail.
 	UpstreamProxy *trafficRoute `json:"upstream_proxy"`
+	// ClientProtocol and OriginProtocol are as in trafficDetail.
+	ClientProtocol string `json:"client_protocol"`
+	OriginProtocol string `json:"origin_protocol"`
 }
 
 // trafficDetail is the GET /traffic/{id} response body.
@@ -228,6 +231,11 @@ type trafficDetail struct {
 	// response. It is null before the response or for a pair captured
 	// before route snapshots existed.
 	UpstreamProxy *trafficRoute `json:"upstream_proxy"`
+	// ClientProtocol and OriginProtocol are the pair's protocol on each
+	// leg (GLOSSARY Protocol), "http/1.1" or "h2". They differ only when
+	// Marasi translated the pair between versions.
+	ClientProtocol string `json:"client_protocol"`
+	OriginProtocol string `json:"origin_protocol"`
 }
 
 // trafficRoute is a pair's route snapshot: the upstream proxy that carried
@@ -782,6 +790,9 @@ func trafficSummaryFromDomain(item *domain.RequestResponseSummary) trafficSummar
 		RespondedAt:   respondedAt(item.RespondedAt),
 		Highlight:     item.Highlight,
 		UpstreamProxy: trafficRouteFromDomain(item.Route),
+
+		ClientProtocol: item.ClientProtocol,
+		OriginProtocol: item.OriginProtocol,
 	}
 	return summary
 }
@@ -824,6 +835,9 @@ func trafficDetailFromRow(row *domain.RequestResponseRow) trafficDetail {
 			Response: prettifiedCopy(row.Prettified.Response),
 		},
 		UpstreamProxy: trafficRouteFromDomain(row.Route),
+
+		ClientProtocol: row.Request.ClientProtocol,
+		OriginProtocol: row.Request.OriginProtocol,
 	}
 }
 

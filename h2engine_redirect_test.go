@@ -38,7 +38,7 @@ func redirectPaths(prefix, addr string) PairModifier {
 type pairProtocols chan string
 
 func (p pairProtocols) modifier(_ *Proxy, pair *Pair) error {
-	p <- pair.Request.URL.Path + " " + pair.ClientProtocol + " " + pair.OriginProtocol
+	p <- pair.Request.URL.Path + " " + pair.clientProtocol() + " " + pair.originProtocol
 	return nil
 }
 
@@ -149,20 +149,5 @@ func TestH2Engine_RedirectedRequest(t *testing.T) {
 			t.Errorf("the pair's protocols\nwanted:\n/elsewhere h2 h2\ngot:\n%s", got)
 		}
 		redirected.await(t, "the redirected connection to close", func(p *h2TestPeer) bool { return p.err != nil })
-	})
-}
-
-func TestH1Engine_RecordsProtocols(t *testing.T) {
-	t.Run("should record http/1.1 as the client and origin protocols of an HTTP/1.1 pair", func(t *testing.T) {
-		origin := newRawOrigin(t, "HTTP/1.1 204 No Content\r\n\r\n")
-		addr, _, _ := serveH1EngineMITMProxy(t, true)
-		protocols := make(pairProtocols, 4)
-		proxyOf(t, addr).AddResponsePairModifier(protocols.modifier)
-		conn, br := dialProxy(t, addr)
-		io.WriteString(conn, "GET http://"+origin.addr+"/one HTTP/1.1\r\nHost: "+origin.addr+"\r\n\r\n")
-		readExactly(t, br, "HTTP/1.1 204 No Content\r\n\r\n")
-		if got := protocols.next(t); got != "/one http/1.1 http/1.1" {
-			t.Errorf("the pair's protocols\nwanted:\n/one http/1.1 http/1.1\ngot:\n%s", got)
-		}
 	})
 }

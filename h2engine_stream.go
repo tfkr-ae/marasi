@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/tfkr-ae/marasi/domain"
+
 	"golang.org/x/net/http2"
 )
 
@@ -38,7 +40,6 @@ func (h *h2Conn) carry(st *h2Stream) {
 		h.resetStream(st.id, http2.ErrCodeInternal)
 		return
 	}
-	pair.ClientProtocol = "h2"
 	requestDropped := pair.Dropped()
 	res, wire, cut := h.roundTrip(pair, st)
 	if res == nil {
@@ -74,7 +75,10 @@ func (h *h2Conn) prepare(req *http.Request, st *h2Stream) *http.Request {
 		req.TLS = &state
 	}
 	req.URL.Scheme = "https"
-	req.URL.Host = cmp.Or(withoutDefaultPort(h.c.tunnel, "https"), req.Host)
+	if h.cleartext() {
+		req.URL.Scheme = "http"
+	}
+	req.URL.Host = cmp.Or(withoutDefaultPort(h.c.tunnel, req.URL.Scheme), req.Host)
 	return req.WithContext(st.ctx)
 }
 
@@ -116,32 +120,42 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 	// A route swap sends the client GOAWAY; this stream, already open,
 	// finishes on the route its origin connection is on.
 	h.engine.proxy.resolveRoute()
-	port, ok := carried(req.URL.Scheme)
-	if !ok {
-		return nil, nil, nil, errRouteNotCarried
-	}
 	// The origin the handshake dialled, named as the waypoint modifier
-	// leaves it or as the handshake did. Any other was redirected to.
-	addr := hostPort(req.URL.Host, port)
-	if req.URL.Scheme != "https" || (addr != h.originAddr && (h.originDial == nil || addr != h.originDial.target)) {
+	// leaves it or as the handshake did. Any other, or another scheme, was
+	// redirected to.
+	scheme := "https"
+	if h.cleartext() {
+		scheme = "http"
+	}
+	if req.URL.Scheme != scheme {
+		port, ok := carried(req.URL.Scheme)
+		if !ok {
+			return nil, nil, nil, errRouteNotCarried
+		}
+		return h.sendRedirected(pair, st, hostPort(req.URL.Host, port))
+	}
+	addr := hostPort(req.URL.Host, h.defaultPort())
+	h.openOriginFor(req.Context(), addr)
+	if addr != h.originAddr && (h.originDial == nil || addr != h.originDial.target) {
 		return h.sendRedirected(pair, st, addr)
 	}
-	pair.OriginProtocol = "h2"
-	if h.origin == nil {
+	origin := h.originLeg()
+	if origin == nil {
 		if h.originDial != nil {
 			recordTried(req.Context(), h.originDial.route)
 		}
 		return nil, nil, nil, h.originErr
 	}
 	if pair.Route != nil {
-		pair.Route.Connected(h.origin.conn.route.Snapshot())
+		pair.Route.Connected(origin.conn.route.Snapshot())
 	}
+	pair.originProtocol = domain.ProtocolHTTP2
 	out, err := h2OutboundRequest(pair.requestWire.h2, req)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	h.waitTurn(st)
-	os, err := h.origin.send(out)
+	os, err := origin.send(out)
 	h.passTurn(st)
 	if err != nil {
 		return nil, nil, nil, err
@@ -149,7 +163,7 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 	h.mu.Lock()
 	if st.gone {
 		h.mu.Unlock()
-		h.origin.cancel(os, http2.ErrCodeCancel)
+		origin.cancel(os, http2.ErrCodeCancel)
 		return nil, nil, nil, errStreamGone
 	}
 	st.origin = os

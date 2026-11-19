@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -122,6 +123,10 @@ type trafficRequestEvent struct {
 	Metadata    map[string]any `json:"metadata"`     // request metadata without prettified bodies
 	RequestedAt time.Time      `json:"requested_at"` // when the request was made
 	SitemapNode string         `json:"sitemap_node"` // name of the pair's leaf node in the sitemap
+	// ClientProtocol and OriginProtocol are as pair reads show them. The
+	// origin protocol is the client's until the response names another.
+	ClientProtocol string `json:"client_protocol"`
+	OriginProtocol string `json:"origin_protocol"`
 }
 
 // trafficResponseEvent is the JSON body of a traffic.response SSE event.
@@ -134,7 +139,9 @@ type trafficResponseEvent struct {
 	Metadata    map[string]any `json:"metadata"`     // response metadata without prettified bodies
 	RespondedAt time.Time      `json:"responded_at"` // when the response arrived
 	// UpstreamProxy is the route that carried the pair, as pair reads show it.
-	UpstreamProxy *trafficRoute `json:"upstream_proxy"`
+	UpstreamProxy *trafficRoute `json:"upstream_proxy"` // OriginProtocol is the protocol that carried the pair to the origin,
+	// left out when the pair never reached it: the request's stands.
+	OriginProtocol string `json:"origin_protocol,omitempty"`
 }
 
 // newEventBroadcaster returns an empty broadcaster.
@@ -237,6 +244,9 @@ func (b *eventBroadcaster) publishRequest(request domain.ProxyRequest) {
 		Path:        request.Path,
 		Metadata:    metadataWithoutPrettified(request.Metadata),
 		RequestedAt: request.RequestedAt,
+		// The repository stores an empty protocol as HTTP/1.1.
+		ClientProtocol: cmp.Or(request.ClientProtocol, domain.ProtocolHTTP1),
+		OriginProtocol: cmp.Or(request.OriginProtocol, request.ClientProtocol, domain.ProtocolHTTP1),
 	})
 }
 
@@ -252,14 +262,15 @@ func (b *eventBroadcaster) publishSitemapChanged(reason string) {
 // publishResponse publishes a traffic.response event.
 func (b *eventBroadcaster) publishResponse(response domain.ProxyResponse) {
 	b.publish("traffic.response", trafficResponseEvent{
-		ID:            response.ID,
-		Status:        response.Status,
-		StatusCode:    response.StatusCode,
-		ContentType:   response.ContentType,
-		Length:        response.Length,
-		Metadata:      metadataWithoutPrettified(response.Metadata),
-		RespondedAt:   response.RespondedAt,
-		UpstreamProxy: trafficRouteFromDomain(response.Route),
+		ID:             response.ID,
+		Status:         response.Status,
+		StatusCode:     response.StatusCode,
+		ContentType:    response.ContentType,
+		Length:         response.Length,
+		Metadata:       metadataWithoutPrettified(response.Metadata),
+		RespondedAt:    response.RespondedAt,
+		UpstreamProxy:  trafficRouteFromDomain(response.Route),
+		OriginProtocol: response.OriginProtocol,
 	})
 }
 

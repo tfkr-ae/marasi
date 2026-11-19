@@ -41,6 +41,10 @@ type dbRequestResponse struct {
 	// (db/migrations/00026_pair_route.sql).
 	UpstreamProxyName    sql.NullString `db:"upstream_proxy_name"`
 	UpstreamProxyAddress sql.NullString `db:"upstream_proxy_address"`
+	// Protocols on each leg (db/migrations/00028_pair_protocols.sql). A
+	// response write leaves OriginProtocol alone when it is NULL.
+	ClientProtocol string         `db:"client_protocol"`
+	OriginProtocol sql.NullString `db:"origin_protocol"`
 
 	// Common
 	Metadata  pairMetadata   `db:"metadata"`
@@ -72,6 +76,10 @@ type dbRequestResponseSummary struct {
 	// (db/migrations/00026_pair_route.sql).
 	UpstreamProxyName    sql.NullString `db:"upstream_proxy_name"`
 	UpstreamProxyAddress sql.NullString `db:"upstream_proxy_address"`
+	// Protocols on each leg (db/migrations/00028_pair_protocols.sql). A
+	// response write leaves OriginProtocol alone when it is NULL.
+	ClientProtocol string         `db:"client_protocol"`
+	OriginProtocol sql.NullString `db:"origin_protocol"`
 
 	// Common
 	Metadata  pairMetadata  `db:"metadata"`
@@ -94,6 +102,10 @@ func fromDomainProxyRequest(preq *domain.ProxyRequest) *dbRequestResponse {
 		RequestRaw:  preq.Raw,
 		RequestedAt: preq.RequestedAt,
 		Metadata:    pairMetadata(preq.Metadata),
+		// Empty is HTTP/1.1, the protocol of every pair before HTTP/2; an empty
+		// origin protocol is the client's.
+		ClientProtocol: cmp.Or(preq.ClientProtocol, domain.ProtocolHTTP1),
+		OriginProtocol: sql.NullString{String: cmp.Or(preq.OriginProtocol, preq.ClientProtocol, domain.ProtocolHTTP1), Valid: true},
 		dbPrettified: dbPrettified{Request: sql.NullString{
 			String: prettifiedCopy(preq.Prettified, preq.Metadata, prettifiedRequestKey),
 		}},
@@ -113,6 +125,9 @@ func toDomainProxyRequest(dbReqRes *dbRequestResponse) *domain.ProxyRequest {
 		RequestedAt: dbReqRes.RequestedAt,
 		Metadata:    map[string]any(dbReqRes.Metadata),
 		Prettified:  dbReqRes.dbPrettified.Request.String,
+
+		ClientProtocol: dbReqRes.ClientProtocol,
+		OriginProtocol: dbReqRes.OriginProtocol.String,
 	}
 }
 
@@ -147,6 +162,7 @@ func fromDomainProxyResponse(presp *domain.ProxyResponse) *dbRequestResponse {
 		Metadata:             pairMetadata(presp.Metadata),
 		UpstreamProxyName:    routeName(presp.Route),
 		UpstreamProxyAddress: routeAddress(presp.Route),
+		OriginProtocol:       sql.NullString{String: presp.OriginProtocol, Valid: presp.OriginProtocol != ""},
 		dbPrettified: dbPrettified{Response: sql.NullString{
 			String: prettifiedCopy(presp.Prettified, presp.Metadata, prettifiedResponseKey),
 		}},
@@ -245,6 +261,9 @@ func toDomainRequestResponseSummary(dbSummary *dbRequestResponseSummary) *domain
 		Path:        dbSummary.Path,
 		RequestedAt: dbSummary.RequestedAt,
 		Metadata:    map[string]any(dbSummary.Metadata),
+
+		ClientProtocol: dbSummary.ClientProtocol,
+		OriginProtocol: dbSummary.OriginProtocol.String,
 	}
 
 	if dbSummary.Status.Valid {
@@ -291,8 +310,10 @@ func (repo *Repository) InsertRequest(req *domain.ProxyRequest) error {
 	dbRequest := fromDomainProxyRequest(req)
 	// length is NULL until the response arrives (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md); the column's
 	// '0' default predates the length sort.
-	query := `INSERT INTO request(id, scheme, method, host, path, request_raw, requested_at, metadata, length)
-			  VALUES(:id, :scheme, :method, :host, :path, :request_raw, :requested_at, :metadata, NULL)`
+	query := `INSERT INTO request(id, scheme, method, host, path, request_raw, requested_at, metadata, length,
+			  client_protocol, origin_protocol)
+			  VALUES(:id, :scheme, :method, :host, :path, :request_raw, :requested_at, :metadata, NULL,
+			  :client_protocol, :origin_protocol)`
 	err := repo.inTx(func(tx *sqlx.Tx) error {
 		if _, err := tx.NamedExec(query, dbRequest); err != nil {
 			return err
@@ -342,6 +363,7 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 				responded_at = :responded_at,
 				upstream_proxy_name = :upstream_proxy_name,
 				upstream_proxy_address = :upstream_proxy_address,
+				origin_protocol = coalesce(:origin_protocol, origin_protocol),
 				metadata = json_patch(coalesce(metadata, '{}'), :metadata)
 			  WHERE id = :id`
 	err := repo.inTx(func(tx *sqlx.Tx) error {
@@ -419,6 +441,7 @@ func (repo *Repository) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResp
 			  r.id, r.scheme, r.method, r.host, r.path, r.request_raw, r.requested_at,
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
 			  r.upstream_proxy_name, r.upstream_proxy_address,
+			  r.client_protocol, r.origin_protocol,
 			  r.metadata, n.note, h.highlight, pn.number, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
@@ -446,6 +469,7 @@ func (repo *Repository) GetRequestResponseRows(ids []uuid.UUID) ([]*domain.Reque
 			  r.id, r.scheme, r.method, r.host, r.path, r.request_raw, r.requested_at,
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
 			  r.upstream_proxy_name, r.upstream_proxy_address,
+			  r.client_protocol, r.origin_protocol,
 			  r.metadata, n.note, h.highlight, pn.number, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
@@ -490,6 +514,7 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
 			  upstream_proxy_name, upstream_proxy_address,
+			  client_protocol, origin_protocol,
 			  metadata,
 			  pair_highlight.highlight, pair_number.number
 			  FROM request` + highlightJoin + numberJoin + `
@@ -641,6 +666,7 @@ func (repo *Repository) ListNotes(cursor *uuid.UUID, limit int) ([]*domain.Reque
 			  r.id, r.scheme, r.method, r.host, r.path, r.requested_at,
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
 			  r.upstream_proxy_name, r.upstream_proxy_address,
+			  r.client_protocol, r.origin_protocol,
 			  r.metadata,
 			  n.note, h.highlight, pn.number
 			  FROM request r
@@ -689,6 +715,7 @@ func (repo *Repository) SearchByMetadata(path string, value any) ([]*domain.Requ
 			  id, scheme, method, host, path, requested_at,
 			  status, status_code, content_type, length, responded_at,
 			  upstream_proxy_name, upstream_proxy_address,
+			  client_protocol, origin_protocol,
 			  metadata,
 			  pair_highlight.highlight, pair_number.number
 			  FROM request` + highlightJoin + numberJoin + `
