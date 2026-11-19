@@ -32,8 +32,9 @@ type viewHarness struct {
 }
 
 type viewHarnessConfig struct {
-	listen       string // the listener address, "127.0.0.1" by default
-	secureOrigin bool   // trust any upstream certificate, for an httptest TLS origin
+	listen       string                     // the listener address, "127.0.0.1" by default
+	secureOrigin bool                       // trust any upstream certificate, for an httptest TLS origin
+	onResponse   func(domain.ProxyResponse) // sees each captured response
 	options      []func(*Proxy) error
 }
 
@@ -52,7 +53,12 @@ func startViewHarness(t *testing.T, config viewHarnessConfig) *viewHarness {
 		WithTLS(),
 		WithExtensions(defaultExtensions),
 		WithRequestHandler(func(req domain.ProxyRequest) error { captured <- req; return nil }),
-		WithResponseHandler(func(domain.ProxyResponse) error { return nil }),
+		WithResponseHandler(func(res domain.ProxyResponse) error {
+			if config.onResponse != nil {
+				config.onResponse(res)
+			}
+			return nil
+		}),
 		WithLogHandler(func(domain.Log) error { return nil }),
 		WithLaunchFinishedHandler(func(domain.Launch) {}),
 	}

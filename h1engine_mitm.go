@@ -66,6 +66,9 @@ func (c *h1Conn) intercept(connectHost string) bool {
 	base := config.Clone()
 	config.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 		dialled = c.dialHandshakeOrigin(hello, connectHost)
+		if c.ownH2Only(hello.SupportedProtos) {
+			refuseNonH2Origin(dialled)
+		}
 		answer := base.Clone()
 		answer.NextProtos = clientProtocol(dialled, hello.SupportedProtos)
 		return answer, nil
@@ -120,6 +123,28 @@ func (c *h1Conn) dialHandshakeOrigin(hello *tls.ClientHelloInfo, connectHost str
 		return &handshakeDial{target: target, addr: addr, err: err, route: proxy.CurrentRoute()}
 	}
 	return &handshakeDial{target: target, addr: addr, conn: conn, route: conn.route}
+}
+
+// errOriginNotH2 is the cause when a launch or Armory request written as
+// HTTP/2 meets an origin that did not choose h2 by ALPN.
+var errOriginNotH2 = errors.New("the origin did not choose h2 by ALPN, and a request written as HTTP/2 is not sent over HTTP/1.1")
+
+// ownH2Only reports whether the proxy's own client opened this tunnel and
+// offers h2 alone, as a launch or Armory request written as HTTP/2 does.
+func (c *h1Conn) ownH2Only(offered []string) bool {
+	return slices.Equal(offered, []string{"h2"}) && c.engine.proxy.isSelfClientConnection(c.conn.RemoteAddr().String())
+}
+
+// refuseNonH2Origin drops an origin connection that did not choose h2, so
+// the handshake completes with h2 and each request is answered with a 502
+// naming the cause, as when the origin cannot be reached. A request written
+// as HTTP/2 never falls back to HTTP/1.1.
+func refuseNonH2Origin(dialled *handshakeDial) {
+	if dialled.conn == nil || dialled.conn.protocol() == "h2" {
+		return
+	}
+	dialled.conn.Close()
+	dialled.conn, dialled.err = nil, errOriginNotH2
 }
 
 // clientProtocol is what the client's handshake answers by ALPN: the origin's
