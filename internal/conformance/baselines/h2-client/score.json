@@ -7,6 +7,27 @@
       "approach": "connect-tls",
       "matched": 135,
       "cases": 146
+    },
+    {
+      "run": "checkpoint-forward",
+      "target": "nginx",
+      "approach": "connect-tls",
+      "matched": 135,
+      "cases": 146
+    },
+    {
+      "run": "checkpoint-edit",
+      "target": "nginx",
+      "approach": "connect-tls",
+      "matched": 135,
+      "cases": 146
+    },
+    {
+      "run": "extension",
+      "target": "nginx",
+      "approach": "connect-tls",
+      "matched": 135,
+      "cases": 146
     }
   ]
 }

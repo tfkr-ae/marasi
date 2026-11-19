@@ -61,11 +61,11 @@ jobs:
           path: dist/conformance/
           if-no-files-found: ignore
 
-  # Report only: HTTP/2 does not exist in Marasi yet, so the score shows in
-  # the job summary and never blocks a merge. h2-client installs h2spec with
-  # the Go toolchain set up here (go install, outside go.mod).
+  # Report only until the h2 suites become required checks: the score shows
+  # in the job summary and never blocks a merge. h2-client installs h2spec
+  # with the Go toolchain set up here (go install, outside go.mod).
   h2:
-    name: ${{ matrix.suite }} (proxy)
+    name: ${{ matrix.suite }} (${{ matrix.run }})
     needs: paths
     if: needs.paths.outputs.h2 == 'true'
     runs-on: ubuntu-24.04
@@ -75,17 +75,18 @@ jobs:
       fail-fast: false
       matrix:
         suite: [h2-client, h2-origin]
+        run: [proxy, checkpoint-forward, checkpoint-edit, extension]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-      - run: make conformance SUITES=${{ matrix.suite }} RUNS=proxy
+      - run: make conformance SUITES=${{ matrix.suite }} RUNS=${{ matrix.run }}
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: conformance-${{ matrix.suite }}-proxy
+          name: conformance-${{ matrix.suite }}-${{ matrix.run }}
           path: dist/conformance/
           if-no-files-found: ignore
 

@@ -59,8 +59,7 @@ help:
 		'                     blocking h1-origin,h1-client. Suites: autobahn (Marasi on the' \
 		'                     host), h1-origin, h1-client, h2-client and h2-origin (Marasi' \
 		'                     in a Linux container built for LINUX_ARCH, this machine by' \
-		'                     default; the h2 suites are report only, proxy run only: run' \
-		'                     them on their own).' \
+		'                     default; the h2 suites are report only: run them on their own).' \
 		'                     Narrow with SUITES=autobahn' \
 		'                     RUNS=proxy CASES=3.*,7.9.* EXCLUDE=9.* APPROACHES=connect-tls,' \
 		'                     and for autobahn MODES=fuzzingclient PEERS=strict (runs: proxy' \

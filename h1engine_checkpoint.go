@@ -77,6 +77,9 @@ func rebuildWireResponse(raw []byte, original *http.Response, wire *wireResponse
 
 // wireRequestEdit is the Checkpoint edit of a request the engine read.
 func wireRequestEdit(original *http.Request, wire *wireRequest) *checkpointEdit {
+	if wire.h2 != nil {
+		return h2RequestEdit(original, wire.h2)
+	}
 	var req *http.Request
 	var rebuilt *wireRequest
 	return &checkpointEdit{
@@ -92,6 +95,9 @@ func wireRequestEdit(original *http.Request, wire *wireRequest) *checkpointEdit 
 
 // wireResponseEdit is the Checkpoint edit of a response the engine read.
 func wireResponseEdit(original *http.Response, wire *wireResponse) *checkpointEdit {
+	if wire.h2 != nil {
+		return h2ResponseEdit(original, wire.h2)
+	}
 	var res *http.Response
 	var rebuilt *wireResponse
 	return &checkpointEdit{

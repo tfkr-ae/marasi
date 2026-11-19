@@ -43,9 +43,9 @@ var _ conformance.Suite = Suite{}
 // Name is "h2-origin".
 func (s Suite) Name() string { return Name }
 
-// Runs is only proxy: the h2 Checkpoint and extension runs come with
-// HTTP/2 itself (Phase 5).
-func (s Suite) Runs() []conformance.RunName { return []conformance.RunName{conformance.RunProxy} }
+// Runs is all four proxied runs: Checkpoint holds and resolves each HTTP/2
+// request and response, and the extension run edits each body to itself.
+func (s Suite) Runs() []conformance.RunName { return conformance.ProxiedRuns }
 
 // Approaches is TLS inside CONNECT, with ALPN h2.
 func (s Suite) Approaches() []conformance.Approach {
@@ -58,9 +58,14 @@ func (s Suite) Targets() []string { return []string{Target} }
 // Setup runs Marasi in a container that resolves the origin's name to
 // loopback. The went-through check is the intercepted TLS: through the
 // proxy the client trusts only the proxy's CA, which a proxy speaking only
-// HTTP/1.1, and so recording no h2 traffic, still shows.
+// HTTP/1.1, and so recording no h2 traffic, still shows. The Checkpoint
+// and extension runs hold and edit HTTP as an HTTP/1.1 suite does.
 func (s Suite) Setup() conformance.Setup {
-	return conformance.Setup{Traffic: conformance.TrafficTLS, Container: true, Hosts: []string{s.originHost()}}
+	setup := conformance.HTTPSetup()
+	setup.Traffic = conformance.TrafficTLS
+	setup.Container = true
+	setup.Hosts = []string{s.originHost()}
+	return setup
 }
 
 // Execute runs every selected case, one at a time.
