@@ -121,6 +121,14 @@ func TestDirectRecording(t *testing.T) {
 		}
 	})
 
+	t.Run("should record a body larger than the flow-control window by its length and SHA-256", func(t *testing.T) {
+		got := baselineCase(t, settings, "flow-control-window@connect-tls").Client[0].Streams[0]
+		const want = "9c7ba7491ab99b39cfcb11c7815edfa453aae3afe155848fe4220f8f731fff9e"
+		if got.DataLength != 81920 || got.DataSHA256 != want || got.Data != nil || got.EndStream != h2.EndData {
+			t.Fatalf("\nwanted 81920 bytes, sha256 %s, ending on DATA\ngot:\n%+v", want, got)
+		}
+	})
+
 	t.Run("should record padded, split DATA and other SETTINGS the same as one plain DATA frame", func(t *testing.T) {
 		plain := baselineCase(t, settings, "headers-with-data@connect-tls")
 		split := baselineCase(t, settings, "data-padded-split@connect-tls")

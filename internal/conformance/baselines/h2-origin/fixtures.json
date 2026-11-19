@@ -676,6 +676,68 @@
       }
     ]
   },
+  "flow-control-window@connect-tls": {
+    "client": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                },
+                {
+                  "name": "content-type",
+                  "value": "application/octet-stream"
+                }
+              ]
+            ],
+            "data_length": 81920,
+            "data_sha256": "9c7ba7491ab99b39cfcb11c7815edfa453aae3afe155848fe4220f8f731fff9e",
+            "end_stream": "data"
+          }
+        ]
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "POST"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/large"
+                },
+                {
+                  "name": "content-type",
+                  "value": "application/octet-stream"
+                }
+              ]
+            ],
+            "data_length": 81920,
+            "data_sha256": "b2b7b05309275e27bc90aaeb5de063dd5707ac9389cb64adec7654da17fcc3cf",
+            "end_stream": "data"
+          }
+        ]
+      }
+    ]
+  },
   "goaway-in-flight@connect-tls": {
     "client": [
       {

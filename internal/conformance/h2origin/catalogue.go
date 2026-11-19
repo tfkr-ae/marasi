@@ -238,6 +238,22 @@ var Catalogue = []Case{
 			Data(0, true, "continued"),
 		},
 	},
+	{
+		// Bodies longer than the initial 65,535-byte windows, so neither
+		// side can send all of one before the other gives window back.
+		ID:  "flow-control-window",
+		RFC: "RFC 9113 §6.9 flow control",
+		Requests: []Request{{
+			Method: "POST", Path: "/large",
+			Fields: h2.Fields("content-type", "application/octet-stream"),
+			Body:   largeBody("request"),
+		}},
+		Script: []Step{
+			Await(),
+			Headers(0, false, ":status", "200", "content-type", "application/octet-stream"),
+			Data(0, true, largeBody("response")),
+		},
+	},
 }
 
 // gzipped compresses s with gzip. The header carries no name or time, so
@@ -248,4 +264,11 @@ func gzipped(s string) string {
 	_, _ = w.Write([]byte(s))
 	_ = w.Close()
 	return b.String()
+}
+
+// largeBody is 81,920 bytes starting with label: more than the initial
+// connection and stream windows of 65,535 bytes.
+func largeBody(label string) string {
+	line := label + strings.Repeat(".", 63-len(label)) + "\n"
+	return strings.Repeat(line, 1280)
 }
