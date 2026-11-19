@@ -3,6 +3,7 @@ package h2origin
 import (
 	"bytes"
 	"compress/gzip"
+	"strings"
 
 	"golang.org/x/net/http2"
 
@@ -218,6 +219,23 @@ var Catalogue = []Case{
 			Data(0, true, "first"),
 			Headers(1, false, ":status", "200"),
 			Data(1, true, "second"),
+		},
+	},
+	{
+		// Both header blocks split into a HEADERS frame and CONTINUATION
+		// frames, with END_STREAM on the HEADERS frame of the request.
+		ID:  "continuation",
+		RFC: "RFC 9113 §6.10 CONTINUATION",
+		Requests: []Request{{
+			Method: "GET", Path: "/continued",
+			Fields:   h2.Fields("x-long", strings.Repeat("request ", 16), "accept", "*/*", "x-after", "continued"),
+			Fragment: 16,
+		}},
+		Script: []Step{
+			Await(),
+			ContinuedHeaders(0, false, 10, ":status", "200", "content-type", "text/plain",
+				"x-long", strings.Repeat("response ", 16), "x-after", "continued"),
+			Data(0, true, "continued"),
 		},
 	},
 }

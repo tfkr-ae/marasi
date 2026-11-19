@@ -33,6 +33,9 @@ type Request struct {
 	Fields   []h2.Field
 	Body     string     // sent as one DATA frame when not empty
 	Trailers []h2.Field // sent as a last header block when not empty
+	// Fragment, when not zero, splits the header block into a HEADERS
+	// frame and CONTINUATION frames of at most this many bytes.
+	Fragment int
 }
 
 // StepKind names what a script step does.
@@ -57,6 +60,7 @@ type Step struct {
 	Stream    int
 	EndStream bool
 	Fields    []h2.Field      // StepHeaders
+	Fragment  int             // StepHeaders: when not zero, the most bytes of the block in one frame
 	Data      string          // StepData
 	Pad       uint8           // StepData: padding bytes
 	Code      http2.ErrCode   // StepReset, StepGoAway
@@ -71,6 +75,14 @@ func Await() Step { return Step{Kind: StepAwait} }
 // Headers sends a header block of name, value pairs on a request stream.
 func Headers(stream int, endStream bool, pairs ...string) Step {
 	return Step{Kind: StepHeaders, Stream: stream, EndStream: endStream, Fields: h2.Fields(pairs...)}
+}
+
+// ContinuedHeaders sends a header block as HEADERS and CONTINUATION frames
+// of at most fragment bytes each.
+func ContinuedHeaders(stream int, endStream bool, fragment int, pairs ...string) Step {
+	step := Headers(stream, endStream, pairs...)
+	step.Fragment = fragment
+	return step
 }
 
 // Data sends one DATA frame on a request stream.
@@ -259,7 +271,7 @@ func (o *origin) run(c *originConn, w *frameWriter, changed <-chan struct{}, rea
 			deadline.Stop()
 			awaited++
 		case StepHeaders:
-			err = w.headers(streamID(step.Stream), step.EndStream, step.Fields)
+			err = w.headers(streamID(step.Stream), step.EndStream, step.Fields, step.Fragment)
 		case StepData:
 			id := streamID(step.Stream)
 			err = w.do(func(f *http2.Framer) error {
@@ -335,8 +347,9 @@ func (w *frameWriter) do(write func(*http2.Framer) error) error {
 	return write(w.framer)
 }
 
-// headers encodes fields and sends them as one HEADERS frame.
-func (w *frameWriter) headers(id uint32, endStream bool, fields []h2.Field) error {
+// headers encodes fields and sends them as one HEADERS frame, or split
+// into fragments of at most fragment bytes when fragment is not zero.
+func (w *frameWriter) headers(id uint32, endStream bool, fields []h2.Field, fragment int) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.block.Reset()
@@ -345,9 +358,30 @@ func (w *frameWriter) headers(id uint32, endStream bool, fields []h2.Field) erro
 			return err
 		}
 	}
-	return w.framer.WriteHeaders(http2.HeadersFrameParam{
-		StreamID: id, BlockFragment: w.block.Bytes(), EndStream: endStream, EndHeaders: true,
-	})
+	return writeBlock(w.framer, id, w.block.Bytes(), endStream, fragment)
+}
+
+// writeBlock sends an encoded header block as one HEADERS frame, or as
+// HEADERS and CONTINUATION frames of at most fragment bytes each.
+func writeBlock(framer *http2.Framer, id uint32, block []byte, endStream bool, fragment int) error {
+	if fragment <= 0 || len(block) <= fragment {
+		return framer.WriteHeaders(http2.HeadersFrameParam{
+			StreamID: id, BlockFragment: block, EndStream: endStream, EndHeaders: true,
+		})
+	}
+	if err := framer.WriteHeaders(http2.HeadersFrameParam{
+		StreamID: id, BlockFragment: block[:fragment], EndStream: endStream,
+	}); err != nil {
+		return err
+	}
+	for rest := block[fragment:]; len(rest) > 0; {
+		n := min(fragment, len(rest))
+		if err := framer.WriteContinuation(id, n == len(rest), rest[:n]); err != nil {
+			return err
+		}
+		rest = rest[n:]
+	}
+	return nil
 }
 
 // acknowledge answers SETTINGS and PING, as every HTTP/2 endpoint must.

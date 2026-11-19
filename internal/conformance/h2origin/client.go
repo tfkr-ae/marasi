@@ -107,9 +107,7 @@ func (s Suite) exchange(conn net.Conn, recorder *h2.Recorder, requests []Request
 		recorder.Open(id)
 		fields := append(h2.Fields(":method", r.Method, ":scheme", "https", ":authority", authority, ":path", r.Path), r.Fields...)
 		hasBody, hasTrailers := r.Body != "", len(r.Trailers) > 0
-		if err := framer.WriteHeaders(http2.HeadersFrameParam{
-			StreamID: id, BlockFragment: encode(fields), EndStream: !hasBody && !hasTrailers, EndHeaders: true,
-		}); err != nil {
+		if err := writeBlock(framer, id, encode(fields), !hasBody && !hasTrailers, r.Fragment); err != nil {
 			return fmt.Errorf("sending request %d: %w", i, err)
 		}
 		if hasBody {

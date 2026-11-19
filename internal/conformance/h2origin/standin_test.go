@@ -193,12 +193,13 @@ func (s *standIn) serve(raw net.Conn) {
 // that write to it, and the HPACK state for what arrives from it and what
 // is sent to it.
 type leg struct {
-	mu      sync.Mutex
-	framer  *http2.Framer
-	decoder *hpack.Decoder
-	block   bytes.Buffer
-	encoder *hpack.Encoder
-	pending []byte // a header block waiting for its CONTINUATION
+	mu         sync.Mutex
+	framer     *http2.Framer
+	decoder    *hpack.Decoder
+	block      bytes.Buffer
+	encoder    *hpack.Encoder
+	pending    []byte // a header block waiting for its CONTINUATION
+	pendingEnd bool   // END_STREAM on the HEADERS frame of pending
 }
 
 func newLeg(conn net.Conn) *leg {
@@ -286,15 +287,15 @@ func (r *relay) relayFrame(frame http2.Frame, from, to *leg, upstream bool) erro
 		}
 	case *http2.HeadersFrame:
 		from.pending = append(from.pending[:0], f.HeaderBlockFragment()...)
+		from.pendingEnd = f.StreamEnded()
 		if f.HeadersEnded() {
 			return r.headers(f.StreamID, f.StreamEnded(), from, to, upstream)
 		}
 	case *http2.ContinuationFrame:
 		from.pending = append(from.pending, f.HeaderBlockFragment()...)
 		if f.HeadersEnded() {
-			// END_STREAM sits on the HEADERS frame; this relay's
-			// tests never split a block, so a CONTINUATION ends nothing.
-			return r.headers(f.StreamID, false, from, to, upstream)
+			// END_STREAM sits on the HEADERS frame the block began with.
+			return r.headers(f.StreamID, from.pendingEnd, from, to, upstream)
 		}
 	case *http2.DataFrame:
 		id := r.streamID(f.StreamID, upstream)

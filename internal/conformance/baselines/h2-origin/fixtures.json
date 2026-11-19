@@ -282,6 +282,81 @@
       }
     ]
   },
+  "continuation@connect-tls": {
+    "client": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                },
+                {
+                  "name": "content-type",
+                  "value": "text/plain"
+                },
+                {
+                  "name": "x-long",
+                  "value": "response response response response response response response response response response response response response response response response "
+                },
+                {
+                  "name": "x-after",
+                  "value": "continued"
+                }
+              ]
+            ],
+            "data": "Y29udGludWVk",
+            "end_stream": "data"
+          }
+        ]
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/continued"
+                },
+                {
+                  "name": "x-long",
+                  "value": "request request request request request request request request request request request request request request request request "
+                },
+                {
+                  "name": "accept",
+                  "value": "*/*"
+                },
+                {
+                  "name": "x-after",
+                  "value": "continued"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          }
+        ]
+      }
+    ]
+  },
   "cookie-crumbs@connect-tls": {
     "client": [
       {
