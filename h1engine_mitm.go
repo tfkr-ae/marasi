@@ -9,6 +9,8 @@ import (
 	"net"
 	"slices"
 	"time"
+
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // MITM on Marasi's own engine: the client leg's TLS, inside a CONNECT or sent
@@ -49,6 +51,8 @@ type handshakeDial struct {
 	err    error
 	// route is the route the dial ran on.
 	route *Route
+	// offered is the client's ALPN list, which the origin was offered.
+	offered []string
 }
 
 // intercept runs the TLS handshake a client started, as the server, with a
@@ -90,7 +94,7 @@ func (c *h1Conn) intercept(connectHost string) bool {
 	c.bw.Reset(tlsConn)
 	c.protocol = tlsConn.ConnectionState().NegotiatedProtocol
 	c.handshake = dialled
-	if dialled != nil && dialled.conn != nil && c.protocol != "h2" {
+	if dialled != nil && dialled.conn != nil && c.protocol != domain.ProtocolHTTP2 {
 		c.origin = &originConn{
 			addr: dialled.addr, scheme: "https", route: dialled.conn.route, conn: dialled.conn,
 			br: bufio.NewReader(dialled.conn), bw: bufio.NewWriter(dialled.conn),
@@ -105,10 +109,11 @@ func (c *h1Conn) intercept(connectHost string) bool {
 // one. It offers the origin the client's ALPN list.
 func (c *h1Conn) dialHandshakeOrigin(hello *tls.ClientHelloInfo, connectHost string) *handshakeDial {
 	proxy := c.engine.proxy
+	offered := hello.SupportedProtos
 	addr := connectHost
 	if addr == "" {
 		if hello.ServerName == "" {
-			return &handshakeDial{err: errNoOriginName, route: proxy.CurrentRoute()}
+			return &handshakeDial{err: errNoOriginName, route: proxy.CurrentRoute(), offered: offered}
 		}
 		addr = net.JoinHostPort(hello.ServerName, "443")
 	}
@@ -116,13 +121,13 @@ func (c *h1Conn) dialHandshakeOrigin(hello *tls.ClientHelloInfo, connectHost str
 	if override, ok := proxy.waypointOverride(addr); ok {
 		addr = override
 	}
-	ctx, cancel := context.WithTimeout(withOriginALPN(c.ctx, hello.SupportedProtos), tlsHandshakeTimeout)
+	ctx, cancel := context.WithTimeout(withOriginALPN(c.ctx, offered), tlsHandshakeTimeout)
 	defer cancel()
 	conn, err := proxy.dialOrigin(ctx, "https", addr)
 	if err != nil {
-		return &handshakeDial{target: target, addr: addr, err: err, route: proxy.CurrentRoute()}
+		return &handshakeDial{target: target, addr: addr, err: err, route: proxy.CurrentRoute(), offered: offered}
 	}
-	return &handshakeDial{target: target, addr: addr, conn: conn, route: conn.route}
+	return &handshakeDial{target: target, addr: addr, conn: conn, route: conn.route, offered: offered}
 }
 
 // errOriginNotH2 is the cause when a launch or Armory request written as
@@ -132,7 +137,7 @@ var errOriginNotH2 = errors.New("the origin did not choose h2 by ALPN, and a req
 // ownH2Only reports whether the proxy's own client opened this tunnel and
 // offers h2 alone, as a launch or Armory request written as HTTP/2 does.
 func (c *h1Conn) ownH2Only(offered []string) bool {
-	return slices.Equal(offered, []string{"h2"}) && c.engine.proxy.isSelfClientConnection(c.conn.RemoteAddr().String())
+	return slices.Equal(offered, []string{domain.ProtocolHTTP2}) && c.engine.proxy.isSelfClientConnection(c.conn.RemoteAddr().String())
 }
 
 // refuseNonH2Origin drops an origin connection that did not choose h2, so
@@ -140,7 +145,7 @@ func (c *h1Conn) ownH2Only(offered []string) bool {
 // naming the cause, as when the origin cannot be reached. A request written
 // as HTTP/2 never falls back to HTTP/1.1.
 func refuseNonH2Origin(dialled *handshakeDial) {
-	if dialled.conn == nil || dialled.conn.protocol() == "h2" {
+	if dialled.conn == nil || dialled.conn.protocol() == domain.ProtocolHTTP2 {
 		return
 	}
 	dialled.conn.Close()
@@ -157,7 +162,7 @@ func clientProtocol(dialled *handshakeDial, offered []string) []string {
 		}
 		return nil
 	}
-	for _, protocol := range []string{"http/1.1", "h2"} {
+	for _, protocol := range []string{domain.ProtocolHTTP1, domain.ProtocolHTTP2} {
 		if slices.Contains(offered, protocol) {
 			return []string{protocol}
 		}

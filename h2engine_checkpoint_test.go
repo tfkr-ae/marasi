@@ -2,6 +2,7 @@ package marasi
 
 import (
 	"testing"
+	"time"
 
 	"github.com/tfkr-ae/marasi/domain"
 )
@@ -125,7 +126,10 @@ func TestH2Engine_Checkpoint(t *testing.T) {
 		expectCapturedResponse(t, captured, "HTTP/2 403\r\nX-Edited: Yes\r\nTransfer-Encoding: chunked\r\ncontent-length: 2\r\n\r\nchanged")
 	})
 
-	t.Run("should hold only its own stream", func(t *testing.T) {
+	t.Run("should hold only its own stream: one opened once the hold is older than the order wait goes to the origin without waiting", func(t *testing.T) {
+		wait := h2OrderWait
+		h2OrderWait = 2 * time.Second
+		t.Cleanup(func() { h2OrderWait = wait })
 		origin := newH2TestOrigin(t)
 		addr, _, ca := serveH1EngineMITMProxy(t, true, holdEverything(t))
 		proxy := proxyOf(t, addr)
@@ -134,6 +138,8 @@ func TestH2Engine_Checkpoint(t *testing.T) {
 
 		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/held")
 		held := waitForCheckpoint(t, proxy, 1)[0]
+		time.Sleep(h2OrderWait + 100*time.Millisecond)
+		sent := time.Now()
 		client.headers(3, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/free")
 		var free domain.CheckpointItem
 		for _, item := range waitForCheckpoint(t, proxy, 2) {
@@ -145,6 +151,9 @@ func TestH2Engine_Checkpoint(t *testing.T) {
 			t.Fatalf("forwarding: %v", err)
 		}
 		id := upstream.nthStream(t, 0)
+		if waited := time.Since(sent); waited > h2OrderWait/2 {
+			t.Fatalf("the free stream's wait for the origin\nwanted:\nunder %s\ngot:\n%s", h2OrderWait/2, waited)
+		}
 		if path, _ := upstream.stream(t, id).headers[0].get(":path"); path != "/free" {
 			t.Fatalf("the origin's first request\nwanted:\n/free\ngot:\n%q", path)
 		}

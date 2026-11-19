@@ -139,7 +139,8 @@ type trafficResponseEvent struct {
 	Metadata    map[string]any `json:"metadata"`     // response metadata without prettified bodies
 	RespondedAt time.Time      `json:"responded_at"` // when the response arrived
 	// UpstreamProxy is the route that carried the pair, as pair reads show it.
-	UpstreamProxy *trafficRoute `json:"upstream_proxy"` // OriginProtocol is the protocol that carried the pair to the origin,
+	UpstreamProxy *trafficRoute `json:"upstream_proxy"`
+	// OriginProtocol is the protocol that carried the pair to the origin,
 	// left out when the pair never reached it: the request's stands.
 	OriginProtocol string `json:"origin_protocol,omitempty"`
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 
 	utls "github.com/refraction-networking/utls"
+	"github.com/tfkr-ae/marasi/domain"
 )
 
 // connectOverTLS runs TLS with the upstream proxy on conn, verified against
@@ -18,7 +19,7 @@ func (route *Route) connectOverTLS(ctx context.Context, conn net.Conn, address s
 	if err != nil {
 		return nil, route.fail(UpstreamProxyInvalid, err.Error(), err)
 	}
-	tlsConn := tls.Client(conn, &tls.Config{ServerName: route.Host, RootCAs: roots, NextProtos: []string{"http/1.1"}})
+	tlsConn := tls.Client(conn, &tls.Config{ServerName: route.Host, RootCAs: roots, NextProtos: []string{domain.ProtocolHTTP1}})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		return nil, route.handshakeFailure("the upstream proxy", contextCause(ctx, err))
 	}

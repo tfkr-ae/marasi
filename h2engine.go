@@ -6,7 +6,9 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"maps"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -61,9 +63,7 @@ type h2Conn struct {
 	dialMu     sync.Mutex
 
 	// The header block being read, until its END_HEADERS.
-	block         []byte
-	blockID       uint32
-	blockEnd      bool
+	block         h2Block
 	blockSelfDeps bool
 	sawSettings   bool
 
@@ -74,7 +74,7 @@ type h2Conn struct {
 	// streams are the client's open streams, by ID; closed are the
 	// streams that were open once and are no longer.
 	streams map[uint32]*h2Stream
-	closed  map[uint32]bool
+	closed  h2ClosedStreams
 	// maxID is the highest stream ID the client used.
 	maxID uint32
 	// maxStreams is the SETTINGS_MAX_CONCURRENT_STREAMS the client was
@@ -98,6 +98,42 @@ type h2Conn struct {
 	unsent []*h2Stream
 }
 
+// h2ClosedKept is how many closed stream IDs h2ClosedStreams keeps exactly.
+const h2ClosedKept = 1024
+
+// h2ClosedStreams records the client streams that were open once and no
+// longer are, so HEADERS on one is told from HEADERS on a stream the client
+// skipped (RFC 9113 §5.1, §5.1.1). Stream IDs only grow, so once more than
+// twice h2ClosedKept are recorded the oldest are forgotten and every ID at or
+// below the newest forgotten counts as closed: a client that skipped one of
+// those is told STREAM_CLOSED rather than PROTOCOL_ERROR, a connection error
+// either way.
+type h2ClosedStreams struct {
+	ids   map[uint32]bool
+	below uint32
+}
+
+func (c *h2ClosedStreams) add(id uint32) {
+	if c.ids == nil {
+		c.ids = make(map[uint32]bool)
+	}
+	c.ids[id] = true
+	if len(c.ids) <= 2*h2ClosedKept {
+		return
+	}
+	ids := slices.Sorted(maps.Keys(c.ids))
+	forgotten := ids[:len(ids)-h2ClosedKept]
+	c.below = forgotten[len(forgotten)-1]
+	for _, id := range forgotten {
+		delete(c.ids, id)
+	}
+}
+
+// has reports whether stream id was closed.
+func (c *h2ClosedStreams) has(id uint32) bool {
+	return id <= c.below || c.ids[id]
+}
+
 // h2Stream is one client stream.
 type h2Stream struct {
 	id     uint32
@@ -116,36 +152,87 @@ type h2Stream struct {
 	// the streams the client opened after it may go.
 	turn     chan struct{}
 	turnOnce sync.Once
+	// heldSince is when Checkpoint started to hold the stream's request,
+	// zero when it is not held; holding is closed as a hold starts, and
+	// replaced as it ends.
+	heldSince time.Time
+	holding   chan struct{}
 }
 
 // h2OrderWait bounds how long a stream waits for the streams the client
-// opened before it to go to the origin first. A stream that is held, by
-// Checkpoint or a slow hook, lets the others pass once it runs out.
-const h2OrderWait = 250 * time.Millisecond
+// opened before it to go to the origin first. For a stream Checkpoint holds
+// it runs from the hold's start, so a quick hold keeps the client's order
+// and a long one delays the streams behind it once, by h2OrderWait at most.
+// A stream a slow hook holds lets the others pass once the wait runs out.
+var h2OrderWait = 250 * time.Millisecond
 
 // waitTurn waits until every stream the client opened before st was sent
-// to the origin or ended, or h2OrderWait passed, so origin streams open in
-// the client's order as they would going direct.
+// to the origin or ended, or its wait ran out (h2OrderWait from now, or from
+// the start of the stream's hold while Checkpoint holds it), so origin
+// streams open in the client's order as they would going direct. A stream
+// that gave up its turn waits for none.
 func (h *h2Conn) waitTurn(st *h2Stream) {
 	h.mu.Lock()
-	var before []chan struct{}
+	var before []*h2Stream
 	for _, other := range h.unsent {
 		if other == st {
 			break
 		}
-		before = append(before, other.turn)
+		before = append(before, other)
+	}
+	if !slices.Contains(h.unsent, st) {
+		before = nil
 	}
 	h.mu.Unlock()
-	timeout := time.NewTimer(h2OrderWait)
-	defer timeout.Stop()
-	for _, turn := range before {
-		select {
-		case <-turn:
-		case <-timeout.C:
-			return
-		case <-st.ctx.Done():
+	deadline := time.Now().Add(h2OrderWait)
+	for _, other := range before {
+		if !h.waitFor(st, other, deadline) {
 			return
 		}
+	}
+}
+
+// waitFor waits until other was sent or ended, and reports false when the
+// wait ran out first or st ended. Until deadline, or while other is held,
+// until its hold is h2OrderWait old.
+func (h *h2Conn) waitFor(st, other *h2Stream, deadline time.Time) bool {
+	for {
+		h.mu.Lock()
+		turn, holding, until := other.turn, other.holding, deadline
+		if !other.heldSince.IsZero() {
+			until = other.heldSince.Add(h2OrderWait)
+		}
+		h.mu.Unlock()
+		timeout := time.NewTimer(time.Until(until))
+		select {
+		case <-turn:
+			timeout.Stop()
+			return true
+		case <-holding:
+			// A hold started: wait again, until it is h2OrderWait old.
+			timeout.Stop()
+		case <-timeout.C:
+			return false
+		case <-st.ctx.Done():
+			timeout.Stop()
+			return false
+		}
+	}
+}
+
+// held notes that Checkpoint started or ended a hold of st's request.
+func (h *h2Conn) held(st *h2Stream, onHold bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if st.holding == nil || !st.heldSince.IsZero() == onHold {
+		return
+	}
+	if onHold {
+		st.heldSince = time.Now()
+		close(st.holding)
+	} else {
+		st.heldSince = time.Time{}
+		st.holding = make(chan struct{})
 	}
 }
 
@@ -171,7 +258,7 @@ func (c *h1Conn) serveH2() {
 		c: c, engine: c.engine, conn: c.conn, br: c.br,
 		flow:    newH2Flow(),
 		decoder: hpack.NewDecoder(4096, nil),
-		streams: make(map[uint32]*h2Stream), closed: make(map[uint32]bool), sent: make(map[uint32]uint32),
+		streams: make(map[uint32]*h2Stream), sent: make(map[uint32]uint32),
 	}
 	h.framer = http2.NewFramer(c.bw, c.br)
 	h.framer.AllowIllegalWrites = true
@@ -314,14 +401,17 @@ func (h *h2Conn) frame(frame http2.Frame) error {
 		if f.StreamID%2 == 0 {
 			return http2.ConnectionError(http2.ErrCodeProtocol)
 		}
-		h.block = append(h.block[:0], f.HeaderBlockFragment()...)
-		h.blockID, h.blockEnd = f.StreamID, f.StreamEnded()
 		h.blockSelfDeps = f.HasPriority() && f.Priority.StreamDep == f.StreamID
+		if err := h.block.start(f); err != nil {
+			return err
+		}
 		if f.HeadersEnded() {
 			return h.headerBlock()
 		}
 	case *http2.ContinuationFrame:
-		h.block = append(h.block, f.HeaderBlockFragment()...)
+		if err := h.block.add(f.HeaderBlockFragment()); err != nil {
+			return err
+		}
 		if f.HeadersEnded() {
 			return h.headerBlock()
 		}
@@ -406,15 +496,11 @@ func (h *h2Conn) rstStream(f *http2.RSTStreamFrame) error {
 // becomes of it, to keep the HPACK table in step. Its fields are not
 // checked: a malformed request goes to the origin as it came.
 func (h *h2Conn) headerBlock() error {
-	decoded, err := h.decoder.DecodeFull(h.block)
+	fields, err := h.block.decode(h.decoder)
 	if err != nil {
-		return http2.ConnectionError(http2.ErrCodeCompression)
+		return err
 	}
-	fields := make(h2Fields, len(decoded))
-	for i, f := range decoded {
-		fields[i] = h2Field{Name: f.Name, Value: f.Value, Sensitive: f.Sensitive}
-	}
-	id, end := h.blockID, h.blockEnd
+	id, end := h.block.id, h.block.endStream
 	h.mu.Lock()
 	if st := h.streams[id]; st != nil {
 		switch {
@@ -432,7 +518,7 @@ func (h *h2Conn) headerBlock() error {
 		return nil
 	}
 	if id <= h.maxID {
-		closed := h.closed[id]
+		closed := h.closed.has(id)
 		h.mu.Unlock()
 		// HEADERS on a closed stream (RFC 9113 §5.1), or on one the
 		// client skipped, which is closed too (§5.1.1).
@@ -447,11 +533,11 @@ func (h *h2Conn) headerBlock() error {
 		h.mu.Unlock()
 		return nil
 	case h.blockSelfDeps:
-		h.closed[id] = true
+		h.closed.add(id)
 		h.mu.Unlock()
 		return http2.StreamError{StreamID: id, Code: http2.ErrCodeProtocol}
 	case h.maxStreamsSet && uint32(len(h.streams)) >= h.maxStreams:
-		h.closed[id] = true
+		h.closed.add(id)
 		h.mu.Unlock()
 		return http2.StreamError{StreamID: id, Code: http2.ErrCodeRefusedStream}
 	}
@@ -521,16 +607,29 @@ func (h *h2Conn) clientGoAway(f *http2.GoAwayFrame) {
 
 // dispatch carries a stream whose request is whole on its own goroutine.
 func (h *h2Conn) dispatch(st *h2Stream) {
-	h.mu.Lock()
-	st.turn = make(chan struct{})
-	h.unsent = append(h.unsent, st)
-	h.mu.Unlock()
+	if !h.queue(st) {
+		return
+	}
 	h.streamsWG.Add(1)
 	go func() {
 		defer h.streamsWG.Done()
 		h.carry(st)
 		h.closeStream(st, nil)
 	}()
+}
+
+// queue puts st in line for the origin, behind the streams the client
+// opened before it (waitTurn). It reports false for a stream that closed
+// meanwhile, as one an origin GOAWAY abandoned does: that is not carried.
+func (h *h2Conn) queue(st *h2Stream) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if st.gone {
+		return false
+	}
+	st.turn, st.holding = make(chan struct{}), make(chan struct{})
+	h.unsent = append(h.unsent, st)
+	return true
 }
 
 // resetStream sends RST_STREAM with code and ends the stream, resetting its
@@ -556,16 +655,16 @@ func (h *h2Conn) closeStream(st *h2Stream, originCode *http2.ErrCode) {
 	}
 	st.gone = true
 	delete(h.streams, st.id)
-	h.closed[st.id] = true
-	os, origin := st.origin, h.origin
+	h.closed.add(st.id)
+	originStream, origin, queued := st.origin, h.origin, st.turn != nil
 	h.mu.Unlock()
 	st.cancel()
-	if st.turn != nil {
+	if queued {
 		h.passTurn(st)
 	}
 	h.flow.end(&st.window)
-	if os != nil && originCode != nil && origin != nil {
-		origin.cancel(os, *originCode)
+	if originStream != nil && originCode != nil && origin != nil {
+		origin.cancel(originStream, *originCode)
 	}
 	h.finishIfDone()
 }

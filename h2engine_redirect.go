@@ -25,9 +25,15 @@ import (
 // HTTP/1.1 the request/response pair is translated, and header case is lost.
 // The connection carries that one request and is closed after its response.
 
-// redirectedALPN is what a redirected request's origin is offered: h2 first,
-// as an HTTP/2 client going direct would.
-var redirectedALPN = []string{"h2", "http/1.1"}
+// redirectedALPN is what a redirected request's origin is offered: the
+// client's own ALPN list, as the handshake's origin was, or, for a client
+// that sent none (h2c), h2 first as an HTTP/2 client going direct would.
+func (h *h2Conn) redirectedALPN() []string {
+	if h.originDial != nil && len(h.originDial.offered) > 0 {
+		return h.originDial.offered
+	}
+	return []string{domain.ProtocolHTTP2, domain.ProtocolHTTP1}
+}
 
 // errH2Switched is the cause when an HTTP/1.1 origin answers a translated
 // request with 101, which an HTTP/2 stream cannot carry.
@@ -43,7 +49,7 @@ func (h *h2Conn) sendRedirected(pair *Pair, st *h2Stream, addr string) (*http.Re
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	conn, err := h.engine.proxy.dialOrigin(withOriginALPN(st.ctx, redirectedALPN), req.URL.Scheme, addr)
+	conn, err := h.engine.proxy.dialOrigin(withOriginALPN(st.ctx, h.redirectedALPN()), req.URL.Scheme, addr)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -55,18 +61,18 @@ func (h *h2Conn) sendRedirected(pair *Pair, st *h2Stream, addr string) (*http.Re
 	if pair.Route != nil {
 		pair.Route.Connected(conn.route.Snapshot())
 	}
-	if conn.protocol() == "h2" {
+	if conn.protocol() == domain.ProtocolHTTP2 {
 		pair.originProtocol = domain.ProtocolHTTP2
 		origin, err := startH2Origin(conn, addr, nil, nil)
 		if err != nil {
 			return nil, nil, nil, err
 		}
 		defer origin.close()
-		os, err := origin.send(out)
+		sent, err := origin.send(out)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		return h.awaitResponse(st, req, os)
+		return h.awaitResponse(st, req, sent)
 	}
 	pair.originProtocol = domain.ProtocolHTTP1
 	return h.sendTranslated(st, req, conn, out)

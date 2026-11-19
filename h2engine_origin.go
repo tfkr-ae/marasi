@@ -38,6 +38,9 @@ type h2Origin struct {
 	onGoAway func(last uint32, code http2.ErrCode, debug []byte)
 	onEnd    func()
 
+	// block is the header block being read; only read touches it.
+	block h2Block
+
 	mu      sync.Mutex
 	streams map[uint32]*h2OriginStream
 	nextID  uint32
@@ -53,17 +56,43 @@ type h2Origin struct {
 type h2OriginStream struct {
 	id     uint32
 	window h2SendWindow
-	// interim carries each 1xx response as it arrives.
-	interim chan h2Fields
-	done    chan struct{}
+	done   chan struct{}
+
+	// interim holds each 1xx response from its arrival until it is taken
+	// (takeInterim); moreInterim is signalled when one arrives.
+	interimMu   sync.Mutex
+	interim     []h2Fields
+	moreInterim chan struct{}
 
 	// Set before done is closed, and only read after.
 	response *h2Response
 	final    bool
 	reset    *http2.ErrCode
 	err      error
-	block    []byte
-	blockEnd bool
+}
+
+func newH2OriginStream() *h2OriginStream {
+	return &h2OriginStream{done: make(chan struct{}), moreInterim: make(chan struct{}, 1)}
+}
+
+// addInterim files an interim response for takeInterim.
+func (s *h2OriginStream) addInterim(fields h2Fields) {
+	s.interimMu.Lock()
+	s.interim = append(s.interim, fields)
+	s.interimMu.Unlock()
+	select {
+	case s.moreInterim <- struct{}{}:
+	default:
+	}
+}
+
+// takeInterim returns the interim responses filed since it last ran.
+func (s *h2OriginStream) takeInterim() []h2Fields {
+	s.interimMu.Lock()
+	defer s.interimMu.Unlock()
+	interim := s.interim
+	s.interim = nil
+	return interim
 }
 
 // errOriginGoneAway is the cause for a request the origin will not process:
@@ -179,28 +208,25 @@ func (o *h2Origin) frame(frame http2.Frame, decoder *hpack.Decoder) error {
 			if !o.flow.grow(nil, int64(f.Increment)) {
 				return http2.ConnectionError(http2.ErrCodeFlowControl)
 			}
-		} else if s := o.stream(f.StreamID); s != nil {
-			o.flow.grow(&s.window, int64(f.Increment))
+		} else if s := o.stream(f.StreamID); s != nil && !o.flow.grow(&s.window, int64(f.Increment)) {
+			// A stream error (RFC 9113 §6.9.1): the stream is reset and
+			// the client answered with a proxy error.
+			o.w.do(func(fr *http2.Framer) error { return fr.WriteRSTStream(s.id, http2.ErrCodeFlowControl) })
+			o.finish(s, errors.New("the origin overflowed the stream's flow-control window (FLOW_CONTROL_ERROR)"))
 		}
 	case *http2.HeadersFrame:
-		if s := o.stream(f.StreamID); s != nil {
-			s.block = append(s.block[:0], f.HeaderBlockFragment()...)
-			s.blockEnd = f.StreamEnded()
-			if f.HeadersEnded() {
-				return o.headers(s, decoder)
-			}
-		} else if f.HeadersEnded() {
-			// Decoded all the same, to keep the table in step.
-			if _, err := decoder.DecodeFull(f.HeaderBlockFragment()); err != nil {
-				return http2.ConnectionError(http2.ErrCodeCompression)
-			}
+		if err := o.block.start(f); err != nil {
+			return err
+		}
+		if f.HeadersEnded() {
+			return o.headers(decoder)
 		}
 	case *http2.ContinuationFrame:
-		if s := o.stream(f.StreamID); s != nil {
-			s.block = append(s.block, f.HeaderBlockFragment()...)
-			if f.HeadersEnded() {
-				return o.headers(s, decoder)
-			}
+		if err := o.block.add(f.HeaderBlockFragment()); err != nil {
+			return err
+		}
+		if f.HeadersEnded() {
+			return o.headers(decoder)
 		}
 	case *http2.DataFrame:
 		n := f.Header().Length
@@ -251,24 +277,22 @@ func (o *h2Origin) frame(frame http2.Frame, decoder *hpack.Decoder) error {
 }
 
 // headers decodes a whole header block from the origin and files it on its
-// stream: an interim response, the final one, or its trailers.
-func (o *h2Origin) headers(s *h2OriginStream, decoder *hpack.Decoder) error {
-	decoded, err := decoder.DecodeFull(s.block)
+// stream: an interim response, the final one, or its trailers. A block on a
+// stream no longer open is decoded all the same, to keep the table in step.
+func (o *h2Origin) headers(decoder *hpack.Decoder) error {
+	fields, err := o.block.decode(decoder)
 	if err != nil {
-		return http2.ConnectionError(http2.ErrCodeCompression)
+		return err
 	}
-	fields := make(h2Fields, len(decoded))
-	for i, f := range decoded {
-		fields[i] = h2Field{Name: f.Name, Value: f.Value, Sensitive: f.Sensitive}
+	s := o.stream(o.block.id)
+	if s == nil {
+		return nil
 	}
 	switch status, _ := fields.get(":status"); {
 	case s.final:
 		s.response.trailers = fields
 	case len(status) == 3 && status[0] == '1' && status != "101":
-		select {
-		case s.interim <- fields:
-		default:
-		}
+		s.addInterim(fields)
 	default:
 		s.final = true
 		if s.response == nil {
@@ -276,7 +300,7 @@ func (o *h2Origin) headers(s *h2OriginStream, decoder *hpack.Decoder) error {
 		}
 		s.response.fields = fields
 	}
-	if s.blockEnd {
+	if o.block.endStream {
 		o.finish(s, nil)
 	}
 	return nil
@@ -335,7 +359,7 @@ func (o *h2Origin) close() {
 // block, its body, and its trailers, END_STREAM falling where it fell on the
 // client's stream.
 func (o *h2Origin) send(request *h2Request) (*h2OriginStream, error) {
-	s := &h2OriginStream{interim: make(chan h2Fields, 8), done: make(chan struct{})}
+	s := newH2OriginStream()
 	pick := func() (uint32, error) {
 		o.mu.Lock()
 		defer o.mu.Unlock()

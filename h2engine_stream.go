@@ -82,12 +82,10 @@ func (h *h2Conn) prepare(req *http.Request, st *h2Stream) *http.Request {
 		state := tlsConn.ConnectionState()
 		req.TLS = &state
 	}
-	req.URL.Scheme = "https"
-	if h.cleartext() {
-		req.URL.Scheme = "http"
-	}
+	req.URL.Scheme, _ = h.scheme()
 	req.URL.Host = cmp.Or(withoutDefaultPort(h.c.tunnel, req.URL.Scheme), req.Host)
-	return req.WithContext(st.ctx)
+	// The streams behind a held stream do not wait for it while it is held.
+	return req.WithContext(withHoldHooks(st.ctx, holdHooks{started: func() { h.held(st, true) }, ended: func() { h.held(st, false) }}))
 }
 
 // roundTrip gets the pair's response, as h1Conn.roundTrip does. A nil
@@ -131,10 +129,7 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 	// The origin the handshake dialled, named as the waypoint modifier
 	// leaves it or as the handshake did. Any other, or another scheme, was
 	// redirected to.
-	scheme := "https"
-	if h.cleartext() {
-		scheme = "http"
-	}
+	scheme, defaultPort := h.scheme()
 	if req.URL.Scheme != scheme {
 		port, ok := carried(req.URL.Scheme)
 		if !ok {
@@ -142,7 +137,7 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 		}
 		return h.sendRedirected(pair, st, hostPort(req.URL.Host, port))
 	}
-	addr := hostPort(req.URL.Host, h.defaultPort())
+	addr := hostPort(req.URL.Host, defaultPort)
 	h.openOriginFor(req.Context(), addr)
 	if addr != h.originAddr && (h.originDial == nil || addr != h.originDial.target) {
 		return h.sendRedirected(pair, st, addr)
@@ -163,7 +158,7 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 		return nil, nil, nil, err
 	}
 	h.waitTurn(st)
-	os, err := origin.send(out)
+	sent, err := origin.send(out)
 	h.passTurn(st)
 	if err != nil {
 		return nil, nil, nil, err
@@ -171,52 +166,51 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 	h.mu.Lock()
 	if st.gone {
 		h.mu.Unlock()
-		origin.cancel(os, http2.ErrCodeCancel)
+		origin.cancel(sent, http2.ErrCodeCancel)
 		return nil, nil, nil, errStreamGone
 	}
-	st.origin = os
-	h.sent[st.id] = os.id
+	st.origin = sent
+	h.sent[st.id] = sent.id
 	h.mu.Unlock()
-	return h.awaitResponse(st, req, os)
+	return h.awaitResponse(st, req, sent)
 }
 
-// awaitResponse waits for the response on origin stream os, relaying its
+// awaitResponse waits for the response on origin stream s, relaying its
 // interim responses to st.
-func (h *h2Conn) awaitResponse(st *h2Stream, req *http.Request, os *h2OriginStream) (*http.Response, *wireResponse, *http2.ErrCode, error) {
+func (h *h2Conn) awaitResponse(st *h2Stream, req *http.Request, s *h2OriginStream) (*http.Response, *wireResponse, *http2.ErrCode, error) {
 	for done := false; !done; {
 		select {
-		case fields := <-os.interim:
-			h.relayInterim(st, fields)
-		case <-os.done:
+		case <-s.moreInterim:
+		case <-s.done:
 			done = true
 		case <-st.ctx.Done():
 			return nil, nil, nil, errStreamGone
 		}
-	}
-	for len(os.interim) > 0 {
-		h.relayInterim(st, <-os.interim)
+		for _, fields := range s.takeInterim() {
+			h.relayInterim(st, fields)
+		}
 	}
 	switch {
-	case errors.Is(os.err, errStreamGone), h.gone(st):
+	case errors.Is(s.err, errStreamGone), h.gone(st):
 		return nil, nil, nil, errStreamGone
-	case os.err != nil:
-		return nil, nil, nil, os.err
-	case !os.final && os.reset != nil:
-		h.resetStream(st.id, *os.reset)
+	case s.err != nil:
+		return nil, nil, nil, s.err
+	case !s.final && s.reset != nil:
+		h.resetStream(st.id, *s.reset)
 		return nil, nil, nil, errStreamGone
-	case !os.final:
+	case !s.final:
 		return nil, nil, nil, errors.New("the origin ended the stream without a response")
 	}
-	wire := os.response
+	wire := s.response
 	res := wire.response()
 	res.Request = req
 	switch {
-	case os.reset != nil:
-		res.Body = cutShortBody(wire.body, fmt.Errorf("the origin reset the stream (%s)", *os.reset))
+	case s.reset != nil:
+		res.Body = cutShortBody(wire.body, fmt.Errorf("the origin reset the stream (%s)", *s.reset))
 	case len(wire.body) > 0:
 		res.Body = io.NopCloser(bytes.NewReader(wire.body))
 	}
-	return res, &wireResponse{h2: wire}, os.reset, nil
+	return res, &wireResponse{h2: wire}, s.reset, nil
 }
 
 // relayInterim writes an origin's interim response to the client, except a
@@ -301,20 +295,13 @@ func (h *h2Conn) writeMessage(st *h2Stream, fields h2Fields, body []byte, traile
 }
 
 // h2OutboundRequest is the request as it goes to the origin: the client's
-// field list with the view's edits merged, and the view's body. A body the
-// chain changed gets its content-length, when it has one, set to its new
-// length; an unchanged message goes as it came.
+// field list with the view's edits merged, and the view's body (withPayloadLength).
 func h2OutboundRequest(wire *h2Request, req *http.Request) (*h2Request, error) {
 	payload, err := readViewBody(&req.Body)
 	if err != nil {
 		return nil, err
 	}
-	fields := wire.merge(req)
-	if !bytes.Equal(payload, wire.body) {
-		if _, ok := fields.get("content-length"); ok {
-			fields = fields.set("content-length", strconv.Itoa(len(payload)))
-		}
-	}
+	fields := withPayloadLength(wire.merge(req), wire.body, payload)
 	return &h2Request{fields: fields, body: payload, trailers: wire.trailers, endsOnData: wire.endsOnData || len(payload) > 0}, nil
 }
 
@@ -325,11 +312,19 @@ func h2OutboundResponse(wire *h2Response, res *http.Response) (*h2Response, erro
 	if err != nil {
 		return nil, err
 	}
-	fields := wire.merge(res)
-	if !bytes.Equal(payload, wire.body) {
-		if _, ok := fields.get("content-length"); ok {
-			fields = fields.set("content-length", strconv.Itoa(len(payload)))
-		}
-	}
+	fields := withPayloadLength(wire.merge(res), wire.body, payload)
 	return &h2Response{fields: fields, body: payload, trailers: wire.trailers, endsOnData: wire.endsOnData || len(payload) > 0}, nil
+}
+
+// withPayloadLength is a merged field list for payload, which replaces the wire's
+// body: a body the chain changed gets its content-length, when it has one,
+// set to its new length; an unchanged message goes as it came.
+func withPayloadLength(fields h2Fields, body, payload []byte) h2Fields {
+	if bytes.Equal(payload, body) {
+		return fields
+	}
+	if _, ok := fields.get("content-length"); ok {
+		return fields.set("content-length", strconv.Itoa(len(payload)))
+	}
+	return fields
 }

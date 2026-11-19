@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/internal/h1"
 )
 
@@ -259,13 +260,13 @@ func (proxy *Proxy) sendRaw(ctx context.Context, r *rawRequest, internal [][2]st
 const tunnelHeadBuffer = 16
 
 // connectRaw opens a tunnel to host through the proxy's listener and starts
-// TLS inside it, as a proxy client does for an HTTPS request. h2 is the
-// scheme of an HTTP/2 request, or "" for HTTP/1.1: an https one offers h2
+// TLS inside it, as a proxy client does for an HTTPS request. h2Scheme is
+// the scheme of an HTTP/2 request, or "" for HTTP/1.1: an https one offers h2
 // alone by ALPN and fails unless the proxy chose it, and an http one gets
 // the plain tunnel, for prior knowledge.
-func (proxy *Proxy) connectRaw(ctx context.Context, conn net.Conn, host, credentials, h2 string) (net.Conn, error) {
+func (proxy *Proxy) connectRaw(ctx context.Context, conn net.Conn, host, credentials, h2Scheme string) (net.Conn, error) {
 	port := "443"
-	if h2 == "http" {
+	if h2Scheme == "http" {
 		port = "80"
 	}
 	authority := host
@@ -283,15 +284,15 @@ func (proxy *Proxy) connectRaw(ctx context.Context, conn net.Conn, host, credent
 	if head.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("opening the tunnel: the proxy answered %d", head.StatusCode)
 	}
-	if h2 == "http" {
+	if h2Scheme == "http" {
 		return conn, nil
 	}
 	config := &tls.Config{}
 	if proxy.MarasiClientTLSConfig != nil {
 		config = proxy.MarasiClientTLSConfig.Clone()
 	}
-	if h2 != "" {
-		config.NextProtos = []string{"h2"}
+	if h2Scheme != "" {
+		config.NextProtos = []string{domain.ProtocolHTTP2}
 	}
 	if config.ServerName == "" {
 		name, _, err := net.SplitHostPort(authority)
@@ -304,7 +305,7 @@ func (proxy *Proxy) connectRaw(ctx context.Context, conn net.Conn, host, credent
 	if err := stream.HandshakeContext(ctx); err != nil {
 		return nil, fmt.Errorf("starting TLS in the tunnel: %w", err)
 	}
-	if h2 != "" && stream.ConnectionState().NegotiatedProtocol != "h2" {
+	if h2Scheme != "" && stream.ConnectionState().NegotiatedProtocol != domain.ProtocolHTTP2 {
 		return nil, errNoH2
 	}
 	return stream, nil
