@@ -20,10 +20,6 @@ import (
 // on the stream's own origin stream, the response step, and the response
 // written back on the stream.
 
-// errH2Redirect is the cause when a modifier sent an HTTP/2 request to an
-// origin other than the one the client's handshake dialled.
-var errH2Redirect = errors.New("an HTTP/2 request sent to another origin is not carried yet")
-
 // carry carries st's request, which is whole, and writes its response.
 func (h *h2Conn) carry(st *h2Stream) {
 	h.mu.Lock()
@@ -130,11 +126,23 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 	// finishes on the route its origin connection is on.
 	h.engine.proxy.resolveRoute()
 	// The origin the handshake dialled, named as the waypoint modifier
-	// leaves it or as the handshake did.
+	// leaves it or as the handshake did. Any other, or another scheme, was
+	// redirected to.
+	scheme := "https"
+	if h.cleartext() {
+		scheme = "http"
+	}
+	if req.URL.Scheme != scheme {
+		port, ok := carried(req.URL.Scheme)
+		if !ok {
+			return nil, nil, nil, errRouteNotCarried
+		}
+		return h.sendRedirected(pair, st, hostPort(req.URL.Host, port))
+	}
 	addr := hostPort(req.URL.Host, h.defaultPort())
 	h.openOriginFor(req.Context(), addr)
 	if addr != h.originAddr && (h.originDial == nil || addr != h.originDial.target) {
-		return nil, nil, nil, fmt.Errorf("%w: %s", errH2Redirect, addr)
+		return h.sendRedirected(pair, st, addr)
 	}
 	origin := h.originLeg()
 	if origin == nil {
@@ -166,7 +174,12 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 	st.origin = os
 	h.sent[st.id] = os.id
 	h.mu.Unlock()
+	return h.awaitResponse(st, req, os)
+}
 
+// awaitResponse waits for the response on origin stream os, relaying its
+// interim responses to st.
+func (h *h2Conn) awaitResponse(st *h2Stream, req *http.Request, os *h2OriginStream) (*http.Response, *wireResponse, *http2.ErrCode, error) {
 	for done := false; !done; {
 		select {
 		case fields := <-os.interim:
