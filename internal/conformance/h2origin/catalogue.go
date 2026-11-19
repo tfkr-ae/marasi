@@ -14,8 +14,9 @@ import (
 // headers-with-data and data-padded-split.
 var dataRequest = Request{Method: "GET", Path: "/data", Fields: h2.Fields("x-request-id", "abc", "accept", "text/plain")}
 
-// Catalogue is the h2 origin fixture cases: the minimum that proves the
-// recording format. Phase 5 grows it.
+// Catalogue is the h2 origin fixture cases: the recording format's own
+// cases first, then the HTTP/2 behaviour a transparent proxy must keep
+// (docs/adr/2026-11-19-http2-transparency-is-end-to-end-for-messages-and-per-leg-for-frames.md).
 var Catalogue = []Case{
 	{
 		ID:       "headers-with-data",

@@ -15,7 +15,7 @@
 // shim's port; a proxy that routes h2 requests by :authority rather than
 // by the CONNECT target reaches the shim, not nginx.
 //
-// The suite is report only in Phase 0: run it apart from the h1 suites.
+// The suite is a required check on all four conformance runs.
 package h2client
 
 import (
