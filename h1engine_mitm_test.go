@@ -199,6 +199,23 @@ func TestH1Engine_MITM(t *testing.T) {
 		expectCaptured(t, captured, "https", request, originResponse)
 	})
 
+	t.Run("should send a request inside a tunnel to the tunnel's origin, whatever its Host says", func(t *testing.T) {
+		origin := newRawTLSOrigin(t, originResponse)
+		addr, captured, ca := serveH1EngineMITMProxy(t, true)
+		conn, br := dialProxy(t, addr)
+		openTunnel(t, conn, br, origin.addr)
+
+		tlsConn, tbr := clientTLS(t, conn, br, ca, "127.0.0.1")
+		request := "GET /reset HTTP/1.1\r\nHost: evil.invalid\r\n\r\n"
+		io.WriteString(tlsConn, request)
+		readExactly(t, tbr, originResponse)
+		requests, _ := origin.received()
+		if len(requests) != 1 || requests[0] != request {
+			t.Fatalf("wanted the tunnel's origin to receive the Host as sent:\n%q\ngot:\n%q", request, requests)
+		}
+		expectCaptured(t, captured, "https", request, originResponse)
+	})
+
 	t.Run("should intercept TLS sent straight to the proxy listener", func(t *testing.T) {
 		origin := newRawTLSOrigin(t, originResponse)
 		addr, captured, ca := serveH1EngineMITMProxy(t, true)

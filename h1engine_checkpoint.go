@@ -3,6 +3,7 @@ package marasi
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,8 +47,10 @@ func rebuildWireRequest(raw []byte, original *http.Request, wire *wireRequest) (
 	// Checkpoint holds only requests the engine carries, a CONNECT sent
 	// inside a tunnel included, so every one needs the scheme.
 	view.URL.Scheme = original.URL.Scheme
+	// An edit goes where the held request was going: its Host is only a
+	// field. An edit whose request line names a target goes there.
 	if view.URL.Host == "" {
-		view.URL.Host = view.Host
+		view.URL.Host = cmp.Or(original.URL.Host, view.Host)
 	}
 	if len(payload) > 0 {
 		view.Body = io.NopCloser(bytes.NewReader(payload))

@@ -2756,522 +2756,6 @@
     "rfc": "RFC 9112 §2.2"
   },
   {
-    "cases": "COMP-HOST-EMPTY-VALUE@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"\\\"<html>\\\\r\\\\n<head><title>400 Bad Request</title></head>\\\\r\\\\n<body>\\\\r\\\\n<center><h1>400 Bad Request</h1></center>\\\\r\\\\n<hr><center>nginx/1.29.3</center>\\\\r\\\\n</body>\\\\r\\\\n</html>\\\\r\\\\n\\\"\", got \"\\\"\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-EMPTY-VALUE@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].fields",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Server: nginx/1.29.3\\nDate: Thu, 01 Jan 1970 00:00:00 GMT\\nContent-Type: text/html\", got \"Warning: 199 \\\"martian\\\" \\\"http: no Host in request URL\\\" \\\"Mon, 16 Nov 2026 20:03:28 GMT\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-EMPTY-VALUE@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].reason",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Bad Request\", got \"Bad Gateway\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-EMPTY-VALUE@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].status",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"400\", got \"502\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-EMPTY-VALUE@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "verdict",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Pass\", got \"Fail\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-EMPTY-VALUE@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"\\\"<html>\\\\r\\\\n<head><title>400 Bad Request</title></head>\\\\r\\\\n<body>\\\\r\\\\n<center><h1>400 Bad Request</h1></center>\\\\r\\\\n<hr><center>nginx/1.29.3</center>\\\\r\\\\n</body>\\\\r\\\\n</html>\\\\r\\\\n\\\"\", got \"\\\"\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-EMPTY-VALUE@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].fields",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Server: nginx/1.29.3\\nDate: Thu, 01 Jan 1970 00:00:00 GMT\\nContent-Type: text/html\", got \"Warning: 199 \\\"martian\\\" \\\"http: no Host in request URL\\\" \\\"Mon, 16 Nov 2026 20:04:55 GMT\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-EMPTY-VALUE@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].reason",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Bad Request\", got \"Bad Gateway\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-EMPTY-VALUE@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].status",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"400\", got \"502\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-EMPTY-VALUE@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "verdict",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Pass\", got \"Fail\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-PATH@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"\\\"<html>\\\\r\\\\n<head><title>400 Bad Request</title></head>\\\\r\\\\n<body>\\\\r\\\\n<center><h1>400 Bad Request</h1></center>\\\\r\\\\n<hr><center>nginx/1.29.3</center>\\\\r\\\\n</body>\\\\r\\\\n</html>\\\\r\\\\n\\\"\", got \"\\\"\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-PATH@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].fields",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Server: nginx/1.29.3\\nDate: Thu, 01 Jan 1970 00:00:00 GMT\\nContent-Type: text/html\", got \"Warning: 199 \\\"martian\\\" \\\"dial tcp: lookup nginx.test:00000/path: no such host\\\" \\\"Mon, 16 Nov 2026 20:03:16 GMT\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-PATH@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].reason",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Bad Request\", got \"Bad Gateway\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-PATH@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].status",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"400\", got \"502\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-PATH@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "verdict",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Pass\", got \"Fail\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-PATH@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"\\\"<html>\\\\r\\\\n<head><title>400 Bad Request</title></head>\\\\r\\\\n<body>\\\\r\\\\n<center><h1>400 Bad Request</h1></center>\\\\r\\\\n<hr><center>nginx/1.29.3</center>\\\\r\\\\n</body>\\\\r\\\\n</html>\\\\r\\\\n\\\"\", got \"\\\"\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-PATH@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].fields",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Server: nginx/1.29.3\\nDate: Thu, 01 Jan 1970 00:00:00 GMT\\nContent-Type: text/html\", got \"Warning: 199 \\\"martian\\\" \\\"dial tcp: lookup nginx.test:00000/path: no such host\\\" \\\"Mon, 16 Nov 2026 20:04:42 GMT\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-PATH@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].reason",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Bad Request\", got \"Bad Gateway\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-PATH@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].status",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"400\", got \"502\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-PATH@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "verdict",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Pass\", got \"Fail\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-USERINFO@connect-plain",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "client[0].end",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"open\", got \"closed\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-USERINFO@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"\\\"OK\\\"\", got \"\\\"\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-USERINFO@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].fields",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Server: nginx/1.29.3\\nDate: Thu, 01 Jan 1970 00:00:00 GMT\\nContent-Type: text/plain\", got \"Warning: 199 \\\"martian\\\" \\\"dial tcp: lookup user@nginx.test: no such host\\\" \\\"Mon, 16 Nov 2026 20:03:15 GMT\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-USERINFO@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].reason",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"OK\", got \"Bad Gateway\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-USERINFO@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].status",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"200\", got \"502\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-USERINFO@connect-tls",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "client[0].end",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"open\", got \"closed\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-USERINFO@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"\\\"OK\\\"\", got \"\\\"\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-USERINFO@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].fields",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Server: nginx/1.29.3\\nDate: Thu, 01 Jan 1970 00:00:00 GMT\\nContent-Type: text/plain\", got \"Warning: 199 \\\"martian\\\" \\\"dial tcp: lookup user@nginx.test: no such host\\\" \\\"Mon, 16 Nov 2026 20:04:42 GMT\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-USERINFO@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].reason",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"OK\", got \"Bad Gateway\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-USERINFO@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].status",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"200\", got \"502\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HTTP10-NO-HOST@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"\\\"OK\\\"\", got \"\\\"\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HTTP10-NO-HOST@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].fields",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Server: nginx/1.29.3\\nDate: Thu, 01 Jan 1970 00:00:00 GMT\\nContent-Type: text/plain\", got \"Warning: 199 \\\"martian\\\" \\\"http: no Host in request URL\\\" \\\"Mon, 16 Nov 2026 20:03:28 GMT\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HTTP10-NO-HOST@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].reason",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"OK\", got \"Bad Gateway\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HTTP10-NO-HOST@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].status",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"200\", got \"502\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HTTP10-NO-HOST@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "verdict",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Warn\", got \"Fail\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HTTP10-NO-HOST@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"\\\"OK\\\"\", got \"\\\"\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HTTP10-NO-HOST@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].fields",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Server: nginx/1.29.3\\nDate: Thu, 01 Jan 1970 00:00:00 GMT\\nContent-Type: text/plain\", got \"Warning: 199 \\\"martian\\\" \\\"http: no Host in request URL\\\" \\\"Mon, 16 Nov 2026 20:04:55 GMT\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HTTP10-NO-HOST@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].reason",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"OK\", got \"Bad Gateway\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HTTP10-NO-HOST@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].status",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"200\", got \"502\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HTTP10-NO-HOST@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "verdict",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Warn\", got \"Fail\")",
-    "phase": 7
-  },
-  {
     "cases": "MAL-POST-CL-HUGE-NO-BODY@connect-plain",
     "runs": [
       "proxy",
@@ -3298,288 +2782,6 @@
     "phase": 6
   },
   {
-    "cases": "RFC9112-7.1-MISSING-HOST@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"\\\"<html>\\\\r\\\\n<head><title>400 Bad Request</title></head>\\\\r\\\\n<body>\\\\r\\\\n<center><h1>400 Bad Request</h1></center>\\\\r\\\\n<hr><center>nginx/1.29.3</center>\\\\r\\\\n</body>\\\\r\\\\n</html>\\\\r\\\\n\\\"\", got \"\\\"\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "RFC9112-7.1-MISSING-HOST@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].fields",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Server: nginx/1.29.3\\nDate: Thu, 01 Jan 1970 00:00:00 GMT\\nContent-Type: text/html\", got \"Warning: 199 \\\"martian\\\" \\\"http: no Host in request URL\\\" \\\"Mon, 16 Nov 2026 20:03:15 GMT\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "RFC9112-7.1-MISSING-HOST@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].reason",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Bad Request\", got \"Bad Gateway\")",
-    "phase": 7
-  },
-  {
-    "cases": "RFC9112-7.1-MISSING-HOST@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].status",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"400\", got \"502\")",
-    "phase": 7
-  },
-  {
-    "cases": "RFC9112-7.1-MISSING-HOST@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "verdict",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Pass\", got \"Fail\")",
-    "phase": 7
-  },
-  {
-    "cases": "RFC9112-7.1-MISSING-HOST@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"\\\"<html>\\\\r\\\\n<head><title>400 Bad Request</title></head>\\\\r\\\\n<body>\\\\r\\\\n<center><h1>400 Bad Request</h1></center>\\\\r\\\\n<hr><center>nginx/1.29.3</center>\\\\r\\\\n</body>\\\\r\\\\n</html>\\\\r\\\\n\\\"\", got \"\\\"\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "RFC9112-7.1-MISSING-HOST@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].fields",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Server: nginx/1.29.3\\nDate: Thu, 01 Jan 1970 00:00:00 GMT\\nContent-Type: text/html\", got \"Warning: 199 \\\"martian\\\" \\\"http: no Host in request URL\\\" \\\"Mon, 16 Nov 2026 20:04:42 GMT\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "RFC9112-7.1-MISSING-HOST@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].reason",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Bad Request\", got \"Bad Gateway\")",
-    "phase": 7
-  },
-  {
-    "cases": "RFC9112-7.1-MISSING-HOST@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].status",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"400\", got \"502\")",
-    "phase": 7
-  },
-  {
-    "cases": "RFC9112-7.1-MISSING-HOST@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "verdict",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Pass\", got \"Fail\")",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-MULTIPLE-HOST-COMMA@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"\\\"<html>\\\\r\\\\n<head><title>400 Bad Request</title></head>\\\\r\\\\n<body>\\\\r\\\\n<center><h1>400 Bad Request</h1></center>\\\\r\\\\n<hr><center>nginx/1.29.3</center>\\\\r\\\\n</body>\\\\r\\\\n</html>\\\\r\\\\n\\\"\", got \"\\\"\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-MULTIPLE-HOST-COMMA@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].fields",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Server: nginx/1.29.3\\nDate: Thu, 01 Jan 1970 00:00:00 GMT\\nContent-Type: text/html\", got \"Warning: 199 \\\"martian\\\" \\\"dial tcp: lookup nginx.test:00000, other.example.com: no such host\\\" \\\"Mon, 16 Nov 2026 20:04:02 GMT\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-MULTIPLE-HOST-COMMA@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].reason",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Bad Request\", got \"Bad Gateway\")",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-MULTIPLE-HOST-COMMA@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].status",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"400\", got \"502\")",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-MULTIPLE-HOST-COMMA@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "verdict",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Pass\", got \"Fail\")",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-MULTIPLE-HOST-COMMA@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"\\\"<html>\\\\r\\\\n<head><title>400 Bad Request</title></head>\\\\r\\\\n<body>\\\\r\\\\n<center><h1>400 Bad Request</h1></center>\\\\r\\\\n<hr><center>nginx/1.29.3</center>\\\\r\\\\n</body>\\\\r\\\\n</html>\\\\r\\\\n\\\"\", got \"\\\"\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-MULTIPLE-HOST-COMMA@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].fields",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Server: nginx/1.29.3\\nDate: Thu, 01 Jan 1970 00:00:00 GMT\\nContent-Type: text/html\", got \"Warning: 199 \\\"martian\\\" \\\"dial tcp: lookup nginx.test:00000, other.example.com: no such host\\\" \\\"Mon, 16 Nov 2026 20:05:29 GMT\\\"\")",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-MULTIPLE-HOST-COMMA@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].reason",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Bad Request\", got \"Bad Gateway\")",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-MULTIPLE-HOST-COMMA@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].status",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"400\", got \"502\")",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-MULTIPLE-HOST-COMMA@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "verdict",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Pass\", got \"Fail\")",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-USERINFO@connect-plain",
-    "runs": [
-      "proxy",
-      "extension"
-    ],
-    "field": "client[0].end",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md))",
-    "phase": 7
-  },
-  {
-    "cases": "COMP-HOST-WITH-USERINFO@connect-tls",
-    "runs": [
-      "proxy",
-      "extension"
-    ],
-    "field": "client[0].end",
-    "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md))",
-    "phase": 7
-  },
-  {
     "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-plain",
     "runs": [
       "checkpoint-forward",
@@ -3587,7 +2789,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"open\", got \"closed\")",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
     "phase": 7
   },
   {
@@ -3600,7 +2802,7 @@
     ],
     "field": "client[0].responses[0].body",
     "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"\\\"OK\\\"\", got \"\\\"\\\"\")",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
     "phase": 7
   },
   {
@@ -3613,7 +2815,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Server: nginx/1.29.3\\nDate: Thu, 01 Jan 1970 00:00:00 GMT\\nContent-Type: text/plain\", got \"Warning: 199 \\\"martian\\\" \\\"dial tcp 127.0.0.3:80: connect: connection refused\\\" \\\"Mon, 16 Nov 2026 20:04:02 GMT\\\"\")",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
     "phase": 7
   },
   {
@@ -3626,7 +2828,7 @@
     ],
     "field": "client[0].responses[0].reason",
     "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"OK\", got \"Bad Gateway\")",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
     "phase": 7
   },
   {
@@ -3639,7 +2841,7 @@
     ],
     "field": "client[0].responses[0].status",
     "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"200\", got \"502\")",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
     "phase": 7
   },
   {
@@ -3652,7 +2854,7 @@
     ],
     "field": "verdict",
     "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Warn\", got \"Fail\")",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
     "phase": 7
   },
   {
@@ -3663,7 +2865,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"open\", got \"closed\")",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
     "phase": 7
   },
   {
@@ -3676,7 +2878,7 @@
     ],
     "field": "client[0].responses[0].body",
     "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"\\\"OK\\\"\", got \"\\\"\\\"\")",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
     "phase": 7
   },
   {
@@ -3689,7 +2891,7 @@
     ],
     "field": "client[0].responses[0].fields",
     "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Server: nginx/1.29.3\\nDate: Thu, 01 Jan 1970 00:00:00 GMT\\nContent-Type: text/plain\", got \"Warning: 199 \\\"martian\\\" \\\"dial tcp 127.0.0.3:443: connect: connection refused\\\" \\\"Mon, 16 Nov 2026 20:05:29 GMT\\\"\")",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
     "phase": 7
   },
   {
@@ -3702,7 +2904,7 @@
     ],
     "field": "client[0].responses[0].reason",
     "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"OK\", got \"Bad Gateway\")",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
     "phase": 7
   },
   {
@@ -3715,7 +2917,7 @@
     ],
     "field": "client[0].responses[0].status",
     "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"200\", got \"502\")",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
     "phase": 7
   },
   {
@@ -3728,7 +2930,7 @@
     ],
     "field": "verdict",
     "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: measured by conformance-update-known: baseline \"Warn\", got \"Fail\")",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
     "phase": 7
   },
   {
@@ -3739,7 +2941,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md))",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
     "phase": 7
   },
   {
@@ -3750,7 +2952,7 @@
     ],
     "field": "client[0].end",
     "kind": "known",
-    "reason": "Marasi routes a request inside a CONNECT tunnel by its Host field, as Martian did, so a Host that names no reachable server gets a 502 proxy error response for the failed dial where nginx, at the tunnel's end, answers itself; routing in-tunnel requests by the tunnel's authority is a product decision no phase of the proxy-library spec owns (was: Martian's transport refuses this message, so Marasi answers with a 502 proxy error response, which closes the connection (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md))",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
     "phase": 7
   }
 ]

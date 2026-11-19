@@ -2,11 +2,13 @@ package marasi
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -284,9 +286,31 @@ func (c *h1Conn) prepare(req *http.Request) *http.Request {
 			req.TLS = &state
 			req.URL.Scheme = "https"
 		}
+		// Inside a tunnel the request goes to the tunnel's origin, as it
+		// would without Marasi, so its Host is only a field a tester can
+		// change (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md).
+		// A modifier that changes the URL's host still sends it elsewhere.
 		if req.URL.Host == "" {
-			req.URL.Host = req.Host
+			req.URL.Host = cmp.Or(withoutDefaultPort(c.tunnel, req.URL.Scheme), req.Host)
 		}
 	}
 	return req.WithContext(c.ctx)
+}
+
+// withoutDefaultPort drops authority's port when it is the default for
+// scheme, so a URL built from a CONNECT authority (always host:port) reads as
+// one built from the Host a browser sends (host alone), and scope rules and
+// extensions see the same URL either way. An empty authority stays empty.
+func withoutDefaultPort(authority, scheme string) string {
+	host, port, err := net.SplitHostPort(authority)
+	if err != nil {
+		return authority
+	}
+	if (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
+		if strings.Contains(host, ":") {
+			return "[" + host + "]"
+		}
+		return host
+	}
+	return authority
 }
