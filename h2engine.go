@@ -16,7 +16,8 @@ import (
 
 // Marasi's HTTP/2 engine (docs/adr/2026-11-19-marasi-owns-its-http2-framing.md):
 // the client leg, served on a client connection whose TLS handshake
-// negotiated h2, and its origin leg (h2engine_origin.go), the client
+// negotiated h2 or that opened with the HTTP/2 preface in cleartext
+// (h2engine_h2c.go), and its origin leg (h2engine_origin.go), the client
 // connection's one origin connection. Each client stream is carried on its
 // own goroutine through the request step, the round trip on its own origin
 // stream, and the response step (h2engine_stream.go), so a Checkpoint hold
@@ -29,6 +30,7 @@ import (
 //   - h2engine_stream.go: one stream's pair through the base pipeline;
 //   - h2engine_origin.go: the origin leg;
 //   - h2engine_flow.go: what both legs share: the writer and flow control;
+//   - h2engine_h2c.go: h2c by prior knowledge;
 //   - h2engine_fields.go: field lists, their views and the stored text form.
 
 // h2LingerTimeout bounds how long a client connection that is ending is read
@@ -48,11 +50,15 @@ type h2Conn struct {
 
 	// origin is the origin leg, nil when it could not be opened; originErr
 	// is then why, and each request is answered with it. originAddr is the
-	// address the handshake dialled.
+	// address the handshake dialled. origin is guarded by mu (originLeg):
+	// with lazyOrigin it is opened by the first stream that needs it
+	// (openOriginFor, under dialMu), which sets the other three.
 	origin     *h2Origin
 	originErr  error
 	originAddr string
 	originDial *handshakeDial
+	lazyOrigin bool
+	dialMu     sync.Mutex
 
 	// The header block being read, until its END_HEADERS.
 	block         []byte
@@ -170,13 +176,20 @@ func (c *h1Conn) serveH2() {
 	h.framer = http2.NewFramer(c.bw, c.br)
 	h.framer.AllowIllegalWrites = true
 	h.w = newH2Writer(c.bw, h.framer)
-	if dialled := c.handshake; dialled != nil {
+	switch dialled := c.handshake; {
+	case dialled != nil:
 		h.originAddr, h.originErr, h.originDial = dialled.addr, dialled.err, dialled
+		h.openOrigin()
+	case h.cleartext() && c.tunnel == "":
+		// h2c straight to the listener: the origin is the first request's
+		// authority (openOriginFor).
+		h.lazyOrigin = true
+	default:
+		h.openOrigin()
 	}
-	h.openOrigin()
 	if !c.engine.trackH2(h) {
-		if h.origin != nil {
-			h.origin.close()
+		if origin := h.originLeg(); origin != nil {
+			origin.close()
 		}
 		return
 	}
@@ -230,10 +243,20 @@ func (h *h2Conn) openOrigin() {
 		h.originErr = err
 		return
 	}
-	h.origin = origin
 	origin.mu.Lock()
-	h.maxStreams, h.maxStreamsSet = origin.maxStreams, origin.maxStreamsSet
+	maxStreams, maxStreamsSet := origin.maxStreams, origin.maxStreamsSet
 	origin.mu.Unlock()
+	h.mu.Lock()
+	h.origin = origin
+	h.maxStreams, h.maxStreamsSet = maxStreams, maxStreamsSet
+	h.mu.Unlock()
+}
+
+// originLeg returns the origin leg, nil while there is none.
+func (h *h2Conn) originLeg() *h2Origin {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.origin
 }
 
 // handle deals with an error reading or handling a frame. A stream error
@@ -490,8 +513,8 @@ func (h *h2Conn) clientGoAway(f *http2.GoAwayFrame) {
 	h.mu.Lock()
 	h.clientGone = true
 	h.mu.Unlock()
-	if h.origin != nil {
-		h.origin.relayGoAway(f.ErrCode, f.DebugData())
+	if origin := h.originLeg(); origin != nil {
+		origin.relayGoAway(f.ErrCode, f.DebugData())
 	}
 	h.finishIfDone()
 }
@@ -534,15 +557,15 @@ func (h *h2Conn) closeStream(st *h2Stream, originCode *http2.ErrCode) {
 	st.gone = true
 	delete(h.streams, st.id)
 	h.closed[st.id] = true
-	os := st.origin
+	os, origin := st.origin, h.origin
 	h.mu.Unlock()
 	st.cancel()
 	if st.turn != nil {
 		h.passTurn(st)
 	}
 	h.flow.end(&st.window)
-	if os != nil && originCode != nil && h.origin != nil {
-		h.origin.cancel(os, *originCode)
+	if os != nil && originCode != nil && origin != nil {
+		origin.cancel(os, *originCode)
 	}
 	h.finishIfDone()
 }
@@ -648,8 +671,8 @@ func (h *h2Conn) close() {
 		h.closeStream(st, nil)
 	}
 	h.flow.close()
-	if h.origin != nil {
-		h.origin.close()
+	if origin := h.originLeg(); origin != nil {
+		origin.close()
 	}
 	h.streamsWG.Wait()
 }
@@ -689,7 +712,7 @@ func (engine *h1Engine) forgetH2(h *h2Conn) {
 // caller holds engine.mu.
 func (engine *h1Engine) h2Swapped(route *Route) {
 	for h := range engine.h2conns {
-		if h.origin != nil && h.origin.conn.route != route {
+		if origin := h.originLeg(); origin != nil && origin.conn.route != route {
 			go h.goAway()
 		}
 	}

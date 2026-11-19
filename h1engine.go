@@ -204,12 +204,18 @@ func newH1Conn(engine *h1Engine, conn net.Conn) *h1Conn {
 func (c *h1Conn) serve() {
 	defer c.end()
 	// TLS sent straight to the listener is intercepted here, as TLS inside
-	// a CONNECT is, so its handshake is origin first too.
-	if c.startsTLS() && !c.intercept("") {
-		return
+	// a CONNECT is, so its handshake is origin first too. The HTTP/2
+	// preface is h2c by prior knowledge (h2engine_h2c.go).
+	switch c.opening() {
+	case openingTLS:
+		if !c.intercept("") {
+			return
+		}
+	case openingH2C:
+		c.protocol = protocolH2C
 	}
 	for {
-		if c.protocol == "h2" {
+		if c.protocol == "h2" || c.protocol == protocolH2C {
 			c.serveH2()
 			return
 		}
@@ -231,16 +237,34 @@ func (c *h1Conn) serve() {
 	}
 }
 
-// startsTLS reports whether the client opens its connection with a TLS
-// record, within the time a request head has. Meanwhile the connection is
-// idle, so shutdown does not wait on a client that sends nothing.
-func (c *h1Conn) startsTLS() bool {
+// How a client opens its connection to the listener.
+type opening int
+
+const (
+	openingHTTP1 opening = iota
+	openingTLS
+	openingH2C
+)
+
+// opening reports whether the client opens its connection with a TLS
+// record, the HTTP/2 preface or anything else, within the time a request
+// head has. Meanwhile the connection is idle, so shutdown does not wait on
+// a client that sends nothing.
+func (c *h1Conn) opening() opening {
 	if _, ok := c.conn.(*tls.Conn); ok || !c.engine.idle(c, c.engine.headerTimeout) {
-		return false
+		return openingHTTP1
 	}
+	defer c.engine.busy(c)
 	first, err := c.br.Peek(1)
-	c.engine.busy(c)
-	return err == nil && first[0] == 0x16
+	switch {
+	case err != nil:
+		return openingHTTP1
+	case first[0] == 0x16:
+		return openingTLS
+	case c.startsPriorKnowledge():
+		return openingH2C
+	}
+	return openingHTTP1
 }
 
 // end closes the client connection, unless the pipeline took it over, and
@@ -295,8 +319,16 @@ func (c *h1Conn) connect(head *h1.RequestHead) bool {
 	if err != nil {
 		return false
 	}
-	if first[0] == 0x16 && !c.intercept(req.URL.Host) {
-		return false
+	switch {
+	case first[0] == 0x16:
+		if !c.intercept(req.URL.Host) {
+			return false
+		}
+	case c.startsPriorKnowledge():
+		// h2c by prior knowledge inside a plain tunnel: the origin is
+		// dialled now, as a TLS handshake inside a tunnel dials it.
+		c.protocol = protocolH2C
+		c.handshake = c.dialPriorKnowledgeOrigin(c.ctx, req.URL.Host)
 	}
 	c.tunnel = req.URL.Host
 	return true
