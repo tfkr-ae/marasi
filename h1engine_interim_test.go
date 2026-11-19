@@ -30,6 +30,12 @@ func newScriptedOrigin(t *testing.T, script func(conn net.Conn)) *scriptedOrigin
 	if err != nil {
 		t.Fatalf("listening for the origin: %v", err)
 	}
+	return serveScriptedOrigin(t, l, script)
+}
+
+// serveScriptedOrigin is newScriptedOrigin on the listener l.
+func serveScriptedOrigin(t *testing.T, l net.Listener, script func(conn net.Conn)) *scriptedOrigin {
+	t.Helper()
 	t.Cleanup(func() { l.Close() })
 	origin := &scriptedOrigin{addr: l.Addr().String(), requests: make(chan string, 4)}
 	go func() {
