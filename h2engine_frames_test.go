@@ -2,6 +2,8 @@ package marasi
 
 import (
 	"bytes"
+	"context"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -151,6 +153,30 @@ func TestH2Engine_OriginStreams(t *testing.T) {
 		}
 		if status, _ := client.stream(t, 1).headers[0].get(":status"); status != "502" {
 			t.Fatalf("the client's response\nwanted:\n502\ngot:\n%v", status)
+		}
+	})
+}
+
+func TestH2Conn_Dispatch(t *testing.T) {
+	t.Run("should leave no stream waiting for its turn when it closes while being dispatched", func(t *testing.T) {
+		for range 200 {
+			h := &h2Conn{flow: newH2Flow(), streams: make(map[uint32]*h2Stream), sent: make(map[uint32]uint32)}
+			ctx, cancel := context.WithCancel(context.Background())
+			st := &h2Stream{id: 1, ctx: ctx, cancel: cancel}
+			h.streams[st.id] = st
+			start, closed := make(chan struct{}), make(chan struct{})
+			go func() {
+				<-start
+				h.closeStream(st, nil)
+				close(closed)
+			}()
+			close(start)
+			runtime.Gosched()
+			h.queue(st)
+			<-closed
+			if len(h.unsent) != 0 {
+				t.Fatalf("the streams waiting for their turn\nwanted:\nnone\ngot:\n%d", len(h.unsent))
+			}
 		}
 	})
 }

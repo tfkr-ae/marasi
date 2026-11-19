@@ -556,16 +556,29 @@ func (h *h2Conn) clientGoAway(f *http2.GoAwayFrame) {
 
 // dispatch carries a stream whose request is whole on its own goroutine.
 func (h *h2Conn) dispatch(st *h2Stream) {
-	h.mu.Lock()
-	st.turn = make(chan struct{})
-	h.unsent = append(h.unsent, st)
-	h.mu.Unlock()
+	if !h.queue(st) {
+		return
+	}
 	h.streamsWG.Add(1)
 	go func() {
 		defer h.streamsWG.Done()
 		h.carry(st)
 		h.closeStream(st, nil)
 	}()
+}
+
+// queue puts st in line for the origin, behind the streams the client
+// opened before it (waitTurn). It reports false for a stream that closed
+// meanwhile, as one an origin GOAWAY abandoned does: that is not carried.
+func (h *h2Conn) queue(st *h2Stream) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if st.gone {
+		return false
+	}
+	st.turn = make(chan struct{})
+	h.unsent = append(h.unsent, st)
+	return true
 }
 
 // resetStream sends RST_STREAM with code and ends the stream, resetting its
@@ -592,15 +605,15 @@ func (h *h2Conn) closeStream(st *h2Stream, originCode *http2.ErrCode) {
 	st.gone = true
 	delete(h.streams, st.id)
 	h.closed.add(st.id)
-	os, origin := st.origin, h.origin
+	originStream, origin, queued := st.origin, h.origin, st.turn != nil
 	h.mu.Unlock()
 	st.cancel()
-	if st.turn != nil {
+	if queued {
 		h.passTurn(st)
 	}
 	h.flow.end(&st.window)
-	if os != nil && originCode != nil && origin != nil {
-		origin.cancel(os, *originCode)
+	if originStream != nil && originCode != nil && origin != nil {
+		origin.cancel(originStream, *originCode)
 	}
 	h.finishIfDone()
 }
