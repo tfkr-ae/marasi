@@ -77,7 +77,10 @@ func (h *h2Conn) prepare(req *http.Request, st *h2Stream) *http.Request {
 		req.TLS = &state
 	}
 	req.URL.Scheme = "https"
-	req.URL.Host = cmp.Or(withoutDefaultPort(h.c.tunnel, "https"), req.Host)
+	if h.cleartext() {
+		req.URL.Scheme = "http"
+	}
+	req.URL.Host = cmp.Or(withoutDefaultPort(h.c.tunnel, req.URL.Scheme), req.Host)
 	return req.WithContext(st.ctx)
 }
 
@@ -121,25 +124,27 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 	h.engine.proxy.resolveRoute()
 	// The origin the handshake dialled, named as the waypoint modifier
 	// leaves it or as the handshake did.
-	addr := hostPort(req.URL.Host, "443")
+	addr := hostPort(req.URL.Host, h.defaultPort())
+	h.openOriginFor(req.Context(), addr)
 	if addr != h.originAddr && (h.originDial == nil || addr != h.originDial.target) {
 		return nil, nil, nil, fmt.Errorf("%w: %s", errH2Redirect, addr)
 	}
-	if h.origin == nil {
+	origin := h.originLeg()
+	if origin == nil {
 		if h.originDial != nil {
 			recordTried(req.Context(), h.originDial.route)
 		}
 		return nil, nil, nil, h.originErr
 	}
 	if pair.Route != nil {
-		pair.Route.Connected(h.origin.conn.route.Snapshot())
+		pair.Route.Connected(origin.conn.route.Snapshot())
 	}
 	out, err := h2OutboundRequest(pair.requestWire.h2, req)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	h.waitTurn(st)
-	os, err := h.origin.send(out)
+	os, err := origin.send(out)
 	h.passTurn(st)
 	if err != nil {
 		return nil, nil, nil, err
@@ -147,7 +152,7 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 	h.mu.Lock()
 	if st.gone {
 		h.mu.Unlock()
-		h.origin.cancel(os, http2.ErrCodeCancel)
+		origin.cancel(os, http2.ErrCodeCancel)
 		return nil, nil, nil, errStreamGone
 	}
 	st.origin = os
