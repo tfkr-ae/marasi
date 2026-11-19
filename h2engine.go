@@ -152,41 +152,87 @@ type h2Stream struct {
 	// the streams the client opened after it may go.
 	turn     chan struct{}
 	turnOnce sync.Once
+	// heldSince is when Checkpoint started to hold the stream's request,
+	// zero when it is not held; holding is closed as a hold starts, and
+	// replaced as it ends.
+	heldSince time.Time
+	holding   chan struct{}
 }
 
 // h2OrderWait bounds how long a stream waits for the streams the client
-// opened before it to go to the origin first. A stream Checkpoint holds
-// gives up its turn as the hold starts; one a slow hook holds lets the
-// others pass once the wait runs out.
+// opened before it to go to the origin first. For a stream Checkpoint holds
+// it runs from the hold's start, so a quick hold keeps the client's order
+// and a long one delays the streams behind it once, by h2OrderWait at most.
+// A stream a slow hook holds lets the others pass once the wait runs out.
 var h2OrderWait = 250 * time.Millisecond
 
 // waitTurn waits until every stream the client opened before st was sent
-// to the origin or ended, or h2OrderWait passed, so origin streams open in
-// the client's order as they would going direct. A stream that gave up its
-// turn already waits for none.
+// to the origin or ended, or its wait ran out (h2OrderWait from now, or from
+// the start of the stream's hold while Checkpoint holds it), so origin
+// streams open in the client's order as they would going direct. A stream
+// that gave up its turn waits for none.
 func (h *h2Conn) waitTurn(st *h2Stream) {
 	h.mu.Lock()
-	var before []chan struct{}
+	var before []*h2Stream
 	for _, other := range h.unsent {
 		if other == st {
 			break
 		}
-		before = append(before, other.turn)
+		before = append(before, other)
 	}
 	if !slices.Contains(h.unsent, st) {
 		before = nil
 	}
 	h.mu.Unlock()
-	timeout := time.NewTimer(h2OrderWait)
-	defer timeout.Stop()
-	for _, turn := range before {
-		select {
-		case <-turn:
-		case <-timeout.C:
-			return
-		case <-st.ctx.Done():
+	deadline := time.Now().Add(h2OrderWait)
+	for _, other := range before {
+		if !h.waitFor(st, other, deadline) {
 			return
 		}
+	}
+}
+
+// waitFor waits until other was sent or ended, and reports false when the
+// wait ran out first or st ended. Until deadline, or while other is held,
+// until its hold is h2OrderWait old.
+func (h *h2Conn) waitFor(st, other *h2Stream, deadline time.Time) bool {
+	for {
+		h.mu.Lock()
+		turn, holding, until := other.turn, other.holding, deadline
+		if !other.heldSince.IsZero() {
+			until = other.heldSince.Add(h2OrderWait)
+		}
+		h.mu.Unlock()
+		timeout := time.NewTimer(time.Until(until))
+		select {
+		case <-turn:
+			timeout.Stop()
+			return true
+		case <-holding:
+			// A hold started: wait again, until it is h2OrderWait old.
+			timeout.Stop()
+		case <-timeout.C:
+			return false
+		case <-st.ctx.Done():
+			timeout.Stop()
+			return false
+		}
+	}
+}
+
+// held notes that Checkpoint started or ended a hold of st's request.
+func (h *h2Conn) held(st *h2Stream, onHold bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if st.holding == nil || !st.heldSince.IsZero() == onHold {
+		return
+	}
+	if onHold {
+		st.heldSince = time.Now()
+		close(st.holding)
+	} else {
+		st.heldSince = time.Time{}
+		st.holding = make(chan struct{})
 	}
 }
 
@@ -581,7 +627,7 @@ func (h *h2Conn) queue(st *h2Stream) bool {
 	if st.gone {
 		return false
 	}
-	st.turn = make(chan struct{})
+	st.turn, st.holding = make(chan struct{}), make(chan struct{})
 	h.unsent = append(h.unsent, st)
 	return true
 }

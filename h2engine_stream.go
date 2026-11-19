@@ -84,9 +84,8 @@ func (h *h2Conn) prepare(req *http.Request, st *h2Stream) *http.Request {
 	}
 	req.URL.Scheme, _ = h.scheme()
 	req.URL.Host = cmp.Or(withoutDefaultPort(h.c.tunnel, req.URL.Scheme), req.Host)
-	// A held stream gives up its turn before the origin as its hold
-	// starts, so streams the client opened after it do not wait on it.
-	return req.WithContext(withHoldStarts(st.ctx, func() { h.passTurn(st) }))
+	// The streams behind a held stream do not wait for it while it is held.
+	return req.WithContext(withHoldHooks(st.ctx, holdHooks{started: func() { h.held(st, true) }, ended: func() { h.held(st, false) }}))
 }
 
 // roundTrip gets the pair's response, as h1Conn.roundTrip does. A nil
