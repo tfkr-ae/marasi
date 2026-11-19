@@ -6,7 +6,9 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"maps"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -72,7 +74,7 @@ type h2Conn struct {
 	// streams are the client's open streams, by ID; closed are the
 	// streams that were open once and are no longer.
 	streams map[uint32]*h2Stream
-	closed  map[uint32]bool
+	closed  h2ClosedStreams
 	// maxID is the highest stream ID the client used.
 	maxID uint32
 	// maxStreams is the SETTINGS_MAX_CONCURRENT_STREAMS the client was
@@ -94,6 +96,42 @@ type h2Conn struct {
 	// unsent are the streams dispatched and not yet sent to the origin, in
 	// the order the client opened them (waitTurn).
 	unsent []*h2Stream
+}
+
+// h2ClosedKept is how many closed stream IDs h2ClosedStreams keeps exactly.
+const h2ClosedKept = 1024
+
+// h2ClosedStreams records the client streams that were open once and no
+// longer are, so HEADERS on one is told from HEADERS on a stream the client
+// skipped (RFC 9113 §5.1, §5.1.1). Stream IDs only grow, so once more than
+// twice h2ClosedKept are recorded the oldest are forgotten and every ID at or
+// below the newest forgotten counts as closed: a client that skipped one of
+// those is told STREAM_CLOSED rather than PROTOCOL_ERROR, a connection error
+// either way.
+type h2ClosedStreams struct {
+	ids   map[uint32]bool
+	below uint32
+}
+
+func (c *h2ClosedStreams) add(id uint32) {
+	if c.ids == nil {
+		c.ids = make(map[uint32]bool)
+	}
+	c.ids[id] = true
+	if len(c.ids) <= 2*h2ClosedKept {
+		return
+	}
+	ids := slices.Sorted(maps.Keys(c.ids))
+	forgotten := ids[:len(ids)-h2ClosedKept]
+	c.below = forgotten[len(forgotten)-1]
+	for _, id := range forgotten {
+		delete(c.ids, id)
+	}
+}
+
+// has reports whether stream id was closed.
+func (c *h2ClosedStreams) has(id uint32) bool {
+	return id <= c.below || c.ids[id]
 }
 
 // h2Stream is one client stream.
@@ -169,7 +207,7 @@ func (c *h1Conn) serveH2() {
 		c: c, engine: c.engine, conn: c.conn, br: c.br,
 		flow:    newH2Flow(),
 		decoder: hpack.NewDecoder(4096, nil),
-		streams: make(map[uint32]*h2Stream), closed: make(map[uint32]bool), sent: make(map[uint32]uint32),
+		streams: make(map[uint32]*h2Stream), sent: make(map[uint32]uint32),
 	}
 	h.framer = http2.NewFramer(c.bw, c.br)
 	h.framer.AllowIllegalWrites = true
@@ -429,7 +467,7 @@ func (h *h2Conn) headerBlock() error {
 		return nil
 	}
 	if id <= h.maxID {
-		closed := h.closed[id]
+		closed := h.closed.has(id)
 		h.mu.Unlock()
 		// HEADERS on a closed stream (RFC 9113 §5.1), or on one the
 		// client skipped, which is closed too (§5.1.1).
@@ -444,11 +482,11 @@ func (h *h2Conn) headerBlock() error {
 		h.mu.Unlock()
 		return nil
 	case h.blockSelfDeps:
-		h.closed[id] = true
+		h.closed.add(id)
 		h.mu.Unlock()
 		return http2.StreamError{StreamID: id, Code: http2.ErrCodeProtocol}
 	case h.maxStreamsSet && uint32(len(h.streams)) >= h.maxStreams:
-		h.closed[id] = true
+		h.closed.add(id)
 		h.mu.Unlock()
 		return http2.StreamError{StreamID: id, Code: http2.ErrCodeRefusedStream}
 	}
@@ -553,7 +591,7 @@ func (h *h2Conn) closeStream(st *h2Stream, originCode *http2.ErrCode) {
 	}
 	st.gone = true
 	delete(h.streams, st.id)
-	h.closed[st.id] = true
+	h.closed.add(st.id)
 	os, origin := st.origin, h.origin
 	h.mu.Unlock()
 	st.cancel()
