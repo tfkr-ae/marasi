@@ -1784,6 +1784,46 @@ func TestRequestType(t *testing.T) {
 			},
 		},
 		{
+			name:    "req:protocol should return http/1.1 for an HTTP/1.1 request",
+			luaCode: `return r:protocol()`,
+			options: []func(*Runtime) error{
+				withRequest(basicReq()),
+			},
+			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
+				if got != "http/1.1" {
+					t.Errorf("\nwanted:\nhttp/1.1\ngot:\n%v", got)
+				}
+			},
+		},
+		{
+			name:    "req:protocol should return h2 for an HTTP/2 request",
+			luaCode: `return r:protocol()`,
+			options: []func(*Runtime) error{
+				withRequest(func() *http.Request {
+					req := basicReq()
+					req.Proto, req.ProtoMajor, req.ProtoMinor = "HTTP/2.0", 2, 0
+					return req
+				}()),
+			},
+			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
+				if got != "h2" {
+					t.Errorf("\nwanted:\nh2\ngot:\n%v", got)
+				}
+			},
+		},
+		{
+			name:    "req:set_protocol should not exist, as protocol is read-only",
+			luaCode: `return r.set_protocol == nil`,
+			options: []func(*Runtime) error{
+				withRequest(basicReq()),
+			},
+			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
+				if got != true {
+					t.Errorf("\nwanted:\ntrue\ngot:\n%v", got)
+				}
+			},
+		},
+		{
 			name:    "req:remote_addr should return correct remote address",
 			luaCode: `return r:remote_addr()`,
 			options: []func(*Runtime) error{
@@ -2227,6 +2267,34 @@ func TestResponseType(t *testing.T) {
 			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
 				if got != "200 OK" {
 					t.Errorf("\nwanted:\n200 OK\ngot:\n%v", got)
+				}
+			},
+		},
+		{
+			name:    "res:protocol should return http/1.1 for an HTTP/1.1 response",
+			luaCode: `return r:protocol()`,
+			options: []func(*Runtime) error{
+				withResponse(basicRes()),
+			},
+			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
+				if got != "http/1.1" {
+					t.Errorf("\nwanted:\nhttp/1.1\ngot:\n%v", got)
+				}
+			},
+		},
+		{
+			name:    "res:protocol should return h2 for an HTTP/2 response",
+			luaCode: `return r:protocol()`,
+			options: []func(*Runtime) error{
+				withResponse(func() *http.Response {
+					res := basicRes()
+					res.Proto, res.ProtoMajor, res.ProtoMinor = "HTTP/2.0", 2, 0
+					return res
+				}()),
+			},
+			validatorFunc: func(t *testing.T, ext *Runtime, got any) {
+				if got != "h2" {
+					t.Errorf("\nwanted:\nh2\ngot:\n%v", got)
 				}
 			},
 		},

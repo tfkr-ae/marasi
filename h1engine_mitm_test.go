@@ -50,9 +50,9 @@ func newRawTLSOrigin(t *testing.T, response string) *rawOrigin {
 
 // serveH1EngineMITMProxy serves the engine as serveH1EngineProxy does,
 // with the proxy's CA loaded. trustOrigin makes the origin leg trust any
-// certificate.
+// certificate. Each configure runs on the proxy before capture is added.
 // It returns the listener's address, the captures and the CA.
-func serveH1EngineMITMProxy(t *testing.T, trustOrigin bool) (string, *capturedPair, *x509.Certificate) {
+func serveH1EngineMITMProxy(t *testing.T, trustOrigin bool, configure ...func(proxy *Proxy)) (string, *capturedPair, *x509.Certificate) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	database, err := db.New(":memory:", logger)
@@ -76,8 +76,11 @@ func serveH1EngineMITMProxy(t *testing.T, trustOrigin bool) (string, *capturedPa
 		t.Fatalf("creating proxy: %v", err)
 	}
 	proxy.AddRequestPairModifier(SetupRequestModifier)
-	proxy.AddRequestPairModifier(WriteRequestModifier)
 	proxy.AddResponsePairModifier(ResponseFilterModifier)
+	for _, c := range configure {
+		c(proxy)
+	}
+	proxy.AddRequestPairModifier(WriteRequestModifier)
 	proxy.AddResponsePairModifier(WriteResponseModifier)
 	listener, err := proxy.GetListener("127.0.0.1", "0")
 	if err != nil {
