@@ -49,6 +49,8 @@ type handshakeDial struct {
 	err    error
 	// route is the route the dial ran on.
 	route *Route
+	// offered is the client's ALPN list, which the origin was offered.
+	offered []string
 }
 
 // intercept runs the TLS handshake a client started, as the server, with a
@@ -105,10 +107,11 @@ func (c *h1Conn) intercept(connectHost string) bool {
 // one. It offers the origin the client's ALPN list.
 func (c *h1Conn) dialHandshakeOrigin(hello *tls.ClientHelloInfo, connectHost string) *handshakeDial {
 	proxy := c.engine.proxy
+	offered := hello.SupportedProtos
 	addr := connectHost
 	if addr == "" {
 		if hello.ServerName == "" {
-			return &handshakeDial{err: errNoOriginName, route: proxy.CurrentRoute()}
+			return &handshakeDial{err: errNoOriginName, route: proxy.CurrentRoute(), offered: offered}
 		}
 		addr = net.JoinHostPort(hello.ServerName, "443")
 	}
@@ -116,13 +119,13 @@ func (c *h1Conn) dialHandshakeOrigin(hello *tls.ClientHelloInfo, connectHost str
 	if override, ok := proxy.waypointOverride(addr); ok {
 		addr = override
 	}
-	ctx, cancel := context.WithTimeout(withOriginALPN(c.ctx, hello.SupportedProtos), tlsHandshakeTimeout)
+	ctx, cancel := context.WithTimeout(withOriginALPN(c.ctx, offered), tlsHandshakeTimeout)
 	defer cancel()
 	conn, err := proxy.dialOrigin(ctx, "https", addr)
 	if err != nil {
-		return &handshakeDial{target: target, addr: addr, err: err, route: proxy.CurrentRoute()}
+		return &handshakeDial{target: target, addr: addr, err: err, route: proxy.CurrentRoute(), offered: offered}
 	}
-	return &handshakeDial{target: target, addr: addr, conn: conn, route: conn.route}
+	return &handshakeDial{target: target, addr: addr, conn: conn, route: conn.route, offered: offered}
 }
 
 // errOriginNotH2 is the cause when a launch or Armory request written as

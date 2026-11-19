@@ -22,6 +22,8 @@ type h2TestOrigin struct {
 	// conns carries each accepted connection, once its preface and first
 	// SETTINGS are read.
 	conns chan *h2TestPeer
+	// offered carries the ALPN list of each handshake.
+	offered chan []string
 }
 
 // newH2TestOrigin serves TLS with ALPN alpn (h2 by default) and SETTINGS
@@ -31,11 +33,19 @@ func newH2TestOrigin(t *testing.T, settings ...http2.Setting) *h2TestOrigin {
 	issuer, _ := newTestLeafIssuer(t, 24*time.Hour)
 	config := issuer.config("127.0.0.1:443")
 	config.NextProtos = []string{"h2"}
+	origin := &h2TestOrigin{conns: make(chan *h2TestPeer, 4), offered: make(chan []string, 4)}
+	config.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		select {
+		case origin.offered <- hello.SupportedProtos:
+		default:
+		}
+		return nil, nil
+	}
 	l, err := tls.Listen("tcp", "127.0.0.1:0", config)
 	if err != nil {
 		t.Fatalf("listening for the origin: %v", err)
 	}
-	origin := &h2TestOrigin{addr: l.Addr().String(), conns: make(chan *h2TestPeer, 4)}
+	origin.addr = l.Addr().String()
 	t.Cleanup(func() { l.Close() })
 	go func() {
 		for {

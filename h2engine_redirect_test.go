@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +65,7 @@ func TestH2Engine_RedirectedRequest(t *testing.T) {
 		proxy.AddRequestPairModifier(redirectPaths("/elsewhere", h1Origin.addr))
 		protocols := make(pairProtocols, 4)
 		proxy.AddResponsePairModifier(protocols.modifier)
-		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2", "http/1.1")
 		origin.accept(t)
 
 		client.headers(1, false, ":method", "POST", ":scheme", "https", ":authority", origin.addr, ":path", "/elsewhere?x=1",
@@ -96,7 +97,7 @@ func TestH2Engine_RedirectedRequest(t *testing.T) {
 		})
 		addr, _, ca := serveH1EngineMITMProxy(t, true, holdEverything(t))
 		proxy := proxyOf(t, addr)
-		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2", "http/1.1")
 		origin.accept(t)
 
 		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/a")
@@ -120,7 +121,7 @@ func TestH2Engine_RedirectedRequest(t *testing.T) {
 		})
 		addr, _, ca := serveH1EngineMITMProxy(t, true)
 		proxyOf(t, addr).AddRequestPairModifier(redirectPaths("/elsewhere", h1Origin.addr))
-		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2", "http/1.1")
 		upstream := origin.accept(t)
 
 		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/elsewhere")
@@ -143,6 +144,23 @@ func TestH2Engine_RedirectedRequest(t *testing.T) {
 		if len(response.headers) != 1 || !equalFields(response.headers[0], want) || string(response.data) != "late" {
 			t.Fatalf("the redirected stream\nwanted:\n%v %q\ngot:\n%v %q", want, "late", response.headers, response.data)
 		}
+	})
+
+	t.Run("should offer a redirected request's origin the client's ALPN list", func(t *testing.T) {
+		origin := newH2TestOrigin(t)
+		other := newH2TestOrigin(t)
+		addr, _, ca := serveH1EngineMITMProxy(t, true)
+		proxyOf(t, addr).AddRequestPairModifier(redirectPaths("/elsewhere", other.addr))
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		origin.accept(t)
+
+		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/elsewhere")
+		redirected := other.accept(t)
+		if offered := <-other.offered; !slices.Equal(offered, []string{"h2"}) {
+			t.Fatalf("the redirected origin's ALPN offer\nwanted:\n[h2]\ngot:\n%v", offered)
+		}
+		redirected.headers(redirected.nthStream(t, 0), true, ":status", "204")
+		client.stream(t, 1)
 	})
 
 	t.Run("should send a redirected request as it is to an origin that chooses h2, on a connection of its own", func(t *testing.T) {
