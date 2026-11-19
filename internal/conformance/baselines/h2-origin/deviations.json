@@ -1,1 +1,30 @@
-[]
+[
+  {
+    "cases": "redirect-to-http1@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].alpn",
+    "got": "h2",
+    "kind": "accepted",
+    "reason": "The client's protocol is the one the origin its handshake reached chose; a request redirected afterwards to an origin that speaks only HTTP/1.1 is translated on the origin leg, and the client leg stays HTTP/2 (docs/adr/2026-11-19-marasi-gives-the-client-the-origins-protocol.md)",
+    "rfc": "RFC 9113 §8.3.1"
+  },
+  {
+    "cases": "redirect-to-http1@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client[0].streams[0].headers[0]",
+    "got": ":status: 201\ncontent-type: text/plain\nx-origin: HTTP1\ncontent-length: 4",
+    "kind": "accepted",
+    "reason": "Header case is lost when a pair is translated between HTTP/1.1 and HTTP/2: an HTTP/2 field name is lowercase (docs/adr/2026-11-19-http2-transparency-is-end-to-end-for-messages-and-per-leg-for-frames.md)",
+    "rfc": "RFC 9113 §8.2.1"
+  }
+]

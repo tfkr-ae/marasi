@@ -254,6 +254,19 @@ var Catalogue = []Case{
 			Data(0, true, largeBody("response")),
 		},
 	},
+	{
+		// A request that a rule sends to another origin, which speaks only
+		// HTTP/1.1: the pair is translated, and the response's header case
+		// is lost (an HTTP/2 field name is lowercase).
+		ID:  "redirect-to-http1",
+		RFC: "RFC 9113 §8.3.1 request pseudo-header fields as HTTP/1.1, and §8.2.2 connection-specific fields",
+		Requests: []Request{{
+			Method: "POST", Path: "/redirected?q=1",
+			Fields: h2.Fields("content-type", "text/plain", "x-request", "1"),
+			Body:   "ping",
+		}},
+		Redirect: "HTTP/1.1 201 Created\r\nContent-Type: text/plain\r\nX-Origin: HTTP1\r\nContent-Length: 4\r\n\r\npong",
+	},
 }
 
 // gzipped compresses s with gzip. The header carries no name or time, so

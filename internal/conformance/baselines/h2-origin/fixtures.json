@@ -1057,6 +1057,78 @@
       }
     ]
   },
+  "redirect-to-http1@connect-tls": {
+    "client": [
+      {
+        "alpn": "http/1.1",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "201"
+                },
+                {
+                  "name": "Content-Type",
+                  "value": "text/plain"
+                },
+                {
+                  "name": "X-Origin",
+                  "value": "HTTP1"
+                },
+                {
+                  "name": "Content-Length",
+                  "value": "4"
+                }
+              ]
+            ],
+            "data": "cG9uZw==",
+            "end_stream": "data"
+          }
+        ]
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "http/1.1",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "POST"
+                },
+                {
+                  "name": ":path",
+                  "value": "/redirected?q=1"
+                },
+                {
+                  "name": "host",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": "content-type",
+                  "value": "text/plain"
+                },
+                {
+                  "name": "x-request",
+                  "value": "1"
+                },
+                {
+                  "name": "content-length",
+                  "value": "4"
+                }
+              ]
+            ],
+            "data": "cGluZw==",
+            "end_stream": "data"
+          }
+        ]
+      }
+    ]
+  },
   "rst-stream@connect-tls": {
     "client": [
       {

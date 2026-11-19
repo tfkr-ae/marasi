@@ -59,12 +59,16 @@ func (s Suite) Targets() []string { return []string{Target} }
 // loopback. The went-through check is the intercepted TLS: through the
 // proxy the client trusts only the proxy's CA, which a proxy speaking only
 // HTTP/1.1, and so recording no h2 traffic, still shows. The Checkpoint
-// and extension runs hold and edit HTTP as an HTTP/1.1 suite does.
+// and extension runs hold and edit HTTP as an HTTP/1.1 suite does. Every
+// run has the Lua that redirects a request naming RedirectField, which the
+// extension run's Lua calls before setting each body to itself.
 func (s Suite) Setup() conformance.Setup {
 	setup := conformance.HTTPSetup()
 	setup.Traffic = conformance.TrafficTLS
 	setup.Container = true
 	setup.Hosts = []string{s.originHost()}
+	setup.Lua = redirectLua
+	setup.Extension = extensionLua
 	return setup
 }
 

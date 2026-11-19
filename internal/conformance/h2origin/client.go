@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -48,6 +49,16 @@ func (s Suite) record(ctx context.Context, c Case, job conformance.Job) (h2.Reco
 	normalise := func(value string) string { return strings.ReplaceAll(value, authority, placeholder) }
 
 	address := net.JoinHostPort(s.listen(), o.port())
+	requests := c.Requests
+	var redirect *http1Origin
+	if c.Redirect != "" {
+		if redirect, err = startHTTP1Origin(s.listen(), c.Redirect, s.timeout(), serverTLS); err != nil {
+			return h2.Recording{}, fmt.Errorf("starting the HTTP/1.1 origin: %w", err)
+		}
+		defer redirect.stop()
+		address = net.JoinHostPort(s.listen(), redirect.port())
+		requests = redirected(requests, net.JoinHostPort(s.originHost(), redirect.port()))
+	}
 	if job.Proxy != "" {
 		address = job.Proxy
 	}
@@ -70,16 +81,37 @@ func (s Suite) record(ctx context.Context, c Case, job conformance.Job) (h2.Reco
 	}
 	protocol := conn.ConnectionState().NegotiatedProtocol
 	recorder := h2.NewRecorder(protocol)
-	if protocol == "h2" {
-		if err := s.exchange(conn, recorder, c.Requests, authority); err != nil {
+	client := recorder.Connection(normalise)
+	switch {
+	case protocol == "h2":
+		if err := s.exchange(conn, recorder, requests, authority); err != nil {
 			return h2.Recording{}, err
 		}
+		client = recorder.Connection(normalise)
+	case redirect != nil && job.Proxy == "":
+		streams, err := s.exchangeHTTP1(conn, c.Requests, authority)
+		if err != nil {
+			return h2.Recording{}, err
+		}
+		client.Streams = normaliseStreams(streams, normalise)
 	}
 	// The origin's view is taken before the client closes, as in h1-origin.
-	return h2.Recording{
-		Client: []h2.Connection{recorder.Connection(normalise)},
-		Origin: o.snapshot(normalise),
-	}, nil
+	// A redirected case records only the origin its requests went to.
+	origins := o.snapshot(normalise)
+	if redirect != nil {
+		origins = redirect.snapshot(normalise)
+	}
+	return h2.Recording{Client: []h2.Connection{client}, Origin: origins}, nil
+}
+
+// redirected is requests, each with RedirectField naming target last.
+func redirected(requests []Request, target string) []Request {
+	out := make([]Request, len(requests))
+	for i, r := range requests {
+		r.Fields = append(slices.Clone(r.Fields), h2.Field{Name: RedirectField, Value: target})
+		out[i] = r
+	}
+	return out
 }
 
 // exchange sends every request on its own stream, then records what comes

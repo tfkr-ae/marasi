@@ -23,6 +23,13 @@ type Case struct {
 	RFC      string // the RFC rule the case exercises
 	Requests []Request
 	Script   []Step
+	// Redirect, when set, makes the case a redirected one: its requests go
+	// to an origin that speaks only HTTP/1.1 and answers each with these
+	// bytes, framed by content-length. Directly the client sends them there
+	// in HTTP/1.1; through the proxy it sends them to the h2 origin, which
+	// follows Script, with RedirectField, which Setup's Lua turns into a
+	// redirect. The recording's origin side is the HTTP/1.1 origin's.
+	Redirect string
 }
 
 // Request is one request the client sends on its own stream. The client
