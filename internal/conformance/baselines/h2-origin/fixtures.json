@@ -1,4 +1,142 @@
 {
+  "content-length-mismatch@connect-tls": {
+    "client": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                },
+                {
+                  "name": "content-type",
+                  "value": "text/plain"
+                },
+                {
+                  "name": "content-length",
+                  "value": "3"
+                }
+              ]
+            ],
+            "data": "bG9uZ2VyIHRoYW4gdGhyZWU=",
+            "end_stream": "data"
+          }
+        ]
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "POST"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/length"
+                },
+                {
+                  "name": "content-type",
+                  "value": "text/plain"
+                },
+                {
+                  "name": "content-length",
+                  "value": "10"
+                }
+              ]
+            ],
+            "data": "c2hvcnQ=",
+            "end_stream": "data"
+          }
+        ]
+      }
+    ]
+  },
+  "cookie-crumbs@connect-tls": {
+    "client": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "204"
+                },
+                {
+                  "name": "set-cookie",
+                  "value": "e=5"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          }
+        ]
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/cookies"
+                },
+                {
+                  "name": "cookie",
+                  "value": "a=1"
+                },
+                {
+                  "name": "accept",
+                  "value": "*/*"
+                },
+                {
+                  "name": "cookie",
+                  "value": "b=2; c=3"
+                },
+                {
+                  "name": "cookie",
+                  "value": "d=4"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          }
+        ]
+      }
+    ]
+  },
   "data-padded-split@connect-tls": {
     "client": [
       {
@@ -57,6 +195,188 @@
                 {
                   "name": "accept",
                   "value": "text/plain"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          }
+        ]
+      }
+    ]
+  },
+  "early-hints@connect-tls": {
+    "client": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "103"
+                },
+                {
+                  "name": "link",
+                  "value": "\u003c/style.css\u003e; rel=preload; as=style"
+                }
+              ],
+              [
+                {
+                  "name": ":status",
+                  "value": "103"
+                },
+                {
+                  "name": "link",
+                  "value": "\u003c/script.js\u003e; rel=preload; as=script"
+                }
+              ],
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                },
+                {
+                  "name": "content-type",
+                  "value": "text/html"
+                },
+                {
+                  "name": "link",
+                  "value": "\u003c/style.css\u003e; rel=preload; as=style"
+                }
+              ]
+            ],
+            "data": "PGh0bWw+PC9odG1sPg==",
+            "end_stream": "data"
+          }
+        ]
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/hints"
+                }
+              ]
+            ],
+            "end_stream": "headers"
+          }
+        ]
+      }
+    ]
+  },
+  "field-order@connect-tls": {
+    "client": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                },
+                {
+                  "name": "x-z",
+                  "value": "1"
+                },
+                {
+                  "name": "set-cookie",
+                  "value": "a=1"
+                },
+                {
+                  "name": "content-type",
+                  "value": "text/plain"
+                },
+                {
+                  "name": "set-cookie",
+                  "value": "b=2"
+                },
+                {
+                  "name": "x-z",
+                  "value": "2"
+                },
+                {
+                  "name": "x-a",
+                  "value": "3"
+                },
+                {
+                  "name": "x-z",
+                  "value": "3"
+                }
+              ]
+            ],
+            "data": "b3JkZXJlZA==",
+            "end_stream": "data"
+          }
+        ]
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "GET"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/order"
+                },
+                {
+                  "name": "x-b",
+                  "value": "1"
+                },
+                {
+                  "name": "accept",
+                  "value": "*/*"
+                },
+                {
+                  "name": "x-a",
+                  "value": "2"
+                },
+                {
+                  "name": "x-b",
+                  "value": "3"
+                },
+                {
+                  "name": "x-b",
+                  "value": "4"
+                },
+                {
+                  "name": "user-agent",
+                  "value": "fixture"
                 }
               ]
             ],
@@ -144,6 +464,82 @@
               ]
             ],
             "end_stream": "headers"
+          }
+        ]
+      }
+    ]
+  },
+  "gzip-body@connect-tls": {
+    "client": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":status",
+                  "value": "200"
+                },
+                {
+                  "name": "content-type",
+                  "value": "text/plain"
+                },
+                {
+                  "name": "content-encoding",
+                  "value": "gzip"
+                },
+                {
+                  "name": "vary",
+                  "value": "accept-encoding"
+                }
+              ]
+            ],
+            "data": "H4sIAAAAAAAA/ypKLS7IzytOVUjKT6nUUUjOzy0oSi0uTk0BBAAA//8f9vyBGQAAAA==",
+            "end_stream": "data"
+          }
+        ]
+      }
+    ],
+    "origin": [
+      {
+        "alpn": "h2",
+        "streams": [
+          {
+            "headers": [
+              [
+                {
+                  "name": ":method",
+                  "value": "POST"
+                },
+                {
+                  "name": ":scheme",
+                  "value": "https"
+                },
+                {
+                  "name": ":authority",
+                  "value": "origin.test:PORT"
+                },
+                {
+                  "name": ":path",
+                  "value": "/gzip"
+                },
+                {
+                  "name": "content-type",
+                  "value": "text/plain"
+                },
+                {
+                  "name": "content-encoding",
+                  "value": "gzip"
+                },
+                {
+                  "name": "accept-encoding",
+                  "value": "gzip"
+                }
+              ]
+            ],
+            "data": "H4sIAAAAAAAA/ypKLSxNLS5RSMpPqdRRSM7PLShKLS5OTQEEAAD//3xVMsQYAAAA",
+            "end_stream": "data"
           }
         ]
       }

@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/tfkr-ae/marasi/domain"
 
@@ -64,10 +66,11 @@ func (h *h2Conn) carry(st *h2Stream) {
 	}
 	// The response step may have replaced the wire message: a Checkpoint
 	// edit is a new field list.
+	read := wire
 	if pair.responseWire != nil {
 		wire = pair.responseWire
 	}
-	h.writeResponse(st, pair, res, wire)
+	h.writeResponse(st, pair, res, wire, read)
 }
 
 // prepare gives a request view what every request needs, as h1Conn.prepare
@@ -226,13 +229,18 @@ func (h *h2Conn) relayInterim(st *h2Stream, fields h2Fields) {
 }
 
 // writeResponse writes the pair's response on st: the origin's as its field
-// list with the chain's edits, or one Marasi made.
-func (h *h2Conn) writeResponse(st *h2Stream, pair *Pair, res *http.Response, wire *wireResponse) {
+// list with the chain's edits, or one Marasi made. read is the response as
+// the origin sent it, which wire replaces after a Checkpoint edit.
+func (h *h2Conn) writeResponse(st *h2Stream, pair *Pair, res *http.Response, wire, read *wireResponse) {
 	if wire != nil && wire.h2 != nil && !pair.FromMarasi() {
 		client, err := encodedForClient(pair, res)
 		if err == nil {
+			base := wire.h2
+			if client != res && read != nil && read.h2 != nil {
+				base = withCodingOf(base, read.h2)
+			}
 			var out *h2Response
-			if out, err = h2OutboundResponse(wire.h2, client); err == nil {
+			if out, err = h2OutboundResponse(base, client); err == nil {
 				h.writeMessage(st, out.fields, out.body, out.trailers, true, out.endsOnData)
 				return
 			}
@@ -247,6 +255,27 @@ func (h *h2Conn) writeResponse(st *h2Stream, pair *Pair, res *http.Response, wir
 		payload = nil
 	}
 	h.writeMessage(st, h2FieldsFromHeader(res.StatusCode, res.Header, len(payload)), payload, nil, true, false)
+}
+
+// withCodingOf is m with origin's content-encoding fields back where origin
+// had them, when m has none. Checkpoint shows a decoded body without its
+// content-encoding, so an edit's field list lacks it; when the client gets
+// the coded body after all (encodedForClient), the field goes back to its
+// place rather than last.
+func withCodingOf(m, origin *h2Response) *h2Response {
+	coding := func(f h2Field) bool { return strings.EqualFold(f.Name, "content-encoding") }
+	if slices.ContainsFunc(m.fields, coding) {
+		return m
+	}
+	fields := slices.Clone(m.fields)
+	for i, f := range origin.fields {
+		if coding(f) {
+			fields = slices.Insert(fields, min(i, len(fields)), f)
+		}
+	}
+	out := *m
+	out.fields = fields
+	return &out
 }
 
 // writeMessage writes a header block, a body and trailers on st. With end
