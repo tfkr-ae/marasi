@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,10 +21,13 @@ import (
 
 // newRawTLSOrigin is a rawOrigin served over TLS with a certificate no
 // client trusts, so only a proxy that skips origin verification reaches it.
+// It speaks only HTTP/1.1, and says so by ALPN.
 func newRawTLSOrigin(t *testing.T, response string) *rawOrigin {
 	t.Helper()
 	issuer, _ := newTestLeafIssuer(t, 24*time.Hour)
-	l, err := tls.Listen("tcp", "127.0.0.1:0", issuer.config("127.0.0.1:443"))
+	config := issuer.config("127.0.0.1:443")
+	config.NextProtos = []string{"http/1.1"}
+	l, err := tls.Listen("tcp", "127.0.0.1:0", config)
 	if err != nil {
 		t.Fatalf("listening for the origin: %v", err)
 	}
@@ -97,7 +101,23 @@ func serveH1EngineMITMProxy(t *testing.T, trustOrigin bool) (string, *capturedPa
 			t.Error("proxy serve did not stop")
 		}
 	})
-	return net.JoinHostPort(proxy.Addr, proxy.Port), captured, proxy.Cert
+	addr := net.JoinHostPort(proxy.Addr, proxy.Port)
+	testProxies.Store(addr, proxy)
+	return addr, captured, proxy.Cert
+}
+
+// testProxies maps the address of each proxy serveH1EngineMITMProxy
+// serves to the proxy, for tests that act on it.
+var testProxies sync.Map
+
+// proxyOf returns the proxy serving addr.
+func proxyOf(t *testing.T, addr string) *Proxy {
+	t.Helper()
+	proxy, ok := testProxies.Load(addr)
+	if !ok {
+		t.Fatalf("no test proxy serves %s", addr)
+	}
+	return proxy.(*Proxy)
 }
 
 // openTunnel sends CONNECT for authority and reads the 200.
@@ -145,7 +165,7 @@ func expectCaptured(t *testing.T, captured *capturedPair, scheme, request, respo
 }
 
 func TestH1Engine_MITM(t *testing.T) {
-	t.Run("should intercept HTTPS inside CONNECT with a leaf the client verifies against the CA, and capture it", func(t *testing.T) {
+	t.Run("should intercept HTTPS inside CONNECT with a leaf the client verifies against the CA, answer an h2 offer with the HTTP/1.1 origin's http/1.1, and capture it", func(t *testing.T) {
 		origin := newRawTLSOrigin(t, originResponse)
 		addr, captured, ca := serveH1EngineMITMProxy(t, true)
 		_, port, _ := net.SplitHostPort(origin.addr)

@@ -17,10 +17,6 @@ import (
 	"time"
 )
 
-// defaultALPN is the list of protocols Marasi offers clients it intercepts.
-// Adding h2 (Phase 5) is a change to this list.
-var defaultALPN = []string{"http/1.1"}
-
 // leafIssuer issues the leaf certificates Marasi shows clients it
 // intercepts, signed by the proxy's CA. A leaf is made from the host alone;
 // it never copies the origin's certificate. Each host's leaf is kept in
@@ -28,8 +24,6 @@ var defaultALPN = []string{"http/1.1"}
 type leafIssuer struct {
 	ca    *x509.Certificate
 	caKey crypto.Signer
-	// alpn is what the TLS configs offer, in order.
-	alpn []string
 
 	mu     sync.Mutex
 	leaves map[string]*tls.Certificate
@@ -42,7 +36,7 @@ func newLeafIssuer(ca *x509.Certificate, caKey any) (*leafIssuer, error) {
 	if !ok {
 		return nil, fmt.Errorf("the CA key is a %T, which cannot sign", caKey)
 	}
-	return &leafIssuer{ca: ca, caKey: signer, alpn: defaultALPN, leaves: make(map[string]*tls.Certificate)}, nil
+	return &leafIssuer{ca: ca, caKey: signer, leaves: make(map[string]*tls.Certificate)}, nil
 }
 
 // errNoServerName fails a handshake that names no host: no SNI, and no
@@ -52,10 +46,10 @@ var errNoServerName = errors.New("the client sent no SNI and there is no CONNECT
 // config returns the TLS config served to an intercepted client. Its leaf
 // names the client's SNI, or connectHost (a CONNECT authority, port allowed)
 // when the client sends none. connectHost is "" for TLS sent straight to the
-// listener.
+// listener. It offers no protocol by ALPN: the engine answers with the
+// origin's choice (h1Conn.intercept).
 func (issuer *leafIssuer) config(connectHost string) *tls.Config {
 	return &tls.Config{
-		NextProtos: issuer.alpn,
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			host := hello.ServerName
 			if host == "" {

@@ -124,7 +124,6 @@ type Proxy struct {
 	WordlistManager       wordlist.Provider     // Provider for available wordlists.
 	SPKIHash              string                // SPKI Hash of the current certificate
 	Cert                  *x509.Certificate     // The proxy's TLS certificate.
-	mitmConfig            *tls.Config           // The TLS config that intercepted tunnels serve clients
 	MarasiClientTLSConfig *tls.Config           // TLSConfig for the proxy.Client
 	Scope                 *compass.Scope        // Proxy scope configuration through Compass
 	Waypoints             map[string]string     // Published host:port overrides. Replaced, never mutated.
@@ -871,7 +870,7 @@ func (proxy *Proxy) WrapListener(rawListener net.Listener) net.Listener {
 	}
 	proxy.Port = fmt.Sprintf("%d", addr.Port)
 
-	muxListener := listener.NewProtocolMuxListener(rawListener, proxy.mitmConfig)
+	muxListener := listener.NewProtocolMuxListener(rawListener, nil)
 	muxListener.WrapConn = func(conn net.Conn) net.Conn { return proxy.trackConnection(conn, true) }
 	marasiListener := listener.NewMarasiListener(muxListener)
 
@@ -1040,7 +1039,9 @@ func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
 // the watch never takes body bytes. A body cut short is not watched: what is left on the
 // socket is not a request, and the round trip fails on the body's read error instead.
 func (proxy *Proxy) watchClient(req *http.Request, ending BodyEnding) {
-	if ending == BodyCutShort {
+	// The HTTP/2 engine reads its client connection all along, and ends a
+	// stream's context when the stream or the connection ends.
+	if ending == BodyCutShort || req.ProtoMajor == 2 {
 		return
 	}
 	conn := proxy.clientConnection(req.RemoteAddr)

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -275,7 +276,7 @@ func (views *browserViews) take(client, url string) (*http.Response, *wireRespon
 // chunked coding removed. The engine writes the head as stored and frames
 // the payload by it (outboundResponse).
 func readStoredResponse(raw []byte) (*http.Response, *wireResponse, error) {
-	br := bufio.NewReader(bytes.NewReader(raw))
+	br := bufio.NewReader(bytes.NewReader(storedAsHTTP1(raw)))
 	head, err := h1.ReadResponseHead(br)
 	if err != nil {
 		return nil, nil, err
@@ -289,6 +290,28 @@ func readStoredResponse(raw []byte) (*http.Response, *wireResponse, error) {
 		res.Body = io.NopCloser(bytes.NewReader(payload))
 	}
 	return res, &wireResponse{head: head}, nil
+}
+
+// storedAsHTTP1 turns a response stored in the HTTP/2 text form
+// (docs/adr/2026-11-19-marasi-owns-its-http2-framing.md) into one the HTTP/1.1
+// codec reads: HTTP/2 <status> becomes an HTTP/1.1 status line, and lines
+// that start with ":" are skipped. Any other response is returned as it is.
+func storedAsHTTP1(raw []byte) []byte {
+	status, rest, ok := bytes.Cut(raw, []byte("\r\n"))
+	code, isH2 := bytes.CutPrefix(status, []byte("HTTP/2 "))
+	if !ok || !isH2 {
+		return raw
+	}
+	head, body, _ := bytes.Cut(rest, []byte("\r\n\r\n"))
+	n, _ := strconv.Atoi(string(code))
+	out := []byte("HTTP/1.1 " + string(code) + " " + http.StatusText(n) + "\r\n")
+	for line := range bytes.SplitSeq(head, []byte("\r\n")) {
+		if len(line) > 0 && line[0] != ':' {
+			out = append(append(out, line...), "\r\n"...)
+		}
+	}
+	out = append(out, "\r\n"...)
+	return append(out, body...)
 }
 
 // clear drops every pending browser view.

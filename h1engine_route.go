@@ -64,6 +64,7 @@ func (c *h1Conn) retireOrigin() {
 func (engine *h1Engine) routeSwapped(route *Route) {
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
+	engine.h2Swapped(route)
 	for conn, idle := range engine.conns {
 		// While idle, the connection's goroutine is not touching origin.
 		if idle && conn.origin != nil && conn.origin.route != route {

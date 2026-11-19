@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/tfkr-ae/marasi/domain"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 // Route says how the transport reaches the origin for a new connection. The
@@ -106,6 +108,17 @@ func sameRoute(a, b *Route) bool {
 type routedConn struct {
 	net.Conn
 	route *Route
+}
+
+// protocol is what the origin chose by ALPN, "" for a connection without
+// TLS or one whose origin chose nothing.
+func (c *routedConn) protocol() string {
+	if state, ok := c.Conn.(interface {
+		ConnectionState() utls.ConnectionState
+	}); ok {
+		return state.ConnectionState().NegotiatedProtocol
+	}
+	return ""
 }
 
 // CurrentRoute returns the route new connections to the origin use.

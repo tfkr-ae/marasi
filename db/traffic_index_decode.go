@@ -42,10 +42,14 @@ func indexableMessageBody(head, body []byte) any {
 
 // contentCodings returns the content codings of a message head in the order
 // they were applied, lower case, across every Content-Encoding header line.
-// identity codings are left out.
+// identity codings are left out. A line that starts with ":" is a
+// pseudo-header field of the HTTP/2 text form, not a header field.
 func contentCodings(head []byte) []string {
 	var codings []string
 	for _, line := range bytes.Split(head, []byte("\n")) {
+		if bytes.HasPrefix(line, []byte(":")) {
+			continue
+		}
 		name, value, ok := strings.Cut(string(line), ":")
 		if !ok || !strings.EqualFold(strings.TrimSpace(name), "content-encoding") {
 			continue

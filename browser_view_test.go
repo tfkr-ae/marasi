@@ -551,6 +551,34 @@ func TestProxy_BrowserView(t *testing.T) {
 		h.assertNothingCaptured(t, 1)
 	})
 
+	t.Run("should serve the stored HTTP/2 response of an h2 origin", func(t *testing.T) {
+		h := startViewHarness(t, viewHarnessConfig{secureOrigin: true})
+		origin := &viewOrigin{hits: make(map[string]int)}
+		origin.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprintf(w, "<html>%s</html>", r.Proto)
+		}))
+		origin.EnableHTTP2 = true
+		origin.StartTLS()
+		t.Cleanup(origin.Close)
+		_, port, _ := net.SplitHostPort(strings.TrimPrefix(origin.URL, "https://"))
+		target := "https://localhost:" + port + "/h2"
+		browser := h.client(t, "127.0.0.1")
+		browser.Transport.(*http.Transport).ForceAttemptHTTP2 = true
+		req, _ := http.NewRequest(http.MethodGet, target, nil)
+		pair := h.capture(t, browser, req)
+		stored := h.storedResponse(t, pair.ID)
+		if !bytes.HasPrefix(stored, []byte("HTTP/2 200\r\n")) {
+			t.Fatalf("wanted an HTTP/2 response stored\ngot: %q", stored)
+		}
+
+		res, body := get(t, browser, openView(t, browser, pair.ID))
+
+		if res.StatusCode != http.StatusOK || string(body) != "<html>HTTP/2.0</html>" || res.Header.Get("Content-Type") != "text/html; charset=utf-8" {
+			t.Fatalf("served response\nwanted:\n200 text/html <html>HTTP/2.0</html>\ngot:\n%d %v %q", res.StatusCode, res.Header, body)
+		}
+	})
+
 	t.Run("should open a browser view over HTTPS to marasi", func(t *testing.T) {
 		h := startViewHarness(t, viewHarnessConfig{})
 		origin := startViewOrigin(t, false)

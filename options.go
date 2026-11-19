@@ -350,11 +350,9 @@ func WithTLSContext(ctx context.Context) func(*Proxy) error {
 		if err != nil {
 			return fmt.Errorf("setting spki hash %s: %w", proxy.SPKIHash, err)
 		}
-		mitmConfig, err := proxy.engine.setMITM(certificate, privateKey)
-		if err != nil {
+		if err := proxy.engine.setMITM(certificate, privateKey); err != nil {
 			return err
 		}
-		proxy.mitmConfig = mitmConfig
 
 		// Add system certificates + marasi cert
 		systemPool, err := x509.SystemCertPool()
