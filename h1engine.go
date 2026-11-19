@@ -55,8 +55,10 @@ type h1Engine struct {
 
 	mu sync.Mutex
 	// conns are the client connections being served, true while one waits
-	// for its next request.
-	conns map[*h1Conn]bool
+	// for its next request. h2conns are those that speak HTTP/2
+	// (h2engine.go).
+	conns   map[*h1Conn]bool
+	h2conns map[*h2Conn]bool
 }
 
 func newH1Engine(proxy *Proxy) *h1Engine {
@@ -93,6 +95,7 @@ func (engine *h1Engine) startClose() {
 	engine.closing.Store(true)
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
+	engine.h2Close()
 	for conn, idle := range engine.conns {
 		if idle {
 			conn.conn.SetReadDeadline(time.Now())
@@ -177,6 +180,11 @@ type h1Conn struct {
 	// origin is this client connection's origin connection, nil until its
 	// first request or after the origin closed it.
 	origin *originConn
+	// protocol is what the client's TLS handshake negotiated by ALPN, and
+	// handshake the origin dial it made (h1engine_mitm.go); "" and nil
+	// before intercepted TLS.
+	protocol  string
+	handshake *handshakeDial
 }
 
 func newH1Conn(engine *h1Engine, conn net.Conn) *h1Conn {
@@ -195,7 +203,16 @@ func newH1Conn(engine *h1Engine, conn net.Conn) *h1Conn {
 // pipelined requests are answered in order.
 func (c *h1Conn) serve() {
 	defer c.end()
+	// TLS sent straight to the listener is intercepted here, as TLS inside
+	// a CONNECT is, so its handshake is origin first too.
+	if c.startsTLS() && !c.intercept("") {
+		return
+	}
 	for {
+		if c.protocol == "h2" {
+			c.serveH2()
+			return
+		}
 		head, ok := c.readHead()
 		if !ok {
 			return
@@ -212,6 +229,18 @@ func (c *h1Conn) serve() {
 			return
 		}
 	}
+}
+
+// startsTLS reports whether the client opens its connection with a TLS
+// record, within the time a request head has. Meanwhile the connection is
+// idle, so shutdown does not wait on a client that sends nothing.
+func (c *h1Conn) startsTLS() bool {
+	if _, ok := c.conn.(*tls.Conn); ok || !c.engine.idle(c, c.engine.headerTimeout) {
+		return false
+	}
+	first, err := c.br.Peek(1)
+	c.engine.busy(c)
+	return err == nil && first[0] == 0x16
 }
 
 // end closes the client connection, unless the pipeline took it over, and

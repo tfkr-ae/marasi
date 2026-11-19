@@ -106,10 +106,11 @@ func TestNewCertificateAuthority(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		serverConfig, err := newH1Engine(nil).setMITM(ca, key)
-		if err != nil {
+		engine := newH1Engine(nil)
+		if err := engine.setMITM(ca, key); err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
+		serverConfig := engine.leaves.config("")
 		roots := x509.NewCertPool()
 		roots.AddCert(ca)
 

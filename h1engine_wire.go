@@ -77,6 +77,14 @@ func outboundResponse(wire *wireResponse, res *http.Response) (outbound[*h1.Resp
 // dumpWireRequest is the stored raw text of a request the engine read from
 // the wire: the request as it goes upstream.
 func dumpWireRequest(wire *wireRequest, req *http.Request) ([]byte, string, error) {
+	if wire.h2 != nil {
+		out, err := h2OutboundRequest(wire.h2, req)
+		if err != nil {
+			return nil, "", err
+		}
+		raw, prettified := rawhttp.Assemble(h2RequestText(out.fields), out.body)
+		return raw, prettified, nil
+	}
 	out, err := outboundRequest(wire, req)
 	if err != nil {
 		return nil, "", err
@@ -88,6 +96,14 @@ func dumpWireRequest(wire *wireRequest, req *http.Request) ([]byte, string, erro
 // dumpWireResponse is the stored raw text of a response the engine read from
 // the origin, after the response modifiers, and its payload's length.
 func dumpWireResponse(wire *wireResponse, res *http.Response) ([]byte, string, int, error) {
+	if wire.h2 != nil {
+		out, err := h2OutboundResponse(wire.h2, res)
+		if err != nil {
+			return nil, "", 0, err
+		}
+		raw, prettified := rawhttp.Assemble(h2ResponseText(out.fields), out.body)
+		return raw, prettified, len(out.body), nil
+	}
 	out, err := outboundResponse(wire, res)
 	if err != nil {
 		return nil, "", 0, err

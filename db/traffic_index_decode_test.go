@@ -72,6 +72,13 @@ func TestTrafficRepo_ListTrafficSearchesDecodedBodies(t *testing.T) {
 		},
 		{name: "mislabelled", request: "GET /mislabelled HTTP/1.1\r\n\r\n", response: response("Content-Encoding: gzip", "stored-as-text")},
 		{name: "unknown", request: "GET /unknown HTTP/1.1\r\n\r\n", response: response("Content-Encoding: compress", "unknown-coding-text")},
+		{
+			// The HTTP/2 text form: its pseudo-header lines are no fields
+			// to the decoder, and stay in the head's text.
+			name:     "h2",
+			request:  "GET /h2 HTTP/2\r\n:scheme: https\r\n:authority: h2.example\r\n\r\n",
+			response: []byte("HTTP/2 200\r\ncontent-encoding: gzip\r\n\r\n" + encode(t, "decoded-h2-text", "gzip")),
+		},
 	})
 
 	for query, want := range map[string]string{
@@ -84,6 +91,8 @@ func TestTrafficRepo_ListTrafficSearchesDecodedBodies(t *testing.T) {
 		`request_body:"decoded-request-text"`:     "request",
 		`response_body:"stored-as-text"`:          "mislabelled",
 		`response_body:"unknown-coding-text"`:     "unknown",
+		`response_body:"decoded-h2-text"`:         "h2",
+		`request_head:":authority: h2.example"`:   "h2",
 	} {
 		t.Run(query, func(t *testing.T) {
 			if got := listNames(t, repo, ids, query); got != want {

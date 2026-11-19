@@ -290,6 +290,12 @@ func (c *h1Conn) originFor(pair *Pair, route *Route, addr string) (*originConn, 
 	scheme := pair.Request.URL.Scheme
 	if c.origin == nil || c.origin.addr != addr || c.origin.route != route || c.origin.scheme != scheme {
 		c.closeOrigin()
+		if h := c.handshake; h != nil && h.err != nil && h.addr == addr && scheme == "https" {
+			// The origin the handshake could not reach: each request
+			// is answered with the cause (h1engine_mitm.go).
+			recordTried(pair.Request.Context(), h.route)
+			return nil, h.err
+		}
 		conn, err := c.engine.proxy.dialOrigin(pair.Request.Context(), scheme, addr)
 		if err != nil {
 			return nil, err

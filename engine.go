@@ -42,6 +42,9 @@ type wireRequest struct {
 	// for any other request. A refused request has no body and never goes
 	// upstream (docs/adr/2026-11-17-ambiguous-request-framing-is-refused-with-a-400.md).
 	refused error
+	// h2 is an HTTP/2 request's field list, body and trailers; head and
+	// body are nil then (h2engine_fields.go).
+	h2 *h2Request
 }
 
 // wireResponse is a response as it was read from the origin. The pair's
@@ -49,4 +52,7 @@ type wireRequest struct {
 type wireResponse struct {
 	head *h1.ResponseHead
 	body *h1.Body
+	// h2 is an HTTP/2 response's field list, body and trailers; head and
+	// body are nil then.
+	h2 *h2Response
 }
