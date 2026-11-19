@@ -52,6 +52,13 @@ func (c *h1Conn) carryPair(head *h1.RequestHead) bool {
 	}
 
 	res, wire := c.roundTrip(pair)
+	if wire == nil && res.Close {
+		// Marasi's own answer ends the connection, so the origin
+		// connection, which a handshake may have dialled before any
+		// request, is closed before it: the origin sees its end no
+		// later than the client.
+		c.closeOrigin()
+	}
 	stream, _ := res.Body.(*originStream)
 	err = c.engine.response(res, wire)
 	if stream != nil {
