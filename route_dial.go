@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/tfkr-ae/marasi/listener"
 )
 
 // DefaultUpstreamProxyTimeout bounds reaching an upstream proxy and opening a
@@ -45,7 +47,8 @@ const (
 
 // UpstreamProxyError is a route's failure to carry a connection. Its text
 // names the upstream proxy by name and redacted address and never holds
-// credentials, because martian copies it into the client's Warning header.
+// credentials, because it is the body of the proxy error response the client
+// gets and is written to the proxy log.
 type UpstreamProxyError struct {
 	// Name is the selected upstream proxy's name.
 	Name string
@@ -233,3 +236,11 @@ type bufferedConn struct {
 func (conn *bufferedConn) Read(p []byte) (int, error) {
 	return conn.reader.Read(p)
 }
+
+// CloseWrite half-closes the wrapped connection.
+func (conn *bufferedConn) CloseWrite() error {
+	return listener.CloseWrite(conn.Conn)
+}
+
+// A TLS connection over bufferedConn half-closes through it.
+var _ listener.CloseWriter = (*bufferedConn)(nil)

@@ -1,7 +1,6 @@
 package marasi
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -15,7 +14,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
-	"github.com/tfkr-ae/marasi/rawhttp"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
@@ -57,9 +55,11 @@ type launchOutcomeWrite struct {
 	id uuid.UUID
 }
 
-// Launch sends a raw HTTP request from a launchpad through the proxy client.
-// It returns the launch id once the launch is accepted. The launch id is the
-// UUID of the request/response pair the launch creates.
+// Launch sends a raw HTTP request from a launchpad through the proxy's own
+// listener, as bytes on a new connection, so its header case, order and
+// whitespace reach the origin as typed. Only the Content-Length value is
+// recalculated. It returns the launch id once the launch is accepted. The
+// launch id is the UUID of the request/response pair the launch creates.
 //
 // Malformed raw requests and a missing Host fail at once and create no launch.
 // A normal HTTP launch completes once its response is drained. A WebSocket
@@ -100,31 +100,9 @@ func (proxy *Proxy) startLaunch(raw string, launchpadID string, useHttps bool) (
 	if err != nil {
 		return nil, fmt.Errorf("parsing launchpad id: %w", err)
 	}
-	updated, err := rawhttp.RecalculateContentLength([]byte(raw))
+	request, err := readRawRequest(raw, useHttps)
 	if err != nil {
-		return nil, fmt.Errorf("recalculating content length: %w", err)
-	}
-	req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(updated)))
-	if err != nil {
-		return nil, fmt.Errorf("reading http request: %w", err)
-	}
-
-	scheme := "http"
-	if req.TLS != nil {
-		scheme = "https"
-	}
-	if useHttps {
-		scheme = "https"
-	}
-	host := req.Host
-	if host == "" {
-		return nil, fmt.Errorf("host header not found or is empty")
-	}
-
-	req.RequestURI, req.URL.Scheme, req.URL.Host = "", scheme, host
-
-	if _, ok := req.Header["User-Agent"]; !ok {
-		req.Header.Set("User-Agent", "")
+		return nil, err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -133,7 +111,7 @@ func (proxy *Proxy) startLaunch(raw string, launchpadID string, useHttps bool) (
 		cancel()
 		return nil, err
 	}
-	launched, err := launchedRequest(req, entry.launch)
+	launched, err := launchedRequest(request, entry.launch)
 	if err != nil {
 		proxy.removeLaunch(entry.launch.ID)
 		cancel()
@@ -143,31 +121,35 @@ func (proxy *Proxy) startLaunch(raw string, launchpadID string, useHttps bool) (
 	entry.launched = launched
 	proxy.launchMu.Unlock()
 
-	if marasiws.IsUpgradeRequest(req) {
-		req.Header.Set("x-marasi-metadata", `{"websocket.held_by":"launchpad"}`)
+	var internal [][2]string
+	if marasiws.IsUpgradeRequest(request.view) {
+		internal = append(internal, [2]string{"x-marasi-metadata", `{"websocket.held_by":"launchpad"}`})
 	}
-	req.Header.Set(launchIDHeader, entry.launch.ID.String())
-	req = req.WithContext(ctx)
+	internal = append(internal, [2]string{launchIDHeader, entry.launch.ID.String()})
 
 	if proxy.OnLaunchStarted != nil {
 		proxy.OnLaunchStarted(entry.launch)
 	}
-	go proxy.runLaunch(entry.launch.ID, proxy.launchClient(), req)
+	go proxy.runLaunch(ctx, entry.launch.ID, request, internal)
 	return entry, nil
 }
 
-// launchedRequest records a launch's request as the proxy client sends it,
-// before any internal header is added, under the launch id.
-func launchedRequest(req *http.Request, launch domain.Launch) (*domain.ProxyRequest, error) {
+// launchedRequest records a launch's request as it was typed, with its
+// Content-Length recalculated and before any internal field is added, under
+// the launch id.
+func launchedRequest(request *rawRequest, launch domain.Launch) (*domain.ProxyRequest, error) {
 	metadata := make(map[string]any)
 	setLaunchMetadata(metadata, launch)
-	snapshot := core.ContextWithMetadata(core.ContextWithRequestTime(req, time.Now()), metadata)
-	launched, err := NewProxyRequest(snapshot, launch.ID)
+	launched, err := NewProxyRequest(&Pair{
+		Request:     request.view,
+		requestWire: request.wire(),
+		ID:          launch.ID,
+		Metadata:    metadata,
+		Timing:      PairTiming{Requested: time.Now()},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("recording launched request: %w", err)
 	}
-	// NewProxyRequest buffers the body on the snapshot; hand it back to the request.
-	req.Body = snapshot.Body
 	return launched, nil
 }
 
@@ -413,28 +395,28 @@ func (proxy *Proxy) launchIs(id uuid.UUID, state func(*launchEntry) bool) bool {
 	return ok && state(entry)
 }
 
-// isLaunch reports whether req is a launch: claimed by the pipeline, or
+// isLaunch reports whether pair is a launch: claimed by the pipeline, or
 // naming a launch that waits for its claim, as it does before Setup runs.
-func (proxy *Proxy) isLaunch(req *http.Request) bool {
-	if _, ok := core.LaunchpadIDFromContext(req.Context()); ok {
+func (proxy *Proxy) isLaunch(pair *Pair) bool {
+	if pair.LaunchpadID != uuid.Nil {
 		return true
 	}
-	id, ok := requestedLaunchID(req.Context())
-	return ok && proxy.launchIs(id, func(entry *launchEntry) bool { return !entry.claimed })
+	id := pair.requestedLaunch
+	return id != uuid.Nil && proxy.launchIs(id, func(entry *launchEntry) bool { return !entry.claimed })
 }
 
-// compassSkips reports whether Compass marked req out of scope. A launch is
+// compassSkips reports whether Compass marked pair out of scope. A launch is
 // deliberate and must appear in its launchpad, so Compass runs on it but its
 // skip decision does not apply (docs/adr/2026-10-13-launches-are-tracked-and-cancellable.md): the mark is cleared and the launch
 // goes on through the pipeline. A Compass drop still applies to a launch.
-func (proxy *Proxy) compassSkips(req *http.Request) bool {
-	if skip, ok := core.SkipFlagFromContext(req.Context()); !ok || !skip {
+func (proxy *Proxy) compassSkips(pair *Pair) bool {
+	if !pair.Skipped {
 		return false
 	}
-	if !proxy.isLaunch(req) {
+	if !proxy.isLaunch(pair) {
 		return true
 	}
-	*req = *core.ContextWithSkipFlag(req, false)
+	pair.Skipped = false
 	return false
 }
 
@@ -457,11 +439,14 @@ func (proxy *Proxy) recordLaunchFailure(id uuid.UUID, reason domain.LaunchReason
 // Compass runs before Setup claims a launch, so a launch dropped there is
 // claimed here. A second claim of a launch was refused by Setup, so it cannot
 // claim the launch again here and cannot fail the launch it named.
-func (proxy *Proxy) recordLaunchDropped(req *http.Request) {
-	id, ok := core.RequestIDFromContext(req.Context())
-	if !ok {
-		launchID, named := requestedLaunchID(req.Context())
-		if !named {
+func (proxy *Proxy) recordLaunchDropped(pair *Pair) {
+	if pair == nil {
+		return
+	}
+	id := pair.ID
+	if id == uuid.Nil {
+		launchID := pair.requestedLaunch
+		if launchID == uuid.Nil {
 			return
 		}
 		if _, claim := proxy.claimLaunch(launchID); claim != launchClaimed {
@@ -472,50 +457,19 @@ func (proxy *Proxy) recordLaunchDropped(req *http.Request) {
 	proxy.recordLaunchFailure(id, domain.LaunchReasonDropped)
 }
 
-// launchClient returns a client with a transport of its own, so a launch is
-// always the first request on a new connection and the transport cannot retry
-// it on a reused one. It does not set DisableKeepAlives, which would add
-// Connection: close to the request; runLaunch closes the connection instead.
-// Compression stays off so the request gains no Accept-Encoding. Like
-// proxy.Client, it sends through the proxy's own listener.
-func (proxy *Proxy) launchClient() *http.Client {
-	base := proxy.Client
-	if base == nil {
-		base = &http.Client{}
-	}
-	client := *base
-	transport, ok := client.Transport.(*http.Transport)
-	if client.Transport == nil {
-		transport, ok = http.DefaultTransport.(*http.Transport)
-	}
-	if ok {
-		transport = transport.Clone()
-		transport.DisableCompression = true
-		client.Transport = transport
-	}
-	return &client
-}
-
-// runLaunch sends a launch and reports how it ended.
-func (proxy *Proxy) runLaunch(id uuid.UUID, client *http.Client, req *http.Request) {
-	// The launch's transport is its own, so closing its idle connections once
-	// the response is read closes the launch's connection.
-	defer client.CloseIdleConnections()
-	res, err := client.Do(req)
+// runLaunch sends a launch on a connection of its own and reports how it
+// ended. The connection is closed when the launch ends, so a launch is never
+// retried on a reused connection.
+func (proxy *Proxy) runLaunch(ctx context.Context, id uuid.UUID, request *rawRequest, internal [][2]string) {
+	res, err := proxy.sendRaw(ctx, request, internal)
 	if err != nil {
 		log.Printf("launch %s : %v", id, err)
 		proxy.endLaunch(id, domain.LaunchFailed, domain.LaunchReasonNetworkError)
 		return
 	}
-
-	if marasiws.IsUpgradeResponse(res) {
-		proxy.holdLaunchpadWebSocket(res.Body)
-		proxy.endLaunch(id, domain.LaunchCompleted, "")
-		return
+	if res.upgrade != nil {
+		proxy.holdLaunchpadWebSocket(res.upgrade)
 	}
-
-	_, _ = io.Copy(io.Discard, res.Body)
-	_ = res.Body.Close()
 	proxy.endLaunch(id, domain.LaunchCompleted, "")
 }
 
@@ -604,26 +558,17 @@ func (proxy *Proxy) applyLaunchOutcome(launch domain.Launch) error {
 	return proxy.TrafficRepo.UpdateMetadata(metadata, launch.ID)
 }
 
-// launchFailureRoundTripper records upstream round-trip failures of claimed
-// launches, and writes a proxy log for each request a route could not carry.
-type launchFailureRoundTripper struct {
-	proxy *Proxy
-	base  http.RoundTripper
-}
-
-// RoundTrip satisfies http.RoundTripper.
-func (rt *launchFailureRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	res, err := rt.base.RoundTrip(req)
-	if err != nil {
-		if id, ok := core.RequestIDFromContext(req.Context()); ok {
-			rt.proxy.recordLaunchFailure(id, domain.LaunchReasonUpstreamError)
-		}
-		var routeErr *UpstreamProxyError
-		if errors.As(err, &routeErr) {
-			rt.proxy.logUpstreamProxyFailure(req, routeErr)
-		}
+// roundTripFailed records a round trip that got no response from the origin:
+// a launch finishes failed, and an upstream proxy failure is logged. The
+// engine calls it before answering with a proxy error response.
+func (proxy *Proxy) roundTripFailed(req *http.Request, err error) {
+	if id, ok := core.RequestIDFromContext(req.Context()); ok {
+		proxy.recordLaunchFailure(id, domain.LaunchReasonUpstreamError)
 	}
-	return res, err
+	var routeErr *UpstreamProxyError
+	if errors.As(err, &routeErr) {
+		proxy.logUpstreamProxyFailure(req, routeErr)
+	}
 }
 
 // logUpstreamProxyFailure writes one ERROR proxy log naming req's pair, the

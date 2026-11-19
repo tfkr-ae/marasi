@@ -5,3 +5,5 @@ The conformance harness scores hop-by-hop fields and framing with leg rules take
 RFC 9110 §7.6.3 also says a proxy MUST send `Via`. Marasi does not, and this is on the allow-list on purpose: a testing tool should not announce itself to the origin or add a header the user did not send.
 
 **Consequences:** this contradicts [The proxy adds no headers to a request](2026-10-19-the-proxy-adds-no-headers-to-a-request.md), which forwards the client's `Connection` lines as written. Today that breaks a leg rule and is recorded as a known deviation. The HTTP/1.1 library is expected to fix it and supersede that ADR's `Connection` rule. Its rule against adding headers still stands, and is the reason for the `Via` exception.
+
+**Amended 2026-11-17:** the HTTP/1.1 library removes `Connection` and the fields it names on each leg, and the `Connection` rule of the 2026-10-19 ADR is superseded. See [Marasi owns its HTTP/1.1 wire format](2026-11-17-marasi-owns-its-http1-wire-format.md).

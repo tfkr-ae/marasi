@@ -487,15 +487,15 @@ func TestProxy_WebSocketDeflateNegotiation(t *testing.T) {
 }
 
 func TestFailWebSocketHandshake(t *testing.T) {
-	t.Run("should return an error matching ErrWebSocketHandshakeFailed and ErrDropped", func(t *testing.T) {
+	t.Run("should drop the pair as a failed handshake", func(t *testing.T) {
 		proxy := &Proxy{DBWriteChannel: make(chan any, 1)}
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/socket", nil)
-		cause := errors.New("upstream accepted an extension no one offered")
+		pair := NewTestPair(req)
 
-		err := failWebSocketHandshake(proxy, &http.Response{Request: req}, cause)
+		failWebSocketHandshake(proxy, pair, errors.New("upstream accepted an extension no one offered"))
 
-		if !errors.Is(err, ErrWebSocketHandshakeFailed) || !errors.Is(err, ErrDropped) || !errors.Is(err, cause) {
-			t.Fatalf("\nwanted:\nan error matching ErrWebSocketHandshakeFailed, ErrDropped and the cause\ngot:\n%v", err)
+		if !pair.Dropped() || !pair.webSocketFailed {
+			t.Fatalf("\nwanted:\nthe pair dropped as a failed handshake\ngot:\ndropped %v, failed %v", pair.Dropped(), pair.webSocketFailed)
 		}
 	})
 }

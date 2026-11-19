@@ -64,10 +64,10 @@ func (proxy *Proxy) CheckUpstreamProxy(ctx context.Context, name, target string)
 	ctx, cancel := context.WithTimeout(ctx, route.timeoutOrDefault())
 	defer cancel()
 	fixed := func() *Route { return route }
-	transport := newRoutedTransport(fixed, fixed, proxy.dialTransport)
-	dial := transport.dialPlain
+	dialer := newOriginDialer(fixed, fixed, proxy.dialTransport)
+	dial := dialer.dialPlain
 	if useTLS {
-		dial = transport.dialTLS
+		dial = dialer.dialTLS
 	}
 	conn, err := dial(ctx, "tcp", address)
 	if err != nil {

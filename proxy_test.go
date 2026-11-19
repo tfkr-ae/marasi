@@ -17,15 +17,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/google/martian"
 	"github.com/google/uuid"
-	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
@@ -50,13 +49,6 @@ type errorCloser struct {
 
 func (closer *errorCloser) Close() error { return closer.err }
 
-type testRoundTripFunc func(*http.Request) (*http.Response, error)
-
-type testResponseBody struct {
-	*strings.Reader
-	closed bool
-}
-
 type testArmoryTrafficRepository struct {
 	domain.TrafficRepository
 	inserted []*domain.ProxyRequest
@@ -72,15 +64,6 @@ type testArmoryEntryRepository struct {
 type testProxyArmoryService struct {
 	ArmoryService
 	repository domain.ArmoryRepository
-}
-
-func (roundTrip testRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return roundTrip(req)
-}
-
-func (body *testResponseBody) Close() error {
-	body.closed = true
-	return nil
 }
 
 func (repository *testArmoryTrafficRepository) InsertRequest(request *domain.ProxyRequest) error {
@@ -104,112 +87,77 @@ func (service *testProxyArmoryService) Repo() domain.ArmoryRepository {
 }
 
 func TestProxy_SendArmoryRequest(t *testing.T) {
-	t.Run("should send a rendered request with armory correlation", func(t *testing.T) {
-		runID, err := uuid.NewV7()
-		if err != nil {
-			t.Fatalf("creating run uuid: %v", err)
-		}
-		responseBody := &testResponseBody{Reader: strings.NewReader("bad gateway")}
-		var got *http.Request
-		var gotBody string
-		proxy := &Proxy{
-			Client: &http.Client{Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-				got = req
-				body, err := io.ReadAll(req.Body)
-				if err != nil {
-					return nil, err
-				}
-				gotBody = string(body)
-				return &http.Response{
-					StatusCode: http.StatusBadGateway,
-					Body:       responseBody,
-					Header:     make(http.Header),
-					Request:    req,
-				}, nil
-			})},
-		}
-		raw := "POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: 100\r\n\r\npayload"
+	t.Run("should send the raw text through the proxy with armory correlation", func(t *testing.T) {
+		runID := uuid.Must(uuid.NewV7())
+		origin := newWireOrigin(t)
+		h := startLaunchHarness(t)
+		raw := "POST /submit HTTP/1.1\r\nHost: " + origin.addr + "\r\ncontent-length: 100\r\n\r\npayload"
 
-		err = proxy.SendArmoryRequest(context.Background(), raw, runID, false)
-		if err != nil {
+		if err := h.proxy.SendArmoryRequest(context.Background(), raw, runID, false); err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if got == nil {
-			t.Fatal("\nwanted:\nHTTP request\ngot:\nnil")
+		got := origin.received(t)
+		_, body, _ := strings.Cut(got, "\r\n\r\n")
+		if !strings.HasPrefix(got, "POST /submit HTTP/1.1\r\n") || body != "payload" || !slices.Equal(headerLines(got, "Content-Length"), []string{"7"}) {
+			t.Fatalf("\nwanted:\nPOST /submit with Content-Length 7 and body payload\ngot:\n%q", got)
 		}
-		if got.URL.Scheme != "http" {
-			t.Fatalf("\nwanted:\nhttp\ngot:\n%s", got.URL.Scheme)
+		if lines := headerLines(got, armoryRunIDHeader); lines != nil {
+			t.Fatalf("\nwanted:\nno armory run id line upstream\ngot:\n%q", lines)
 		}
-		if got.URL.Host != "example.com" {
-			t.Fatalf("\nwanted:\nexample.com\ngot:\n%s", got.URL.Host)
-		}
-		if got.RequestURI != "" {
-			t.Fatalf("\nwanted:\nempty request URI\ngot:\n%s", got.RequestURI)
-		}
-		if got.Header.Get(armoryRunIDHeader) != runID.String() {
-			t.Fatalf("\nwanted:\n%s\ngot:\n%s", runID, got.Header.Get(armoryRunIDHeader))
-		}
-		if _, exists := got.Header["User-Agent"]; !exists {
-			t.Fatal("\nwanted:\nuser-agent header\ngot:\nmissing header")
-		}
-		if got.ContentLength != int64(len("payload")) {
-			t.Fatalf("\nwanted:\n%d\ngot:\n%d", len("payload"), got.ContentLength)
-		}
-		if gotBody != "payload" {
-			t.Fatalf("\nwanted:\npayload\ngot:\n%s", gotBody)
-		}
-		if !responseBody.closed {
-			t.Fatal("\nwanted:\nclosed response body\ngot:\nopen response body")
-		}
-		if responseBody.Len() != 0 {
-			t.Fatalf("\nwanted:\ndrained response body\ngot:\n%d unread bytes", responseBody.Len())
+		select {
+		case stored := <-h.requests:
+			if fmt.Sprint(stored.Metadata["armory_run_id"]) != runID.String() {
+				t.Fatalf("\nwanted:\narmory_run_id %s\ngot:\n%v", runID, stored.Metadata)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for the stored request")
 		}
 	})
 
 	t.Run("should use HTTPS when configured", func(t *testing.T) {
-		runID, err := uuid.NewV7()
-		if err != nil {
-			t.Fatalf("creating run uuid: %v", err)
-		}
-		var got *http.Request
-		proxy := &Proxy{
-			Client: &http.Client{Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-				got = req
-				return &http.Response{
-					StatusCode: http.StatusNoContent,
-					Body:       io.NopCloser(strings.NewReader("")),
-					Header:     make(http.Header),
-					Request:    req,
-				}, nil
-			})},
-		}
+		received := make(chan *http.Request, 1)
+		origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			received <- r
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer origin.Close()
+		h := startViewHarness(t, viewHarnessConfig{secureOrigin: true})
+		raw := "GET /secure HTTP/1.1\r\nHost: " + strings.TrimPrefix(origin.URL, "https://") + "\r\n\r\n"
 
-		err = proxy.SendArmoryRequest(context.Background(), "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n", runID, true)
-		if err != nil {
+		if err := h.proxy.SendArmoryRequest(context.Background(), raw, uuid.Must(uuid.NewV7()), true); err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if got.URL.Scheme != "https" {
-			t.Fatalf("\nwanted:\nhttps\ngot:\n%s", got.URL.Scheme)
+		select {
+		case r := <-received:
+			if r.URL.Path != "/secure" || r.TLS == nil {
+				t.Fatalf("\nwanted:\n/secure over TLS\ngot:\n%s, TLS %v", r.URL.Path, r.TLS != nil)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for the origin")
 		}
 	})
 
 	t.Run("should cancel an in-flight request", func(t *testing.T) {
-		runID, err := uuid.NewV7()
-		if err != nil {
-			t.Fatalf("creating run uuid: %v", err)
-		}
 		started := make(chan struct{})
-		proxy := &Proxy{
-			Client: &http.Client{Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-				close(started)
-				<-req.Context().Done()
-				return nil, req.Context().Err()
-			})},
+		hung, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listening for the origin: %v", err)
 		}
+		defer hung.Close()
+		go func() {
+			conn, err := hung.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			close(started)
+			_, _ = io.Copy(io.Discard, conn)
+		}()
+		h := startLaunchHarness(t)
 		ctx, cancel := context.WithCancel(context.Background())
 		result := make(chan error, 1)
 		go func() {
-			result <- proxy.SendArmoryRequest(ctx, "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n", runID, false)
+			result <- h.proxy.SendArmoryRequest(ctx, "GET / HTTP/1.1\r\nHost: "+hung.Addr().String()+"\r\n\r\n", uuid.Must(uuid.NewV7()), false)
 		}()
 
 		select {
@@ -230,11 +178,7 @@ func TestProxy_SendArmoryRequest(t *testing.T) {
 	})
 
 	t.Run("should return an error for invalid input", func(t *testing.T) {
-		runID, err := uuid.NewV7()
-		if err != nil {
-			t.Fatalf("creating run uuid: %v", err)
-		}
-
+		runID := uuid.Must(uuid.NewV7())
 		tests := []struct {
 			name  string
 			ctx   context.Context
@@ -244,11 +188,11 @@ func TestProxy_SendArmoryRequest(t *testing.T) {
 		}{
 			{name: "missing context", raw: "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n", runID: runID, want: "request context is required"},
 			{name: "missing run ID", ctx: context.Background(), raw: "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n", want: "armory run ID is required"},
-			{name: "malformed request", ctx: context.Background(), raw: "malformed", runID: runID, want: "recalculating content length"},
+			{name: "malformed request", ctx: context.Background(), raw: "malformed", runID: runID, want: "reading http request"},
 			{name: "missing host", ctx: context.Background(), raw: "GET / HTTP/1.1\r\n\r\n", runID: runID, want: "host header not found or is empty"},
 		}
 
-		proxy := &Proxy{Client: &http.Client{}}
+		proxy := &Proxy{}
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
 				err := proxy.SendArmoryRequest(test.ctx, test.raw, test.runID, false)
@@ -262,22 +206,9 @@ func TestProxy_SendArmoryRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("should return a client transport error", func(t *testing.T) {
-		runID, err := uuid.NewV7()
-		if err != nil {
-			t.Fatalf("creating run uuid: %v", err)
-		}
-		proxy := &Proxy{
-			Client: &http.Client{Transport: testRoundTripFunc(func(*http.Request) (*http.Response, error) {
-				return nil, errors.New("transport failed")
-			})},
-		}
-
-		err = proxy.SendArmoryRequest(context.Background(), "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n", runID, false)
-		if err == nil {
-			t.Fatal("\nwanted:\nerror\ngot:\nnil")
-		}
-		if !strings.Contains(err.Error(), "sending armory request") {
+	t.Run("should fail when the proxy listener is not running", func(t *testing.T) {
+		err := (&Proxy{}).SendArmoryRequest(context.Background(), "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n", uuid.Must(uuid.NewV7()), false)
+		if err == nil || !strings.Contains(err.Error(), "sending armory request") {
 			t.Fatalf("\nwanted:\nerror containing 'sending armory request'\ngot:\n%v", err)
 		}
 	})
@@ -476,21 +407,17 @@ func TestProxy_WriteToDBCheckpointHookLog(t *testing.T) {
 			function interceptRequest(request) error("request boom") end
 			function interceptResponse(response) error("response boom") end
 		`)
-		req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-		_, remove, err := martian.TestContext(req, nil, nil)
-		if err != nil {
-			t.Fatalf("applying martian context : %v", err)
-		}
-		defer remove()
-		if err := SetupRequestModifier(proxy, req); err != nil {
+		pair := NewTestPair(httptest.NewRequest(http.MethodGet, "https://marasi.app", nil))
+		if err := SetupRequestModifier(proxy, pair); err != nil {
 			t.Fatalf("running SetupRequestModifier : %v", err)
 		}
-		reqID, _ := core.RequestIDFromContext(req.Context())
+		reqID := pair.ID
 
-		if err := CheckpointRequestModifier(proxy, req); err != nil {
+		if err := CheckpointRequestModifier(proxy, pair); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
-		if err := CheckpointResponseModifier(proxy, &http.Response{Header: make(http.Header), Request: req}); err != nil {
+		pair.Response = &http.Response{Header: make(http.Header), Request: pair.Request}
+		if err := CheckpointResponseModifier(proxy, pair); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
 		close(proxy.DBWriteChannel)
@@ -2764,10 +2691,10 @@ func testProxyWebSocketIntegration(
 	}
 	serveResult := make(chan error, 1)
 	if secure {
-		proxy.martianProxy.SetRoundTripper(newDirectTransport(nil, true))
+		proxy.dialer.Store(newDirectDialer(nil, true))
 		go proxy.WriteToDB()
 		go func() {
-			serveResult <- proxy.martianProxy.Serve(proxyListener)
+			serveResult <- proxy.engine.serve(proxyListener)
 		}()
 	} else {
 		go func() {

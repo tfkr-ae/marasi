@@ -1166,7 +1166,7 @@ end`, function, holdURL, nestURL)
 				runtime := findExtensionRuntime(server.proxy, id)
 				var err error
 				if function == "processRequest" {
-					err = runtime.CallRequestHandler(req)
+					err = runtime.CallRequestHandler(&extensions.Request{Request: req})
 				} else {
 					err = runtime.CallResponseHandler(&http.Response{Request: req})
 				}
@@ -1250,10 +1250,9 @@ func assertExtensionLuaOwnsProject(t *testing.T, id uuid.UUID, httpsNested bool,
 		if err := lifecycle.proxy.WithOptions(marasi.WithTLS()); err != nil {
 			t.Fatalf("configuring proxy TLS: %v", err)
 		}
-		lifecycle.proxy.AddRequestModifier(marasi.SkipConnectRequestModifier)
 		// Terminate client TLS at the proxy; the test origin speaks plain HTTP.
-		lifecycle.proxy.AddRequestModifier(func(_ *marasi.Proxy, req *http.Request) error {
-			req.URL.Scheme = "http"
+		lifecycle.proxy.AddRequestPairModifier(func(_ *marasi.Proxy, pair *marasi.Pair) error {
+			pair.Request.URL.Scheme = "http"
 			return nil
 		})
 	}

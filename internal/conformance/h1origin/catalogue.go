@@ -16,6 +16,16 @@ var gzipHello = func() string {
 	return string(b)
 }()
 
+// brHello is "hello, world" brotli-compressed, kept as bytes for the same
+// reason.
+var brHello = func() string {
+	b, err := hex.DecodeString("1b0b0000a440586a90496af29c1e01")
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}()
+
 // resetSettle is how long an origin waits after the bytes it sends before
 // a reset, so the peer has read them before the reset can discard them.
 const resetSettle = 100 * time.Millisecond
@@ -162,6 +172,26 @@ var Catalogue = []Case{
 				"24\r\n" + gzipHello + "\r\n0\r\n\r\n"),
 		},
 	},
+	// Content codings, which a proxy passes on as the origin sent them.
+	{
+		ID:       "content-encoding-gzip",
+		RFC:      "RFC 9110 §8.4 a content coding is end to end",
+		Requests: []string{"GET /content-gzip HTTP/1.1\r\nHost: {authority}\r\nAccept-Encoding: gzip\r\n\r\n"},
+		Script: []Step{
+			Await(),
+			Send("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: 36\r\n\r\n" + gzipHello),
+		},
+	},
+	{
+		ID:       "content-encoding-br",
+		RFC:      "RFC 9110 §8.4 a content coding is end to end",
+		Requests: []string{"GET /content-br HTTP/1.1\r\nHost: {authority}\r\nAccept-Encoding: br\r\n\r\n"},
+		Script: []Step{
+			Await(),
+			Send("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: br\r\nTransfer-Encoding: chunked\r\n\r\n" +
+				"f\r\n" + brHello + "\r\n0\r\n\r\n"),
+		},
+	},
 	{
 		ID:       "content-length-and-transfer-encoding",
 		RFC:      "RFC 9112 §6.3 Transfer-Encoding overrides Content-Length, which a proxy must remove",
@@ -184,6 +214,17 @@ var Catalogue = []Case{
 			Await(),
 			Send("HTTP/1.1 100 Continue\r\n\r\n"),
 			Send("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"),
+		},
+	},
+	{
+		ID:  "interim-100-continue-refused",
+		RFC: "RFC 9110 §10.1.1 an origin may refuse the body with 417",
+		Requests: []string{
+			"POST /refuse HTTP/1.1\r\nHost: {authority}\r\nExpect: 100-continue\r\nContent-Length: 5\r\n\r\nhello",
+		},
+		Script: []Step{
+			Await(),
+			Send("HTTP/1.1 417 Expectation Failed\r\nContent-Length: 0\r\n\r\n"),
 		},
 	},
 	{
@@ -265,6 +306,17 @@ var Catalogue = []Case{
 			Send("HTTP/1.1 201 Created\r\nTransfer-Encoding: chunked\r\n\r\n6\r\nsecond\r\n0\r\n\r\n"),
 			Await(),
 			Send("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nthird"),
+		},
+	},
+
+	// A request that names the proxy itself.
+	{
+		ID:       "loop-back",
+		RFC:      "RFC 9110 §7.6 a proxy must not forward a request back to itself",
+		Requests: []string{"GET /loop HTTP/1.1\r\nHost: {proxy}\r\n\r\n"},
+		Script: []Step{
+			Await(),
+			Send("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"),
 		},
 	},
 

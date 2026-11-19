@@ -1,158 +1,71 @@
 package marasi
 
 import (
-	"bytes"
 	"context"
-	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"syscall"
+	"strings"
 	"testing"
 )
 
-type testBaseRoundTripper struct {
-	wasCalled bool
-	response  *http.Response
-	request   *http.Request
-}
-
-func (tR *testBaseRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	tR.wasCalled = true
-	tR.request = req
-	if tR.response == nil {
-		tR.response = &http.Response{
-			StatusCode: http.StatusNoContent,
-			Body:       io.NopCloser(bytes.NewBufferString("")),
-			Header:     make(http.Header),
-		}
-	}
-	return tR.response, nil
-}
-
-// newDirectTransport builds marasi's round tripper as Serve does, on a route
-// that is always direct. insecure trusts a self-signed origin.
-func newDirectTransport(dial func(context.Context, string, string) (net.Conn, error), insecure bool) *marasiRoundTripper {
+// newDirectDialer builds the origin dialer as Serve does, on a route that is
+// always direct. insecure trusts a self-signed origin.
+func newDirectDialer(dial func(context.Context, string, string) (net.Conn, error), insecure bool) *originDialer {
 	direct := DirectRoute()
 	always := func() *Route { return direct }
-	routed := newRoutedTransport(always, always, dial)
-	routed.insecureSkipVerify = insecure
-	return &marasiRoundTripper{base: routed}
+	dialer := newOriginDialer(always, always, dial)
+	dialer.insecureSkipVerify = insecure
+	return dialer
 }
 
-func TestMarasiRoundTripper(t *testing.T) {
-	t.Run("requests to any other host should call the base RoundTrip", func(t *testing.T) {
-		want := &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewBufferString("Marasi Test")),
-			Header:     make(http.Header),
-		}
-		baseRoundTripper := &testBaseRoundTripper{
-			response: want,
-		}
-		roundTripper := &marasiRoundTripper{base: baseRoundTripper}
-
-		req := httptest.NewRequest("GET", "https://marasi.app", nil)
-
-		resp, err := roundTripper.RoundTrip(req)
-		if err != nil {
-			t.Fatalf("wanted: nil\ngot: %v", err)
-		}
-
-		if !baseRoundTripper.wasCalled {
-			t.Fatal("expected base RoundTrip to be called")
-		}
-
-		sent := baseRoundTripper.request
-		if sent == req {
-			t.Error("expected base RoundTrip to receive a copy of the request, not the request itself")
-		}
-		if sent.Method != req.Method || sent.URL != req.URL || sent.Body != req.Body {
-			t.Errorf("wanted: copy of %s %s\ngot: %s %s", req.Method, req.URL, sent.Method, sent.URL)
-		}
-
-		if resp != want {
-			t.Errorf("wanted: %v\n got: %v", resp, want)
-		}
-		if resp.Request != req {
-			t.Error("expected the response to point at the original request")
-		}
-	})
-
-	t.Run("requests without User-Agent should not receive the Go default", func(t *testing.T) {
-		baseRoundTripper := &testBaseRoundTripper{
-			response: &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewBufferString("UA Test")),
-			},
-		}
-		roundTripper := &marasiRoundTripper{base: baseRoundTripper}
-
-		req := httptest.NewRequest("GET", "https://marasi.app", nil)
-		req.Header.Del("User-Agent")
-
-		_, err := roundTripper.RoundTrip(req)
-		if err != nil {
-			t.Fatalf("wanted: nil\ngot: %v", err)
-		}
-
-		val, ok := baseRoundTripper.request.Header["User-Agent"]
-		if !ok {
-			t.Error("wanted: User-Agent key to be present\ngot: missing")
-		} else if len(val) > 0 && val[0] != "" {
-			t.Errorf("wanted: %q\ngot: %q", "", val[0])
-		}
-	})
-}
-
-func TestMarasiTransportDialTLSContext(t *testing.T) {
-	transport := newDirectTransport(nil, true)
-
-	t.Run("request to standard HTTPS server should pass through", func(t *testing.T) {
-		testTLSServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("marasi tls"))
+func TestH1Engine_OriginTLS(t *testing.T) {
+	t.Run("should speak HTTP/1.1 to a TLS origin that also offers h2", func(t *testing.T) {
+		protos := make(chan string, 1)
+		origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			protos <- r.Proto
+			io.WriteString(w, "marasi tls")
 		}))
-		defer testTLSServer.Close()
+		origin.EnableHTTP2 = true
+		origin.StartTLS()
+		t.Cleanup(origin.Close)
+		authority := strings.TrimPrefix(origin.URL, "https://")
+		addr, _, ca := serveH1EngineMITMProxy(t, true)
+		conn, br := dialProxy(t, addr)
+		openTunnel(t, conn, br, authority)
+		tlsConn, tlsReader := clientTLS(t, conn, br, ca, "127.0.0.1")
 
-		testClient := &http.Client{
-			Transport: transport,
-		}
-
-		resp, err := testClient.Get(testTLSServer.URL)
+		fmt.Fprintf(tlsConn, "GET / HTTP/1.1\r\nHost: %s\r\n\r\n", authority)
+		res, err := http.ReadResponse(tlsReader, nil)
 		if err != nil {
-			t.Fatalf("wanted: nil\ngot: %v", err)
+			t.Fatalf("reading the response: %v", err)
 		}
-		defer resp.Body.Close()
+		body, _ := io.ReadAll(res.Body)
+		proto := <-protos
 
-		if resp.Proto != "HTTP/1.1" {
-			t.Errorf("wanted: HTTP/1.1\ngot: %s", resp.Proto)
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("wanted: %d\ngot: %d", http.StatusOK, resp.StatusCode)
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("reading response body: %v", err)
-		}
-		if string(body) != "marasi tls" {
-			t.Fatalf("wanted %q\ngot: %q", "marasi tls", body)
+		if res.StatusCode != http.StatusOK || string(body) != "marasi tls" || proto != "HTTP/1.1" {
+			t.Fatalf("\nwanted:\n200 %q over HTTP/1.1\ngot:\n%d %q over %q", "marasi tls", res.StatusCode, body, proto)
 		}
 	})
 
-	t.Run("requests to closed ports should fail", func(t *testing.T) {
-		testClient := &http.Client{
-			Transport: transport,
+	t.Run("should answer a TLS origin on a closed port with a 502 naming the refusal", func(t *testing.T) {
+		authority := closedAddress(t)
+		addr, _, ca := serveH1EngineMITMProxy(t, true)
+		conn, br := dialProxy(t, addr)
+		openTunnel(t, conn, br, authority)
+		tlsConn, tlsReader := clientTLS(t, conn, br, ca, "127.0.0.1")
+
+		fmt.Fprintf(tlsConn, "GET / HTTP/1.1\r\nHost: %s\r\n\r\n", authority)
+		res, err := http.ReadResponse(tlsReader, nil)
+		if err != nil {
+			t.Fatalf("reading the response: %v", err)
 		}
-		_, err := testClient.Get("https://127.0.0.1:1")
-		if err == nil {
-			t.Fatal("wanted an error but got nil")
-		}
-		if !errors.Is(err, syscall.ECONNREFUSED) {
-			t.Fatalf("wanted: %s\ngot: %v", syscall.ECONNREFUSED, err)
+		body, _ := io.ReadAll(res.Body)
+
+		if res.StatusCode != http.StatusBadGateway || !strings.Contains(string(body), "connection refused") {
+			t.Fatalf("\nwanted:\n502 naming %q\ngot:\n%d %q", "connection refused", res.StatusCode, body)
 		}
 	})
 }

@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/martian"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
 )
@@ -36,25 +35,11 @@ const (
 	RequestTimeKey contextKey = "RequestTime"
 	// ResponseTimeKey is the context key for the response timestamp (time.Time)
 	ResponseTimeKey contextKey = "ResponseTime"
-	// MartianSessionKey is the context key to store the martian session (*martian.Session). This is used to hijack connection and control the response
-	MartianSessionKey contextKey = "SessionKey"
 	// WebSocketUpstreamKey stores the upgraded upstream WebSocket stream.
 	WebSocketUpstreamKey contextKey = "WebSocketUpstream"
 	// RouteRecordKey is the context key for the request's route record (*RouteRecord)
 	RouteRecordKey contextKey = "RouteRecord"
 )
-
-// ContextWithSession returns a new request with a martian session in the context.
-func ContextWithSession(req *http.Request, session *martian.Session) *http.Request {
-	ctx := context.WithValue(req.Context(), MartianSessionKey, session)
-	return req.WithContext(ctx)
-}
-
-// SessionFromContext returns the martian session from the context if it exists.
-func SessionFromContext(ctx context.Context) (*martian.Session, bool) {
-	session, ok := ctx.Value(MartianSessionKey).(*martian.Session)
-	return session, ok
-}
 
 // ContextWithRequestID returns a new request with a request ID in the context.
 func ContextWithRequestID(req *http.Request, requestId uuid.UUID) *http.Request {

@@ -152,11 +152,11 @@ func (s *Scope) Matches(input interface{}) bool {
 	var host, url string
 	switch v := input.(type) {
 	case *http.Request:
-		host = v.Host
+		host = destination(v)
 		url = v.URL.String()
 	case *http.Response:
 		if v.Request != nil {
-			host = v.Request.Host
+			host = destination(v.Request)
 			url = v.Request.URL.String()
 		} else {
 			// If the response doesn't have an associated request, we can't proceed
@@ -208,7 +208,7 @@ func (s *Scope) Matches(input interface{}) bool {
 func (s *Scope) MatchesWithRule(request *http.Request) (bool, *Rule) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	host, url := request.Host, request.URL.String()
+	host, url := destination(request), request.URL.String()
 	for _, rule := range s.ExcludeRules {
 		if rule.matches(host, url) {
 			matched := rule
@@ -237,6 +237,18 @@ func (s *Scope) Snapshot() (includeRules, excludeRules map[string]Rule, defaultA
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return maps.Clone(s.IncludeRules), maps.Clone(s.ExcludeRules), s.DefaultAllow
+}
+
+// destination is the host a host rule matches: where the request goes, which
+// inside a tunnel is the tunnel's origin and not its Host field, so a tester
+// who changes the Host stays in scope
+// (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md).
+// A request whose URL names no host falls back to its Host.
+func destination(req *http.Request) string {
+	if req.URL != nil && req.URL.Host != "" {
+		return req.URL.Host
+	}
+	return req.Host
 }
 
 func (rule Rule) matches(host, url string) bool {

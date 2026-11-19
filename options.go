@@ -1,6 +1,7 @@
 package marasi
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -17,15 +18,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/martian"
-	"github.com/google/martian/mitm"
 	"github.com/google/uuid"
 	"github.com/spf13/viper"
 	"github.com/tfkr-ae/marasi/chrome"
 	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
-	marasiws "github.com/tfkr-ae/marasi/websocket"
 	"github.com/tfkr-ae/marasi/wordlist"
 )
 
@@ -51,11 +49,6 @@ type RepositoryProvider interface {
 	// have marked them due (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md). The database writer calls it when idle.
 	RefreshStatisticsIfDue()
 }
-
-var (
-	// ErrSessionContext is returned when the session could not be fetch from context
-	ErrSessionContext = errors.New("failed to get session from context")
-)
 
 // WithOptions applies a series of configuration functions to the proxy instance.
 // Each option function can modify the proxy configuration and return an error if it fails.
@@ -357,12 +350,11 @@ func WithTLSContext(ctx context.Context) func(*Proxy) error {
 		if err != nil {
 			return fmt.Errorf("setting spki hash %s: %w", proxy.SPKIHash, err)
 		}
-		mitmConfig, err := mitm.NewConfig(certificate, privateKey)
+		mitmConfig, err := proxy.engine.setMITM(certificate, privateKey)
 		if err != nil {
-			return fmt.Errorf("creating new mitm config: %w", err)
+			return err
 		}
-		proxy.martianProxy.SetMITM(mitmConfig)
-		proxy.mitmConfig = mitmConfig.TLS()
+		proxy.mitmConfig = mitmConfig
 
 		// Add system certificates + marasi cert
 		systemPool, err := x509.SystemCertPool()
@@ -562,128 +554,216 @@ func WithWorkAdmission(admit func(context.Context, bool) (func(), uint64, error)
 }
 
 // WithBasePipeline will setup the base modifier pipeline for marasi
-// It will define the main Request & Response modifiers that will execute the
-// attached modifiers and hande `ErrDropped` and `ErrSkipPipeline`.
+// It will define the main Request & Response steps that will execute the
+// attached modifiers and carry out the control a modifier set on the pair.
 // Work is admitted for the request modifiers and again, once the response body
-// has been buffered, for the response modifiers, never for the wait on the origin.
-// If a response is dropped the `martian.Session` is read from the context and hijacked to
-// close the `conn`
+// has been read, for the response modifiers, never for the wait on the origin.
+// If a response is dropped the client connection is taken over and closed. A
+// 101 that the response chain passes is handed to the upgrade handler.
 func WithBasePipeline() func(*Proxy) error {
 	return func(proxy *Proxy) error {
-		proxy.martianProxy.SetRequestModifier(
-			martianReqModifierFunc(func(req *http.Request) error {
-				// Proxy credentials must not reach the origin or extension scripts.
-				expected := "Basic " + base64.StdEncoding.EncodeToString([]byte("marasi:"+proxy.clientWorkToken))
-				internal := req.Header.Get("Proxy-Authorization") == expected
-				session := martian.NewContext(req).Session()
-				if req.Method == http.MethodConnect && internal {
-					session.Set("marasi.self-client", true)
-				}
-				if owned, _ := session.Get("marasi.self-client"); owned == true {
-					internal = true
-				}
-				req.Header.Del("Proxy-Authorization")
-				// Only the proxy's own client may name a launch. The header never leaves the proxy.
-				launchID, launchErr := uuid.Parse(req.Header.Get(launchIDHeader))
-				req.Header.Del(launchIDHeader)
-				release, generation, err := proxy.admitWork(req.Context(), internal)
-				if err != nil {
-					// Martian sends a request upstream even when a modifier
-					// fails, so a refused request ends its connection instead.
-					conn, _, hijackErr := session.Hijack()
-					if hijackErr != nil {
-						return errors.Join(err, fmt.Errorf("hijacking session: %w", hijackErr))
-					}
-					return errors.Join(err, conn.Close())
-				}
-				// The wait on the origin is not project work, so the request
-				// side releases its admission before the round trip (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
-				defer release()
-				ctx := context.WithValue(req.Context(), projectAdmissionKey{}, projectAdmission{internal: internal, generation: generation})
-				if internal && launchErr == nil {
-					ctx = context.WithValue(ctx, launchIDKey{}, launchID)
-				}
-				*req = *req.WithContext(ctx)
-				proxy.watchClient(req)
-				err = proxy.Modifiers.ModifyRequest(req)
-				if errors.Is(err, ErrDropped) {
-					proxy.recordLaunchDropped(req)
-				}
-				if err == nil || errors.Is(err, ErrDropped) || errors.Is(err, ErrSkipPipeline) {
-					return nil
-				}
-				// TODO this should be handled through logging
-				log.Printf("request pipeline: %v", err)
-				return err
-			}),
-		)
-		proxy.martianProxy.SetResponseModifier(
-			martianResModifierFunc(func(res *http.Response) error {
-				// A request the proxy answered itself is sent as answered,
-				// with no response modifier and no admission.
-				if own, ok := ownResponse(res.Request); ok {
-					own.Request = res.Request
-					*res = *own
-					return nil
-				}
-				// A launch whose client left was cancelled or interrupted. Its
-				// round trip was abandoned, so it has no response to process or store.
-				if _, launch := core.LaunchpadIDFromContext(res.Request.Context()); launch && res.Request.Context().Err() != nil {
-					return nil
-				}
-				// The body is still the wait on the origin, so it is read
-				// before the response side is admitted (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
-				if err := BufferStreamingBodyModifier(proxy, res); err != nil {
-					log.Printf("response pipeline: %v", err)
-					return err
-				}
-				if admission, ok := res.Request.Context().Value(projectAdmissionKey{}).(projectAdmission); ok {
-					release, generation, err := proxy.admitWork(res.Request.Context(), admission.internal)
-					if err != nil {
-						// The client left while a handoff paused admission, or
-						// the instance handed its project to a restart's successor.
-						return nil
-					}
-					defer release()
-					if generation != admission.generation {
-						// The pair was captured in a project that is no longer
-						// open. It stays response-less there (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
-						return proxy.passStaleResponse(res)
-					}
-					// In place: martian finds its context by the request's address.
-					*res.Request = *res.Request.WithContext(context.WithValue(res.Request.Context(), projectReleaseKey{}, release))
-				}
-				err := proxy.Modifiers.ModifyResponse(res)
-				if err == nil || errors.Is(err, ErrSkipPipeline) {
-					return nil
-				}
-				if errors.Is(err, ErrDropped) {
-					proxy.recordLaunchDropped(res.Request)
-					proxy.markDroppedWebSocketHandshake(res, err)
-					if session, ok := core.SessionFromContext(res.Request.Context()); ok {
-						conn, _, err := session.Hijack()
-						if err != nil {
-							return fmt.Errorf("hijacking session: %w", err)
-						}
-						err = conn.Close()
-						if err != nil {
-							return fmt.Errorf("closing connection: %w", err)
-						}
-					} else {
-						return ErrSessionContext
-					}
-				}
-				// TODO this should be handled through logging
-				log.Printf("response pipeline: %v", err)
-				return err
-			}),
-		)
+		proxy.engine.setPipeline(proxy.baseRequest, proxy.baseResponse)
 		return nil
 	}
 }
 
-// projectAdmissionKey holds the projectAdmission of a request's request side.
-type projectAdmissionKey struct{}
+// errNoClientConnection is returned when the proxy cannot take over the client
+// connection of a pair.
+var errNoClientConnection = errors.New("no client connection for the pair")
+
+// baseRequest is the base pipeline's request step, run for every request the
+// engine reads from client, including a CONNECT.
+func (proxy *Proxy) baseRequest(req *http.Request, client clientHijacker, wire *wireRequest) error {
+	// Proxy credentials must not reach the origin or extension scripts.
+	expected := "Basic " + base64.StdEncoding.EncodeToString([]byte("marasi:"+proxy.clientWorkToken))
+	internal := req.Header.Get("Proxy-Authorization") == expected
+	req.Header.Del("Proxy-Authorization")
+	// A CONNECT the engine read with a wire message was sent inside a
+	// tunnel: it is a request for the tunnel's origin, not a tunnel.
+	if req.Method == http.MethodConnect && wire == nil {
+		if err := proxy.admitTunnel(req, internal); err != nil {
+			return refuseConnection(client, err)
+		}
+		return nil
+	}
+	internal = internal || proxy.isSelfClientConnection(req.RemoteAddr)
+	// Only the proxy's own client may name a launch. The header never leaves the proxy.
+	launchID, launchErr := uuid.Parse(req.Header.Get(launchIDHeader))
+	req.Header.Del(launchIDHeader)
+	// The body is the wait on the client, so it is read before
+	// the request side is admitted.
+	bodyEnding := readRequestBody(req)
+	release, generation, err := proxy.admitWork(req.Context(), internal)
+	if err != nil {
+		return refuseConnection(client, err)
+	}
+	// The wait on the origin is not project work, so the request
+	// side releases its admission before the round trip (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
+	defer release()
+	pair := &Pair{requestState: requestState{
+		admission: &projectAdmission{internal: internal, generation: generation},
+		client:    client,
+	}, RequestBodyEnding: bodyEnding, requestWire: wire}
+	if internal && launchErr == nil {
+		pair.requestedLaunch = launchID
+	}
+	*req = *req.WithContext(context.WithValue(req.Context(), pairKey{}, pair))
+	proxy.watchClient(req, bodyEnding)
+	pair.Request = req
+	pair.ctx = req.Context()
+	if wire != nil && wire.refused != nil {
+		proxy.refuseRequest(pair, wire.refused)
+		return nil
+	}
+	err = proxy.requestModifiers.Modify(proxy, pair)
+	switch pair.control {
+	case controlDrop:
+		// The round trip answers a dropped request with an empty 200, as before.
+		proxy.recordLaunchDropped(pair)
+	case controlStop:
+		// A stop ends only the request chain.
+		pair.control = controlNone
+	}
+	if err != nil {
+		// A Go modifier failed: the request fails closed and
+		// never goes upstream half-modified.
+		proxy.failRequestChain(pair, err)
+	}
+	return nil
+}
+
+// baseResponse is the base pipeline's response step, run for every response
+// the engine is about to write.
+func (proxy *Proxy) baseResponse(res *http.Response, wire *wireResponse) error {
+	// A CONNECT that opened a tunnel has no pair, and the 200 that opens it
+	// is no pair's response. A CONNECT sent inside a tunnel is a request
+	// like any other.
+	if res.Request.Method == http.MethodConnect && requestPair(res.Request) == nil {
+		return nil
+	}
+	// A request the proxy answered itself (the round trip
+	// returned its response) or dropped is sent as it is, with
+	// no response modifier and no admission, unless the answer
+	// is a proxy error response to a captured request.
+	pair := requestPair(res.Request)
+	if pair != nil && (pair.control == controlRespond || pair.Dropped()) {
+		if !pair.capturesProxyError() {
+			return nil
+		}
+		// A proxy error response is stored: the response chain
+		// runs, and its hooks skip what Marasi made.
+		pair.control = controlNone
+	}
+	// A launch whose client left was cancelled or interrupted. Its
+	// round trip was abandoned, so it has no response to process or store.
+	if _, launch := core.LaunchpadIDFromContext(res.Request.Context()); launch && res.Request.Context().Err() != nil {
+		return nil
+	}
+	if pair == nil {
+		pair = &Pair{}
+	}
+	loadPair(pair, res.Request, res)
+	pair.responseWire = wire
+	// The body is still the wait on the origin, so it is read
+	// before the response side is admitted (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
+	if err := readResponseBody(pair); err != nil {
+		// No response modifier runs on a body cut short: what arrived
+		// goes to the client as it arrived (h1Conn.carryPair). It is
+		// still stored, with how it ended.
+		proxy.captureCutShortResponse(pair)
+		return err
+	}
+	detachOpaqueUpgrade(pair)
+	if admission := pair.admission; admission != nil {
+		release, generation, err := proxy.admitWork(res.Request.Context(), admission.internal)
+		if err != nil {
+			// The client left while a handoff paused admission, or
+			// the instance handed its project to a restart's successor.
+			return nil
+		}
+		defer release()
+		if generation != admission.generation {
+			// The pair was captured in a project that is no longer
+			// open. It stays response-less there (docs/adr/2026-10-17-project-switch-never-waits-on-the-network.md).
+			return proxy.passStaleResponse(pair, res)
+		}
+		pair.release = release
+	}
+	err := proxy.responseModifiers.Modify(proxy, pair)
+	if pair.Dropped() {
+		proxy.recordLaunchDropped(pair)
+		proxy.markDroppedWebSocketHandshake(pair)
+		if pair.client == nil {
+			return errNoClientConnection
+		}
+		conn, _, err := pair.client.Hijack()
+		if err != nil {
+			return fmt.Errorf("hijacking client connection: %w", err)
+		}
+		if err := conn.Close(); err != nil {
+			return fmt.Errorf("closing connection: %w", err)
+		}
+	}
+	if err != nil && !pair.Dropped() {
+		// A Go modifier failed: the response may be half-edited, so it
+		// fails closed like a request (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md).
+		proxy.failResponseChain(pair, err)
+		*res = *pair.Response
+		return nil
+	}
+	// A 101 is handed off only once the whole chain has run, so the
+	// pair is captured. A chain stopped early (a pair out of scope)
+	// still relays an opaque upgrade, which records nothing.
+	if err == nil && (pair.control == controlNone || pair.control == controlStop) {
+		return proxy.handOffUpgrade(pair)
+	}
+	return err
+}
+
+// responseBodyEndingMetadataKey is the metadata field that records a response
+// body that did not arrive whole, as BodyEnding's words.
+const responseBodyEndingMetadataKey = "response_body_ending"
+
+// captureCutShortResponse stores what arrived of a response whose body the
+// origin cut short, with metadata.response_body_ending, when its request was
+// stored. It is admitted as project work like any response.
+func (proxy *Proxy) captureCutShortResponse(pair *Pair) {
+	if pair.ID == uuid.Nil || !pair.requestCaptured || pair.Skipped {
+		return
+	}
+	if admission := pair.admission; admission != nil {
+		release, generation, err := proxy.admitWork(pair.Request.Context(), admission.internal)
+		if err != nil {
+			return
+		}
+		defer release()
+		if generation != admission.generation {
+			return
+		}
+	}
+	// The view's body fails after what arrived; capture stores only that.
+	arrived, _ := io.ReadAll(pair.Response.Body)
+	pair.Response.Body = io.NopCloser(bytes.NewReader(arrived))
+	pair.Timing.Responded = time.Now()
+	if pair.Metadata == nil {
+		pair.Metadata = make(map[string]any)
+	}
+	pair.Metadata[responseBodyEndingMetadataKey] = pair.ResponseBodyEnding.String()
+	if err := WriteResponseModifier(proxy, pair); err != nil {
+		log.Printf("capturing a cut-short response: %v", err)
+	}
+}
+
+// refuseConnection ends the client connection of a refused request. The
+// engine sends a request upstream, or opens a tunnel, even when the request
+// step fails, so a refusal closes the connection instead.
+func refuseConnection(client clientHijacker, err error) error {
+	conn, _, hijackErr := client.Hijack()
+	if hijackErr != nil {
+		return errors.Join(err, fmt.Errorf("hijacking client connection: %w", hijackErr))
+	}
+	return errors.Join(err, conn.Close())
+}
 
 // projectAdmission is how a request was admitted: whether by the proxy's own
 // client, and in which generation of the open project.
@@ -692,21 +772,21 @@ type projectAdmission struct {
 	generation uint64
 }
 
-// projectReleaseKey holds the release of a response's admission, which a
-// WebSocket session calls once it is registered.
-type projectReleaseKey struct{}
-
 // passStaleResponse passes a response whose pair belongs to a project that is
-// no longer open straight to the client. A WebSocket upgrade cannot be relayed
-// without recording it, so it is refused instead.
-func (proxy *Proxy) passStaleResponse(res *http.Response) error {
-	if !marasiws.IsUpgradeResponse(res) {
+// no longer open straight to the client. An upgrade cannot be relayed without
+// recording it, so it is refused instead.
+func (proxy *Proxy) passStaleResponse(pair *Pair, res *http.Response) error {
+	if res.StatusCode != http.StatusSwitchingProtocols {
 		return nil
 	}
 	if res.Body != nil {
 		res.Body.Close()
 	}
-	body := "the open project changed while the WebSocket handshake was in flight\n"
+	if pair.upgradeUpstream != nil {
+		pair.upgradeUpstream.Close()
+		pair.upgradeUpstream = nil
+	}
+	body := "the open project changed while the upgrade handshake was in flight\n"
 	*res = http.Response{
 		Status:        http.StatusText(http.StatusBadGateway),
 		StatusCode:    http.StatusBadGateway,
@@ -722,42 +802,32 @@ func (proxy *Proxy) passStaleResponse(res *http.Response) error {
 	return nil
 }
 
-// launchIDKey holds the launch id an internal request named.
-type launchIDKey struct{}
-
-// requestedLaunchID returns the launch id an internal request named, if any.
-func requestedLaunchID(ctx context.Context) (uuid.UUID, bool) {
-	id, ok := ctx.Value(launchIDKey{}).(uuid.UUID)
-	return id, ok
-}
-
 // WithDefaultModifierPipeline adds the default request and response modifiers.
 // They run in the order they are added below. The base pipeline has already
 // buffered the response body.
 func WithDefaultModifierPipeline() func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		// Request Modifiers
-		proxy.AddRequestModifier(MarasiPagesModifier)
-		proxy.AddRequestModifier(PreventLoopModifier)
-		proxy.AddRequestModifier(SkipConnectRequestModifier)
-		proxy.AddRequestModifier(CompassRequestModifier)
-		proxy.AddRequestModifier(SetupRequestModifier)
-		proxy.AddRequestModifier(OverrideWaypointsModifier)
-		proxy.AddRequestModifier(ExtensionsRequestModifier)
-		proxy.AddRequestModifier(CheckpointRequestModifier)
-		proxy.AddRequestModifier(WebSocketOffersModifier)
-		proxy.AddRequestModifier(WriteRequestModifier)
+		proxy.AddRequestPairModifier(MarasiPagesModifier)
+		proxy.AddRequestPairModifier(PreventLoopModifier)
+		proxy.AddRequestPairModifier(CompassRequestModifier)
+		proxy.AddRequestPairModifier(SetupRequestModifier)
+		proxy.AddRequestPairModifier(OverrideWaypointsModifier)
+		proxy.AddRequestPairModifier(ExtensionsRequestModifier)
+		proxy.AddRequestPairModifier(CheckpointRequestModifier)
+		proxy.AddRequestPairModifier(WebSocketOffersModifier)
+		proxy.AddRequestPairModifier(WriteRequestModifier)
 
 		// Response Modifiers
-		proxy.AddResponseModifier(ResponseFilterModifier)
-		proxy.AddResponseModifier(WebSocketPrepareModifier)
-		proxy.AddResponseModifier(CompressedResponseModifier)
-		proxy.AddResponseModifier(CompassResponseModifier)
-		proxy.AddResponseModifier(ExtensionsResponseModifier)
-		proxy.AddResponseModifier(CheckpointResponseModifier)
-		proxy.AddResponseModifier(WebSocketNegotiationModifier)
-		proxy.AddResponseModifier(WriteResponseModifier)
-		proxy.AddResponseModifier(WebSocketHandoffModifier)
+		proxy.AddResponsePairModifier(ResponseFilterModifier)
+		proxy.AddResponsePairModifier(WebSocketPrepareModifier)
+		proxy.AddResponsePairModifier(CompressedResponseModifier)
+		proxy.AddResponsePairModifier(CompassResponseModifier)
+		proxy.AddResponsePairModifier(ExtensionsResponseModifier)
+		proxy.AddResponsePairModifier(CheckpointResponseModifier)
+		proxy.AddResponsePairModifier(WebSocketNegotiationModifier)
+		proxy.AddResponsePairModifier(WriteResponseModifier)
+		proxy.SetUpgradeHandler(WebSocketUpgradeHandler)
 		return nil
 	}
 

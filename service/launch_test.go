@@ -20,12 +20,55 @@ import (
 	"github.com/tfkr-ae/marasi/domain"
 )
 
-// newLaunchServer serves launches for one launchpad through a proxy whose
-// client reaches origin directly.
-func newLaunchServer(t *testing.T, launchpadID uuid.UUID, origin *httptest.Server) *Server {
+// newListeningProxy serves a proxy with the base pipeline and no modifiers,
+// so a launch reaches the origin through the listener as it does in a service.
+// The options apply after the defaults and before the proxy serves, since the
+// writer reads the repositories while it runs.
+func newListeningProxy(t *testing.T, options ...func(*marasi.Proxy) error) *marasi.Proxy {
+	t.Helper()
+	database, err := db.New(":memory:", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("opening database: %v", err)
+	}
+	repo := db.NewProxyRepo(database)
+	t.Cleanup(func() { repo.Close() })
+	proxy, err := marasi.New(append([]func(*marasi.Proxy) error{
+		marasi.WithConfigDir(t.TempDir()),
+		marasi.WithDefaultRepositories(repo),
+		marasi.WithLogHandler(func(domain.Log) error { return nil }),
+		marasi.WithBasePipeline(),
+	}, options...)...)
+	if err != nil {
+		t.Fatalf("creating proxy: %v", err)
+	}
+	listener, err := proxy.GetListener("127.0.0.1", "0")
+	if err != nil {
+		t.Fatalf("creating proxy listener: %v", err)
+	}
+	serveResult := make(chan error, 1)
+	go func() { serveResult <- proxy.Serve(listener) }()
+	t.Cleanup(func() {
+		proxy.Close()
+		select {
+		case <-serveResult:
+		case <-time.After(5 * time.Second):
+			t.Error("proxy serve did not stop")
+		}
+	})
+	return proxy
+}
+
+// newLaunchServer serves launches for one launchpad through a listening
+// proxy. With listening false the proxy has no listener, so a launch fails
+// to reach it.
+func newLaunchServer(t *testing.T, launchpadID uuid.UUID, listening bool) *Server {
 	t.Helper()
 	repo := &stubLaunchpadRepository{items: map[uuid.UUID]*domain.Launchpad{launchpadID: {ID: launchpadID, Name: "Login"}}}
-	proxy := &marasi.Proxy{LaunchpadRepo: repo, Client: origin.Client()}
+	proxy := &marasi.Proxy{}
+	if listening {
+		proxy = newListeningProxy(t)
+	}
+	proxy.LaunchpadRepo = repo
 	server := newTestServer(proxy, func() {})
 	if err := proxy.WithOptions(
 		marasi.WithLaunchStartedHandler(server.HandleLaunchStarted),
@@ -67,14 +110,14 @@ func TestLaunchControlAPI(t *testing.T) {
 			received <- r
 		}))
 		defer origin.Close()
-		server := newLaunchServer(t, launchpadID, origin)
+		server := newLaunchServer(t, launchpadID, true)
 		subscriber := server.events.subscribe()
 		defer server.events.unsubscribe(subscriber)
 
 		id := startLaunch(t, server, launchpadID, launchBody(origin, "/login"))
 
-		if request := <-received; request.URL.Path != "/login" || request.Header.Get("x-marasi-launch-id") != id.String() {
-			t.Fatalf("\nwanted:\n/login with launch %s\ngot:\n%s with launch %q", id, request.URL.Path, request.Header.Get("x-marasi-launch-id"))
+		if request := <-received; request.URL.Path != "/login" || request.Header.Get("x-marasi-launch-id") != "" {
+			t.Fatalf("\nwanted:\n/login with no launch id field\ngot:\n%s with launch %q", request.URL.Path, request.Header.Get("x-marasi-launch-id"))
 		}
 		record := `{"launch_id":"` + id.String() + `","launchpad_id":"` + launchpadID.String() + `","status":"%s"}`
 		for _, want := range []string{
@@ -88,9 +131,10 @@ func TestLaunchControlAPI(t *testing.T) {
 	})
 
 	t.Run("should publish launch.failed with its reason", func(t *testing.T) {
+		// A proxy that is not listening cannot be reached: a network error.
 		closed := httptest.NewServer(http.NotFoundHandler())
-		server := newLaunchServer(t, launchpadID, closed)
 		closed.Close()
+		server := newLaunchServer(t, launchpadID, false)
 		subscriber := server.events.subscribe()
 		defer server.events.unsubscribe(subscriber)
 
@@ -110,7 +154,7 @@ func TestLaunchControlAPI(t *testing.T) {
 		}))
 		defer origin.Close()
 		defer close(release)
-		server := newLaunchServer(t, launchpadID, origin)
+		server := newLaunchServer(t, launchpadID, true)
 
 		id := startLaunch(t, server, launchpadID, launchBody(origin, "/slow"))
 
@@ -139,7 +183,7 @@ func TestLaunchControlAPI(t *testing.T) {
 			<-r.Context().Done()
 		}))
 		defer origin.Close()
-		server := newLaunchServer(t, launchpadID, origin)
+		server := newLaunchServer(t, launchpadID, true)
 		subscriber := server.events.subscribe()
 		defer server.events.unsubscribe(subscriber)
 

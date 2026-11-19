@@ -1,10 +1,8 @@
 package marasi
 
 import (
-	"bufio"
 	"bytes"
 	"compress/flate"
-	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,16 +10,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/martian"
 	"github.com/google/uuid"
-	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
-// deflateHandoff hands a permessage-deflate WebSocket upgrade to the proxy
-// over in-memory peers. It returns the client and upstream peers once the
-// client has read the handshake response.
+// deflateHandoff hands a permessage-deflate WebSocket upgrade to the upgrade
+// handler over in-memory peers. It returns the client and upstream peers.
 func deflateHandoff(t *testing.T, proxy *Proxy) (clientPeer, upstreamPeer net.Conn) {
 	t.Helper()
 	requestID, err := uuid.NewV7()
@@ -45,20 +40,6 @@ func deflateHandoff(t *testing.T, proxy *Proxy) (clientPeer, upstreamPeer net.Co
 	req := httptest.NewRequest(http.MethodGet, "https://marasi.app/socket", nil)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "websocket")
-	clientBuffer := bufio.NewReadWriter(bufio.NewReader(clientConnection), bufio.NewWriter(clientConnection))
-	martianContext, remove, err := martian.TestContext(req, clientConnection, clientBuffer)
-	if err != nil {
-		t.Fatalf("applying martian context: %v", err)
-	}
-	t.Cleanup(remove)
-
-	req = core.ContextWithRequestID(req, requestID)
-	req = core.ContextWithSession(req, martianContext.Session())
-	req = core.ContextWithWebSocketUpstream(req, upstreamConnection)
-	req = req.WithContext(context.WithValue(req.Context(), webSocketNegotiationKey{}, webSocketNegotiation{
-		accept:  []string{"permessage-deflate"},
-		deflate: &domain.WebSocketDeflate{ServerMaxWindowBits: 15, ClientMaxWindowBits: 15},
-	}))
 	res := &http.Response{
 		StatusCode: http.StatusSwitchingProtocols,
 		Proto:      "HTTP/1.1",
@@ -72,18 +53,13 @@ func deflateHandoff(t *testing.T, proxy *Proxy) (clientPeer, upstreamPeer net.Co
 		Body: http.NoBody,
 	}
 	res.Header.Set(marasiws.ExtensionsHeader, "permessage-deflate")
-	go func() { _ = WebSocketHandoffModifier(proxy, res) }()
-
-	clientReader := bufio.NewReader(clientPeer)
-	for {
-		line, err := clientReader.ReadString('\n')
-		if err != nil {
-			t.Fatalf("reading handshake response: %v", err)
-		}
-		if line == "\r\n" {
-			break
-		}
+	pair := newResponsePair(res)
+	pair.ID = requestID
+	pair.webSocketNegotiation = &webSocketNegotiation{
+		accept:  []string{"permessage-deflate"},
+		deflate: &domain.WebSocketDeflate{ServerMaxWindowBits: 15, ClientMaxWindowBits: 15},
 	}
+	go func() { _ = WebSocketUpgradeHandler(proxy, pair, clientConnection, upstreamConnection) }()
 	return clientPeer, upstreamPeer
 }
 
@@ -122,7 +98,7 @@ func zerosDeflated(t *testing.T, size int) []byte {
 	return bytes.TrimSuffix(buf.Bytes(), []byte{0x00, 0x00, 0xff, 0xff})
 }
 
-func TestWebSocketHandoffModifier_LogsInflateFailures(t *testing.T) {
+func TestWebSocketUpgradeHandler_LogsInflateFailures(t *testing.T) {
 	tests := []struct {
 		name    string
 		limit   int64

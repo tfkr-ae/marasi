@@ -146,7 +146,7 @@ func TestProjectLifecycle(t *testing.T) {
 					t.Fatal(err)
 				}
 				// Exercise CONNECT and client TLS at the proxy; the origin speaks HTTP.
-				proxy.AddRequestModifier(func(_ *marasi.Proxy, req *http.Request) error { req.URL.Scheme = "http"; return nil })
+				proxy.AddRequestPairModifier(func(_ *marasi.Proxy, pair *marasi.Pair) error { pair.Request.URL.Scheme = "http"; return nil })
 			}
 			entered, release := make(chan struct{}), make(chan struct{})
 			var once sync.Once

@@ -16,7 +16,7 @@ const maxWatchedBytes = 4096
 var aLongTimeAgo = time.Unix(1, 0)
 
 // WatchedConn reports a client that closes its connection while nobody is reading it.
-// Martian stops reading a client connection while modifiers run, so a closed client
+// The engine stops reading a client connection while modifiers run, so a closed client
 // is not otherwise noticed until the next request read.
 type WatchedConn struct {
 	net.Conn
@@ -86,12 +86,13 @@ func (c *WatchedConn) Read(b []byte) (int, error) {
 	c.mu.Lock()
 	if done := c.done; done != nil {
 		c.done = nil
-		deadline := c.readDeadline
 		c.mu.Unlock()
 		c.Conn.SetReadDeadline(aLongTimeAgo)
 		<-done
-		c.Conn.SetReadDeadline(deadline)
 		c.mu.Lock()
+		// The deadline as it is now: one set while the watch ended, such
+		// as a close's, must not be lost.
+		c.Conn.SetReadDeadline(c.readDeadline)
 	}
 	if len(c.pending) > 0 {
 		n := copy(b, c.pending)
@@ -129,4 +130,9 @@ func (c *WatchedConn) Close() error {
 	c.closed = true
 	c.mu.Unlock()
 	return c.Conn.Close()
+}
+
+// CloseWrite half-closes the watched connection.
+func (c *WatchedConn) CloseWrite() error {
+	return CloseWrite(c.Conn)
 }

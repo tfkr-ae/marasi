@@ -63,8 +63,8 @@ The request/response pairs persisted for the open project.
 _Avoid_: Flow, exchange, HTTP history when referring to this collection.
 
 **Request/response pair**:
-One captured HTTP request and its matching response, identified by a single UUID.
-_Avoid_: Flow, exchange, transaction.
+One HTTP request and its matching response, identified by a single UUID from the moment the proxy reads the request, while it is in flight and after it is stored. It is the same unit whichever HTTP version carries it on the client leg or the origin leg.
+_Avoid_: Flow, exchange, transaction, stream (an HTTP/2 stream carries a pair; it is not one).
 
 **Pair number**:
 The position of a request/response pair in its project's capture order, starting at 1. It never changes and is never reused, so deleting pairs leaves gaps.
@@ -221,6 +221,10 @@ _Avoid_: using logbook as a control API collection or as a synonym for test case
 **Proxy log**:
 A message recorded by the proxy and stored in the open project, identified by UUID. It has a severity and may name a request/response pair or an extension.
 _Avoid_: instance log, extension log, event
+
+**Proxy error response**:
+A response Marasi makes for the client when it could not get one from the origin, giving the cause. It is never sent upstream, and the request/response pair that holds it is marked as Marasi's, not the origin's. A browser view and Marasi's own pages are deliberate answers, not proxy error responses.
+_Avoid_: blank 200, Martian 502, Warning header, synthetic response
 
 **Background job**:
 Work that Marasi does on an open project after opening it, such as building the search index or the sitemap. It stops when the project closes and resumes from where it stopped on the next open. A client can ask for it to be rebuilt.

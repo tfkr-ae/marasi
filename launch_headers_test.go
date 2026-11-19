@@ -64,9 +64,12 @@ func TestProxy_LaunchAddsNoHeaders(t *testing.T) {
 		connection string // the Connection line the researcher wrote, or "" for none
 		want       []string
 	}{
+		// Connection is removed on each leg; the Connection rule of the
+		// 2026-10-19 ADR is superseded
+		// (docs/adr/2026-11-16-the-proxy-follows-hop-by-hop-rules-but-sends-no-via.md).
 		{name: "no Connection header", want: nil},
-		{name: "Connection keep-Alive", connection: "keep-Alive", want: []string{"keep-Alive"}},
-		{name: "Connection close", connection: "close", want: []string{"close"}},
+		{name: "Connection keep-Alive", connection: "keep-Alive", want: nil},
+		{name: "Connection close", connection: "close", want: nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

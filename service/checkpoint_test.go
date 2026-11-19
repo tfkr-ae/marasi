@@ -15,10 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/martian"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
-	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
@@ -166,8 +164,8 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		body := fmt.Sprintf(`{"ids":["%s","%s","%s"]}`, secondID, missing, firstID)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/drop", body), http.StatusOK, `{"done":2,"gone":1,"failed":0}`+"\n")
 		for _, done := range []<-chan error{firstDone, secondDone} {
-			if err := receiveCheckpointHold(t, done); !errors.Is(err, marasi.ErrDropped) {
-				t.Fatalf("\nwanted:\n%v\ngot:\n%v", marasi.ErrDropped, err)
+			if err := receiveCheckpointHold(t, done); !errors.Is(err, errHoldDropped) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", errHoldDropped, err)
 			}
 		}
 		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"dropped"}`, secondID))
@@ -205,13 +203,13 @@ func TestCheckpointControlRoutes(t *testing.T) {
 			secondID, dumpCheckpointRequest(t, secondReq), checkpointHeldAt(t, proxy, secondID),
 		)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+firstID.String()+"/drop", ""), http.StatusOK, wantRemaining)
-		if err := receiveCheckpointHold(t, firstDone); !errors.Is(err, marasi.ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", marasi.ErrDropped, err)
+		if err := receiveCheckpointHold(t, firstDone); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"dropped"}`, firstID))
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+secondID.String()+"/drop", `{}`), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false}`+"\n")
-		if err := receiveCheckpointHold(t, secondDone); !errors.Is(err, marasi.ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", marasi.ErrDropped, err)
+		if err := receiveCheckpointHold(t, secondDone); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"dropped"}`, secondID))
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+secondID.String()+"/drop", ""), http.StatusNotFound, `{"error":"not_found"}`+"\n")
@@ -231,8 +229,8 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		drainCheckpointHeld(t, subscriber)
 
 		cancel()
-		if err := receiveCheckpointHold(t, done); !errors.Is(err, marasi.ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", marasi.ErrDropped, err)
+		if err := receiveCheckpointHold(t, done); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"abandoned"}`, reqID))
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint", ""), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false}`+"\n")
@@ -519,8 +517,8 @@ func TestCheckpointServiceStop(t *testing.T) {
 		drainCheckpointHeld(t, subscriber)
 
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/service/stop", ""), http.StatusAccepted, `{"status":"shutdown_in_progress"}`+"\n")
-		if err := receiveCheckpointHold(t, reqDone); !errors.Is(err, marasi.ErrDropped) {
-			t.Fatalf("wanted: %v\ngot: %v", marasi.ErrDropped, err)
+		if err := receiveCheckpointHold(t, reqDone); !errors.Is(err, errHoldDropped) {
+			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 		if err := receiveCheckpointHold(t, messageDone); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
@@ -572,8 +570,8 @@ func TestCheckpointEventFrames(t *testing.T) {
 	if got := readEventFrame(t, reader); got != wantDropped {
 		t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantDropped, got)
 	}
-	if err := receiveCheckpointHold(t, dropDone); !errors.Is(err, marasi.ErrDropped) {
-		t.Fatalf("wanted: %v\ngot: %v", marasi.ErrDropped, err)
+	if err := receiveCheckpointHold(t, dropDone); !errors.Is(err, errHoldDropped) {
+		t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 	}
 
 	response = sendCheckpointRequest(t, http.MethodPost, httpServer.URL+"/checkpoint/intercept", `{"intercept":false}`)
@@ -647,41 +645,22 @@ func startCheckpointHTTPHold(t *testing.T, proxy *marasi.Proxy) (*http.Request, 
 func startCheckpointHTTPHoldContext(t *testing.T, proxy *marasi.Proxy, ctx context.Context) (*http.Request, uuid.UUID, <-chan error) {
 	t.Helper()
 	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "https://marasi.app", nil)
-	_, remove, err := martian.TestContext(req, nil, nil)
-	if err != nil {
-		t.Fatalf("applying martian context: %v", err)
-	}
-	t.Cleanup(remove)
-	if err := marasi.SetupRequestModifier(proxy, req); err != nil {
+	pair := marasi.NewTestPair(req)
+	if err := marasi.SetupRequestModifier(proxy, pair); err != nil {
 		t.Fatalf("running SetupRequestModifier: %v", err)
-	}
-	reqID, ok := core.RequestIDFromContext(req.Context())
-	if !ok {
-		t.Fatal("request id missing")
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- marasi.CheckpointRequestModifier(proxy, req)
+		done <- holdResult(pair, marasi.CheckpointRequestModifier(proxy, pair))
 	}()
-	return req, reqID, done
+	return req, pair.ID, done
 }
 
 func startCheckpointHTTPResponseHold(t *testing.T, proxy *marasi.Proxy) (uuid.UUID, <-chan error) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "https://marasi.app", nil)
-	_, remove, err := martian.TestContext(req, nil, nil)
-	if err != nil {
-		t.Fatalf("applying martian context: %v", err)
-	}
-	t.Cleanup(remove)
-	if err := marasi.SetupRequestModifier(proxy, req); err != nil {
-		t.Fatalf("running SetupRequestModifier: %v", err)
-	}
-	reqID, ok := core.RequestIDFromContext(req.Context())
-	if !ok {
-		t.Fatal("request id missing")
-	}
-	res := &http.Response{
+	pair := marasi.NewTestPair(req)
+	pair.Response = &http.Response{
 		Status:     "200 OK",
 		StatusCode: http.StatusOK,
 		Proto:      "HTTP/1.1",
@@ -693,9 +672,9 @@ func startCheckpointHTTPResponseHold(t *testing.T, proxy *marasi.Proxy) (uuid.UU
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- marasi.CheckpointResponseModifier(proxy, res)
+		done <- holdResult(pair, marasi.CheckpointResponseModifier(proxy, pair))
 	}()
-	return reqID, done
+	return pair.ID, done
 }
 
 // checkpointMessageHeldAt is the intercepted_at of the message startCheckpointWebSocketHold holds.
@@ -737,6 +716,19 @@ func waitForCheckpointItems(t *testing.T, proxy *marasi.Proxy, n int) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %d checkpoint items, got %d", n, len(proxy.CheckpointItems()))
+}
+
+// errHoldDropped is what a hold's result channel carries when Checkpoint
+// dropped the pair.
+var errHoldDropped = errors.New("checkpoint dropped the pair")
+
+// holdResult is the result of a Checkpoint modifier: its error, or
+// errHoldDropped when it dropped the pair.
+func holdResult(pair *marasi.Pair, err error) error {
+	if err == nil && pair.Dropped() {
+		return errHoldDropped
+	}
+	return err
 }
 
 func receiveCheckpointHold(t *testing.T, result <-chan error) error {

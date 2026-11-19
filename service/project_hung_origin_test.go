@@ -48,7 +48,7 @@ func newHungOriginHarness(t *testing.T, secure bool) *hungOriginHarness {
 		if err := proxy.WithOptions(marasi.WithTLS()); err != nil {
 			t.Fatal(err)
 		}
-		proxy.AddRequestModifier(func(_ *marasi.Proxy, req *http.Request) error { req.URL.Scheme = "http"; return nil })
+		proxy.AddRequestPairModifier(func(_ *marasi.Proxy, pair *marasi.Pair) error { pair.Request.URL.Scheme = "http"; return nil })
 	}
 	harness := &hungOriginHarness{server: server, lifecycle: lifecycle, dir: dir, current: current, entered: make(chan struct{}, 8), secure: secure}
 	released := make(chan struct{})

@@ -102,7 +102,7 @@ suites:
   Http11Probe test with the approach, and its recording is the test's verdict
   plus the shim's capture of the connection, compared like `h1-origin`'s client
   side. The leg rules run on the responses Marasi sent. Marasi runs in the same
-  container as for `h1-origin`. Martian routes a request inside `CONNECT` by its
+  container as for `h1-origin`. Marasi routes a request inside `CONNECT` by its
   `Host` field, which names the shim's port, so nginx listens on that port at
   `127.0.0.2`, where Marasi resolves `nginx.test`. The first run builds the
   Http11Probe image, which takes a few minutes.
@@ -191,7 +191,7 @@ strict suite.
 #### Updating baselines and known entries
 
 A deviation is "new" when no entry in `deviations.json` lists it: the run
-fails. If the change meant it, or it is a Martian difference a later phase
+fails. If the change meant it, or it is a difference a later phase
 removes, record it as a known entry with the phase expected to remove it:
 
 ```bash

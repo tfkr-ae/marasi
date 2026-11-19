@@ -194,7 +194,7 @@ func TestMarasiBuilder(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Add("X-Custom", "Marasi")
 
-		ext.LuaState.PushUserData(req)
+		ext.LuaState.PushUserData(&Request{Request: req})
 		lua.SetMetaTableNamed(ext.LuaState, "req")
 		ext.LuaState.SetGlobal("test_req")
 

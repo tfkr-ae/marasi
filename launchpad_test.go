@@ -54,7 +54,8 @@ func startLaunchHarness(t *testing.T, extra ...func(*Proxy) error) *launchHarnes
 	}
 	finished := make(chan domain.Launch, 16)
 	requests := make(chan domain.ProxyRequest, 16)
-	options := []func(*Proxy) error{
+	var options []func(*Proxy) error
+	options = append(options,
 		WithConfigDir(t.TempDir()),
 		WithDefaultRepositories(repository),
 		WithExtensions(defaultExtensions),
@@ -62,7 +63,7 @@ func startLaunchHarness(t *testing.T, extra ...func(*Proxy) error) *launchHarnes
 		WithResponseHandler(func(domain.ProxyResponse) error { return nil }),
 		WithLogHandler(func(domain.Log) error { return nil }),
 		WithLaunchFinishedHandler(func(launch domain.Launch) { finished <- launch }),
-	}
+	)
 	options = append(options, extra...)
 	options = append(options, WithBasePipeline(), WithDefaultModifierPipeline())
 	proxy, err := New(options...)
@@ -346,8 +347,9 @@ func TestProxy_LaunchFailure(t *testing.T) {
 			t.Fatalf("\nwanted:\nlaunchpad members [%s]\ngot:\n%v", id, got)
 		}
 
-		// martian answers an unreachable origin with its own 502, and that
-		// response is stored, so the launchpad's newest status is 502, not nil.
+		// Marasi answers an unreachable origin with a proxy error response,
+		// and that response is stored, so the launchpad's newest status is
+		// 502, not nil.
 		if err := h.proxy.flushDBWrites(); err != nil {
 			t.Fatalf("flushing database writes: %v", err)
 		}
@@ -357,6 +359,9 @@ func TestProxy_LaunchFailure(t *testing.T) {
 		}
 		if res.StatusCode != http.StatusBadGateway {
 			t.Fatalf("\nwanted:\nstored status %d\ngot:\n%d", http.StatusBadGateway, res.StatusCode)
+		}
+		if cause, _ := res.Metadata["proxy_error"].(string); !strings.Contains(cause, "connection refused") {
+			t.Fatalf("\nwanted:\nmetadata.proxy_error naming the cause\ngot:\n%v", res.Metadata)
 		}
 		launchpads, err := h.repository.GetLaunchpads()
 		if err != nil {

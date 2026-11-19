@@ -13,7 +13,6 @@
 package marasi
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -27,16 +26,14 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/google/martian"
-	"github.com/google/martian/fifo"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/compass"
-	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
 	"github.com/tfkr-ae/marasi/listener"
@@ -87,10 +84,9 @@ const (
 // extension management, database operations, and TLS handling. It serves as the central coordinator
 // for the Marasi proxy server.
 type Proxy struct {
-	martianProxy   *martian.Proxy                       // The underlying martian.Proxy
+	engine         *h1Engine                            // serves the listener and runs the base pipeline
 	ConfigDir      string                               // The configuration directory (defaults to the marasi folder under the user configuration directory)
 	Config         *Config                              // The marasi proxy configuration (separate from the GUI config)
-	Modifiers      *fifo.Group                          // Modifier group pipeline
 	DBWriteChannel chan any                             // DB Write Channel
 	OnRequest      func(req domain.ProxyRequest) error  // Function to be ran on each request - used by the GUI application to handle the new requests
 	OnResponse     func(res domain.ProxyResponse) error // Function to be ran on each response - used by the GUI application to handle the new responses
@@ -128,7 +124,7 @@ type Proxy struct {
 	WordlistManager       wordlist.Provider     // Provider for available wordlists.
 	SPKIHash              string                // SPKI Hash of the current certificate
 	Cert                  *x509.Certificate     // The proxy's TLS certificate.
-	mitmConfig            *tls.Config           // Martian Proxy MITM config
+	mitmConfig            *tls.Config           // The TLS config that intercepted tunnels serve clients
 	MarasiClientTLSConfig *tls.Config           // TLSConfig for the proxy.Client
 	Scope                 *compass.Scope        // Proxy scope configuration through Compass
 	Waypoints             map[string]string     // Published host:port overrides. Replaced, never mutated.
@@ -143,19 +139,20 @@ type Proxy struct {
 	webSocketLifecycleMu sync.RWMutex
 	webSocketSessions    sync.WaitGroup
 	webSocketsClosing    bool
-	martianCloseOnce     sync.Once
-	martianCloseDone     chan struct{}
+	upgradeHandler       UpgradeHandler // takes over a pair whose response switched protocols
+	requestModifiers     *ModifierGroup // the request chain
+	responseModifiers    *ModifierGroup // the response chain
 	connectionMu         sync.Mutex
 	connectionSessions   sync.WaitGroup
 	connections          map[net.Conn]struct{}
-	clientConnections    map[string]*listener.WatchedConn
+	clientConnections    map[string]*clientConnection
 	connectionsClosing   bool
 	transportContext     context.Context
 	cancelTransport      context.CancelFunc
-	route                atomic.Pointer[Route]           // the route new connections to the origin use
-	transport            atomic.Pointer[routedTransport] // the transport the latest Serve built
-	routes               routeResolver                   // turns the upstream proxy selection into routes
-	routeMu              sync.Mutex                      // serializes route swaps from the resolver
+	route                atomic.Pointer[Route]        // the route new connections to the origin use
+	dialer               atomic.Pointer[originDialer] // the origin dialer the latest Serve built
+	routes               routeResolver                // turns the upstream proxy selection into routes
+	routeMu              sync.Mutex                   // serializes route swaps from the resolver
 	listenerMu           sync.Mutex
 	activeListener       net.Listener
 	activeServeDone      chan struct{}
@@ -323,7 +320,7 @@ func (proxy *Proxy) GetArmory() (ArmoryService, error) {
 }
 
 // New creates a new Proxy instance with default configuration and applies any provided options.
-// It initializes the underlying martian proxy, database write channel, extensions map, HTTP client,
+// It initializes the proxy engine, database write channel, extensions map, HTTP client,
 // scope, waypoints, and sets up default log modifiers.
 //
 // Parameters:
@@ -338,9 +335,9 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 		transportContext:     transportContext,
 		cancelTransport:      cancelTransport,
 		connections:          make(map[net.Conn]struct{}),
-		clientConnections:    make(map[string]*listener.WatchedConn),
-		martianProxy:         martian.NewProxy(),
-		Modifiers:            fifo.NewGroup(),
+		clientConnections:    make(map[string]*clientConnection),
+		requestModifiers:     NewModifierGroup(),
+		responseModifiers:    NewModifierGroup(),
 		DBWriteChannel:       make(chan any, 10),
 		Extensions:           make([]*extensions.Runtime, 0),
 		Client:               &http.Client{},
@@ -356,6 +353,7 @@ func New(options ...func(*Proxy) error) (*Proxy, error) {
 			return func() {}, 0, nil
 		},
 	}
+	proxy.engine = newH1Engine(proxy)
 	proxy.route.Store(DirectRoute())
 	err := proxy.WithOptions(options...)
 	if err != nil {
@@ -389,18 +387,6 @@ func (proxy *Proxy) SetProjectResources(resources ProjectResources) {
 	proxy.Armory = resources.Armory
 	proxy.ReportGenerator = resources.ReportGenerator
 	proxy.SelectUpstreamProxy(resources.UpstreamProxy)
-}
-
-// AddRequestModifier accepts RequestModifierFunc and wraps it in a reqAdapter
-func (proxy *Proxy) AddRequestModifier(modifier RequestModifierFunc) {
-	adapter := &reqAdapter{proxy: proxy, modifier: modifier}
-	proxy.Modifiers.AddRequestModifier(adapter)
-}
-
-// AddResponseModifier accepts ResponseModifierFunc and wraps it in a resAdapter
-func (proxy *Proxy) AddResponseModifier(modifier ResponseModifierFunc) {
-	adapter := &resAdapter{proxy: proxy, modifier: modifier}
-	proxy.Modifiers.AddResponseModifier(adapter)
 }
 
 // ApplyWaypointChange persists a waypoint change and publishes the resulting
@@ -485,13 +471,14 @@ type Waypoint struct {
 	Override string // The destination to redirect to
 }
 
-// NewProxyRequest creates a new domain.ProxyRequest from an http.Request.
-// It extracts metadata from the request context and dumps the raw request.
-func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyRequest, error) {
-	if metadata, ok := core.MetadataFromContext(req.Context()); ok {
-		requestTime, ok := core.RequestTimeFromContext(req.Context())
-		if !ok {
-			return nil, fmt.Errorf("timestamp not found for this context")
+// NewProxyRequest creates a new domain.ProxyRequest from the request of pair,
+// with the pair's UUID, metadata and request time, and dumps the raw request.
+func NewProxyRequest(pair *Pair) (*domain.ProxyRequest, error) {
+	req, requestId := pair.Request, pair.ID
+	if metadata := pair.Metadata; metadata != nil {
+		requestTime := pair.Timing.Requested
+		if requestTime.IsZero() {
+			return nil, fmt.Errorf("request time not set")
 		}
 
 		path := req.URL.Path
@@ -528,14 +515,22 @@ func NewProxyRequest(req *http.Request, requestId uuid.UUID) (*domain.ProxyReque
 		}
 		proxyRequest.SitemapNode = domain.SitemapLeaf(proxyRequest.Scheme, proxyRequest.Host, proxyRequest.Path)
 
-		// TODO Check prettified error
-		rawReq, prettified, err := rawhttp.DumpRequest(req)
+		// The raw text is the request as it goes upstream: the wire form,
+		// or a dump of the view for a pair built outside the engine.
+		var rawReq []byte
+		var prettified string
+		var err error
+		if pair.requestWire != nil {
+			rawReq, prettified, err = dumpWireRequest(pair.requestWire, req)
+		} else {
+			rawReq, prettified, err = rawhttp.DumpRequest(req)
+		}
 
 		req.Host = currentHost
 		req.URL.Host = currentURLHost
 
 		if err != nil {
-			return nil, fmt.Errorf("dumping request %d body: %w", requestId, err)
+			return nil, fmt.Errorf("dumping request %s body: %w", requestId, err)
 		}
 
 		proxyRequest.Raw = domain.RawField(rawReq)
@@ -562,20 +557,40 @@ func parseContentType(header string) (string, error) {
 	return strings.ToLower(mediaType), nil
 }
 
-// NewProxyResponse creates a new domain.ProxyResponse from an http.Response.
-// It extracts metadata from the response context and dumps the raw response.
-func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
-	requestId, ok := core.RequestIDFromContext(res.Request.Context())
-	if !ok {
-		return nil, fmt.Errorf("request id not found in context")
+// NewProxyResponse creates a new domain.ProxyResponse from the pair's response.
+// It takes the ID, response time, metadata and route from the pair and dumps
+// the raw response.
+func NewProxyResponse(pair *Pair) (*domain.ProxyResponse, error) {
+	res := pair.Response
+	requestId := pair.ID
+	if requestId == uuid.Nil {
+		return nil, fmt.Errorf("pair has no request id")
 	}
 
-	responseTime, ok := core.ResponseTimeFromContext(res.Request.Context())
-	if !ok {
-		return nil, fmt.Errorf("timestamp not found for this context")
+	responseTime := pair.Timing.Responded
+	if responseTime.IsZero() {
+		return nil, fmt.Errorf("pair has no response time")
 	}
 
-	rawRes, prettified, err := rawhttp.DumpResponse(res)
+	var rawRes []byte
+	var prettified string
+	var err error
+	// Length is the stored body's length. A response from the origin may
+	// have no Content-Length (chunked, or read until close), so it is the
+	// payload's length, which is what a Content-Length would say. A response
+	// Marasi made carries its length in ContentLength, not in the header, and
+	// the dump writes it out.
+	length := res.Header.Get("Content-Length")
+	if pair.responseWire != nil && !pair.FromMarasi() {
+		var payload int
+		rawRes, prettified, payload, err = dumpWireResponse(pair.responseWire, res)
+		length = strconv.Itoa(payload)
+	} else {
+		rawRes, prettified, err = rawhttp.DumpResponse(res)
+		if length == "" && res.ContentLength >= 0 {
+			length = strconv.FormatInt(res.ContentLength, 10)
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("dumping response %s: %w", requestId, err)
 	}
@@ -596,14 +611,14 @@ func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
 		}
 	}
 
-	metadata, ok := core.MetadataFromContext(res.Request.Context())
-	if !ok {
+	metadata := pair.Metadata
+	if metadata == nil {
 		metadata = make(map[string]any)
 	}
 
 	var route *domain.RouteSnapshot
-	if record, ok := core.RouteRecordFromContext(res.Request.Context()); ok {
-		route = record.Snapshot()
+	if pair.Route != nil {
+		route = pair.Route.Snapshot()
 	}
 
 	proxyResponse := &domain.ProxyResponse{
@@ -611,7 +626,7 @@ func NewProxyResponse(res *http.Response) (*domain.ProxyResponse, error) {
 		Status:      res.Status,
 		StatusCode:  res.StatusCode,
 		ContentType: contentType,
-		Length:      res.Header.Get("Content-Length"),
+		Length:      length,
 		Raw:         domain.RawField(rawRes),
 		Metadata:    metadata,
 		Prettified:  prettified,
@@ -903,9 +918,7 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 	if err := proxy.flushDBWrites(); err != nil {
 		return err
 	}
-	routed := newRoutedTransport(proxy.resolveRoute, proxy.CurrentRoute, proxy.dialTransport)
-	proxy.transport.Store(routed)
-	proxy.martianProxy.SetRoundTripper(&launchFailureRoundTripper{proxy: proxy, base: &marasiRoundTripper{base: routed}})
+	proxy.dialer.Store(newOriginDialer(proxy.resolveRoute, proxy.CurrentRoute, proxy.dialTransport))
 	proxy.listenerMu.Lock()
 	proxy.activeListener = activeListener
 	serveDone := make(chan struct{})
@@ -920,10 +933,7 @@ func (proxy *Proxy) Serve(activeListener net.Listener) error {
 		proxy.listenerMu.Unlock()
 	}()
 
-	return proxy.martianProxy.Serve(listener.NewClosingListener(
-		activeListener,
-		proxy.martianProxy.Closing,
-	))
+	return proxy.engine.serve(activeListener)
 }
 
 // Close shuts down the proxy and closes the database connection.
@@ -953,16 +963,7 @@ func (proxy *Proxy) close(ctx context.Context, closeDatabase bool) error {
 	proxy.webSocketsClosing = true
 	proxy.webSocketLifecycleMu.Unlock()
 
-	proxy.martianCloseOnce.Do(func() {
-		proxy.martianCloseDone = make(chan struct{})
-		go func() {
-			proxy.martianProxy.Close()
-			close(proxy.martianCloseDone)
-		}()
-	})
-	for !proxy.martianProxy.Closing() {
-		time.Sleep(time.Millisecond)
-	}
+	proxy.engine.startClose()
 
 	var listenerErr error
 	proxy.listenerMu.Lock()
@@ -984,8 +985,7 @@ func (proxy *Proxy) close(ctx context.Context, closeDatabase bool) error {
 	if serveDone != nil {
 		<-serveDone
 	}
-	<-proxy.martianCloseDone
-	// Martian increments its handler wait count inside the new goroutine.
+	proxy.engine.waitClosed()
 	// Join accepted sockets too, including not-yet-scheduled handlers.
 	proxy.connectionSessions.Wait()
 	proxy.ForceCloseTransport()
@@ -1005,16 +1005,16 @@ func (proxy *Proxy) close(ctx context.Context, closeDatabase bool) error {
 // also interrupts clients and upstreams that have not sent HTTP headers yet.
 // Inbound sockets are watched and indexed by client address so a client disconnect can cancel its request.
 func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
-	var watched *listener.WatchedConn
+	var client *clientConnection
 	clientAddress := conn.RemoteAddr().String()
 	if inbound {
-		watched = listener.NewWatchedConnection(conn)
-		conn = watched
+		client = &clientConnection{WatchedConn: listener.NewWatchedConnection(conn)}
+		conn = client.WatchedConn
 	}
 	proxy.connectionMu.Lock()
 	if inbound {
 		proxy.connectionSessions.Add(1)
-		proxy.clientConnections[clientAddress] = watched
+		proxy.clientConnections[clientAddress] = client
 	}
 	proxy.connections[conn] = struct{}{}
 	closing := proxy.connectionsClosing
@@ -1025,7 +1025,7 @@ func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
 	return listener.NewTrackedConnection(conn, func() {
 		proxy.connectionMu.Lock()
 		delete(proxy.connections, conn)
-		if inbound && proxy.clientConnections[clientAddress] == watched {
+		if inbound && proxy.clientConnections[clientAddress] == client {
 			delete(proxy.clientConnections, clientAddress)
 		}
 		proxy.connectionMu.Unlock()
@@ -1035,60 +1035,29 @@ func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
 	})
 }
 
-// maxEagerBody bounds the request body watchClient reads before the pipeline runs.
-const maxEagerBody = 1 << 20
-
 // watchClient cancels the request context when its client disconnects while the request
-// is in flight, which interrupts its hooks. The socket is watched only after the body has
-// been read, so the watch never takes body bytes. A small body of known length is read now,
-// so hooks are watched. A larger, chunked, or Expect: 100-continue body is watched once it
-// has been read through.
-func (proxy *Proxy) watchClient(req *http.Request) {
+// is in flight, which interrupts its hooks. The proxy has read the body whole by now, so
+// the watch never takes body bytes. A body cut short is not watched: what is left on the
+// socket is not a request, and the round trip fails on the body's read error instead.
+func (proxy *Proxy) watchClient(req *http.Request, ending BodyEnding) {
+	if ending == BodyCutShort {
+		return
+	}
 	conn := proxy.clientConnection(req.RemoteAddr)
 	if conn == nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(req.Context())
 	*req = *req.WithContext(ctx)
-
-	if req.Body == nil || req.Body == http.NoBody {
-		conn.Watch(cancel)
-		return
-	}
-	if req.ContentLength > 0 && req.ContentLength <= maxEagerBody && req.Header.Get("Expect") == "" {
-		body, err := io.ReadAll(req.Body)
-		req.Body = io.NopCloser(bytes.NewReader(body))
-		if err != nil {
-			cancel()
-			return
-		}
-		conn.Watch(cancel)
-		return
-	}
-	req.Body = &watchAtEOF{ReadCloser: req.Body, watch: func() { conn.Watch(cancel) }}
+	conn.Watch(cancel)
 }
 
-// clientConnection returns the watched client socket for remoteAddr, or nil when the
+// clientConnection returns the client connection for remoteAddr, or nil when the
 // client did not come through the proxy listener.
-func (proxy *Proxy) clientConnection(remoteAddr string) *listener.WatchedConn {
+func (proxy *Proxy) clientConnection(remoteAddr string) *clientConnection {
 	proxy.connectionMu.Lock()
 	defer proxy.connectionMu.Unlock()
 	return proxy.clientConnections[remoteAddr]
-}
-
-// watchAtEOF starts watching the client once the request body has been read through.
-type watchAtEOF struct {
-	io.ReadCloser
-	once  sync.Once
-	watch func()
-}
-
-func (body *watchAtEOF) Read(p []byte) (int, error) {
-	n, err := body.ReadCloser.Read(p)
-	if err == io.EOF {
-		body.once.Do(body.watch)
-	}
-	return n, err
 }
 
 func (proxy *Proxy) dialTransport(ctx context.Context, network, address string) (net.Conn, error) {

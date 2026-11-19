@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httputil"
+	"strconv"
 	"strings"
 
 	"github.com/beevik/etree"
@@ -88,31 +89,29 @@ func DumpResponse(res *http.Response) (rawDump []byte, prettyDump string, error 
 	}
 	res.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
-	fullDump := append(responseDump, bodyBytes...)
-
-	prettified, err := Prettify(bodyBytes)
-	if err != nil || len(prettified) == 0 {
-		return fullDump, "", nil
-	}
-
-	// appending twice with requestDump will lead to truncating fullDump
-	prettyHeaders := make([]byte, len(responseDump))
-	copy(prettyHeaders, responseDump)
-
-	prettifiedDump := append(prettyHeaders, prettified...)
-	return fullDump, string(prettifiedDump), nil
+	fullDump, prettified := Assemble(responseDump, bodyBytes)
+	return fullDump, prettified, nil
 }
 
 // DumpRequest takes a *http.Request, dumps the raw request and resets the body so it can be consumed
 // Returns the full dump, prettified dump and an error
 func DumpRequest(req *http.Request) (rawDump []byte, prettyDump string, err error) {
-	requestDump, err := httputil.DumpRequest(req, false)
-	if err != nil {
-		return []byte{}, "", fmt.Errorf("dumping request: %w", err)
-	}
 	bodyBytes, err := io.ReadAll(req.Body)
 	if err != nil {
 		return []byte{}, "", fmt.Errorf("reading request body: %w", err)
+	}
+	head := req
+	if length := strconv.Itoa(len(bodyBytes)); req.Header.Get("Content-Length") != "" && req.Header.Get("Content-Length") != length {
+		// A modifier changed the body without the header, which the
+		// writer frames from ContentLength: dump the length that is sent.
+		copied := *req
+		copied.Header = req.Header.Clone()
+		copied.Header.Set("Content-Length", length)
+		head = &copied
+	}
+	requestDump, err := httputil.DumpRequest(head, false)
+	if err != nil {
+		return []byte{}, "", fmt.Errorf("dumping request: %w", err)
 	}
 	// An empty body goes back as http.NoBody, or net/http sends it chunked.
 	if len(bodyBytes) == 0 {
@@ -121,19 +120,23 @@ func DumpRequest(req *http.Request) (rawDump []byte, prettyDump string, err erro
 		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	}
 
-	fullDump := append(requestDump, bodyBytes...)
-	prettified, err := Prettify(bodyBytes)
+	fullDump, prettified := Assemble(requestDump, bodyBytes)
+	return fullDump, prettified, nil
+}
 
-	if err != nil || len(prettified) == 0 {
-		return fullDump, "", nil
+// Assemble returns a message's raw text, its head followed by its body, and
+// the same head followed by the prettified body, or "" when the body does not
+// prettify. head ends with the empty line that ends the header section.
+func Assemble(head, body []byte) (raw []byte, prettified string) {
+	raw = make([]byte, 0, len(head)+len(body))
+	raw = append(append(raw, head...), body...)
+	pretty, err := Prettify(body)
+	if err != nil || len(pretty) == 0 {
+		return raw, ""
 	}
-
-	// appending twice with requestDump will lead to truncating fullDump
-	prettyHeaders := make([]byte, len(requestDump))
-	copy(prettyHeaders, requestDump)
-
-	prettifiedDump := append(prettyHeaders, prettified...)
-	return fullDump, string(prettifiedDump), nil
+	prettyDump := make([]byte, 0, len(head)+len(pretty))
+	prettyDump = append(append(prettyDump, head...), pretty...)
+	return raw, string(prettyDump)
 }
 
 // Takes a raw request / response and updates the content-length to match the body length

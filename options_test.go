@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/martian/mitm"
 	"github.com/tfkr-ae/marasi/armory"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
@@ -422,11 +421,11 @@ func TestWithTLS(t *testing.T) {
 
 	t.Run("should reject a mismatched pair without replacing it", func(t *testing.T) {
 		configDir := t.TempDir()
-		cert, _, err := mitm.NewAuthority("first", "first", time.Hour)
+		cert, _, err := newCertificateAuthority("first", "first", time.Hour)
 		if err != nil {
 			t.Fatalf("creating certificate: %v", err)
 		}
-		_, key, err := mitm.NewAuthority("second", "second", time.Hour)
+		_, key, err := newCertificateAuthority("second", "second", time.Hour)
 		if err != nil {
 			t.Fatalf("creating key: %v", err)
 		}

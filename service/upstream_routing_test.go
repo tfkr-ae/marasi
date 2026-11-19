@@ -528,12 +528,15 @@ func TestUpstreamProxyFailsClosed(t *testing.T) {
 			service.addUpstreamProxy(t, "corp", fake.URL("http", "user", "s3cret-pw"))
 			service.use(t, "corp")
 
-			response, _ := service.get(t, service.origin.URL+"/blocked")
+			response, body := service.get(t, service.origin.URL+"/blocked")
 			if response.StatusCode != http.StatusBadGateway {
 				t.Fatalf("\nwanted:\n502\ngot:\n%d", response.StatusCode)
 			}
-			if warning := response.Header.Get("Warning"); !strings.Contains(warning, `upstream proxy \"corp\"`) || strings.Contains(warning, "s3cret-pw") {
-				t.Fatalf("\nwanted:\na Warning naming corp without credentials\ngot:\n%s", warning)
+			if warning := response.Header.Get("Warning"); warning != "" {
+				t.Fatalf("\nwanted:\nno Warning header\ngot:\n%s", warning)
+			}
+			if !strings.Contains(body, `upstream proxy "corp"`) || strings.Contains(body, "s3cret-pw") {
+				t.Fatalf("\nwanted:\na proxy error response naming corp without credentials\ngot:\n%s", body)
 			}
 			if hits := service.originHits.Load(); hits != 0 {
 				t.Fatalf("\nwanted:\nthe origin never reached\ngot:\n%d hits", hits)

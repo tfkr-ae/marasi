@@ -248,3 +248,31 @@ func (e temporaryListenerError) Error() string   { return e.err.Error() }
 func (e temporaryListenerError) Unwrap() error   { return e.err }
 func (e temporaryListenerError) Timeout() bool   { return false }
 func (e temporaryListenerError) Temporary() bool { return true }
+
+// CloseWriter is a connection that can half-close: stop sending while it still
+// reads. Every wrapper in this package passes it through to the connection it
+// wraps, so a half-close reaches the socket.
+type CloseWriter interface {
+	CloseWrite() error
+}
+
+// The wrappers must keep the method: a caller that half-closes through them
+// would otherwise fail silently.
+var (
+	_ CloseWriter = (*connWrapper)(nil)
+	_ CloseWriter = (*WatchedConn)(nil)
+)
+
+// CloseWrite half-closes conn when it can, and returns errors.ErrUnsupported
+// when it cannot, such as an in-memory pipe.
+func CloseWrite(conn net.Conn) error {
+	if writer, ok := conn.(CloseWriter); ok {
+		return writer.CloseWrite()
+	}
+	return errors.ErrUnsupported
+}
+
+// CloseWrite half-closes the wrapped connection.
+func (cw *connWrapper) CloseWrite() error {
+	return CloseWrite(cw.Conn)
+}

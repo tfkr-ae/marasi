@@ -176,7 +176,7 @@ func TestServiceRestart(t *testing.T) {
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "service", "restart")
 		wantRefusal := restartWarning +
 			"Error: restarting service: 1 Checkpoint items are held:\n" +
-			"  " + id + " request GET http://127.0.0.1:1/held HTTP/1.1\n" +
+			"  " + id + " request GET /held HTTP/1.1\n" +
 			"forward or drop them, or rerun with --force to drop them\n"
 		if err == nil || stdout != "" || stderr != wantRefusal {
 			t.Fatalf("\nwanted:\n%s\ngot:\nstdout %q, stderr %q, error %v", wantRefusal, stdout, stderr, err)
