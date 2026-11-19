@@ -89,6 +89,28 @@ func TestH2Engine_RedirectedRequest(t *testing.T) {
 			"HTTP/2 201\r\ncontent-type: text/plain\r\nx-origin: h1\r\n\r\npong")
 	})
 
+	t.Run("should send a Checkpoint edit whose request line names another origin to that origin, translated for HTTP/1.1", func(t *testing.T) {
+		origin := newH2TestOrigin(t)
+		h1Origin := newScriptedTLSOrigin(t, func(conn net.Conn) {
+			io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+		})
+		addr, _, ca := serveH1EngineMITMProxy(t, true, holdEverything(t))
+		proxy := proxyOf(t, addr)
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		origin.accept(t)
+
+		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/a")
+
+		shown := "GET /a HTTP/2\r\n:scheme: https\r\n:authority: " + origin.addr + "\r\n\r\n"
+		edit := "GET https://" + h1Origin.addr + "/moved HTTP/2\r\n:scheme: https\r\n:authority: " + origin.addr + "\r\nx-edit: 1\r\n\r\n"
+		forwardHeld(t, proxy, shown, edit)
+
+		want := "GET /moved HTTP/1.1\r\nhost: " + h1Origin.addr + "\r\nx-edit: 1\r\n\r\n"
+		if got := h1Origin.received(t); got != want {
+			t.Fatalf("the HTTP/1.1 origin's request\nwanted:\n%q\ngot:\n%q", want, got)
+		}
+	})
+
 	t.Run("should leave the connection's other streams to its origin while a redirected request is in flight", func(t *testing.T) {
 		origin := newH2TestOrigin(t)
 		release := make(chan struct{})

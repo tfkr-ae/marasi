@@ -62,6 +62,11 @@ func (h *h2Conn) carry(st *h2Stream) {
 		h.resetStream(st.id, *cut)
 		return
 	}
+	// The response step may have replaced the wire message: a Checkpoint
+	// edit is a new field list.
+	if pair.responseWire != nil {
+		wire = pair.responseWire
+	}
 	h.writeResponse(st, pair, res, wire)
 }
 

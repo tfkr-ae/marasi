@@ -7,6 +7,27 @@
       "approach": "connect-tls",
       "matched": 5,
       "cases": 5
+    },
+    {
+      "run": "checkpoint-forward",
+      "target": "fixtures",
+      "approach": "connect-tls",
+      "matched": 5,
+      "cases": 5
+    },
+    {
+      "run": "checkpoint-edit",
+      "target": "fixtures",
+      "approach": "connect-tls",
+      "matched": 5,
+      "cases": 5
+    },
+    {
+      "run": "extension",
+      "target": "fixtures",
+      "approach": "connect-tls",
+      "matched": 5,
+      "cases": 5
     }
   ]
 }
