@@ -5,7 +5,7 @@
       "run": "proxy",
       "target": "nginx",
       "approach": "connect-plain",
-      "matched": 114,
+      "matched": 120,
       "cases": 213,
       "leg_rules": {
         "passed": 624,
@@ -16,7 +16,7 @@
       "run": "proxy",
       "target": "nginx",
       "approach": "connect-tls",
-      "matched": 114,
+      "matched": 120,
       "cases": 213,
       "leg_rules": {
         "passed": 624,
@@ -27,7 +27,7 @@
       "run": "checkpoint-forward",
       "target": "nginx",
       "approach": "connect-plain",
-      "matched": 114,
+      "matched": 120,
       "cases": 213,
       "leg_rules": {
         "passed": 624,
@@ -38,7 +38,7 @@
       "run": "checkpoint-forward",
       "target": "nginx",
       "approach": "connect-tls",
-      "matched": 114,
+      "matched": 120,
       "cases": 213,
       "leg_rules": {
         "passed": 624,
@@ -49,7 +49,7 @@
       "run": "checkpoint-edit",
       "target": "nginx",
       "approach": "connect-plain",
-      "matched": 114,
+      "matched": 120,
       "cases": 213,
       "leg_rules": {
         "passed": 624,
@@ -60,7 +60,7 @@
       "run": "checkpoint-edit",
       "target": "nginx",
       "approach": "connect-tls",
-      "matched": 114,
+      "matched": 120,
       "cases": 213,
       "leg_rules": {
         "passed": 624,
@@ -71,7 +71,7 @@
       "run": "extension",
       "target": "nginx",
       "approach": "connect-plain",
-      "matched": 114,
+      "matched": 120,
       "cases": 213,
       "leg_rules": {
         "passed": 624,
@@ -82,7 +82,7 @@
       "run": "extension",
       "target": "nginx",
       "approach": "connect-tls",
-      "matched": 114,
+      "matched": 120,
       "cases": 213,
       "leg_rules": {
         "passed": 624,
