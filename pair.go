@@ -47,6 +47,12 @@ type Pair struct {
 	// ResponseBodyEnding is how the proxy's read of the response body
 	// ended, BodyUnread on the request chain.
 	ResponseBodyEnding BodyEnding
+	// ClientProtocol is the protocol the client sent the request in, and
+	// OriginProtocol the one it went to the origin in: "http/1.1" or "h2".
+	// They differ when a redirected request was translated between them.
+	// OriginProtocol is empty until the request went out.
+	ClientProtocol string
+	OriginProtocol string
 
 	// webSocketUpstream is the upstream stream of a successful upgrade,
 	// detached from the response body by WebSocketPrepareModifier.
