@@ -1,0 +1,50 @@
+[
+  {
+    "cases": "*.HTTPVersion:2.*.bidi-stream.full-duplex.*@connect-plain",
+    "runs": [
+      "proxy"
+    ],
+    "field": "verdict",
+    "got": "timed-out",
+    "kind": "known",
+    "reason": "Marasi reads a body whole before it forwards it, so a full-duplex bidirectional stream over h2c waits for a request body that never ends; the streamed carry fixes it (2026-11-20-conformance-testers-for-grpc-and-streams.md)",
+    "phase": 4
+  },
+  {
+    "cases": "Deadline Propagation.HTTPVersion:2.*.bidi-stream.full-duplex.success@connect-plain",
+    "runs": [
+      "proxy"
+    ],
+    "field": "verdict",
+    "got": "failed",
+    "kind": "known",
+    "reason": "Marasi reads a body whole before it forwards it, so a full-duplex bidirectional stream over h2c waits for a request body that never ends; the streamed carry fixes it; the client's deadline ends the call first",
+    "phase": 4
+  },
+  {
+    "cases": "*.HTTPVersion:2.*.bidi-stream.full-duplex.*@connect-plain",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "verdict",
+    "got": "timed-out",
+    "kind": "known",
+    "reason": "Checkpoint and the extension run take each body whole, so a full-duplex bidirectional stream over h2c waits for a request body that never ends; holding and hooking stream messages fixes it (2026-11-20-conformance-testers-for-grpc-and-streams.md)",
+    "phase": 6
+  },
+  {
+    "cases": "Deadline Propagation.HTTPVersion:2.*.bidi-stream.full-duplex.success@connect-plain",
+    "runs": [
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "verdict",
+    "got": "failed",
+    "kind": "known",
+    "reason": "Checkpoint and the extension run take each body whole, so a full-duplex bidirectional stream over h2c waits for a request body that never ends; holding and hooking stream messages fixes it; the client's deadline ends the call first",
+    "phase": 6
+  }
+]

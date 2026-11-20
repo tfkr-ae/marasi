@@ -1,0 +1,33 @@
+{
+  "suite": "connect-client",
+  "rows": [
+    {
+      "run": "proxy",
+      "target": "reference",
+      "approach": "connect-plain",
+      "matched": 6367,
+      "cases": 6767
+    },
+    {
+      "run": "checkpoint-forward",
+      "target": "reference",
+      "approach": "connect-plain",
+      "matched": 6367,
+      "cases": 6767
+    },
+    {
+      "run": "checkpoint-edit",
+      "target": "reference",
+      "approach": "connect-plain",
+      "matched": 6367,
+      "cases": 6767
+    },
+    {
+      "run": "extension",
+      "target": "reference",
+      "approach": "connect-plain",
+      "matched": 6367,
+      "cases": 6767
+    }
+  ]
+}
