@@ -248,6 +248,72 @@ var Catalogue = []Case{
 			Message(true, "id: 2\ndata: second\n\n"),
 		},
 	},
+	{
+		// gRPC-Web in both directions over chunked bodies: the origin
+		// answers each request message before the request ends, and ends
+		// with a trailers frame.
+		ID:       "grpc-web-wait-for-answer-http1",
+		RFC:      "gRPC PROTOCOL-WEB.md over RFC 9112 §7.1 chunked transfer coding",
+		Protocol: ProtocolHTTP1,
+		Client: []Step{
+			Head(false, ":method", "POST", ":path", "/conformance.Stream/PingPong", "Host", "{authority}",
+				"Content-Type", "application/grpc-web+proto", "X-Grpc-Web", "1", "Transfer-Encoding", "chunked"),
+			Await(KindMessage),
+			Message(false, GRPC("pong 1")),
+			Await(KindMessage),
+			Message(true, GRPC("pong 2")),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Head(false, ":status", "200", "Content-Type", "application/grpc-web+proto", "Transfer-Encoding", "chunked"),
+			Message(false, GRPC("ping 1")),
+			Await(KindMessage),
+			Message(false, GRPC("ping 2")),
+			Await(KindEnd),
+			Message(true, GRPCWebTrailers("grpc-status: 0\r\n")),
+		},
+	},
+	{
+		ID:       "connect-wait-for-answer-http1",
+		RFC:      "Connect protocol streaming and EndStreamResponse, over RFC 9112 §7.1 chunked transfer coding",
+		Protocol: ProtocolHTTP1,
+		Client: []Step{
+			Head(false, ":method", "POST", ":path", "/conformance.Stream/PingPong", "Host", "{authority}",
+				"Content-Type", "application/connect+proto", "Connect-Protocol-Version", "1", "Transfer-Encoding", "chunked"),
+			Await(KindMessage),
+			Message(false, GRPC("pong 1")),
+			Await(KindMessage),
+			Message(true, GRPC("pong 2")),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Head(false, ":status", "200", "Content-Type", "application/connect+proto", "Transfer-Encoding", "chunked"),
+			Message(false, GRPC("ping 1")),
+			Await(KindMessage),
+			Message(false, GRPC("ping 2")),
+			Await(KindEnd),
+			Message(true, ConnectEnd("{}")),
+		},
+	},
+	{
+		// A response with no length and no chunked coding runs until the
+		// origin closes its connection (RFC 9112 §6.3).
+		ID:       "ndjson-wait-for-answer-http1",
+		RFC:      "NDJSON (one JSON text per line), over an RFC 9112 §6.3 body read until close",
+		Protocol: ProtocolHTTP1,
+		Client: []Step{
+			Head(true, ":method", "GET", ":path", "/logs", "Host", "{authority}", "Accept", "application/x-ndjson"),
+			Await(KindMessage),
+			Answer(),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Head(false, ":status", "200", "Content-Type", "application/x-ndjson"),
+			Message(false, "{\"n\":1}\n"),
+			Await(KindAnswer),
+			Message(true, "{\"n\":2}\n"),
+		},
+	},
 	// The stall cases are ordinary pairs: their heads name no message
 	// framing, so Marasi reads each body whole until it stalls for 2
 	// seconds after some arrived, then forwards it as it arrives. The

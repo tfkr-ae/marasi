@@ -84,6 +84,273 @@
       }
     ]
   },
+  "connect-wait-for-answer-http1@absolute": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/PingPong"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/connect+proto"
+          },
+          {
+            "name": "Connect-Protocol-Version",
+            "value": "1"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/connect+proto"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZwaW5nIDE="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAZwb25nIDE="
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZwaW5nIDI="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAZwb25nIDI="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AgAAAAJ7fQ=="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "connect-wait-for-answer-http1@connect-plain": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/PingPong"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/connect+proto"
+          },
+          {
+            "name": "Connect-Protocol-Version",
+            "value": "1"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/connect+proto"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZwaW5nIDE="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAZwb25nIDE="
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZwaW5nIDI="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAZwb25nIDI="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AgAAAAJ7fQ=="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "connect-wait-for-answer-http1@connect-tls": {
+    "client_alpn": "http/1.1",
+    "origin_alpn": [
+      "http/1.1"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/PingPong"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/connect+proto"
+          },
+          {
+            "name": "Connect-Protocol-Version",
+            "value": "1"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/connect+proto"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZwaW5nIDE="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAZwb25nIDE="
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZwaW5nIDI="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAZwb25nIDI="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AgAAAAJ7fQ=="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
   "grpc-trailers-only@connect-tls": {
     "client_alpn": "h2",
     "origin_alpn": [
@@ -335,6 +602,273 @@
       }
     ]
   },
+  "grpc-web-wait-for-answer-http1@absolute": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/PingPong"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/grpc-web+proto"
+          },
+          {
+            "name": "X-Grpc-Web",
+            "value": "1"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/grpc-web+proto"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZwaW5nIDE="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAZwb25nIDE="
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZwaW5nIDI="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAZwb25nIDI="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "gAAAABBncnBjLXN0YXR1czogMA0K"
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "grpc-web-wait-for-answer-http1@connect-plain": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/PingPong"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/grpc-web+proto"
+          },
+          {
+            "name": "X-Grpc-Web",
+            "value": "1"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/grpc-web+proto"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZwaW5nIDE="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAZwb25nIDE="
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZwaW5nIDI="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAZwb25nIDI="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "gAAAABBncnBjLXN0YXR1czogMA0K"
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "grpc-web-wait-for-answer-http1@connect-tls": {
+    "client_alpn": "http/1.1",
+    "origin_alpn": [
+      "http/1.1"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/PingPong"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/grpc-web+proto"
+          },
+          {
+            "name": "X-Grpc-Web",
+            "value": "1"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/grpc-web+proto"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZwaW5nIDE="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAZwb25nIDE="
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZwaW5nIDI="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAZwb25nIDI="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "gAAAABBncnBjLXN0YXR1czogMA0K"
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
   "ndjson-wait-for-answer-h2@connect-tls": {
     "client_alpn": "h2",
     "origin_alpn": [
@@ -381,6 +915,204 @@
           },
           {
             "name": "content-type",
+            "value": "application/x-ndjson"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "eyJuIjoxfQo="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "eyJuIjoyfQo="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "ndjson-wait-for-answer-http1@absolute": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "GET"
+          },
+          {
+            "name": ":path",
+            "value": "/logs"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Accept",
+            "value": "application/x-ndjson"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/x-ndjson"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "eyJuIjoxfQo="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "eyJuIjoyfQo="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "ndjson-wait-for-answer-http1@connect-plain": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "GET"
+          },
+          {
+            "name": ":path",
+            "value": "/logs"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Accept",
+            "value": "application/x-ndjson"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/x-ndjson"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "eyJuIjoxfQo="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "eyJuIjoyfQo="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "ndjson-wait-for-answer-http1@connect-tls": {
+    "client_alpn": "http/1.1",
+    "origin_alpn": [
+      "http/1.1"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "GET"
+          },
+          {
+            "name": ":path",
+            "value": "/logs"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Accept",
+            "value": "application/x-ndjson"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
             "value": "application/x-ndjson"
           }
         ]

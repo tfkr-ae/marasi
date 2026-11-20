@@ -292,6 +292,13 @@ func (sp *streamedPair) ended(d *streamedDirection, err error) {
 	sp.end(d, streamCancelled, 0)
 }
 
+// ending is how d ended, "" while it goes on.
+func (sp *streamedPair) ending(d *streamedDirection) string {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return d.ending
+}
+
 // end records d's ending once; a code goes with a reset.
 func (sp *streamedPair) end(d *streamedDirection, ending string, code http2.ErrCode) {
 	sp.mu.Lock()
