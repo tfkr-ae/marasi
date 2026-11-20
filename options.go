@@ -725,6 +725,9 @@ func (proxy *Proxy) baseResponse(res *http.Response, wire *wireResponse) error {
 		proxy.captureCutShortResponse(pair)
 		return err
 	}
+	if pair.ResponseBodyEnding == BodyTooLarge {
+		markPassedThrough(pair, "response")
+	}
 	detachOpaqueUpgrade(pair)
 	if admission := pair.admission; admission != nil {
 		release, generation, err := proxy.admitWork(res.Request.Context(), admission.internal)

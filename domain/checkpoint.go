@@ -13,22 +13,39 @@ const (
 	CheckpointTypeResponse = "response"
 	// CheckpointTypeWebSocket is a held WebSocket message.
 	CheckpointTypeWebSocket = "websocket"
+	// CheckpointTypeStream is a held stream message of a streamed pair.
+	CheckpointTypeStream = "stream"
 )
 
-// CheckpointItem is an in-flight request, response, or WebSocket message held by Checkpoint.
+// CheckpointItem is an in-flight request, response, WebSocket message or
+// stream message held by Checkpoint.
 type CheckpointItem struct {
-	// ID is the request/response pair UUID or the WebSocket message UUID.
+	// ID is the request/response pair UUID, or the WebSocket or stream
+	// message UUID.
 	ID uuid.UUID
-	// Type is request, response, or websocket.
+	// Type is request, response, websocket or stream.
 	Type string
 	// Raw is the dumped HTTP request or response bytes.
 	Raw []byte
-	// Payload is the WebSocket frame payload.
+	// Payload is the WebSocket frame payload, or a stream message's payload
+	// without its envelope, as it is on the wire.
 	Payload []byte
 	// Opcode is the WebSocket frame opcode.
 	Opcode int
-	// Direction is the WebSocket frame direction.
+	// Direction is the WebSocket frame direction, or a stream message's:
+	// request or response.
 	Direction string
+	// PairID is the streamed pair that carries a stream message.
+	PairID uuid.UUID
+	// Framing is a stream message's message framing, such as grpc.
+	Framing string
+	// Flags is a stream message's envelope flags byte, nil for a framing
+	// without one.
+	Flags *uint8
+	// Text is a stream message's payload in its text form, for a framing
+	// and codec that has one (stream.TextForm); HasText reports it.
+	Text    string
+	HasText bool
 	// ConnectionID is the WebSocket connection that carried the frame.
 	ConnectionID uuid.UUID
 	// RequestID is the HTTP upgrade request that opened the WebSocket connection.
@@ -36,9 +53,11 @@ type CheckpointItem struct {
 	// FrameCount is how many frames carried the WebSocket message on the wire.
 	FrameCount int
 	// Compressed reports that the WebSocket message was compressed with
-	// permessage-deflate on the wire. Payload is always uncompressed.
+	// permessage-deflate on the wire, in which case Payload is uncompressed;
+	// for a stream message, that its envelope's compressed flag is set.
 	Compressed bool
-	// Metadata is the WebSocket message's extension and proxy annotations.
+	// Metadata is the WebSocket or stream message's extension and proxy
+	// annotations.
 	Metadata map[string]any
 	// InterceptedAt is when Checkpoint held the item. A held response has its
 	// own time, though it shares its request's id.

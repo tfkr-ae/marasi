@@ -73,6 +73,7 @@ type httpHoldResult struct {
 type checkpointState struct {
 	mu          sync.Mutex
 	http        map[uuid.UUID]*pendingHTTP
+	stream      map[uuid.UUID]*pendingStream
 	order       []uuid.UUID
 	wsConn      map[uuid.UUID]uuid.UUID
 	holdStarted chan struct{}
@@ -83,6 +84,7 @@ type checkpointState struct {
 func newCheckpointState() *checkpointState {
 	return &checkpointState{
 		http:        make(map[uuid.UUID]*pendingHTTP),
+		stream:      make(map[uuid.UUID]*pendingStream),
 		wsConn:      make(map[uuid.UUID]uuid.UUID),
 		holdStarted: make(chan struct{}),
 		now:         time.Now,
@@ -98,6 +100,10 @@ func cloneCheckpointItem(item domain.CheckpointItem) domain.CheckpointItem {
 	item.Raw = bytes.Clone(item.Raw)
 	item.Payload = bytes.Clone(item.Payload)
 	item.Metadata = maps.Clone(item.Metadata)
+	if item.Flags != nil {
+		flags := *item.Flags
+		item.Flags = &flags
+	}
 	return item
 }
 
@@ -150,7 +156,7 @@ func (proxy *Proxy) CheckpointHoldStarted() <-chan struct{} {
 	return state.holdStarted
 }
 
-// HasPendingCheckpoint reports whether any HTTP or WebSocket Checkpoint item is pending.
+// HasPendingCheckpoint reports whether any HTTP, WebSocket or stream Checkpoint item is pending.
 func (proxy *Proxy) HasPendingCheckpoint() bool {
 	if proxy.httpPendingCount() != 0 {
 		return true
@@ -164,10 +170,10 @@ func (proxy *Proxy) httpPendingCount() int {
 	}
 	proxy.checkpoint.mu.Lock()
 	defer proxy.checkpoint.mu.Unlock()
-	return len(proxy.checkpoint.http)
+	return len(proxy.checkpoint.http) + len(proxy.checkpoint.stream)
 }
 
-// CheckpointItems returns pending HTTP and WebSocket items in hold order, oldest first.
+// CheckpointItems returns pending HTTP, WebSocket and stream items in hold order, oldest first.
 func (proxy *Proxy) CheckpointItems() []domain.CheckpointItem {
 	if proxy.checkpoint == nil {
 		return []domain.CheckpointItem{}
@@ -186,6 +192,10 @@ func (proxy *Proxy) CheckpointItems() []domain.CheckpointItem {
 	for _, id := range proxy.checkpoint.order {
 		seen[id] = struct{}{}
 		if pending, ok := proxy.checkpoint.http[id]; ok {
+			items = append(items, cloneCheckpointItem(pending.item))
+			continue
+		}
+		if pending, ok := proxy.checkpoint.stream[id]; ok {
 			items = append(items, cloneCheckpointItem(pending.item))
 			continue
 		}
@@ -208,6 +218,11 @@ func (proxy *Proxy) GetCheckpoint(id uuid.UUID) (domain.CheckpointItem, bool) {
 		proxy.checkpoint.mu.Lock()
 		pending, ok := proxy.checkpoint.http[id]
 		if ok {
+			item := cloneCheckpointItem(pending.item)
+			proxy.checkpoint.mu.Unlock()
+			return item, true
+		}
+		if pending, ok := proxy.checkpoint.stream[id]; ok {
 			item := cloneCheckpointItem(pending.item)
 			proxy.checkpoint.mu.Unlock()
 			return item, true
@@ -238,6 +253,11 @@ func (proxy *Proxy) ForwardCheckpoint(id uuid.UUID, fwd CheckpointForward) error
 	if err := proxy.forwardHTTP(id, fwd); err == nil || !errors.Is(err, ErrCheckpointNotFound) {
 		return err
 	}
+	if proxy.checkpoint != nil {
+		if err := proxy.forwardStream(id, fwd); err == nil || !errors.Is(err, ErrCheckpointNotFound) {
+			return err
+		}
+	}
 	return proxy.forwardWebSocket(id, fwd)
 }
 
@@ -246,13 +266,19 @@ func (proxy *Proxy) DropCheckpoint(id uuid.UUID) error {
 	if err := proxy.dropHTTP(id); err == nil || !errors.Is(err, ErrCheckpointNotFound) {
 		return err
 	}
+	if proxy.checkpoint != nil {
+		if err := proxy.dropStream(id); err == nil || !errors.Is(err, ErrCheckpointNotFound) {
+			return err
+		}
+	}
 	return proxy.dropWebSocket(id)
 }
 
-// DropAllCheckpoint unblocks every pending HTTP and WebSocket item as drop.
+// DropAllCheckpoint unblocks every pending HTTP, WebSocket and stream item as drop.
 // It returns the items it actually removed.
 func (proxy *Proxy) DropAllCheckpoint() []domain.CheckpointItem {
 	var httpPending []*pendingHTTP
+	var streamPending []*pendingStream
 	if proxy.checkpoint != nil {
 		proxy.checkpoint.mu.Lock()
 		httpPending = make([]*pendingHTTP, 0, len(proxy.checkpoint.http))
@@ -261,6 +287,7 @@ func (proxy *Proxy) DropAllCheckpoint() []domain.CheckpointItem {
 			httpPending = append(httpPending, pending)
 			delete(proxy.checkpoint.http, id)
 		}
+		streamPending = proxy.checkpoint.dropAllStreams()
 		proxy.checkpoint.order = nil
 		clear(proxy.checkpoint.wsConn)
 		proxy.checkpoint.mu.Unlock()
@@ -270,6 +297,10 @@ func (proxy *Proxy) DropAllCheckpoint() []domain.CheckpointItem {
 	for _, pending := range httpPending {
 		removed = append(removed, cloneCheckpointItem(pending.item))
 		pending.release()
+	}
+	for _, pending := range streamPending {
+		removed = append(removed, cloneCheckpointItem(pending.item))
+		close(pending.done)
 	}
 	if proxy.WebSocketInterceptor != nil {
 		for _, message := range proxy.WebSocketInterceptor.CancelAll() {

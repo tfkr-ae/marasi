@@ -191,6 +191,9 @@ func SetupRequestModifier(proxy *Proxy, pair *Pair) error {
 
 	pair.ID = id
 	pair.Metadata = metadata
+	if pair.RequestBodyEnding == BodyTooLarge {
+		markPassedThrough(pair, "request")
+	}
 	pair.Timing.Requested = requested
 	// The transport records the route the request goes out on, and the
 	// response writes it as the pair's route snapshot.
@@ -257,6 +260,9 @@ func CompassRequestModifier(proxy *Proxy, pair *Pair) error {
 // After processRequest, it will check if the request is passed through (nil), stopped (Stop), or dropped (Drop).
 func ExtensionsRequestModifier(proxy *Proxy, pair *Pair) error {
 	req := pair.Request
+	if pair.RequestBodyEnding == BodyTooLarge {
+		defer proxy.keepPassedBody(pair, &req.Body, "request")()
+	}
 	extensionID := req.Header.Get("x-extension-id")
 	pair.ExtensionID, _ = uuid.Parse(extensionID)
 
@@ -313,6 +319,10 @@ func CheckpointRequestModifier(proxy *Proxy, pair *Pair) error {
 			// A Lua error does not match the rule. The global flag still holds.
 		}
 
+		if (shouldIntercept || proxy.GetIntercept()) && pair.RequestBodyEnding == BodyTooLarge {
+			proxy.logPassedThrough(pair, "request", "A Checkpoint hold was")
+			return nil
+		}
 		if shouldIntercept || proxy.GetIntercept() {
 			// A request read from the wire shows as it goes upstream and
 			// is edited through the codec (h1engine_checkpoint.go).
@@ -662,6 +672,11 @@ func WebSocketUpgradeHandler(proxy *Proxy, pair *Pair, client, upstream io.ReadW
 func CompressedResponseModifier(proxy *Proxy, pair *Pair) error {
 	res := pair.Response
 	codings := res.Header.Values("Content-Encoding")
+	// A passed body is only what arrived before it passed: it goes to
+	// the client and storage as the origin coded it.
+	if pair.ResponseBodyEnding == BodyTooLarge {
+		return nil
+	}
 	if len(codings) != 1 || (codings[0] != "gzip" && codings[0] != "br") {
 		return nil
 	}
@@ -814,6 +829,9 @@ func ExtensionsResponseModifier(proxy *Proxy, pair *Pair) error {
 	if pair.FromMarasi() {
 		return nil
 	}
+	if pair.ResponseBodyEnding == BodyTooLarge {
+		defer proxy.keepPassedBody(pair, &pair.Response.Body, "response")()
+	}
 	for _, ext := range proxy.Extensions {
 		if ext.Data.Name != "checkpoint" && ext.Data.Name != "compass" && ext.MetadataSnapshot().Enabled {
 			if pair.ExtensionID != ext.Data.ID {
@@ -870,6 +888,10 @@ func CheckpointResponseModifier(proxy *Proxy, pair *Pair) error {
 			// A Lua error does not match the rule. The global and per-request flags still hold.
 		}
 
+		if (pair.InterceptResponse || shouldIntercept || proxy.GetIntercept()) && pair.ResponseBodyEnding == BodyTooLarge {
+			proxy.logPassedThrough(pair, "response", "A Checkpoint hold was")
+			return nil
+		}
 		if pair.InterceptResponse || shouldIntercept || proxy.GetIntercept() {
 			// A response read from the wire shows as it goes to the
 			// client and is edited through the codec (h1engine_checkpoint.go).

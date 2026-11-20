@@ -18,10 +18,10 @@ var checkpointForwardFile string
 var checkpointInterceptResponse bool
 
 func init() {
-	checkpointListCmd.Flags().StringVar(&checkpointKind, "kind", "", "Keep only http or websocket items")
+	checkpointListCmd.Flags().StringVar(&checkpointKind, "kind", "", "Keep only http, websocket or stream items")
 	checkpointForwardCmd.Flags().StringVar(&checkpointForwardFile, "file", "", "Read edited bytes from a file. If omitted, use piped stdin. If stdin is not piped, forward the original bytes")
 	checkpointForwardCmd.Flags().BoolVar(&checkpointInterceptResponse, "intercept-response", false, "Hold the matching response")
-	checkpointCmd.AddCommand(checkpointListCmd, checkpointGetCmd, checkpointForwardCmd, checkpointDropCmd, checkpointInterceptCmd, checkpointWebsocketInterceptCmd)
+	checkpointCmd.AddCommand(checkpointListCmd, checkpointGetCmd, checkpointForwardCmd, checkpointDropCmd, checkpointInterceptCmd, checkpointWebsocketInterceptCmd, checkpointStreamInterceptCmd)
 	rootCmd.AddCommand(checkpointCmd)
 }
 
@@ -37,8 +37,10 @@ var checkpointListCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		path := "/checkpoint"
 		if cmd.Flags().Changed("kind") {
-			if checkpointKind != "http" && checkpointKind != "websocket" {
-				return errors.New("checkpoint list --kind must be http or websocket")
+			switch checkpointKind {
+			case "http", "websocket", "stream":
+			default:
+				return errors.New("checkpoint list --kind must be http, websocket or stream")
 			}
 			path += "?" + url.Values{"kind": {checkpointKind}}.Encode()
 		}
@@ -187,6 +189,15 @@ var checkpointWebsocketInterceptCmd = &cobra.Command{
 	},
 }
 
+var checkpointStreamInterceptCmd = &cobra.Command{
+	Use:   "stream-intercept on|off",
+	Short: "Set stream message Checkpoint intercept",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runCheckpointFlag(cmd, args[0], "/checkpoint/stream-intercept", "stream_intercept", "setting checkpoint stream intercept", "stream-intercept")
+	},
+}
+
 func runCheckpointFlag(cmd *cobra.Command, value, path, field, operation, name string) error {
 	if value != "on" && value != "off" {
 		return fmt.Errorf("checkpoint %s requires on or off", name)
@@ -233,7 +244,7 @@ func encodeCheckpointForward(cmd *cobra.Command, id string) ([]byte, error) {
 			return nil, fmt.Errorf("decoding checkpoint item: %w", err)
 		}
 		encoded := base64.StdEncoding.EncodeToString(raw)
-		if parsed.Type == "websocket" {
+		if parsed.Type == "websocket" || parsed.Type == "stream" {
 			request.Payload = &encoded
 		} else {
 			request.Raw = &encoded
@@ -302,7 +313,7 @@ func writeCheckpointGet(body []byte, stdout io.Writer, terminal bool) error {
 		return fmt.Errorf("decoding checkpoint item: %w", err)
 	}
 	data := item.Raw
-	if item.Type == "websocket" {
+	if item.Type == "websocket" || item.Type == "stream" {
 		data = item.Payload
 	}
 	if terminal && len(data) > 0 && data[len(data)-1] != '\n' {

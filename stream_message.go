@@ -16,21 +16,23 @@ import (
 // handle is what happens to a whole stream message between being read and
 // being forwarded: a compressed one is decoded, the processStreamMessage
 // hooks see and may change it, the declared-length rule undoes a change the
-// direction cannot carry, and it is stored as it goes out. It returns the
-// bytes to forward: the message as it came when nothing changed it, nil
-// when it was dropped. A compressed message the proxy cannot decode is
-// stored with its inflate error and returned as a *messageDecodeError, so
-// the carry resets the stream.
+// direction cannot carry, Checkpoint may hold it, and it is stored as it
+// goes out. It returns the bytes to forward: the message as it came when
+// nothing changed it, nil when it was dropped. A compressed message the
+// proxy cannot decode is stored with its inflate error and returned as a
+// *messageDecodeError, so the carry resets the stream.
 //
 // It runs on the direction's one reader, so nothing more is read from the
-// sender until it returns. Checkpoint holds and injection extend it.
-func (sp *streamedPair) handle(name string, d *streamedDirection, message *stream.Message) ([]byte, error) {
+// sender until it returns: a held message stops only its own direction.
+// cutOff closes when the direction is reset or cut off, which abandons a
+// hold. Injection extends it.
+func (sp *streamedPair) handle(name string, d *streamedDirection, message *stream.Message, cutOff <-chan struct{}) ([]byte, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
 		id = uuid.New()
 	}
 	live := &stream.LiveMessage{
-		ID: id, PairID: sp.pair.ID, Direction: name, Framing: d.framing,
+		ID: id, PairID: sp.pair.ID, Direction: name, Framing: d.framing, ContentType: sp.contentType(d),
 		Flags: message.Flags, Payload: message.Payload, Encoding: d.encoding, Metadata: map[string]any{},
 	}
 	compressed := live.Compressed()
@@ -44,26 +46,51 @@ func (sp *streamedPair) handle(name string, d *streamedDirection, message *strea
 	}
 	original := live.Payload
 	processStreamMessageExtensions(sp.proxy, sp.pair, live)
+	intercept := !live.Dropped && shouldInterceptStreamMessage(sp.proxy, live)
 
-	edited := !bytes.Equal(live.Payload, original)
+	out := outgoing(d, message, original)
+	raw, flagsOut, edited := out(live.Payload)
 	if edited && live.ReadOnly {
 		sp.readOnlyRefused(name, d.encoding)
-		live.Payload, edited = original, false
+		live.Payload = original
+		raw, flagsOut, edited = out(original)
 	}
-	// An edited message goes out uncompressed, its compressed flag cleared.
-	flagsOut, raw := live.Flags, message.Raw
-	if edited {
-		raw = live.Payload
-		if d.framing.Enveloped() {
-			flagsOut = stream.Uncompressed(live.Flags)
-			raw = stream.Envelope(flagsOut, live.Payload)
+	declared := sp.declaresLength(d)
+	if declared && (live.Dropped || len(raw) != len(message.Raw)) {
+		sp.lengthRefused(name, live.Dropped)
+		live.Dropped, live.Payload = false, original
+		raw, flagsOut, edited = out(original)
+	}
+	if intercept && !live.Dropped {
+		live.Metadata["intercepted"] = true
+		// refuse is what Checkpoint checks before a forward or drop ends
+		// the hold, so a refused change leaves the message held.
+		readOnly := live.ReadOnly
+		refuse := func(payload []byte, drop bool) error {
+			switch {
+			case drop && declared:
+				return fmt.Errorf("%w: the %s head declares a length, so a drop cannot be carried", ErrStreamLengthDeclared, name)
+			case drop || payload == nil:
+				return nil
+			case readOnly && !bytes.Equal(payload, original):
+				return fmt.Errorf("%w: the %s message is compressed with %q, which Marasi does not decode", ErrStreamReadOnly, name, d.encoding)
+			}
+			if wire, _, _ := out(payload); declared && len(wire) != len(message.Raw) {
+				return fmt.Errorf("%w: the %s head declares a length, so an edit that makes the message %d bytes on the wire instead of %d cannot be carried",
+					ErrStreamLengthDeclared, name, len(wire), len(message.Raw))
+			}
+			return nil
+		}
+		decision := sp.proxy.holdStreamMessage(sp, live, refuse, cutOff)
+		switch {
+		case decision.dropped:
+			live.Dropped = true
+		case decision.payload != nil:
+			live.Payload = decision.payload
+			raw, flagsOut, edited = out(live.Payload)
 		}
 	}
-	if sp.declaresLength(d) && (live.Dropped || len(raw) != len(message.Raw)) {
-		sp.lengthRefused(name, live.Dropped)
-		live.Dropped, live.Payload, edited = false, original, false
-		flagsOut, raw = live.Flags, message.Raw
-	}
+
 	switch {
 	case live.Dropped:
 		live.Metadata["dropped"] = true
@@ -87,6 +114,23 @@ func (sp *streamedPair) handle(name string, d *streamedDirection, message *strea
 	row.Compressed = compressed
 	sp.queue(row)
 	return raw, nil
+}
+
+// outgoing returns what message goes out as with a payload: the bytes it
+// came in and its flags when the payload is original, the payload it was
+// read as; otherwise the payload uncompressed, in a new envelope with its
+// compressed flag cleared where the framing has one, reported edited.
+func outgoing(d *streamedDirection, message *stream.Message, original []byte) func(payload []byte) (raw []byte, flags byte, edited bool) {
+	return func(payload []byte) ([]byte, byte, bool) {
+		if bytes.Equal(payload, original) {
+			return message.Raw, message.Flags, false
+		}
+		if !d.framing.Enveloped() {
+			return payload, message.Flags, true
+		}
+		flags := stream.Uncompressed(message.Flags)
+		return stream.Envelope(flags, payload), flags, true
+	}
 }
 
 // messageDecodeError is a compressed stream message the proxy could not
@@ -126,6 +170,20 @@ func (sp *streamedPair) undecodable(name string, d *streamedDirection, id uuid.U
 func (sp *streamedPair) readOnlyRefused(name, encoding string) {
 	entry := fmt.Sprintf("Stream message change ignored (%s): the %s message is compressed with %q, which Marasi does not decode, so it cannot be edited and went out as it came", sp.requestName(), name, encoding)
 	_ = sp.proxy.WriteLog("WARN", entry, pairLogOptions(sp.pair)...)
+}
+
+// headWentOut records the content type of d's head as it went out.
+func (sp *streamedPair) headWentOut(d *streamedDirection, contentType string) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	d.contentType = contentType
+}
+
+// contentType is the content type of d's head as it went out.
+func (sp *streamedPair) contentType(d *streamedDirection) string {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return d.contentType
 }
 
 // declaresLength reports whether d's head declared a length.
@@ -184,4 +242,31 @@ func processStreamMessageExtensions(proxy *Proxy, pair *Pair, message *stream.Li
 			return
 		}
 	}
+}
+
+// shouldInterceptStreamMessage reports whether Checkpoint holds a stream
+// message: the stream_intercept switch is on, or checkpoint's
+// interceptStreamMessage returns true. A disabled checkpoint holds none,
+// whatever the switch. An interrupted hook drops the message, as for
+// WebSocket.
+func shouldInterceptStreamMessage(proxy *Proxy, message *stream.LiveMessage) bool {
+	checkpoint, ok := proxy.GetExtension("checkpoint")
+	if ok && (checkpoint.Data == nil || !checkpoint.MetadataSnapshot().Enabled) {
+		return false
+	}
+	if proxy.GetStreamIntercept() {
+		return true
+	}
+	if !ok {
+		return false
+	}
+	intercept, err := checkpoint.ShouldInterceptStreamMessage(message)
+	if err != nil {
+		_ = proxy.WriteLog("ERROR", fmt.Sprintf("Running interceptStreamMessage : %s", err.Error()), core.LogWithExtensionID(checkpoint.Data.ID))
+		if hookInterrupted(context.Background(), checkpoint) {
+			message.Dropped = true
+		}
+		return false
+	}
+	return intercept
 }

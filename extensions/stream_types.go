@@ -45,6 +45,14 @@ func RegisterStreamMessageType(extension *Runtime) {
 			l.PushString(string(check(l).Payload))
 			return 1
 		}},
+		{Name: "text", Signature: "() -> string?", Summary: "Returns the payload in its text form: the protoscope text of a protobuf gRPC, gRPC-Web or Connect message, or the text of a JSON one. Returns nil for a message with no text form, or one editable() is false for.", Function: func(l *lua.State) int {
+			if text, ok := check(l).Text(); ok {
+				l.PushString(text)
+			} else {
+				l.PushNil()
+			}
+			return 1
+		}},
 		{Name: "set_payload", Signature: "(payload: string)", Summary: "Replaces the message payload; the envelope's length follows it. An edited compressed message goes out uncompressed with its compressed flag cleared. A change is ignored, and a proxy log says why, when editable() is false, or on a direction whose head declares a length when the message would go out at another length.", Function: func(l *lua.State) int {
 			message := check(l)
 			message.Payload = []byte(lua.CheckString(l, 2))
@@ -125,4 +133,28 @@ func (extension *Runtime) CallStreamMessageHandler(message *stream.LiveMessage) 
 		return fmt.Errorf("calling processStreamMessage: %w", err)
 	}
 	return nil
+}
+
+// ShouldInterceptStreamMessage calls the `interceptStreamMessage` function in
+// the Lua script to decide whether Checkpoint holds the stream message.
+func (extension *Runtime) ShouldInterceptStreamMessage(message *stream.LiveMessage) (bool, error) {
+	extension.Mu.Lock()
+	defer extension.Mu.Unlock()
+	defer extension.beginExecution(context.Background())()
+
+	extension.LuaState.Global(hookInterceptStreamMessage)
+	if !extension.LuaState.IsFunction(-1) {
+		extension.LuaState.Pop(1)
+		return false, nil
+	}
+
+	extension.LuaState.PushUserData(message)
+	lua.SetMetaTableNamed(extension.LuaState, streamMessageType)
+	if err := extension.LuaState.ProtectedCall(1, 1, 0); err != nil {
+		extension.LuaState.Pop(1)
+		return false, fmt.Errorf("calling interceptStreamMessage: %w", err)
+	}
+	intercept := extension.LuaState.ToBoolean(-1)
+	extension.LuaState.Pop(1)
+	return intercept, nil
 }

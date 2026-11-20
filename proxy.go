@@ -150,6 +150,7 @@ type Proxy struct {
 	checkpoint           *checkpointState
 	httpIntercept        atomic.Bool
 	webSocketIntercept   atomic.Bool
+	streamIntercept      atomic.Bool
 	webSocketLifecycleMu sync.RWMutex
 	webSocketSessions    sync.WaitGroup
 	webSocketsClosing    bool
@@ -1071,7 +1072,8 @@ func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
 func (proxy *Proxy) watchClient(req *http.Request, ending BodyEnding) {
 	// The HTTP/2 engine reads its client connection all along, and ends a
 	// stream's context when the stream or the connection ends.
-	if ending == BodyCutShort || req.ProtoMajor == 2 {
+	// A body forwarded as it arrives is still being read from the client.
+	if ending == BodyCutShort || ending == BodyTooLarge || req.ProtoMajor == 2 {
 		return
 	}
 	conn := proxy.clientConnection(req.RemoteAddr)

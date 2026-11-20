@@ -116,7 +116,7 @@ func TestExtensionAPICommand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nthe hooks\ngot:\n%v", err)
 		}
-		for _, want := range []string{"startup()", "processWebSocketMessage(message: wsmsg)", "processStreamMessage(message: streammsg)", "Called only in checkpoint"} {
+		for _, want := range []string{"startup()", "processWebSocketMessage(message: wsmsg)", "processStreamMessage(message: streammsg)", "interceptStreamMessage(message: streammsg) -> boolean", "Called only in checkpoint"} {
 			if !strings.Contains(stdout, want) {
 				t.Errorf("\nwanted:\n%q\ngot:\n%s", want, stdout)
 			}
@@ -143,8 +143,8 @@ func TestExtensionAPICommand(t *testing.T) {
 		if err := json.Unmarshal([]byte(stdout), &ref); err != nil {
 			t.Fatalf("\nwanted:\none JSON value\ngot:\n%v", err)
 		}
-		if len(ref.Hooks) != 8 || len(ref.Libraries) == 0 || len(ref.Types) == 0 {
-			t.Errorf("\nwanted:\n8 hooks, libraries, and types\ngot:\n%+v", ref)
+		if len(ref.Hooks) != 9 || len(ref.Libraries) == 0 || len(ref.Types) == 0 {
+			t.Errorf("\nwanted:\n9 hooks, libraries, and types\ngot:\n%+v", ref)
 		}
 	})
 

@@ -27,7 +27,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		subscriber := server.events.subscribe()
 		defer server.events.unsubscribe(subscriber)
 
-		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint", ""), http.StatusOK, `{"items":[],"intercept":false,"websocket_intercept":false}`+"\n")
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint", ""), http.StatusOK, `{"items":[],"intercept":false,"websocket_intercept":false,"stream_intercept":false}`+"\n")
 		assertNoCheckpointEvent(t, subscriber)
 	})
 
@@ -48,7 +48,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		firstRaw := dumpCheckpointRequest(t, firstReq)
 		secondRaw := dumpCheckpointRequest(t, secondReq)
 		want := fmt.Sprintf(
-			`{"items":[{"id":"%s","type":"request","raw":"%s","intercepted_at":"%s"},{"id":"%s","type":"request","raw":"%s","intercepted_at":"%s"}],"intercept":true,"websocket_intercept":false}`+"\n",
+			`{"items":[{"id":"%s","type":"request","raw":"%s","intercepted_at":"%s"},{"id":"%s","type":"request","raw":"%s","intercepted_at":"%s"}],"intercept":true,"websocket_intercept":false,"stream_intercept":false}`+"\n",
 			firstID, firstRaw, checkpointHeldAt(t, proxy, firstID), secondID, secondRaw, checkpointHeldAt(t, proxy, secondID),
 		)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint", ""), http.StatusOK, want)
@@ -71,11 +71,11 @@ func TestCheckpointControlRoutes(t *testing.T) {
 
 		raw := dumpCheckpointRequest(t, req)
 		httpBody := fmt.Sprintf(
-			`{"items":[{"id":"%s","type":"request","raw":"%s","intercepted_at":"%s"}],"intercept":true,"websocket_intercept":false}`+"\n",
+			`{"items":[{"id":"%s","type":"request","raw":"%s","intercepted_at":"%s"}],"intercept":true,"websocket_intercept":false,"stream_intercept":false}`+"\n",
 			reqID, raw, checkpointHeldAt(t, proxy, reqID),
 		)
 		wsBody := fmt.Sprintf(
-			`{"items":[{"id":"%s","type":"websocket","payload":"%s","opcode":1,"direction":"client","connection_id":"%s","request_id":"%s","frame_count":3,"compressed":true,"metadata":{"tag":"seen"},"intercepted_at":"`+checkpointMessageHeldAt+`"}],"intercept":true,"websocket_intercept":false}`+"\n",
+			`{"items":[{"id":"%s","type":"websocket","payload":"%s","opcode":1,"direction":"client","connection_id":"%s","request_id":"%s","frame_count":3,"compressed":true,"metadata":{"tag":"seen"},"intercepted_at":"`+checkpointMessageHeldAt+`"}],"intercept":true,"websocket_intercept":false,"stream_intercept":false}`+"\n",
 			messageID, base64.StdEncoding.EncodeToString([]byte("held")), uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e367809"), uuid.MustParse("0193802f-f0e7-73d9-a764-06d21e36780a"),
 		)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint?kind=http", ""), http.StatusOK, httpBody)
@@ -111,7 +111,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		drainCheckpointHeld(t, subscriber)
 
 		response := requestControlAPI(server, http.MethodPost, "/checkpoint/"+reqID.String()+"/forward", `{}`)
-		assertControlAPIResponse(t, response, http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false}`+"\n")
+		assertControlAPIResponse(t, response, http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false,"stream_intercept":false}`+"\n")
 		if err := receiveCheckpointHold(t, done); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -199,7 +199,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		drainCheckpointHeld(t, subscriber)
 
 		wantRemaining := fmt.Sprintf(
-			`{"items":[{"id":"%s","type":"request","raw":"%s","intercepted_at":"%s"}],"intercept":true,"websocket_intercept":false}`+"\n",
+			`{"items":[{"id":"%s","type":"request","raw":"%s","intercepted_at":"%s"}],"intercept":true,"websocket_intercept":false,"stream_intercept":false}`+"\n",
 			secondID, dumpCheckpointRequest(t, secondReq), checkpointHeldAt(t, proxy, secondID),
 		)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+firstID.String()+"/drop", ""), http.StatusOK, wantRemaining)
@@ -207,7 +207,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"dropped"}`, firstID))
-		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+secondID.String()+"/drop", `{}`), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false}`+"\n")
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+secondID.String()+"/drop", `{}`), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false,"stream_intercept":false}`+"\n")
 		if err := receiveCheckpointHold(t, secondDone); !errors.Is(err, errHoldDropped) {
 			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
@@ -233,7 +233,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 			t.Fatalf("wanted: %v\ngot: %v", errHoldDropped, err)
 		}
 		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(`{"id":"%s","type":"request","request_id":null,"reason":"abandoned"}`, reqID))
-		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint", ""), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false}`+"\n")
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, "/checkpoint", ""), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false,"stream_intercept":false}`+"\n")
 		assertNoCheckpointEvent(t, subscriber)
 	})
 
@@ -276,7 +276,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		waitForCheckpointItems(t, proxy, 1)
 		drainCheckpointHeld(t, subscriber)
 
-		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+reqID.String()+"/forward", `{"intercept_response":true}`), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false}`+"\n")
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+reqID.String()+"/forward", `{"intercept_response":true}`), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false,"stream_intercept":false}`+"\n")
 		if err := receiveCheckpointHold(t, done); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -308,23 +308,32 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		subscriber := server.events.subscribe()
 		defer server.events.unsubscribe(subscriber)
 
-		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/intercept", `{"intercept":false}`), http.StatusOK, `{"items":[],"intercept":false,"websocket_intercept":false}`+"\n")
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/intercept", `{"intercept":false}`), http.StatusOK, `{"items":[],"intercept":false,"websocket_intercept":false,"stream_intercept":false}`+"\n")
 		assertNoCheckpointEvent(t, subscriber)
 
-		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/intercept", `{"intercept":true}`), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false}`+"\n")
-		assertCheckpointEvent(t, subscriber, "checkpoint.updated", `{"intercept":true,"websocket_intercept":false}`)
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/intercept", `{"intercept":true}`), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false,"stream_intercept":false}`+"\n")
+		assertCheckpointEvent(t, subscriber, "checkpoint.updated", `{"intercept":true,"websocket_intercept":false,"stream_intercept":false}`)
 		if !proxy.GetIntercept() || proxy.GetWebSocketIntercept() {
 			t.Fatalf("wanted http intercept only, got http=%t websocket=%t", proxy.GetIntercept(), proxy.GetWebSocketIntercept())
 		}
 
-		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/websocket-intercept", `{"websocket_intercept":true}`), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":true}`+"\n")
-		assertCheckpointEvent(t, subscriber, "checkpoint.updated", `{"intercept":true,"websocket_intercept":true}`)
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/websocket-intercept", `{"websocket_intercept":true}`), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":true,"stream_intercept":false}`+"\n")
+		assertCheckpointEvent(t, subscriber, "checkpoint.updated", `{"intercept":true,"websocket_intercept":true,"stream_intercept":false}`)
 		if !proxy.GetIntercept() || !proxy.GetWebSocketIntercept() {
 			t.Fatal("wanted both flags true")
 		}
 
-		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/websocket-intercept", `{"websocket_intercept":true}`), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":true}`+"\n")
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/websocket-intercept", `{"websocket_intercept":true}`), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":true,"stream_intercept":false}`+"\n")
 		assertNoCheckpointEvent(t, subscriber)
+
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/stream-intercept", `{"stream_intercept":true}`), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":true,"stream_intercept":true}`+"\n")
+		assertCheckpointEvent(t, subscriber, "checkpoint.updated", `{"intercept":true,"websocket_intercept":true,"stream_intercept":true}`)
+		if !proxy.GetStreamIntercept() {
+			t.Fatal("wanted the stream switch on")
+		}
+		for _, body := range []string{`{}`, `{"stream_intercept":null}`, `{"websocket_intercept":true}`} {
+			assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/stream-intercept", body), http.StatusBadRequest, `{"error":"invalid_checkpoint_request"}`+"\n")
+		}
 	})
 
 	t.Run("should report intercepted_at as the RFC 3339 time of each hold", func(t *testing.T) {
@@ -415,7 +424,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 
 		payload := base64.StdEncoding.EncodeToString([]byte("edited"))
 		body := fmt.Sprintf(`{"payload":"%s","opcode":2}`, payload)
-		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+messageID.String()+"/forward", body), http.StatusOK, `{"items":[],"intercept":false,"websocket_intercept":false}`+"\n")
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+messageID.String()+"/forward", body), http.StatusOK, `{"items":[],"intercept":false,"websocket_intercept":false,"stream_intercept":false}`+"\n")
 		if err := receiveCheckpointHold(t, done); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -430,7 +439,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		waitForCheckpointItems(t, proxy, 1)
 		drainCheckpointHeld(t, subscriber)
 
-		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+messageID.String()+"/drop", ""), http.StatusOK, `{"items":[],"intercept":false,"websocket_intercept":false}`+"\n")
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+messageID.String()+"/drop", ""), http.StatusOK, `{"items":[],"intercept":false,"websocket_intercept":false,"stream_intercept":false}`+"\n")
 		drainCheckpointHold(t, done)
 		assertCheckpointEvent(t, subscriber, "checkpoint.dropped", fmt.Sprintf(
 			`{"id":"%s","type":"websocket","request_id":"%s","reason":"dropped"}`,
@@ -470,7 +479,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		}
 
 		edited := base64.StdEncoding.EncodeToString([]byte("GET /edited HTTP/1.1\r\nHost: marasi.app\r\n\r\n"))
-		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+reqID.String()+"/forward", `{"raw":"`+edited+`"}`), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false}`+"\n")
+		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/checkpoint/"+reqID.String()+"/forward", `{"raw":"`+edited+`"}`), http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false,"stream_intercept":false}`+"\n")
 		if err := receiveCheckpointHold(t, done); err != nil {
 			t.Fatalf("wanted: nil\ngot: %v", err)
 		}
@@ -496,7 +505,7 @@ func TestCheckpointControlRoutes(t *testing.T) {
 		}()
 		select {
 		case response := <-result:
-			assertControlAPIResponse(t, response, http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false}`+"\n")
+			assertControlAPIResponse(t, response, http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false,"stream_intercept":false}`+"\n")
 		case <-time.After(200 * time.Millisecond):
 			t.Fatal("checkpoint flag post waited on the project write gate")
 		}
@@ -583,7 +592,7 @@ func TestCheckpointEventFrames(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("setting intercept: %d %s", response.StatusCode, body)
 	}
-	wantUpdated := "event: checkpoint.updated\ndata: {\"intercept\":false,\"websocket_intercept\":false}\n\n"
+	wantUpdated := "event: checkpoint.updated\ndata: {\"intercept\":false,\"websocket_intercept\":false,\"stream_intercept\":false}\n\n"
 	if got := readEventFrame(t, reader); got != wantUpdated {
 		t.Fatalf("\nwanted:\n%s\ngot:\n%s", wantUpdated, got)
 	}

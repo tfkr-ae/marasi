@@ -35,14 +35,32 @@ type checkpointWebSocketItem struct {
 	InterceptedAt time.Time      `json:"intercepted_at"`
 }
 
+// checkpointStreamItem is a held stream message. Text is its text form
+// (stream.TextForm), null when its framing and codec have none.
+type checkpointStreamItem struct {
+	ID            uuid.UUID      `json:"id"`
+	Type          string         `json:"type"`
+	Payload       []byte         `json:"payload"`
+	Text          *string        `json:"text"`
+	Direction     string         `json:"direction"`
+	Framing       string         `json:"framing"`
+	PairID        uuid.UUID      `json:"pair_id"`
+	Flags         *uint8         `json:"flags"`
+	Compressed    bool           `json:"compressed"`
+	Metadata      map[string]any `json:"metadata"`
+	InterceptedAt time.Time      `json:"intercepted_at"`
+}
+
 type checkpointList struct {
 	Items              []any `json:"items"`
 	Intercept          bool  `json:"intercept"`
 	WebsocketIntercept bool  `json:"websocket_intercept"`
+	StreamIntercept    bool  `json:"stream_intercept"`
 }
 
 // checkpointResolvedEvent is the data of checkpoint.forwarded and checkpoint.dropped.
-// RequestID is the upgrade request of a WebSocket item and null for an HTTP item.
+// RequestID is the upgrade request of a WebSocket item, the pair of a stream
+// item, and null for an HTTP item.
 type checkpointResolvedEvent struct {
 	ID        uuid.UUID            `json:"id"`
 	Type      string               `json:"type"`
@@ -65,6 +83,7 @@ const (
 type checkpointFlags struct {
 	Intercept          bool `json:"intercept"`
 	WebsocketIntercept bool `json:"websocket_intercept"`
+	StreamIntercept    bool `json:"stream_intercept"`
 }
 
 var errInvalidCheckpointRequest = errors.New("invalid checkpoint request")
@@ -134,6 +153,10 @@ func addCheckpointRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadca
 				writeCheckpointError(w, r, http.StatusNotFound, "not_found")
 				return
 			}
+			if errors.Is(err, marasi.ErrStreamLengthDeclared) {
+				writeRefusal(w, r, http.StatusBadRequest, "invalid_checkpoint_request", err.Error())
+				return
+			}
 			writeCheckpointError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
@@ -157,6 +180,10 @@ func addCheckpointRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadca
 
 	mux.HandleFunc("POST /checkpoint/websocket-intercept", func(w http.ResponseWriter, r *http.Request) {
 		serveCheckpointFlag(w, r, proxy, events, "websocket_intercept", proxy.GetWebSocketIntercept, proxy.SetWebSocketIntercept)
+	})
+
+	mux.HandleFunc("POST /checkpoint/stream-intercept", func(w http.ResponseWriter, r *http.Request) {
+		serveCheckpointFlag(w, r, proxy, events, "stream_intercept", proxy.GetStreamIntercept, proxy.SetStreamIntercept)
 	})
 }
 
@@ -218,6 +245,7 @@ func serveCheckpointFlag(w http.ResponseWriter, r *http.Request, proxy *marasi.P
 		events.publish("checkpoint.updated", checkpointFlags{
 			Intercept:          response.Intercept,
 			WebsocketIntercept: response.WebsocketIntercept,
+			StreamIntercept:    response.StreamIntercept,
 		})
 	}
 	writeJSON(w, r, http.StatusOK, response)
@@ -226,7 +254,7 @@ func serveCheckpointFlag(w http.ResponseWriter, r *http.Request, proxy *marasi.P
 func parseCheckpointKind(r *http.Request) (string, error) {
 	kind := r.URL.Query().Get("kind")
 	switch kind {
-	case "", "http", "websocket":
+	case "", "http", "websocket", "stream":
 		return kind, nil
 	default:
 		return "", errInvalidCheckpointRequest
@@ -245,11 +273,15 @@ func parseCheckpointID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool)
 func getCheckpointList(proxy *marasi.Proxy, kind string) checkpointList {
 	items := make([]any, 0)
 	for _, item := range proxy.CheckpointItems() {
-		if kind == "http" && item.Type == domain.CheckpointTypeWebSocket {
-			continue
-		}
-		if kind == "websocket" && item.Type != domain.CheckpointTypeWebSocket {
-			continue
+		switch kind {
+		case "http":
+			if item.Type != domain.CheckpointTypeRequest && item.Type != domain.CheckpointTypeResponse {
+				continue
+			}
+		case "websocket", "stream":
+			if item.Type != kind {
+				continue
+			}
 		}
 		items = append(items, checkpointItemFromDomain(item))
 	}
@@ -257,10 +289,34 @@ func getCheckpointList(proxy *marasi.Proxy, kind string) checkpointList {
 		Items:              items,
 		Intercept:          proxy.GetIntercept(),
 		WebsocketIntercept: proxy.GetWebSocketIntercept(),
+		StreamIntercept:    proxy.GetStreamIntercept(),
 	}
 }
 
 func checkpointItemFromDomain(item domain.CheckpointItem) any {
+	if item.Type == domain.CheckpointTypeStream {
+		metadata := item.Metadata
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
+		streamItem := checkpointStreamItem{
+			ID:            item.ID,
+			Type:          item.Type,
+			Payload:       item.Payload,
+			Direction:     item.Direction,
+			Framing:       item.Framing,
+			PairID:        item.PairID,
+			Flags:         item.Flags,
+			Compressed:    item.Compressed,
+			Metadata:      metadata,
+			InterceptedAt: item.InterceptedAt,
+		}
+		if item.HasText {
+			text := item.Text
+			streamItem.Text = &text
+		}
+		return streamItem
+	}
 	if item.Type == domain.CheckpointTypeWebSocket {
 		metadata := item.Metadata
 		if metadata == nil {
@@ -290,8 +346,11 @@ func checkpointItemFromDomain(item domain.CheckpointItem) any {
 
 func checkpointResolvedEventFromDomain(item domain.CheckpointItem, reason checkpointResolution) checkpointResolvedEvent {
 	event := checkpointResolvedEvent{ID: item.ID, Type: item.Type, Reason: reason}
-	if item.Type == domain.CheckpointTypeWebSocket {
+	switch item.Type {
+	case domain.CheckpointTypeWebSocket:
 		event.RequestID = &item.RequestID
+	case domain.CheckpointTypeStream:
+		event.RequestID = &item.PairID
 	}
 	return event
 }
@@ -334,6 +393,15 @@ func decodeCheckpointForward(r *http.Request, itemType string) (marasi.Checkpoin
 			default:
 				return marasi.CheckpointForward{}, errInvalidCheckpointRequest
 			}
+		case domain.CheckpointTypeStream:
+			if name != "payload" {
+				return marasi.CheckpointForward{}, errInvalidCheckpointRequest
+			}
+			value, err := decodeCheckpointBytes(raw)
+			if err != nil {
+				return marasi.CheckpointForward{}, err
+			}
+			fwd.Payload = &value
 		case domain.CheckpointTypeWebSocket:
 			switch name {
 			case "payload":
@@ -424,7 +492,9 @@ func writeCheckpointForwardError(w http.ResponseWriter, r *http.Request, err err
 		writeCheckpointError(w, r, http.StatusNotFound, "not_found")
 	case errors.Is(err, marasi.ErrInterceptResponseNotAllowed),
 		errors.Is(err, marasi.ErrRebuildRequest),
-		errors.Is(err, marasi.ErrRebuildResponse):
+		errors.Is(err, marasi.ErrRebuildResponse),
+		errors.Is(err, marasi.ErrStreamLengthDeclared),
+		errors.Is(err, marasi.ErrStreamReadOnly):
 		writeRefusal(w, r, http.StatusBadRequest, "invalid_checkpoint_request", err.Error())
 	default:
 		writeCheckpointError(w, r, http.StatusInternalServerError, "internal_server_error")

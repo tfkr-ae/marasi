@@ -74,10 +74,12 @@ type h2Inbound struct {
 	// end is how the direction ended, nil while it goes on.
 	end      error
 	trailers h2Fields
+	// gone is closed when the direction is reset or cut off.
+	gone chan struct{}
 }
 
 func newH2Inbound(window int64, refund func(uint32)) *h2Inbound {
-	in := &h2Inbound{window: window, refund: refund}
+	in := &h2Inbound{window: window, refund: refund, gone: make(chan struct{})}
 	in.cond = sync.NewCond(&in.mu)
 	return in
 }
@@ -133,6 +135,11 @@ func (in *h2Inbound) close(err error) {
 	if in.end == nil {
 		in.end = err
 	}
+	select {
+	case <-in.gone:
+	default:
+		close(in.gone)
+	}
 	in.mu.Unlock()
 	in.cond.Broadcast()
 }
@@ -173,6 +180,7 @@ type h2StreamedBody struct {
 func (b *h2StreamedBody) peek() ([]byte, error)    { return b.in.peek() }
 func (b *h2StreamedBody) discard(n int)            { b.in.discard(n) }
 func (b *h2StreamedBody) reset(code http2.ErrCode) { b.resetBy(code) }
+func (b *h2StreamedBody) cutOff() <-chan struct{}  { return b.in.gone }
 
 func (b *h2StreamedBody) trailers() h2Fields {
 	b.in.mu.Lock()
@@ -273,6 +281,8 @@ func (h *h2Conn) sendOn(origin *h2Origin, st *h2Stream, pair *Pair, out *h2Reque
 	}
 	sp := h.engine.proxy.streamed(pair)
 	d := sp.direction(domain.StreamDirectionRequest, body.framing)
+	contentType, _ := out.fields.get("content-type")
+	sp.headWentOut(d, contentType)
 	if _, ok := out.fields.get("content-length"); ok {
 		sp.declareLength(d)
 	}
@@ -296,6 +306,8 @@ func (h *h2Conn) carryStreamedResponse(st *h2Stream, pair *Pair, res *http.Respo
 		h.resetStream(st.id, http2.ErrCodeCancel)
 		return
 	}
+	contentType, _ := out.fields.get("content-type")
+	pair.stream.headWentOut(d, contentType)
 	if _, ok := out.fields.get("content-length"); ok {
 		pair.stream.declareLength(d)
 	}

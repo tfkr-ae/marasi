@@ -97,7 +97,8 @@ type CheckpointKind string
 // Checkpoint kinds.
 const (
 	CheckpointWebSocket CheckpointKind = "websocket"
-	CheckpointHTTP      CheckpointKind = "http" // requests and their responses
+	CheckpointHTTP      CheckpointKind = "http"   // requests and their responses
+	CheckpointStream    CheckpointKind = "stream" // stream messages of streamed pairs
 )
 
 // flag is the marasi checkpoint subcommand that holds the kind, or false
@@ -108,6 +109,8 @@ func (k CheckpointKind) flag() (string, bool) {
 		return "websocket-intercept", true
 	case CheckpointHTTP:
 		return "intercept", true
+	case CheckpointStream:
+		return "stream-intercept", true
 	}
 	return "", false
 }

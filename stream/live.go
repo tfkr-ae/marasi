@@ -18,6 +18,9 @@ type LiveMessage struct {
 	Direction string
 	// Framing is the direction's message framing.
 	Framing Framing
+	// ContentType is the content type of the direction's head, which
+	// names the codec the text form is read with.
+	ContentType string
 	// Flags is the envelope's flags byte.
 	Flags byte
 	// Payload is the message without its envelope, decoded when it is
@@ -54,6 +57,16 @@ func Compressed(framing Framing, flags byte) bool {
 // edited message, which goes out uncompressed.
 func Uncompressed(flags byte) byte {
 	return flags &^ flagCompressed
+}
+
+// Text is the payload in its text form (TextForm), and false when the
+// framing and codec have none or the payload is compressed with an encoding
+// the proxy does not decode.
+func (m *LiveMessage) Text() (string, bool) {
+	if m.ReadOnly {
+		return "", false
+	}
+	return TextForm(m.ContentType, m.Payload)
 }
 
 // Envelope is payload in the gRPC, gRPC-Web and Connect envelope: the flags
