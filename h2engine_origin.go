@@ -289,7 +289,7 @@ func (o *h2Origin) frame(frame http2.Frame, decoder *hpack.Decoder) error {
 	case *http2.RSTStreamFrame:
 		if s := o.stream(f.StreamID); s != nil {
 			if s.final && s.response.streamed != nil {
-				s.response.streamed.in.close(&streamResetError{code: f.ErrCode})
+				s.response.streamed.in.closeUnlessEnded(&streamResetError{code: f.ErrCode})
 			}
 			o.resetBy(s, f.ErrCode)
 		}
@@ -444,11 +444,12 @@ func (o *h2Origin) finish(s *h2OriginStream, err error) {
 		o.flow.end(&s.window)
 	}
 	if body := s.streamed.Load(); body != nil {
-		// The connection ended, or the stream was given up.
+		// The connection ended, or the stream was given up; a body
+		// that already ended stays as it ended.
 		if err == nil {
 			err = errStreamGone
 		}
-		body.in.close(err)
+		body.in.closeUnlessEnded(err)
 	}
 	close(s.done)
 }

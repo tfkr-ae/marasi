@@ -144,6 +144,20 @@ func (in *h2Inbound) close(err error) {
 	in.cond.Broadcast()
 }
 
+// closeUnlessEnded is close for the origin's stream ending, by its reset
+// or the connection, after the direction may have ended. Once the sender
+// ended it cleanly, as a gRPC origin does with its trailers before it
+// resets the stream to stop the request, the direction stays as it ended,
+// and a hold of its trailers goes on.
+func (in *h2Inbound) closeUnlessEnded(err error) {
+	in.mu.Lock()
+	ended := in.end == io.EOF
+	in.mu.Unlock()
+	if !ended {
+		in.close(err)
+	}
+}
+
 // peek is streamSource.peek. Bytes that arrived before the end are read
 // first, so what arrived of a message cut short still goes on.
 func (in *h2Inbound) peek() ([]byte, error) {

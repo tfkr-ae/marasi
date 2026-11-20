@@ -112,8 +112,13 @@ func (s Suite) Targets() []string { return []string{Target} }
 func (s Suite) Deterministic() {}
 
 // Setup runs Marasi on the host, which reaches the reference servers on
-// loopback, and holds and edits HTTP as an HTTP/1.1 suite does.
-func (s Suite) Setup() conformance.Setup { return conformance.HTTPSetup() }
+// loopback, and holds and edits HTTP as an HTTP/1.1 suite does. The
+// Checkpoint runs also hold every stream message and trailer block.
+func (s Suite) Setup() conformance.Setup {
+	setup := conformance.HTTPSetup()
+	setup.Checkpoint = append(setup.Checkpoint, conformance.CheckpointStream)
+	return setup
+}
 
 // Recording is a case's recording: the runner's verdict.
 type Recording struct {

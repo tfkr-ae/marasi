@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/net/http2"
+
 	"github.com/tfkr-ae/marasi/domain"
 )
 
@@ -74,6 +76,42 @@ func TestH2Engine_CheckpointTrailers(t *testing.T) {
 		trailers, _ := direction(t, res.Metadata, "response")["trailers"].([]any)
 		if len(trailers) != 2 || trailers[0].(map[string]any)["value"] != "7" {
 			t.Errorf("the stored trailers\nwanted:\ngrpc-status 7 first\ngot:\n%v", trailers)
+		}
+	})
+
+	t.Run("should keep holding the response's trailers when the origin resets the stream after them to stop the request", func(t *testing.T) {
+		call := startGRPCCall(t, func(proxy *Proxy) { proxy.SetStreamIntercept(true) })
+		call.upstream.headers(call.id, false, ":status", "200", "content-type", "application/grpc")
+		call.upstream.headers(call.id, true, "grpc-status", "13", "grpc-message", "failed")
+		held := awaitItems(t, call.proxy, domain.CheckpointTypeTrailer, 1)[0]
+		call.upstream.write(func(f *http2.Framer) error { return f.WriteRSTStream(call.id, http2.ErrCodeNo) })
+		// Nothing shows the reset was read but time.
+		time.Sleep(50 * time.Millisecond)
+
+		awaitItems(t, call.proxy, domain.CheckpointTypeTrailer, 1)
+		if err := call.proxy.ForwardCheckpoint(held.ID, CheckpointForward{}); err != nil {
+			t.Fatal(err)
+		}
+		call.client.await(t, "the trailers", func(p *h2TestPeer) bool {
+			return p.streams[1] != nil && (p.streams[1].ended || p.streams[1].reset != "")
+		})
+		if s := arrived(call.client, 1); s.reset != "" || len(s.trailers) == 0 {
+			t.Fatalf("the client's stream\nwanted:\nthe trailers, grpc-status 13\ngot:\ntrailers %v, reset %q", s.trailers, s.reset)
+		} else if status, _ := s.trailers.get("grpc-status"); status != "13" {
+			t.Fatalf("the client's trailers\nwanted:\ngrpc-status 13\ngot:\n%v", s.trailers)
+		}
+	})
+
+	t.Run("should abandon held trailers when the client cancels the call", func(t *testing.T) {
+		call := startGRPCCall(t, func(proxy *Proxy) { proxy.SetStreamIntercept(true) })
+		call.upstream.headers(call.id, false, ":status", "200", "content-type", "application/grpc")
+		call.upstream.headers(call.id, true, "grpc-status", "0")
+		held := awaitItems(t, call.proxy, domain.CheckpointTypeTrailer, 1)[0]
+		call.client.write(func(f *http2.Framer) error { return f.WriteRSTStream(1, http2.ErrCodeCancel) })
+
+		awaitItems(t, call.proxy, domain.CheckpointTypeTrailer, 0)
+		if err := call.proxy.ForwardCheckpoint(held.ID, CheckpointForward{}); !errors.Is(err, ErrCheckpointNotFound) {
+			t.Fatalf("forwarding the abandoned trailers\nwanted:\nErrCheckpointNotFound\ngot:\n%v", err)
 		}
 	})
 
