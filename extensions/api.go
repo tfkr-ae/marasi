@@ -14,6 +14,7 @@ const (
 	hookProcessRequest            = "processRequest"
 	hookProcessResponse           = "processResponse"
 	hookProcessWebSocketMessage   = "processWebSocketMessage"
+	hookProcessStreamMessage      = "processStreamMessage"
 	hookInterceptRequest          = "interceptRequest"
 	hookInterceptResponse         = "interceptResponse"
 	hookInterceptWebSocketMessage = "interceptWebSocketMessage"
@@ -26,6 +27,7 @@ var hooks = []Entry{
 	{Name: hookProcessRequest, Signature: "(request: req)", Summary: "Called for each request before it is sent upstream. Change the request in place, or call request:drop() or request:skip(). compass runs first, then other enabled extensions. Not called in checkpoint."},
 	{Name: hookProcessResponse, Signature: "(response: res)", Summary: "Called for each response before it reaches the client. Change the response in place, or call response:drop() or response:skip(). compass runs first, then other enabled extensions. Not called in checkpoint."},
 	{Name: hookProcessWebSocketMessage, Signature: "(message: wsmsg)", Summary: "Called for each WebSocket message in either direction. Change the message in place, or call message:drop() or message:skip(). Called in enabled extensions other than checkpoint."},
+	{Name: hookProcessStreamMessage, Signature: "(message: streammsg)", Summary: "Called for each stream message of a streamed pair, such as each gRPC message, in either direction, before it is forwarded. Change the message in place, or call message:drop() or message:skip(). On a direction whose head declares a length, a change to the length is ignored. Called in enabled extensions other than checkpoint."},
 	{Name: hookInterceptRequest, Signature: "(request: req) -> boolean", Summary: "Called only in checkpoint. Return true to hold the request for review."},
 	{Name: hookInterceptResponse, Signature: "(response: res) -> boolean", Summary: "Called only in checkpoint. Return true to hold the response for review."},
 	{Name: hookInterceptWebSocketMessage, Signature: "(message: wsmsg) -> boolean", Summary: "Called only in checkpoint. Return true to hold the WebSocket message for review."},
@@ -126,6 +128,7 @@ func registerAPI(extension *Runtime, proxy ProxyService) {
 	RegisterRequestType(extension)
 	RegisterResponseType(extension)
 	RegisterWebSocketMessageType(extension)
+	RegisterStreamMessageType(extension)
 	RegisterURLType(extension)
 	RegisterHeaderType(extension)
 	RegisterCookieType(extension)
