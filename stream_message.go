@@ -10,6 +10,7 @@ import (
 	"golang.org/x/net/http2"
 
 	"github.com/tfkr-ae/marasi/core"
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/stream"
 )
 
@@ -25,15 +26,25 @@ import (
 // It runs on the direction's one reader, so nothing more is read from the
 // sender until it returns: a held message stops only its own direction.
 // cutOff closes when the direction is reset or cut off, which abandons a
-// hold. Injection extends it.
+// hold.
 func (sp *streamedPair) handle(name string, d *streamedDirection, message *stream.Message, cutOff <-chan struct{}) ([]byte, error) {
+	raw, _, err := sp.process(name, d, message, cutOff, nil)
+	return raw, err
+}
+
+// process is handle, for a message that comes with metadata, an injected
+// one's, and it also returns the message as it was stored.
+func (sp *streamedPair) process(name string, d *streamedDirection, message *stream.Message, cutOff <-chan struct{}, metadata map[string]any) ([]byte, domain.StreamMessage, error) {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
 	id, err := uuid.NewV7()
 	if err != nil {
 		id = uuid.New()
 	}
 	live := &stream.LiveMessage{
 		ID: id, PairID: sp.pair.ID, Direction: name, Framing: d.framing, ContentType: sp.contentType(d),
-		Flags: message.Flags, Payload: message.Payload, Encoding: d.encoding, Metadata: map[string]any{},
+		Flags: message.Flags, Payload: message.Payload, Encoding: d.encoding, Metadata: metadata,
 	}
 	compressed := live.Compressed()
 	if compressed {
@@ -41,7 +52,7 @@ func (sp *streamedPair) handle(name string, d *streamedDirection, message *strea
 		if !stream.Decodable(d.encoding) {
 			live.ReadOnly = true
 		} else if live.Payload, err = stream.Decompress(d.encoding, message.Payload, sp.limit); err != nil {
-			return nil, sp.undecodable(name, d, id, message, err)
+			return nil, domain.StreamMessage{}, sp.undecodable(name, d, id, message, err)
 		}
 	}
 	original := live.Payload
@@ -113,7 +124,7 @@ func (sp *streamedPair) handle(name string, d *streamedDirection, message *strea
 	row := sp.message(id, name, d, flags, live.Payload, live.Metadata)
 	row.Compressed = compressed
 	sp.queue(row)
-	return raw, nil
+	return raw, row, nil
 }
 
 // outgoing returns what message goes out as with a payload: the bytes it
@@ -172,11 +183,23 @@ func (sp *streamedPair) readOnlyRefused(name, encoding string) {
 	_ = sp.proxy.WriteLog("WARN", entry, pairLogOptions(sp.pair)...)
 }
 
-// headWentOut records the content type of d's head as it went out.
-func (sp *streamedPair) headWentOut(d *streamedDirection, contentType string) {
+// headWentOut records the content type and the per-message encoding of d's
+// head as it went out, with fields. The engine calls it before the direction
+// is carried.
+func (sp *streamedPair) headWentOut(d *streamedDirection, fields h2Fields) {
+	contentType, _ := fields.get("content-type")
+	var encoding string
+	if header := stream.EncodingHeader(d.framing); header != "" {
+		for _, f := range fields {
+			if strings.EqualFold(f.Name, header) {
+				encoding = f.Value
+				break
+			}
+		}
+	}
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	d.contentType = contentType
+	d.contentType, d.encoding = contentType, encoding
 }
 
 // contentType is the content type of d's head as it went out.

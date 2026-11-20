@@ -115,6 +115,22 @@ func TestH2Engine_CheckpointTrailers(t *testing.T) {
 		}
 	})
 
+	t.Run("should abandon held trailers when the pair is cancelled", func(t *testing.T) {
+		call := startGRPCCall(t, func(proxy *Proxy) { proxy.SetStreamIntercept(true) })
+		call.upstream.headers(call.id, false, ":status", "200", "content-type", "application/grpc")
+		call.upstream.headers(call.id, true, "grpc-status", "0")
+		held := awaitItems(t, call.proxy, domain.CheckpointTypeTrailer, 1)[0]
+		if err := call.proxy.CancelStreamedPair(held.PairID); err != nil {
+			t.Fatal(err)
+		}
+
+		awaitItems(t, call.proxy, domain.CheckpointTypeTrailer, 0)
+		call.client.await(t, "the reset", func(p *h2TestPeer) bool { return p.streams[1] != nil && p.streams[1].reset != "" })
+		if s := arrived(call.client, 1); s.reset != "CANCEL" || len(s.trailers) != 0 {
+			t.Fatalf("the client's stream\nwanted:\nRST_STREAM CANCEL, no trailers\ngot:\nreset %q, trailers %v", s.reset, s.trailers)
+		}
+	})
+
 	t.Run("should refuse a trailer edit with a line that is not a field, keeping it held", func(t *testing.T) {
 		call := startGRPCCall(t, func(proxy *Proxy) { proxy.SetStreamIntercept(true) })
 		call.client.data(1, true, "")
