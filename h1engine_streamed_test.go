@@ -415,6 +415,32 @@ func TestH1Engine_StreamMessageHooks(t *testing.T) {
 }
 
 func TestH1Engine_CheckpointStreamMessages(t *testing.T) {
+	t.Run("should hold a gRPC response's chunked trailers as a trailer item and send and store an edited grpc-status", func(t *testing.T) {
+		origin := newH1ScriptedOrigin(t)
+		proxy, addr, captured := serveFramingProxy(t, func(proxy *Proxy) { proxy.SetStreamIntercept(true) })
+		client, br := dialProxy(t, addr)
+		fmt.Fprintf(client, "POST http://%s/test.Echo/Say HTTP/1.1\r\nHost: %s\r\nContent-Type: application/grpc\r\nTE: trailers\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n", origin.addr, origin.addr)
+
+		upstream := origin.accept(t)
+		const head = "HTTP/1.1 200 OK\r\nContent-Type: application/grpc\r\nTransfer-Encoding: chunked\r\n\r\n"
+		io.WriteString(upstream, head+"0\r\ngrpc-status: 0\r\n\r\n")
+		held := awaitItems(t, proxy, domain.CheckpointTypeTrailer, 1)[0]
+		if string(held.Raw) != "grpc-status: 0\r\n" || held.Direction != "response" || held.Framing != "grpc" {
+			t.Fatalf("the held trailer item\nwanted:\nthe chunked trailers of the response\ngot:\n%+v %q", held, held.Raw)
+		}
+		edit := []byte("grpc-status: 7\r\n")
+		if err := proxy.ForwardCheckpoint(held.ID, CheckpointForward{Raw: &edit}); err != nil {
+			t.Fatal(err)
+		}
+		readWithin(t, client, br, "the client", head+"0\r\ngrpc-status: 7\r\n\r\n")
+
+		_, res := streamedResponse(t, captured)
+		trailers, _ := direction(t, res.Metadata, "response")["trailers"].([]any)
+		if len(trailers) != 1 || trailers[0].(map[string]any)["value"] != "7" {
+			t.Errorf("the stored trailers\nwanted:\ngrpc-status 7\ngot:\n%v", trailers)
+		}
+	})
+
 	t.Run("should send a held event the user edited, and store it edited", func(t *testing.T) {
 		origin := newH1ScriptedOrigin(t)
 		proxy, addr, captured := serveFramingProxy(t, func(proxy *Proxy) { proxy.SetStreamIntercept(true) })
