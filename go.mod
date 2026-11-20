@@ -18,6 +18,7 @@ require (
 	go.einride.tech/aip v0.86.3
 	golang.org/x/net v0.42.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20250528174236-200df99c418a
+	google.golang.org/protobuf v1.36.6
 	modernc.org/sqlite v1.38.2
 	roci.dev/fracdex v0.0.0-20241211175510-82d7df79e312
 	rsc.io/qr v0.2.0
@@ -44,7 +45,6 @@ require (
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/text v0.27.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250528174236-200df99c418a // indirect
-	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
