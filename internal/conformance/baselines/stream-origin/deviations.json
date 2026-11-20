@@ -1,19 +1,5 @@
 [
   {
-    "cases": "sse-wait-for-answer-h2@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "order",
-    "kind": "known",
-    "reason": "Marasi reads a server-sent event response whole before forwarding it, so the first event reaches the client only once the origin ends the stream: the client times out waiting for it, and every event arrives after its answer. Phase 4 carries a text/event-stream response as stream messages as they arrive (docs/adr/2026-11-20-streamed-pairs-are-recognised-from-the-head-and-other-pairs-stay-buffered.md)",
-    "rfc": "WHATWG HTML \u00a79.2 server-sent events",
-    "phase": 4
-  },
-  {
     "cases": "sse-wait-for-answer-http1@absolute",
     "runs": [
       "proxy",
@@ -24,7 +10,7 @@
     "field": "order",
     "kind": "known",
     "reason": "Marasi reads a server-sent event response whole before forwarding it, so the first event reaches the client only once the origin ends the stream: the client times out waiting for it, and every event arrives after its answer. Phase 4 carries a text/event-stream response as stream messages as they arrive (docs/adr/2026-11-20-streamed-pairs-are-recognised-from-the-head-and-other-pairs-stay-buffered.md)",
-    "rfc": "WHATWG HTML \u00a79.2 server-sent events",
+    "rfc": "WHATWG HTML §9.2 server-sent events",
     "phase": 4
   },
   {
@@ -38,7 +24,7 @@
     "field": "order",
     "kind": "known",
     "reason": "Marasi reads a server-sent event response whole before forwarding it, so the first event reaches the client only once the origin ends the stream: the client times out waiting for it, and every event arrives after its answer. Phase 4 carries a text/event-stream response as stream messages as they arrive (docs/adr/2026-11-20-streamed-pairs-are-recognised-from-the-head-and-other-pairs-stay-buffered.md)",
-    "rfc": "WHATWG HTML \u00a79.2 server-sent events",
+    "rfc": "WHATWG HTML §9.2 server-sent events",
     "phase": 4
   },
   {
@@ -52,7 +38,7 @@
     "field": "order",
     "kind": "known",
     "reason": "Marasi reads a server-sent event response whole before forwarding it, so the first event reaches the client only once the origin ends the stream: the client times out waiting for it, and every event arrives after its answer. Phase 4 carries a text/event-stream response as stream messages as they arrive (docs/adr/2026-11-20-streamed-pairs-are-recognised-from-the-head-and-other-pairs-stay-buffered.md)",
-    "rfc": "WHATWG HTML \u00a79.2 server-sent events",
+    "rfc": "WHATWG HTML §9.2 server-sent events",
     "phase": 4
   }
 ]

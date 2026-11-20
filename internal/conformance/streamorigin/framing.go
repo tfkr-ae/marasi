@@ -8,9 +8,12 @@ import (
 
 // Message framings the splitter knows, named as in GLOSSARY.md.
 const (
-	framingNone = ""
-	framingGRPC = "grpc"
-	framingSSE  = "sse"
+	framingNone    = ""
+	framingGRPC    = "grpc"
+	framingGRPCWeb = "grpc-web"
+	framingConnect = "connect"
+	framingSSE     = "sse"
+	framingNDJSON  = "ndjson"
 )
 
 // framingOf is the message framing a direction's content type names: the
@@ -21,8 +24,14 @@ func framingOf(contentType string) string {
 	switch {
 	case mediaType == "application/grpc" || strings.HasPrefix(mediaType, "application/grpc+"):
 		return framingGRPC
+	case mediaType == "application/grpc-web" || strings.HasPrefix(mediaType, "application/grpc-web+"):
+		return framingGRPCWeb
+	case strings.HasPrefix(mediaType, "application/connect+"):
+		return framingConnect
 	case mediaType == "text/event-stream":
 		return framingSSE
+	case mediaType == "application/x-ndjson" || mediaType == "application/jsonl":
+		return framingNDJSON
 	}
 	return framingNone
 }
@@ -52,9 +61,11 @@ func (s *splitter) write(data []byte) [][]byte {
 // next is the length of the first whole message held, or 0.
 func (s *splitter) next() int {
 	switch s.framing {
-	case framingGRPC:
+	case framingGRPC, framingGRPCWeb, framingConnect:
 		// A 5-byte envelope: a flags byte and a big-endian length
-		// (gRPC PROTOCOL-HTTP2.md, Length-Prefixed-Message).
+		// (gRPC PROTOCOL-HTTP2.md, Length-Prefixed-Message). A gRPC-Web
+		// trailers frame and a Connect end-of-stream message are
+		// envelopes too.
 		if len(s.held) < 5 {
 			return 0
 		}
@@ -71,6 +82,9 @@ func (s *splitter) next() int {
 			}
 		}
 		return first
+	case framingNDJSON:
+		// A line ends at a LF.
+		return bytes.IndexByte(s.held, '\n') + 1
 	}
 	return 0
 }

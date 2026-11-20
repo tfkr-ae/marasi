@@ -182,8 +182,18 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 			}
 			continue
 		}
-		// The direction ended: what arrived of a message it ended inside
-		// goes on as it came, and is stored cut short.
+		// The direction ended: a message its end makes whole goes on, and
+		// what arrived of a message it ended inside goes on as it came,
+		// and is stored cut short.
+		if errors.Is(readErr, io.EOF) {
+			if last := splitter.Flush(); last != nil {
+				sp.record(name, d, last, nil)
+				if err := sink.forward(last.Raw); err != nil {
+					sp.ended(d, err)
+					return
+				}
+			}
+		}
 		if partial := splitter.Partial(); partial != nil {
 			sp.record(name, d, partial, map[string]any{"cut_short": true})
 			sink.forward(partial.Raw)
@@ -261,8 +271,11 @@ func (sp *streamedPair) record(name string, d *streamedDirection, message *strea
 	sp.mu.Lock()
 	d.messages++
 	sp.mu.Unlock()
-	flags := message.Flags
-	sp.store(name, d, &flags, message.Payload, metadata)
+	var flags *uint8
+	if d.framing.Enveloped() {
+		flags = &message.Flags
+	}
+	sp.store(name, d, flags, message.Payload, metadata)
 }
 
 // tooLarge records a message over the limit, which is never forwarded, and
