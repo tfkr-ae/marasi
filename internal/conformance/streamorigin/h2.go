@@ -66,7 +66,7 @@ func (c *h2Conn) read(onHead func()) {
 	var split splitter
 	heads, ended := 0, false
 	end := func() {
-		if a, ok := split.end(c.side); ok {
+		for _, a := range split.end(c.side) {
 			c.t.add(a)
 		}
 		ended = true
@@ -76,7 +76,7 @@ func (c *h2Conn) read(onHead func()) {
 		frame, err := c.framer.ReadFrame()
 		if err != nil {
 			if heads > 0 && !ended {
-				if a, ok := split.end(c.side); ok {
+				for _, a := range split.end(c.side) {
 					c.t.add(a)
 				}
 				c.t.add(Arrival{Side: c.side, Kind: KindClosed})
@@ -110,7 +110,7 @@ func (c *h2Conn) read(onHead func()) {
 				c.t.add(Arrival{Side: c.side, Kind: KindTrailers, Fields: fields})
 			} else {
 				c.t.add(Arrival{Side: c.side, Kind: KindHead, Fields: fields})
-				split.framing = framingOf(contentType)
+				split.head(contentType, fields)
 			}
 			if !interim(f.PseudoValue("status")) {
 				heads++
@@ -130,7 +130,7 @@ func (c *h2Conn) read(onHead func()) {
 				end()
 			}
 		case *http2.RSTStreamFrame:
-			if a, ok := split.end(c.side); ok {
+			for _, a := range split.end(c.side) {
 				c.t.add(a)
 			}
 			ended = true

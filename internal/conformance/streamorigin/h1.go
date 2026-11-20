@@ -128,7 +128,7 @@ func (c *h1Conn) trailers(fields []h2.Field) error {
 func (c *h1Conn) read(br *bufio.Reader, method string, onHead func()) {
 	var split splitter
 	closed := func() {
-		if a, ok := split.end(c.side); ok {
+		for _, a := range split.end(c.side) {
 			c.t.add(a)
 		}
 		c.t.add(Arrival{Side: c.side, Kind: KindClosed})
@@ -171,7 +171,7 @@ func (c *h1Conn) read(br *bufio.Reader, method string, onHead func()) {
 			}
 		}
 		c.t.add(Arrival{Side: c.side, Kind: KindHead, Fields: fields})
-		split.framing = framingOf(contentType)
+		split.head(contentType, header)
 		if c.side == SideOrigin || status >= 200 || status == 101 {
 			break
 		}
@@ -186,7 +186,7 @@ func (c *h1Conn) read(br *bufio.Reader, method string, onHead func()) {
 		}
 	}
 	end := func() {
-		if a, ok := split.end(c.side); ok {
+		for _, a := range split.end(c.side) {
 			c.t.add(a)
 		}
 		c.t.add(Arrival{Side: c.side, Kind: KindEnd})

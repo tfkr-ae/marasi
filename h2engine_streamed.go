@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"sync"
 
 	"golang.org/x/net/http2"
@@ -32,11 +31,13 @@ func h2CarriesFraming(framing stream.Framing) bool {
 }
 
 // h2StreamedFraming is the message framing a head's content-type names, when
-// the engine carries it streamed, and FramingNone otherwise. Two bodies
-// whose messages cannot be cut before they are decoded are read whole: a
-// gRPC-Web body in base64 (application/grpc-web-text), and a server-sent
-// event or NDJSON body with a Content-Encoding, until whole-body
-// compression is carried.
+// the engine carries it streamed, and FramingNone otherwise. A gRPC-Web body
+// in base64 (application/grpc-web-text) is read whole, since its messages
+// cannot be cut before it is decoded. A server-sent event or NDJSON body
+// with a Content-Encoding is carried streamed when the coding is gzip or
+// deflate and the head declares no length, since the proxy compresses it
+// again toward the receiver (stream_body_compression.go); otherwise it is
+// read whole.
 func h2StreamedFraming(fields h2Fields, response bool) stream.Framing {
 	contentType, _ := fields.get("content-type")
 	if stream.IsGRPCWebText(contentType) {
@@ -44,7 +45,12 @@ func h2StreamedFraming(fields h2Fields, response bool) stream.Framing {
 	}
 	framing := stream.FramingOf(contentType, response)
 	if !framing.Enveloped() {
-		if encoding, _ := fields.get("content-encoding"); encoding != "" && !strings.EqualFold(strings.TrimSpace(encoding), "identity") {
+		contentEncoding, _ := fields.get("content-encoding")
+		encoding, carried := streamedBodyEncoding(contentEncoding)
+		if !carried {
+			return stream.FramingNone
+		}
+		if _, declared := fields.get("content-length"); encoding != "" && declared {
 			return stream.FramingNone
 		}
 	}
@@ -52,6 +58,17 @@ func h2StreamedFraming(fields h2Fields, response bool) stream.Framing {
 		return framing
 	}
 	return stream.FramingNone
+}
+
+// h2BodyEncoding is the whole-body coding of a streamed head whose framing
+// has no per-message compression, "" for none.
+func h2BodyEncoding(fields h2Fields, framing stream.Framing) string {
+	if framing.Enveloped() {
+		return ""
+	}
+	contentEncoding, _ := fields.get("content-encoding")
+	encoding, _ := streamedBodyEncoding(contentEncoding)
+	return encoding
 }
 
 // h2OriginStreamWindow is the receive window Marasi gives each origin
@@ -187,8 +204,12 @@ func (in *h2Inbound) discard(n int) {
 // framing and its source, the inbound and how to reset the sender.
 type h2StreamedBody struct {
 	framing stream.Framing
-	in      *h2Inbound
-	resetBy func(http2.ErrCode)
+	// encoding is the whole-body coding of a response's head, "" for
+	// none: only server-sent events and NDJSON, response framings, have
+	// one.
+	encoding string
+	in       *h2Inbound
+	resetBy  func(http2.ErrCode)
 }
 
 func (b *h2StreamedBody) peek() ([]byte, error)    { return b.in.peek() }
@@ -320,6 +341,8 @@ func (h *h2Conn) carryStreamedResponse(st *h2Stream, pair *Pair, res *http.Respo
 		return
 	}
 	pair.stream.headWentOut(d, out.fields)
+	encoding, _ := out.fields.get("content-encoding")
+	pair.stream.bodyEncodings(d, body.encoding, encoding)
 	if _, ok := out.fields.get("content-length"); ok {
 		pair.stream.declareLength(d)
 	}
