@@ -259,7 +259,7 @@ func TestTrafficQueryHostileInput(t *testing.T) {
 		{name: "column filter id", q: `launchpad:"{request_body}:x"`, traffic: outcome{message: `operator : on launchpad takes only *`, position: 1}, launchpad: outcome{message: `operator : on launchpad takes only *`, position: 1}},
 		{name: "non uuid id", q: `launchpad = "one"`, traffic: outcome{message: `"one" is not a launchpad id`, position: 13}, launchpad: outcome{message: `"one" is not a launchpad id`, position: 13}},
 		{name: "uppercase uuid", q: `launchpad = "` + "<ONE>" + `"`, traffic: outcome{names: "orig,launched,shared,hostile"}, launchpad: outcome{names: "orig,launched,shared,hostile"}},
-		{name: "unquoted uuid", q: `launchpad = 01937f5d-351a-7e68-936d-61a7a25661a3`, traffic: outcome{message: `01937 is not a valid number`, position: 13}, launchpad: outcome{message: `01937 is not a valid number`, position: 13}},
+		{name: "unquoted uuid", q: `launchpad = 01937f5d-351a-7e68-936d-61a7a25661a3`, traffic: outcome{message: `quote the UUID: "01937f5d-351a-7e68-936d-61a7a25661a3"`, position: 13}, launchpad: outcome{message: `quote the UUID: "01937f5d-351a-7e68-936d-61a7a25661a3"`, position: 13}},
 		{name: "unquoted word", q: `launchpad = nope`, traffic: outcome{message: `launchpad needs a quoted launchpad id`, position: 13}, launchpad: outcome{message: `launchpad needs a quoted launchpad id`, position: 13}},
 
 		// (b) and (c) text terms with hostile literals, alone and with launchpad.

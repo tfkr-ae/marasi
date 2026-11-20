@@ -53,6 +53,8 @@ const (
 	fieldHighlight
 	// fieldNumber matches a pair's number (docs/adr/2026-10-16-pairs-are-numbered-in-capture-order.md) with = != < <= > >=.
 	fieldNumber
+	// fieldID matches a pair's id with = and != against a quoted UUID.
+	fieldID
 )
 
 // member is true for a pair linked to the target bound to its ?. It is an
@@ -127,6 +129,7 @@ type trafficField struct {
 
 // trafficFields declares the fields a traffic query can name.
 var trafficFields = map[string]trafficField{
+	"id":           {kind: fieldID, column: "request.id", indexed: true},
 	"host":         {kind: fieldExactText, column: "host", indexed: true},
 	"method":       {kind: fieldExactText, column: "method"},
 	"scheme":       {kind: fieldExactText, column: "scheme"},
@@ -279,6 +282,11 @@ func (t *queryTranslator) parseError(err error) error {
 	}
 	message := deepest.Message()
 	offset := deepest.Position().Offset
+	if start, id, ok := t.unquotedUUID(offset); ok {
+		// The parser reads an unquoted UUID as a number or a word followed
+		// by a stray token, which says nothing useful.
+		return &domain.QueryError{Message: fmt.Sprintf("quote the UUID: %q", id), Position: t.position(start)}
+	}
 	switch {
 	case errors.Is(cause, io.EOF):
 		message = "unexpected end of query"
@@ -292,6 +300,36 @@ func (t *queryTranslator) parseError(err error) error {
 		message = "expected " + describeTokenType(strings.TrimPrefix(message, "expected "))
 	}
 	return &domain.QueryError{Message: message, Position: t.position(offset)}
+}
+
+// unquotedUUID reports whether offset in the trimmed query falls in an
+// unquoted UUID, and returns the UUID's offset and text.
+func (t *queryTranslator) unquotedUUID(offset int32) (int32, string, bool) {
+	trimmed := strings.TrimSpace(t.raw)
+	if offset < 0 || int(offset) > len(trimmed) {
+		return 0, "", false
+	}
+	inUUID := func(c byte) bool {
+		return c == '-' || ('0' <= c && c <= '9') || ('a' <= c && c <= 'f') || ('A' <= c && c <= 'F')
+	}
+	start, end := int(offset), int(offset)
+	for start > 0 && inUUID(trimmed[start-1]) {
+		start--
+	}
+	for end < len(trimmed) && inUUID(trimmed[end]) {
+		end++
+	}
+	word := trimmed[start:end]
+	if start > 0 && trimmed[start-1] == '"' {
+		return 0, "", false
+	}
+	if len(word) != 36 {
+		return 0, "", false
+	}
+	if _, err := uuid.Parse(word); err != nil {
+		return 0, "", false
+	}
+	return int32(start), word, true
 }
 
 // unexpectedToken describes the first token at or after offset in the trimmed
@@ -479,7 +517,7 @@ func (t *queryTranslator) indexDriven(e *expr.Expr) bool {
 			}
 			_, run := armoryRunText(jsonPath, args[1])
 			return run && op == "="
-		case field.kind == fieldLink, field.kind == fieldSitemap, field.kind == fieldHighlight:
+		case field.kind == fieldLink, field.kind == fieldSitemap, field.kind == fieldHighlight, field.kind == fieldID:
 			return op == "="
 		case field.kind == fieldNumber:
 			return op != "!="
@@ -550,6 +588,8 @@ func (t *queryTranslator) has(e, lhs, rhs *expr.Expr) (string, error) {
 			return "", t.errorAt(e, "operator : on highlight takes only *, as in highlight:*; use highlight = 3 for one highlight")
 		}
 		return anyHighlight, nil
+	case fieldID:
+		return "", t.errorAt(e, "operator : is not supported on id; use = or !=, for example id = \"01937f5d-351a-7e68-936d-61a7a25661a3\"")
 	}
 	return "", t.errorAt(e, "operator : is not supported on %s; use = or another comparison", name)
 }
@@ -763,6 +803,17 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 		}
 		t.bind(id)
 		return negate(op, field.links.member()), nil
+
+	case fieldID:
+		if op != "=" && op != "!=" {
+			return "", t.errorAt(e, "operator %s is not supported on id; use = or !=", op)
+		}
+		id, err := t.linkTargetID(rhs, name, "pair")
+		if err != nil {
+			return "", err
+		}
+		t.bind(id)
+		return negate(op, field.column+" = ?"), nil
 
 	case fieldSitemap:
 		if op != "=" && op != "!=" {
