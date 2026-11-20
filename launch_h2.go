@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
@@ -64,8 +65,9 @@ var errNoH2 = errors.New("the proxy listener did not negotiate h2")
 
 // sendH2Raw sends r on stream 1 of a new HTTP/2 connection over stream,
 // with the internal fields appended in lowercase, and reads the response to
-// its end.
-func sendH2Raw(stream net.Conn, r *rawRequest, internal [][2]string) (*rawResponse, error) {
+// its end. onCancel is given the function that resets the stream with
+// CANCEL, for the caller to run when the launch is cancelled.
+func sendH2Raw(stream net.Conn, r *rawRequest, internal [][2]string, onCancel func(reset func())) (*rawResponse, error) {
 	fields := slices.Clone(r.h2.fields)
 	for _, field := range internal {
 		fields = append(fields, h2Field{Name: strings.ToLower(field[0]), Value: field[1]})
@@ -74,6 +76,7 @@ func sendH2Raw(stream net.Conn, r *rawRequest, internal [][2]string) (*rawRespon
 	if err := client.start(); err != nil {
 		return nil, fmt.Errorf("starting HTTP/2: %w", err)
 	}
+	onCancel(client.cancel)
 	go client.read()
 	if err := client.send(fields, r.h2.body); err != nil {
 		return nil, fmt.Errorf("writing the request: %w", err)
@@ -149,6 +152,23 @@ func (c *h2LaunchClient) response() (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.status, c.err
+}
+
+// h2CancelWait bounds how long a cancelled launch waits to write its
+// RST_STREAM before its connection is closed anyway.
+const h2CancelWait = time.Second
+
+// cancel resets the launch's stream with CANCEL, so the proxy resets the
+// origin stream rather than seeing only the connection end. A stream that
+// already ended needs no reset.
+func (c *h2LaunchClient) cancel() {
+	select {
+	case <-c.done:
+		return
+	default:
+	}
+	c.conn.SetWriteDeadline(time.Now().Add(h2CancelWait))
+	c.w.do(func(f *http2.Framer) error { return f.WriteRSTStream(h2LaunchStream, http2.ErrCodeCancel) })
 }
 
 // finish ends the stream with err, nil when the response ended.
