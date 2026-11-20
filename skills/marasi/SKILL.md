@@ -224,7 +224,7 @@ Use the listed command group's `--help`, then the chosen subcommand's `--help` f
 
 ## Write Lua extensions
 
-An extension is Lua source stored in the project. The proxy calls the hooks the source defines: `startup` when it loads, and `processRequest`, `processResponse`, and `processWebSocketMessage` for traffic. Only the `checkpoint` extension's `intercept*` hooks decide what Checkpoint holds. `extension call` runs any global function. Read the API for the installed version before you write Lua, then read each library or type you use:
+An extension is Lua source stored in the project. The proxy calls the hooks the source defines: `startup` when it loads, and `processRequest`, `processResponse`, `processWebSocketMessage`, and `processStreamMessage` (each message of a streamed pair, such as a gRPC call; type `streammsg`) for traffic. On a stream whose head declares a length, a hook's change to that length, or a drop, is ignored and a proxy log says why. Only the `checkpoint` extension's `intercept*` hooks decide what Checkpoint holds. `extension call` runs any global function. Read the API for the installed version before you write Lua, then read each library or type you use:
 
 ```sh
 marasi extension api

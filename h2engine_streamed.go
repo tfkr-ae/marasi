@@ -258,6 +258,9 @@ func (h *h2Conn) sendOn(origin *h2Origin, st *h2Stream, pair *Pair, out *h2Reque
 	}
 	sp := h.engine.proxy.streamed(pair)
 	d := sp.direction(domain.StreamDirectionRequest, body.framing)
+	if _, ok := out.fields.get("content-length"); ok {
+		sp.declareLength(d)
+	}
 	st.carrying.Add(1)
 	go func() {
 		defer st.carrying.Done()
@@ -277,6 +280,9 @@ func (h *h2Conn) carryStreamedResponse(st *h2Stream, pair *Pair, res *http.Respo
 		body.reset(http2.ErrCodeCancel)
 		h.resetStream(st.id, http2.ErrCodeCancel)
 		return
+	}
+	if _, ok := out.fields.get("content-length"); ok {
+		pair.stream.declareLength(d)
 	}
 	pair.stream.carry(domain.StreamDirectionResponse, d, body, h2ClientSink{h: h, st: st})
 }

@@ -93,6 +93,8 @@ type streamedDirection struct {
 	ending    string
 	resetCode string
 	trailers  h2Fields
+	// declared is set when the direction's head declared a length.
+	declared bool
 }
 
 // streamed returns the pair's streamed state, made the first time.
@@ -169,8 +171,11 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 				src.reset(http2.ErrCodeEnhanceYourCalm)
 				return
 			case message != nil:
-				sp.record(name, d, message, nil)
-				if err := sink.forward(message.Raw); err != nil {
+				raw := sp.handle(name, d, message)
+				if raw == nil {
+					continue
+				}
+				if err := sink.forward(raw); err != nil {
 					sp.ended(d, err)
 					return
 				}
@@ -276,26 +281,35 @@ func (sp *streamedPair) tooLarge(name string, d *streamedDirection, err *stream.
 	_ = sp.proxy.WriteLog("WARN", entry, pairLogOptions(sp.pair)...)
 }
 
-// store queues one stream message for storage and announces it. A pair
-// that is not stored, out of scope or skipped, has its messages carried and
-// neither stored nor announced.
+// store queues one stream message for storage and announces it.
 func (sp *streamedPair) store(name string, d *streamedDirection, flags *uint8, payload []byte, metadata map[string]any) {
-	if !sp.announced() {
-		return
-	}
 	id, err := uuid.NewV7()
 	if err != nil {
 		return
 	}
+	sp.queue(sp.message(id, name, d, flags, payload, metadata))
+}
+
+// message is a stream message row of the pair's direction d.
+func (sp *streamedPair) message(id uuid.UUID, name string, d *streamedDirection, flags *uint8, payload []byte, metadata map[string]any) domain.StreamMessage {
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
 	if payload == nil {
 		payload = []byte{}
 	}
-	message := domain.StreamMessage{
+	return domain.StreamMessage{
 		ID: id, PairID: sp.pair.ID, Direction: name, Framing: string(d.framing), Flags: flags,
 		Payload: payload, CreatedAt: time.Now(), Metadata: metadata,
+	}
+}
+
+// queue queues message for storage and announces it. A pair that is not
+// stored, out of scope or skipped, has its messages carried and neither
+// stored nor announced.
+func (sp *streamedPair) queue(message domain.StreamMessage) {
+	if !sp.announced() {
+		return
 	}
 	if sp.proxy.DBWriteChannel != nil {
 		stored := message
