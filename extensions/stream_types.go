@@ -41,11 +41,11 @@ func RegisterStreamMessageType(extension *Runtime) {
 			l.PushInteger(int(check(l).Flags))
 			return 1
 		}},
-		{Name: "payload", Signature: "() -> string", Summary: "Returns the message payload without its envelope, as it is on the wire: compressed when compressed() is true.", Function: func(l *lua.State) int {
+		{Name: "payload", Signature: "() -> string", Summary: "Returns the message payload without its envelope, decompressed when compressed() is true and the encoding is gzip or deflate; as it is on the wire when editable() is false.", Function: func(l *lua.State) int {
 			l.PushString(string(check(l).Payload))
 			return 1
 		}},
-		{Name: "set_payload", Signature: "(payload: string)", Summary: "Replaces the message payload; the envelope's length follows it. On a direction whose head declares a length, a payload of another length is ignored and a proxy log says why.", Function: func(l *lua.State) int {
+		{Name: "set_payload", Signature: "(payload: string)", Summary: "Replaces the message payload; the envelope's length follows it. An edited compressed message goes out uncompressed with its compressed flag cleared. A change is ignored, and a proxy log says why, when editable() is false, or on a direction whose head declares a length when the message would go out at another length.", Function: func(l *lua.State) int {
 			message := check(l)
 			message.Payload = []byte(lua.CheckString(l, 2))
 			return 0
@@ -54,8 +54,16 @@ func RegisterStreamMessageType(extension *Runtime) {
 			l.PushInteger(len(check(l).Payload))
 			return 1
 		}},
-		{Name: "compressed", Signature: "() -> boolean", Summary: "Reports whether the envelope's compressed flag is set, so payload() is compressed.", Function: func(l *lua.State) int {
+		{Name: "compressed", Signature: "() -> boolean", Summary: "Reports whether the envelope's compressed flag is set: the message is compressed on the wire with encoding().", Function: func(l *lua.State) int {
 			l.PushBoolean(check(l).Compressed())
+			return 1
+		}},
+		{Name: "encoding", Signature: "() -> string", Summary: "Returns the direction's per-message encoding from grpc-encoding (gRPC, gRPC-Web) or connect-content-encoding (Connect), such as \"gzip\"; \"\" when the head names none.", Function: func(l *lua.State) int {
+			l.PushString(check(l).Encoding)
+			return 1
+		}},
+		{Name: "editable", Signature: "() -> boolean", Summary: "Reports whether set_payload can change the message: false for a message compressed with an encoding other than gzip or deflate, whose payload() is the compressed bytes.", Function: func(l *lua.State) int {
+			l.PushBoolean(!check(l).ReadOnly)
 			return 1
 		}},
 		{Name: "metadata", Signature: "() -> table", Summary: "Returns the message metadata, keyed by extension name.", Function: func(l *lua.State) int {

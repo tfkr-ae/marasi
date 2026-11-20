@@ -20,8 +20,16 @@ type LiveMessage struct {
 	Framing Framing
 	// Flags is the envelope's flags byte.
 	Flags byte
-	// Payload is the message without its envelope, as it is on the wire.
+	// Payload is the message without its envelope, decoded when it is
+	// compressed with a Decodable encoding, as it is on the wire otherwise.
 	Payload []byte
+	// Encoding is the direction's per-message encoding, from the head
+	// field EncodingHeader names; "" when the head names none.
+	Encoding string
+	// ReadOnly means the payload is compressed with an encoding the proxy
+	// does not decode, so it is shown as it came and a change to it is
+	// refused.
+	ReadOnly bool
 	// Metadata holds extension annotations, keyed by extension name.
 	Metadata map[string]any
 	// Dropped means the message is not forwarded.
@@ -31,13 +39,21 @@ type LiveMessage struct {
 }
 
 // Compressed reports whether the envelope's compressed flag is set: the
-// payload is compressed on the wire.
+// message is compressed on the wire. Payload is decoded unless ReadOnly.
 func (m *LiveMessage) Compressed() bool {
-	switch m.Framing {
-	case FramingGRPC, FramingGRPCWeb, FramingConnect:
-		return m.Flags&1 != 0
-	}
-	return false
+	return Compressed(m.Framing, m.Flags)
+}
+
+// Compressed reports whether an envelope with flags, of framing, carries a
+// compressed message.
+func Compressed(framing Framing, flags byte) bool {
+	return framing.Enveloped() && flags&flagCompressed != 0
+}
+
+// Uncompressed is flags with the compressed flag cleared: the flags of an
+// edited message, which goes out uncompressed.
+func Uncompressed(flags byte) byte {
+	return flags &^ flagCompressed
 }
 
 // Envelope is payload in the gRPC, gRPC-Web and Connect envelope: the flags
