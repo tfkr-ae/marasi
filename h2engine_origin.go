@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
+
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 // The origin leg of an HTTP/2 client connection: Marasi as the origin's
@@ -69,9 +72,16 @@ type h2OriginStream struct {
 	interim     []h2Fields
 	moreInterim chan struct{}
 
-	// Set before done is closed, and only read after; or for a response
-	// body that passed the threshold, response is set before passed is
-	// closed, and its rest goes on pass (h2engine_threshold.go).
+	// headed is closed once a streamed response's head arrived: its body
+	// goes on in response.streamed, and done closes when the stream ends.
+	headed chan struct{}
+	// streamed is response.streamed, for the goroutines other than the
+	// leg's reader, which reset or end the stream.
+	streamed atomic.Pointer[h2StreamedBody]
+
+	// Set before done or headed is closed, and only read after; or for a
+	// response body that passed the threshold, response is set before
+	// passed is closed, and its rest goes on pass (h2engine_threshold.go).
 	response *h2Response
 	final    bool
 	reset    *http2.ErrCode
@@ -90,7 +100,7 @@ type h2OriginStream struct {
 }
 
 func newH2OriginStream() *h2OriginStream {
-	return &h2OriginStream{done: make(chan struct{}), moreInterim: make(chan struct{}, 1), passed: make(chan struct{})}
+	return &h2OriginStream{done: make(chan struct{}), headed: make(chan struct{}), moreInterim: make(chan struct{}, 1), passed: make(chan struct{})}
 }
 
 // addInterim files an interim response for takeInterim.
@@ -134,12 +144,14 @@ func startH2Origin(conn *routedConn, addr string, onGoAway func(uint32, http2.Er
 	if _, err := io.WriteString(bw, http2.ClientPreface); err != nil {
 		return nil, err
 	}
-	// A large window on both levels, so the origin sends a body whole
-	// without waiting on Marasi, which reads bodies whole.
+	// A large connection window, which Marasi opens again as data
+	// arrives, and a stream window a streamed response's reader opens only
+	// as it reads (h2engine_streamed.go); a body read whole opens it with
+	// each DATA frame.
 	err := o.w.do(func(f *http2.Framer) error {
 		if err := f.WriteSettings(
 			http2.Setting{ID: http2.SettingEnablePush, Val: 0},
-			http2.Setting{ID: http2.SettingInitialWindowSize, Val: h2MaxWindow},
+			http2.Setting{ID: http2.SettingInitialWindowSize, Val: h2OriginStreamWindow},
 		); err != nil {
 			return err
 		}
@@ -256,6 +268,10 @@ func (o *h2Origin) frame(frame http2.Frame, decoder *hpack.Decoder) error {
 		if s == nil {
 			return nil
 		}
+		if s.final && s.response.streamed != nil {
+			o.streamedData(s, f)
+			return nil
+		}
 		if s.receive(f.Data(), f.StreamEnded(), o.threshold) {
 			if f.StreamEnded() {
 				o.finish(s, nil)
@@ -272,6 +288,9 @@ func (o *h2Origin) frame(frame http2.Frame, decoder *hpack.Decoder) error {
 		}
 	case *http2.RSTStreamFrame:
 		if s := o.stream(f.StreamID); s != nil {
+			if s.final && s.response.streamed != nil {
+				s.response.streamed.in.close(&streamResetError{code: f.ErrCode})
+			}
 			o.resetBy(s, f.ErrCode)
 		}
 	case *http2.GoAwayFrame:
@@ -317,6 +336,11 @@ func (o *h2Origin) headers(decoder *hpack.Decoder) error {
 		return nil
 	}
 	switch status, _ := fields.get(":status"); {
+	case s.final && s.response.streamed != nil:
+		// A streamed response's trailers end its body, not the
+		// stream: the request may still be going out.
+		s.response.streamed.in.finish(fields)
+		return nil
 	case s.final && s.passing() != nil:
 		s.passing().end(fields)
 	case s.final:
@@ -330,16 +354,52 @@ func (o *h2Origin) headers(decoder *hpack.Decoder) error {
 			s.response = &h2Response{}
 		}
 		s.response.fields = fields
-		if !o.block.endStream && declaredOver(fields, o.threshold) {
-			// A body declared over the threshold goes as it arrives.
+		framing := h2StreamedFraming(fields, true)
+		if framing == stream.FramingNone && !o.block.endStream && declaredOver(fields, o.threshold) {
+			// An ordinary body declared over the threshold goes as it
+			// arrives.
 			s.startPassLocked(o.threshold)
 		}
 		s.passMu.Unlock()
+		if framing != stream.FramingNone && !o.block.endStream {
+			o.streamResponse(s, framing)
+			return nil
+		}
 	}
 	if o.block.endStream {
 		o.finish(s, nil)
 	}
 	return nil
+}
+
+// streamResponse carries s's response as stream messages: the head goes on
+// now (headed), and the body as it arrives.
+func (o *h2Origin) streamResponse(s *h2OriginStream, framing stream.Framing) {
+	id := s.id
+	s.response.streamed = &h2StreamedBody{
+		framing: framing,
+		in: newH2Inbound(h2OriginStreamWindow, func(n uint32) {
+			o.w.do(func(f *http2.Framer) error { return f.WriteWindowUpdate(id, n) })
+		}),
+		resetBy: func(code http2.ErrCode) { o.cancel(s, code) },
+	}
+	s.streamed.Store(s.response.streamed)
+	close(s.headed)
+}
+
+// streamedData puts a DATA frame of a streamed response in its inbound. One
+// past the stream's window resets the stream with FLOW_CONTROL_ERROR.
+func (o *h2Origin) streamedData(s *h2OriginStream, f *http2.DataFrame) {
+	in := s.response.streamed.in
+	if !in.put(f.Data(), f.Header().Length) {
+		code := http2.ErrCodeFlowControl
+		in.close(&streamResetError{code: code})
+		o.cancel(s, code)
+		return
+	}
+	if f.StreamEnded() {
+		in.finish(nil)
+	}
 }
 
 // stream returns the open stream id, nil for any other.
@@ -382,6 +442,13 @@ func (o *h2Origin) finish(s *h2OriginStream, err error) {
 	s.err = err
 	if !sending {
 		o.flow.end(&s.window)
+	}
+	if body := s.streamed.Load(); body != nil {
+		// The connection ended, or the stream was given up.
+		if err == nil {
+			err = errStreamGone
+		}
+		body.in.close(err)
 	}
 	close(s.done)
 }
@@ -445,7 +512,49 @@ func (o *h2Origin) close() {
 // block, its body, and its trailers, END_STREAM falling where it fell on the
 // client's stream.
 func (o *h2Origin) send(request *h2Request) (*h2OriginStream, error) {
+	if request.rest != nil {
+		// A body past the threshold: what arrived, then the rest as it
+		// arrives (h2engine_threshold.go).
+		request.rest.take()
+		s, err := o.openStream(request.fields, false, true)
+		if err != nil {
+			// Nothing will forward the rest.
+			close(request.rest.forwarded)
+			return nil, err
+		}
+		go o.forwardRequestPass(s, request)
+		return s, nil
+	}
+	hasBody := len(request.body) > 0 || request.endsOnData
+	hasTrailers := len(request.trailers) > 0
+	s, err := o.openStream(request.fields, !hasBody && !hasTrailers, false)
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		err := sendData(o.w, o.flow, &s.window, s.id, request.body, hasBody && !hasTrailers)
+		if err == nil && hasTrailers {
+			_, err = o.w.headers(fixedID(s.id), request.trailers, true, o.flow.frameSize())
+		}
+		if err != nil && !errors.Is(err, errStreamGone) {
+			o.end(err)
+		}
+	}()
+	return s, nil
+}
+
+// sendHead opens an origin stream with a streamed request's head, leaving
+// the stream open for its body (h2OriginSink).
+func (o *h2Origin) sendHead(fields h2Fields) (*h2OriginStream, error) {
+	return o.openStream(fields, false, false)
+}
+
+// openStream opens an origin stream with a header block. sending marks it,
+// before it opens, as one whose passed request body is still to be sent,
+// so a response that ends first leaves it open for the rest (finish).
+func (o *h2Origin) openStream(fields h2Fields, endStream, sending bool) (*h2OriginStream, error) {
 	s := newH2OriginStream()
+	s.sending = sending
 	pick := func() (uint32, error) {
 		o.mu.Lock()
 		defer o.mu.Unlock()
@@ -463,37 +572,12 @@ func (o *h2Origin) send(request *h2Request) (*h2OriginStream, error) {
 		o.streams[s.id] = s
 		return s.id, nil
 	}
-	hasBody := len(request.body) > 0 || request.endsOnData
-	hasTrailers := len(request.trailers) > 0
-	if request.rest != nil {
-		// Set before the stream is open, so a response that ends first
-		// leaves it open for the rest (finish).
-		s.sending = true
-		request.rest.take()
-	}
-	if _, err := o.w.headers(pick, request.fields, !hasBody && !hasTrailers && request.rest == nil, o.flow.frameSize()); err != nil {
+	if _, err := o.w.headers(pick, fields, endStream, o.flow.frameSize()); err != nil {
 		if s.id != 0 {
 			o.finish(s, err)
 		}
-		if request.rest != nil {
-			// Nothing will forward the rest.
-			close(request.rest.forwarded)
-		}
 		return nil, err
 	}
-	if request.rest != nil {
-		go o.forwardRequestPass(s, request)
-		return s, nil
-	}
-	go func() {
-		err := sendData(o.w, o.flow, &s.window, s.id, request.body, hasBody && !hasTrailers)
-		if err == nil && hasTrailers {
-			_, err = o.w.headers(fixedID(s.id), request.trailers, true, o.flow.frameSize())
-		}
-		if err != nil && !errors.Is(err, errStreamGone) {
-			o.end(err)
-		}
-	}()
 	return s, nil
 }
 
@@ -505,8 +589,19 @@ func (o *h2Origin) cancel(s *h2OriginStream, code http2.ErrCode) {
 	if !open {
 		return
 	}
+	if body := s.streamed.Load(); body != nil {
+		body.in.close(&streamResetError{code: code})
+	}
 	o.w.do(func(f *http2.Framer) error { return f.WriteRSTStream(s.id, code) })
 	o.finish(s, errStreamGone)
+}
+
+// open reports whether stream s is still open.
+func (o *h2Origin) open(s *h2OriginStream) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	_, open := o.streams[s.id]
+	return open
 }
 
 // relayGoAway sends the origin a GOAWAY the client sent Marasi, with the

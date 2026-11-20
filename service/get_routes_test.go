@@ -68,6 +68,8 @@ var readOnlyGetRoutes = map[string][]string{
 	"GET /report/template":                   {"/report/template"},
 	"GET /scope":                             {"/scope"},
 	"GET /status":                            nil,
+	"GET /stream/{pair_id}/message":          {"/stream/0190f0c4-7b6e-7000-8000-000000000001/message"},
+	"GET /stream/{pair_id}/message/{id}":     {"/stream/0190f0c4-7b6e-7000-8000-000000000001/message/0190f0c4-7b6e-7000-8000-000000000002"},
 	"GET /test-case":                         {"/test-case"},
 	"GET /test-case/checklist":               {"/test-case/checklist"},
 	"GET /test-case/{id}":                    {"/test-case/0190f0c4-7b6e-7000-8000-000000000001"},

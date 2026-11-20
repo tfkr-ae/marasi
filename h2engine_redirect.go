@@ -53,28 +53,52 @@ func (h *h2Conn) sendRedirected(pair *Pair, st *h2Stream, addr string) (*http.Re
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	defer conn.Close()
 	// A stream that ends while in flight closes the connection, as a
 	// direct client resetting its only stream would.
 	stop := context.AfterFunc(st.ctx, func() { conn.Close() })
-	defer stop()
+	var origin *h2Origin
+	// keep is set when a direction is streamed: the connection stays
+	// open until it is carried (h2Conn.dispatch).
+	keep := false
+	release := func() {
+		stop()
+		if origin != nil {
+			origin.close()
+		}
+		conn.Close()
+	}
+	defer func() {
+		if keep || pair.stream != nil {
+			st.release = append(st.release, release)
+			return
+		}
+		release()
+	}()
 	if pair.Route != nil {
 		pair.Route.Connected(conn.route.Snapshot())
 	}
 	if conn.protocol() == domain.ProtocolHTTP2 {
 		pair.originProtocol = domain.ProtocolHTTP2
-		origin, err := startH2Origin(conn, addr, nil, nil, h.engine.proxy.bodyThreshold())
+		origin, err = startH2Origin(conn, addr, nil, nil, h.engine.proxy.bodyThreshold())
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		defer origin.close()
-		sent, err := origin.send(out)
+		sent, err := h.sendOn(origin, st, pair, out)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		return h.awaitResponse(st, req, sent)
+		res, wire, cut, err := h.awaitResponse(st, req, sent)
+		keep = wire != nil && wire.h2.streamed != nil
+		return res, wire, cut, err
 	}
 	pair.originProtocol = domain.ProtocolHTTP1
+	if body := st.request.streamed; body != nil {
+		// Translated to HTTP/1.1, a streamed request is read whole.
+		if out.body, out.trailers, err = readStreamedBody(body); err != nil {
+			return nil, nil, nil, errStreamGone
+		}
+		out.endsOnData = true
+	}
 	return h.sendTranslated(st, req, conn, out)
 }
 

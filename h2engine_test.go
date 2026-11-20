@@ -108,6 +108,12 @@ type h2TestPeer struct {
 	order   []uint32
 	goAway  *http2.GoAwayFrame
 	err     error
+	// credit is what WINDOW_UPDATE frames gave, by stream, 0 being the
+	// connection. holdWindow stops the peer giving window back for DATA.
+	credit     map[uint32]int64
+	holdWindow bool
+	// sentOn is what sendWithinWindow sent, by stream.
+	sentOn map[uint32]int64
 }
 
 // h2TestStream is what arrived on one stream.
@@ -121,7 +127,7 @@ type h2TestStream struct {
 }
 
 func newH2TestPeer(conn net.Conn) *h2TestPeer {
-	peer := &h2TestPeer{conn: conn, framer: http2.NewFramer(conn, conn), changed: make(chan struct{}), streams: make(map[uint32]*h2TestStream)}
+	peer := &h2TestPeer{conn: conn, framer: http2.NewFramer(conn, conn), changed: make(chan struct{}), streams: make(map[uint32]*h2TestStream), sentOn: make(map[uint32]int64)}
 	peer.framer.AllowIllegalWrites = true
 	peer.encoder = hpack.NewEncoder(&peer.block)
 	return peer
@@ -201,7 +207,7 @@ func (p *h2TestPeer) read() {
 			s := stream(f.StreamID)
 			s.data = append(s.data, f.Data()...)
 			s.ended = s.ended || f.StreamEnded()
-			if n := f.Header().Length; n > 0 {
+			if n := f.Header().Length; n > 0 && !p.holdWindow {
 				go p.write(func(fr *http2.Framer) error {
 					fr.WriteWindowUpdate(0, n)
 					return fr.WriteWindowUpdate(f.StreamID, n)
@@ -209,6 +215,11 @@ func (p *h2TestPeer) read() {
 			}
 		case *http2.RSTStreamFrame:
 			stream(f.StreamID).reset = f.ErrCode.String()
+		case *http2.WindowUpdateFrame:
+			if p.credit == nil {
+				p.credit = make(map[uint32]int64)
+			}
+			p.credit[f.StreamID] += int64(f.Increment)
 		case *http2.GoAwayFrame:
 			p.goAway = f
 		}

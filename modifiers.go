@@ -949,8 +949,13 @@ func WriteResponseModifier(proxy *Proxy, pair *Pair) error {
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrProxyResponse, err)
 	}
-	proxy.DBWriteChannel <- proxyResponse
 	pair.responseCaptured = true
+	if pair.deferResponse(proxyResponse) {
+		// A streamed pair's response is stored once its directions end,
+		// with their endings and trailers (streamedPair.finish).
+		return nil
+	}
+	proxy.DBWriteChannel <- proxyResponse
 	if proxy.OnResponse != nil {
 		proxy.OnResponse(*proxyResponse)
 	}

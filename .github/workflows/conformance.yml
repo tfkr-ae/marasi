@@ -97,7 +97,10 @@ jobs:
           if-no-files-found: ignore
 
   # Required checks, as the h1 and h2 jobs are, for the streamed pair
-  # suites: "stream-origin (proxy)" and so on.
+  # suites: "stream-origin (proxy)", "grpc-client (proxy)" and so on.
+  # grpc-client installs grpc-go's interop client with the Go toolchain
+  # set up here (go install, outside go.mod) and builds grpc-java's
+  # interop image.
   streams:
     name: ${{ matrix.suite }} (${{ matrix.run }})
     needs: paths
@@ -106,7 +109,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [stream-origin]
+        suite: [stream-origin, grpc-client]
         run: [proxy, checkpoint-forward, checkpoint-edit, extension]
     env:
       RUN_SUITE: ${{ needs.paths.outputs.streams }}
@@ -209,7 +212,9 @@ jobs:
           check streams "${marasi[@]}" "${harness[@]}" \
             ':(glob)internal/conformance/h2/**' \
             ':(glob)internal/conformance/streamorigin/**' \
-            ':(glob)internal/conformance/baselines/stream-*/**'
+            ':(glob)internal/conformance/baselines/stream-*/**' \
+            ':(glob)internal/conformance/grpcclient/**' \
+            ':(glob)internal/conformance/baselines/grpc-*/**'
           # Autobahn takes hours, so its list stays narrow: a relay waits on
           # the database writer's queue, so a slower writer can fail a case
           # (db/, proxy.go); the matrix runs WebSocket modifiers, Checkpoint

@@ -1,0 +1,33 @@
+{
+  "suite": "grpc-client",
+  "rows": [
+    {
+      "run": "proxy",
+      "target": "grpc-java",
+      "approach": "connect-tls",
+      "matched": 18,
+      "cases": 18
+    },
+    {
+      "run": "checkpoint-forward",
+      "target": "grpc-java",
+      "approach": "connect-tls",
+      "matched": 18,
+      "cases": 18
+    },
+    {
+      "run": "checkpoint-edit",
+      "target": "grpc-java",
+      "approach": "connect-tls",
+      "matched": 18,
+      "cases": 18
+    },
+    {
+      "run": "extension",
+      "target": "grpc-java",
+      "approach": "connect-tls",
+      "matched": 18,
+      "cases": 18
+    }
+  ]
+}

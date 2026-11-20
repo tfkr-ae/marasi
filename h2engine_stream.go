@@ -45,19 +45,43 @@ func (h *h2Conn) carry(st *h2Stream) {
 		h.resetStream(st.id, http2.ErrCodeInternal)
 		return
 	}
+	st.pair = pair
 	requestDropped := pair.Dropped()
 	res, wire, cut := h.roundTrip(pair, st)
 	if res == nil {
 		return
 	}
-	h.engine.response(res, wire)
-	if h.gone(st) {
-		return
+	// A streamed response's head runs the response chain with an empty
+	// body; its stream messages follow (h2engine_streamed.go).
+	var streamed *h2StreamedBody
+	var d *streamedDirection
+	if wire != nil && wire.h2 != nil && wire.h2.streamed != nil {
+		streamed = wire.h2.streamed
+		d = h.engine.proxy.streamed(pair).direction(domain.StreamDirectionResponse, streamed.framing)
 	}
-	if !requestDropped && pair.Dropped() {
+	h.engine.response(res, wire)
+	switch {
+	case h.gone(st):
+		if streamed != nil {
+			streamed.reset(http2.ErrCodeCancel)
+		}
+		return
+	case !requestDropped && pair.Dropped():
 		// A dropped response: the client's stream is cancelled, as an
 		// HTTP/1.1 client's connection is closed.
+		if streamed != nil {
+			streamed.reset(http2.ErrCodeCancel)
+		}
 		h.resetStream(st.id, http2.ErrCodeCancel)
+		return
+	case streamed != nil && pair.FromMarasi():
+		// The chain answered with a response of Marasi's own.
+		streamed.reset(http2.ErrCodeCancel)
+	case streamed != nil:
+		if pair.responseWire != nil {
+			wire = pair.responseWire
+		}
+		h.carryStreamedResponse(st, pair, res, wire, streamed, d)
 		return
 	}
 	if cut != nil {
@@ -171,7 +195,7 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 		return nil, nil, nil, err
 	}
 	h.waitTurn(st)
-	sent, err := origin.send(out)
+	sent, err := h.sendOn(origin, st, pair, out)
 	h.passTurn(st)
 	if errors.Is(err, errOriginGoneAway) {
 		// The origin's GOAWAY came before this stream went out. Once it
@@ -204,6 +228,9 @@ func (h *h2Conn) awaitResponse(st *h2Stream, req *http.Request, s *h2OriginStrea
 		case <-s.moreInterim:
 		case <-s.done:
 			done = true
+		case <-s.headed:
+			// A streamed response: its head is all there is so far.
+			done = true
 		case <-s.passed:
 			done = true
 		case <-st.ctx.Done():
@@ -212,6 +239,16 @@ func (h *h2Conn) awaitResponse(st *h2Stream, req *http.Request, s *h2OriginStrea
 		for _, fields := range s.takeInterim() {
 			h.relayInterim(st, fields)
 		}
+	}
+	if s.streamed.Load() != nil {
+		// The head came before headed closed; the body goes on in its
+		// inbound, however the stream ends.
+		if h.gone(st) {
+			return nil, nil, nil, errStreamGone
+		}
+		res := s.response.response()
+		res.Request = req
+		return res, &wireResponse{h2: s.response}, nil, nil
 	}
 	if s.passing() != nil {
 		// The response goes with what arrived; the rest follows
