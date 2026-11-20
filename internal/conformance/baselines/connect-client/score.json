@@ -5,28 +5,28 @@
       "run": "proxy",
       "target": "reference",
       "approach": "connect-plain",
-      "matched": 6507,
+      "matched": 6767,
       "cases": 6767
     },
     {
       "run": "checkpoint-forward",
       "target": "reference",
       "approach": "connect-plain",
-      "matched": 6507,
+      "matched": 6767,
       "cases": 6767
     },
     {
       "run": "checkpoint-edit",
       "target": "reference",
       "approach": "connect-plain",
-      "matched": 6507,
+      "matched": 6767,
       "cases": 6767
     },
     {
       "run": "extension",
       "target": "reference",
       "approach": "connect-plain",
-      "matched": 6507,
+      "matched": 6767,
       "cases": 6767
     }
   ]
