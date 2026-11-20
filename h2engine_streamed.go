@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 
 	"golang.org/x/net/http2"
@@ -24,16 +25,30 @@ import (
 // others.
 
 // h2CarriesFraming reports whether the HTTP/2 engine carries a direction
-// with framing as stream messages. Others are read whole, as before.
+// with framing as stream messages: every message framing. An ordinary body
+// is read whole, as before.
 func h2CarriesFraming(framing stream.Framing) bool {
-	return framing == stream.FramingGRPC
+	return framing != stream.FramingNone
 }
 
 // h2StreamedFraming is the message framing a head's content-type names, when
-// the engine carries it streamed, and FramingNone otherwise.
+// the engine carries it streamed, and FramingNone otherwise. Two bodies
+// whose messages cannot be cut before they are decoded are read whole: a
+// gRPC-Web body in base64 (application/grpc-web-text), and a server-sent
+// event or NDJSON body with a Content-Encoding, until whole-body
+// compression is carried.
 func h2StreamedFraming(fields h2Fields, response bool) stream.Framing {
 	contentType, _ := fields.get("content-type")
-	if framing := stream.FramingOf(contentType, response); h2CarriesFraming(framing) {
+	if stream.IsGRPCWebText(contentType) {
+		return stream.FramingNone
+	}
+	framing := stream.FramingOf(contentType, response)
+	if !framing.Enveloped() {
+		if encoding, _ := fields.get("content-encoding"); encoding != "" && !strings.EqualFold(strings.TrimSpace(encoding), "identity") {
+			return stream.FramingNone
+		}
+	}
+	if h2CarriesFraming(framing) {
 		return framing
 	}
 	return stream.FramingNone

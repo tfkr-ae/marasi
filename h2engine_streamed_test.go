@@ -356,3 +356,138 @@ func sendWithinWindow(t *testing.T, p *h2TestPeer, id uint32, body string) int {
 	}
 	return sent
 }
+
+func TestH2Engine_StreamedFramings(t *testing.T) {
+	cases := []struct {
+		name                 string
+		path, requestType    string
+		requestMessages      []string // the client's messages; none sends the head with END_STREAM
+		responseType         string
+		responseMessages     []string
+		framing, request     string // the response's framing, and the request's ("" when not streamed)
+		flags                []*uint8
+		responsePayloadFirst string // the first response message's stored payload
+	}{
+		{
+			name: "gRPC-Web, its trailers frame a stream message", path: "/test.Echo/Say", requestType: "application/grpc-web+proto",
+			requestMessages: []string{grpcEnvelope(0, "hi")}, responseType: "application/grpc-web+proto",
+			responseMessages: []string{grpcEnvelope(0, "one"), grpcEnvelope(0x80, "grpc-status: 0\r\n")},
+			framing:          "grpc-web", request: "grpc-web", responsePayloadFirst: "one",
+		},
+		{
+			name: "Connect streaming, its end-of-stream envelope a stream message", path: "/test.Echo/Say", requestType: "application/connect+json",
+			requestMessages: []string{grpcEnvelope(0, `{"a":1}`)}, responseType: "application/connect+json",
+			responseMessages: []string{grpcEnvelope(0, `{"b":2}`), grpcEnvelope(0x02, `{}`)},
+			framing:          "connect", request: "connect", responsePayloadFirst: `{"b":2}`,
+		},
+		{
+			name: "server-sent events, one event per message", path: "/events",
+			responseType: "text/event-stream", responseMessages: []string{"id: 1\ndata: first\n\n", "id: 2\ndata: second\n\n"},
+			framing: "sse", responsePayloadFirst: "id: 1\ndata: first\n\n",
+		},
+		{
+			name: "NDJSON, one line per message", path: "/logs",
+			responseType: "application/x-ndjson", responseMessages: []string{"{\"n\":1}\n", "{\"n\":2}\n"},
+			framing: "ndjson", responsePayloadFirst: "{\"n\":1}\n",
+		},
+	}
+	for _, c := range cases {
+		t.Run("should carry "+c.name+" as each message arrives, and store each as its own row", func(t *testing.T) {
+			origin := newH2TestOrigin(t)
+			addr, captured, ca := serveH1EngineMITMProxy(t, true)
+			client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+			upstream := origin.accept(t)
+			head := []string{":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", c.path}
+			if c.requestType != "" {
+				head = []string{":method", "POST", ":scheme", "https", ":authority", origin.addr, ":path", c.path, "content-type", c.requestType}
+			}
+			client.headers(1, len(c.requestMessages) == 0, head...)
+			id := upstream.nthStream(t, 0)
+			sent := ""
+			for _, m := range c.requestMessages {
+				client.data(1, false, m)
+				sent += m
+				awaitData(t, upstream, "the origin", id, sent)
+			}
+			upstream.headers(id, false, ":status", "200", "content-type", c.responseType)
+			upstream.data(id, false, c.responseMessages[0])
+			awaitData(t, client, "the client", 1, c.responseMessages[0])
+			if len(c.requestMessages) > 0 {
+				client.data(1, true, "")
+			}
+			upstream.data(id, true, c.responseMessages[1])
+			if body := client.stream(t, 1).data; string(body) != strings.Join(c.responseMessages, "") {
+				t.Fatalf("the client's response body\nwanted:\n%q\ngot:\n%q", strings.Join(c.responseMessages, ""), body)
+			}
+
+			req, res := streamedResponse(t, captured)
+			d := direction(t, res.Metadata, "response")
+			if d["framing"] != c.framing || d["messages"] != float64(2) || d["ending"] != "complete" {
+				t.Errorf("metadata.streamed.response\nwanted:\n%s, 2 messages, complete\ngot:\n%v", c.framing, d)
+			}
+			if c.request != "" {
+				if d := direction(t, res.Metadata, "request"); d["framing"] != c.request || d["messages"] != float64(1) {
+					t.Errorf("metadata.streamed.request\nwanted:\n%s, 1 message\ngot:\n%v", c.request, d)
+				}
+			}
+			var responses []*domain.StreamMessage
+			for _, m := range storedMessages(t, proxyOf(t, addr), req.ID) {
+				if m.Direction == "response" {
+					responses = append(responses, m)
+				}
+			}
+			if len(responses) != 2 || string(responses[0].Payload) != c.responsePayloadFirst || responses[0].Framing != c.framing {
+				t.Fatalf("stored response messages\nwanted:\n2, the first %q as %s\ngot:\n%d %v", c.responsePayloadFirst, c.framing, len(responses), responses)
+			}
+			envelope := c.framing == "grpc-web" || c.framing == "connect"
+			if (responses[1].Flags != nil) != envelope {
+				t.Errorf("the second message's flags\nwanted:\nset only for an envelope framing\ngot:\n%v", responses[1].Flags)
+			}
+		})
+	}
+
+	t.Run("should carry a gzipped server-sent event stream read whole, as before, until compression is carried", func(t *testing.T) {
+		origin := newH2TestOrigin(t)
+		addr, captured, ca := serveH1EngineMITMProxy(t, true)
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		upstream := origin.accept(t)
+		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/events")
+		id := upstream.nthStream(t, 0)
+		upstream.headers(id, false, ":status", "200", "content-type", "text/event-stream", "content-encoding", "gzip")
+		upstream.data(id, true, "\x1f\x8b opaque")
+		if body := client.stream(t, 1).data; string(body) != "\x1f\x8b opaque" {
+			t.Fatalf("the client's response body\nwanted:\n%q\ngot:\n%q", "\x1f\x8b opaque", body)
+		}
+		_, res := streamedResponse(t, captured)
+		if _, ok := res.Metadata["streamed"]; ok {
+			t.Fatalf("the stored response\nwanted:\nno streamed metadata\ngot:\n%v", res.Metadata)
+		}
+	})
+
+	ordinary := []struct{ name, path, contentType string }{
+		{"unary Connect with protobuf", "/test.Echo/Say", "application/proto"},
+		{"unary Connect with JSON", "/test.Echo/Say", "application/json"},
+		{"a /pkg.Svc/Method path with JSON", "/pkg.Svc/Method", "application/json"},
+	}
+	for _, c := range ordinary {
+		t.Run("should store "+c.name+" as an ordinary pair, its bodies read whole", func(t *testing.T) {
+			origin := newH2TestOrigin(t)
+			addr, captured, ca := serveH1EngineMITMProxy(t, true)
+			client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+			upstream := origin.accept(t)
+			client.headers(1, false, ":method", "POST", ":scheme", "https", ":authority", origin.addr, ":path", c.path, "content-type", c.contentType)
+			client.data(1, true, `{"a":1}`)
+			id := upstream.nthStream(t, 0)
+			if body := upstream.stream(t, id).data; string(body) != `{"a":1}` {
+				t.Fatalf("the origin's request body\nwanted:\n%q\ngot:\n%q", `{"a":1}`, body)
+			}
+			upstream.headers(id, false, ":status", "200", "content-type", c.contentType)
+			upstream.data(id, true, `{"b":2}`)
+			client.stream(t, 1)
+			req, res := streamedResponse(t, captured)
+			if _, ok := res.Metadata["streamed"]; ok || !strings.HasSuffix(string(req.Raw), `{"a":1}`) || !strings.HasSuffix(string(res.Raw), `{"b":2}`) {
+				t.Fatalf("the stored pair\nwanted:\nboth bodies, no streamed metadata\ngot:\n%q\n%q\n%v", req.Raw, res.Raw, res.Metadata)
+			}
+		})
+	}
+}
