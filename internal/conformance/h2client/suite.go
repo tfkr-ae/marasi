@@ -15,7 +15,7 @@
 // shim's port; a proxy that routes h2 requests by :authority rather than
 // by the CONNECT target reaches the shim, not nginx.
 //
-// The suite is report only in Phase 0: run it apart from the h1 suites.
+// The suite is a required check on all four conformance runs.
 package h2client
 
 import (
@@ -67,9 +67,9 @@ var _ conformance.Suite = Suite{}
 // Name is "h2-client".
 func (s Suite) Name() string { return Name }
 
-// Runs is only proxy: the h2 Checkpoint and extension runs come with
-// HTTP/2 itself (Phase 5).
-func (s Suite) Runs() []conformance.RunName { return []conformance.RunName{conformance.RunProxy} }
+// Runs is all four proxied runs: Checkpoint holds and resolves each HTTP/2
+// request and response, and the extension run edits each body to itself.
+func (s Suite) Runs() []conformance.RunName { return conformance.ProxiedRuns }
 
 // Approaches is TLS inside CONNECT, with ALPN h2.
 func (s Suite) Approaches() []conformance.Approach {
@@ -87,9 +87,14 @@ func (s Suite) Deterministic() {}
 // Setup runs Marasi in a container that resolves nginx's name to
 // marasiAddress. The went-through check is the intercepted TLS, which a
 // proxy that answers ALPN with http/1.1, and so stores no h2 traffic,
-// still shows.
+// still shows. The Checkpoint and extension runs hold and edit HTTP as
+// an HTTP/1.1 suite does.
 func (s Suite) Setup() conformance.Setup {
-	return conformance.Setup{Traffic: conformance.TrafficTLS, Container: true, Hosts: []string{TargetHost + ":" + marasiAddress}}
+	setup := conformance.HTTPSetup()
+	setup.Traffic = conformance.TrafficTLS
+	setup.Container = true
+	setup.Hosts = []string{TargetHost + ":" + marasiAddress}
+	return setup
 }
 
 // Execute runs h2spec once per selected case through one shim, against

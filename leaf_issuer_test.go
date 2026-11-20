@@ -149,15 +149,6 @@ func TestLeafIssuer(t *testing.T) {
 		}
 	})
 
-	t.Run("should offer http/1.1 only by ALPN", func(t *testing.T) {
-		issuer, _ := newTestLeafIssuer(t, 3*365*24*time.Hour)
-		for _, config := range []*tls.Config{issuer.config(""), issuer.config("example.com:443")} {
-			if !slices.Equal(config.NextProtos, []string{"http/1.1"}) {
-				t.Fatalf("ALPN\nwanted:\n[http/1.1]\ngot:\n%v", config.NextProtos)
-			}
-		}
-	})
-
 	t.Run("should send the CA after the leaf", func(t *testing.T) {
 		issuer, ca := newTestLeafIssuer(t, 3*365*24*time.Hour)
 		certificate, err := issuer.config("").GetCertificate(&tls.ClientHelloInfo{ServerName: "example.com"})

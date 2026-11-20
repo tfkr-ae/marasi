@@ -50,6 +50,17 @@ type pendingHTTP struct {
 	// edit reads an edit through the codec for a message the engine read
 	// from the wire; nil rebuilds it with net/http.
 	edit *checkpointEdit
+	// ended is what the request's engine runs as the hold ends (holdHooks).
+	ended func()
+}
+
+// release ends the hold: the engine is told, then the held message goes on.
+// The caller has taken pending out of the pending items.
+func (pending *pendingHTTP) release() {
+	if pending.ended != nil {
+		pending.ended()
+	}
+	close(pending.done)
 }
 
 type httpHoldResult struct {
@@ -258,7 +269,7 @@ func (proxy *Proxy) DropAllCheckpoint() []domain.CheckpointItem {
 	removed := make([]domain.CheckpointItem, 0, len(httpPending))
 	for _, pending := range httpPending {
 		removed = append(removed, cloneCheckpointItem(pending.item))
-		close(pending.done)
+		pending.release()
 	}
 	if proxy.WebSocketInterceptor != nil {
 		for _, message := range proxy.WebSocketInterceptor.CancelAll() {
@@ -300,6 +311,12 @@ func (proxy *Proxy) holdHTTP(item domain.CheckpointItem, req *http.Request, res 
 		done: make(chan struct{}),
 		edit: edit,
 	}
+	if req != nil {
+		if hooks, ok := req.Context().Value(holdHooksKey{}).(holdHooks); ok {
+			hooks.started()
+			pending.ended = hooks.ended
+		}
+	}
 
 	proxy.checkpoint.mu.Lock()
 	if _, exists := proxy.checkpoint.http[item.ID]; exists {
@@ -328,6 +345,21 @@ func (proxy *Proxy) holdHTTP(item domain.CheckpointItem, req *http.Request, res 
 		rebuiltReq:        pending.rebuiltReq,
 		rebuiltRes:        pending.rebuiltRes,
 	}, nil
+}
+
+// holdHooks is what a request's engine runs as Checkpoint starts to hold the
+// request, and as the hold ends, before the request goes on: an HTTP/2
+// stream is passed over by the streams behind it while it is held, so the
+// hold blocks only its own stream.
+type holdHooks struct {
+	started, ended func()
+}
+
+type holdHooksKey struct{}
+
+// withHoldHooks returns ctx with hooks run around a hold of its request.
+func withHoldHooks(ctx context.Context, hooks holdHooks) context.Context {
+	return context.WithValue(ctx, holdHooksKey{}, hooks)
 }
 
 // checkpointHoldContext returns the context that ends an HTTP hold: the request's,
@@ -372,7 +404,7 @@ func (proxy *Proxy) abandonHTTP(pending *pendingHTTP) {
 	proxy.checkpoint.order = removeCheckpointID(proxy.checkpoint.order, id)
 	notify := proxy.OnCheckpointAbandoned
 	proxy.checkpoint.mu.Unlock()
-	close(pending.done)
+	pending.release()
 
 	if notify != nil {
 		_ = notify(cloneCheckpointItem(pending.item))
@@ -428,7 +460,7 @@ func (proxy *Proxy) forwardHTTP(id uuid.UUID, fwd CheckpointForward) error {
 	delete(proxy.checkpoint.http, id)
 	proxy.checkpoint.order = removeCheckpointID(proxy.checkpoint.order, id)
 	proxy.checkpoint.mu.Unlock()
-	close(pending.done)
+	pending.release()
 	return nil
 }
 
@@ -447,7 +479,7 @@ func (proxy *Proxy) dropHTTP(id uuid.UUID) error {
 	delete(proxy.checkpoint.http, id)
 	proxy.checkpoint.order = removeCheckpointID(proxy.checkpoint.order, id)
 	proxy.checkpoint.mu.Unlock()
-	close(pending.done)
+	pending.release()
 	return nil
 }
 

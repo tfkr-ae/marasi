@@ -27,6 +27,10 @@ type rawOrigin struct {
 	mu          sync.Mutex
 	requests    []string
 	connections int
+
+	// ended, when set, receives once for each connection the origin's
+	// peer ends.
+	ended chan struct{}
 }
 
 func newRawOrigin(t *testing.T, response string) *rawOrigin {
@@ -56,6 +60,9 @@ func newRawOrigin(t *testing.T, response string) *rawOrigin {
 // each one.
 func (origin *rawOrigin) serve(conn net.Conn) {
 	defer conn.Close()
+	if origin.ended != nil {
+		defer func() { origin.ended <- struct{}{} }()
+	}
 	br := bufio.NewReader(conn)
 	for {
 		var head strings.Builder

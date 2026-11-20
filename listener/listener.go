@@ -40,6 +40,7 @@ func NewTrackedConnection(conn net.Conn, onClose func()) net.Conn {
 }
 
 // ProtocolMuxListener wraps net.Listener and inspects the incoming connection to determine the protocol.
+// With a TLSConfig it completes TLS itself; without one it hands TLS on unread.
 // Each connection is inspected on its own goroutine, so a client that connects
 // and sends nothing does not hold up the connections accepted after it.
 type ProtocolMuxListener struct {
@@ -159,7 +160,9 @@ func (l *ProtocolMuxListener) inspect(rawConnection net.Conn) (net.Conn, error) 
 
 	isTLS := len(peekedBytes) >= 2 && peekedBytes[0] == 0x16 && peekedBytes[1] == 0x03
 
-	if isTLS {
+	// Without a TLS config the connection is handed on as it came, TLS
+	// included, for its owner to complete.
+	if isTLS && l.TLSConfig != nil {
 		tlsConn := tls.Server(&connWrapper{
 			Conn:   rawConnection,
 			Reader: bufferedReader,

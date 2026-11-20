@@ -121,6 +121,32 @@ func TestDirectRecording(t *testing.T) {
 		}
 	})
 
+	t.Run("should record a body larger than the flow-control window by its length and SHA-256", func(t *testing.T) {
+		got := baselineCase(t, settings, "flow-control-window@connect-tls").Client[0].Streams[0]
+		const want = "9c7ba7491ab99b39cfcb11c7815edfa453aae3afe155848fe4220f8f731fff9e"
+		if got.DataLength != 81920 || got.DataSHA256 != want || got.Data != nil || got.EndStream != h2.EndData {
+			t.Fatalf("\nwanted 81920 bytes, sha256 %s, ending on DATA\ngot:\n%+v", want, got)
+		}
+	})
+
+	t.Run("should record a redirected case's HTTP/1.1 exchange with the HTTP/1.1 origin, header case kept", func(t *testing.T) {
+		got := baselineCase(t, settings, "redirect-to-http1@connect-tls")
+		want := h2.Recording{
+			Client: []h2.Connection{{ALPN: "http/1.1", Streams: []h2.Stream{{
+				Headers: [][]h2.Field{h2.Fields(":status", "201", "Content-Type", "text/plain", "X-Origin", "HTTP1", "Content-Length", "4")},
+				Data:    []byte("pong"), EndStream: h2.EndData,
+			}}}},
+			Origin: []h2.Connection{{ALPN: "http/1.1", Streams: []h2.Stream{{
+				Headers: [][]h2.Field{h2.Fields(":method", "POST", ":path", "/redirected?q=1", "host", "origin.test:PORT",
+					"content-type", "text/plain", "x-request", "1", "content-length", "4")},
+				Data: []byte("ping"), EndStream: h2.EndData,
+			}}}},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+	})
+
 	t.Run("should record padded, split DATA and other SETTINGS the same as one plain DATA frame", func(t *testing.T) {
 		plain := baselineCase(t, settings, "headers-with-data@connect-tls")
 		split := baselineCase(t, settings, "data-padded-split@connect-tls")
@@ -133,8 +159,10 @@ func TestDirectRecording(t *testing.T) {
 func TestReencodingRelay(t *testing.T) {
 	t.Run("should match every case though SETTINGS, HPACK encoding, DATA frames, padding and stream IDs differ", func(t *testing.T) {
 		settings := newHarness(t, reencode, nil)
+		// The stand-in runs no Lua, so it never redirects.
+		settings.Exclude = []string{"redirect-*"}
 		result := onlyResult(t, runHarness(t, settings))
-		if len(result.Cases) != len(h2origin.Catalogue) || result.Matched() != len(result.Cases) || len(result.New) != 0 {
+		if len(result.Cases) != len(h2origin.Catalogue)-1 || result.Matched() != len(result.Cases) || len(result.New) != 0 {
 			t.Fatalf("\nwanted every case matched and nothing new\ngot %d of %d:\n%+v", result.Matched(), len(result.Cases), result.New)
 		}
 	})

@@ -8,6 +8,8 @@
 package h2
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
@@ -40,9 +42,13 @@ type Stream struct {
 	// Headers are the header blocks before any trailers, in order, each
 	// with its pseudo-header fields: interim (1xx) responses, then the
 	// final response, or the request's one block.
-	Headers  [][]Field `json:"headers"`
-	Data     []byte    `json:"data,omitempty"` // the DATA frames' payloads joined, padding left out
-	Trailers []Field   `json:"trailers,omitempty"`
+	Headers [][]Field `json:"headers"`
+	Data    []byte    `json:"data,omitempty"` // the DATA frames' payloads joined, padding left out
+	// DataLength and DataSHA256 stand for Data when it is longer than
+	// LargeData bytes, so a large body keeps the baseline small.
+	DataLength int     `json:"data_length,omitempty"`
+	DataSHA256 string  `json:"data_sha256,omitempty"`
+	Trailers   []Field `json:"trailers,omitempty"`
 	// EndStream is where END_STREAM fell: EndHeaders, EndData,
 	// EndTrailers, or empty when it never came.
 	EndStream string `json:"end_stream,omitempty"`
@@ -51,6 +57,9 @@ type Stream struct {
 	id    uint32
 	final bool // a final header block came, so the next one is trailers
 }
+
+// LargeData is the longest body a recording keeps as bytes.
+const LargeData = 4096
 
 // Where END_STREAM fell.
 const (
@@ -243,7 +252,12 @@ func (r *Recorder) Connection(normalise func(string) string) Connection {
 			s.Headers[j] = normaliseFields(block, normalise)
 		}
 		s.Trailers = normaliseFields(s.Trailers, normalise)
-		s.Data = slices.Clone(s.Data)
+		if len(s.Data) > LargeData {
+			sum := sha256.Sum256(s.Data)
+			s.DataLength, s.DataSHA256, s.Data = len(s.Data), hex.EncodeToString(sum[:]), nil
+		} else {
+			s.Data = slices.Clone(s.Data)
+		}
 		conn.Streams[i] = s
 	}
 	if r.conn.GoAway != nil {

@@ -193,12 +193,13 @@ func (s *standIn) serve(raw net.Conn) {
 // that write to it, and the HPACK state for what arrives from it and what
 // is sent to it.
 type leg struct {
-	mu      sync.Mutex
-	framer  *http2.Framer
-	decoder *hpack.Decoder
-	block   bytes.Buffer
-	encoder *hpack.Encoder
-	pending []byte // a header block waiting for its CONTINUATION
+	mu         sync.Mutex
+	framer     *http2.Framer
+	decoder    *hpack.Decoder
+	block      bytes.Buffer
+	encoder    *hpack.Encoder
+	pending    []byte // a header block waiting for its CONTINUATION
+	pendingEnd bool   // END_STREAM on the HEADERS frame of pending
 }
 
 func newLeg(conn net.Conn) *leg {
@@ -286,17 +287,28 @@ func (r *relay) relayFrame(frame http2.Frame, from, to *leg, upstream bool) erro
 		}
 	case *http2.HeadersFrame:
 		from.pending = append(from.pending[:0], f.HeaderBlockFragment()...)
+		from.pendingEnd = f.StreamEnded()
 		if f.HeadersEnded() {
 			return r.headers(f.StreamID, f.StreamEnded(), from, to, upstream)
 		}
 	case *http2.ContinuationFrame:
 		from.pending = append(from.pending, f.HeaderBlockFragment()...)
 		if f.HeadersEnded() {
-			// END_STREAM sits on the HEADERS frame; this relay's
-			// tests never split a block, so a CONTINUATION ends nothing.
-			return r.headers(f.StreamID, false, from, to, upstream)
+			// END_STREAM sits on the HEADERS frame the block began with.
+			return r.headers(f.StreamID, from.pendingEnd, from, to, upstream)
 		}
 	case *http2.DataFrame:
+		if f.Length > 0 {
+			length, stream := f.Length, f.StreamID
+			if err := from.do(func(w *http2.Framer) error {
+				if err := w.WriteWindowUpdate(0, length); err != nil {
+					return err
+				}
+				return w.WriteWindowUpdate(stream, length)
+			}); err != nil {
+				return err
+			}
+		}
 		id := r.streamID(f.StreamID, upstream)
 		data := bytes.Clone(f.Data())
 		if r.broken && !upstream && len(data) > 0 && !r.flipped(id) {
@@ -306,9 +318,15 @@ func (r *relay) relayFrame(frame http2.Frame, from, to *leg, upstream bool) erro
 			if len(data) == 0 {
 				return w.WriteData(id, f.StreamEnded(), nil)
 			}
-			for i := range data {
-				end := f.StreamEnded() && i == len(data)-1
-				if err := w.WriteDataPadded(id, end, data[i:i+1], make([]byte, 2)); err != nil {
+			// One byte a frame, or 4 KiB a frame for a large body.
+			piece := 1
+			if len(data) > 64 {
+				piece = 4096
+			}
+			for i := 0; i < len(data); i += piece {
+				j := min(i+piece, len(data))
+				end := f.StreamEnded() && j == len(data)
+				if err := w.WriteDataPadded(id, end, data[i:j], make([]byte, 2)); err != nil {
 					return err
 				}
 			}

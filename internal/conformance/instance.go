@@ -213,7 +213,8 @@ func (i *Instance) InstallExtension(ctx context.Context, lua string) error {
 
 // MarasiLauncher starts a Marasi service instance on the host for each
 // proxied conformance run and sets it up for the run: Checkpoint with a
-// resolver for the Checkpoint runs, the suite's Lua for the extension run.
+// resolver for the Checkpoint runs, the suite's Lua for every run and its
+// extension Lua for the extension run.
 // Its log is copied to the run's report directory when it stops.
 func MarasiLauncher(binary string, log io.Writer) Launcher {
 	return func(ctx context.Context, suite Suite, run RunName, dir string) (Proxy, error) {
@@ -239,6 +240,11 @@ func prepare(ctx context.Context, instance *Instance, suite Suite, run RunName, 
 	}
 	instance.LogCopy = filepath.Join(dir, "marasi.log")
 	setup := suite.Setup()
+	if setup.Lua != "" {
+		if err := instance.InstallExtension(ctx, setup.Lua); err != nil {
+			return nil, err
+		}
+	}
 	switch run {
 	case RunProxy:
 	case RunCheckpointForward, RunCheckpointEdit:

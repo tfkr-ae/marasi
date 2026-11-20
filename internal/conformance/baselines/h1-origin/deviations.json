@@ -91,6 +91,32 @@
     "rfc": "RFC 9110 §7.6"
   },
   {
+    "cases": "loop-back@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].requests.count",
+    "kind": "accepted",
+    "reason": "Marasi dials the origin when the client's TLS ClientHello arrives, before any request (docs/adr/2026-11-19-marasi-gives-the-client-the-origins-protocol.md), so the origin connection opens; the request that loops back to the proxy listener is still answered with a 502 proxy error response and never goes upstream, and the origin connection is closed before the client is answered",
+    "rfc": "RFC 9110 §7.6"
+  },
+  {
+    "cases": "loop-back@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "origin[0].end",
+    "kind": "accepted",
+    "reason": "Marasi dials the origin when the client's TLS ClientHello arrives, before any request (docs/adr/2026-11-19-marasi-gives-the-client-the-origins-protocol.md), so the origin connection opens; the request that loops back to the proxy listener is still answered with a 502 proxy error response and never goes upstream, and the origin connection is closed before the client is answered",
+    "rfc": "RFC 9110 §7.6"
+  },
+  {
     "cases": "reset-mid-body@*",
     "runs": [
       "proxy",

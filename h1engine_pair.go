@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/internal/h1"
 )
 
@@ -51,6 +52,13 @@ func (c *h1Conn) carryPair(head *h1.RequestHead) bool {
 	}
 
 	res, wire := c.roundTrip(pair)
+	if wire == nil && res.Close {
+		// Marasi's own answer ends the connection, so the origin
+		// connection, which a handshake may have dialled before any
+		// request, is closed before it: the origin sees its end no
+		// later than the client.
+		c.closeOrigin()
+	}
 	stream, _ := res.Body.(*originStream)
 	err = c.engine.response(res, wire)
 	if stream != nil {
@@ -290,6 +298,12 @@ func (c *h1Conn) originFor(pair *Pair, route *Route, addr string) (*originConn, 
 	scheme := pair.Request.URL.Scheme
 	if c.origin == nil || c.origin.addr != addr || c.origin.route != route || c.origin.scheme != scheme {
 		c.closeOrigin()
+		if h := c.handshake; h != nil && h.err != nil && h.addr == addr && scheme == "https" {
+			// The origin the handshake could not reach: each request
+			// is answered with the cause (h1engine_mitm.go).
+			recordTried(pair.Request.Context(), h.route)
+			return nil, h.err
+		}
 		conn, err := c.engine.proxy.dialOrigin(pair.Request.Context(), scheme, addr)
 		if err != nil {
 			return nil, err
@@ -297,6 +311,7 @@ func (c *h1Conn) originFor(pair *Pair, route *Route, addr string) (*originConn, 
 		c.origin = &originConn{addr: addr, scheme: scheme, route: conn.route, conn: conn, br: bufio.NewReader(conn), bw: bufio.NewWriter(conn)}
 	}
 	recordRoute(pair, c.origin)
+	pair.originProtocol = domain.ProtocolHTTP1
 	return c.origin, nil
 }
 

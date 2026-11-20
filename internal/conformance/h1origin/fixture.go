@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -195,6 +196,20 @@ func (o *origin) finish(c *originConn, end h1.End) {
 	defer o.mu.Unlock()
 	if c.end == "" {
 		c.end = end
+	}
+}
+
+// awaitEnds waits up to d for every connection to end.
+func (o *origin) awaitEnds(d time.Duration) {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		o.mu.Lock()
+		open := slices.ContainsFunc(o.connections, func(c *originConn) bool { return c.end == "" })
+		o.mu.Unlock()
+		if !open {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

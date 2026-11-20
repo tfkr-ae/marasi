@@ -13,6 +13,7 @@
 package marasi
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -124,7 +125,6 @@ type Proxy struct {
 	WordlistManager       wordlist.Provider     // Provider for available wordlists.
 	SPKIHash              string                // SPKI Hash of the current certificate
 	Cert                  *x509.Certificate     // The proxy's TLS certificate.
-	mitmConfig            *tls.Config           // The TLS config that intercepted tunnels serve clients
 	MarasiClientTLSConfig *tls.Config           // TLSConfig for the proxy.Client
 	Scope                 *compass.Scope        // Proxy scope configuration through Compass
 	Waypoints             map[string]string     // Published host:port overrides. Replaced, never mutated.
@@ -512,6 +512,12 @@ func NewProxyRequest(pair *Pair) (*domain.ProxyRequest, error) {
 			Host:        req.Host,
 			Path:        path,
 			RequestedAt: requestTime,
+
+			ClientProtocol: pair.clientProtocol(),
+			// The request is stored before it goes out, so the origin
+			// protocol is the client's until the response names the one
+			// that carried it.
+			OriginProtocol: cmp.Or(pair.originProtocol, pair.clientProtocol()),
 		}
 		proxyRequest.SitemapNode = domain.SitemapLeaf(proxyRequest.Scheme, proxyRequest.Host, proxyRequest.Path)
 
@@ -632,6 +638,9 @@ func NewProxyResponse(pair *Pair) (*domain.ProxyResponse, error) {
 		Prettified:  prettified,
 		RespondedAt: responseTime,
 		Route:       route,
+		// Empty for a pair that never reached the origin, which keeps the
+		// origin protocol stored with the request.
+		OriginProtocol: pair.originProtocol,
 	}
 	return proxyResponse, nil
 }
@@ -871,7 +880,7 @@ func (proxy *Proxy) WrapListener(rawListener net.Listener) net.Listener {
 	}
 	proxy.Port = fmt.Sprintf("%d", addr.Port)
 
-	muxListener := listener.NewProtocolMuxListener(rawListener, proxy.mitmConfig)
+	muxListener := listener.NewProtocolMuxListener(rawListener, nil)
 	muxListener.WrapConn = func(conn net.Conn) net.Conn { return proxy.trackConnection(conn, true) }
 	marasiListener := listener.NewMarasiListener(muxListener)
 
@@ -1040,7 +1049,9 @@ func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
 // the watch never takes body bytes. A body cut short is not watched: what is left on the
 // socket is not a request, and the round trip fails on the body's read error instead.
 func (proxy *Proxy) watchClient(req *http.Request, ending BodyEnding) {
-	if ending == BodyCutShort {
+	// The HTTP/2 engine reads its client connection all along, and ends a
+	// stream's context when the stream or the connection ends.
+	if ending == BodyCutShort || req.ProtoMajor == 2 {
 		return
 	}
 	conn := proxy.clientConnection(req.RemoteAddr)

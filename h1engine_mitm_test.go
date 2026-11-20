@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,14 +22,17 @@ import (
 
 // newRawTLSOrigin is a rawOrigin served over TLS with a certificate no
 // client trusts, so only a proxy that skips origin verification reaches it.
+// It speaks only HTTP/1.1, and says so by ALPN.
 func newRawTLSOrigin(t *testing.T, response string) *rawOrigin {
 	t.Helper()
 	issuer, _ := newTestLeafIssuer(t, 24*time.Hour)
-	l, err := tls.Listen("tcp", "127.0.0.1:0", issuer.config("127.0.0.1:443"))
+	config := issuer.config("127.0.0.1:443")
+	config.NextProtos = []string{"http/1.1"}
+	l, err := tls.Listen("tcp", "127.0.0.1:0", config)
 	if err != nil {
 		t.Fatalf("listening for the origin: %v", err)
 	}
-	origin := &rawOrigin{addr: l.Addr().String(), response: response}
+	origin := &rawOrigin{addr: l.Addr().String(), response: response, ended: make(chan struct{}, 16)}
 	t.Cleanup(func() { l.Close() })
 	go func() {
 		for {
@@ -46,9 +51,16 @@ func newRawTLSOrigin(t *testing.T, response string) *rawOrigin {
 
 // serveH1EngineMITMProxy serves the engine as serveH1EngineProxy does,
 // with the proxy's CA loaded. trustOrigin makes the origin leg trust any
-// certificate.
+// certificate. Each configure runs on the proxy before capture is added.
 // It returns the listener's address, the captures and the CA.
-func serveH1EngineMITMProxy(t *testing.T, trustOrigin bool) (string, *capturedPair, *x509.Certificate) {
+func serveH1EngineMITMProxy(t *testing.T, trustOrigin bool, configure ...func(proxy *Proxy)) (string, *capturedPair, *x509.Certificate) {
+	t.Helper()
+	return serveH1EngineMITMProxyOn(t, trustOrigin, nil, configure...)
+}
+
+// serveH1EngineMITMProxyOn is serveH1EngineMITMProxy with the engine taking
+// client connections from wrap's listener; nil wrap takes them as they come.
+func serveH1EngineMITMProxyOn(t *testing.T, trustOrigin bool, wrap func(net.Listener) net.Listener, configure ...func(proxy *Proxy)) (string, *capturedPair, *x509.Certificate) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	database, err := db.New(":memory:", logger)
@@ -72,8 +84,11 @@ func serveH1EngineMITMProxy(t *testing.T, trustOrigin bool) (string, *capturedPa
 		t.Fatalf("creating proxy: %v", err)
 	}
 	proxy.AddRequestPairModifier(SetupRequestModifier)
-	proxy.AddRequestPairModifier(WriteRequestModifier)
 	proxy.AddResponsePairModifier(ResponseFilterModifier)
+	for _, c := range configure {
+		c(proxy)
+	}
+	proxy.AddRequestPairModifier(WriteRequestModifier)
 	proxy.AddResponsePairModifier(WriteResponseModifier)
 	listener, err := proxy.GetListener("127.0.0.1", "0")
 	if err != nil {
@@ -87,7 +102,11 @@ func serveH1EngineMITMProxy(t *testing.T, trustOrigin bool) (string, *capturedPa
 	proxy.dbWriterStarted.Store(true)
 	go proxy.WriteToDB()
 	serveResult := make(chan error, 1)
-	go func() { serveResult <- proxy.engine.serve(listener) }()
+	served := net.Listener(listener)
+	if wrap != nil {
+		served = wrap(listener)
+	}
+	go func() { serveResult <- proxy.engine.serve(served) }()
 	t.Cleanup(func() {
 		listener.Close()
 		proxy.Close()
@@ -97,7 +116,23 @@ func serveH1EngineMITMProxy(t *testing.T, trustOrigin bool) (string, *capturedPa
 			t.Error("proxy serve did not stop")
 		}
 	})
-	return net.JoinHostPort(proxy.Addr, proxy.Port), captured, proxy.Cert
+	addr := net.JoinHostPort(proxy.Addr, proxy.Port)
+	testProxies.Store(addr, proxy)
+	return addr, captured, proxy.Cert
+}
+
+// testProxies maps the address of each proxy serveH1EngineMITMProxy
+// serves to the proxy, for tests that act on it.
+var testProxies sync.Map
+
+// proxyOf returns the proxy serving addr.
+func proxyOf(t *testing.T, addr string) *Proxy {
+	t.Helper()
+	proxy, ok := testProxies.Load(addr)
+	if !ok {
+		t.Fatalf("no test proxy serves %s", addr)
+	}
+	return proxy.(*Proxy)
 }
 
 // openTunnel sends CONNECT for authority and reads the 200.
@@ -145,7 +180,7 @@ func expectCaptured(t *testing.T, captured *capturedPair, scheme, request, respo
 }
 
 func TestH1Engine_MITM(t *testing.T) {
-	t.Run("should intercept HTTPS inside CONNECT with a leaf the client verifies against the CA, and capture it", func(t *testing.T) {
+	t.Run("should intercept HTTPS inside CONNECT with a leaf the client verifies against the CA, answer an h2 offer with the HTTP/1.1 origin's http/1.1, and capture it", func(t *testing.T) {
 		origin := newRawTLSOrigin(t, originResponse)
 		addr, captured, ca := serveH1EngineMITMProxy(t, true)
 		_, port, _ := net.SplitHostPort(origin.addr)
@@ -255,6 +290,69 @@ func TestH1Engine_MITM(t *testing.T) {
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatal("the 502 was not captured")
+		}
+	})
+}
+
+// answerProbe is a listener whose connections, once armed, note before
+// their first write whether the origin has seen its connection end, waiting
+// up to two seconds for it.
+type answerProbe struct {
+	net.Listener
+	origin *rawOrigin
+	armed  atomic.Bool
+	ended  chan bool
+}
+
+func (p *answerProbe) Accept() (net.Conn, error) {
+	conn, err := p.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &answerProbeConn{Conn: conn, probe: p}, nil
+}
+
+type answerProbeConn struct {
+	net.Conn
+	probe *answerProbe
+}
+
+func (c *answerProbeConn) Write(b []byte) (int, error) {
+	if c.probe.armed.CompareAndSwap(true, false) {
+		select {
+		case <-c.probe.origin.ended:
+			c.probe.ended <- true
+		case <-time.After(2 * time.Second):
+			c.probe.ended <- false
+		}
+	}
+	return c.Conn.Write(b)
+}
+
+func TestH1Engine_MITMLoopBack(t *testing.T) {
+	t.Run("should close the origin connection the handshake dialled before answering a request that loops back", func(t *testing.T) {
+		origin := newRawTLSOrigin(t, originResponse)
+		probe := &answerProbe{origin: origin, ended: make(chan bool, 1)}
+		addr, _, ca := serveH1EngineMITMProxyOn(t, true, func(l net.Listener) net.Listener {
+			probe.Listener = l
+			return probe
+		}, func(proxy *Proxy) { proxy.AddRequestPairModifier(PreventLoopModifier) })
+		conn, br := dialProxy(t, addr)
+		openTunnel(t, conn, br, origin.addr)
+		tlsConn, tbr := clientTLS(t, conn, br, ca, "127.0.0.1")
+
+		// The next bytes Marasi sends the client are its answer.
+		probe.armed.Store(true)
+		io.WriteString(tlsConn, "GET /loop HTTP/1.1\r\nHost: "+addr+"\r\n\r\n")
+		res, err := http.ReadResponse(tbr, nil)
+		if err != nil || res.StatusCode != http.StatusBadGateway {
+			t.Fatalf("wanted a 502 proxy error response\ngot: %v, %v", res, err)
+		}
+		if !<-probe.ended {
+			t.Fatal("wanted the origin connection closed before the client was answered\ngot: still open")
+		}
+		if requests, connections := origin.received(); len(requests) != 0 || connections != 1 {
+			t.Fatalf("wanted one origin connection that carried nothing\ngot: %d connections, requests %q", connections, requests)
 		}
 	})
 }

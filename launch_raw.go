@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/internal/h1"
 )
 
@@ -27,16 +28,27 @@ import (
 // rawRequest is the raw text of a launch or Armory request, read with the
 // codec and with its Content-Length recalculated.
 type rawRequest struct {
-	head   *h1.RequestHead
-	body   []byte        // the body exactly as typed
-	view   *http.Request // a view of the request, for the launch record and checks
-	scheme string        // http or https
+	head   *h1.RequestHead // nil for HTTP/2 text
+	h2     *h2Request      // the HTTP/2 text read as a field list, else nil
+	body   []byte          // the body exactly as typed
+	view   *http.Request   // a view of the request, for the launch record and checks
+	scheme string          // http or https
 }
 
 // readRawRequest reads raw as a request head followed by its body, sets the
 // Content-Length to the body's length (see recalculateContentLength), and
 // checks that it names a host.
+//
+// Text whose request line names HTTP/2 is read in the HTTP/2 text form
+// instead (readH2RawRequest), and its Content-Length is left as typed.
 func readRawRequest(raw string, useHTTPS bool) (*rawRequest, error) {
+	scheme := "http"
+	if useHTTPS {
+		scheme = "https"
+	}
+	if isH2Text(raw) {
+		return readH2RawRequest(raw, scheme)
+	}
 	br := bufio.NewReader(strings.NewReader(raw))
 	head, err := h1.ReadRequestHead(br)
 	if err != nil {
@@ -54,10 +66,6 @@ func readRawRequest(raw string, useHTTPS bool) (*rawRequest, error) {
 	if view.Host == "" {
 		return nil, errors.New("host header not found or is empty")
 	}
-	scheme := "http"
-	if useHTTPS {
-		scheme = "https"
-	}
 	view.URL.Scheme, view.URL.Host = scheme, view.Host
 	if payload := wireBody(head, body).Payload(); len(payload) > 0 {
 		view.Body = io.NopCloser(bytes.NewReader(payload))
@@ -68,6 +76,9 @@ func readRawRequest(raw string, useHTTPS bool) (*rawRequest, error) {
 // wire is the request as the engine would have read it, so the launch record
 // is stored in its wire form.
 func (r *rawRequest) wire() *wireRequest {
+	if r.h2 != nil {
+		return &wireRequest{h2: r.h2}
+	}
 	return &wireRequest{head: r.head, body: wireBody(r.head, r.body)}
 }
 
@@ -183,10 +194,17 @@ func (proxy *Proxy) sendRaw(ctx context.Context, r *rawRequest, internal [][2]st
 	}()
 
 	credentials := "Basic " + base64.StdEncoding.EncodeToString([]byte("marasi:"+proxy.clientWorkToken))
+	if r.h2 != nil {
+		stream, err := proxy.connectRaw(ctx, conn, r.view.Host, credentials, r.scheme)
+		if err != nil {
+			return nil, err
+		}
+		return sendH2Raw(stream, r, internal)
+	}
 	var stream net.Conn = conn
 	line := r.head.Line
 	if r.scheme == "https" {
-		if stream, err = proxy.connectRaw(ctx, conn, r.view.Host, credentials); err != nil {
+		if stream, err = proxy.connectRaw(ctx, conn, r.view.Host, credentials, ""); err != nil {
 			return nil, err
 		}
 	} else {
@@ -242,11 +260,18 @@ func (proxy *Proxy) sendRaw(ctx context.Context, r *rawRequest, internal [][2]st
 const tunnelHeadBuffer = 16
 
 // connectRaw opens a tunnel to host through the proxy's listener and starts
-// TLS inside it, as a proxy client does for an HTTPS request.
-func (proxy *Proxy) connectRaw(ctx context.Context, conn net.Conn, host, credentials string) (net.Conn, error) {
+// TLS inside it, as a proxy client does for an HTTPS request. h2Scheme is
+// the scheme of an HTTP/2 request, or "" for HTTP/1.1: an https one offers h2
+// alone by ALPN and fails unless the proxy chose it, and an http one gets
+// the plain tunnel, for prior knowledge.
+func (proxy *Proxy) connectRaw(ctx context.Context, conn net.Conn, host, credentials, h2Scheme string) (net.Conn, error) {
+	port := "443"
+	if h2Scheme == "http" {
+		port = "80"
+	}
 	authority := host
 	if _, _, err := net.SplitHostPort(host); err != nil {
-		authority = net.JoinHostPort(strings.Trim(host, "[]"), "443")
+		authority = net.JoinHostPort(strings.Trim(host, "[]"), port)
 	}
 	connect := "CONNECT " + authority + " HTTP/1.1\r\nHost: " + authority + "\r\nProxy-Authorization: " + credentials + "\r\n\r\n"
 	if _, err := io.WriteString(conn, connect); err != nil {
@@ -259,9 +284,15 @@ func (proxy *Proxy) connectRaw(ctx context.Context, conn net.Conn, host, credent
 	if head.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("opening the tunnel: the proxy answered %d", head.StatusCode)
 	}
+	if h2Scheme == "http" {
+		return conn, nil
+	}
 	config := &tls.Config{}
 	if proxy.MarasiClientTLSConfig != nil {
 		config = proxy.MarasiClientTLSConfig.Clone()
+	}
+	if h2Scheme != "" {
+		config.NextProtos = []string{domain.ProtocolHTTP2}
 	}
 	if config.ServerName == "" {
 		name, _, err := net.SplitHostPort(authority)
@@ -273,6 +304,9 @@ func (proxy *Proxy) connectRaw(ctx context.Context, conn net.Conn, host, credent
 	stream := tls.Client(conn, config)
 	if err := stream.HandshakeContext(ctx); err != nil {
 		return nil, fmt.Errorf("starting TLS in the tunnel: %w", err)
+	}
+	if h2Scheme != "" && stream.ConnectionState().NegotiatedProtocol != domain.ProtocolHTTP2 {
+		return nil, errNoH2
 	}
 	return stream, nil
 }

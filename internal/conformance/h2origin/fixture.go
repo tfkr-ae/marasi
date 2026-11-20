@@ -3,6 +3,7 @@ package h2origin
 import (
 	"bytes"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -22,6 +23,13 @@ type Case struct {
 	RFC      string // the RFC rule the case exercises
 	Requests []Request
 	Script   []Step
+	// Redirect, when set, makes the case a redirected one: its requests go
+	// to an origin that speaks only HTTP/1.1 and answers each with these
+	// bytes, framed by content-length. Directly the client sends them there
+	// in HTTP/1.1; through the proxy it sends them to the h2 origin, which
+	// follows Script, with RedirectField, which Setup's Lua turns into a
+	// redirect. The recording's origin side is the HTTP/1.1 origin's.
+	Redirect string
 }
 
 // Request is one request the client sends on its own stream. The client
@@ -33,6 +41,9 @@ type Request struct {
 	Fields   []h2.Field
 	Body     string     // sent as one DATA frame when not empty
 	Trailers []h2.Field // sent as a last header block when not empty
+	// Fragment, when not zero, splits the header block into a HEADERS
+	// frame and CONTINUATION frames of at most this many bytes.
+	Fragment int
 }
 
 // StepKind names what a script step does.
@@ -57,6 +68,7 @@ type Step struct {
 	Stream    int
 	EndStream bool
 	Fields    []h2.Field      // StepHeaders
+	Fragment  int             // StepHeaders: when not zero, the most bytes of the block in one frame
 	Data      string          // StepData
 	Pad       uint8           // StepData: padding bytes
 	Code      http2.ErrCode   // StepReset, StepGoAway
@@ -71,6 +83,14 @@ func Await() Step { return Step{Kind: StepAwait} }
 // Headers sends a header block of name, value pairs on a request stream.
 func Headers(stream int, endStream bool, pairs ...string) Step {
 	return Step{Kind: StepHeaders, Stream: stream, EndStream: endStream, Fields: h2.Fields(pairs...)}
+}
+
+// ContinuedHeaders sends a header block as HEADERS and CONTINUATION frames
+// of at most fragment bytes each.
+func ContinuedHeaders(stream int, endStream bool, fragment int, pairs ...string) Step {
+	step := Headers(stream, endStream, pairs...)
+	step.Fragment = fragment
+	return step
 }
 
 // Data sends one DATA frame on a request stream.
@@ -184,17 +204,20 @@ func (o *origin) serve(c *originConn) {
 	}
 	changed := make(chan struct{}, 1)
 	read := make(chan struct{})
+	windows := newWindows()
 	go func() {
 		defer close(read)
-		o.read(c, http2.NewFramer(io.Discard, conn), w, changed)
+		defer windows.end()
+		o.read(c, http2.NewFramer(io.Discard, conn), w, windows, changed)
 	}()
-	o.run(c, w, changed, read)
+	o.run(c, w, windows, changed, read)
 	<-read
 }
 
-// read records every frame, acknowledges SETTINGS and PING, and signals
-// changed after each frame, until the connection ends.
-func (o *origin) read(c *originConn, reader *http2.Framer, w *frameWriter, changed chan<- struct{}) {
+// read records every frame, acknowledges SETTINGS and PING, keeps the send
+// windows, gives back the window each DATA frame took, and signals changed
+// after each frame, until the connection ends.
+func (o *origin) read(c *originConn, reader *http2.Framer, w *frameWriter, windows *windows, changed chan<- struct{}) {
 	defer func() {
 		select {
 		case changed <- struct{}{}:
@@ -207,6 +230,10 @@ func (o *origin) read(c *originConn, reader *http2.Framer, w *frameWriter, chang
 			return
 		}
 		if err := acknowledge(frame, w); err != nil {
+			return
+		}
+		windows.received(frame)
+		if err := w.do(func(f *http2.Framer) error { return replenish(f, frame) }); err != nil {
 			return
 		}
 		o.mu.Lock()
@@ -224,7 +251,7 @@ func (o *origin) read(c *originConn, reader *http2.Framer, w *frameWriter, chang
 
 // run follows the script. An Await that times out, or a connection that
 // ends, stops it.
-func (o *origin) run(c *originConn, w *frameWriter, changed <-chan struct{}, read <-chan struct{}) {
+func (o *origin) run(c *originConn, w *frameWriter, windows *windows, changed <-chan struct{}, read <-chan struct{}) {
 	awaited := 0
 	streamID := func(i int) uint32 {
 		o.mu.Lock()
@@ -259,15 +286,9 @@ func (o *origin) run(c *originConn, w *frameWriter, changed <-chan struct{}, rea
 			deadline.Stop()
 			awaited++
 		case StepHeaders:
-			err = w.headers(streamID(step.Stream), step.EndStream, step.Fields)
+			err = w.headers(streamID(step.Stream), step.EndStream, step.Fields, step.Fragment)
 		case StepData:
-			id := streamID(step.Stream)
-			err = w.do(func(f *http2.Framer) error {
-				if step.Pad > 0 {
-					return f.WriteDataPadded(id, step.EndStream, []byte(step.Data), make([]byte, step.Pad))
-				}
-				return f.WriteData(id, step.EndStream, []byte(step.Data))
-			})
+			err = w.data(streamID(step.Stream), windows, step)
 		case StepReset:
 			id := streamID(step.Stream)
 			err = w.do(func(f *http2.Framer) error { return f.WriteRSTStream(id, step.Code) })
@@ -335,8 +356,45 @@ func (w *frameWriter) do(write func(*http2.Framer) error) error {
 	return write(w.framer)
 }
 
-// headers encodes fields and sends them as one HEADERS frame.
-func (w *frameWriter) headers(id uint32, endStream bool, fields []h2.Field) error {
+// errEnded is a script step that could not finish: the connection ended
+// while it waited for a flow-control window.
+var errEnded = errors.New("the connection ended")
+
+// data sends a StepData within the peer's flow-control windows: a padded
+// frame whole once its window is open, other data in frames as large as
+// the windows allow.
+func (w *frameWriter) data(id uint32, windows *windows, step Step) error {
+	data := []byte(step.Data)
+	if step.Pad > 0 {
+		need := len(data) + int(step.Pad) + 1
+		if windows.take(id, need, need) == 0 {
+			return errEnded
+		}
+		return w.do(func(f *http2.Framer) error {
+			return f.WriteDataPadded(id, step.EndStream, data, make([]byte, step.Pad))
+		})
+	}
+	if len(data) == 0 {
+		return w.do(func(f *http2.Framer) error { return f.WriteData(id, step.EndStream, nil) })
+	}
+	for len(data) > 0 {
+		n := windows.take(id, len(data), 0)
+		if n == 0 {
+			return errEnded
+		}
+		end := step.EndStream && n == len(data)
+		chunk := data[:n]
+		if err := w.do(func(f *http2.Framer) error { return f.WriteData(id, end, chunk) }); err != nil {
+			return err
+		}
+		data = data[n:]
+	}
+	return nil
+}
+
+// headers encodes fields and sends them as one HEADERS frame, or split
+// into fragments of at most fragment bytes when fragment is not zero.
+func (w *frameWriter) headers(id uint32, endStream bool, fields []h2.Field, fragment int) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.block.Reset()
@@ -345,9 +403,30 @@ func (w *frameWriter) headers(id uint32, endStream bool, fields []h2.Field) erro
 			return err
 		}
 	}
-	return w.framer.WriteHeaders(http2.HeadersFrameParam{
-		StreamID: id, BlockFragment: w.block.Bytes(), EndStream: endStream, EndHeaders: true,
-	})
+	return writeBlock(w.framer, id, w.block.Bytes(), endStream, fragment)
+}
+
+// writeBlock sends an encoded header block as one HEADERS frame, or as
+// HEADERS and CONTINUATION frames of at most fragment bytes each.
+func writeBlock(framer *http2.Framer, id uint32, block []byte, endStream bool, fragment int) error {
+	if fragment <= 0 || len(block) <= fragment {
+		return framer.WriteHeaders(http2.HeadersFrameParam{
+			StreamID: id, BlockFragment: block, EndStream: endStream, EndHeaders: true,
+		})
+	}
+	if err := framer.WriteHeaders(http2.HeadersFrameParam{
+		StreamID: id, BlockFragment: block[:fragment], EndStream: endStream,
+	}); err != nil {
+		return err
+	}
+	for rest := block[fragment:]; len(rest) > 0; {
+		n := min(fragment, len(rest))
+		if err := framer.WriteContinuation(id, n == len(rest), rest[:n]); err != nil {
+			return err
+		}
+		rest = rest[n:]
+	}
+	return nil
 }
 
 // acknowledge answers SETTINGS and PING, as every HTTP/2 endpoint must.

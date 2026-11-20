@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/internal/h1"
 )
 
@@ -55,8 +56,10 @@ type h1Engine struct {
 
 	mu sync.Mutex
 	// conns are the client connections being served, true while one waits
-	// for its next request.
-	conns map[*h1Conn]bool
+	// for its next request. h2conns are those that speak HTTP/2
+	// (h2engine.go).
+	conns   map[*h1Conn]bool
+	h2conns map[*h2Conn]bool
 }
 
 func newH1Engine(proxy *Proxy) *h1Engine {
@@ -93,6 +96,7 @@ func (engine *h1Engine) startClose() {
 	engine.closing.Store(true)
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
+	engine.h2Close()
 	for conn, idle := range engine.conns {
 		if idle {
 			conn.conn.SetReadDeadline(time.Now())
@@ -177,6 +181,11 @@ type h1Conn struct {
 	// origin is this client connection's origin connection, nil until its
 	// first request or after the origin closed it.
 	origin *originConn
+	// protocol is what the client's TLS handshake negotiated by ALPN, and
+	// handshake the origin dial it made (h1engine_mitm.go); "" and nil
+	// before intercepted TLS.
+	protocol  string
+	handshake *handshakeDial
 }
 
 func newH1Conn(engine *h1Engine, conn net.Conn) *h1Conn {
@@ -195,7 +204,22 @@ func newH1Conn(engine *h1Engine, conn net.Conn) *h1Conn {
 // pipelined requests are answered in order.
 func (c *h1Conn) serve() {
 	defer c.end()
+	// TLS sent straight to the listener is intercepted here, as TLS inside
+	// a CONNECT is, so its handshake is origin first too. The HTTP/2
+	// preface is h2c by prior knowledge (h2engine_h2c.go).
+	switch c.opening() {
+	case openingTLS:
+		if !c.intercept("") {
+			return
+		}
+	case openingH2C:
+		c.protocol = protocolH2C
+	}
 	for {
+		if c.protocol == domain.ProtocolHTTP2 || c.protocol == protocolH2C {
+			c.serveH2()
+			return
+		}
 		head, ok := c.readHead()
 		if !ok {
 			return
@@ -212,6 +236,36 @@ func (c *h1Conn) serve() {
 			return
 		}
 	}
+}
+
+// How a client opens its connection to the listener.
+type opening int
+
+const (
+	openingHTTP1 opening = iota
+	openingTLS
+	openingH2C
+)
+
+// opening reports whether the client opens its connection with a TLS
+// record, the HTTP/2 preface or anything else, within the time a request
+// head has. Meanwhile the connection is idle, so shutdown does not wait on
+// a client that sends nothing.
+func (c *h1Conn) opening() opening {
+	if _, ok := c.conn.(*tls.Conn); ok || !c.engine.idle(c, c.engine.headerTimeout) {
+		return openingHTTP1
+	}
+	defer c.engine.busy(c)
+	first, err := c.br.Peek(1)
+	switch {
+	case err != nil:
+		return openingHTTP1
+	case first[0] == 0x16:
+		return openingTLS
+	case c.startsPriorKnowledge():
+		return openingH2C
+	}
+	return openingHTTP1
 }
 
 // end closes the client connection, unless the pipeline took it over, and
@@ -266,8 +320,16 @@ func (c *h1Conn) connect(head *h1.RequestHead) bool {
 	if err != nil {
 		return false
 	}
-	if first[0] == 0x16 && !c.intercept(req.URL.Host) {
-		return false
+	switch {
+	case first[0] == 0x16:
+		if !c.intercept(req.URL.Host) {
+			return false
+		}
+	case c.startsPriorKnowledge():
+		// h2c by prior knowledge inside a plain tunnel: the origin is
+		// dialled now, as a TLS handshake inside a tunnel dials it.
+		c.protocol = protocolH2C
+		c.handshake = c.dialPriorKnowledgeOrigin(c.ctx, req.URL.Host)
 	}
 	c.tunnel = req.URL.Host
 	return true

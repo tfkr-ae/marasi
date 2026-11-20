@@ -66,6 +66,10 @@ _Avoid_: Flow, exchange, HTTP history when referring to this collection.
 One HTTP request and its matching response, identified by a single UUID from the moment the proxy reads the request, while it is in flight and after it is stored. It is the same unit whichever HTTP version carries it on the client leg or the origin leg.
 _Avoid_: Flow, exchange, transaction, stream (an HTTP/2 stream carries a pair; it is not one).
 
+**Protocol**:
+The HTTP version a request/response pair used on one leg: HTTP/1.1 or HTTP/2. A pair has a client protocol and an origin protocol, which differ only when Marasi translated it between versions.
+_Avoid_: version, ALPN (how the protocol is chosen over TLS, not the protocol itself), h2 as a name in prose
+
 **Pair number**:
 The position of a request/response pair in its project's capture order, starting at 1. It never changes and is never reused, so deleting pairs leaves gaps.
 _Avoid_: row number, index, rowid, sequence, id
@@ -244,7 +248,7 @@ _Avoid_: event log, history, backlog
 
 **Stream reset**:
 The `stream.reset` event a service instance sends first when a client asks to resume from an event id it cannot resume from: one older than the replay buffer (`expired`), from another run (`restarted`), or not one it issued (`invalid`). No events are replayed after it, so the client re-reads its state.
-_Avoid_: resync event, gap event
+_Avoid_: resync event, gap event, and stream reset for an HTTP/2 `RST_STREAM`, which is unrelated
 
 **Chrome path**:
 A configured Chrome or Chromium executable location on the instance machine, tagged with an operating system.

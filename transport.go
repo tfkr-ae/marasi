@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"github.com/tfkr-ae/marasi/core"
+	"github.com/tfkr-ae/marasi/domain"
 
 	utls "github.com/refraction-networking/utls"
 )
@@ -65,10 +66,31 @@ func (rt *originDialer) openTLS(ctx context.Context, network, addr string, route
 	return handshakeOrigin(ctx, tcpConn, addr, route, rt.insecureSkipVerify)
 }
 
+// originALPNKey carries, on a dial's context, the protocols the origin's TLS
+// handshake offers by ALPN.
+type originALPNKey struct{}
+
+// withOriginALPN asks the origin dials under ctx to offer protocols by ALPN,
+// in order: the list the client offered Marasi, so the origin chooses what it
+// would choose going direct (docs/adr/2026-11-19-marasi-gives-the-client-the-origins-protocol.md).
+func withOriginALPN(ctx context.Context, protocols []string) context.Context {
+	return context.WithValue(ctx, originALPNKey{}, protocols)
+}
+
+// originALPN is what an origin dial under ctx offers: the list
+// withOriginALPN set, or http/1.1 alone when it set none or an empty one.
+func originALPN(ctx context.Context) []string {
+	if protocols, _ := ctx.Value(originALPNKey{}).([]string); len(protocols) > 0 {
+		return protocols
+	}
+	return []string{domain.ProtocolHTTP1}
+}
+
 // handshakeOrigin runs a utls handshake that mimics Chrome with the origin
-// at addr over conn, opened through route, offering http/1.1 only. It
-// verifies the origin against the system roots plus the route's CA, unless
-// insecure is set (tests only). It closes conn when the handshake fails.
+// at addr over conn, opened through route, offering by ALPN what
+// originALPN(ctx) gives. It verifies the origin against the system roots
+// plus the route's CA, unless insecure is set (tests only). It closes conn
+// when the handshake fails.
 func handshakeOrigin(ctx context.Context, conn net.Conn, addr string, route *Route, insecure bool) (net.Conn, error) {
 	sniHost, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -97,13 +119,12 @@ func handshakeOrigin(ctx context.Context, conn net.Conn, addr string, route *Rou
 		return nil, fmt.Errorf("building handshake state: %w", err)
 	}
 
+	// HelloChrome_Auto ignores the config's NextProtos, so the ALPN
+	// extension is given the list itself, before the handshake.
 	foundALPN := false
-	// HelloChrome_Auto will ignore uTLSConfig.NextProtos and accept H2
-	// This will loop over all the TLSExtensions and set the ALPNExtension to accept
-	// http/1.1 only. This needs to be done before .HandshakeContext
 	for _, ext := range uConn.Extensions {
 		if alpnExt, ok := ext.(*utls.ALPNExtension); ok {
-			alpnExt.AlpnProtocols = []string{"http/1.1"}
+			alpnExt.AlpnProtocols = originALPN(ctx)
 			foundALPN = true
 			break
 		}

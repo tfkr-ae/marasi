@@ -1,162 +1,30 @@
 [
   {
-    "cases": "data-padded-split@connect-tls",
+    "cases": "redirect-to-http1@connect-tls",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "client[0].alpn",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"h2\", got \"http/1.1\"",
-    "phase": 5
+    "got": "h2",
+    "kind": "accepted",
+    "reason": "The client's protocol is the one the origin its handshake reached chose; a request redirected afterwards to an origin that speaks only HTTP/1.1 is translated on the origin leg, and the client leg stays HTTP/2 (docs/adr/2026-11-19-marasi-gives-the-client-the-origins-protocol.md)",
+    "rfc": "RFC 9113 §8.3.1"
   },
   {
-    "cases": "data-padded-split@connect-tls",
+    "cases": "redirect-to-http1@connect-tls",
     "runs": [
-      "proxy"
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
     ],
-    "field": "client[0].streams.count",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
-    "phase": 5
-  },
-  {
-    "cases": "data-padded-split@connect-tls",
-    "runs": [
-      "proxy"
-    ],
-    "field": "origin.count",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
-    "phase": 5
-  },
-  {
-    "cases": "goaway@connect-tls",
-    "runs": [
-      "proxy"
-    ],
-    "field": "client[0].alpn",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"h2\", got \"http/1.1\"",
-    "phase": 5
-  },
-  {
-    "cases": "goaway@connect-tls",
-    "runs": [
-      "proxy"
-    ],
-    "field": "client[0].goaway",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"NO_ERROR processed [0]\", got \"none\"",
-    "phase": 5
-  },
-  {
-    "cases": "goaway@connect-tls",
-    "runs": [
-      "proxy"
-    ],
-    "field": "client[0].streams.count",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"2\", got \"0\"",
-    "phase": 5
-  },
-  {
-    "cases": "goaway@connect-tls",
-    "runs": [
-      "proxy"
-    ],
-    "field": "origin.count",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
-    "phase": 5
-  },
-  {
-    "cases": "headers-with-data@connect-tls",
-    "runs": [
-      "proxy"
-    ],
-    "field": "client[0].alpn",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"h2\", got \"http/1.1\"",
-    "phase": 5
-  },
-  {
-    "cases": "headers-with-data@connect-tls",
-    "runs": [
-      "proxy"
-    ],
-    "field": "client[0].streams.count",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
-    "phase": 5
-  },
-  {
-    "cases": "headers-with-data@connect-tls",
-    "runs": [
-      "proxy"
-    ],
-    "field": "origin.count",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
-    "phase": 5
-  },
-  {
-    "cases": "rst-stream@connect-tls",
-    "runs": [
-      "proxy"
-    ],
-    "field": "client[0].alpn",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"h2\", got \"http/1.1\"",
-    "phase": 5
-  },
-  {
-    "cases": "rst-stream@connect-tls",
-    "runs": [
-      "proxy"
-    ],
-    "field": "client[0].streams.count",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
-    "phase": 5
-  },
-  {
-    "cases": "rst-stream@connect-tls",
-    "runs": [
-      "proxy"
-    ],
-    "field": "origin.count",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
-    "phase": 5
-  },
-  {
-    "cases": "trailers@connect-tls",
-    "runs": [
-      "proxy"
-    ],
-    "field": "client[0].alpn",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"h2\", got \"http/1.1\"",
-    "phase": 5
-  },
-  {
-    "cases": "trailers@connect-tls",
-    "runs": [
-      "proxy"
-    ],
-    "field": "client[0].streams.count",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
-    "phase": 5
-  },
-  {
-    "cases": "trailers@connect-tls",
-    "runs": [
-      "proxy"
-    ],
-    "field": "origin.count",
-    "kind": "known",
-    "reason": "measured by conformance-update-known: baseline \"1\", got \"0\"",
-    "phase": 5
+    "field": "client[0].streams[0].headers[0]",
+    "got": ":status: 201\ncontent-type: text/plain\nx-origin: HTTP1\ncontent-length: 4",
+    "kind": "accepted",
+    "reason": "Header case is lost when a pair is translated between HTTP/1.1 and HTTP/2: an HTTP/2 field name is lowercase (docs/adr/2026-11-19-http2-transparency-is-end-to-end-for-messages-and-per-leg-for-frames.md)",
+    "rfc": "RFC 9113 §8.2.1"
   }
 ]
