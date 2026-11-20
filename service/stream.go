@@ -1,19 +1,24 @@
 package service
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"net/http"
+	"net/textproto"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 // Stream messages of a streamed pair (GLOSSARY: Streamed pair, Stream
 // message): read a pair's messages a page at a time, in the order they
 // arrived, or one by its ID. A message's payload is its decompressed
-// payload without its envelope.
+// payload without its envelope. One message read by its ID also carries
+// its text form, when it has one (stream.TextForm).
 
 // streamMessageResponse is one stream message. flags is null for a framing
 // without a flags byte.
@@ -27,6 +32,13 @@ type streamMessageResponse struct {
 	Compressed bool           `json:"compressed"`
 	CreatedAt  time.Time      `json:"created_at"`
 	Metadata   map[string]any `json:"metadata"`
+}
+
+// streamMessageWithText is one stream message with its text form, null
+// when it has none.
+type streamMessageWithText struct {
+	streamMessageResponse
+	Text *string `json:"text"`
 }
 
 type streamMessageList struct {
@@ -107,6 +119,29 @@ func addStreamRoutes(mux routeMux, proxy *marasi.Proxy) {
 			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
 			return
 		}
-		writeJSON(w, r, http.StatusOK, streamMessageFromDomain(*message))
+		item := streamMessageWithText{streamMessageResponse: streamMessageFromDomain(*message)}
+		if proxy.TrafficRepo != nil {
+			if row, err := proxy.TrafficRepo.GetRequestResponseRow(pairID); err == nil {
+				if text, ok := stream.TextForm(streamContentType(row, message.Direction), message.Payload); ok {
+					item.Text = &text
+				}
+			}
+		}
+		writeJSON(w, r, http.StatusOK, item)
 	})
+}
+
+// streamContentType is the content type of the pair's head in direction.
+// A response message is read by the request's content type while the
+// streamed response is not yet stored, which happens when it ends.
+func streamContentType(row *domain.RequestResponseRow, direction string) string {
+	if direction == domain.StreamDirectionResponse && row.Response.ContentType != "" {
+		return row.Response.ContentType
+	}
+	reader := textproto.NewReader(bufio.NewReader(bytes.NewReader(row.Request.Raw)))
+	if _, err := reader.ReadLine(); err != nil {
+		return ""
+	}
+	header, _ := reader.ReadMIMEHeader()
+	return header.Get("Content-Type")
 }

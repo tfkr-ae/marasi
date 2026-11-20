@@ -150,6 +150,10 @@ _Avoid_: message on its own, frame, chunk, event (which is a service instance no
 How a streamed pair's body is cut into stream messages: `grpc`, `grpc-web`, `connect`, `sse` or `ndjson`. Each direction of a pair has at most one, read from that direction's head.
 _Avoid_: codec, protocol (which is the HTTP version on a leg), content type
 
+**Protobuf text form**:
+A gRPC, gRPC-Web or Connect stream message's protobuf payload decoded without a schema into protoscope-compatible text that states each field's wire type, so encoding it gives back the exact bytes. Computed on read, never stored. Not the text form of an HTTP/2 pair.
+_Avoid_: prototext, textproto, JSON form, pretty payload
+
 **Waypoint**:
 A pairing of an original host:port with an override host:port, stored in the open project and identified by the original host:port.
 _Avoid_: host override, redirect, DNS override, way point
