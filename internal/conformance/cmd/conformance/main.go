@@ -23,6 +23,7 @@ import (
 	"github.com/tfkr-ae/marasi/internal/conformance/h1origin"
 	"github.com/tfkr-ae/marasi/internal/conformance/h2client"
 	"github.com/tfkr-ae/marasi/internal/conformance/h2origin"
+	"github.com/tfkr-ae/marasi/internal/conformance/streamorigin"
 )
 
 // narrowing are the flags that select less than every case. With each of
@@ -99,6 +100,8 @@ func main() {
 			settings.Suites = append(settings.Suites, h2client.Suite{})
 		case h2origin.Name:
 			settings.Suites = append(settings.Suites, h2origin.Suite{})
+		case streamorigin.Name:
+			settings.Suites = append(settings.Suites, streamorigin.Suite{})
 		default:
 			fail(fmt.Errorf("unknown suite %q", name))
 		}

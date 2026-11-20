@@ -1,0 +1,465 @@
+{
+  "grpc-trailers-only@connect-tls": {
+    "client_alpn": "h2",
+    "origin_alpn": [
+      "h2"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":scheme",
+            "value": "https"
+          },
+          {
+            "name": ":authority",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/Unknown"
+          },
+          {
+            "name": "content-type",
+            "value": "application/grpc"
+          },
+          {
+            "name": "te",
+            "value": "trailers"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAVoZWxsbw=="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "content-type",
+            "value": "application/grpc"
+          },
+          {
+            "name": "grpc-status",
+            "value": "12"
+          },
+          {
+            "name": "grpc-message",
+            "value": "unknown method"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "grpc-wait-for-answer@connect-tls": {
+    "client_alpn": "h2",
+    "origin_alpn": [
+      "h2"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":scheme",
+            "value": "https"
+          },
+          {
+            "name": ":authority",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/PingPong"
+          },
+          {
+            "name": "content-type",
+            "value": "application/grpc"
+          },
+          {
+            "name": "te",
+            "value": "trailers"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "content-type",
+            "value": "application/grpc"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZwaW5nIDE="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAZwb25nIDE="
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZwaW5nIDI="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAZwb25nIDI="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "trailers",
+        "fields": [
+          {
+            "name": "grpc-status",
+            "value": "0"
+          },
+          {
+            "name": "grpc-message",
+            "value": ""
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "sse-wait-for-answer-h2@connect-tls": {
+    "client_alpn": "h2",
+    "origin_alpn": [
+      "h2"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "GET"
+          },
+          {
+            "name": ":scheme",
+            "value": "https"
+          },
+          {
+            "name": ":authority",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": ":path",
+            "value": "/events"
+          },
+          {
+            "name": "accept",
+            "value": "text/event-stream"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "content-type",
+            "value": "text/event-stream"
+          },
+          {
+            "name": "cache-control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDEKZGF0YTogZmlyc3QKCg=="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDIKZGF0YTogc2Vjb25kCgo="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "sse-wait-for-answer-http1@absolute": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "GET"
+          },
+          {
+            "name": ":path",
+            "value": "/events"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Accept",
+            "value": "text/event-stream"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/event-stream"
+          },
+          {
+            "name": "Cache-Control",
+            "value": "no-cache"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDEKZGF0YTogZmlyc3QKCg=="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDIKZGF0YTogc2Vjb25kCgo="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "sse-wait-for-answer-http1@connect-plain": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "GET"
+          },
+          {
+            "name": ":path",
+            "value": "/events"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Accept",
+            "value": "text/event-stream"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/event-stream"
+          },
+          {
+            "name": "Cache-Control",
+            "value": "no-cache"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDEKZGF0YTogZmlyc3QKCg=="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDIKZGF0YTogc2Vjb25kCgo="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "sse-wait-for-answer-http1@connect-tls": {
+    "client_alpn": "http/1.1",
+    "origin_alpn": [
+      "http/1.1"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "GET"
+          },
+          {
+            "name": ":path",
+            "value": "/events"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Accept",
+            "value": "text/event-stream"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/event-stream"
+          },
+          {
+            "name": "Cache-Control",
+            "value": "no-cache"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDEKZGF0YTogZmlyc3QKCg=="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDIKZGF0YTogc2Vjb25kCgo="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  }
+}
