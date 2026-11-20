@@ -2,7 +2,9 @@ package service
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -62,7 +64,48 @@ func streamMessageFromDomain(message domain.StreamMessage) streamMessageResponse
 	}
 }
 
-func addStreamRoutes(mux routeMux, proxy *marasi.Proxy) {
+func addStreamRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifecycle, proxy *marasi.Proxy) {
+	// Inject runs the hooks and may be held in Checkpoint, which a project
+	// switch waits for, so the project's admission is released first, as
+	// for a WebSocket injection.
+	raw.HandleFunc("POST /stream/{pair_id}/inject", func(w http.ResponseWriter, r *http.Request) {
+		release, admitted := admitProjectWork(projects, w, r)
+		if !admitted {
+			return
+		}
+		defer release()
+		pairID, err := uuid.Parse(r.PathValue("pair_id"))
+		if err != nil {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
+		inject, err := decodeStreamInject(r)
+		if err != nil {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "invalid_stream_request"})
+			return
+		}
+		release()
+		message, err := proxy.InjectStreamMessage(r.Context(), pairID, inject.direction, inject.payload, inject.options)
+		if err != nil {
+			writeStreamControlError(w, r, proxy, pairID, err)
+			return
+		}
+		writeJSON(w, r, http.StatusOK, streamMessageFromDomain(message))
+	})
+
+	mux.HandleFunc("POST /stream/{pair_id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		pairID, err := uuid.Parse(r.PathValue("pair_id"))
+		if err != nil {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
+		if err := proxy.CancelStreamedPair(pairID); err != nil {
+			writeStreamControlError(w, r, proxy, pairID, err)
+			return
+		}
+		writeJSON(w, r, http.StatusOK, streamCancelResponse{PairID: pairID, Cancelled: true})
+	})
+
 	// The pair's messages, oldest first: cursor is the last ID of the
 	// page before.
 	mux.HandleFunc("GET /stream/{pair_id}/message", func(w http.ResponseWriter, r *http.Request) {
@@ -130,6 +173,78 @@ func addStreamRoutes(mux routeMux, proxy *marasi.Proxy) {
 		}
 		writeJSON(w, r, http.StatusOK, item)
 	})
+}
+
+// streamCancelResponse answers POST /stream/{pair_id}/cancel.
+type streamCancelResponse struct {
+	PairID    uuid.UUID `json:"pair_id"`
+	Cancelled bool      `json:"cancelled"`
+}
+
+// streamInjectRequest is a decoded inject request.
+type streamInjectRequest struct {
+	direction string
+	payload   []byte
+	options   marasi.StreamInjectOptions
+}
+
+// decodeStreamInject decodes an inject request: direction (request or
+// response), a base64 payload, and an optional compress of "auto" (the
+// default: compress as the direction does) or "never".
+func decodeStreamInject(r *http.Request) (streamInjectRequest, error) {
+	invalid := errors.New("invalid stream request")
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var body struct {
+		Direction *string `json:"direction"`
+		Payload   *[]byte `json:"payload"`
+		Compress  *string `json:"compress"`
+	}
+	if err := decoder.Decode(&body); err != nil {
+		return streamInjectRequest{}, invalid
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return streamInjectRequest{}, invalid
+	}
+	if body.Direction == nil || *body.Direction != domain.StreamDirectionRequest && *body.Direction != domain.StreamDirectionResponse || body.Payload == nil {
+		return streamInjectRequest{}, invalid
+	}
+	request := streamInjectRequest{direction: *body.Direction, payload: *body.Payload}
+	if body.Compress != nil {
+		switch *body.Compress {
+		case "auto":
+		case "never":
+			request.options.NeverCompress = true
+		default:
+			return streamInjectRequest{}, invalid
+		}
+	}
+	return request, nil
+}
+
+// writeStreamControlError answers an inject or cancel that failed: not
+// found for a pair that was never stored, conflict with the reason for one
+// that is not being carried, or a direction that cannot take an injection.
+func writeStreamControlError(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, pairID uuid.UUID, err error) {
+	switch {
+	case errors.Is(err, marasi.ErrStreamedPairNotFound):
+		if proxy.TrafficRepo != nil {
+			if _, stored := proxy.TrafficRepo.GetMetadata(pairID); stored == nil {
+				writeRefusal(w, r, http.StatusConflict, "stream_not_open", "the pair is not a streamed pair being carried")
+				return
+			}
+		}
+		writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+	case errors.Is(err, marasi.ErrStreamDirectionNotStreamed),
+		errors.Is(err, marasi.ErrStreamDirectionEnded):
+		writeRefusal(w, r, http.StatusConflict, "stream_not_open", err.Error())
+	case errors.Is(err, marasi.ErrStreamLengthDeclared):
+		writeRefusal(w, r, http.StatusConflict, "stream_inject_refused", err.Error())
+	case errors.Is(err, r.Context().Err()):
+		// The caller left while the injection waited for its turn.
+	default:
+		writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+	}
 }
 
 // payloadDecoded reports whether message's stored payload is decoded: it

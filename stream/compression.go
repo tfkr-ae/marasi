@@ -72,6 +72,34 @@ func Decompress(encoding string, payload []byte, limit int64) ([]byte, error) {
 	return out, nil
 }
 
+// Compress compresses payload with encoding, a Decodable one, as a sender
+// compresses a message: an injected one the proxy sends compressed.
+func Compress(encoding string, payload []byte) ([]byte, error) {
+	var out bytes.Buffer
+	var w io.WriteCloser
+	switch normalEncoding(encoding) {
+	case "gzip":
+		w = gzip.NewWriter(&out)
+	case "deflate":
+		w = zlib.NewWriter(&out)
+	default:
+		return nil, fmt.Errorf("the %q encoding is not encoded", encoding)
+	}
+	if _, err := w.Write(payload); err != nil {
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// CompressedFlags is flags with the compressed flag set: the flags of a message
+// sent compressed.
+func CompressedFlags(flags byte) byte {
+	return flags | flagCompressed
+}
+
 func normalEncoding(encoding string) string {
 	return strings.ToLower(strings.TrimSpace(encoding))
 }
