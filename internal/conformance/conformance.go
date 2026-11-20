@@ -113,8 +113,9 @@ func (k CheckpointKind) flag() (string, bool) {
 }
 
 // HTTPExtension sets every HTTP request and response body to itself in
-// processRequest and processResponse, a no-op edit through the extension
-// path. Lua can set only the body of a message, not its head.
+// processRequest and processResponse, and every stream message's payload to
+// itself in processStreamMessage, a no-op edit through the extension path.
+// Lua can set only the body of a message, not its head.
 const HTTPExtension = `
 
 -- Conformance harness: a no-op edit through the extension path.
@@ -124,6 +125,10 @@ end
 
 function processResponse(response)
 	response:set_body(response:body())
+end
+
+function processStreamMessage(message)
+	message:set_payload(message:payload())
 end
 `
 

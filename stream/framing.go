@@ -59,6 +59,19 @@ func FramingOf(contentType string, response bool) Framing {
 	return FramingNone
 }
 
+// Enveloped reports whether framing cuts its messages into 5-byte envelopes,
+// whose flags byte each message has.
+func (f Framing) Enveloped() bool {
+	return f == FramingGRPC || f == FramingGRPCWeb || f == FramingConnect
+}
+
+// IsGRPCWebText reports whether contentType is gRPC-Web in base64
+// (application/grpc-web-text), whose envelopes are cut only once decoded.
+func IsGRPCWebText(contentType string) bool {
+	mediaType, _, _ := strings.Cut(contentType, ";")
+	return suffixed(strings.ToLower(strings.TrimSpace(mediaType)), "application/grpc-web-text")
+}
+
 // suffixed reports whether mediaType is base or base+codec.
 func suffixed(mediaType, base string) bool {
 	rest, ok := strings.CutPrefix(mediaType, base)

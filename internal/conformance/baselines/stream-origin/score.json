@@ -19,8 +19,8 @@
       "run": "proxy",
       "target": "fixtures",
       "approach": "connect-tls",
-      "matched": 8,
-      "cases": 8
+      "matched": 11,
+      "cases": 11
     },
     {
       "run": "checkpoint-forward",
@@ -40,8 +40,8 @@
       "run": "checkpoint-forward",
       "target": "fixtures",
       "approach": "connect-tls",
-      "matched": 8,
-      "cases": 8
+      "matched": 11,
+      "cases": 11
     },
     {
       "run": "checkpoint-edit",
@@ -61,8 +61,8 @@
       "run": "checkpoint-edit",
       "target": "fixtures",
       "approach": "connect-tls",
-      "matched": 8,
-      "cases": 8
+      "matched": 11,
+      "cases": 11
     },
     {
       "run": "extension",
@@ -82,8 +82,8 @@
       "run": "extension",
       "target": "fixtures",
       "approach": "connect-tls",
-      "matched": 8,
-      "cases": 8
+      "matched": 11,
+      "cases": 11
     }
   ]
 }
