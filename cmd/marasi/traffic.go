@@ -47,6 +47,9 @@ number, its # in capture order, then its id.
       Marasi, or between Marasi and the origin: "http/1.1" or "h2", for
       example client_protocol = "h2". They differ only when Marasi
       translated the pair between versions.
+  id
+      = and != against the pair's id, a quoted UUID, for example
+      id = "01937f5d-351a-7e68-936d-61a7a25661a3".
   number
       = != < <= > >= against the pair's number in capture order, for
       example number = 10 or number > 500. Numbers start at 1, never

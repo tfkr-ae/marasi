@@ -298,6 +298,14 @@ func invalidTrafficQueries() []invalidTrafficQuery {
 		{query: `host = "unterminated`, message: `unterminated string`, position: 8},
 		{query: `host = "é" AND status_code = "x"`, message: `status_code needs a whole number`, position: 30},
 		{query: `host = "é" AND stauts = 5`, message: `unknown field "stauts"`, position: 16},
+		{query: `id = 01937f5d-351a-7e68-936d-61a7a25661a3`, message: `quote the UUID: "01937f5d-351a-7e68-936d-61a7a25661a3"`, position: 6},
+		{query: `id = a1937f5d-351a-7e68-936d-61a7a25661a3`, message: `quote the UUID`, position: 6},
+		{query: `host = "a" AND id != 01937f5d-351a-7e68-936d-61a7a25661a3`, message: `quote the UUID`, position: 22},
+		{query: `id = "not-a-uuid"`, message: `"not-a-uuid" is not a pair id`, position: 6},
+		{query: `id = 5`, message: `id needs a quoted pair id`, position: 6},
+		{query: `id > "01937f5d-351a-7e68-936d-61a7a25661a3"`, message: `operator > is not supported on id; use = or !=`, position: 1},
+		{query: `id:*`, message: `operator : is not supported on id; use = or !=`, position: 1},
+		{query: `id.x = "01937f5d-351a-7e68-936d-61a7a25661a3"`, message: `field "id" has no member "x"`, position: 1},
 		{query: strings.Repeat(" ", maxQueryLength) + `host = "a"`, message: `query is longer than`, position: 1},
 		{query: strings.Repeat(`"abc" `, 201), message: `query nests more than 200 conditions`, position: 1},
 		{query: strings.Repeat(`"abc" AND `, 200) + `"abc"`, message: `query nests more than 200 conditions`, position: 1},
@@ -329,6 +337,47 @@ func TestTrafficRepo_ListTrafficQueryErrors(t *testing.T) {
 			}
 			if items != nil || nextCursor != nil {
 				t.Fatalf("\nwanted:\nno page\ngot:\n%v %v", items, nextCursor)
+			}
+		})
+	}
+}
+
+func TestTrafficRepo_ListTrafficQueryID(t *testing.T) {
+	t.Parallel()
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	ids := seedQueryPairs(t, repo, queryTestPairs())
+
+	tests := []struct {
+		query string
+		want  string // names newest first
+	}{
+		{query: `id = "{c}"`, want: "c"},
+		{query: `id = "{C}"`, want: "c"},
+		{query: `id != "{c}"`, want: "edba"},
+		{query: `NOT id = "{c}"`, want: "edba"},
+		{query: `id = "{c}" OR id = "{a}"`, want: "ca"},
+		{query: `id = "{c}" AND method = "GET"`, want: "c"},
+		{query: `id = "{c}" AND method = "POST"`, want: ""},
+		{query: `id = "01937f5d-351a-7e68-936d-61a7a25661a3"`, want: ""},
+	}
+	for _, test := range tests {
+		query := test.query
+		for name, id := range ids {
+			query = strings.ReplaceAll(query, "{"+name+"}", id.String())
+			query = strings.ReplaceAll(query, "{"+strings.ToUpper(name)+"}", strings.ToUpper(id.String()))
+		}
+		t.Run(test.query, func(t *testing.T) {
+			items, _, _, err := listPage(repo, nil, 200, query)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			want := make([]uuid.UUID, 0, len(test.want))
+			for _, name := range test.want {
+				want = append(want, ids[string(name)])
+			}
+			if got := idsOf(items); !reflect.DeepEqual(got, want) {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", namesOf(ids, want), namesOf(ids, got))
 			}
 		})
 	}
