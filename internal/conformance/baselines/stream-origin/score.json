@@ -5,85 +5,85 @@
       "run": "proxy",
       "target": "fixtures",
       "approach": "absolute",
-      "matched": 0,
-      "cases": 1
+      "matched": 3,
+      "cases": 3
     },
     {
       "run": "proxy",
       "target": "fixtures",
       "approach": "connect-plain",
-      "matched": 0,
-      "cases": 1
+      "matched": 3,
+      "cases": 3
     },
     {
       "run": "proxy",
       "target": "fixtures",
       "approach": "connect-tls",
-      "matched": 2,
-      "cases": 4
+      "matched": 8,
+      "cases": 8
     },
     {
       "run": "checkpoint-forward",
       "target": "fixtures",
       "approach": "absolute",
-      "matched": 0,
-      "cases": 1
+      "matched": 3,
+      "cases": 3
     },
     {
       "run": "checkpoint-forward",
       "target": "fixtures",
       "approach": "connect-plain",
-      "matched": 0,
-      "cases": 1
+      "matched": 3,
+      "cases": 3
     },
     {
       "run": "checkpoint-forward",
       "target": "fixtures",
       "approach": "connect-tls",
-      "matched": 2,
-      "cases": 4
+      "matched": 8,
+      "cases": 8
     },
     {
       "run": "checkpoint-edit",
       "target": "fixtures",
       "approach": "absolute",
-      "matched": 0,
-      "cases": 1
+      "matched": 3,
+      "cases": 3
     },
     {
       "run": "checkpoint-edit",
       "target": "fixtures",
       "approach": "connect-plain",
-      "matched": 0,
-      "cases": 1
+      "matched": 3,
+      "cases": 3
     },
     {
       "run": "checkpoint-edit",
       "target": "fixtures",
       "approach": "connect-tls",
-      "matched": 2,
-      "cases": 4
+      "matched": 8,
+      "cases": 8
     },
     {
       "run": "extension",
       "target": "fixtures",
       "approach": "absolute",
-      "matched": 0,
-      "cases": 1
+      "matched": 3,
+      "cases": 3
     },
     {
       "run": "extension",
       "target": "fixtures",
       "approach": "connect-plain",
-      "matched": 0,
-      "cases": 1
+      "matched": 3,
+      "cases": 3
     },
     {
       "run": "extension",
       "target": "fixtures",
       "approach": "connect-tls",
-      "matched": 2,
-      "cases": 4
+      "matched": 8,
+      "cases": 8
     }
   ]
 }
