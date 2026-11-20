@@ -124,6 +124,32 @@ func TestH2Engine_CompressedEventStream(t *testing.T) {
 		}
 	})
 
+	t.Run("should send an injected event to the client inside the stream compressed again, between the origin's events", func(t *testing.T) {
+		origin := newH2TestOrigin(t)
+		addr, captured, ca := serveH1EngineMITMProxy(t, true)
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		upstream := origin.accept(t)
+		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/events")
+		id := upstream.nthStream(t, 0)
+		gz := newGzipStream()
+		upstream.headers(id, false, ":status", "200", "content-type", "text/event-stream", "content-encoding", "gzip")
+		upstream.data(id, false, gz.message("data: one\n\n"))
+		client.await(t, "the first event", func(p *h2TestPeer) bool {
+			s := p.streams[1]
+			got := ""
+			if s != nil {
+				got, _ = inflatedSoFar(s.data)
+			}
+			return got == "data: one\n\n"
+		})
+		req := <-captured.request
+		injectOnceCarried(t, proxyOf(t, addr), req.ID, "response", "data: injected\n\n", StreamInjectOptions{})
+		upstream.data(id, true, gz.message("data: two\n\n")+gz.end())
+		if body, ended := inflatedSoFar(client.stream(t, 1).data); body != "data: one\n\ndata: injected\n\ndata: two\n\n" || !ended {
+			t.Fatalf("the client's body, inflated\nwanted:\nthe injected event between the two\ngot:\n%q (ended %v)", body, ended)
+		}
+	})
+
 	readWhole := []struct{ name, encoding, body string }{
 		{"a brotli event stream, a coding Marasi does not compress", "br", brotlied(t, "data: one\n\n")},
 		{"a gzipped event stream whose head declares a length", "gzip", gzipped(t, "data: one\n\n")},

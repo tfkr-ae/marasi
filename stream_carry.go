@@ -104,12 +104,25 @@ type streamedDirection struct {
 	// declared is set when the direction's head declared a length.
 	declared bool
 	// encoding is the per-message encoding the direction's head names
-	// (stream.EncodingHeader), read when its carry starts.
+	// (stream.EncodingHeader) as it went out (headWentOut).
 	encoding string
 	// bodyIn and bodyOut are the whole-body codings of the sender's head
 	// and of the head that went out (stream_body_compression.go), "" for
 	// none.
 	bodyIn, bodyOut string
+	// src and sink are the direction's legs once its carry started, nil
+	// before.
+	src  streamSource
+	sink streamSink
+	// turn is the direction's one place in line on its sink: the carry
+	// holds it while a message is partly read, handled or forwarded, and
+	// an injection while it is handled and forwarded, so an injected
+	// message lands between two messages, never inside one. It is a
+	// channel of one, so an injection can stop waiting for it.
+	turn chan struct{}
+	// stopped is set, holding turn, once the carry stopped: nothing more
+	// goes to the sink.
+	stopped bool
 }
 
 // streamed returns the pair's streamed state, made the first time.
@@ -131,8 +144,11 @@ func (proxy *Proxy) streamed(pair *Pair) *streamedPair {
 // The first direction of a stored pair announces the pair started.
 func (sp *streamedPair) direction(name string, framing stream.Framing) *streamedDirection {
 	sp.mu.Lock()
-	d := &streamedDirection{name: name, framing: framing}
+	d := &streamedDirection{name: name, framing: framing, turn: make(chan struct{}, 1)}
 	sp.directions[name] = d
+	if len(sp.directions) == 1 {
+		sp.proxy.streamedPairs.Store(sp.pair.ID, sp)
+	}
 	var started *domain.StreamedPairStarted
 	if !sp.started && sp.announced() {
 		sp.started = true
@@ -167,13 +183,35 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 		sink.reset(http2.ErrCodeInternal)
 		return
 	}
-	if header := stream.EncodingHeader(d.framing); header != "" {
-		d.encoding = sp.headField(name, header)
-	}
+	// An injected message goes to the receiver through the same
+	// compressor as the carried ones.
 	src, sink, inflater := sp.compressedBody(d, src, sink)
+	d.turn <- struct{}{}
+	sp.mu.Lock()
+	d.src, d.sink = src, sink
+	sp.mu.Unlock()
+	<-d.turn
+	// The carry holds d.turn from the first byte of a message until it
+	// went out, and from the end of the direction on.
+	holding := false
+	defer func() {
+		if !holding {
+			d.turn <- struct{}{}
+		}
+		d.stopped = true
+		<-d.turn
+	}()
 	var lastProgress time.Time
 	for {
+		if holding && splitter.Buffered() == 0 {
+			<-d.turn
+			holding = false
+		}
 		data, readErr := src.peek()
+		if !holding {
+			d.turn <- struct{}{}
+			holding = true
+		}
 		if len(data) > 0 {
 			n, message, err := splitter.Feed(data)
 			src.discard(n)
@@ -272,21 +310,6 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 // streamProgressInterval is the least time between two progress
 // announcements of one direction's message, as for WebSocket messages.
 const streamProgressInterval = 100 * time.Millisecond
-
-// headField is field of direction name's head as the chain left it: the
-// request's for the request, the response's for the response.
-func (sp *streamedPair) headField(name, field string) string {
-	if name == domain.StreamDirectionResponse {
-		if res := sp.pair.Response; res != nil {
-			return res.Header.Get(field)
-		}
-		return ""
-	}
-	if req := sp.pair.Request; req != nil {
-		return req.Header.Get(field)
-	}
-	return ""
-}
 
 // progress announces a message still arriving, bytes of it so far, at most
 // once per streamProgressInterval since *last.
@@ -463,6 +486,7 @@ func (sp *streamedPair) finish() {
 	}
 	sp.mu.Unlock()
 	proxy := sp.proxy
+	proxy.streamedPairs.CompareAndDelete(sp.pair.ID, sp)
 	if started && proxy.OnStreamedPairEnded != nil {
 		defer proxy.OnStreamedPairEnded(ended)
 	}

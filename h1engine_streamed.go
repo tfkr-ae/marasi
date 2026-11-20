@@ -57,6 +57,21 @@ func h1BodyEncoding(header *h1.Header, framing stream.Framing) string {
 	return h2BodyEncoding(h1FramingFields(header), framing)
 }
 
+// h1HeadFields are a head's fields as headWentOut reads them: the
+// content type with its name lowercased, as HTTP/2 writes it, and the rest
+// as written.
+func h1HeadFields(header *h1.Header) h2Fields {
+	fields := make(h2Fields, 0, len(header.Fields))
+	for _, f := range header.Fields {
+		name := f.Name()
+		if strings.EqualFold(name, "content-type") {
+			name = "content-type"
+		}
+		fields = append(fields, h2Field{Name: name, Value: f.Value()})
+	}
+	return fields
+}
+
 // h1Streams is the streamed state of the pair a client connection carries:
 // the streamed directions' sources, the request's carry, and what to release
 // once both directions ended.
@@ -232,6 +247,7 @@ func (c *h1Conn) carryStreamedRequest(pair *Pair, origin *originConn, head *h1.R
 	sp := c.engine.proxy.streamed(pair)
 	d := sp.direction(domain.StreamDirectionRequest, body.framing)
 	streams.requestDirection = d
+	sp.headWentOut(d, h1HeadFields(&head.Header))
 	chunked := isChunked(&head.Header)
 	if head.Header.Has("Content-Length") && !chunked {
 		sp.declareLength(d)
@@ -304,6 +320,7 @@ func (c *h1Conn) carryStreamedResponse(pair *Pair, res *http.Response, wire *wir
 		body.src.reset(http2.ErrCodeCancel)
 		return false
 	}
+	pair.stream.headWentOut(d, h1HeadFields(&out.head.Header))
 	chunked := isChunked(&out.head.Header)
 	if out.head.Header.Has("Content-Length") && !chunked {
 		pair.stream.declareLength(d)
