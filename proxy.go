@@ -178,6 +178,7 @@ type Proxy struct {
 	ExtensionRepo domain.ExtensionRepository // Repository for extension data.
 	ReportingRepo domain.ReportingRepository // Repository for reporting data.
 	WebSocketRepo domain.WebSocketRepository // Repository for websocket data
+	StreamRepo    domain.StreamRepository    // Repository for stream messages
 
 	Armory          ArmoryService          // Provides persistence and execution operations for request fuzzing.
 	ReportGenerator domain.ReportGenerator // Generator for report templates and exports.
@@ -378,6 +379,7 @@ func (proxy *Proxy) SetProjectResources(resources ProjectResources) {
 	proxy.ExtensionRepo = resources.Repository
 	proxy.ReportingRepo = resources.Repository
 	proxy.WebSocketRepo = resources.Repository
+	proxy.StreamRepo = resources.Repository
 	proxy.DBCloser = resources.Repository
 	proxy.Extensions = resources.Extensions
 	proxy.Scope = resources.Scope
@@ -719,6 +721,10 @@ func (proxy *Proxy) writeItem(proxyItem any) {
 	case *domain.WebSocketMessage:
 		err := proxy.WebSocketRepo.InsertMessage(castItem)
 		if err != nil {
+			log.Println(err)
+		}
+	case *domain.StreamMessage:
+		if err := proxy.StreamRepo.InsertStreamMessage(castItem); err != nil {
 			log.Println(err)
 		}
 	case *domain.Log:

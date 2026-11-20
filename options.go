@@ -44,6 +44,7 @@ type RepositoryProvider interface {
 	domain.LogRepository
 	domain.ReportingRepository
 	domain.WebSocketRepository
+	domain.StreamRepository
 	io.Closer
 	// RefreshStatisticsIfDue refreshes the planner statistics when captures
 	// have marked them due (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md). The database writer calls it when idle.
@@ -382,6 +383,7 @@ func WithDefaultRepositories(repo RepositoryProvider) func(*Proxy) error {
 			WithWaypointRepository(repo),
 			WithReportingRepository(repo),
 			WithWebSocketRepository(repo),
+			WithStreamRepository(repo),
 			WithDBCloser(repo),
 		)
 	}
@@ -480,6 +482,14 @@ func WithLogRepository(repo domain.LogRepository) func(*Proxy) error {
 func WithReportingRepository(repo domain.ReportingRepository) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		proxy.ReportingRepo = repo
+		return nil
+	}
+}
+
+// WithStreamRepository injects the stream message repository implementation.
+func WithStreamRepository(repo domain.StreamRepository) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		proxy.StreamRepo = repo
 		return nil
 	}
 }
