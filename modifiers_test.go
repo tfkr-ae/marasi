@@ -233,12 +233,17 @@ func forwardOnHold(proxy *Proxy, fwd CheckpointForward) {
 }
 
 // RequestModifiers
+// newLoopTestProxy is a test proxy whose listener is on addr:port.
+func newLoopTestProxy(t *testing.T, addr, port string) *Proxy {
+	t.Helper()
+	proxy := newTestProxy(t)
+	proxy.Addr, proxy.Port = addr, port
+	return proxy
+}
+
 func TestPreventLoopModifier(t *testing.T) {
 	t.Run("request to 127.0.0.1:8080 with listener on 127.0.0.1:8080 should fail", func(t *testing.T) {
-		proxy := &Proxy{
-			Addr: "127.0.0.1",
-			Port: "8080",
-		}
+		proxy := newLoopTestProxy(t, "127.0.0.1", "8080")
 		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
@@ -246,62 +251,48 @@ func TestPreventLoopModifier(t *testing.T) {
 		if pair.Response.StatusCode != http.StatusBadGateway || pair.Metadata["proxy_error"] != errLoop.Error() {
 			t.Fatalf("wanted a 502 proxy error response\ngot: %d, metadata %v", pair.Response.StatusCode, pair.Metadata)
 		}
+		// The request is captured and the cause logged.
+		if got := len(proxy.DBWriteChannel); got != 2 {
+			t.Fatalf("wanted the request and a proxy log written\ngot: %d writes", got)
+		}
 	})
 	t.Run("request to localhost:8080 with listener on 127.0.0.1:8080 should fail", func(t *testing.T) {
-		proxy := &Proxy{
-			Addr: "127.0.0.1",
-			Port: "8080",
-		}
+		proxy := newLoopTestProxy(t, "127.0.0.1", "8080")
 		req := httptest.NewRequest(http.MethodGet, "http://localhost:8080/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
 		assertControl(t, pair, err, controlRespond)
 	})
 	t.Run("request to localhost:8080 with listener on localhost:8080 should fail", func(t *testing.T) {
-		proxy := &Proxy{
-			Addr: "localhost",
-			Port: "8080",
-		}
+		proxy := newLoopTestProxy(t, "localhost", "8080")
 		req := httptest.NewRequest(http.MethodGet, "http://localhost:8080/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
 		assertControl(t, pair, err, controlRespond)
 	})
 	t.Run("request to 127.0.0.1:8080 with listener on localhost:8080 should fail", func(t *testing.T) {
-		proxy := &Proxy{
-			Addr: "localhost",
-			Port: "8080",
-		}
+		proxy := newLoopTestProxy(t, "localhost", "8080")
 		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
 		assertControl(t, pair, err, controlRespond)
 	})
 	t.Run("request to [::1]:8080 with listener on [::1]:8080 should fail", func(t *testing.T) {
-		proxy := &Proxy{
-			Addr: "::1",
-			Port: "8080",
-		}
+		proxy := newLoopTestProxy(t, "::1", "8080")
 		req := httptest.NewRequest(http.MethodGet, "http://[::1]:8080/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
 		assertControl(t, pair, err, controlRespond)
 	})
 	t.Run("request to 192.168.1.10:8080 with listener on 192.168.1.10:8080 should fail", func(t *testing.T) {
-		proxy := &Proxy{
-			Addr: "192.168.1.10",
-			Port: "8080",
-		}
+		proxy := newLoopTestProxy(t, "192.168.1.10", "8080")
 		req := httptest.NewRequest(http.MethodGet, "http://192.168.1.10:8080/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
 		assertControl(t, pair, err, controlRespond)
 	})
 	t.Run("request to 192.168.1.10:8080 with listener on localhost:8080 should work", func(t *testing.T) {
-		proxy := &Proxy{
-			Addr: "localhost",
-			Port: "8080",
-		}
+		proxy := newLoopTestProxy(t, "localhost", "8080")
 		req := httptest.NewRequest(http.MethodGet, "http://192.168.1.10:8080/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
@@ -314,30 +305,21 @@ func TestPreventLoopModifier(t *testing.T) {
 	})
 
 	t.Run("request to https://localhost with listener on localhost:443 should fail", func(t *testing.T) {
-		proxy := &Proxy{
-			Addr: "localhost",
-			Port: "443",
-		}
+		proxy := newLoopTestProxy(t, "localhost", "443")
 		req := httptest.NewRequest(http.MethodGet, "https://localhost/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
 		assertControl(t, pair, err, controlRespond)
 	})
 	t.Run("request to http://localhost with listener on localhost:80 should fail", func(t *testing.T) {
-		proxy := &Proxy{
-			Addr: "localhost",
-			Port: "80",
-		}
+		proxy := newLoopTestProxy(t, "localhost", "80")
 		req := httptest.NewRequest(http.MethodGet, "http://localhost/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
 		assertControl(t, pair, err, controlRespond)
 	})
 	t.Run("request to 192.168.1.10:8081 with listener on 192.168.1.10:8080 should work", func(t *testing.T) {
-		proxy := &Proxy{
-			Addr: "192.168.1.10",
-			Port: "8080",
-		}
+		proxy := newLoopTestProxy(t, "192.168.1.10", "8080")
 		req := httptest.NewRequest(http.MethodGet, "http://192.168.1.10:8081/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)
@@ -350,10 +332,7 @@ func TestPreventLoopModifier(t *testing.T) {
 	})
 
 	t.Run("request to marasi.app:8080 with listener on marasi.app:8080 should fail", func(t *testing.T) {
-		proxy := &Proxy{
-			Addr: "marasi.app",
-			Port: "8080",
-		}
+		proxy := newLoopTestProxy(t, "marasi.app", "8080")
 		req := httptest.NewRequest(http.MethodGet, "http://marasi.app:8080/path", nil)
 		pair := NewTestPair(req)
 		err := PreventLoopModifier(proxy, pair)

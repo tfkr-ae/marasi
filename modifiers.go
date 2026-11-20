@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"maps"
 	"net"
 	"net/http"
@@ -114,12 +115,28 @@ func hookRequest(pair *Pair) *extensions.Request {
 	return &extensions.Request{Request: pair.Request, ID: pair.ID, Metadata: pair.Metadata}
 }
 
-// PreventLoopModifier answers a request made to marasi's active listener address and port with a proxy error response, so it never loops back through the proxy
-// It will normalize localhost & 127.0.0.1 when checking the host and port
+// PreventLoopModifier answers a request made to marasi's active listener
+// address and port with a 502 proxy error response, so it never loops back
+// through the proxy. It normalises localhost and 127.0.0.1 when it checks the
+// host and port. Like a refused request, the pair is set up, stored whatever
+// the scope and its cause logged
+// (docs/adr/2026-11-17-go-modifier-errors-fail-closed-and-proxy-error-responses-never-go-upstream.md).
 func PreventLoopModifier(proxy *Proxy, pair *Pair) error {
-	if proxy.targetsListener(pair.Request) {
-		proxy.respondWithProxyError(pair, http.StatusBadGateway, errLoop)
+	if !proxy.targetsListener(pair.Request) {
+		return nil
 	}
+	if err := SetupRequestModifier(proxy, pair); err != nil {
+		return err
+	}
+	if pair.Dropped() {
+		// A second claim of the same launch.
+		return nil
+	}
+	proxy.respondWithProxyError(pair, http.StatusBadGateway, errLoop)
+	if err := WriteRequestModifier(proxy, pair); err != nil {
+		log.Printf("capturing a request that loops back: %v", err)
+	}
+	proxy.logProxyError(pair, errLoop)
 	return nil
 }
 

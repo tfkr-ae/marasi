@@ -57,9 +57,11 @@ number, its # in capture order, then its id.
   status_code
       = != < <= > >=, for example status_code >= 500.
   length
-      = != < <= > >= against the response's Content-Length as a number,
-      for example length > 100000. A response without the header has
-      length 0. A pair with no response yet has no length.
+      = != < <= > >= against the stored response body's length in bytes,
+      for example length > 100000. It counts the body as stored, so a
+      chunked response or one with no Content-Length has its real length,
+      and a gzip or br response its decoded length. A response with no
+      body has length 0. A pair with no response yet has no length.
   requested_at, responded_at
       = != < <= > >= against an RFC 3339 timestamp, for example
       requested_at > "2024-01-02T15:04:05Z".

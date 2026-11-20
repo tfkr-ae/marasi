@@ -357,12 +357,16 @@ func TestProxyErrorResponse_GoModifierError(t *testing.T) {
 }
 
 func TestProxyErrorResponse_Loop(t *testing.T) {
-	t.Run("should answer a request to the proxy's own listener with a proxy error response", func(t *testing.T) {
+	t.Run("should answer a request to the proxy's own listener with a proxy error response, store it and log it", func(t *testing.T) {
 		h := startProxyErrorHarness(t, WithDefaultModifierPipeline())
 
 		res, body := h.get(t, net.JoinHostPort(h.proxy.Addr, h.proxy.Port), "/loop")
 
 		assertProxyError(t, res, body, "loops back to the proxy listener")
+		assertStoredProxyError(t, h.stored(t), "loops back to the proxy listener")
+		if logs := h.errorLogs(t, "loops back to the proxy listener"); len(logs) != 1 {
+			t.Fatalf("\nwanted:\n1 ERROR proxy log naming the cause\ngot:\n%d", len(logs))
+		}
 	})
 }
 
