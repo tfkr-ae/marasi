@@ -160,6 +160,14 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 	h.waitTurn(st)
 	sent, err := origin.send(out)
 	h.passTurn(st)
+	if errors.Is(err, errOriginGoneAway) {
+		// The origin's GOAWAY came before this stream went out. Once it
+		// is relayed, a stream it left unanswered is gone.
+		<-origin.relayed
+		if h.gone(st) {
+			return nil, nil, nil, errStreamGone
+		}
+	}
 	if err != nil {
 		return nil, nil, nil, err
 	}
