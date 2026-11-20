@@ -268,3 +268,21 @@ func TestProxy_CancelStreamedPair(t *testing.T) {
 		}
 	})
 }
+
+func TestProxy_CancelStreamedPairWhoseOnlyDirectionEnded(t *testing.T) {
+	t.Run("should reset both legs of a call whose request ended before the origin answered", func(t *testing.T) {
+		call := startGRPCCall(t)
+		req := callPair(t, call)
+		call.client.data(1, true, grpcEnvelope(0, "only"))
+		call.upstream.await(t, "the request to end", func(p *h2TestPeer) bool { return p.streams[call.id].ended })
+
+		if err := call.proxy.CancelStreamedPair(req.ID); err != nil {
+			t.Fatal(err)
+		}
+		call.client.await(t, "the client's reset", func(p *h2TestPeer) bool { return p.streams[1] != nil && p.streams[1].reset != "" })
+		call.upstream.await(t, "the origin's reset", func(p *h2TestPeer) bool { return p.streams[call.id].reset != "" })
+		if client, origin := arrived(call.client, 1).reset, arrived(call.upstream, call.id).reset; client != "CANCEL" || origin != "CANCEL" {
+			t.Fatalf("the resets\nwanted:\nCANCEL to the client and the origin\ngot:\n%q to the client, %q to the origin", client, origin)
+		}
+	})
+}

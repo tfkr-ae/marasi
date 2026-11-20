@@ -62,7 +62,8 @@ func (proxy *Proxy) InjectStreamMessage(ctx context.Context, pairID uuid.UUID, d
 }
 
 // CancelStreamedPair cancels the streamed pair pairID on both legs:
-// RST_STREAM CANCEL toward the client and toward the origin. Each direction
+// RST_STREAM CANCEL toward the client and toward the origin on HTTP/2, and
+// both connections closed on HTTP/1.1. Each direction
 // still going is recorded cancelled, and the pair's held stream messages
 // are abandoned.
 func (proxy *Proxy) CancelStreamedPair(pairID uuid.UUID) error {
@@ -143,9 +144,9 @@ func injectedMessage(d *streamedDirection, payload []byte, options StreamInjectO
 	return &stream.Message{Raw: raw, Flags: flags, Payload: raw[len(raw)-len(wire):]}, nil
 }
 
-// cancel resets both legs of each direction with CANCEL. The receivers are
-// reset first, and only then the senders of the directions still going,
-// so no leg is reset twice.
+// cancel resets both legs of the pair with CANCEL: each direction's
+// receiver, then the sender of each direction still going, or of the only
+// direction, so no leg is reset twice. HTTP/1.1 legs are closed.
 func (sp *streamedPair) cancel() {
 	sp.mu.Lock()
 	directions := make([]*streamedDirection, 0, len(sp.directions))
@@ -162,7 +163,9 @@ func (sp *streamedPair) cancel() {
 		if sink != nil {
 			sink.reset(http2.ErrCodeCancel)
 		}
-		if src != nil && going {
+		// The sender of a direction that ended is reset through the
+		// other direction's sink, unless there is none.
+		if src != nil && (going || len(directions) == 1) {
 			senders = append(senders, src)
 		}
 	}
