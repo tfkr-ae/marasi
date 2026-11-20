@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -190,12 +191,9 @@ func TestArmoryCommandLifecycle(t *testing.T) {
 		t.Skip("service process fixture uses Unix control sockets")
 	}
 	requestStarted := make(chan struct{})
+	signalStarted := sync.OnceFunc(func() { close(requestStarted) })
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		select {
-		case <-requestStarted:
-		default:
-			close(requestStarted)
-		}
+		signalStarted()
 		select {
 		case <-time.After(200 * time.Millisecond):
 			w.WriteHeader(http.StatusNoContent)

@@ -49,6 +49,9 @@ type h2Origin struct {
 	gone     bool
 	goneLast uint32
 	err      error
+	// relayed is closed once the first GOAWAY has been handled: onGoAway
+	// returned and the streams it left unprocessed were finished.
+	relayed chan struct{}
 }
 
 // h2OriginStream is one origin stream: the request sent on it and, once done
@@ -111,6 +114,7 @@ func startH2Origin(conn *routedConn, addr string, onGoAway func(uint32, http2.Er
 		conn: conn, addr: addr, w: newH2Writer(bw, framer), flow: newH2Flow(),
 		onGoAway: onGoAway, onEnd: onEnd,
 		streams: make(map[uint32]*h2OriginStream), nextID: 1,
+		relayed: make(chan struct{}),
 	}
 	if _, err := io.WriteString(bw, http2.ClientPreface); err != nil {
 		return nil, err
@@ -255,6 +259,7 @@ func (o *h2Origin) frame(frame http2.Frame, decoder *hpack.Decoder) error {
 		}
 	case *http2.GoAwayFrame:
 		o.mu.Lock()
+		first := !o.gone
 		o.gone, o.goneLast = true, f.LastStreamID
 		var unprocessed []*h2OriginStream
 		for id, s := range o.streams {
@@ -263,11 +268,17 @@ func (o *h2Origin) frame(frame http2.Frame, decoder *hpack.Decoder) error {
 			}
 		}
 		o.mu.Unlock()
+		// The GOAWAY is relayed before the unprocessed streams finish, so
+		// the client streams it leaves unanswered are gone by the time
+		// their waits end, and are not answered with a 502.
+		if o.onGoAway != nil {
+			o.onGoAway(f.LastStreamID, f.ErrCode, f.DebugData())
+		}
 		for _, s := range unprocessed {
 			o.finish(s, errOriginGoneAway)
 		}
-		if o.onGoAway != nil {
-			o.onGoAway(f.LastStreamID, f.ErrCode, f.DebugData())
+		if first {
+			close(o.relayed)
 		}
 	case *http2.PushPromiseFrame:
 		// Marasi sent ENABLE_PUSH=0 (RFC 9113 §8.4).
