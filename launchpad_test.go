@@ -1080,9 +1080,10 @@ func TestProxy_InterruptedLaunches(t *testing.T) {
 		if got := h.waitFinished(t); got != want {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
 		}
+		// The origin sees the closed connection a moment after the launch ends.
 		select {
 		case <-upstream.Context().Done():
-		default:
+		case <-time.After(5 * time.Second):
 			t.Fatal("wanted the upstream round trip to be abandoned")
 		}
 		h.assertStoredAsLaunched(t, id, "/slow", map[string]any{"status": "failed", "reason": "interrupted"})
