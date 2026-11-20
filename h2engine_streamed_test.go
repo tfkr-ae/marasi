@@ -212,6 +212,30 @@ func TestH2Engine_StreamedPair(t *testing.T) {
 		}
 	})
 
+	t.Run("should still send the origin a streamed request's head, then the client's reset, when the client resets it while the request chain runs", func(t *testing.T) {
+		origin := newH2TestOrigin(t)
+		chainRunning := make(chan struct{})
+		addr, _, ca := serveH1EngineMITMProxy(t, true, func(proxy *Proxy) {
+			proxy.AddRequestPairModifier(func(proxy *Proxy, pair *Pair) error {
+				close(chainRunning)
+				time.Sleep(200 * time.Millisecond)
+				return nil
+			})
+		})
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		upstream := origin.accept(t)
+		client.headers(1, false, ":method", "POST", ":scheme", "https", ":authority", origin.addr, ":path", "/test.Echo/StreamingInputCall",
+			"content-type", "application/grpc", "te", "trailers")
+		<-chainRunning
+		client.write(func(f *http2.Framer) error { return f.WriteRSTStream(1, http2.ErrCodeCancel) })
+
+		id := upstream.nthStream(t, 0)
+		upstream.await(t, "the reset", func(p *h2TestPeer) bool { return p.streams[id].reset != "" })
+		if got := arrived(upstream, id); len(got.headers) != 1 || got.reset != "CANCEL" {
+			t.Fatalf("the origin's stream\nwanted:\nthe head, then RST_STREAM CANCEL\ngot:\n%d heads, reset %q", len(got.headers), got.reset)
+		}
+	})
+
 	t.Run("should record a message over the per-message limit as too large, with the size it declared, and reset the stream on both legs", func(t *testing.T) {
 		call := startGRPCCall(t, func(proxy *Proxy) { proxy.Config.StreamMaxMessageSize = 8 })
 		call.upstream.headers(call.id, false, ":status", "200", "content-type", "application/grpc")
