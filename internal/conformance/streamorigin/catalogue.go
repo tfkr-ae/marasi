@@ -80,9 +80,20 @@ func Await(kind string) Step { return Step{Kind: StepAwait, Await: kind} }
 func Answer() Step { return Step{Kind: StepAnswer} }
 
 // GRPC is payload in a gRPC Length-Prefixed-Message: an uncompressed
-// flag and a big-endian length.
-func GRPC(payload string) string {
+// flag and a big-endian length. gRPC-Web and Connect messages are the same.
+func GRPC(payload string) string { return envelope(0, payload) }
+
+// GRPCWebTrailers is a gRPC-Web trailers frame: the trailer block in an
+// envelope with flag 0x80 (gRPC PROTOCOL-WEB.md).
+func GRPCWebTrailers(block string) string { return envelope(0x80, block) }
+
+// ConnectEnd is a Connect end-of-stream message: its JSON in an envelope
+// with flag 0x02 (Connect protocol, Streaming-Response).
+func ConnectEnd(json string) string { return envelope(0x02, json) }
+
+func envelope(flags byte, payload string) string {
 	var prefix [5]byte
+	prefix[0] = flags
 	binary.BigEndian.PutUint32(prefix[1:], uint32(len(payload)))
 	return string(prefix[:]) + payload
 }
@@ -135,6 +146,71 @@ var Catalogue = []Case{
 		Origin: []Step{
 			Await(KindEnd),
 			Head(true, ":status", "200", "content-type", "application/grpc", "grpc-status", "12", "grpc-message", "unknown method"),
+		},
+	},
+	{
+		// Server streaming over gRPC-Web: the status goes in a trailers
+		// frame at the end of the body, not in HTTP trailers.
+		ID:       "grpc-web-trailers-frame-h2",
+		RFC:      "gRPC PROTOCOL-WEB.md trailers frame, over RFC 9113 §8.1 HTTP message framing",
+		Protocol: ProtocolH2,
+		Client: []Step{
+			Head(false, ":method", "POST", ":path", "/conformance.Stream/Watch",
+				"content-type", "application/grpc-web+proto", "x-grpc-web", "1"),
+			Message(true, GRPC("watch")),
+			Await(KindMessage),
+			Answer(),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Await(KindEnd),
+			Head(false, ":status", "200", "content-type", "application/grpc-web+proto"),
+			Message(false, GRPC("tick 1")),
+			Await(KindAnswer),
+			Message(false, GRPC("tick 2")),
+			Message(true, GRPCWebTrailers("grpc-status: 0\r\n")),
+		},
+	},
+	{
+		// Bidirectional Connect streaming: the origin answers each
+		// request message before the request ends, and ends its
+		// response with an end-of-stream message.
+		ID:       "connect-wait-for-answer-h2",
+		RFC:      "Connect protocol bidirectional streaming and EndStreamResponse, over RFC 9113 §8.1 HTTP message framing",
+		Protocol: ProtocolH2,
+		Client: []Step{
+			Head(false, ":method", "POST", ":path", "/conformance.Stream/PingPong",
+				"content-type", "application/connect+proto", "connect-protocol-version", "1"),
+			Await(KindMessage),
+			Message(false, GRPC("pong 1")),
+			Await(KindMessage),
+			Message(true, GRPC("pong 2")),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Head(false, ":status", "200", "content-type", "application/connect+proto"),
+			Message(false, GRPC("ping 1")),
+			Await(KindMessage),
+			Message(false, GRPC("ping 2")),
+			Await(KindEnd),
+			Message(true, ConnectEnd("{}")),
+		},
+	},
+	{
+		ID:       "ndjson-wait-for-answer-h2",
+		RFC:      "NDJSON (one JSON text per line), over RFC 9113 §8.1 HTTP message framing",
+		Protocol: ProtocolH2,
+		Client: []Step{
+			Head(true, ":method", "GET", ":path", "/logs", "accept", "application/x-ndjson"),
+			Await(KindMessage),
+			Answer(),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Head(false, ":status", "200", "content-type", "application/x-ndjson"),
+			Message(false, "{\"n\":1}\n"),
+			Await(KindAnswer),
+			Message(true, "{\"n\":2}\n"),
 		},
 	},
 	{

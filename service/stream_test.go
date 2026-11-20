@@ -116,4 +116,31 @@ func TestStreamMessageRoutes(t *testing.T) {
 			assertControlAPIResponse(t, requestControlAPI(server, http.MethodGet, test.path, ""), test.status, test.body)
 		}
 	})
+
+	t.Run("should give a compressed message a text form only when its payload was decoded", func(t *testing.T) {
+		flags := uint8(1)
+		decoded, _ := uuid.NewV7()
+		raw, _ := uuid.NewV7()
+		failed, _ := uuid.NewV7()
+		for _, m := range []domain.StreamMessage{
+			{ID: decoded, Payload: []byte{0x08, 0x01}, Metadata: map[string]any{"encoding": "gzip"}},
+			{ID: raw, Payload: []byte{0x08, 0x01}, Metadata: map[string]any{"encoding": "snappy"}},
+			{ID: failed, Payload: []byte{0x08, 0x01}, Metadata: map[string]any{"encoding": "gzip", "inflate_error": "bad"}},
+		} {
+			m.PairID, m.Direction, m.Framing, m.Flags, m.Compressed, m.CreatedAt = pair, domain.StreamDirectionRequest, "grpc", &flags, true, time.Now()
+			if err := repo.InsertStreamMessage(&m); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, test := range []struct {
+			id   uuid.UUID
+			text any
+		}{{decoded, "1:VARINT 1\n"}, {raw, nil}, {failed, nil}} {
+			var item map[string]any
+			response := requestControlAPI(server, http.MethodGet, path+"/"+test.id.String(), "")
+			if json.Unmarshal(response.Body.Bytes(), &item) != nil || item["text"] != test.text {
+				t.Errorf("the text form of %s\nwanted:\n%v\ngot:\n%s", test.id, test.text, response.Body)
+			}
+		}
+	})
 }

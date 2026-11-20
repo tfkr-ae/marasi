@@ -4,67 +4,172 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
+	"golang.org/x/net/http2"
 
 	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/stream"
 )
 
 // handle is what happens to a whole stream message between being read and
-// being forwarded: the processStreamMessage hooks see and may change it, the
-// declared-length rule undoes a change the direction cannot carry,
-// Checkpoint may hold it, and it is stored as it goes out. It returns the
-// bytes to forward: the message as it came when nothing changed it, nil
-// when it was dropped.
+// being forwarded: a compressed one is decoded, the processStreamMessage
+// hooks see and may change it, the declared-length rule undoes a change the
+// direction cannot carry, Checkpoint may hold it, and it is stored as it
+// goes out. It returns the bytes to forward: the message as it came when
+// nothing changed it, nil when it was dropped. A compressed message the
+// proxy cannot decode is stored with its inflate error and returned as a
+// *messageDecodeError, so the carry resets the stream.
 //
 // It runs on the direction's one reader, so nothing more is read from the
 // sender until it returns: a held message stops only its own direction.
 // cutOff closes when the direction is reset or cut off, which abandons a
 // hold. Injection extends it.
-func (sp *streamedPair) handle(name string, d *streamedDirection, message *stream.Message, cutOff <-chan struct{}) []byte {
+func (sp *streamedPair) handle(name string, d *streamedDirection, message *stream.Message, cutOff <-chan struct{}) ([]byte, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
 		id = uuid.New()
 	}
 	live := &stream.LiveMessage{
 		ID: id, PairID: sp.pair.ID, Direction: name, Framing: d.framing, ContentType: sp.contentType(d),
-		Flags: message.Flags, Payload: message.Payload, Metadata: map[string]any{},
+		Flags: message.Flags, Payload: message.Payload, Encoding: d.encoding, Metadata: map[string]any{},
 	}
+	compressed := live.Compressed()
+	if compressed {
+		live.Metadata["encoding"] = d.encoding
+		if !stream.Decodable(d.encoding) {
+			live.ReadOnly = true
+		} else if live.Payload, err = stream.Decompress(d.encoding, message.Payload, sp.limit); err != nil {
+			return nil, sp.undecodable(name, d, id, message, err)
+		}
+	}
+	original := live.Payload
 	processStreamMessageExtensions(sp.proxy, sp.pair, live)
 	intercept := !live.Dropped && shouldInterceptStreamMessage(sp.proxy, live)
 
-	if sp.declaresLength(d) && (live.Dropped || len(live.Payload) != len(message.Payload)) {
+	out := outgoing(d, message, original)
+	raw, flagsOut, edited := out(live.Payload)
+	if edited && live.ReadOnly {
+		sp.readOnlyRefused(name, d.encoding)
+		live.Payload = original
+		raw, flagsOut, edited = out(original)
+	}
+	declared := sp.declaresLength(d)
+	if declared && (live.Dropped || len(raw) != len(message.Raw)) {
 		sp.lengthRefused(name, live.Dropped)
-		live.Dropped, live.Payload = false, message.Payload
+		live.Dropped, live.Payload = false, original
+		raw, flagsOut, edited = out(original)
 	}
 	if intercept && !live.Dropped {
 		live.Metadata["intercepted"] = true
-		decision := sp.proxy.holdStreamMessage(sp, d, live, cutOff)
+		// refuse is what Checkpoint checks before a forward or drop ends
+		// the hold, so a refused change leaves the message held.
+		readOnly := live.ReadOnly
+		refuse := func(payload []byte, drop bool) error {
+			switch {
+			case drop && declared:
+				return fmt.Errorf("%w: the %s head declares a length, so a drop cannot be carried", ErrStreamLengthDeclared, name)
+			case drop || payload == nil:
+				return nil
+			case readOnly && !bytes.Equal(payload, original):
+				return fmt.Errorf("%w: the %s message is compressed with %q, which Marasi does not decode", ErrStreamReadOnly, name, d.encoding)
+			}
+			if wire, _, _ := out(payload); declared && len(wire) != len(message.Raw) {
+				return fmt.Errorf("%w: the %s head declares a length, so an edit that makes the message %d bytes on the wire instead of %d cannot be carried",
+					ErrStreamLengthDeclared, name, len(wire), len(message.Raw))
+			}
+			return nil
+		}
+		decision := sp.proxy.holdStreamMessage(sp, live, refuse, cutOff)
 		switch {
 		case decision.dropped:
 			live.Dropped = true
 		case decision.payload != nil:
 			live.Payload = decision.payload
+			raw, flagsOut, edited = out(live.Payload)
 		}
 	}
 
-	raw := message.Raw
 	switch {
 	case live.Dropped:
 		live.Metadata["dropped"] = true
 		raw = nil
-	case !bytes.Equal(live.Payload, message.Payload):
+	case edited:
 		live.Metadata["edited"] = true
-		raw = stream.Envelope(live.Flags, live.Payload)
+		if compressed {
+			compressed = false
+			delete(live.Metadata, "encoding")
+		}
 	}
 
 	sp.mu.Lock()
 	d.messages++
 	sp.mu.Unlock()
-	flags := live.Flags
-	sp.queue(sp.message(id, name, d, &flags, live.Payload, live.Metadata))
-	return raw
+	var flags *uint8
+	if d.framing.Enveloped() {
+		flags = &flagsOut
+	}
+	row := sp.message(id, name, d, flags, live.Payload, live.Metadata)
+	row.Compressed = compressed
+	sp.queue(row)
+	return raw, nil
+}
+
+// outgoing returns what message goes out as with a payload: the bytes it
+// came in and its flags when the payload is original, the payload it was
+// read as; otherwise the payload uncompressed, in a new envelope with its
+// compressed flag cleared where the framing has one, reported edited.
+func outgoing(d *streamedDirection, message *stream.Message, original []byte) func(payload []byte) (raw []byte, flags byte, edited bool) {
+	return func(payload []byte) ([]byte, byte, bool) {
+		if bytes.Equal(payload, original) {
+			return message.Raw, message.Flags, false
+		}
+		if !d.framing.Enveloped() {
+			return payload, message.Flags, true
+		}
+		flags := stream.Uncompressed(message.Flags)
+		return stream.Envelope(flags, payload), flags, true
+	}
+}
+
+// messageDecodeError is a compressed stream message the proxy could not
+// decode, so it cannot forward it.
+type messageDecodeError struct{ err error }
+
+func (e *messageDecodeError) Error() string { return "decoding a stream message: " + e.err.Error() }
+
+// tooLarge reports whether the message decoded past the per-message limit.
+func (e *messageDecodeError) tooLarge() bool { return strings.HasPrefix(e.err.Error(), "too large") }
+
+// undecodable stores a compressed message the proxy could not decode as the
+// compressed bytes it came as, with the error in inflate_error, writes a
+// proxy log and records the direction reset. No hook sees it, since it
+// cannot be edited or forwarded.
+func (sp *streamedPair) undecodable(name string, d *streamedDirection, id uuid.UUID, message *stream.Message, err error) error {
+	decodeErr := &messageDecodeError{err: err}
+	code := http2.ErrCodeInternal
+	if decodeErr.tooLarge() {
+		code = http2.ErrCodeEnhanceYourCalm
+	}
+	sp.mu.Lock()
+	d.messages++
+	sp.mu.Unlock()
+	flags := message.Flags
+	row := sp.message(id, name, d, &flags, message.Payload, map[string]any{"encoding": d.encoding, "inflate_error": err.Error()})
+	row.Compressed = true
+	sp.queue(row)
+	sp.end(d, streamReset, code)
+	entry := fmt.Sprintf("Stream message not decoded (%s): a %s message compressed with %q could not be decoded (%v); the stream was reset", sp.requestName(), name, d.encoding, err)
+	_ = sp.proxy.WriteLog("WARN", entry, pairLogOptions(sp.pair)...)
+	return decodeErr
+}
+
+// readOnlyRefused writes the proxy log for a hook's edit to a message
+// compressed with an encoding the proxy does not decode.
+func (sp *streamedPair) readOnlyRefused(name, encoding string) {
+	entry := fmt.Sprintf("Stream message change ignored (%s): the %s message is compressed with %q, which Marasi does not decode, so it cannot be edited and went out as it came", sp.requestName(), name, encoding)
+	_ = sp.proxy.WriteLog("WARN", entry, pairLogOptions(sp.pair)...)
 }
 
 // headWentOut records the content type of d's head as it went out.

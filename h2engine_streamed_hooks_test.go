@@ -82,6 +82,32 @@ func TestH2Engine_StreamMessageHooks(t *testing.T) {
 		}
 	})
 
+	t.Run("should send a server-sent event processStreamMessage rewrote as the bare event, with no envelope or flags", func(t *testing.T) {
+		call := startGRPCCall(t, withStreamExtension(t, "rewriter", `
+			function processStreamMessage(message)
+				if message:framing() == "sse" then
+					message:set_payload("data: edited\n\n")
+				end
+			end
+		`))
+		call.client.data(1, true, grpcEnvelope(0, "hello"))
+		awaitData(t, call.upstream, "the origin", call.id, grpcEnvelope(0, "hello"))
+		call.upstream.headers(call.id, false, ":status", "200", "content-type", "text/event-stream")
+		call.upstream.data(call.id, true, "data: first\n\n")
+		awaitData(t, call.client, "the client", 1, "data: edited\n\n")
+
+		req, _ := streamedResponse(t, call.captured)
+		var event *domain.StreamMessage
+		for _, m := range storedMessages(t, call.proxy, req.ID) {
+			if m.Direction == "response" {
+				event = m
+			}
+		}
+		if event == nil || string(event.Payload) != "data: edited\n\n" || event.Flags != nil || event.Metadata["edited"] != true {
+			t.Errorf("the stored event\nwanted:\n%q, edited, no flags\ngot:\n%+v", "data: edited\n\n", event)
+		}
+	})
+
 	t.Run("should not forward a message processStreamMessage dropped, and store it as dropped", func(t *testing.T) {
 		call := startGRPCCall(t, withStreamExtension(t, "dropper", `
 			function processStreamMessage(message)

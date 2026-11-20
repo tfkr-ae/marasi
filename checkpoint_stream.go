@@ -24,12 +24,19 @@ import (
 // would alter. The message stays held.
 var ErrStreamLengthDeclared = errors.New("the direction's head declares a length")
 
+// ErrStreamReadOnly is returned for a Checkpoint edit of a stream message
+// compressed with an encoding Marasi does not decode. The message stays
+// held.
+var ErrStreamReadOnly = errors.New("the stream message cannot be edited")
+
 // pendingStream is a held stream message.
 type pendingStream struct {
 	item domain.CheckpointItem
 	sp   *streamedPair
-	d    *streamedDirection
 	done chan struct{}
+	// refuse says why a forward with payload, or a drop, cannot be
+	// carried, or nil when it can (streamedPair.handle).
+	refuse func(payload []byte, drop bool) error
 	// decision is what the hold ended with, set before done closes.
 	decision streamHoldDecision
 }
@@ -68,17 +75,20 @@ func checkpointItemFromStream(message *stream.LiveMessage) domain.CheckpointItem
 	case stream.FramingGRPC, stream.FramingGRPCWeb, stream.FramingConnect:
 		item.Flags = &flags
 	}
-	item.Text, item.HasText = message.Text()
+	if !message.ReadOnly {
+		item.Text, item.HasText = message.Text()
+	}
 	return item
 }
 
 // holdStreamMessage holds message until it is forwarded, dropped or
-// abandoned, and returns how its hold ended. cutOff closing abandons it.
-func (proxy *Proxy) holdStreamMessage(sp *streamedPair, d *streamedDirection, message *stream.LiveMessage, cutOff <-chan struct{}) streamHoldDecision {
+// abandoned, and returns how its hold ended. refuse vets a forward's
+// payload or a drop first. cutOff closing abandons the hold.
+func (proxy *Proxy) holdStreamMessage(sp *streamedPair, message *stream.LiveMessage, refuse func(payload []byte, drop bool) error, cutOff <-chan struct{}) streamHoldDecision {
 	state := proxy.checkpoint
 	item := checkpointItemFromStream(message)
 	item.InterceptedAt = state.now()
-	pending := &pendingStream{item: item, sp: sp, d: d, done: make(chan struct{})}
+	pending := &pendingStream{item: item, sp: sp, refuse: refuse, done: make(chan struct{})}
 
 	state.mu.Lock()
 	if proxy.engine != nil && proxy.engine.closing.Load() {
@@ -121,8 +131,8 @@ func (state *checkpointState) takeStream(id uuid.UUID) *pendingStream {
 }
 
 // forwardStream forwards a held stream message, with fwd.Payload when set.
-// An edit that changes the length of a direction whose head declared one is
-// refused, and the message stays held.
+// An edit the message cannot carry is refused with the reason, and the
+// message stays held.
 func (proxy *Proxy) forwardStream(id uuid.UUID, fwd CheckpointForward) error {
 	state := proxy.checkpoint
 	state.mu.Lock()
@@ -131,10 +141,11 @@ func (proxy *Proxy) forwardStream(id uuid.UUID, fwd CheckpointForward) error {
 		state.mu.Unlock()
 		return fmt.Errorf("%w: %s", ErrCheckpointNotFound, id)
 	}
-	if fwd.Payload != nil && len(*fwd.Payload) != len(pending.item.Payload) && pending.sp.declaresLength(pending.d) {
-		state.mu.Unlock()
-		return fmt.Errorf("%w (%s): the %s head declares a length, so an edit that changes the payload's length from %d to %d bytes cannot be carried",
-			ErrStreamLengthDeclared, id, pending.item.Direction, len(pending.item.Payload), len(*fwd.Payload))
+	if fwd.Payload != nil {
+		if err := pending.refuse(*fwd.Payload, false); err != nil {
+			state.mu.Unlock()
+			return fmt.Errorf("%s: %w", id, err)
+		}
 	}
 	state.takeStream(id)
 	state.mu.Unlock()
@@ -145,8 +156,9 @@ func (proxy *Proxy) forwardStream(id uuid.UUID, fwd CheckpointForward) error {
 	return nil
 }
 
-// dropStream drops a held stream message. A drop on a direction whose head
-// declared a length is refused, and the message stays held.
+// dropStream drops a held stream message. A drop the direction cannot
+// carry, because its head declared a length, is refused, and the message
+// stays held.
 func (proxy *Proxy) dropStream(id uuid.UUID) error {
 	state := proxy.checkpoint
 	state.mu.Lock()
@@ -155,9 +167,9 @@ func (proxy *Proxy) dropStream(id uuid.UUID) error {
 		state.mu.Unlock()
 		return fmt.Errorf("%w: %s", ErrCheckpointNotFound, id)
 	}
-	if pending.sp.declaresLength(pending.d) {
+	if err := pending.refuse(nil, true); err != nil {
 		state.mu.Unlock()
-		return fmt.Errorf("%w (%s): the %s head declares a length, so a drop cannot be carried", ErrStreamLengthDeclared, id, pending.item.Direction)
+		return fmt.Errorf("%s: %w", id, err)
 	}
 	state.takeStream(id)
 	state.mu.Unlock()

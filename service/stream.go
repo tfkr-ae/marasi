@@ -16,7 +16,9 @@ import (
 // Stream messages of a streamed pair (GLOSSARY: Streamed pair, Stream
 // message): read a pair's messages a page at a time, in the order they
 // arrived, or one by its ID. A message's payload is its decompressed
-// payload without its envelope. One message read by its ID also carries
+// payload without its envelope, or the compressed bytes when Marasi does
+// not decode its encoding (metadata.encoding) or could not
+// (metadata.inflate_error). One message read by its ID also carries
 // its text form, when it has one (stream.TextForm).
 
 // streamMessageResponse is one stream message. flags is null for a framing
@@ -119,7 +121,7 @@ func addStreamRoutes(mux routeMux, proxy *marasi.Proxy) {
 			return
 		}
 		item := streamMessageWithText{streamMessageResponse: streamMessageFromDomain(*message)}
-		if proxy.TrafficRepo != nil {
+		if proxy.TrafficRepo != nil && payloadDecoded(message) {
 			if row, err := proxy.TrafficRepo.GetRequestResponseRow(pairID); err == nil {
 				if text, ok := stream.TextForm(streamContentType(row, message.Direction), message.Payload); ok {
 					item.Text = &text
@@ -128,6 +130,19 @@ func addStreamRoutes(mux routeMux, proxy *marasi.Proxy) {
 		}
 		writeJSON(w, r, http.StatusOK, item)
 	})
+}
+
+// payloadDecoded reports whether message's stored payload is decoded: it
+// was not compressed, or was compressed with an encoding Marasi decodes and
+// decoded without error. A payload stored as the compressed bytes has no
+// text form.
+func payloadDecoded(message *domain.StreamMessage) bool {
+	if !message.Compressed {
+		return true
+	}
+	encoding, _ := message.Metadata["encoding"].(string)
+	_, failed := message.Metadata["inflate_error"]
+	return stream.Decodable(encoding) && !failed
 }
 
 // streamContentType is the content type of the pair's head in direction.

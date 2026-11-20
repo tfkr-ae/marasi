@@ -215,4 +215,44 @@ func TestH2Engine_CheckpointStreamMessages(t *testing.T) {
 			t.Fatalf("the origin's request body\nwanted:\nthe message, not held\ngot:\n%q", request.data)
 		}
 	})
+
+	t.Run("should hold a gzip message decoded, forward it unedited as its original bytes, and send an edit uncompressed", func(t *testing.T) {
+		call := startCompressedCall(t, "gzip", func(proxy *Proxy) { proxy.SetStreamIntercept(true) })
+		sent := grpcEnvelope(1, gzipped(t, "hello"))
+		call.client.data(1, false, sent)
+		held := awaitStreamItems(t, call.proxy, 1)[0]
+		if string(held.Payload) != "hello" || !held.Compressed || held.Flags == nil || *held.Flags != 1 {
+			t.Fatalf("the held item\nwanted:\n%q decoded, compressed, flags 1\ngot:\n%+v", "hello", held)
+		}
+		if err := call.proxy.ForwardCheckpoint(held.ID, CheckpointForward{}); err != nil {
+			t.Fatal(err)
+		}
+		awaitData(t, call.upstream, "the origin", call.id, sent)
+
+		call.client.data(1, true, grpcEnvelope(1, gzipped(t, "again")))
+		edited := awaitStreamItems(t, call.proxy, 1)[0]
+		payload := []byte("AGAIN")
+		if err := call.proxy.ForwardCheckpoint(edited.ID, CheckpointForward{Payload: &payload}); err != nil {
+			t.Fatal(err)
+		}
+		awaitData(t, call.upstream, "the origin", call.id, sent+grpcEnvelope(0, "AGAIN"))
+	})
+
+	t.Run("should refuse an edit of a message in an encoding it does not decode, keeping it held", func(t *testing.T) {
+		call := startCompressedCall(t, "snappy", func(proxy *Proxy) { proxy.SetStreamIntercept(true) })
+		sent := grpcEnvelope(1, "opaque")
+		call.client.data(1, true, sent)
+		held := awaitStreamItems(t, call.proxy, 1)[0]
+		if held.HasText {
+			t.Errorf("the held item's text\nwanted:\nnone\ngot:\n%q", held.Text)
+		}
+		payload := []byte("edited")
+		if err := call.proxy.ForwardCheckpoint(held.ID, CheckpointForward{Payload: &payload}); !errors.Is(err, ErrStreamReadOnly) {
+			t.Fatalf("an edit\nwanted:\nErrStreamReadOnly\ngot:\n%v", err)
+		}
+		if err := call.proxy.ForwardCheckpoint(held.ID, CheckpointForward{}); err != nil {
+			t.Fatal(err)
+		}
+		awaitData(t, call.upstream, "the origin", call.id, sent)
+	})
 }

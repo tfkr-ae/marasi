@@ -493,7 +493,8 @@ func writeCheckpointForwardError(w http.ResponseWriter, r *http.Request, err err
 	case errors.Is(err, marasi.ErrInterceptResponseNotAllowed),
 		errors.Is(err, marasi.ErrRebuildRequest),
 		errors.Is(err, marasi.ErrRebuildResponse),
-		errors.Is(err, marasi.ErrStreamLengthDeclared):
+		errors.Is(err, marasi.ErrStreamLengthDeclared),
+		errors.Is(err, marasi.ErrStreamReadOnly):
 		writeRefusal(w, r, http.StatusBadRequest, "invalid_checkpoint_request", err.Error())
 	default:
 		writeCheckpointError(w, r, http.StatusInternalServerError, "internal_server_error")
