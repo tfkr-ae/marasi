@@ -172,4 +172,80 @@ var Catalogue = []Case{
 			Message(true, "id: 2\ndata: second\n\n"),
 		},
 	},
+	// The stall cases are ordinary pairs: their heads name no message
+	// framing, so Marasi reads each body whole until it stalls for 2
+	// seconds after some arrived, then forwards it as it arrives. The
+	// waiting side waits longer than that. The recording cuts a text/plain
+	// body into lines so a side can wait on part of it.
+	{
+		ID:       "ordinary-request-stall-http1",
+		RFC:      "RFC 9112 §7.1 chunked transfer coding: a request body that stalls partway",
+		Protocol: ProtocolHTTP1,
+		Client: []Step{
+			Head(false, ":method", "POST", ":path", "/upload", "Host", "{authority}", "Content-Type", "text/plain",
+				"Transfer-Encoding", "chunked"),
+			Message(false, "part 1\n"),
+			Await(KindMessage),
+			Message(true, "part 2\n"),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Await(KindMessage),
+			Head(false, ":status", "200", "Content-Type", "text/plain", "Content-Length", "11"),
+			Message(true, "got part 1\n"),
+			Await(KindEnd),
+		},
+	},
+	{
+		ID:       "ordinary-request-stall-h2",
+		RFC:      "RFC 9113 §8.1 HTTP message framing: a request body that stalls partway",
+		Protocol: ProtocolH2,
+		Client: []Step{
+			Head(false, ":method", "POST", ":path", "/upload", "content-type", "text/plain"),
+			Message(false, "part 1\n"),
+			Await(KindMessage),
+			Message(true, "part 2\n"),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Await(KindMessage),
+			Head(false, ":status", "200", "content-type", "text/plain"),
+			Message(true, "got part 1\n"),
+			Await(KindEnd),
+		},
+	},
+	{
+		ID:       "ordinary-response-stall-http1",
+		RFC:      "RFC 9112 §7.1 chunked transfer coding: a response body that stalls partway",
+		Protocol: ProtocolHTTP1,
+		Client: []Step{
+			Head(true, ":method", "GET", ":path", "/download", "Host", "{authority}"),
+			Await(KindMessage),
+			Answer(),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Head(false, ":status", "200", "Content-Type", "text/plain", "Transfer-Encoding", "chunked"),
+			Message(false, "first\n"),
+			Await(KindAnswer),
+			Message(true, "second\n"),
+		},
+	},
+	{
+		ID:       "ordinary-response-stall-h2",
+		RFC:      "RFC 9113 §8.1 HTTP message framing: a response body that stalls partway",
+		Protocol: ProtocolH2,
+		Client: []Step{
+			Head(true, ":method", "GET", ":path", "/download"),
+			Await(KindMessage),
+			Answer(),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Head(false, ":status", "200", "content-type", "text/plain"),
+			Message(false, "first\n"),
+			Await(KindAnswer),
+			Message(true, "second\n"),
+		},
+	},
 }

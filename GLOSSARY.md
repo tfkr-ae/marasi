@@ -142,6 +142,10 @@ _Avoid_: extension on its own, plugin
 A request/response pair whose head names a message framing, so the body in that direction is carried as stream messages as they arrive instead of being read whole. It is still a request/response pair, with the same UUID; its stored body is empty, and its stream messages hold the content.
 _Avoid_: stream, gRPC call, streaming request, flow
 
+**Body threshold**:
+The size past which an ordinary request/response pair's body stops being read whole and is forwarded as it arrives, as it is too when its head declares more or it stalls for 2 seconds. From then on that body cannot be held or edited, and it is stored up to the threshold, marked too large. 64 MiB unless `body_threshold` sets it.
+_Avoid_: size limit, max body size
+
 **Stream message**:
 One unit of a streamed pair's body in one direction, cut out by its message framing: a gRPC, gRPC-Web or Connect envelope, a server-sent event, or an NDJSON line. Stored in the open project and identified by its own UUID. The frames, chunks or DATA frames that carry it are wire detail with no id.
 _Avoid_: message on its own, frame, chunk, event (which is a service instance notification), WebSocket message

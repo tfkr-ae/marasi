@@ -11,6 +11,11 @@ const (
 	framingNone = ""
 	framingGRPC = "grpc"
 	framingSSE  = "sse"
+	// framingLines is the recording's own cut, not a message framing: an
+	// ordinary text/plain body is recorded line by line as it arrives, so
+	// a stall fixture can wait on part of a body that Marasi reads whole
+	// until it stalls.
+	framingLines = "lines"
 )
 
 // framingOf is the message framing a direction's content type names: the
@@ -23,6 +28,8 @@ func framingOf(contentType string) string {
 		return framingGRPC
 	case mediaType == "text/event-stream":
 		return framingSSE
+	case mediaType == "text/plain":
+		return framingLines
 	}
 	return framingNone
 }
@@ -71,6 +78,8 @@ func (s *splitter) next() int {
 			}
 		}
 		return first
+	case framingLines:
+		return bytes.IndexByte(s.held, '\n') + 1
 	}
 	return 0
 }

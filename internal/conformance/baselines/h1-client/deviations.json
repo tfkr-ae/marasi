@@ -2824,32 +2824,6 @@
     "rfc": "RFC 9112 §2.2"
   },
   {
-    "cases": "MAL-POST-CL-HUGE-NO-BODY@connect-plain",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses.count",
-    "kind": "known",
-    "reason": "Marasi reads a request body whole before the chains run, with no size limit, so it waits for the 999999999 bytes nginx refuses up front with 413; streaming bodies (Phase 6) removes the wait (was: measured by conformance-update-known: baseline \"1\", got \"0\")",
-    "phase": 6
-  },
-  {
-    "cases": "MAL-POST-CL-HUGE-NO-BODY@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses.count",
-    "kind": "known",
-    "reason": "Marasi reads a request body whole before the chains run, with no size limit, so it waits for the 999999999 bytes nginx refuses up front with 413; streaming bodies (Phase 6) removes the wait (was: measured by conformance-update-known: baseline \"1\", got \"0\")",
-    "phase": 6
-  },
-  {
     "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-plain",
     "runs": [
       "checkpoint-forward",

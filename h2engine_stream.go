@@ -28,7 +28,10 @@ func (h *h2Conn) carry(st *h2Stream) {
 	request := st.request
 	h.mu.Unlock()
 	req := request.request()
-	if len(request.body) > 0 {
+	switch {
+	case request.rest != nil:
+		req.Body = newPassedBody(request.body, int64(len(request.body)))
+	case len(request.body) > 0:
 		req.Body = io.NopCloser(bytes.NewReader(request.body))
 	}
 	req = h.prepare(req, st)
@@ -71,6 +74,16 @@ func (h *h2Conn) carry(st *h2Stream) {
 		wire = pair.responseWire
 	}
 	h.writeResponse(st, pair, res, wire, read)
+	if read != nil && read.h2 != nil && read.h2.rest != nil && !read.h2.rest.taken() {
+		// A passed response the client did not get: the rest is not
+		// wanted, so the origin stream is cancelled.
+		h.mu.Lock()
+		sent, origin := st.origin, h.origin
+		h.mu.Unlock()
+		if sent != nil && origin != nil {
+			origin.cancel(sent, http2.ErrCodeCancel)
+		}
+	}
 }
 
 // prepare gives a request view what every request needs, as h1Conn.prepare
@@ -191,12 +204,26 @@ func (h *h2Conn) awaitResponse(st *h2Stream, req *http.Request, s *h2OriginStrea
 		case <-s.moreInterim:
 		case <-s.done:
 			done = true
+		case <-s.passed:
+			done = true
 		case <-st.ctx.Done():
 			return nil, nil, nil, errStreamGone
 		}
 		for _, fields := range s.takeInterim() {
 			h.relayInterim(st, fields)
 		}
+	}
+	if s.passing() != nil {
+		// The response goes with what arrived; the rest follows
+		// (writeResponse).
+		for _, fields := range s.takeInterim() {
+			h.relayInterim(st, fields)
+		}
+		wire := s.response
+		res := wire.response()
+		res.Request = req
+		res.Body = newPassedBody(wire.body, int64(len(wire.body)))
+		return res, &wireResponse{h2: wire}, nil, nil
 	}
 	switch {
 	case errors.Is(s.err, errStreamGone), h.gone(st):
@@ -222,9 +249,13 @@ func (h *h2Conn) awaitResponse(st *h2Stream, req *http.Request, s *h2OriginStrea
 }
 
 // relayInterim writes an origin's interim response to the client, except a
-// 100: an HTTP/2 request's body is read whole before it goes upstream.
+// 100: an HTTP/2 request's body is read whole before it goes upstream,
+// unless it passed the body threshold.
 func (h *h2Conn) relayInterim(st *h2Stream, fields h2Fields) {
-	if status, _ := fields.get(":status"); status == "100" || h.gone(st) {
+	h.mu.Lock()
+	passing := st.pass != nil
+	h.mu.Unlock()
+	if status, _ := fields.get(":status"); (status == "100" && !passing) || h.gone(st) {
 		return
 	}
 	h.w.headers(fixedID(st.id), fields, false, h.flow.frameSize())
@@ -243,6 +274,11 @@ func (h *h2Conn) writeResponse(st *h2Stream, pair *Pair, res *http.Response, wir
 			}
 			var out *h2Response
 			if out, err = h2OutboundResponse(base, client); err == nil {
+				if out.rest != nil {
+					h.writeMessage(st, out.fields, out.body, nil, false, false)
+					h.forwardResponsePass(st, out.rest)
+					return
+				}
 				h.writeMessage(st, out.fields, out.body, out.trailers, true, out.endsOnData)
 				return
 			}
@@ -310,7 +346,7 @@ func h2OutboundRequest(wire *h2Request, req *http.Request) (*h2Request, error) {
 		return nil, err
 	}
 	fields := withPayloadLength(wire.merge(req), wire.body, payload)
-	return &h2Request{fields: fields, body: payload, trailers: wire.trailers, endsOnData: wire.endsOnData || len(payload) > 0}, nil
+	return &h2Request{fields: fields, body: payload, trailers: wire.trailers, endsOnData: wire.endsOnData || len(payload) > 0, rest: wire.rest}, nil
 }
 
 // h2OutboundResponse is the response as it goes to the client, as
@@ -321,7 +357,7 @@ func h2OutboundResponse(wire *h2Response, res *http.Response) (*h2Response, erro
 		return nil, err
 	}
 	fields := withPayloadLength(wire.merge(res), wire.body, payload)
-	return &h2Response{fields: fields, body: payload, trailers: wire.trailers, endsOnData: wire.endsOnData || len(payload) > 0}, nil
+	return &h2Response{fields: fields, body: payload, trailers: wire.trailers, endsOnData: wire.endsOnData || len(payload) > 0, rest: wire.rest}, nil
 }
 
 // withPayloadLength is a merged field list for payload, which replaces the wire's

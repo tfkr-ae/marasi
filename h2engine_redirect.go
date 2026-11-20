@@ -63,7 +63,7 @@ func (h *h2Conn) sendRedirected(pair *Pair, st *h2Stream, addr string) (*http.Re
 	}
 	if conn.protocol() == domain.ProtocolHTTP2 {
 		pair.originProtocol = domain.ProtocolHTTP2
-		origin, err := startH2Origin(conn, addr, nil, nil)
+		origin, err := startH2Origin(conn, addr, nil, nil, h.engine.proxy.bodyThreshold())
 		if err != nil {
 			return nil, nil, nil, err
 		}
