@@ -79,6 +79,9 @@ type streamedPair struct {
 
 	mu         sync.Mutex
 	directions map[string]*streamedDirection
+	// started reports that the pair's start was announced, so its end
+	// is too.
+	started bool
 	// response is the response capture WriteResponseModifier deferred.
 	response *domain.ProxyResponse
 }
@@ -108,12 +111,32 @@ func (proxy *Proxy) streamed(pair *Pair) *streamedPair {
 }
 
 // direction records that the pair's direction is streamed with framing.
+// The first direction of a stored pair announces the pair started.
 func (sp *streamedPair) direction(name string, framing stream.Framing) *streamedDirection {
 	sp.mu.Lock()
-	defer sp.mu.Unlock()
 	d := &streamedDirection{framing: framing}
 	sp.directions[name] = d
+	var started *domain.StreamedPairStarted
+	if !sp.started && sp.announced() {
+		sp.started = true
+	}
+	if sp.started && len(sp.directions) == 1 && sp.proxy.OnStreamedPairStarted != nil {
+		started = &domain.StreamedPairStarted{PairID: sp.pair.ID, Framings: make(map[string]string, len(sp.directions))}
+		for name, d := range sp.directions {
+			started.Framings[name] = string(d.framing)
+		}
+	}
+	sp.mu.Unlock()
+	if started != nil {
+		sp.proxy.OnStreamedPairStarted(*started)
+	}
 	return d
+}
+
+// announced reports whether the pair's streaming is announced: only a
+// stored pair's is.
+func (sp *streamedPair) announced() bool {
+	return sp.pair.requestCaptured
 }
 
 // carry carries direction name from src to sink, a stream message at a
@@ -127,11 +150,17 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 		sink.reset(http2.ErrCodeInternal)
 		return
 	}
+	var lastProgress time.Time
 	for {
 		data, readErr := src.peek()
 		if len(data) > 0 {
 			n, message, err := splitter.Feed(data)
 			src.discard(n)
+			if message == nil && err == nil {
+				sp.progress(name, d, splitter.Buffered(), &lastProgress)
+			} else {
+				lastProgress = time.Time{}
+			}
 			var tooLarge *stream.TooLargeError
 			switch {
 			case errors.As(err, &tooLarge):
@@ -188,6 +217,26 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 	}
 }
 
+// streamProgressInterval is the least time between two progress
+// announcements of one direction's message, as for WebSocket messages.
+const streamProgressInterval = 100 * time.Millisecond
+
+// progress announces a message still arriving, bytes of it so far, at most
+// once per streamProgressInterval since *last.
+func (sp *streamedPair) progress(name string, d *streamedDirection, bytes int, last *time.Time) {
+	if bytes == 0 || sp.proxy.OnStreamMessageProgress == nil || !sp.announced() {
+		return
+	}
+	now := time.Now()
+	if !last.IsZero() && now.Sub(*last) < streamProgressInterval {
+		return
+	}
+	*last = now
+	sp.proxy.OnStreamMessageProgress(domain.StreamMessageProgress{
+		PairID: sp.pair.ID, Direction: name, Framing: string(d.framing), Bytes: int64(bytes),
+	})
+}
+
 // ended records a direction that ended because of err: a reset with its
 // code, CANCEL being a cancel, or anything else a cancel.
 func (sp *streamedPair) ended(d *streamedDirection, err error) {
@@ -240,10 +289,11 @@ func (sp *streamedPair) tooLarge(name string, d *streamedDirection, err *stream.
 	_ = sp.proxy.WriteLog("WARN", entry, pairLogOptions(sp.pair)...)
 }
 
-// store queues one stream message for storage. A pair that is not stored,
-// out of scope or skipped, has its messages carried and not stored.
+// store queues one stream message for storage and announces it. A pair
+// that is not stored, out of scope or skipped, has its messages carried and
+// neither stored nor announced.
 func (sp *streamedPair) store(name string, d *streamedDirection, flags *uint8, payload []byte, metadata map[string]any) {
-	if !sp.pair.requestCaptured || sp.proxy.DBWriteChannel == nil {
+	if !sp.announced() {
 		return
 	}
 	id, err := uuid.NewV7()
@@ -256,9 +306,16 @@ func (sp *streamedPair) store(name string, d *streamedDirection, flags *uint8, p
 	if payload == nil {
 		payload = []byte{}
 	}
-	sp.proxy.DBWriteChannel <- &domain.StreamMessage{
+	message := domain.StreamMessage{
 		ID: id, PairID: sp.pair.ID, Direction: name, Framing: string(d.framing), Flags: flags,
 		Payload: payload, CreatedAt: time.Now(), Metadata: metadata,
+	}
+	if sp.proxy.DBWriteChannel != nil {
+		stored := message
+		sp.proxy.DBWriteChannel <- &stored
+	}
+	if sp.proxy.OnStreamMessage != nil {
+		sp.proxy.OnStreamMessage(message)
 	}
 }
 
@@ -277,17 +334,21 @@ func (pair *Pair) deferResponse(response *domain.ProxyResponse) bool {
 
 // finish stores the deferred response capture with each streamed
 // direction's framing, message count, ending and trailers in
-// metadata.streamed. The engine calls it once both directions ended.
+// metadata.streamed, then announces the pair ended. The engine calls it
+// once both directions ended.
 func (sp *streamedPair) finish() {
 	sp.mu.Lock()
 	response := sp.response
 	sp.response = nil
+	started := sp.started
+	ended := domain.StreamedPairEnded{PairID: sp.pair.ID, Directions: make(map[string]domain.StreamedDirection, len(sp.directions))}
 	streamed := make(map[string]any, len(sp.directions))
 	for name, d := range sp.directions {
-		entry := map[string]any{"framing": string(d.framing), "messages": d.messages, "ending": d.ending}
-		if d.ending == "" {
-			entry["ending"] = streamCancelled
+		direction := domain.StreamedDirection{Framing: string(d.framing), Messages: d.messages, Ending: d.ending, ResetCode: d.resetCode}
+		if direction.Ending == "" {
+			direction.Ending = streamCancelled
 		}
+		entry := map[string]any{"framing": direction.Framing, "messages": direction.Messages, "ending": direction.Ending}
 		if d.resetCode != "" {
 			entry["reset_code"] = d.resetCode
 		}
@@ -295,12 +356,18 @@ func (sp *streamedPair) finish() {
 			trailers := make([]map[string]string, len(d.trailers))
 			for i, f := range d.trailers {
 				trailers[i] = map[string]string{"name": f.Name, "value": f.Value}
+				direction.Trailers = append(direction.Trailers, domain.StreamTrailer{Name: f.Name, Value: f.Value})
 			}
 			entry["trailers"] = trailers
 		}
 		streamed[name] = entry
+		ended.Directions[name] = direction
 	}
 	sp.mu.Unlock()
+	proxy := sp.proxy
+	if started && proxy.OnStreamedPairEnded != nil {
+		defer proxy.OnStreamedPairEnded(ended)
+	}
 	if response == nil {
 		return
 	}
@@ -312,7 +379,6 @@ func (sp *streamedPair) finish() {
 	}
 	metadata["streamed"] = streamed
 	response.Metadata = metadata
-	proxy := sp.proxy
 	proxy.DBWriteChannel <- response
 	if proxy.OnResponse != nil {
 		proxy.OnResponse(*response)

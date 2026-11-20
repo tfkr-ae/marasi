@@ -114,6 +114,20 @@ type Proxy struct {
 	// OnWebSocketHandshakeEnded is called with websocket.state failed or
 	// dropped for an upgrade that will not open, once that state is stored.
 	OnWebSocketHandshakeEnded func(requestID uuid.UUID, state string)
+	// Streamed pairs (GLOSSARY) are announced for pairs that are stored,
+	// from the goroutines that carry them; the handlers must not block.
+	// OnStreamedPairStarted is called once the first head naming a
+	// message framing is read.
+	OnStreamedPairStarted func(domain.StreamedPairStarted)
+	// OnStreamMessage is called for each stream message once it is whole,
+	// cut short or too large, in the order of each direction.
+	OnStreamMessage func(domain.StreamMessage)
+	// OnStreamMessageProgress is called while a stream message is still
+	// arriving, at most once per streamProgressInterval per direction.
+	OnStreamMessageProgress func(domain.StreamMessageProgress)
+	// OnStreamedPairEnded is called once every streamed direction of a
+	// pair ended, after its response is stored.
+	OnStreamedPairEnded func(domain.StreamedPairEnded)
 	// OnLaunchStarted is called once a launch is accepted, before it is sent.
 	OnLaunchStarted func(domain.Launch)
 	// OnLaunchFinished is called once per launch when it reaches a terminal state.
