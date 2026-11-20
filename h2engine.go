@@ -14,6 +14,8 @@ import (
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
+
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 // Marasi's HTTP/2 engine (docs/adr/2026-11-19-marasi-owns-its-http2-framing.md):
@@ -157,6 +159,15 @@ type h2Stream struct {
 	// replaced as it ends.
 	heldSince time.Time
 	holding   chan struct{}
+	// clientReset is the code the client reset the stream with, nil
+	// unless it did.
+	clientReset *http2.ErrCode
+
+	// carrying counts the streamed directions still being carried
+	// (h2engine_streamed.go); release runs once they are done.
+	carrying sync.WaitGroup
+	release  []func()
+	pair     *Pair
 }
 
 // h2OrderWait bounds how long a stream waits for the streams the client
@@ -484,6 +495,12 @@ func (h *h2Conn) rstStream(f *http2.RSTStreamFrame) error {
 	switch {
 	case st != nil:
 		code := f.ErrCode
+		h.mu.Lock()
+		st.clientReset = &code
+		h.mu.Unlock()
+		if body := st.request.streamed; body != nil {
+			body.in.close(&streamResetError{code: code})
+		}
 		h.closeStream(st, &code)
 	case idle:
 		return http2.ConnectionError(http2.ErrCodeProtocol)
@@ -512,7 +529,14 @@ func (h *h2Conn) headerBlock() error {
 			h.mu.Unlock()
 			return http2.StreamError{StreamID: id, Code: http2.ErrCodeProtocol}
 		}
-		st.request.trailers, st.ended = fields, true
+		st.ended = true
+		if body := st.request.streamed; body != nil {
+			// A streamed request was dispatched with its head.
+			h.mu.Unlock()
+			body.in.finish(fields)
+			return nil
+		}
+		st.request.trailers = fields
 		h.mu.Unlock()
 		h.dispatch(st)
 		return nil
@@ -546,16 +570,29 @@ func (h *h2Conn) headerBlock() error {
 	h.flow.mu.Lock()
 	st.window.window = h.flow.initial
 	h.flow.mu.Unlock()
+	if framing := h2StreamedFraming(fields, false); framing != stream.FramingNone && !end {
+		// A streamed request goes on with its head; its body follows as
+		// it arrives (h2engine_streamed.go).
+		st.request.streamed = &h2StreamedBody{
+			framing: framing,
+			in: newH2Inbound(h2DefaultWindow, func(n uint32) {
+				h.w.do(func(fr *http2.Framer) error { return fr.WriteWindowUpdate(id, n) })
+			}),
+			resetBy: func(code http2.ErrCode) { h.resetStream(id, code) },
+		}
+	}
 	h.streams[id] = st
 	h.mu.Unlock()
-	if end {
+	if end || st.request.streamed != nil {
 		h.dispatch(st)
 	}
 	return nil
 }
 
-// data adds a DATA frame's payload to its stream's request body. Every
-// window is opened again at once: bodies are read whole.
+// data adds a DATA frame's payload to its stream's request body. The
+// connection's window is opened again at once, and so is the stream's for a
+// body read whole; a streamed body's stream window opens as its reader takes
+// what arrived (h2Inbound).
 func (h *h2Conn) data(f *http2.DataFrame) error {
 	id, n := f.StreamID, f.Header().Length
 	if n > 0 {
@@ -577,6 +614,19 @@ func (h *h2Conn) data(f *http2.DataFrame) error {
 	case st.ended:
 		h.mu.Unlock()
 		return http2.StreamError{StreamID: id, Code: http2.ErrCodeStreamClosed}
+	}
+	if body := st.request.streamed; body != nil {
+		if f.StreamEnded() {
+			st.ended = true
+		}
+		h.mu.Unlock()
+		if !body.in.put(f.Data(), n) {
+			return http2.StreamError{StreamID: id, Code: http2.ErrCodeFlowControl}
+		}
+		if f.StreamEnded() {
+			body.in.finish(nil)
+		}
+		return nil
 	}
 	st.request.body = append(st.request.body, f.Data()...)
 	if f.StreamEnded() {
@@ -615,6 +665,15 @@ func (h *h2Conn) dispatch(st *h2Stream) {
 		defer h.streamsWG.Done()
 		h.carry(st)
 		h.closeStream(st, nil)
+		// A streamed pair is stored once each direction it carries
+		// ended, with how (streamedPair.finish).
+		st.carrying.Wait()
+		for _, release := range st.release {
+			release()
+		}
+		if st.pair != nil && st.pair.stream != nil {
+			st.pair.stream.finish()
+		}
 	}()
 }
 
@@ -659,6 +718,9 @@ func (h *h2Conn) closeStream(st *h2Stream, originCode *http2.ErrCode) {
 	originStream, origin, queued := st.origin, h.origin, st.turn != nil
 	h.mu.Unlock()
 	st.cancel()
+	if body := st.request.streamed; body != nil {
+		body.in.close(errStreamGone)
+	}
 	if queued {
 		h.passTurn(st)
 	}

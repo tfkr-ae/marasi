@@ -40,6 +40,11 @@ type Config struct {
 	// unset means websocket.DefaultMaxMessageSize (64 MiB). A negative value
 	// is rejected when the config loads.
 	WebSocketMaxMessageSize int64 `mapstructure:"websocket_max_message_size"`
+	// StreamMaxMessageSize is the per-message limit of a streamed pair's
+	// stream messages in bytes, set by stream_max_message_size in
+	// marasi_config.yaml. Zero or unset means stream.DefaultMaxMessageSize
+	// (64 MiB). A negative value is rejected when the config loads.
+	StreamMaxMessageSize int64 `mapstructure:"stream_max_message_size"`
 	// Updates is the updates section of marasi_config.yaml.
 	Updates UpdatesConfig `mapstructure:"updates"`
 	// UpstreamProxies is the machine's upstream proxy list, the
@@ -67,6 +72,9 @@ func (u UpdatesConfig) AutoCheckEnabled() bool {
 func (cfg *Config) validate() error {
 	if cfg.WebSocketMaxMessageSize < 0 {
 		return fmt.Errorf("websocket_max_message_size is %d: use 0 for the 64 MiB default or a positive number of bytes", cfg.WebSocketMaxMessageSize)
+	}
+	if cfg.StreamMaxMessageSize < 0 {
+		return fmt.Errorf("stream_max_message_size is %d: use 0 for the 64 MiB default or a positive number of bytes", cfg.StreamMaxMessageSize)
 	}
 	if cfg.Updates.Channel != "" {
 		if _, err := update.ParseChannel(string(cfg.Updates.Channel)); err != nil {

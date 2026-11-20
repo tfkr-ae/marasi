@@ -20,10 +20,12 @@ import (
 	"github.com/tfkr-ae/marasi/internal/conformance"
 	"github.com/tfkr-ae/marasi/internal/conformance/autobahn"
 	"github.com/tfkr-ae/marasi/internal/conformance/connectclient"
+	"github.com/tfkr-ae/marasi/internal/conformance/grpcclient"
 	"github.com/tfkr-ae/marasi/internal/conformance/h1client"
 	"github.com/tfkr-ae/marasi/internal/conformance/h1origin"
 	"github.com/tfkr-ae/marasi/internal/conformance/h2client"
 	"github.com/tfkr-ae/marasi/internal/conformance/h2origin"
+	"github.com/tfkr-ae/marasi/internal/conformance/streamorigin"
 )
 
 // narrowing are the flags that select less than every case. With each of
@@ -94,6 +96,8 @@ func main() {
 			settings.Suites = append(settings.Suites, autobahnSuite)
 		case connectclient.Name:
 			settings.Suites = append(settings.Suites, connectclient.Suite{})
+		case grpcclient.Name:
+			settings.Suites = append(settings.Suites, grpcclient.Suite{})
 		case h1client.Name:
 			settings.Suites = append(settings.Suites, h1client.Suite{})
 		case h1origin.Name:
@@ -102,6 +106,8 @@ func main() {
 			settings.Suites = append(settings.Suites, h2client.Suite{})
 		case h2origin.Name:
 			settings.Suites = append(settings.Suites, h2origin.Suite{})
+		case streamorigin.Name:
+			settings.Suites = append(settings.Suites, streamorigin.Suite{})
 		default:
 			fail(fmt.Errorf("unknown suite %q", name))
 		}

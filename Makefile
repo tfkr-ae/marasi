@@ -26,7 +26,7 @@ STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
 
 # Conformance harness (Docker). See `make help`.
 # The suites that are required checks; autobahn runs on its own.
-SUITES     ?= h1-origin,h1-client,h2-client,h2-origin,connect-client
+SUITES     ?= h1-origin,h1-client,h2-client,h2-origin,stream-origin,grpc-client,connect-client
 CASES      ?= *
 EXCLUDE    ?=
 APPROACHES ?=
@@ -57,10 +57,11 @@ help:
 		'                     and target it lists ran (with CASES, EXCLUDE or APPROACHES set,' \
 		'                     only one that covers a case that ran). SUITES defaults to the' \
 		'                     suites that block a merge: h1-origin,h1-client,h2-client,' \
-		'                     h2-origin,connect-client.' \
+		'                     h2-origin,stream-origin,grpc-client,connect-client.' \
 		'                     Suites: autobahn and connect-client (Marasi on the host),' \
-		'                     h1-origin, h1-client, h2-client and h2-origin (Marasi in a' \
-		'                     Linux container built for LINUX_ARCH, this machine by default).' \
+		'                     h1-origin, h1-client, h2-client, h2-origin, stream-origin and' \
+		'                     grpc-client (Marasi in a Linux container built for LINUX_ARCH,' \
+		'                     this machine by default).' \
 		'                     Narrow with SUITES=autobahn' \
 		'                     RUNS=proxy CASES=3.*,7.9.* EXCLUDE=9.* APPROACHES=connect-tls,' \
 		'                     and for autobahn MODES=fuzzingclient PEERS=strict (runs: proxy' \
@@ -68,8 +69,9 @@ help:
 		'                     tester output. Reports land in dist/conformance/<suite>/<run>/.' \
 		'                     Quick runs: SUITES=h1-origin RUNS=proxy,' \
 		'                     SUITES=h1-client RUNS=proxy CASES=SMUG-CL-TE-BOTH@* (exact IDs run' \
-		'                     only those probes), SUITES=h2-origin RUNS=proxy. CI: the' \
-		'                     conformance workflow (the h1 and h2 jobs are required checks).' \
+		'                     only those probes), SUITES=h2-origin RUNS=proxy,' \
+		'                     SUITES=grpc-client RUNS=proxy CASES=ping_pong@*. CI: the' \
+		'                     conformance workflow (the h1, h2 and streams jobs are required checks).' \
 		'make conformance-baseline  rerun the selected cases with no proxy and merge them' \
 		'                     into the direct baselines' \
 		'make conformance-update-known PHASE=2  run, then rewrite the known entries of' \

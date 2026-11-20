@@ -94,6 +94,9 @@ type Pair struct {
 	// nothing. The h1 engine sends the origin's encoded body while the
 	// view's body still equals the decoded one.
 	decoded *decodedResponse
+	// stream is the pair's streamed state, nil unless a direction's head
+	// named a message framing (stream_carry.go).
+	stream *streamedPair
 
 	// requestState is what the proxy knows of the request before the chain
 	// runs, and what the request chain leaves for the proxy.
