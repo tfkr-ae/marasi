@@ -24,6 +24,9 @@ type h1Conn struct {
 
 	mu      sync.Mutex // guards writes
 	chunked bool       // the head sent declared Transfer-Encoding: chunked
+	// untilClose is set when the head sent was a response's with neither
+	// a length nor chunked coding: its body ends when the connection does.
+	untilClose bool
 	// absolute, on a client sending to a proxy in absolute form, is the
 	// origin's host:port for the request target.
 	absolute string
@@ -56,23 +59,29 @@ func (c *h1Conn) head(fields []h2.Field, _ bool) error {
 		}
 		fmt.Fprintf(&b, "%s %s HTTP/1.1\r\n", pseudo[":method"], target)
 	}
-	chunked := false
+	chunked, length := false, false
 	for _, f := range rest {
 		fmt.Fprintf(&b, "%s: %s\r\n", f.Name, f.Value)
 		if strings.EqualFold(f.Name, "transfer-encoding") && strings.EqualFold(f.Value, "chunked") {
 			chunked = true
+		}
+		if strings.EqualFold(f.Name, "content-length") {
+			length = true
 		}
 	}
 	b.WriteString("\r\n")
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.chunked = chunked
+	_, response := pseudo[":status"]
+	c.untilClose = response && !chunked && !length
 	_, err := io.WriteString(c.conn, b.String())
 	return err
 }
 
 // message sends data as one chunk of a chunked body, ending it with the
-// last chunk when end is set, or as it is otherwise.
+// last chunk when end is set, or as it is otherwise. The last message of a
+// body read until close closes the connection's write side.
 func (c *h1Conn) message(data []byte, end bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -83,8 +92,16 @@ func (c *h1Conn) message(data []byte, end bool) error {
 			out = append(out, "0\r\n\r\n"...)
 		}
 	}
-	_, err := c.conn.Write(out)
-	return err
+	if _, err := c.conn.Write(out); err != nil {
+		return err
+	}
+	if end && c.untilClose {
+		if cw, ok := c.conn.(interface{ CloseWrite() error }); ok {
+			return cw.CloseWrite()
+		}
+		return c.conn.Close()
+	}
+	return nil
 }
 
 // trailers sends the last chunk with a trailer section.
