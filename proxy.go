@@ -151,6 +151,9 @@ type Proxy struct {
 	httpIntercept        atomic.Bool
 	webSocketIntercept   atomic.Bool
 	streamIntercept      atomic.Bool
+	// streamedPairs are the streamed pairs being carried, by pair ID,
+	// for injection and cancel (stream_inject.go).
+	streamedPairs        sync.Map
 	webSocketLifecycleMu sync.RWMutex
 	webSocketSessions    sync.WaitGroup
 	webSocketsClosing    bool

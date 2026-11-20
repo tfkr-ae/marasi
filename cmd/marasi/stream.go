@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,14 +18,21 @@ import (
 func init() {
 	streamMessagesCmd.Flags().StringVar(&streamMessagesLimit, "limit", "200", "Maximum number of items to return, from 1 to 500")
 	streamMessagesCmd.Flags().StringVar(&streamMessagesCursor, "cursor", "", "ID of the last message of the page before, to fetch the next page")
-	streamCmd.AddCommand(streamMessagesCmd, streamGetCmd)
+	streamInjectCmd.Flags().StringVar(&streamInjectDirection, "direction", "", "Direction to inject into: request (toward the origin) or response (toward the client). Required")
+	streamInjectCmd.Flags().StringVar(&streamInjectFile, "file", "", "Read the message's payload from a file. If omitted, use piped stdin or an empty payload")
+	streamInjectCmd.Flags().StringVar(&streamInjectCompress, "compress", "auto", "auto compresses the message as its direction compresses (grpc-encoding, connect-content-encoding), never sends it uncompressed")
+	streamCmd.AddCommand(streamMessagesCmd, streamGetCmd, streamInjectCmd, streamCancelCmd)
 	rootCmd.AddCommand(streamCmd)
 }
 
 var streamCmd = &cobra.Command{
 	Use:   "stream",
-	Short: "Read the stream messages of streamed pairs (gRPC)",
+	Short: "Read, inject and cancel the stream messages of streamed pairs (gRPC)",
 }
+
+var streamInjectDirection string
+var streamInjectFile string
+var streamInjectCompress string
 
 var streamMessagesLimit string
 var streamMessagesCursor string
@@ -117,6 +125,76 @@ var streamGetCmd = &cobra.Command{
 			return fmt.Errorf("decoding stream message: %w", err)
 		}
 		return writeStreamMessageHuman(cmd.OutOrStdout(), message)
+	},
+}
+
+var streamInjectCmd = &cobra.Command{
+	Use:   "inject PAIR_ID",
+	Short: "Inject a stream message into a direction of a running streamed pair",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if streamInjectDirection != "request" && streamInjectDirection != "response" {
+			return errors.New("stream inject --direction must be request or response")
+		}
+		if streamInjectCompress != "auto" && streamInjectCompress != "never" {
+			return errors.New("stream inject --compress must be auto or never")
+		}
+		id, err := parseServiceID(args[0])
+		if err != nil {
+			return err
+		}
+		var compress string
+		if cmd.Flags().Changed("compress") {
+			compress = streamInjectCompress
+		}
+		raw, err := readInjectedBytes(cmd, streamInjectFile, "stream message")
+		if err != nil {
+			return err
+		}
+		payload, err := json.Marshal(struct {
+			Direction string `json:"direction"`
+			Payload   []byte `json:"payload"`
+			Compress  string `json:"compress,omitempty"`
+		}{streamInjectDirection, raw, compress})
+		if err != nil {
+			return fmt.Errorf("encoding stream injection: %w", err)
+		}
+		body, err := runControlRequest(cmd, http.MethodPost, "/stream/"+id+"/inject", "injecting stream message", payload)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		var message streamMessage
+		if err := json.Unmarshal(body, &message); err != nil {
+			return fmt.Errorf("decoding stream message: %w", err)
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "stream message %s injected\n", message.ID)
+		return err
+	},
+}
+
+var streamCancelCmd = &cobra.Command{
+	Use:   "cancel PAIR_ID",
+	Short: "Cancel a running streamed pair on both legs",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		id, err := parseServiceID(args[0])
+		if err != nil {
+			return err
+		}
+		body, err := runControlRequest(cmd, http.MethodPost, "/stream/"+id+"/cancel", "cancelling streamed pair", nil)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "stream %s cancelled\n", id)
+		return err
 	},
 }
 

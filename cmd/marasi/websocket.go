@@ -101,30 +101,9 @@ var websocketInjectCmd = &cobra.Command{
 		if cmd.Flags().Changed("compress") {
 			compress = websocketInjectCompress
 		}
-		var raw []byte
-		var err error
-		if cmd.Flags().Changed("file") {
-			raw, err = os.ReadFile(websocketInjectFile)
-			if err != nil {
-				return fmt.Errorf("reading websocket file: %w", err)
-			}
-		} else {
-			stdin := cmd.InOrStdin()
-			if file, ok := stdin.(*os.File); ok {
-				info, err := file.Stat()
-				if err != nil {
-					return fmt.Errorf("checking stdin: %w", err)
-				}
-				if info.Mode()&os.ModeCharDevice != 0 {
-					stdin = nil
-				}
-			}
-			if stdin != nil {
-				raw, err = io.ReadAll(stdin)
-				if err != nil {
-					return fmt.Errorf("reading websocket from stdin: %w", err)
-				}
-			}
+		raw, err := readInjectedBytes(cmd, websocketInjectFile, "websocket")
+		if err != nil {
+			return err
 		}
 		payload, err := json.Marshal(struct {
 			Direction string `json:"direction"`
@@ -383,4 +362,31 @@ func writeWebSocketConnectionHuman(body []byte, stdout io.Writer) error {
 		strings.Join(connection.RemovedExtensions, ", "),
 	)
 	return err
+}
+
+// readInjectedBytes reads the bytes to inject: the file when --file is
+// set, else piped stdin, else none, so an open terminal is not read.
+func readInjectedBytes(cmd *cobra.Command, file, what string) ([]byte, error) {
+	if cmd.Flags().Changed("file") {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s file: %w", what, err)
+		}
+		return raw, nil
+	}
+	stdin := cmd.InOrStdin()
+	if f, ok := stdin.(*os.File); ok {
+		info, err := f.Stat()
+		if err != nil {
+			return nil, fmt.Errorf("checking stdin: %w", err)
+		}
+		if info.Mode()&os.ModeCharDevice != 0 {
+			return nil, nil
+		}
+	}
+	raw, err := io.ReadAll(stdin)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s from stdin: %w", what, err)
+	}
+	return raw, nil
 }
