@@ -244,6 +244,17 @@ func processStreamMessageExtensions(proxy *Proxy, pair *Pair, message *stream.Li
 	}
 }
 
+// shouldInterceptTrailers reports whether Checkpoint holds a streamed
+// direction's trailers: the stream_intercept switch is on and the
+// checkpoint extension, when there is one, is enabled.
+func shouldInterceptTrailers(proxy *Proxy) bool {
+	checkpoint, ok := proxy.GetExtension("checkpoint")
+	if ok && (checkpoint.Data == nil || !checkpoint.MetadataSnapshot().Enabled) {
+		return false
+	}
+	return proxy.GetStreamIntercept()
+}
+
 // shouldInterceptStreamMessage reports whether Checkpoint holds a stream
 // message: the stream_intercept switch is on, or checkpoint's
 // interceptStreamMessage returns true. A disabled checkpoint holds none,

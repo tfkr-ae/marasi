@@ -107,7 +107,7 @@ The intercept capability of a service instance. It is not stored and has no id.
 _Avoid_: intercept as the product name, using checkpoint as a synonym for the checkpoint extension
 
 **Checkpoint item**:
-An in-flight request, response, or WebSocket message held by Checkpoint. Identified by the request/response pair UUID or the WebSocket message UUID. Not stored in the open project.
+An in-flight request, response, WebSocket message, stream message, or trailer block of a streamed pair held by Checkpoint. Identified by the request/response pair UUID, or by the WebSocket message's, stream message's or trailer block's own UUID. Not stored in the open project.
 _Avoid_: intercepted item, intercept, paused traffic, held flow
 
 **Scope**:

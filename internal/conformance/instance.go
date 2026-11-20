@@ -311,8 +311,9 @@ var (
 // Resolver forwards every held Checkpoint item through the control API.
 // With Edit set, each forward carries the original content as an edit,
 // taking the same path as a real edit: the raw bytes of an HTTP request or
-// response, the payload and opcode of a WebSocket message, the payload of a
-// stream message (which keeps its length, so a declared length allows it).
+// response or of a trailer block, the payload and opcode of a WebSocket
+// message, the payload of a stream message (which keeps its length, so a
+// declared length allows it).
 type Resolver struct {
 	Edit      bool
 	Forwarded atomic.Int64 // items forwarded
@@ -410,8 +411,9 @@ func streamHolds(ctx context.Context, client *service.Client, wake chan<- struct
 	}
 }
 
-// heldItem is a held Checkpoint item: Raw for an HTTP request or response,
-// Payload and Opcode for a WebSocket message, Payload for a stream message.
+// heldItem is a held Checkpoint item: Raw for an HTTP request or response
+// or a trailer block, Payload and Opcode for a WebSocket message, Payload
+// for a stream message.
 type heldItem struct {
 	ID      string `json:"id"`
 	Type    string `json:"type"`

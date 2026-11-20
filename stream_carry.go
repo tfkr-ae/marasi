@@ -226,6 +226,14 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 		switch {
 		case errors.Is(readErr, io.EOF):
 			trailers := src.trailers()
+			if len(trailers) > 0 && shouldInterceptTrailers(sp.proxy) {
+				var abandoned bool
+				if trailers, abandoned = sp.holdTrailers(name, d, trailers, src.cutOff()); abandoned {
+					sp.end(d, streamCancelled, 0)
+					sink.reset(http2.ErrCodeCancel)
+					return
+				}
+			}
 			sp.mu.Lock()
 			d.trailers = trailers
 			sp.mu.Unlock()

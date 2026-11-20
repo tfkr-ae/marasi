@@ -15,29 +15,35 @@ const (
 	CheckpointTypeWebSocket = "websocket"
 	// CheckpointTypeStream is a held stream message of a streamed pair.
 	CheckpointTypeStream = "stream"
+	// CheckpointTypeTrailer is the held trailer block of a streamed pair's
+	// direction: its HTTP/2 trailers, or a gRPC-Web trailers frame.
+	CheckpointTypeTrailer = "trailer"
 )
 
-// CheckpointItem is an in-flight request, response, WebSocket message or
-// stream message held by Checkpoint.
+// CheckpointItem is an in-flight request, response, WebSocket message,
+// stream message or trailer block held by Checkpoint.
 type CheckpointItem struct {
-	// ID is the request/response pair UUID, or the WebSocket or stream
-	// message UUID.
+	// ID is the request/response pair UUID, or the WebSocket message,
+	// stream message or trailer block UUID.
 	ID uuid.UUID
-	// Type is request, response, websocket or stream.
+	// Type is request, response, websocket, stream or trailer.
 	Type string
-	// Raw is the dumped HTTP request or response bytes.
+	// Raw is the dumped HTTP request or response bytes, or a trailer
+	// block: one "name: value" line per field, each ending in CRLF.
 	Raw []byte
 	// Payload is the WebSocket frame payload, or a stream message's payload
 	// without its envelope, as it is on the wire.
 	Payload []byte
 	// Opcode is the WebSocket frame opcode.
 	Opcode int
-	// Direction is the WebSocket frame direction, or a stream message's:
-	// request or response.
+	// Direction is the WebSocket frame direction, or a stream message's or
+	// trailer block's: request or response.
 	Direction string
-	// PairID is the streamed pair that carries a stream message.
+	// PairID is the streamed pair that carries a stream message or trailer
+	// block.
 	PairID uuid.UUID
-	// Framing is a stream message's message framing, such as grpc.
+	// Framing is a stream message's or trailer block's message framing,
+	// such as grpc.
 	Framing string
 	// Flags is a stream message's envelope flags byte, nil for a framing
 	// without one.

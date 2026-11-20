@@ -18,7 +18,7 @@ var checkpointForwardFile string
 var checkpointInterceptResponse bool
 
 func init() {
-	checkpointListCmd.Flags().StringVar(&checkpointKind, "kind", "", "Keep only http, websocket or stream items")
+	checkpointListCmd.Flags().StringVar(&checkpointKind, "kind", "", "Keep only http, websocket, stream or trailer items")
 	checkpointForwardCmd.Flags().StringVar(&checkpointForwardFile, "file", "", "Read edited bytes from a file. If omitted, use piped stdin. If stdin is not piped, forward the original bytes")
 	checkpointForwardCmd.Flags().BoolVar(&checkpointInterceptResponse, "intercept-response", false, "Hold the matching response")
 	checkpointCmd.AddCommand(checkpointListCmd, checkpointGetCmd, checkpointForwardCmd, checkpointDropCmd, checkpointInterceptCmd, checkpointWebsocketInterceptCmd, checkpointStreamInterceptCmd)
@@ -38,9 +38,9 @@ var checkpointListCmd = &cobra.Command{
 		path := "/checkpoint"
 		if cmd.Flags().Changed("kind") {
 			switch checkpointKind {
-			case "http", "websocket", "stream":
+			case "http", "websocket", "stream", "trailer":
 			default:
-				return errors.New("checkpoint list --kind must be http, websocket or stream")
+				return errors.New("checkpoint list --kind must be http, websocket, stream or trailer")
 			}
 			path += "?" + url.Values{"kind": {checkpointKind}}.Encode()
 		}

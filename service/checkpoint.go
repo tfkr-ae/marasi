@@ -51,6 +51,19 @@ type checkpointStreamItem struct {
 	InterceptedAt time.Time      `json:"intercepted_at"`
 }
 
+// checkpointTrailerItem is a held trailer block of a streamed pair's
+// direction, edited through raw.
+type checkpointTrailerItem struct {
+	ID            uuid.UUID      `json:"id"`
+	Type          string         `json:"type"`
+	Raw           []byte         `json:"raw"`
+	Direction     string         `json:"direction"`
+	Framing       string         `json:"framing"`
+	PairID        uuid.UUID      `json:"pair_id"`
+	Metadata      map[string]any `json:"metadata"`
+	InterceptedAt time.Time      `json:"intercepted_at"`
+}
+
 type checkpointList struct {
 	Items              []any `json:"items"`
 	Intercept          bool  `json:"intercept"`
@@ -254,7 +267,7 @@ func serveCheckpointFlag(w http.ResponseWriter, r *http.Request, proxy *marasi.P
 func parseCheckpointKind(r *http.Request) (string, error) {
 	kind := r.URL.Query().Get("kind")
 	switch kind {
-	case "", "http", "websocket", "stream":
+	case "", "http", "websocket", "stream", "trailer":
 		return kind, nil
 	default:
 		return "", errInvalidCheckpointRequest
@@ -278,7 +291,7 @@ func getCheckpointList(proxy *marasi.Proxy, kind string) checkpointList {
 			if item.Type != domain.CheckpointTypeRequest && item.Type != domain.CheckpointTypeResponse {
 				continue
 			}
-		case "websocket", "stream":
+		case "websocket", "stream", "trailer":
 			if item.Type != kind {
 				continue
 			}
@@ -294,6 +307,22 @@ func getCheckpointList(proxy *marasi.Proxy, kind string) checkpointList {
 }
 
 func checkpointItemFromDomain(item domain.CheckpointItem) any {
+	if item.Type == domain.CheckpointTypeTrailer {
+		metadata := item.Metadata
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
+		return checkpointTrailerItem{
+			ID:            item.ID,
+			Type:          item.Type,
+			Raw:           item.Raw,
+			Direction:     item.Direction,
+			Framing:       item.Framing,
+			PairID:        item.PairID,
+			Metadata:      metadata,
+			InterceptedAt: item.InterceptedAt,
+		}
+	}
 	if item.Type == domain.CheckpointTypeStream {
 		metadata := item.Metadata
 		if metadata == nil {
@@ -349,7 +378,7 @@ func checkpointResolvedEventFromDomain(item domain.CheckpointItem, reason checkp
 	switch item.Type {
 	case domain.CheckpointTypeWebSocket:
 		event.RequestID = &item.RequestID
-	case domain.CheckpointTypeStream:
+	case domain.CheckpointTypeStream, domain.CheckpointTypeTrailer:
 		event.RequestID = &item.PairID
 	}
 	return event
@@ -393,6 +422,15 @@ func decodeCheckpointForward(r *http.Request, itemType string) (marasi.Checkpoin
 			default:
 				return marasi.CheckpointForward{}, errInvalidCheckpointRequest
 			}
+		case domain.CheckpointTypeTrailer:
+			if name != "raw" {
+				return marasi.CheckpointForward{}, errInvalidCheckpointRequest
+			}
+			value, err := decodeCheckpointBytes(raw)
+			if err != nil {
+				return marasi.CheckpointForward{}, err
+			}
+			fwd.Raw = &value
 		case domain.CheckpointTypeStream:
 			if name != "payload" {
 				return marasi.CheckpointForward{}, errInvalidCheckpointRequest
@@ -494,7 +532,8 @@ func writeCheckpointForwardError(w http.ResponseWriter, r *http.Request, err err
 		errors.Is(err, marasi.ErrRebuildRequest),
 		errors.Is(err, marasi.ErrRebuildResponse),
 		errors.Is(err, marasi.ErrStreamLengthDeclared),
-		errors.Is(err, marasi.ErrStreamReadOnly):
+		errors.Is(err, marasi.ErrStreamReadOnly),
+		errors.Is(err, marasi.ErrTrailerEdit):
 		writeRefusal(w, r, http.StatusBadRequest, "invalid_checkpoint_request", err.Error())
 	default:
 		writeCheckpointError(w, r, http.StatusInternalServerError, "internal_server_error")

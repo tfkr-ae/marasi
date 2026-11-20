@@ -53,6 +53,15 @@ func Compressed(framing Framing, flags byte) bool {
 	return framing.Enveloped() && flags&flagCompressed != 0
 }
 
+// flagTrailers is the envelope flag bit of a gRPC-Web trailers frame.
+const flagTrailers = 0x80
+
+// IsTrailersFrame reports whether a message with flags is a gRPC-Web
+// trailers frame, whose payload is the call's trailer block.
+func IsTrailersFrame(framing Framing, flags byte) bool {
+	return framing == FramingGRPCWeb && flags&flagTrailers != 0
+}
+
 // Uncompressed is flags with the compressed flag cleared: the flags of an
 // edited message, which goes out uncompressed.
 func Uncompressed(flags byte) byte {

@@ -98,6 +98,10 @@ func TestH2Engine_CheckpointStreamMessages(t *testing.T) {
 			t.Fatal(err)
 		}
 		call.upstream.headers(call.id, true, "grpc-status", "0")
+		trailers := awaitItems(t, call.proxy, domain.CheckpointTypeTrailer, 1)[0]
+		if err := call.proxy.ForwardCheckpoint(trailers.ID, CheckpointForward{}); err != nil {
+			t.Fatal(err)
+		}
 
 		req, _ := streamedResponse(t, call.captured)
 		messages := storedMessages(t, call.proxy, req.ID)

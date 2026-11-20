@@ -14,7 +14,7 @@ Users hold proxied HTTP messages (and optionally WebSocket messages) on a runnin
 - Forward or drop several items in one call with `checkpoint forward ID ID…` or `checkpoint drop ID ID…`.
 - Toggle HTTP intercept with `checkpoint intercept on` or `off`.
 - Toggle WebSocket intercept with `checkpoint websocket-intercept on` or `off`.
-- Toggle stream message intercept with `checkpoint stream-intercept on` or `off`; held stream messages list with `checkpoint list --kind stream`.
+- Toggle stream message intercept with `checkpoint stream-intercept on` or `off`; held stream messages list with `checkpoint list --kind stream`, and with the switch on a streamed pair's trailers (and a gRPC-Web trailers frame) are held as `trailer` items, listed with `checkpoint list --kind trailer`.
 - Choose human-readable or `--json` output.
 
 ## How to get to it (user POV)

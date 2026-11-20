@@ -203,6 +203,45 @@ func (f *streamCheckpointFixture) held(t *testing.T, n int) []streamItem {
 	}
 }
 
+// trailerItem is a trailer item of GET /checkpoint.
+type trailerItem struct {
+	ID            uuid.UUID      `json:"id"`
+	Type          string         `json:"type"`
+	Raw           []byte         `json:"raw"`
+	Direction     string         `json:"direction"`
+	Framing       string         `json:"framing"`
+	PairID        uuid.UUID      `json:"pair_id"`
+	Metadata      map[string]any `json:"metadata"`
+	InterceptedAt time.Time      `json:"intercepted_at"`
+}
+
+// heldTrailers waits until n trailer items are held, and returns them.
+func (f *streamCheckpointFixture) heldTrailers(t *testing.T, n int) []trailerItem {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		response, err := http.Get(f.control.URL + "/checkpoint?kind=trailer")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var list struct {
+			Items []trailerItem `json:"items"`
+		}
+		err = json.NewDecoder(response.Body).Decode(&list)
+		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(list.Items) == n {
+			return list.Items
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("held trailer items\nwanted:\n%d\ngot:\n%+v", n, list.Items)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // receive waits for the origin to receive a message.
 func (f *streamCheckpointFixture) receive(t *testing.T) []byte {
 	t.Helper()
@@ -256,6 +295,10 @@ func TestCheckpointStreamItems(t *testing.T) {
 			t.Fatalf("forwarding the reply in bulk\nwanted:\n200\ngot:\n%d %s", status, body)
 		}
 		sender.Close()
+		trailers := f.heldTrailers(t, 1)[0]
+		if status, body := f.post(t, "/checkpoint/"+trailers.ID.String()+"/forward", `{}`); status != http.StatusOK {
+			t.Fatalf("forwarding the trailers\nwanted:\n200\ngot:\n%d %s", status, body)
+		}
 		if data, _ := io.ReadAll(response.Body); !bytes.Equal(data, grpcFrame([]byte("reply"))) {
 			t.Fatalf("the client's response body\nwanted:\nthe reply\ngot:\n%q", data)
 		}
@@ -359,6 +402,38 @@ func TestCheckpointStreamItems(t *testing.T) {
 		}
 		if got := f.receive(t); string(got) != "xyz" {
 			t.Fatalf("the origin's message\nwanted:\n%q\ngot:\n%q", "xyz", got)
+		}
+	})
+
+	t.Run("should list a held trailer block under kind trailer, refuse an edit that does not parse, and send an edited grpc-status", func(t *testing.T) {
+		f := newStreamCheckpointFixture(t)
+		f.proxy.SetStreamIntercept(true)
+		responses := f.call(t, bytes.NewReader(nil), -1)
+		response := <-responses
+		item := f.heldTrailers(t, 1)[0]
+		if item.Type != "trailer" || string(item.Raw) != "grpc-status: 0\r\n" || item.Direction != "response" || item.Framing != "grpc" ||
+			item.PairID == uuid.Nil || item.InterceptedAt.IsZero() {
+			t.Fatalf("the held trailer item\nwanted:\nthe response's grpc-status 0, grpc, its pair, a hold time\ngot:\n%+v %q", item, item.Raw)
+		}
+		if streams := f.held(t, 0); len(streams) != 0 {
+			t.Fatalf("stream items\nwanted:\nnone\ngot:\n%+v", streams)
+		}
+
+		bad := fmt.Sprintf(`{"raw":"%s"}`, base64.StdEncoding.EncodeToString([]byte("grpc-status 7\r\n")))
+		if status, body := f.post(t, "/checkpoint/"+item.ID.String()+"/forward", bad); status != http.StatusBadRequest || !bytes.Contains([]byte(body), []byte("invalid_checkpoint_request")) {
+			t.Fatalf("an edit that does not parse\nwanted:\n400 invalid_checkpoint_request\ngot:\n%d %s", status, body)
+		}
+		if status, body := f.post(t, "/checkpoint/"+item.ID.String()+"/forward", `{"payload":"eA=="}`); status != http.StatusBadRequest {
+			t.Fatalf("a payload edit\nwanted:\n400\ngot:\n%d %s", status, body)
+		}
+		edit := fmt.Sprintf(`{"raw":"%s"}`, base64.StdEncoding.EncodeToString([]byte("grpc-status: 7\r\ngrpc-message: denied\r\n")))
+		if status, body := f.post(t, "/checkpoint/"+item.ID.String()+"/forward", edit); status != http.StatusOK {
+			t.Fatalf("forwarding the edit\nwanted:\n200\ngot:\n%d %s", status, body)
+		}
+		_, _ = io.ReadAll(response.Body)
+		response.Body.Close()
+		if status := response.Trailer.Get("Grpc-Status"); status != "7" || response.Trailer.Get("Grpc-Message") != "denied" {
+			t.Fatalf("the client's trailers\nwanted:\ngrpc-status 7, grpc-message denied\ngot:\n%v", response.Trailer)
 		}
 	})
 }

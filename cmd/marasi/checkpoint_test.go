@@ -86,6 +86,16 @@ func TestCheckpointCommands(t *testing.T) {
 			t.Fatalf("\nwanted:\nGET kind=stream\ngot:\n%s %s?%s, stdout %q, stderr %q, error %v", got.Method, got.Path, got.RawQuery, stdout, stderr, err)
 		}
 
+		trailerID := "019a0000-0000-7000-8000-000000000004"
+		trailerList := `{"items":[{"id":"` + trailerID + `","type":"trailer","raw":"` + base64.StdEncoding.EncodeToString([]byte("grpc-status: 0\r\n")) + `","direction":"response","framing":"grpc","pair_id":"019a0000-0000-7000-8000-000000000001","metadata":{},"intercepted_at":"2026-11-20T10:00:00Z"}],"intercept":false,"websocket_intercept":false,"stream_intercept":true}` + "\n"
+		sent = startCannedControlAPI(t, configDir, "kind-trailer", http.StatusOK, trailerList)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "kind-trailer", "checkpoint", "list", "--kind", "trailer")
+		got = sent.snapshot()
+		trailerHeader := "ID                                    TYPE     INTERCEPTED AT\n"
+		if err != nil || stderr != "" || got.RawQuery != "kind=trailer" || stdout != trailerHeader+trailerID+"  trailer  2026-11-20T10:00:00Z\n"+trailerHeader {
+			t.Fatalf("\nwanted:\nGET kind=trailer, the trailer item\ngot:\n%s %s?%s, stdout %q, stderr %q, error %v", got.Method, got.Path, got.RawQuery, stdout, stderr, err)
+		}
+
 		sent = startCannedControlAPI(t, configDir, "kind-bad", http.StatusOK, listBody)
 		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "kind-bad", "checkpoint", "list", "--kind", "other")
 		got = sent.snapshot()
