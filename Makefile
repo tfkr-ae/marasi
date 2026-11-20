@@ -25,8 +25,8 @@ STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
 .PHONY: build all test lint check clean install uninstall help conformance conformance-baseline conformance-update-known autobahn autobahn-baseline $(TARGETS)
 
 # Conformance harness (Docker). See `make help`.
-# The four HTTP suites, all required checks; autobahn runs on its own.
-SUITES     ?= h1-origin,h1-client,h2-client,h2-origin,grpc-client
+# The HTTP suites, all required checks; autobahn runs on its own.
+SUITES     ?= h1-origin,h1-client,h2-client,h2-origin,stream-origin,grpc-client
 CASES      ?= *
 EXCLUDE    ?=
 APPROACHES ?=
@@ -56,9 +56,9 @@ help:
 		'                     or a stale entry: one that matched nothing although a run' \
 		'                     and target it lists ran (with CASES, EXCLUDE or APPROACHES set,' \
 		'                     only one that covers a case that ran). SUITES defaults to the' \
-		'                     HTTP suites h1-origin,h1-client,h2-client,h2-origin,grpc-client.' \
+		'                     HTTP suites h1-origin,h1-client,h2-client,h2-origin,stream-origin,grpc-client.' \
 		'                     Suites: autobahn (Marasi on the host), h1-origin, h1-client,' \
-		'                     h2-client, h2-origin and grpc-client (Marasi in a Linux container built for' \
+		'                     h2-client, h2-origin, stream-origin and grpc-client (Marasi in a Linux container built for' \
 		'                     LINUX_ARCH, this machine by default).' \
 		'                     Narrow with SUITES=autobahn' \
 		'                     RUNS=proxy CASES=3.*,7.9.* EXCLUDE=9.* APPROACHES=connect-tls,' \
@@ -69,7 +69,7 @@ help:
 		'                     SUITES=h1-client RUNS=proxy CASES=SMUG-CL-TE-BOTH@* (exact IDs run' \
 		'                     only those probes), SUITES=h2-origin RUNS=proxy,' \
 		'                     SUITES=grpc-client RUNS=proxy CASES=ping_pong@*. CI: the' \
-		'                     conformance workflow (the h1, h2 and grpc jobs are required checks).' \
+		'                     conformance workflow (the h1, h2 and streams jobs are required checks).' \
 		'make conformance-baseline  rerun the selected cases with no proxy and merge them' \
 		'                     into the direct baselines' \
 		'make conformance-update-known PHASE=2  run, then rewrite the known entries of' \
