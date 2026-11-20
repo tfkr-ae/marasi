@@ -1,0 +1,210 @@
+[
+  {
+    "cases": "cancel_after_first_response@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "error",
+    "kind": "known",
+    "reason": "cancel_after_first_response sends one request on a full-duplex call and waits for its response before it cancels; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"\", got \"no verdict in 30s\")",
+    "phase": 6
+  },
+  {
+    "cases": "cancel_after_first_response@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "streams[0].data",
+    "kind": "known",
+    "reason": "cancel_after_first_response sends one request on a full-duplex call and waits for its response before it cancels; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"31428 bytes, sha256 ed5c3cc9d3b754fa4581b22e0ac890be5be3d4368ebd2d3bfd487d045a6fde0e\", got \"\\\"\\\"\")",
+    "phase": 6
+  },
+  {
+    "cases": "cancel_after_first_response@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "streams[0].headers.count",
+    "kind": "known",
+    "reason": "cancel_after_first_response sends one request on a full-duplex call and waits for its response before it cancels; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"1\", got \"0\")",
+    "phase": 6
+  },
+  {
+    "cases": "cancel_after_first_response@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "verdict",
+    "kind": "known",
+    "reason": "cancel_after_first_response sends one request on a full-duplex call and waits for its response before it cancels; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"passed\", got \"timed-out\")",
+    "phase": 6
+  },
+  {
+    "cases": "custom_metadata@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "error",
+    "kind": "known",
+    "reason": "custom_metadata's second call is full duplex: it sends one request and waits for its response before it half-closes; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"\", got \"no verdict in 30s\")",
+    "phase": 6
+  },
+  {
+    "cases": "custom_metadata@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "streams[1].data",
+    "kind": "known",
+    "reason": "custom_metadata's second call is full duplex: it sends one request and waits for its response before it half-closes; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"\\\"\\\\x00\\\\x00\\\\x00\\\\x00\\\\x05\\\\n\\\\x03\\\\x12\\\\x01\\\\x00\\\"\", got \"\\\"\\\"\")",
+    "phase": 6
+  },
+  {
+    "cases": "custom_metadata@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "streams[1].end-stream",
+    "kind": "known",
+    "reason": "custom_metadata's second call is full duplex: it sends one request and waits for its response before it half-closes; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"trailers\", got \"\")",
+    "phase": 6
+  },
+  {
+    "cases": "custom_metadata@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "streams[1].headers.count",
+    "kind": "known",
+    "reason": "custom_metadata's second call is full duplex: it sends one request and waits for its response before it half-closes; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"1\", got \"0\")",
+    "phase": 6
+  },
+  {
+    "cases": "custom_metadata@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "streams[1].trailers",
+    "kind": "known",
+    "reason": "custom_metadata's second call is full duplex: it sends one request and waits for its response before it half-closes; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"x-grpc-test-echo-trailing-bin: CgsKCwoL\\ngrpc-status: 0\", got \"\")",
+    "phase": 6
+  },
+  {
+    "cases": "custom_metadata@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "verdict",
+    "kind": "known",
+    "reason": "custom_metadata's second call is full duplex: it sends one request and waits for its response before it half-closes; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"passed\", got \"timed-out\")",
+    "phase": 6
+  },
+  {
+    "cases": "ping_pong@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "error",
+    "kind": "known",
+    "reason": "ping_pong is a full-duplex call that sends each request only after the response to the last; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"\", got \"no verdict in 30s\")",
+    "phase": 6
+  },
+  {
+    "cases": "ping_pong@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "streams[0].data",
+    "kind": "known",
+    "reason": "ping_pong is a full-duplex call that sends each request only after the response to the last; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"93102 bytes, sha256 c86ce4df50a4d3b54536d40f3fa1caabc79799125a98973670ba2ac3ab01dd85\", got \"\\\"\\\"\")",
+    "phase": 6
+  },
+  {
+    "cases": "ping_pong@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "streams[0].end-stream",
+    "kind": "known",
+    "reason": "ping_pong is a full-duplex call that sends each request only after the response to the last; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"trailers\", got \"\")",
+    "phase": 6
+  },
+  {
+    "cases": "ping_pong@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "streams[0].headers.count",
+    "kind": "known",
+    "reason": "ping_pong is a full-duplex call that sends each request only after the response to the last; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"1\", got \"0\")",
+    "phase": 6
+  },
+  {
+    "cases": "ping_pong@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "streams[0].trailers",
+    "kind": "known",
+    "reason": "ping_pong is a full-duplex call that sends each request only after the response to the last; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"grpc-status: 0\", got \"\")",
+    "phase": 6
+  },
+  {
+    "cases": "ping_pong@connect-tls",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "verdict",
+    "kind": "known",
+    "reason": "ping_pong is a full-duplex call that sends each request only after the response to the last; Marasi reads a request body whole before it forwards it, so the server's response never comes and the client times out. Streamed pairs (Phase 6) carry each message as it arrives (was: measured by conformance-update-known: baseline \"passed\", got \"timed-out\")",
+    "phase": 6
+  }
+]

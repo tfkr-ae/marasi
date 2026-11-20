@@ -57,7 +57,7 @@ The source requires Go 1.26 or later. These commands run from the repository roo
 | `make windows-amd64` | Builds `dist/marasi-windows-amd64.exe`. |
 | `make all` | Builds the targets listed by `TARGETS` in [Makefile](Makefile). |
 | `make test` | Runs `go test ./...`. |
-| `make conformance` | Runs the conformance suites in Docker through Marasi and scores each case against its committed direct baseline and deviations file. With no `SUITES`, it runs the four HTTP suites, `h1-origin`, `h1-client`, `h2-client` and `h2-origin`, which all block a merge. It exits non-zero on a new deviation, a known deviation that went away, or a stale deviations entry. |
+| `make conformance` | Runs the conformance suites in Docker through Marasi and scores each case against its committed direct baseline and deviations file. With no `SUITES`, it runs the HTTP suites, `h1-origin`, `h1-client`, `h2-client`, `h2-origin` and `grpc-client`, which all block a merge. It exits non-zero on a new deviation, a known deviation that went away, or a stale deviations entry. |
 | `make conformance-baseline` | Runs the selected cases with no proxy and merges them into the direct baselines. For `h1-origin` it records each case twice and leaves out, with an error, a case whose two recordings differ. |
 | `make conformance-update-known PHASE=<n>` | Runs the selected cases, then rewrites the known entries in `deviations.json` and the suite's `score.json`. |
 | `make autobahn`, `make autobahn-baseline` | `make conformance` and `make conformance-baseline` with `SUITES=autobahn`. |
@@ -121,6 +121,26 @@ suites:
   (`got`), so a case that fails in another way is new. It runs all four
   conformance runs (`make conformance SUITES=h2-client RUNS=proxy` for a
   quick one).
+- `grpc-client` scores gRPC through Marasi with grpc-go's interop client
+  (`google.golang.org/grpc/interop/client`, installed with `go install` at a
+  pinned version so it never enters `go.mod`) against grpc-java's interop
+  server, `io.grpc:grpc-interop-testing` at a pinned version in an image
+  built on base images pinned by digest. A Java server keeps quirks that
+  grpc-go and Marasi share through `x/net/http2` from cancelling out.
+  grpc-go's client has no compressed cases, so grpc-java's interop client
+  runs those. The client speaks h2 with prior knowledge to the shim, and the
+  shim is the TLS client toward the server (`connect-tls`, ALPN `h2`),
+  trusting the harness CA directly and only Marasi's CA through Marasi. A
+  case's recording is the client's verdict (`timed-out` when it gives none
+  within 30 seconds, as a call that deadlocks behind a buffering proxy does)
+  plus every stream as the client received it, decoded from the shim's
+  plaintext capture as `h2-origin` records a stream, without GOAWAY, so a
+  proxy that replaces a status or message differs even when the client
+  passes. grpc-java's server has no `expect_compressed` check, so the client
+  compressed cases fail directly too, as in grpc's own interop matrix. The
+  first run builds the grpc-java image, which takes a minute or two. It runs
+  all four conformance runs (`make conformance SUITES=grpc-client RUNS=proxy`
+  for a quick one).
 - `h2-origin` sends each h2 origin fixture case's requests as HTTP/2 streams
   inside `CONNECT` over TLS (`connect-tls`), offering ALPN `h2` then
   `http/1.1`, to fixtures that script frames and serve ALPN `h2`. Its
@@ -235,7 +255,7 @@ make autobahn EXCLUDE='9.*,12.*,13.*'
 ```
 
 `make conformance` with no `SUITES` runs `h1-origin`, `h1-client`,
-`h2-client` and `h2-origin`, the suites that block a merge. `h1-client` runs only
+`h2-client`, `h2-origin` and `grpc-client`, the suites that block a merge. `h1-client` runs only
 the Http11Probe tests that `CASES` names exactly (`ID@*` covers every
 approach); with a glob in the ID it runs all 213 tests and narrows afterwards.
 A narrowed run (`RUNS`, `CASES` and the like) checks only the entries its cases
@@ -258,8 +278,8 @@ suite. A suite runs when the pull request changes Marasi on the HTTP path (root
 the workflow, or that suite's own package and baselines. A change only to docs,
 reports, Armory, Compass, wordlists or another suite skips it.
 
-- `h1-client (<run>)`, `h1-origin (<run>)`, `h2-client (<run>)` and
-  `h2-origin (<run>)`, one job for each of `proxy`, `checkpoint-forward`,
+- `h1-client (<run>)`, `h1-origin (<run>)`, `h2-client (<run>)`,
+  `h2-origin (<run>)` and `grpc-client (<run>)`, one job for each of `proxy`, `checkpoint-forward`,
   `checkpoint-edit` and `extension`, are the required checks. When none of a
   suite's paths changed they still run, skip their steps and pass, because a
   skipped matrix job would never report under its check name.

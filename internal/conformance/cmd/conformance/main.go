@@ -19,6 +19,7 @@ import (
 
 	"github.com/tfkr-ae/marasi/internal/conformance"
 	"github.com/tfkr-ae/marasi/internal/conformance/autobahn"
+	"github.com/tfkr-ae/marasi/internal/conformance/grpcclient"
 	"github.com/tfkr-ae/marasi/internal/conformance/h1client"
 	"github.com/tfkr-ae/marasi/internal/conformance/h1origin"
 	"github.com/tfkr-ae/marasi/internal/conformance/h2client"
@@ -91,6 +92,8 @@ func main() {
 		switch name {
 		case autobahn.Name:
 			settings.Suites = append(settings.Suites, autobahnSuite)
+		case grpcclient.Name:
+			settings.Suites = append(settings.Suites, grpcclient.Suite{})
 		case h1client.Name:
 			settings.Suites = append(settings.Suites, h1client.Suite{})
 		case h1origin.Name:
