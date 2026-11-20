@@ -15,11 +15,15 @@ import (
 
 var checkpointKind string
 var checkpointForwardFile string
+
+// checkpointForwardText sends a stream item's edit as its text form.
+var checkpointForwardText bool
 var checkpointInterceptResponse bool
 
 func init() {
 	checkpointListCmd.Flags().StringVar(&checkpointKind, "kind", "", "Keep only http, websocket, stream or trailer items")
 	checkpointForwardCmd.Flags().StringVar(&checkpointForwardFile, "file", "", "Read edited bytes from a file. If omitted, use piped stdin. If stdin is not piped, forward the original bytes")
+	checkpointForwardCmd.Flags().BoolVar(&checkpointForwardText, "text", false, "Send a stream item's edit as its text form (protoscope text for protobuf, the text for JSON codecs), which the instance encodes")
 	checkpointForwardCmd.Flags().BoolVar(&checkpointInterceptResponse, "intercept-response", false, "Hold the matching response")
 	checkpointCmd.AddCommand(checkpointListCmd, checkpointGetCmd, checkpointForwardCmd, checkpointDropCmd, checkpointInterceptCmd, checkpointWebsocketInterceptCmd, checkpointStreamInterceptCmd)
 	rootCmd.AddCommand(checkpointCmd)
@@ -80,12 +84,12 @@ var checkpointGetCmd = &cobra.Command{
 var checkpointForwardCmd = &cobra.Command{
 	Use:   "forward UUID...",
 	Short: "Forward Checkpoint items",
-	Long:  "Forward one Checkpoint item, edited or not, or several items unedited in one call. With several UUIDs, --file and --intercept-response are refused, stdin is not read, and the output counts the items forwarded (done), no longer held (gone), and failed.",
+	Long:  "Forward one Checkpoint item, edited or not, or several items unedited in one call. With --text, a stream item's edit is its text form, as checkpoint get --json shows it in text, and the instance encodes it; text that does not parse is refused with its line and column. With several UUIDs, --file, --text and --intercept-response are refused, stdin is not read, and the output counts the items forwarded (done), no longer held (gone), and failed.",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) > 1 {
-			if cmd.Flags().Changed("file") || cmd.Flags().Changed("intercept-response") {
-				return errors.New("checkpoint forward with several UUIDs forwards the original bytes; --file and --intercept-response need one UUID")
+			if cmd.Flags().Changed("file") || cmd.Flags().Changed("text") || cmd.Flags().Changed("intercept-response") {
+				return errors.New("checkpoint forward with several UUIDs forwards the original bytes; --file, --text and --intercept-response need one UUID")
 			}
 			return runCheckpointBulk(cmd, "/checkpoint/forward", args, "forwarding checkpoint items", "forwarded")
 		}
@@ -223,9 +227,13 @@ func encodeCheckpointForward(cmd *cobra.Command, id string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if checkpointForwardText && !edited {
+		return nil, errors.New("checkpoint forward --text needs the edited text form from --file or piped stdin")
+	}
 	request := struct {
 		Raw               *string `json:"raw,omitempty"`
 		Payload           *string `json:"payload,omitempty"`
+		Text              *string `json:"text,omitempty"`
 		InterceptResponse bool    `json:"intercept_response,omitempty"`
 	}{InterceptResponse: checkpointInterceptResponse}
 	if edited {
@@ -244,9 +252,15 @@ func encodeCheckpointForward(cmd *cobra.Command, id string) ([]byte, error) {
 			return nil, fmt.Errorf("decoding checkpoint item: %w", err)
 		}
 		encoded := base64.StdEncoding.EncodeToString(raw)
-		if parsed.Type == "websocket" || parsed.Type == "stream" {
+		switch {
+		case checkpointForwardText && parsed.Type != "stream":
+			return nil, fmt.Errorf("checkpoint forward --text edits a stream item, not a %s item", parsed.Type)
+		case checkpointForwardText:
+			text := string(raw)
+			request.Text = &text
+		case parsed.Type == "websocket" || parsed.Type == "stream":
 			request.Payload = &encoded
-		} else {
+		default:
 			request.Raw = &encoded
 		}
 	}

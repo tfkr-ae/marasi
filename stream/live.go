@@ -78,6 +78,17 @@ func (m *LiveMessage) Text() (string, bool) {
 	return TextForm(m.ContentType, m.Payload)
 }
 
+// SetText replaces the payload with what text encodes to (FromText). Text
+// that cannot be encoded is refused, and the payload is unchanged.
+func (m *LiveMessage) SetText(text string) error {
+	payload, err := FromText(m.ContentType, text)
+	if err != nil {
+		return err
+	}
+	m.Payload = payload
+	return nil
+}
+
 // Envelope is payload in the gRPC, gRPC-Web and Connect envelope: the flags
 // byte and the big-endian payload length, then the payload.
 func Envelope(flags byte, payload []byte) []byte {

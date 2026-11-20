@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"errors"
 	"mime"
 	"strings"
 	"unicode/utf8"
@@ -28,6 +29,26 @@ func TextForm(contentType string, payload []byte) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// ErrNoTextForm is returned for a text form given for a message whose
+// framing and codec have none: it can be edited only as its payload.
+var ErrNoTextForm = errors.New("the message has no text form")
+
+// FromText is the payload text gives, the inverse of TextForm for the
+// direction whose head has contentType: the protoscope text form of a
+// protobuf message encoded, so every length inside it follows the edit,
+// or a JSON codec's text as it is. Text that does not parse is refused
+// with an error wrapping protoscope.ErrSyntax that names its line and
+// column; text for a message with no text form with ErrNoTextForm.
+func FromText(contentType, text string) ([]byte, error) {
+	switch codecOf(contentType) {
+	case codecProto:
+		return protoscope.Encode(text)
+	case codecJSON:
+		return []byte(text), nil
+	}
+	return nil, ErrNoTextForm
 }
 
 // codec is how a gRPC, gRPC-Web or Connect message's payload is encoded.

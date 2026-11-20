@@ -32,6 +32,12 @@ var ErrStreamLengthDeclared = errors.New("the direction's head declares a length
 // held.
 var ErrStreamReadOnly = errors.New("the stream message cannot be edited")
 
+// ErrStreamText is returned for a Checkpoint edit or an injection given in
+// a text form that cannot be encoded: one that does not parse, which also
+// wraps protoscope.ErrSyntax and names its line and column, one for a
+// message with no text form, or one given with a payload as well.
+var ErrStreamText = errors.New("the text form cannot be encoded")
+
 // ErrTrailerEdit is returned for a Checkpoint edit of a trailer item with
 // a line that is not a field. The trailers stay held.
 var ErrTrailerEdit = errors.New("the trailer block does not parse")
@@ -41,6 +47,10 @@ type pendingStream struct {
 	item domain.CheckpointItem
 	sp   *streamedPair
 	done chan struct{}
+	// contentType is the content type of the message's direction's head,
+	// which names the codec a text form edit is encoded with; "" for a
+	// trailer block.
+	contentType string
 	// refuse says why a forward with payload, or a drop, cannot be
 	// carried, or nil when it can (streamedPair.handle).
 	refuse func(payload []byte, drop bool) error
@@ -101,7 +111,11 @@ func (proxy *Proxy) holdStreamMessage(sp *streamedPair, message *stream.LiveMess
 		item.Raw, item.Payload = item.Payload, nil
 		item.Text, item.HasText = "", false
 	}
-	decision, held := proxy.holdStreamItem(sp, item, refuse, cutOff)
+	contentType := message.ContentType
+	if item.Type == domain.CheckpointTypeTrailer {
+		contentType = ""
+	}
+	decision, held := proxy.holdStreamItem(sp, item, contentType, refuse, cutOff)
 	if !held {
 		// Nothing would resolve the hold.
 		return streamHoldDecision{dropped: true}
@@ -129,7 +143,7 @@ func (sp *streamedPair) holdTrailers(name string, d *streamedDirection, trailers
 		_, err := parseTrailerBlock(raw)
 		return err
 	}
-	decision, held := sp.proxy.holdStreamItem(sp, item, refuse, cutOff)
+	decision, held := sp.proxy.holdStreamItem(sp, item, "", refuse, cutOff)
 	switch {
 	case !held:
 		return trailers, false
@@ -146,12 +160,13 @@ func (sp *streamedPair) holdTrailers(name string, d *streamedDirection, trailers
 }
 
 // holdStreamItem holds a stream or trailer item until it is forwarded,
-// dropped or abandoned, and returns how its hold ended. It reports false,
+// dropped or abandoned, and returns how its hold ended. contentType is the
+// content type of a stream message's direction's head. It reports false,
 // holding nothing, once the proxy is closing.
-func (proxy *Proxy) holdStreamItem(sp *streamedPair, item domain.CheckpointItem, refuse func(payload []byte, drop bool) error, cutOff <-chan struct{}) (streamHoldDecision, bool) {
+func (proxy *Proxy) holdStreamItem(sp *streamedPair, item domain.CheckpointItem, contentType string, refuse func(payload []byte, drop bool) error, cutOff <-chan struct{}) (streamHoldDecision, bool) {
 	state := proxy.checkpoint
 	item.InterceptedAt = state.now()
-	pending := &pendingStream{item: item, sp: sp, refuse: refuse, done: make(chan struct{})}
+	pending := &pendingStream{item: item, sp: sp, contentType: contentType, refuse: refuse, done: make(chan struct{})}
 
 	state.mu.Lock()
 	if proxy.engine != nil && proxy.engine.closing.Load() {
@@ -226,9 +241,10 @@ func (state *checkpointState) takeStream(id uuid.UUID) *pendingStream {
 	return pending
 }
 
-// forwardStream forwards a held stream message, with fwd.Payload when set,
-// or a held trailer block, with fwd.Raw when set. An edit the item cannot
-// carry is refused with the reason, and the item stays held.
+// forwardStream forwards a held stream message, with fwd.Payload or what
+// fwd.Text encodes to when set, or a held trailer block, with fwd.Raw when
+// set. An edit the item cannot carry is refused with the reason, and the
+// item stays held.
 func (proxy *Proxy) forwardStream(id uuid.UUID, fwd CheckpointForward) error {
 	state := proxy.checkpoint
 	state.mu.Lock()
@@ -240,6 +256,14 @@ func (proxy *Proxy) forwardStream(id uuid.UUID, fwd CheckpointForward) error {
 	edit := fwd.Payload
 	if pending.item.Type == domain.CheckpointTypeTrailer {
 		edit = fwd.Raw
+	}
+	if fwd.Text != nil {
+		encoded, err := pending.fromText(*fwd.Text, edit != nil)
+		if err != nil {
+			state.mu.Unlock()
+			return fmt.Errorf("%s: %w", id, err)
+		}
+		edit = &encoded
 	}
 	if edit != nil {
 		if err := pending.refuse(*edit, false); err != nil {
@@ -254,6 +278,29 @@ func (proxy *Proxy) forwardStream(id uuid.UUID, fwd CheckpointForward) error {
 	}
 	close(pending.done)
 	return nil
+}
+
+// fromText is the payload a text form edit of the held message encodes
+// to, or why it cannot be encoded. withPayload means the edit gave a
+// payload as well.
+func (pending *pendingStream) fromText(text string, withPayload bool) ([]byte, error) {
+	switch {
+	case withPayload:
+		return nil, fmt.Errorf("%w: give a payload or a text form, not both", ErrStreamText)
+	case pending.item.Type != domain.CheckpointTypeStream:
+		return nil, fmt.Errorf("%w: a trailer block is edited as its raw lines", ErrStreamText)
+	}
+	return encodeStreamText(pending.contentType, text)
+}
+
+// encodeStreamText is the payload text encodes to for a direction whose
+// head has contentType, or an error wrapping ErrStreamText.
+func encodeStreamText(contentType, text string) ([]byte, error) {
+	payload, err := stream.FromText(contentType, text)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrStreamText, err)
+	}
+	return payload, nil
 }
 
 // dropStream drops a held stream message. A drop the direction cannot

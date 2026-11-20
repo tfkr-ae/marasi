@@ -20,6 +20,7 @@ func init() {
 	streamMessagesCmd.Flags().StringVar(&streamMessagesCursor, "cursor", "", "ID of the last message of the page before, to fetch the next page")
 	streamInjectCmd.Flags().StringVar(&streamInjectDirection, "direction", "", "Direction to inject into: request (toward the origin) or response (toward the client). Required")
 	streamInjectCmd.Flags().StringVar(&streamInjectFile, "file", "", "Read the message's payload from a file. If omitted, use piped stdin or an empty payload")
+	streamInjectCmd.Flags().BoolVar(&streamInjectText, "text", false, "Read the message as its text form (protoscope text for protobuf, the text for JSON codecs), which the instance encodes; text that does not parse is refused with its line and column")
 	streamInjectCmd.Flags().StringVar(&streamInjectCompress, "compress", "auto", "auto compresses the message as its direction compresses (grpc-encoding, connect-content-encoding), never sends it uncompressed")
 	streamCmd.AddCommand(streamMessagesCmd, streamGetCmd, streamInjectCmd, streamCancelCmd)
 	rootCmd.AddCommand(streamCmd)
@@ -33,6 +34,9 @@ var streamCmd = &cobra.Command{
 var streamInjectDirection string
 var streamInjectFile string
 var streamInjectCompress string
+
+// streamInjectText sends the injected message as its text form.
+var streamInjectText bool
 
 var streamMessagesLimit string
 var streamMessagesCursor string
@@ -151,11 +155,22 @@ var streamInjectCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		payload, err := json.Marshal(struct {
-			Direction string `json:"direction"`
-			Payload   []byte `json:"payload"`
-			Compress  string `json:"compress,omitempty"`
-		}{streamInjectDirection, raw, compress})
+		request := struct {
+			Direction string  `json:"direction"`
+			Payload   *[]byte `json:"payload,omitempty"`
+			Text      *string `json:"text,omitempty"`
+			Compress  string  `json:"compress,omitempty"`
+		}{Direction: streamInjectDirection, Compress: compress}
+		if streamInjectText {
+			text := string(raw)
+			request.Text = &text
+		} else {
+			if raw == nil {
+				raw = []byte{}
+			}
+			request.Payload = &raw
+		}
+		payload, err := json.Marshal(request)
 		if err != nil {
 			return fmt.Errorf("encoding stream injection: %w", err)
 		}

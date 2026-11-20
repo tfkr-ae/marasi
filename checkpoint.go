@@ -32,8 +32,13 @@ type CheckpointForward struct {
 	Raw *[]byte
 	// InterceptResponse holds the matching response after a request forward.
 	InterceptResponse bool
-	// Payload replaces the WebSocket frame payload when non-nil.
+	// Payload replaces the WebSocket frame payload, or the stream message
+	// payload, when non-nil.
 	Payload *[]byte
+	// Text replaces the stream message payload with what its text form
+	// encodes to when non-nil (stream.FromText). It is refused with
+	// ErrStreamText alongside Payload.
+	Text *string
 	// Opcode replaces the WebSocket frame opcode when non-nil.
 	Opcode *int
 }

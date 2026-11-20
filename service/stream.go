@@ -85,7 +85,12 @@ func addStreamRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifecycl
 			return
 		}
 		release()
-		message, err := proxy.InjectStreamMessage(r.Context(), pairID, inject.direction, inject.payload, inject.options)
+		var message domain.StreamMessage
+		if inject.text != nil {
+			message, err = proxy.InjectStreamText(r.Context(), pairID, inject.direction, *inject.text, inject.options)
+		} else {
+			message, err = proxy.InjectStreamMessage(r.Context(), pairID, inject.direction, inject.payload, inject.options)
+		}
 		if err != nil {
 			writeStreamControlError(w, r, proxy, pairID, err)
 			return
@@ -185,11 +190,14 @@ type streamCancelResponse struct {
 type streamInjectRequest struct {
 	direction string
 	payload   []byte
-	options   marasi.StreamInjectOptions
+	// text is the payload in its text form, given instead of payload.
+	text    *string
+	options marasi.StreamInjectOptions
 }
 
 // decodeStreamInject decodes an inject request: direction (request or
-// response), a base64 payload, and an optional compress of "auto" (the
+// response), a base64 payload or the payload in its text form as text, and
+// an optional compress of "auto" (the
 // default: compress as the direction does) or "never".
 func decodeStreamInject(r *http.Request) (streamInjectRequest, error) {
 	invalid := errors.New("invalid stream request")
@@ -198,6 +206,7 @@ func decodeStreamInject(r *http.Request) (streamInjectRequest, error) {
 	var body struct {
 		Direction *string `json:"direction"`
 		Payload   *[]byte `json:"payload"`
+		Text      *string `json:"text"`
 		Compress  *string `json:"compress"`
 	}
 	if err := decoder.Decode(&body); err != nil {
@@ -206,10 +215,13 @@ func decodeStreamInject(r *http.Request) (streamInjectRequest, error) {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return streamInjectRequest{}, invalid
 	}
-	if body.Direction == nil || *body.Direction != domain.StreamDirectionRequest && *body.Direction != domain.StreamDirectionResponse || body.Payload == nil {
+	if body.Direction == nil || *body.Direction != domain.StreamDirectionRequest && *body.Direction != domain.StreamDirectionResponse || (body.Payload == nil) == (body.Text == nil) {
 		return streamInjectRequest{}, invalid
 	}
-	request := streamInjectRequest{direction: *body.Direction, payload: *body.Payload}
+	request := streamInjectRequest{direction: *body.Direction, text: body.Text}
+	if body.Payload != nil {
+		request.payload = *body.Payload
+	}
 	if body.Compress != nil {
 		switch *body.Compress {
 		case "auto":
@@ -240,6 +252,8 @@ func writeStreamControlError(w http.ResponseWriter, r *http.Request, proxy *mara
 		writeRefusal(w, r, http.StatusConflict, "stream_not_open", err.Error())
 	case errors.Is(err, marasi.ErrStreamLengthDeclared):
 		writeRefusal(w, r, http.StatusConflict, "stream_inject_refused", err.Error())
+	case errors.Is(err, marasi.ErrStreamText):
+		writeRefusal(w, r, http.StatusBadRequest, "invalid_stream_request", err.Error())
 	case errors.Is(err, r.Context().Err()):
 		// The caller left while the injection waited for its turn.
 	default:

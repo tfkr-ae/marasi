@@ -66,6 +66,9 @@ func TestStreamInjectAndCancelCommands(t *testing.T) {
 		}
 		stdout, stderr, err := runMarasi(binary, append(inject(configDir, "--direction", "request", "--file", os.DevNull), "--json")...)
 		assertJSONCommandError(t, stdout, stderr, err, "injecting stream message: stream_not_open")
+		if got := sent.snapshot(); got.Body != `{"direction":"request","payload":""}` {
+			t.Fatalf("\nwanted:\nan empty payload sent as one\ngot:\n%+v", got)
+		}
 	})
 
 	t.Run("should cancel a pair, printing it on stderr or passing the JSON through", func(t *testing.T) {

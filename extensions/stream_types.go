@@ -58,6 +58,13 @@ func RegisterStreamMessageType(extension *Runtime) {
 			message.Payload = []byte(lua.CheckString(l, 2))
 			return 0
 		}},
+		{Name: "set_text", Signature: "(text: string)", Summary: "Replaces the message payload with what its text form encodes to, as text() shows it: protoscope text is encoded with every enclosing length following the edit, and a JSON codec's text is the payload. Raises an error, leaving the payload unchanged, for text that does not parse, naming its line and column, or for a message with no text form; pcall it to recover. Otherwise it is set_payload, and is ignored and logged where set_payload would be.", Function: func(l *lua.State) int {
+			message := check(l)
+			if err := message.SetText(lua.CheckString(l, 2)); err != nil {
+				lua.Errorf(l, "set_text: %s", err.Error())
+			}
+			return 0
+		}},
 		{Name: "length", Signature: "() -> integer", Summary: "Returns the payload length in bytes.", Function: func(l *lua.State) int {
 			l.PushInteger(len(check(l).Payload))
 			return 1
@@ -70,7 +77,7 @@ func RegisterStreamMessageType(extension *Runtime) {
 			l.PushString(check(l).Encoding)
 			return 1
 		}},
-		{Name: "editable", Signature: "() -> boolean", Summary: "Reports whether set_payload can change the message: false for a message compressed with an encoding other than gzip or deflate, whose payload() is the compressed bytes.", Function: func(l *lua.State) int {
+		{Name: "editable", Signature: "() -> boolean", Summary: "Reports whether set_payload and set_text can change the message: false for a message compressed with an encoding other than gzip or deflate, whose payload() is the compressed bytes.", Function: func(l *lua.State) int {
 			l.PushBoolean(!check(l).ReadOnly)
 			return 1
 		}},

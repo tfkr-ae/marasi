@@ -1,6 +1,12 @@
 package stream
 
-import "testing"
+import (
+	"bytes"
+	"errors"
+	"testing"
+
+	"github.com/tfkr-ae/marasi/protoscope"
+)
 
 func TestTextForm(t *testing.T) {
 	proto := []byte{0x08, 0x96, 0x01}
@@ -28,6 +34,30 @@ func TestTextForm(t *testing.T) {
 			got, ok := TextForm(c.contentType, c.payload)
 			if got != c.want || ok != c.wantOK {
 				t.Fatalf("\nwanted:\n%q %t\ngot:\n%q %t", c.want, c.wantOK, got, ok)
+			}
+		})
+	}
+}
+
+func TestFromText(t *testing.T) {
+	cases := []struct {
+		name        string
+		contentType string
+		text        string
+		want        []byte
+		wantErr     error
+	}{
+		{"should encode a protobuf message's text form", "application/grpc", `1:LEN {"hi"}`, []byte{0x0a, 0x02, 'h', 'i'}, nil},
+		{"should encode a Connect +proto message's text form", "application/connect+proto", "1:VARINT 150", []byte{0x08, 0x96, 0x01}, nil},
+		{"should take a JSON codec's text as the payload", "application/grpc+json", `{"a":1}`, []byte(`{"a":1}`), nil},
+		{"should refuse text that does not parse", "application/grpc", "1:LEN {", nil, protoscope.ErrSyntax},
+		{"should refuse text for a message with no text form", "text/event-stream", "data: x", nil, ErrNoTextForm},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := FromText(c.contentType, c.text)
+			if !errors.Is(err, c.wantErr) || !bytes.Equal(got, c.want) {
+				t.Fatalf("\nwanted:\n%x %v\ngot:\n%x %v", c.want, c.wantErr, got, err)
 			}
 		})
 	}

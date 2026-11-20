@@ -58,7 +58,23 @@ func (proxy *Proxy) InjectStreamMessage(ctx context.Context, pairID uuid.UUID, d
 	if !ok {
 		return domain.StreamMessage{}, fmt.Errorf("%w: %s", ErrStreamedPairNotFound, pairID)
 	}
-	return sp.inject(ctx, direction, payload, options)
+	return sp.inject(ctx, direction, func(string) ([]byte, error) { return payload, nil }, options)
+}
+
+// InjectStreamText is InjectStreamMessage with the payload given in its
+// text form, encoded with the codec the direction's head names
+// (stream.FromText). Text that cannot be encoded is refused with
+// ErrStreamText, naming the line and column of a syntax error, and nothing
+// is sent.
+func (proxy *Proxy) InjectStreamText(ctx context.Context, pairID uuid.UUID, direction, text string, options StreamInjectOptions) (domain.StreamMessage, error) {
+	if direction != domain.StreamDirectionRequest && direction != domain.StreamDirectionResponse {
+		return domain.StreamMessage{}, fmt.Errorf("%w: %q", ErrStreamDirection, direction)
+	}
+	sp, ok := proxy.liveStreamedPair(pairID)
+	if !ok {
+		return domain.StreamMessage{}, fmt.Errorf("%w: %s", ErrStreamedPairNotFound, pairID)
+	}
+	return sp.inject(ctx, direction, func(contentType string) ([]byte, error) { return encodeStreamText(contentType, text) }, options)
 }
 
 // CancelStreamedPair cancels the streamed pair pairID on both legs:
@@ -83,7 +99,9 @@ func (proxy *Proxy) liveStreamedPair(pairID uuid.UUID) (*streamedPair, bool) {
 	return value.(*streamedPair), true
 }
 
-func (sp *streamedPair) inject(ctx context.Context, name string, payload []byte, options StreamInjectOptions) (domain.StreamMessage, error) {
+// inject puts a message into direction name. payloadOf gives its payload
+// from the content type of the direction's head as it went out.
+func (sp *streamedPair) inject(ctx context.Context, name string, payloadOf func(contentType string) ([]byte, error), options StreamInjectOptions) (domain.StreamMessage, error) {
 	sp.mu.Lock()
 	d := sp.directions[name]
 	sp.mu.Unlock()
@@ -107,6 +125,10 @@ func (sp *streamedPair) inject(ctx context.Context, name string, payload []byte,
 		return domain.StreamMessage{}, fmt.Errorf("%w: %s", ErrStreamDirectionEnded, name)
 	case sp.declaresLength(d):
 		return domain.StreamMessage{}, fmt.Errorf("%w: the %s head declares a length, so an injected message cannot be carried", ErrStreamLengthDeclared, name)
+	}
+	payload, err := payloadOf(sp.contentType(d))
+	if err != nil {
+		return domain.StreamMessage{}, err
 	}
 	message, err := injectedMessage(d, payload, options)
 	if err != nil {

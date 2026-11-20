@@ -432,14 +432,22 @@ func decodeCheckpointForward(r *http.Request, itemType string) (marasi.Checkpoin
 			}
 			fwd.Raw = &value
 		case domain.CheckpointTypeStream:
-			if name != "payload" {
+			switch name {
+			case "payload":
+				value, err := decodeCheckpointBytes(raw)
+				if err != nil {
+					return marasi.CheckpointForward{}, err
+				}
+				fwd.Payload = &value
+			case "text":
+				var value string
+				if err := json.Unmarshal(raw, &value); err != nil {
+					return marasi.CheckpointForward{}, errInvalidCheckpointRequest
+				}
+				fwd.Text = &value
+			default:
 				return marasi.CheckpointForward{}, errInvalidCheckpointRequest
 			}
-			value, err := decodeCheckpointBytes(raw)
-			if err != nil {
-				return marasi.CheckpointForward{}, err
-			}
-			fwd.Payload = &value
 		case domain.CheckpointTypeWebSocket:
 			switch name {
 			case "payload":
@@ -460,6 +468,9 @@ func decodeCheckpointForward(r *http.Request, itemType string) (marasi.Checkpoin
 		default:
 			return marasi.CheckpointForward{}, errInvalidCheckpointRequest
 		}
+	}
+	if fwd.Payload != nil && fwd.Text != nil {
+		return marasi.CheckpointForward{}, errInvalidCheckpointRequest
 	}
 	return fwd, nil
 }
@@ -533,6 +544,7 @@ func writeCheckpointForwardError(w http.ResponseWriter, r *http.Request, err err
 		errors.Is(err, marasi.ErrRebuildResponse),
 		errors.Is(err, marasi.ErrStreamLengthDeclared),
 		errors.Is(err, marasi.ErrStreamReadOnly),
+		errors.Is(err, marasi.ErrStreamText),
 		errors.Is(err, marasi.ErrTrailerEdit):
 		writeRefusal(w, r, http.StatusBadRequest, "invalid_checkpoint_request", err.Error())
 	default:
