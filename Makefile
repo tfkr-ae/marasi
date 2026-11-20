@@ -33,7 +33,6 @@ APPROACHES ?=
 MODES      ?= fuzzingclient,fuzzingserver
 PEERS      ?= strict,lenient
 RUNS       ?= proxy,checkpoint-forward,checkpoint-edit,extension
-PHASE      ?=
 # The HTTP suites run Marasi in a Linux container, built for this architecture.
 LINUX_ARCH ?= $(shell $(GO) env GOARCH)
 CONFORMANCE      = $(GO) run ./internal/conformance/cmd/conformance
@@ -74,8 +73,8 @@ help:
 		'                     conformance workflow (the h1, h2 and streams jobs are required checks).' \
 		'make conformance-baseline  rerun the selected cases with no proxy and merge them' \
 		'                     into the direct baselines' \
-		'make conformance-update-known PHASE=2  run, then rewrite the known entries of' \
-		'                     deviations.json (adds new deviations with PHASE, narrows or removes' \
+		'make conformance-update-known  run, then rewrite the known entries of' \
+		'                     deviations.json (adds new deviations, narrows or removes' \
 		'                     went-away ones) and score.json; accepted entries are never touched.' \
 		'                     Review the diff before you commit it' \
 		'make autobahn        make conformance SUITES=autobahn' \
@@ -118,7 +117,7 @@ conformance-baseline:
 	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites '$(SUITES)' -runs direct
 
 conformance-update-known: build linux-$(LINUX_ARCH)
-	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites '$(SUITES)' -runs '$(RUNS)' -update-known $(if $(PHASE),-phase '$(PHASE)')
+	$(CONFORMANCE) $(CONFORMANCE_FLAGS) -suites '$(SUITES)' -runs '$(RUNS)' -update-known
 
 # The autobahn aliases are the conformance targets with SUITES=autobahn.
 autobahn: SUITES = autobahn

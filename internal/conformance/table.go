@@ -24,10 +24,10 @@ func WriteTable(w io.Writer, outcome Outcome) {
 	if hasMatches(outcome.Results, func(r Result) []Match { return r.Known }) {
 		fmt.Fprintln(w)
 		known := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(known, "RUN\tSUITE\tTARGET\tKNOWN\tFIELD\tPHASE\tREASON")
+		fmt.Fprintln(known, "RUN\tSUITE\tTARGET\tKNOWN\tFIELD\tREASON")
 		for _, result := range outcome.Results {
 			for _, m := range result.Known {
-				fmt.Fprintf(known, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n", result.Run, result.Suite, result.Target, m.Case, m.Field, m.Entry.Phase, m.Entry.Reason)
+				fmt.Fprintf(known, "%s\t%s\t%s\t%s\t%s\t%s\n", result.Run, result.Suite, result.Target, m.Case, m.Field, m.Entry.Reason)
 			}
 		}
 		_ = known.Flush()
@@ -48,8 +48,8 @@ func WriteTable(w io.Writer, outcome Outcome) {
 		fmt.Fprintln(w)
 	}
 	for _, gone := range outcome.WentAway {
-		fmt.Fprintf(w, "%s  %s  went away: known entry %s %s (phase %d); remove it or run update-known\n",
-			gone.Run, gone.Suite, gone.Entry.Cases, gone.Entry.Field, gone.Entry.Phase)
+		fmt.Fprintf(w, "%s  %s  went away: known entry %s %s; remove it or run update-known\n",
+			gone.Run, gone.Suite, gone.Entry.Cases, gone.Entry.Field)
 	}
 	for _, stale := range outcome.Stale {
 		fmt.Fprintf(w, "%s  stale: %s entry %s %s matched nothing although a run and target it lists ran\n",

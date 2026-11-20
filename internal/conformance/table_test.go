@@ -43,11 +43,11 @@ func TestWriteTableListsTheAllowList(t *testing.T) {
 func TestWriteTableListsEntriesThatWentAwayOrAreStale(t *testing.T) {
 	var out strings.Builder
 	WriteTable(&out, Outcome{
-		WentAway: []WentAway{{Suite: "h1-origin", Run: RunProxy, Entry: Entry{Cases: "te-*", Field: "connection", Phase: 2}}},
+		WentAway: []WentAway{{Suite: "h1-origin", Run: RunProxy, Entry: Entry{Cases: "te-*", Field: "connection"}}},
 		Stale:    []Stale{{Suite: "h1-origin", Entry: Entry{Cases: "via-*", Field: "via", Kind: KindAccepted}}},
 	})
 	for _, line := range []string{
-		"proxy  h1-origin  went away: known entry te-* connection (phase 2); remove it or run update-known",
+		"proxy  h1-origin  went away: known entry te-* connection; remove it or run update-known",
 		"h1-origin  stale: accepted entry via-* via matched nothing although a run and target it lists ran",
 	} {
 		if !strings.Contains(out.String(), line) {

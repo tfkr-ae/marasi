@@ -33,7 +33,6 @@ type Entry struct {
 	Kind    EntryKind `json:"kind"`
 	Reason  string    `json:"reason"`
 	RFC     string    `json:"rfc,omitempty"`
-	Phase   int       `json:"phase,omitempty"` // the phase expected to remove a known entry
 }
 
 // appliesTo reports whether the entry applies to target in run.
@@ -67,8 +66,6 @@ func (e Entry) validate() error {
 		return errors.New("no reason")
 	case e.Kind != KindAccepted && e.Kind != KindKnown:
 		return fmt.Errorf("kind %q is neither accepted nor known", e.Kind)
-	case e.Kind == KindKnown && e.Phase <= 0:
-		return errors.New("a known entry needs a phase")
 	}
 	for _, pattern := range append([]string{e.Cases}, e.Targets...) {
 		if _, err := path.Match(pattern, ""); err != nil {
@@ -90,8 +87,13 @@ func ReadDeviations(file string) (Deviations, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading deviations: %w", err)
 	}
+	// A field the harness does not know, such as the phase tags known
+	// entries carried until the last phase of the move off Martian, is an
+	// error rather than silently ignored.
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
 	var deviations Deviations
-	if err := json.Unmarshal(data, &deviations); err != nil {
+	if err := decoder.Decode(&deviations); err != nil {
 		return nil, fmt.Errorf("decoding deviations %s: %w", file, err)
 	}
 	for i, entry := range deviations {

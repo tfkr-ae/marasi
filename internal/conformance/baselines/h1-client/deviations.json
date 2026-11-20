@@ -2824,18 +2824,20 @@
     "rfc": "RFC 9112 §2.2"
   },
   {
-    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-plain",
+    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-*",
     "runs": [
+      "proxy",
       "checkpoint-forward",
-      "checkpoint-edit"
+      "checkpoint-edit",
+      "extension"
     ],
     "field": "client[0].end",
-    "kind": "known",
-    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
-    "phase": 7
+    "kind": "accepted",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2), as an absolute-form request outside a tunnel does; nginx at the tunnel's end ignores the target's host and answers itself, so the direct run gets nginx's answer. Only a request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
+    "rfc": "RFC 9112 §3.2.2"
   },
   {
-    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-plain",
+    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-*",
     "runs": [
       "proxy",
       "checkpoint-forward",
@@ -2843,12 +2845,12 @@
       "extension"
     ],
     "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
-    "phase": 7
+    "kind": "accepted",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2), as an absolute-form request outside a tunnel does; nginx at the tunnel's end ignores the target's host and answers itself, so the direct run gets nginx's answer. Only a request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
+    "rfc": "RFC 9112 §3.2.2"
   },
   {
-    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-plain",
+    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-*",
     "runs": [
       "proxy",
       "checkpoint-forward",
@@ -2856,12 +2858,12 @@
       "extension"
     ],
     "field": "client[0].responses[0].fields",
-    "kind": "known",
-    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
-    "phase": 7
+    "kind": "accepted",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2), as an absolute-form request outside a tunnel does; nginx at the tunnel's end ignores the target's host and answers itself, so the direct run gets nginx's answer. Only a request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
+    "rfc": "RFC 9112 §3.2.2"
   },
   {
-    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-plain",
+    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-*",
     "runs": [
       "proxy",
       "checkpoint-forward",
@@ -2869,12 +2871,12 @@
       "extension"
     ],
     "field": "client[0].responses[0].reason",
-    "kind": "known",
-    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
-    "phase": 7
+    "kind": "accepted",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2), as an absolute-form request outside a tunnel does; nginx at the tunnel's end ignores the target's host and answers itself, so the direct run gets nginx's answer. Only a request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
+    "rfc": "RFC 9112 §3.2.2"
   },
   {
-    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-plain",
+    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-*",
     "runs": [
       "proxy",
       "checkpoint-forward",
@@ -2882,12 +2884,12 @@
       "extension"
     ],
     "field": "client[0].responses[0].status",
-    "kind": "known",
-    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
-    "phase": 7
+    "kind": "accepted",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2), as an absolute-form request outside a tunnel does; nginx at the tunnel's end ignores the target's host and answers itself, so the direct run gets nginx's answer. Only a request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
+    "rfc": "RFC 9112 §3.2.2"
   },
   {
-    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-plain",
+    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-*",
     "runs": [
       "proxy",
       "checkpoint-forward",
@@ -2895,106 +2897,8 @@
       "extension"
     ],
     "field": "verdict",
-    "kind": "known",
-    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-tls",
-    "runs": [
-      "checkpoint-forward",
-      "checkpoint-edit"
-    ],
-    "field": "client[0].end",
-    "kind": "known",
-    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].body",
-    "kind": "known",
-    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].fields",
-    "kind": "known",
-    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].reason",
-    "kind": "known",
-    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "client[0].responses[0].status",
-    "kind": "known",
-    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-tls",
-    "runs": [
-      "proxy",
-      "checkpoint-forward",
-      "checkpoint-edit",
-      "extension"
-    ],
-    "field": "verdict",
-    "kind": "known",
-    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-plain",
-    "runs": [
-      "proxy",
-      "extension"
-    ],
-    "field": "client[0].end",
-    "kind": "known",
-    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
-    "phase": 7
-  },
-  {
-    "cases": "SMUG-ABSOLUTE-URI-HOST-MISMATCH@connect-tls",
-    "runs": [
-      "proxy",
-      "extension"
-    ],
-    "field": "client[0].end",
-    "kind": "known",
-    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host still goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2); nginx at the tunnel's end ignores the target's host and answers itself. A request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
-    "phase": 7
+    "kind": "accepted",
+    "reason": "Inside a CONNECT tunnel, a request whose absolute-form target names another host goes to that target, which the client wrote out, and Marasi rewrites its Host to match (RFC 9112 §3.2.2), as an absolute-form request outside a tunnel does; nginx at the tunnel's end ignores the target's host and answers itself, so the direct run gets nginx's answer. Only a request whose Host alone differs goes to the tunnel's origin (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md)",
+    "rfc": "RFC 9112 §3.2.2"
   }
 ]

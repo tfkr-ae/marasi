@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -57,7 +56,6 @@ func main() {
 	flag.StringVar(&exclude, "exclude", "", "comma-separated case ID patterns to skip")
 	flag.StringVar(&approaches, "approaches", "", "comma-separated client approaches (absolute, connect-plain, connect-tls); empty means all")
 	flag.BoolVar(&settings.UpdateKnown, "update-known", false, "rewrite the known entries of deviations.json and score.json from this run")
-	flag.IntVar(&settings.Phase, "phase", 0, "phase recorded on the known entries -update-known writes")
 	flag.BoolVar(&verbose, "verbose", false, "stream tester output")
 	flag.StringVar(&autobahnSuite.Image, "image", autobahn.Image, "autobahn: testsuite image")
 	flag.StringVar(&modes, "modes", "fuzzingclient,fuzzingserver", "autobahn: suite modes")
@@ -68,9 +66,6 @@ func main() {
 	flag.DurationVar(&autobahnSuite.SuiteLimit, "suite-limit", 75*time.Minute, "autobahn: time limit per mode and peer")
 	flag.Parse()
 
-	if settings.UpdateKnown && settings.Phase <= 0 {
-		fail(errors.New("-update-known needs -phase, the phase expected to remove the new known entries"))
-	}
 	// Make passes every flag, so a flag narrows only when its value differs
 	// from the default.
 	settings.AllCases = true

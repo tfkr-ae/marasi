@@ -75,10 +75,10 @@ func WriteSummary(w io.Writer, suite string, run RunName, results []Result, went
 		if len(wentAway) == 0 {
 			return false
 		}
-		writeRow(w, "Cases", "Field", "Phase", "Reason")
-		writeRow(w, "---", "---", "---:", "---")
+		writeRow(w, "Cases", "Field", "Reason")
+		writeRow(w, "---", "---", "---")
 		for _, gone := range wentAway {
-			writeRow(w, gone.Entry.Cases, gone.Entry.Field, strconv.Itoa(gone.Entry.Phase), gone.Entry.Reason)
+			writeRow(w, gone.Entry.Cases, gone.Entry.Field, gone.Entry.Reason)
 		}
 		return true
 	})
@@ -87,11 +87,11 @@ func WriteSummary(w io.Writer, suite string, run RunName, results []Result, went
 		for _, result := range results {
 			for _, m := range result.Known {
 				if !wrote {
-					writeRow(w, "Target", "Case", "Field", "Baseline", "Got", "Phase", "Reason")
-					writeRow(w, "---", "---", "---", "---", "---", "---:", "---")
+					writeRow(w, "Target", "Case", "Field", "Baseline", "Got", "Reason")
+					writeRow(w, "---", "---", "---", "---", "---", "---")
 					wrote = true
 				}
-				writeRow(w, result.Target, m.Case, m.Field, m.Want, m.Got, strconv.Itoa(m.Entry.Phase), m.Entry.Reason)
+				writeRow(w, result.Target, m.Case, m.Field, m.Want, m.Got, m.Entry.Reason)
 			}
 		}
 		return wrote
