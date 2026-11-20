@@ -18,6 +18,7 @@ const (
 	hookInterceptRequest          = "interceptRequest"
 	hookInterceptResponse         = "interceptResponse"
 	hookInterceptWebSocketMessage = "interceptWebSocketMessage"
+	hookInterceptStreamMessage    = "interceptStreamMessage"
 )
 
 // hooks documents every hook constant above. Hooks are looked up by name, so
@@ -31,6 +32,7 @@ var hooks = []Entry{
 	{Name: hookInterceptRequest, Signature: "(request: req) -> boolean", Summary: "Called only in checkpoint. Return true to hold the request for review."},
 	{Name: hookInterceptResponse, Signature: "(response: res) -> boolean", Summary: "Called only in checkpoint. Return true to hold the response for review."},
 	{Name: hookInterceptWebSocketMessage, Signature: "(message: wsmsg) -> boolean", Summary: "Called only in checkpoint. Return true to hold the WebSocket message for review."},
+	{Name: hookInterceptStreamMessage, Signature: "(message: streammsg) -> boolean", Summary: "Called only in checkpoint, after processStreamMessage, for each stream message of a streamed pair. Return true to hold the message for review; nothing more is read from its sender while it is held."},
 }
 
 // APIFunction is a Lua function registered together with its reference entry.

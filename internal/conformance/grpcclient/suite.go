@@ -84,6 +84,7 @@ func (s Suite) Deterministic() {}
 // extension runs hold and edit HTTP as an HTTP/1.1 suite does.
 func (s Suite) Setup() conformance.Setup {
 	setup := conformance.HTTPSetup()
+	setup.Checkpoint = append(setup.Checkpoint, conformance.CheckpointStream)
 	setup.Traffic = conformance.TrafficTLS
 	setup.Container = true
 	setup.Hosts = []string{TargetHost}

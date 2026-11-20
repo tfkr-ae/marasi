@@ -71,6 +71,7 @@ func (s Suite) Targets() []string { return []string{Target} }
 // request and response, and the extension run sets each body to itself.
 func (s Suite) Setup() conformance.Setup {
 	setup := conformance.HTTPSetup()
+	setup.Checkpoint = append(setup.Checkpoint, conformance.CheckpointStream)
 	setup.Container = true
 	setup.Hosts = []string{s.originHost()}
 	return setup

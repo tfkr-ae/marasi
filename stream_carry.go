@@ -41,6 +41,10 @@ type streamSource interface {
 	trailers() h2Fields
 	// reset resets the direction toward its sender.
 	reset(code http2.ErrCode)
+	// cutOff is closed once the direction is reset or cut off, whether or
+	// not its reader has read that far: a held stream message is abandoned
+	// then.
+	cutOff() <-chan struct{}
 }
 
 // streamSink is the other leg, where a streamed direction goes.
@@ -88,11 +92,15 @@ type streamedPair struct {
 
 // streamedDirection is one streamed direction's record.
 type streamedDirection struct {
-	framing   stream.Framing
-	messages  int
-	ending    string
-	resetCode string
-	trailers  h2Fields
+	name    string
+	framing stream.Framing
+	// contentType is the content type of the direction's head as it went
+	// out, which names the codec its text form is read with.
+	contentType string
+	messages    int
+	ending      string
+	resetCode   string
+	trailers    h2Fields
 	// declared is set when the direction's head declared a length.
 	declared bool
 }
@@ -116,7 +124,7 @@ func (proxy *Proxy) streamed(pair *Pair) *streamedPair {
 // The first direction of a stored pair announces the pair started.
 func (sp *streamedPair) direction(name string, framing stream.Framing) *streamedDirection {
 	sp.mu.Lock()
-	d := &streamedDirection{framing: framing}
+	d := &streamedDirection{name: name, framing: framing}
 	sp.directions[name] = d
 	var started *domain.StreamedPairStarted
 	if !sp.started && sp.announced() {
@@ -171,7 +179,7 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 				src.reset(http2.ErrCodeEnhanceYourCalm)
 				return
 			case message != nil:
-				raw := sp.handle(name, d, message)
+				raw := sp.handle(name, d, message, src.cutOff())
 				if raw == nil {
 					continue
 				}

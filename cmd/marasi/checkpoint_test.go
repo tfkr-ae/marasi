@@ -27,9 +27,12 @@ func TestCheckpointCommands(t *testing.T) {
 	wsID := "01938032-1b17-7243-b035-e6a9f4645904"
 	httpDump := []byte("GET /a HTTP/1.1\r\nHost: example.com\r\n\r\n")
 	wsPayload := []byte("hello")
+	streamID := "019a0000-0000-7000-8000-000000000003"
+	streamPayload := []byte{0x08, 0x96, 0x01}
+	streamItem := `{"id":"` + streamID + `","type":"stream","payload":"` + base64.StdEncoding.EncodeToString(streamPayload) + `","text":"1:VARINT 150\n","direction":"request","framing":"grpc","pair_id":"019a0000-0000-7000-8000-000000000001","flags":0,"compressed":false,"metadata":{"intercepted":true},"intercepted_at":"2026-11-20T10:00:00Z"}` + "\n"
 	httpItem := `{"id":"` + httpID + `","type":"request","raw":"` + base64.StdEncoding.EncodeToString(httpDump) + `","intercepted_at":"2026-10-31T09:00:00Z"}` + "\n"
 	wsItem := `{"id":"` + wsID + `","type":"websocket","payload":"` + base64.StdEncoding.EncodeToString(wsPayload) + `","opcode":1,"direction":"client","connection_id":"0193802f-f0e7-73d9-a764-06d21e36780a","request_id":"0193802f-f0e7-73d9-a764-06d21e36780b","intercepted_at":"2026-10-31T09:01:30.5Z"}` + "\n"
-	listBody := `{"items":[{"id":"` + httpID + `","type":"request","raw":"` + base64.StdEncoding.EncodeToString(httpDump) + `","intercepted_at":"2026-10-31T09:00:00Z"},{"id":"` + wsID + `","type":"websocket","payload":"` + base64.StdEncoding.EncodeToString(wsPayload) + `","opcode":1,"direction":"client","connection_id":"0193802f-f0e7-73d9-a764-06d21e36780a","request_id":"0193802f-f0e7-73d9-a764-06d21e36780b","intercepted_at":"2026-10-31T09:01:30.5Z"}],"intercept":true,"websocket_intercept":false}` + "\n"
+	listBody := `{"items":[{"id":"` + httpID + `","type":"request","raw":"` + base64.StdEncoding.EncodeToString(httpDump) + `","intercepted_at":"2026-10-31T09:00:00Z"},{"id":"` + wsID + `","type":"websocket","payload":"` + base64.StdEncoding.EncodeToString(wsPayload) + `","opcode":1,"direction":"client","connection_id":"0193802f-f0e7-73d9-a764-06d21e36780a","request_id":"0193802f-f0e7-73d9-a764-06d21e36780b","intercepted_at":"2026-10-31T09:01:30.5Z"}],"intercept":true,"websocket_intercept":false,"stream_intercept":false}` + "\n"
 
 	t.Run("should list checkpoint items in an id type intercepted at table", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
@@ -52,7 +55,7 @@ func TestCheckpointCommands(t *testing.T) {
 
 	t.Run("should leave an empty list silent", func(t *testing.T) {
 		configDir := serviceConfigDir(t)
-		startCannedControlAPI(t, configDir, "empty", http.StatusOK, `{"items":[],"intercept":false,"websocket_intercept":false}`+"\n")
+		startCannedControlAPI(t, configDir, "empty", http.StatusOK, `{"items":[],"intercept":false,"websocket_intercept":false,"stream_intercept":false}`+"\n")
 		stdout, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "empty", "checkpoint", "list")
 		if err != nil || stdout != "" || stderr != "" {
 			t.Fatalf("\nwanted:\nempty streams, nil error\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
@@ -74,6 +77,13 @@ func TestCheckpointCommands(t *testing.T) {
 		got = sent.snapshot()
 		if err != nil || stderr != "" || got.RawQuery != "kind=websocket" {
 			t.Fatalf("\nwanted:\nGET kind=websocket\ngot:\n%s %s?%s, stdout %q, stderr %q, error %v", got.Method, got.Path, got.RawQuery, stdout, stderr, err)
+		}
+
+		sent = startCannedControlAPI(t, configDir, "kind-stream", http.StatusOK, listBody)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "kind-stream", "checkpoint", "list", "--kind", "stream")
+		got = sent.snapshot()
+		if err != nil || stderr != "" || got.RawQuery != "kind=stream" {
+			t.Fatalf("\nwanted:\nGET kind=stream\ngot:\n%s %s?%s, stdout %q, stderr %q, error %v", got.Method, got.Path, got.RawQuery, stdout, stderr, err)
 		}
 
 		sent = startCannedControlAPI(t, configDir, "kind-bad", http.StatusOK, listBody)
@@ -98,6 +108,13 @@ func TestCheckpointCommands(t *testing.T) {
 		got = sent.snapshot()
 		if err != nil || stdout != string(wsPayload) || stderr != "" || got.Path != "/checkpoint/"+wsID {
 			t.Fatalf("\nwanted:\nwebsocket payload on stdout\ngot:\n%s %s, stdout %q, stderr %q, error %v", got.Method, got.Path, stdout, stderr, err)
+		}
+
+		sent = startCannedControlAPI(t, configDir, "get-stream", http.StatusOK, streamItem)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "get-stream", "checkpoint", "get", streamID)
+		got = sent.snapshot()
+		if err != nil || stdout != string(streamPayload) || stderr != "" || got.Path != "/checkpoint/"+streamID {
+			t.Fatalf("\nwanted:\nthe stream message's payload on stdout\ngot:\n%s %s, stdout %q, stderr %q, error %v", got.Method, got.Path, stdout, stderr, err)
 		}
 	})
 
@@ -153,6 +170,14 @@ func TestCheckpointCommands(t *testing.T) {
 		wantBody = `{"payload":"` + base64.StdEncoding.EncodeToString([]byte("edited")) + `"}`
 		if err != nil || stdout != "" || stderr != "checkpoint "+wsID+" forwarded\n" || len(history) != 2 || history[1].Body != wantBody {
 			t.Fatalf("\nwanted:\nwebsocket payload body %q\ngot:\n%#v, stdout %q, stderr %q, error %v", wantBody, history, stdout, stderr, err)
+		}
+
+		sent = startCannedControlAPI(t, configDir, "file-stream", http.StatusOK, streamItem)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "file-stream", "checkpoint", "forward", streamID, "--file", wsFile)
+		history = sent.requests()
+		wantBody = `{"payload":"` + base64.StdEncoding.EncodeToString([]byte("edited")) + `"}`
+		if err != nil || stdout != "" || stderr != "checkpoint "+streamID+" forwarded\n" || len(history) != 2 || history[1].Body != wantBody {
+			t.Fatalf("\nwanted:\nstream payload body %q\ngot:\n%#v, stdout %q, stderr %q, error %v", wantBody, history, stdout, stderr, err)
 		}
 
 		sent = startCannedControlAPI(t, configDir, "file-ir", http.StatusOK, httpItem)
@@ -265,6 +290,20 @@ func TestCheckpointCommands(t *testing.T) {
 		got = sent.snapshot()
 		if err != nil || stdout != "" || stderr != "checkpoint websocket-intercept off\n" || got.Body != `{"websocket_intercept":false}` {
 			t.Fatalf("\nwanted:\nPOST websocket intercept false\ngot:\n%s %s body %q, stdout %q, stderr %q, error %v", got.Method, got.Path, got.Body, stdout, stderr, err)
+		}
+
+		sent = startCannedControlAPI(t, configDir, "stream-on", http.StatusOK, listBody)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "stream-on", "checkpoint", "stream-intercept", "on")
+		got = sent.snapshot()
+		if err != nil || stdout != "" || stderr != "checkpoint stream-intercept on\n" || got.Path != "/checkpoint/stream-intercept" || got.Body != `{"stream_intercept":true}` {
+			t.Fatalf("\nwanted:\nPOST stream intercept true\ngot:\n%s %s body %q, stdout %q, stderr %q, error %v", got.Method, got.Path, got.Body, stdout, stderr, err)
+		}
+
+		sent = startCannedControlAPI(t, configDir, "stream-off", http.StatusOK, listBody)
+		stdout, stderr, err = runMarasi(binary, "--config-dir", configDir, "--instance", "stream-off", "checkpoint", "stream-intercept", "off")
+		got = sent.snapshot()
+		if err != nil || stdout != "" || stderr != "checkpoint stream-intercept off\n" || got.Body != `{"stream_intercept":false}` {
+			t.Fatalf("\nwanted:\nPOST stream intercept false\ngot:\n%s %s body %q, stdout %q, stderr %q, error %v", got.Method, got.Path, got.Body, stdout, stderr, err)
 		}
 
 		sent = startCannedControlAPI(t, configDir, "intercept-bad", http.StatusOK, listBody)

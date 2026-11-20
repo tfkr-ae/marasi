@@ -150,6 +150,7 @@ type Proxy struct {
 	checkpoint           *checkpointState
 	httpIntercept        atomic.Bool
 	webSocketIntercept   atomic.Bool
+	streamIntercept      atomic.Bool
 	webSocketLifecycleMu sync.RWMutex
 	webSocketSessions    sync.WaitGroup
 	webSocketsClosing    bool

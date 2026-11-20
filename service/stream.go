@@ -1,11 +1,10 @@
 package service
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"net/http"
-	"net/textproto"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -138,12 +137,17 @@ func streamContentType(row *domain.RequestResponseRow, direction string) string 
 	if direction == domain.StreamDirectionResponse && row.Response.ContentType != "" {
 		return row.Response.ContentType
 	}
-	reader := textproto.NewReader(bufio.NewReader(bytes.NewReader(row.Request.Raw)))
-	if _, err := reader.ReadLine(); err != nil {
-		return ""
+	// A stored HTTP/2 head has its pseudo-header fields as lines, which a
+	// MIME header reader refuses, so the lines are read one by one.
+	head, _, _ := bytes.Cut(row.Request.Raw, []byte("\r\n\r\n"))
+	lines := bytes.Split(head, []byte("\r\n"))
+	for _, line := range lines[1:] {
+		name, value, ok := bytes.Cut(line, []byte(":"))
+		if ok && len(name) > 0 && strings.EqualFold(string(name), "content-type") {
+			return strings.TrimSpace(string(value))
+		}
 	}
-	header, _ := reader.ReadMIMEHeader()
-	return header.Get("Content-Type")
+	return ""
 }
 
 // Streamed pair events (spec: Control API, CLI and events). The stream.

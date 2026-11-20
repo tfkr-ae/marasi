@@ -4,11 +4,11 @@ Where the Lua of Marasi's built-in extensions (Compass, Checkpoint, Workshop) li
 
 ## Where the Lua lives
 
-There are no `.lua` files. Each built-in is a SQL string literal in `db/migrations/00001_db_setup.sql`: an `INSERT INTO extensions` row with `source_url` `'marasi-internal'` and the script in `lua_content`. To change a built-in, edit its literal there.
+There are no `.lua` files. Each built-in is a SQL string literal in `db/migrations/00001_db_setup.sql`: an `INSERT INTO extensions` row with `source_url` `'marasi-internal'` and the script in `lua_content`. A later migration can change a built-in's Lua in every project: `00030_checkpoint_intercept_stream_message.sql` appends Checkpoint's `interceptStreamMessage` (which returns false) unless the script already names it, so a user's edits stay.
 
 ## What an edit reaches
 
-The migrations are embedded and run by goose when a project opens. Goose applies `00001` once per project, so an edit to it reaches only projects created after the change. A project that already exists keeps the Lua it was created with.
+The migrations are embedded and run by goose when a project opens. Goose applies `00001` once per project, so an edit to it reaches only projects created after the change. A project that already exists keeps the Lua it was created with. To reach existing projects, add a migration that updates the row, as `00030` does, and leave `00001` as it is so new projects get the same script.
 
 Tests that open a project with `db.New` and load its extensions run the migrations, so they run the edited Lua. `startLaunchHarness` in `launchpad_test.go` is an example, as is any `service` test that opens a project.
 

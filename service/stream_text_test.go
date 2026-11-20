@@ -23,14 +23,15 @@ func TestStreamMessageTextForm(t *testing.T) {
 	repo := db.NewProxyRepo(conn)
 	server := newTestServer(&marasi.Proxy{TrafficRepo: repo, StreamRepo: repo}, func() {})
 
-	// insertPair stores a pair whose request head names requestType and,
-	// when responseType is not empty, a response naming it.
+	// insertPair stores a pair whose request head, with the pseudo-header
+	// fields an HTTP/2 head is stored with, names requestType and, when
+	// responseType is not empty, a response naming it.
 	insertPair := func(t *testing.T, requestType, responseType string) uuid.UUID {
 		t.Helper()
 		id, _ := uuid.NewV7()
 		err := repo.InsertRequest(&domain.ProxyRequest{
 			ID: id, Scheme: "https", Method: "POST", Host: "grpc.example", Path: "/test.Echo/PingPong",
-			Raw: []byte("POST /test.Echo/PingPong HTTP/2\r\nhost: grpc.example\r\ncontent-type: " + requestType + "\r\n\r\n"), Metadata: map[string]any{}, RequestedAt: time.Now(),
+			Raw: []byte("POST /test.Echo/PingPong HTTP/2\r\n:authority: grpc.example\r\n:scheme: https\r\ncontent-type: " + requestType + "\r\n\r\n"), Metadata: map[string]any{}, RequestedAt: time.Now(),
 		})
 		if err != nil {
 			t.Fatal(err)

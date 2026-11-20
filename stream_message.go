@@ -13,34 +13,48 @@ import (
 
 // handle is what happens to a whole stream message between being read and
 // being forwarded: the processStreamMessage hooks see and may change it, the
-// declared-length rule undoes a change the direction cannot carry, and it
-// is stored as it goes out. It returns the bytes to forward: the message as
-// it came when nothing changed it, nil when it was dropped.
+// declared-length rule undoes a change the direction cannot carry,
+// Checkpoint may hold it, and it is stored as it goes out. It returns the
+// bytes to forward: the message as it came when nothing changed it, nil
+// when it was dropped.
 //
 // It runs on the direction's one reader, so nothing more is read from the
-// sender until it returns. Checkpoint holds and injection extend it.
-func (sp *streamedPair) handle(name string, d *streamedDirection, message *stream.Message) []byte {
+// sender until it returns: a held message stops only its own direction.
+// cutOff closes when the direction is reset or cut off, which abandons a
+// hold. Injection extends it.
+func (sp *streamedPair) handle(name string, d *streamedDirection, message *stream.Message, cutOff <-chan struct{}) []byte {
 	id, err := uuid.NewV7()
 	if err != nil {
 		id = uuid.New()
 	}
 	live := &stream.LiveMessage{
-		ID: id, PairID: sp.pair.ID, Direction: name, Framing: d.framing,
+		ID: id, PairID: sp.pair.ID, Direction: name, Framing: d.framing, ContentType: sp.contentType(d),
 		Flags: message.Flags, Payload: message.Payload, Metadata: map[string]any{},
 	}
 	processStreamMessageExtensions(sp.proxy, sp.pair, live)
+	intercept := !live.Dropped && shouldInterceptStreamMessage(sp.proxy, live)
 
-	edited := !bytes.Equal(live.Payload, message.Payload)
 	if sp.declaresLength(d) && (live.Dropped || len(live.Payload) != len(message.Payload)) {
 		sp.lengthRefused(name, live.Dropped)
-		live.Dropped, live.Payload, edited = false, message.Payload, false
+		live.Dropped, live.Payload = false, message.Payload
 	}
+	if intercept && !live.Dropped {
+		live.Metadata["intercepted"] = true
+		decision := sp.proxy.holdStreamMessage(sp, d, live, cutOff)
+		switch {
+		case decision.dropped:
+			live.Dropped = true
+		case decision.payload != nil:
+			live.Payload = decision.payload
+		}
+	}
+
 	raw := message.Raw
 	switch {
 	case live.Dropped:
 		live.Metadata["dropped"] = true
 		raw = nil
-	case edited:
+	case !bytes.Equal(live.Payload, message.Payload):
 		live.Metadata["edited"] = true
 		raw = stream.Envelope(live.Flags, live.Payload)
 	}
@@ -51,6 +65,20 @@ func (sp *streamedPair) handle(name string, d *streamedDirection, message *strea
 	flags := live.Flags
 	sp.queue(sp.message(id, name, d, &flags, live.Payload, live.Metadata))
 	return raw
+}
+
+// headWentOut records the content type of d's head as it went out.
+func (sp *streamedPair) headWentOut(d *streamedDirection, contentType string) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	d.contentType = contentType
+}
+
+// contentType is the content type of d's head as it went out.
+func (sp *streamedPair) contentType(d *streamedDirection) string {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return d.contentType
 }
 
 // declaresLength reports whether d's head declared a length.
@@ -109,4 +137,31 @@ func processStreamMessageExtensions(proxy *Proxy, pair *Pair, message *stream.Li
 			return
 		}
 	}
+}
+
+// shouldInterceptStreamMessage reports whether Checkpoint holds a stream
+// message: the stream_intercept switch is on, or checkpoint's
+// interceptStreamMessage returns true. A disabled checkpoint holds none,
+// whatever the switch. An interrupted hook drops the message, as for
+// WebSocket.
+func shouldInterceptStreamMessage(proxy *Proxy, message *stream.LiveMessage) bool {
+	checkpoint, ok := proxy.GetExtension("checkpoint")
+	if ok && (checkpoint.Data == nil || !checkpoint.MetadataSnapshot().Enabled) {
+		return false
+	}
+	if proxy.GetStreamIntercept() {
+		return true
+	}
+	if !ok {
+		return false
+	}
+	intercept, err := checkpoint.ShouldInterceptStreamMessage(message)
+	if err != nil {
+		_ = proxy.WriteLog("ERROR", fmt.Sprintf("Running interceptStreamMessage : %s", err.Error()), core.LogWithExtensionID(checkpoint.Data.ID))
+		if hookInterrupted(context.Background(), checkpoint) {
+			message.Dropped = true
+		}
+		return false
+	}
+	return intercept
 }
