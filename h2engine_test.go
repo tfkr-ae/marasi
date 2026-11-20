@@ -442,6 +442,48 @@ func TestH2Engine(t *testing.T) {
 		}
 	})
 
+	t.Run("should count a stream as processed when the origin's GOAWAY arrives just after its head went out", func(t *testing.T) {
+		// The hook holds the second stream right after its head reached
+		// the origin, until the client has the relayed GOAWAY, so the
+		// GOAWAY is handled in that window every time.
+		relayed := make(chan struct{})
+		h2AfterHeadSent = func(clientID uint32) {
+			if clientID == 3 {
+				select {
+				case <-relayed:
+				case <-time.After(5 * time.Second):
+				}
+			}
+		}
+		t.Cleanup(func() { h2AfterHeadSent = nil })
+		origin := newH2TestOrigin(t)
+		addr, _, ca := serveH1EngineMITMProxy(t, true)
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		upstream := origin.accept(t)
+		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/first")
+		first := upstream.nthStream(t, 0)
+		client.headers(3, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/second")
+		second := upstream.nthStream(t, 1)
+		upstream.write(func(f *http2.Framer) error { return f.WriteGoAway(second, http2.ErrCodeNo, nil) })
+		client.await(t, "GOAWAY", func(p *h2TestPeer) bool { return p.goAway != nil })
+		// The framer reuses the frame on its next read, so take the ID now.
+		client.mu.Lock()
+		last := client.goAway.LastStreamID
+		client.mu.Unlock()
+		close(relayed)
+		upstream.headers(first, false, ":status", "200")
+		upstream.data(first, true, "first")
+		upstream.headers(second, false, ":status", "200")
+		upstream.data(second, true, "second")
+
+		if last != 3 {
+			t.Fatalf("GOAWAY\nwanted:\nlast stream 3, both streams processed\ngot:\nlast stream %d", last)
+		}
+		if response := client.stream(t, 3); string(response.data) != "second" {
+			t.Fatalf("the second stream\nwanted:\n%q\ngot:\n%q", "second", response.data)
+		}
+	})
+
 	t.Run("should send a graceful GOAWAY on a route swap, finish the stream in flight, then close both legs", func(t *testing.T) {
 		origin := newH2TestOrigin(t)
 		addr, _, ca := serveH1EngineMITMProxy(t, true)

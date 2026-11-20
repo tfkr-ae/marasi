@@ -513,12 +513,12 @@ func (o *h2Origin) close() {
 // send opens an origin stream and sends the request on it: its header
 // block, its body, and its trailers, END_STREAM falling where it fell on the
 // client's stream.
-func (o *h2Origin) send(request *h2Request) (*h2OriginStream, error) {
+func (o *h2Origin) send(request *h2Request, opened func(id uint32)) (*h2OriginStream, error) {
 	if request.rest != nil {
 		// A body past the threshold: what arrived, then the rest as it
 		// arrives (h2engine_threshold.go).
 		request.rest.take()
-		s, err := o.openStream(request.fields, false, true)
+		s, err := o.openStream(request.fields, false, true, opened)
 		if err != nil {
 			// Nothing will forward the rest.
 			close(request.rest.forwarded)
@@ -529,7 +529,7 @@ func (o *h2Origin) send(request *h2Request) (*h2OriginStream, error) {
 	}
 	hasBody := len(request.body) > 0 || request.endsOnData
 	hasTrailers := len(request.trailers) > 0
-	s, err := o.openStream(request.fields, !hasBody && !hasTrailers, false)
+	s, err := o.openStream(request.fields, !hasBody && !hasTrailers, false, opened)
 	if err != nil {
 		return nil, err
 	}
@@ -547,14 +547,17 @@ func (o *h2Origin) send(request *h2Request) (*h2OriginStream, error) {
 
 // sendHead opens an origin stream with a streamed request's head, leaving
 // the stream open for its body (h2OriginSink).
-func (o *h2Origin) sendHead(fields h2Fields) (*h2OriginStream, error) {
-	return o.openStream(fields, false, false)
+func (o *h2Origin) sendHead(fields h2Fields, opened func(id uint32)) (*h2OriginStream, error) {
+	return o.openStream(fields, false, false, opened)
 }
 
 // openStream opens an origin stream with a header block. sending marks it,
 // before it opens, as one whose passed request body is still to be sent,
 // so a response that ends first leaves it open for the rest (finish).
-func (o *h2Origin) openStream(fields h2Fields, endStream, sending bool) (*h2OriginStream, error) {
+// opened, when set, is told the stream's ID as it is picked, before the
+// head is written and under o.mu, so it is recorded before any frame the
+// origin sends in answer is read, a GOAWAY included.
+func (o *h2Origin) openStream(fields h2Fields, endStream, sending bool, opened func(id uint32)) (*h2OriginStream, error) {
 	s := newH2OriginStream()
 	s.sending = sending
 	pick := func() (uint32, error) {
@@ -572,6 +575,9 @@ func (o *h2Origin) openStream(fields h2Fields, endStream, sending bool) (*h2Orig
 		s.window.window = o.flow.initial
 		o.flow.mu.Unlock()
 		o.streams[s.id] = s
+		if opened != nil {
+			opened(s.id)
+		}
 		return s.id, nil
 	}
 	if _, err := o.w.headers(pick, fields, endStream, o.flow.frameSize()); err != nil {

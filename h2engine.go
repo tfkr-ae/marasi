@@ -93,8 +93,12 @@ type h2Conn struct {
 	originEnded bool
 	ended       bool
 	// sent maps each client stream sent to the origin to its origin stream
-	// ID, so an origin GOAWAY can be told to the client in its own IDs.
-	sent map[uint32]uint32
+	// ID, so an origin GOAWAY can be told to the client in its own IDs. It
+	// is recorded as the origin stream's ID is picked, under the origin
+	// leg's lock, so a GOAWAY the origin leg reads afterwards finds it; it
+	// has its own lock, taken inside the origin leg's and h.mu.
+	sentMu sync.Mutex
+	sent   map[uint32]uint32
 	// unsent are the streams dispatched and not yet sent to the origin, in
 	// the order the client opened them (waitTurn).
 	unsent []*h2Stream
@@ -806,11 +810,13 @@ func (h *h2Conn) goAway() {
 func (h *h2Conn) originGoAway(last uint32, code http2.ErrCode, debug []byte) {
 	h.mu.Lock()
 	var clientLast uint32
+	h.sentMu.Lock()
 	for clientID, originID := range h.sent {
 		if originID <= last {
 			clientLast = max(clientLast, clientID)
 		}
 	}
+	h.sentMu.Unlock()
 	if h.goingAway {
 		clientLast = min(clientLast, h.goAwayLast)
 	}

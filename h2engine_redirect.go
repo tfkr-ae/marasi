@@ -83,7 +83,7 @@ func (h *h2Conn) sendRedirected(pair *Pair, st *h2Stream, addr string) (*http.Re
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		sent, err := h.sendOn(origin, st, pair, out)
+		sent, err := h.sendOn(origin, st, pair, out, nil)
 		if err != nil {
 			return nil, nil, nil, err
 		}

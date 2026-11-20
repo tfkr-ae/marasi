@@ -156,6 +156,11 @@ func (h *h2Conn) roundTrip(pair *Pair, st *h2Stream) (res *http.Response, wire *
 	return res, wire, cut
 }
 
+// h2AfterHeadSent, when set, runs once a stream's request head went out on
+// the origin leg the handshake dialled. Only tests set it, to land an origin
+// frame right after a head.
+var h2AfterHeadSent func(clientID uint32)
+
 // sendUpstream sends the pair's request on an origin stream of its own and
 // waits for the response.
 func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireResponse, *http2.ErrCode, error) {
@@ -195,7 +200,14 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 		return nil, nil, nil, err
 	}
 	h.waitTurn(st)
-	sent, err := h.sendOn(origin, st, pair, out)
+	sent, err := h.sendOn(origin, st, pair, out, func(originID uint32) {
+		h.sentMu.Lock()
+		h.sent[st.id] = originID
+		h.sentMu.Unlock()
+	})
+	if h2AfterHeadSent != nil {
+		h2AfterHeadSent(st.id)
+	}
 	h.passTurn(st)
 	if errors.Is(err, errOriginGoneAway) {
 		// The origin's GOAWAY came before this stream went out. Once it
@@ -215,7 +227,6 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 		return nil, nil, nil, errStreamGone
 	}
 	st.origin = sent
-	h.sent[st.id] = sent.id
 	h.mu.Unlock()
 	return h.awaitResponse(st, req, sent)
 }

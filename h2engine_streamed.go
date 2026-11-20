@@ -305,12 +305,12 @@ func (s *h2OriginStream) endedBy(err error) error {
 // sendOn sends the pair's request on a new stream of origin. A streamed
 // request sends its head, and its body is carried from st's inbound on a
 // goroutine of its own, so the response can come while it is sent.
-func (h *h2Conn) sendOn(origin *h2Origin, st *h2Stream, pair *Pair, out *h2Request) (*h2OriginStream, error) {
+func (h *h2Conn) sendOn(origin *h2Origin, st *h2Stream, pair *Pair, out *h2Request, opened func(originID uint32)) (*h2OriginStream, error) {
 	body := st.request.streamed
 	if body == nil {
-		return origin.send(out)
+		return origin.send(out, opened)
 	}
-	s, err := origin.sendHead(out.fields)
+	s, err := origin.sendHead(out.fields, opened)
 	if err != nil {
 		return nil, err
 	}
