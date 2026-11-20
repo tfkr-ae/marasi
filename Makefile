@@ -25,8 +25,8 @@ STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
 .PHONY: build all test lint check clean install uninstall help conformance conformance-baseline conformance-update-known autobahn autobahn-baseline $(TARGETS)
 
 # Conformance harness (Docker). See `make help`.
-# The HTTP suites, all required checks; autobahn runs on its own.
-SUITES     ?= h1-origin,h1-client,h2-client,h2-origin,stream-origin,grpc-client
+# The suites that are required checks; autobahn runs on its own.
+SUITES     ?= h1-origin,h1-client,h2-client,h2-origin,stream-origin,grpc-client,connect-client
 CASES      ?= *
 EXCLUDE    ?=
 APPROACHES ?=
@@ -56,10 +56,12 @@ help:
 		'                     or a stale entry: one that matched nothing although a run' \
 		'                     and target it lists ran (with CASES, EXCLUDE or APPROACHES set,' \
 		'                     only one that covers a case that ran). SUITES defaults to the' \
-		'                     HTTP suites h1-origin,h1-client,h2-client,h2-origin,stream-origin,grpc-client.' \
-		'                     Suites: autobahn (Marasi on the host), h1-origin, h1-client,' \
-		'                     h2-client, h2-origin, stream-origin and grpc-client (Marasi in a Linux container built for' \
-		'                     LINUX_ARCH, this machine by default).' \
+		'                     suites that block a merge: h1-origin,h1-client,h2-client,' \
+		'                     h2-origin,stream-origin,grpc-client,connect-client.' \
+		'                     Suites: autobahn and connect-client (Marasi on the host),' \
+		'                     h1-origin, h1-client, h2-client, h2-origin, stream-origin and' \
+		'                     grpc-client (Marasi in a Linux container built for LINUX_ARCH,' \
+		'                     this machine by default).' \
 		'                     Narrow with SUITES=autobahn' \
 		'                     RUNS=proxy CASES=3.*,7.9.* EXCLUDE=9.* APPROACHES=connect-tls,' \
 		'                     and for autobahn MODES=fuzzingclient PEERS=strict (runs: proxy' \

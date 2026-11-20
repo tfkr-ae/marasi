@@ -100,16 +100,18 @@ jobs:
   # suites: "stream-origin (proxy)", "grpc-client (proxy)" and so on.
   # grpc-client installs grpc-go's interop client with the Go toolchain
   # set up here (go install, outside go.mod) and builds grpc-java's
-  # interop image.
+  # interop image. connect-client installs the connectrpc/conformance
+  # runner and reference client the same way and runs Marasi on the host,
+  # which reaches the reference servers on loopback.
   streams:
     name: ${{ matrix.suite }} (${{ matrix.run }})
     needs: paths
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        suite: [stream-origin, grpc-client]
+        suite: [stream-origin, grpc-client, connect-client]
         run: [proxy, checkpoint-forward, checkpoint-edit, extension]
     env:
       RUN_SUITE: ${{ needs.paths.outputs.streams }}
@@ -214,7 +216,9 @@ jobs:
             ':(glob)internal/conformance/streamorigin/**' \
             ':(glob)internal/conformance/baselines/stream-*/**' \
             ':(glob)internal/conformance/grpcclient/**' \
-            ':(glob)internal/conformance/baselines/grpc-*/**'
+            ':(glob)internal/conformance/baselines/grpc-*/**' \
+            ':(glob)internal/conformance/connectclient/**' \
+            ':(glob)internal/conformance/baselines/connect-client/**'
           # Autobahn takes hours, so its list stays narrow: a relay waits on
           # the database writer's queue, so a slower writer can fail a case
           # (db/, proxy.go); the matrix runs WebSocket modifiers, Checkpoint
