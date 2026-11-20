@@ -129,6 +129,49 @@ func TestDirectRecording(t *testing.T) {
 		}
 	})
 
+	// messages are a recording's stream messages in order, each as its
+	// side and bytes.
+	messages := func(got streamorigin.Recording) []string {
+		var out []string
+		for _, a := range got.Arrivals {
+			if a.Kind == "message" || a.Kind == "partial" || a.Kind == "answer" {
+				out = append(out, a.Side+" "+a.Kind+" "+string(a.Data))
+			}
+		}
+		return out
+	}
+
+	t.Run("should record a gRPC-Web trailers frame over HTTP/2 as its own message, after the client's answer", func(t *testing.T) {
+		got := baselineCase(t, settings, "grpc-web-trailers-frame-h2@connect-tls")
+		want := []string{
+			"origin message " + grpc("watch"), "client message " + grpc("tick 1"), "origin answer ",
+			"client message " + grpc("tick 2"), "client message \x80\x00\x00\x00\x10grpc-status: 0\r\n",
+		}
+		if got.ClientALPN != "h2" || !reflect.DeepEqual(messages(got), want) {
+			t.Fatalf("\nwanted h2 and:\n%q\ngot %q and:\n%q", want, got.ClientALPN, messages(got))
+		}
+	})
+
+	t.Run("should record each Connect message of a bidirectional call between the peer's answers, its end-of-stream envelope its own message", func(t *testing.T) {
+		got := baselineCase(t, settings, "connect-wait-for-answer-h2@connect-tls")
+		want := []string{
+			"client message " + grpc("ping 1"), "origin message " + grpc("pong 1"),
+			"client message " + grpc("ping 2"), "origin message " + grpc("pong 2"),
+			"client message \x02\x00\x00\x00\x02{}",
+		}
+		if !reflect.DeepEqual(messages(got), want) {
+			t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, messages(got))
+		}
+	})
+
+	t.Run("should record each NDJSON line over HTTP/2 as it arrives, before the client's answer reaches the origin", func(t *testing.T) {
+		got := baselineCase(t, settings, "ndjson-wait-for-answer-h2@connect-tls")
+		want := []string{"client message {\"n\":1}\n", "origin answer ", "client message {\"n\":2}\n"}
+		if !reflect.DeepEqual(messages(got), want) {
+			t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, messages(got))
+		}
+	})
+
 	t.Run("should record a trailers-only gRPC response as one head that ends the stream", func(t *testing.T) {
 		got := baselineCase(t, settings, "grpc-trailers-only@connect-tls").Arrivals
 		last := got[len(got)-2:]

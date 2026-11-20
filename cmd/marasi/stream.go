@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 
@@ -39,6 +40,9 @@ type streamMessage struct {
 	Compressed bool            `json:"compressed"`
 	CreatedAt  string          `json:"created_at"`
 	Metadata   json.RawMessage `json:"metadata"`
+	// Text is the message's text form, which only stream get returns, nil
+	// when it has none.
+	Text *string `json:"text"`
 }
 
 var streamMessagesCmd = &cobra.Command{
@@ -127,6 +131,14 @@ func writeStreamMessageHuman(w io.Writer, m streamMessage) error {
 	}
 	_, err := fmt.Fprintf(w, "id: %s\npair_id: %s\ndirection: %s\nframing: %s\nflags: %s\ncompressed: %t\ncreated_at: %s\nmetadata: %s\npayload: %s\n",
 		m.ID, m.PairID, m.Direction, m.Framing, streamFlags(m.Flags), m.Compressed, m.CreatedAt, metadata, payload)
+	if err != nil || m.Text == nil {
+		return err
+	}
+	text := *m.Text
+	if !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	_, err = fmt.Fprintf(w, "text:\n%s", text)
 	return err
 }
 

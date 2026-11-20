@@ -93,6 +93,11 @@ type streamedDirection struct {
 	ending    string
 	resetCode string
 	trailers  h2Fields
+	// declared is set when the direction's head declared a length.
+	declared bool
+	// encoding is the per-message encoding the direction's head names
+	// (stream.EncodingHeader), read when its carry starts.
+	encoding string
 }
 
 // streamed returns the pair's streamed state, made the first time.
@@ -150,6 +155,9 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 		sink.reset(http2.ErrCodeInternal)
 		return
 	}
+	if header := stream.EncodingHeader(d.framing); header != "" {
+		d.encoding = sp.headField(name, header)
+	}
 	var lastProgress time.Time
 	for {
 		data, readErr := src.peek()
@@ -169,16 +177,39 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 				src.reset(http2.ErrCodeEnhanceYourCalm)
 				return
 			case message != nil:
-				sp.record(name, d, message, nil)
-				if err := sink.forward(message.Raw); err != nil {
+				raw, err := sp.handle(name, d, message)
+				var undecodable *messageDecodeError
+				if errors.As(err, &undecodable) {
+					code := http2.ErrCodeInternal
+					if undecodable.tooLarge() {
+						code = http2.ErrCodeEnhanceYourCalm
+					}
+					sink.reset(code)
+					src.reset(code)
+					return
+				}
+				if raw == nil {
+					continue
+				}
+				if err := sink.forward(raw); err != nil {
 					sp.ended(d, err)
 					return
 				}
 			}
 			continue
 		}
-		// The direction ended: what arrived of a message it ended inside
-		// goes on as it came, and is stored cut short.
+		// The direction ended: a message its end makes whole goes on, and
+		// what arrived of a message it ended inside goes on as it came,
+		// and is stored cut short.
+		if errors.Is(readErr, io.EOF) {
+			if last := splitter.Flush(); last != nil {
+				sp.record(name, d, last, nil)
+				if err := sink.forward(last.Raw); err != nil {
+					sp.ended(d, err)
+					return
+				}
+			}
+		}
 		if partial := splitter.Partial(); partial != nil {
 			sp.record(name, d, partial, map[string]any{"cut_short": true})
 			sink.forward(partial.Raw)
@@ -210,6 +241,21 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 // streamProgressInterval is the least time between two progress
 // announcements of one direction's message, as for WebSocket messages.
 const streamProgressInterval = 100 * time.Millisecond
+
+// headField is field of direction name's head as the chain left it: the
+// request's for the request, the response's for the response.
+func (sp *streamedPair) headField(name, field string) string {
+	if name == domain.StreamDirectionResponse {
+		if res := sp.pair.Response; res != nil {
+			return res.Header.Get(field)
+		}
+		return ""
+	}
+	if req := sp.pair.Request; req != nil {
+		return req.Header.Get(field)
+	}
+	return ""
+}
 
 // progress announces a message still arriving, bytes of it so far, at most
 // once per streamProgressInterval since *last.
@@ -256,8 +302,26 @@ func (sp *streamedPair) record(name string, d *streamedDirection, message *strea
 	sp.mu.Lock()
 	d.messages++
 	sp.mu.Unlock()
-	flags := message.Flags
-	sp.store(name, d, &flags, message.Payload, metadata)
+	var flags *uint8
+	if d.framing.Enveloped() {
+		flags = &message.Flags
+	}
+	// A compressed message cut short is stored as the compressed bytes
+	// that arrived.
+	compressed := stream.Compressed(d.framing, message.Flags)
+	if compressed {
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
+		metadata["encoding"] = d.encoding
+	}
+	id, err := uuid.NewV7()
+	if err != nil {
+		return
+	}
+	row := sp.message(id, name, d, flags, message.Payload, metadata)
+	row.Compressed = compressed
+	sp.queue(row)
 }
 
 // tooLarge records a message over the limit, which is never forwarded, and
@@ -276,26 +340,35 @@ func (sp *streamedPair) tooLarge(name string, d *streamedDirection, err *stream.
 	_ = sp.proxy.WriteLog("WARN", entry, pairLogOptions(sp.pair)...)
 }
 
-// store queues one stream message for storage and announces it. A pair
-// that is not stored, out of scope or skipped, has its messages carried and
-// neither stored nor announced.
+// store queues one stream message for storage and announces it.
 func (sp *streamedPair) store(name string, d *streamedDirection, flags *uint8, payload []byte, metadata map[string]any) {
-	if !sp.announced() {
-		return
-	}
 	id, err := uuid.NewV7()
 	if err != nil {
 		return
 	}
+	sp.queue(sp.message(id, name, d, flags, payload, metadata))
+}
+
+// message is a stream message row of the pair's direction d.
+func (sp *streamedPair) message(id uuid.UUID, name string, d *streamedDirection, flags *uint8, payload []byte, metadata map[string]any) domain.StreamMessage {
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
 	if payload == nil {
 		payload = []byte{}
 	}
-	message := domain.StreamMessage{
+	return domain.StreamMessage{
 		ID: id, PairID: sp.pair.ID, Direction: name, Framing: string(d.framing), Flags: flags,
 		Payload: payload, CreatedAt: time.Now(), Metadata: metadata,
+	}
+}
+
+// queue queues message for storage and announces it. A pair that is not
+// stored, out of scope or skipped, has its messages carried and neither
+// stored nor announced.
+func (sp *streamedPair) queue(message domain.StreamMessage) {
+	if !sp.announced() {
+		return
 	}
 	if sp.proxy.DBWriteChannel != nil {
 		stored := message

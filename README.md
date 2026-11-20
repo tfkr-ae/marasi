@@ -222,7 +222,7 @@ Checkpoint with an auto-resolver that forwards each item unchanged),
 `checkpoint-edit` (the resolver forwards each item as an edit with the same
 bytes), and `extension` (a workshop hook sets each payload or body to itself:
 `processWebSocketMessage` for WebSocket, `processRequest` and
-`processResponse` for HTTP). A suite can also install Lua in every run:
+`processResponse` for HTTP, `processStreamMessage` for each stream message). A suite can also install Lua in every run:
 `h2-origin` installs the rule that redirects its `redirect-to-http1` case. Autobahn runs both modes (`fuzzingclient`, `fuzzingserver`) against
 two peers: Autobahn's strict testee and the harness's lenient echo peer.
 Variables narrow a run:
