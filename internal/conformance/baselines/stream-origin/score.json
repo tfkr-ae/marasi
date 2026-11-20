@@ -6,84 +6,84 @@
       "target": "fixtures",
       "approach": "absolute",
       "matched": 6,
-      "cases": 6
+      "cases": 7
     },
     {
       "run": "proxy",
       "target": "fixtures",
       "approach": "connect-plain",
       "matched": 6,
-      "cases": 6
+      "cases": 7
     },
     {
       "run": "proxy",
       "target": "fixtures",
       "approach": "connect-tls",
       "matched": 14,
-      "cases": 14
+      "cases": 16
     },
     {
       "run": "checkpoint-forward",
       "target": "fixtures",
       "approach": "absolute",
       "matched": 6,
-      "cases": 6
+      "cases": 7
     },
     {
       "run": "checkpoint-forward",
       "target": "fixtures",
       "approach": "connect-plain",
       "matched": 6,
-      "cases": 6
+      "cases": 7
     },
     {
       "run": "checkpoint-forward",
       "target": "fixtures",
       "approach": "connect-tls",
       "matched": 14,
-      "cases": 14
+      "cases": 16
     },
     {
       "run": "checkpoint-edit",
       "target": "fixtures",
       "approach": "absolute",
       "matched": 6,
-      "cases": 6
+      "cases": 7
     },
     {
       "run": "checkpoint-edit",
       "target": "fixtures",
       "approach": "connect-plain",
       "matched": 6,
-      "cases": 6
+      "cases": 7
     },
     {
       "run": "checkpoint-edit",
       "target": "fixtures",
       "approach": "connect-tls",
       "matched": 14,
-      "cases": 14
+      "cases": 16
     },
     {
       "run": "extension",
       "target": "fixtures",
       "approach": "absolute",
       "matched": 6,
-      "cases": 6
+      "cases": 7
     },
     {
       "run": "extension",
       "target": "fixtures",
       "approach": "connect-plain",
       "matched": 6,
-      "cases": 6
+      "cases": 7
     },
     {
       "run": "extension",
       "target": "fixtures",
       "approach": "connect-tls",
       "matched": 14,
-      "cases": 14
+      "cases": 16
     }
   ]
 }

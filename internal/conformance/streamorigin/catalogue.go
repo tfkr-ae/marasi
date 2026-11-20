@@ -249,6 +249,45 @@ var Catalogue = []Case{
 		},
 	},
 	{
+		// A gzipped event stream: the origin flushes its compressor after
+		// each event, and Marasi inflates it and compresses it again
+		// toward the client (the 2026-11-20 amendment of
+		// docs/adr/2026-10-11-proxy-terminates-permessage-deflate-per-leg.md).
+		ID:       "sse-gzip-wait-for-answer-h2",
+		RFC:      "WHATWG HTML §9.2 server-sent events with RFC 9110 §8.4.1.3 gzip content coding, over RFC 9113 §8.1 HTTP message framing",
+		Protocol: ProtocolH2,
+		Client: []Step{
+			Head(true, ":method", "GET", ":path", "/events", "accept", "text/event-stream", "accept-encoding", "gzip"),
+			Await(KindMessage),
+			Answer(),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Head(false, ":status", "200", "content-type", "text/event-stream", "content-encoding", "gzip", "cache-control", "no-cache"),
+			Message(false, "id: 1\ndata: first\n\n"),
+			Await(KindAnswer),
+			Message(true, "id: 2\ndata: second\n\n"),
+		},
+	},
+	{
+		ID:       "sse-gzip-wait-for-answer-http1",
+		RFC:      "WHATWG HTML §9.2 server-sent events with RFC 9110 §8.4.1.3 gzip content coding, over RFC 9112 §7.1 chunked transfer coding",
+		Protocol: ProtocolHTTP1,
+		Client: []Step{
+			Head(true, ":method", "GET", ":path", "/events", "Host", "{authority}", "Accept", "text/event-stream", "Accept-Encoding", "gzip"),
+			Await(KindMessage),
+			Answer(),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Head(false, ":status", "200", "Content-Type", "text/event-stream", "Content-Encoding", "gzip", "Cache-Control", "no-cache",
+				"Transfer-Encoding", "chunked"),
+			Message(false, "id: 1\ndata: first\n\n"),
+			Await(KindAnswer),
+			Message(true, "id: 2\ndata: second\n\n"),
+		},
+	},
+	{
 		// gRPC-Web in both directions over chunked bodies: the origin
 		// answers each request message before the request ends, and ends
 		// with a trailers frame.

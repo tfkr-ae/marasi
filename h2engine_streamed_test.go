@@ -446,24 +446,6 @@ func TestH2Engine_StreamedFramings(t *testing.T) {
 		})
 	}
 
-	t.Run("should carry a gzipped server-sent event stream read whole, as before, until compression is carried", func(t *testing.T) {
-		origin := newH2TestOrigin(t)
-		addr, captured, ca := serveH1EngineMITMProxy(t, true)
-		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
-		upstream := origin.accept(t)
-		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/events")
-		id := upstream.nthStream(t, 0)
-		upstream.headers(id, false, ":status", "200", "content-type", "text/event-stream", "content-encoding", "gzip")
-		upstream.data(id, true, "\x1f\x8b opaque")
-		if body := client.stream(t, 1).data; string(body) != "\x1f\x8b opaque" {
-			t.Fatalf("the client's response body\nwanted:\n%q\ngot:\n%q", "\x1f\x8b opaque", body)
-		}
-		_, res := streamedResponse(t, captured)
-		if _, ok := res.Metadata["streamed"]; ok {
-			t.Fatalf("the stored response\nwanted:\nno streamed metadata\ngot:\n%v", res.Metadata)
-		}
-	})
-
 	ordinary := []struct{ name, path, contentType string }{
 		{"unary Connect with protobuf", "/test.Echo/Say", "application/proto"},
 		{"unary Connect with JSON", "/test.Echo/Say", "application/json"},

@@ -106,6 +106,10 @@ type streamedDirection struct {
 	// encoding is the per-message encoding the direction's head names
 	// (stream.EncodingHeader), read when its carry starts.
 	encoding string
+	// bodyIn and bodyOut are the whole-body codings of the sender's head
+	// and of the head that went out (stream_body_compression.go), "" for
+	// none.
+	bodyIn, bodyOut string
 }
 
 // streamed returns the pair's streamed state, made the first time.
@@ -166,6 +170,7 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 	if header := stream.EncodingHeader(d.framing); header != "" {
 		d.encoding = sp.headField(name, header)
 	}
+	src, sink, inflater := sp.compressedBody(d, src, sink)
 	var lastProgress time.Time
 	for {
 		data, readErr := src.peek()
@@ -180,11 +185,20 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 			var tooLarge *stream.TooLargeError
 			switch {
 			case errors.As(err, &tooLarge):
-				sp.tooLarge(name, d, tooLarge)
+				if inflater != nil {
+					// A decompression bomb stops at the limit.
+					sp.inflateFailed(name, d, inflater.compressed(), inflatedTooLarge(tooLarge), http2.ErrCodeEnhanceYourCalm,
+						map[string]any{"too_large": true, "size_seen": tooLarge.Size})
+				} else {
+					sp.tooLarge(name, d, tooLarge)
+				}
 				sink.reset(http2.ErrCodeEnhanceYourCalm)
 				src.reset(http2.ErrCodeEnhanceYourCalm)
 				return
 			case message != nil:
+				if inflater != nil {
+					inflater.mark()
+				}
 				raw, err := sp.handle(name, d, message, src.cutOff())
 				var undecodable *messageDecodeError
 				if errors.As(err, &undecodable) {
@@ -205,6 +219,15 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 				}
 			}
 			continue
+		}
+		// A body that cannot be inflated cannot be forwarded: the
+		// receiver's decompressor was fed Marasi's output.
+		var notInflated *inflateError
+		if errors.As(readErr, &notInflated) {
+			sp.inflateFailed(name, d, inflater.compressed(), notInflated.err, http2.ErrCodeInternal, nil)
+			sink.reset(http2.ErrCodeInternal)
+			src.reset(http2.ErrCodeInternal)
+			return
 		}
 		// The direction ended: a message its end makes whole goes on, and
 		// what arrived of a message it ended inside goes on as it came,

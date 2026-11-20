@@ -1697,6 +1697,354 @@
       }
     ]
   },
+  "sse-gzip-wait-for-answer-h2@connect-tls": {
+    "client_alpn": "h2",
+    "origin_alpn": [
+      "h2"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "GET"
+          },
+          {
+            "name": ":scheme",
+            "value": "https"
+          },
+          {
+            "name": ":authority",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": ":path",
+            "value": "/events"
+          },
+          {
+            "name": "accept",
+            "value": "text/event-stream"
+          },
+          {
+            "name": "accept-encoding",
+            "value": "gzip"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "content-type",
+            "value": "text/event-stream"
+          },
+          {
+            "name": "content-encoding",
+            "value": "gzip"
+          },
+          {
+            "name": "cache-control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDEKZGF0YTogZmlyc3QKCg=="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDIKZGF0YTogc2Vjb25kCgo="
+      },
+      {
+        "side": "client",
+        "kind": "coded",
+        "data": "H4sICAAAAAAA/29yaWdpbgDKTLFSMORKSSxJtFJIyywqLuHiAgAAAP//AgkZQYWKU5Pz81K4uAABAAD//2uEfyUnAAAA"
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "sse-gzip-wait-for-answer-http1@absolute": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "GET"
+          },
+          {
+            "name": ":path",
+            "value": "/events"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Accept",
+            "value": "text/event-stream"
+          },
+          {
+            "name": "Accept-Encoding",
+            "value": "gzip"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/event-stream"
+          },
+          {
+            "name": "Content-Encoding",
+            "value": "gzip"
+          },
+          {
+            "name": "Cache-Control",
+            "value": "no-cache"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDEKZGF0YTogZmlyc3QKCg=="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDIKZGF0YTogc2Vjb25kCgo="
+      },
+      {
+        "side": "client",
+        "kind": "coded",
+        "data": "H4sICAAAAAAA/29yaWdpbgDKTLFSMORKSSxJtFJIyywqLuHiAgAAAP//AgkZQYWKU5Pz81K4uAABAAD//2uEfyUnAAAA"
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "sse-gzip-wait-for-answer-http1@connect-plain": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "GET"
+          },
+          {
+            "name": ":path",
+            "value": "/events"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Accept",
+            "value": "text/event-stream"
+          },
+          {
+            "name": "Accept-Encoding",
+            "value": "gzip"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/event-stream"
+          },
+          {
+            "name": "Content-Encoding",
+            "value": "gzip"
+          },
+          {
+            "name": "Cache-Control",
+            "value": "no-cache"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDEKZGF0YTogZmlyc3QKCg=="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDIKZGF0YTogc2Vjb25kCgo="
+      },
+      {
+        "side": "client",
+        "kind": "coded",
+        "data": "H4sICAAAAAAA/29yaWdpbgDKTLFSMORKSSxJtFJIyywqLuHiAgAAAP//AgkZQYWKU5Pz81K4uAABAAD//2uEfyUnAAAA"
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "sse-gzip-wait-for-answer-http1@connect-tls": {
+    "client_alpn": "http/1.1",
+    "origin_alpn": [
+      "http/1.1"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "GET"
+          },
+          {
+            "name": ":path",
+            "value": "/events"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Accept",
+            "value": "text/event-stream"
+          },
+          {
+            "name": "Accept-Encoding",
+            "value": "gzip"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/event-stream"
+          },
+          {
+            "name": "Content-Encoding",
+            "value": "gzip"
+          },
+          {
+            "name": "Cache-Control",
+            "value": "no-cache"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDEKZGF0YTogZmlyc3QKCg=="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "aWQ6IDIKZGF0YTogc2Vjb25kCgo="
+      },
+      {
+        "side": "client",
+        "kind": "coded",
+        "data": "H4sICAAAAAAA/29yaWdpbgDKTLFSMORKSSxJtFJIyywqLuHiAgAAAP//AgkZQYWKU5Pz81K4uAABAAD//2uEfyUnAAAA"
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
   "sse-wait-for-answer-h2@connect-tls": {
     "client_alpn": "h2",
     "origin_alpn": [
