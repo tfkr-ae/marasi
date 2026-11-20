@@ -295,6 +295,50 @@ func WithWebSocketProgressHandler(handler func(domain.WebSocketMessageProgress) 
 	}
 }
 
+// WithStreamedPairStartedHandler sets OnStreamedPairStarted.
+func WithStreamedPairStartedHandler(handler func(domain.StreamedPairStarted)) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnStreamedPairStarted != nil {
+			return errors.New("proxy already has a streamed pair started handler defined")
+		}
+		proxy.OnStreamedPairStarted = handler
+		return nil
+	}
+}
+
+// WithStreamMessageHandler sets OnStreamMessage.
+func WithStreamMessageHandler(handler func(domain.StreamMessage)) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnStreamMessage != nil {
+			return errors.New("proxy already has a stream message handler defined")
+		}
+		proxy.OnStreamMessage = handler
+		return nil
+	}
+}
+
+// WithStreamMessageProgressHandler sets OnStreamMessageProgress.
+func WithStreamMessageProgressHandler(handler func(domain.StreamMessageProgress)) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnStreamMessageProgress != nil {
+			return errors.New("proxy already has a stream message progress handler defined")
+		}
+		proxy.OnStreamMessageProgress = handler
+		return nil
+	}
+}
+
+// WithStreamedPairEndedHandler sets OnStreamedPairEnded.
+func WithStreamedPairEndedHandler(handler func(domain.StreamedPairEnded)) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnStreamedPairEnded != nil {
+			return errors.New("proxy already has a streamed pair ended handler defined")
+		}
+		proxy.OnStreamedPairEnded = handler
+		return nil
+	}
+}
+
 // WithWebSocketCloseHandler takes a handler function that will be executed when a WebSocket connection closes.
 func WithWebSocketCloseHandler(handler func(domain.WebSocketConnection) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {

@@ -145,3 +145,89 @@ func streamContentType(row *domain.RequestResponseRow, direction string) string 
 	header, _ := reader.ReadMIMEHeader()
 	return header.Get("Content-Type")
 }
+
+// Streamed pair events (spec: Control API, CLI and events). The stream.
+// prefix names the event stream itself, so these use streamed_pair. and
+// stream_message.
+
+// streamMessageEventPayloadLimit is the largest payload a stream_message
+// event carries. A larger one is left out, with payload_truncated, and is
+// read from GET /stream/{pair_id}/message/{id}.
+const streamMessageEventPayloadLimit = 64 << 10
+
+type streamedPairStartedEvent struct {
+	PairID   uuid.UUID         `json:"pair_id"`
+	Framings map[string]string `json:"framings"`
+}
+
+type streamMessageEvent struct {
+	streamMessageResponse
+	PayloadTruncated bool `json:"payload_truncated"`
+}
+
+type streamMessageProgressEvent struct {
+	PairID    uuid.UUID `json:"pair_id"`
+	Direction string    `json:"direction"`
+	Framing   string    `json:"framing"`
+	Bytes     int64     `json:"bytes"`
+}
+
+type streamTrailerResponse struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// streamedDirectionResponse has the shape of a direction in the response's
+// metadata.streamed.
+type streamedDirectionResponse struct {
+	Framing   string                  `json:"framing"`
+	Messages  int                     `json:"messages"`
+	Ending    string                  `json:"ending"`
+	ResetCode string                  `json:"reset_code,omitempty"`
+	Trailers  []streamTrailerResponse `json:"trailers,omitempty"`
+}
+
+type streamedPairEndedEvent struct {
+	PairID     uuid.UUID                            `json:"pair_id"`
+	Directions map[string]streamedDirectionResponse `json:"directions"`
+}
+
+// HandleStreamedPairStarted publishes streamed_pair.started.
+func (s *Server) HandleStreamedPairStarted(started domain.StreamedPairStarted) {
+	framings := started.Framings
+	if framings == nil {
+		framings = map[string]string{}
+	}
+	s.events.publish("streamed_pair.started", streamedPairStartedEvent{PairID: started.PairID, Framings: framings})
+}
+
+// HandleStreamMessage publishes stream_message, without a payload over
+// streamMessageEventPayloadLimit.
+func (s *Server) HandleStreamMessage(message domain.StreamMessage) {
+	event := streamMessageEvent{streamMessageResponse: streamMessageFromDomain(message)}
+	if len(message.Payload) > streamMessageEventPayloadLimit {
+		event.Payload = nil
+		event.PayloadTruncated = true
+	}
+	s.events.publish("stream_message", event)
+}
+
+// HandleStreamMessageProgress publishes stream_message.progress.
+func (s *Server) HandleStreamMessageProgress(progress domain.StreamMessageProgress) {
+	s.events.publish("stream_message.progress", streamMessageProgressEvent{
+		PairID: progress.PairID, Direction: progress.Direction, Framing: progress.Framing, Bytes: progress.Bytes,
+	})
+}
+
+// HandleStreamedPairEnded publishes streamed_pair.ended.
+func (s *Server) HandleStreamedPairEnded(ended domain.StreamedPairEnded) {
+	directions := make(map[string]streamedDirectionResponse, len(ended.Directions))
+	for name, d := range ended.Directions {
+		direction := streamedDirectionResponse{Framing: d.Framing, Messages: d.Messages, Ending: d.Ending, ResetCode: d.ResetCode}
+		for _, trailer := range d.Trailers {
+			direction.Trailers = append(direction.Trailers, streamTrailerResponse(trailer))
+		}
+		directions[name] = direction
+	}
+	s.events.publish("streamed_pair.ended", streamedPairEndedEvent{PairID: ended.PairID, Directions: directions})
+}
