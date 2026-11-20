@@ -34,13 +34,27 @@ import (
 
 // h1StreamedFraming is the message framing a head's Content-Type names, when
 // the engine carries it streamed, and FramingNone otherwise: the same rule
-// as the HTTP/2 engine's.
+// as the HTTP/2 engine's. A Content-Length a chunked coding overrides
+// declares no length.
 func h1StreamedFraming(header *h1.Header, response bool) stream.Framing {
+	return h2StreamedFraming(h1FramingFields(header), response)
+}
+
+// h1FramingFields are the fields of header the streamed framing rule reads.
+func h1FramingFields(header *h1.Header) h2Fields {
 	fields := h2Fields{{Name: "content-type", Value: header.Get("Content-Type")}}
-	if encoding := header.Get("Content-Encoding"); encoding != "" {
+	if encoding := strings.Join(header.Values("Content-Encoding"), ", "); encoding != "" {
 		fields = append(fields, h2Field{Name: "content-encoding", Value: encoding})
 	}
-	return h2StreamedFraming(fields, response)
+	if header.Has("Content-Length") && !isChunked(header) {
+		fields = append(fields, h2Field{Name: "content-length", Value: header.Get("Content-Length")})
+	}
+	return fields
+}
+
+// h1BodyEncoding is the whole-body coding of a streamed head, "" for none.
+func h1BodyEncoding(header *h1.Header, framing stream.Framing) string {
+	return h2BodyEncoding(h1FramingFields(header), framing)
 }
 
 // h1HeadFields are a head's fields as headWentOut reads them: the
@@ -89,7 +103,11 @@ func (s *h1Streams) cancel() {
 // source on the sender's leg.
 type h1StreamedBody struct {
 	framing stream.Framing
-	src     *h1Source
+	// encoding is the whole-body coding of a response's head, "" for
+	// none: only server-sent events and NDJSON, response framings, have
+	// one.
+	encoding string
+	src      *h1Source
 }
 
 // h1Source is a streamed direction as it arrives on an HTTP/1.1 leg.
@@ -254,7 +272,7 @@ func (c *h1Conn) streamedResponse(origin *originConn, head *h1.ResponseHead, fra
 		return false
 	}
 	streams := c.pairStreams()
-	streams.response = &h1StreamedBody{framing: f, src: &h1Source{body: h1.NewBodyReader(origin.br, framing), conn: origin.conn, streams: streams}}
+	streams.response = &h1StreamedBody{framing: f, encoding: h1BodyEncoding(&head.Header, f), src: &h1Source{body: h1.NewBodyReader(origin.br, framing), conn: origin.conn, streams: streams}}
 	res.Body = http.NoBody
 	return true
 }
@@ -307,6 +325,7 @@ func (c *h1Conn) carryStreamedResponse(pair *Pair, res *http.Response, wire *wir
 	if out.head.Header.Has("Content-Length") && !chunked {
 		pair.stream.declareLength(d)
 	}
+	pair.stream.bodyEncodings(d, body.encoding, strings.Join(out.head.Header.Values("Content-Encoding"), ", "))
 	sink := &h1Sink{bw: c.bw, conn: c.conn, chunked: chunked, streams: streams}
 	pair.stream.carry(domain.StreamDirectionResponse, d, body.src, sink)
 	complete := pair.stream.ending(d) == streamComplete

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"strings"
+
+	"github.com/tfkr-ae/marasi/internal/conformance/h2"
 )
 
 // Message framings the splitter knows, named as in GLOSSARY.md.
@@ -48,11 +50,32 @@ func framingOf(contentType string) string {
 type splitter struct {
 	framing string
 	held    []byte
+	// coding is the body's content coding (coding.go), "" for none;
+	// coded is the compressed body so far, and taken how much of what it
+	// inflates to was cut already.
+	coding string
+	coded  []byte
+	taken  int
+}
+
+// head sets the framing and coding a body's head names.
+func (s *splitter) head(contentType string, fields []h2.Field) {
+	s.framing = framingOf(contentType)
+	s.coding = headCoding(fields)
 }
 
 // write takes the next bytes of the body and returns every message they
-// complete.
+// complete. A compressed body is cut as it inflates.
 func (s *splitter) write(data []byte) [][]byte {
+	if s.coding != "" {
+		s.coded = append(s.coded, data...)
+		out := inflated(s.coding, s.coded)
+		if len(out) < s.taken {
+			return nil
+		}
+		data = out[s.taken:]
+		s.taken = len(out)
+	}
 	s.held = append(s.held, data...)
 	var messages [][]byte
 	for {
@@ -96,17 +119,21 @@ func (s *splitter) next() int {
 	return 0
 }
 
-// end returns the arrival of what is still held when the body ends: the
-// whole body with no framing, or a message cut short.
-func (s *splitter) end(side string) (Arrival, bool) {
-	if len(s.held) == 0 {
-		return Arrival{}, false
+// end returns the arrivals of what is still held when the body ends: the
+// whole body with no framing, or a message cut short, then a compressed
+// body's bytes whole.
+func (s *splitter) end(side string) []Arrival {
+	var arrivals []Arrival
+	if len(s.held) > 0 {
+		kind := KindPartial
+		if s.framing == framingNone {
+			kind = KindBody
+		}
+		arrivals = append(arrivals, Arrival{Side: side, Kind: kind, Data: s.held})
 	}
-	kind := KindPartial
-	if s.framing == framingNone {
-		kind = KindBody
+	if len(s.coded) > 0 {
+		arrivals = append(arrivals, Arrival{Side: side, Kind: KindCoded, Data: s.coded})
 	}
-	a := Arrival{Side: side, Kind: kind, Data: s.held}
-	s.held = nil
-	return a, true
+	s.held, s.coded = nil, nil
+	return arrivals
 }

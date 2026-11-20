@@ -362,7 +362,7 @@ func (o *h2Origin) headers(decoder *hpack.Decoder) error {
 		}
 		s.passMu.Unlock()
 		if framing != stream.FramingNone && !o.block.endStream {
-			o.streamResponse(s, framing)
+			o.streamResponse(s, framing, h2BodyEncoding(fields, framing))
 			return nil
 		}
 	}
@@ -374,10 +374,11 @@ func (o *h2Origin) headers(decoder *hpack.Decoder) error {
 
 // streamResponse carries s's response as stream messages: the head goes on
 // now (headed), and the body as it arrives.
-func (o *h2Origin) streamResponse(s *h2OriginStream, framing stream.Framing) {
+func (o *h2Origin) streamResponse(s *h2OriginStream, framing stream.Framing, encoding string) {
 	id := s.id
 	s.response.streamed = &h2StreamedBody{
-		framing: framing,
+		framing:  framing,
+		encoding: encoding,
 		in: newH2Inbound(h2OriginStreamWindow, func(n uint32) {
 			o.w.do(func(f *http2.Framer) error { return f.WriteWindowUpdate(id, n) })
 		}),

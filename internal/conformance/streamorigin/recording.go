@@ -24,6 +24,7 @@ const (
 	KindMessage  = "message"  // one stream message, cut out by the direction's message framing
 	KindBody     = "body"     // a body with no message framing, whole at its end
 	KindPartial  = "partial"  // the bytes of a stream message cut short when the direction ended
+	KindCoded    = "coded"    // a compressed body's bytes as they came, whole when the direction ended
 	KindTrailers = "trailers" // a trailer section
 	KindEnd      = "end"      // the direction ended: END_STREAM, or the end of an HTTP/1.1 message
 	KindReset    = "reset"    // RST_STREAM, with its code
@@ -49,7 +50,7 @@ type Arrival struct {
 	Side    string     `json:"side"`
 	Kind    string     `json:"kind"`
 	Fields  []h2.Field `json:"fields,omitempty"`  // KindHead, KindTrailers; an HTTP/1.1 start line as pseudo-header fields
-	Data    []byte     `json:"data,omitempty"`    // KindMessage, KindBody, KindPartial: the bytes, framing included
+	Data    []byte     `json:"data,omitempty"`    // KindMessage, KindBody, KindPartial: the bytes, framing included, inflated; KindCoded: compressed
 	Code    string     `json:"code,omitempty"`    // KindReset
 	Awaited string     `json:"awaited,omitempty"` // KindTimeout: the kind awaited
 }
@@ -64,7 +65,7 @@ func (a Arrival) label() string {
 
 // compared lists the kinds whose content is compared, each n-th arrival
 // of a kind on a side with the n-th in the baseline.
-var compared = []string{KindHead, KindMessage, KindBody, KindPartial, KindTrailers, KindReset}
+var compared = []string{KindHead, KindMessage, KindBody, KindPartial, KindCoded, KindTrailers, KindReset}
 
 // Compare compares a recording with its baseline, both as JSON. Field
 // paths are client.alpn, origin.alpn, order (every arrival's side and

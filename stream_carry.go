@@ -106,6 +106,10 @@ type streamedDirection struct {
 	// encoding is the per-message encoding the direction's head names
 	// (stream.EncodingHeader) as it went out (headWentOut).
 	encoding string
+	// bodyIn and bodyOut are the whole-body codings of the sender's head
+	// and of the head that went out (stream_body_compression.go), "" for
+	// none.
+	bodyIn, bodyOut string
 	// src and sink are the direction's legs once its carry started, nil
 	// before.
 	src  streamSource
@@ -179,6 +183,9 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 		sink.reset(http2.ErrCodeInternal)
 		return
 	}
+	// An injected message goes to the receiver through the same
+	// compressor as the carried ones.
+	src, sink, inflater := sp.compressedBody(d, src, sink)
 	d.turn <- struct{}{}
 	sp.mu.Lock()
 	d.src, d.sink = src, sink
@@ -216,11 +223,20 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 			var tooLarge *stream.TooLargeError
 			switch {
 			case errors.As(err, &tooLarge):
-				sp.tooLarge(name, d, tooLarge)
+				if inflater != nil {
+					// A decompression bomb stops at the limit.
+					sp.inflateFailed(name, d, inflater.compressed(), inflatedTooLarge(tooLarge), http2.ErrCodeEnhanceYourCalm,
+						map[string]any{"too_large": true, "size_seen": tooLarge.Size})
+				} else {
+					sp.tooLarge(name, d, tooLarge)
+				}
 				sink.reset(http2.ErrCodeEnhanceYourCalm)
 				src.reset(http2.ErrCodeEnhanceYourCalm)
 				return
 			case message != nil:
+				if inflater != nil {
+					inflater.mark()
+				}
 				raw, err := sp.handle(name, d, message, src.cutOff())
 				var undecodable *messageDecodeError
 				if errors.As(err, &undecodable) {
@@ -241,6 +257,15 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 				}
 			}
 			continue
+		}
+		// A body that cannot be inflated cannot be forwarded: the
+		// receiver's decompressor was fed Marasi's output.
+		var notInflated *inflateError
+		if errors.As(readErr, &notInflated) {
+			sp.inflateFailed(name, d, inflater.compressed(), notInflated.err, http2.ErrCodeInternal, nil)
+			sink.reset(http2.ErrCodeInternal)
+			src.reset(http2.ErrCodeInternal)
+			return
 		}
 		// The direction ended: a message its end makes whole goes on, and
 		// what arrived of a message it ended inside goes on as it came,

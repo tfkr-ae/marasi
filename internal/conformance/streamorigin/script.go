@@ -19,6 +19,7 @@ type sender interface {
 // counted as awaited, so the next Await waits for the arrival after it.
 // An Await for KindEnd waits endTimeout.
 func runScript(t *transcript, side string, steps []Step, s sender, awaited map[string]int, timeout, endTimeout time.Duration) error {
+	s = &codingSender{sender: s}
 	for i, step := range steps {
 		var err error
 		switch step.Kind {

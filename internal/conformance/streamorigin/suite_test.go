@@ -1,8 +1,11 @@
 package streamorigin_test
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -171,6 +174,43 @@ func TestDirectRecording(t *testing.T) {
 			t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, messages(got))
 		}
 	})
+
+	for _, id := range []string{"sse-gzip-wait-for-answer-h2@connect-tls", "sse-gzip-wait-for-answer-http1@connect-plain"} {
+		t.Run("should record each event of a gzipped event stream decoded as it arrives, before the client's answer, then the compressed body whole: "+id, func(t *testing.T) {
+			got := baselineCase(t, settings, id)
+			var kinds []string
+			var coded []byte
+			for _, a := range got.Arrivals {
+				if a.Side != "client" {
+					kinds = append(kinds, a.Side+" "+a.Kind)
+					continue
+				}
+				switch a.Kind {
+				case "coded":
+					coded = a.Data
+					kinds = append(kinds, "client coded")
+				case "message":
+					kinds = append(kinds, "client message "+string(a.Data))
+				default:
+					kinds = append(kinds, "client "+a.Kind)
+				}
+			}
+			want := []string{
+				"origin head", "origin end", "client head", "client message id: 1\ndata: first\n\n", "origin answer",
+				"client message id: 2\ndata: second\n\n", "client coded", "client end",
+			}
+			if !reflect.DeepEqual(kinds, want) {
+				t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, kinds)
+			}
+			r, err := gzip.NewReader(bytes.NewReader(coded))
+			if err != nil {
+				t.Fatalf("the coded body: %v", err)
+			}
+			if body, err := io.ReadAll(r); err != nil || string(body) != "id: 1\ndata: first\n\nid: 2\ndata: second\n\n" {
+				t.Fatalf("the coded body, inflated\nwanted:\nboth events\ngot:\n%q (%v)", body, err)
+			}
+		})
+	}
 
 	t.Run("should record a trailers-only gRPC response as one head that ends the stream", func(t *testing.T) {
 		got := baselineCase(t, settings, "grpc-trailers-only@connect-tls").Arrivals
