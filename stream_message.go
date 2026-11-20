@@ -42,14 +42,21 @@ func (sp *streamedPair) handle(name string, d *streamedDirection, message *strea
 		raw = nil
 	case edited:
 		live.Metadata["edited"] = true
-		raw = stream.Envelope(live.Flags, live.Payload)
+		raw = live.Payload
+		if d.framing.Enveloped() {
+			raw = stream.Envelope(live.Flags, live.Payload)
+		}
 	}
 
 	sp.mu.Lock()
 	d.messages++
 	sp.mu.Unlock()
-	flags := live.Flags
-	sp.queue(sp.message(id, name, d, &flags, live.Payload, live.Metadata))
+	var flags *uint8
+	if d.framing.Enveloped() {
+		f := live.Flags
+		flags = &f
+	}
+	sp.queue(sp.message(id, name, d, flags, live.Payload, live.Metadata))
 	return raw
 }
 
