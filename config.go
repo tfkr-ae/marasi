@@ -45,6 +45,12 @@ type Config struct {
 	// marasi_config.yaml. Zero or unset means stream.DefaultMaxMessageSize
 	// (64 MiB). A negative value is rejected when the config loads.
 	StreamMaxMessageSize int64 `mapstructure:"stream_max_message_size"`
+	// BodyThreshold is the size in bytes past which an ordinary pair's body
+	// is forwarded as it arrives instead of read whole, set by
+	// body_threshold in marasi_config.yaml. Zero or unset means
+	// DefaultBodyThreshold (64 MiB). A negative value is rejected when the
+	// config loads.
+	BodyThreshold int64 `mapstructure:"body_threshold"`
 	// Updates is the updates section of marasi_config.yaml.
 	Updates UpdatesConfig `mapstructure:"updates"`
 	// UpstreamProxies is the machine's upstream proxy list, the
@@ -75,6 +81,9 @@ func (cfg *Config) validate() error {
 	}
 	if cfg.StreamMaxMessageSize < 0 {
 		return fmt.Errorf("stream_max_message_size is %d: use 0 for the 64 MiB default or a positive number of bytes", cfg.StreamMaxMessageSize)
+	}
+	if cfg.BodyThreshold < 0 {
+		return fmt.Errorf("body_threshold is %d: use 0 for the 64 MiB default or a positive number of bytes", cfg.BodyThreshold)
 	}
 	if cfg.Updates.Channel != "" {
 		if _, err := update.ParseChannel(string(cfg.Updates.Channel)); err != nil {

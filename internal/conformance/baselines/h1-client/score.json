@@ -5,88 +5,88 @@
       "run": "proxy",
       "target": "nginx",
       "approach": "connect-plain",
-      "matched": 120,
+      "matched": 121,
       "cases": 213,
       "leg_rules": {
         "passed": 624,
-        "failed": 208
+        "failed": 209
       }
     },
     {
       "run": "proxy",
       "target": "nginx",
       "approach": "connect-tls",
-      "matched": 120,
+      "matched": 121,
       "cases": 213,
       "leg_rules": {
-        "passed": 624,
-        "failed": 208
+        "passed": 627,
+        "failed": 209
       }
     },
     {
       "run": "checkpoint-forward",
       "target": "nginx",
       "approach": "connect-plain",
-      "matched": 120,
+      "matched": 121,
       "cases": 213,
       "leg_rules": {
         "passed": 624,
-        "failed": 208
+        "failed": 209
       }
     },
     {
       "run": "checkpoint-forward",
       "target": "nginx",
       "approach": "connect-tls",
-      "matched": 120,
+      "matched": 121,
       "cases": 213,
       "leg_rules": {
-        "passed": 624,
-        "failed": 208
+        "passed": 627,
+        "failed": 209
       }
     },
     {
       "run": "checkpoint-edit",
       "target": "nginx",
       "approach": "connect-plain",
-      "matched": 120,
+      "matched": 121,
       "cases": 213,
       "leg_rules": {
         "passed": 624,
-        "failed": 208
+        "failed": 209
       }
     },
     {
       "run": "checkpoint-edit",
       "target": "nginx",
       "approach": "connect-tls",
-      "matched": 120,
+      "matched": 121,
       "cases": 213,
       "leg_rules": {
-        "passed": 624,
-        "failed": 208
+        "passed": 627,
+        "failed": 209
       }
     },
     {
       "run": "extension",
       "target": "nginx",
       "approach": "connect-plain",
-      "matched": 120,
+      "matched": 121,
       "cases": 213,
       "leg_rules": {
         "passed": 624,
-        "failed": 208
+        "failed": 209
       }
     },
     {
       "run": "extension",
       "target": "nginx",
       "approach": "connect-tls",
-      "matched": 120,
+      "matched": 121,
       "cases": 213,
       "leg_rules": {
-        "passed": 624,
-        "failed": 208
+        "passed": 627,
+        "failed": 209
       }
     }
   ]

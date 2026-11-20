@@ -405,6 +405,566 @@
       }
     ]
   },
+  "ordinary-request-stall-h2@connect-tls": {
+    "client_alpn": "h2",
+    "origin_alpn": [
+      "h2"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":scheme",
+            "value": "https"
+          },
+          {
+            "name": ":authority",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": ":path",
+            "value": "/upload"
+          },
+          {
+            "name": "content-type",
+            "value": "text/plain"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "cGFydCAxCg=="
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "content-type",
+            "value": "text/plain"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "Z290IHBhcnQgMQo="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "cGFydCAyCg=="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      }
+    ]
+  },
+  "ordinary-request-stall-http1@absolute": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":path",
+            "value": "/upload"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/plain"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "cGFydCAxCg=="
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/plain"
+          },
+          {
+            "name": "Content-Length",
+            "value": "11"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "Z290IHBhcnQgMQo="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "cGFydCAyCg=="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      }
+    ]
+  },
+  "ordinary-request-stall-http1@connect-plain": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":path",
+            "value": "/upload"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/plain"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "cGFydCAxCg=="
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/plain"
+          },
+          {
+            "name": "Content-Length",
+            "value": "11"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "Z290IHBhcnQgMQo="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "cGFydCAyCg=="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      }
+    ]
+  },
+  "ordinary-request-stall-http1@connect-tls": {
+    "client_alpn": "http/1.1",
+    "origin_alpn": [
+      "http/1.1"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":path",
+            "value": "/upload"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/plain"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "cGFydCAxCg=="
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/plain"
+          },
+          {
+            "name": "Content-Length",
+            "value": "11"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "Z290IHBhcnQgMQo="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "cGFydCAyCg=="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      }
+    ]
+  },
+  "ordinary-response-stall-h2@connect-tls": {
+    "client_alpn": "h2",
+    "origin_alpn": [
+      "h2"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "GET"
+          },
+          {
+            "name": ":scheme",
+            "value": "https"
+          },
+          {
+            "name": ":authority",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": ":path",
+            "value": "/download"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "content-type",
+            "value": "text/plain"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "Zmlyc3QK"
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "c2Vjb25kCg=="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "ordinary-response-stall-http1@absolute": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "GET"
+          },
+          {
+            "name": ":path",
+            "value": "/download"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/plain"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "Zmlyc3QK"
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "c2Vjb25kCg=="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "ordinary-response-stall-http1@connect-plain": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "GET"
+          },
+          {
+            "name": ":path",
+            "value": "/download"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/plain"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "Zmlyc3QK"
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "c2Vjb25kCg=="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "ordinary-response-stall-http1@connect-tls": {
+    "client_alpn": "http/1.1",
+    "origin_alpn": [
+      "http/1.1"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "GET"
+          },
+          {
+            "name": ":path",
+            "value": "/download"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/plain"
+          },
+          {
+            "name": "Transfer-Encoding",
+            "value": "chunked"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "Zmlyc3QK"
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "c2Vjb25kCg=="
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
   "sse-wait-for-answer-h2@connect-tls": {
     "client_alpn": "h2",
     "origin_alpn": [

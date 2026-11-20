@@ -151,6 +151,9 @@ type h2Request struct {
 	// framing: body stays empty and the body is carried as stream
 	// messages (h2engine_streamed.go).
 	streamed *h2StreamedBody
+	// rest is set when the body passed the body threshold: body is what
+	// arrived up to it, and the rest follows on rest (h2engine_threshold.go).
+	rest *h2Pass
 }
 
 // h2Response is an HTTP/2 response as the engine read it from the origin.
@@ -161,6 +164,9 @@ type h2Response struct {
 	endsOnData bool
 	// streamed is as on h2Request.
 	streamed *h2StreamedBody
+	// rest is set when the body passed the body threshold, as for a
+	// request.
+	rest *h2Pass
 }
 
 // target is what the request's view shows as its URL and Host: the URL from

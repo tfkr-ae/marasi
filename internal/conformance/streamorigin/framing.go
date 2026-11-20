@@ -14,6 +14,11 @@ const (
 	framingConnect = "connect"
 	framingSSE     = "sse"
 	framingNDJSON  = "ndjson"
+	// framingLines is the recording's own cut, not a message framing: an
+	// ordinary text/plain body is recorded line by line as it arrives, so
+	// a stall fixture can wait on part of a body that Marasi reads whole
+	// until it stalls.
+	framingLines = "lines"
 )
 
 // framingOf is the message framing a direction's content type names: the
@@ -32,6 +37,8 @@ func framingOf(contentType string) string {
 		return framingSSE
 	case mediaType == "application/x-ndjson" || mediaType == "application/jsonl":
 		return framingNDJSON
+	case mediaType == "text/plain":
+		return framingLines
 	}
 	return framingNone
 }
@@ -82,7 +89,7 @@ func (s *splitter) next() int {
 			}
 		}
 		return first
-	case framingNDJSON:
+	case framingNDJSON, framingLines:
 		// A line ends at a LF.
 		return bytes.IndexByte(s.held, '\n') + 1
 	}
