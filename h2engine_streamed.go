@@ -262,7 +262,7 @@ type h2OriginSink struct {
 
 func (k h2OriginSink) forward(raw []byte) error {
 	if err := sendData(k.o.w, k.o.flow, &k.s.window, k.s.id, raw, false); err != nil {
-		return k.s.endedBy(err)
+		return k.o.endedBy(k.s, err)
 	}
 	return nil
 }
@@ -270,13 +270,13 @@ func (k h2OriginSink) forward(raw []byte) error {
 func (k h2OriginSink) end(trailers h2Fields) error {
 	if len(trailers) > 0 {
 		if !k.o.open(k.s) {
-			return k.s.endedBy(errStreamGone)
+			return k.o.endedBy(k.s, errStreamGone)
 		}
 		_, err := k.o.w.headers(fixedID(k.s.id), trailers, true, k.o.flow.frameSize())
 		return err
 	}
 	if err := sendData(k.o.w, k.o.flow, &k.s.window, k.s.id, nil, true); err != nil {
-		return k.s.endedBy(err)
+		return k.o.endedBy(k.s, err)
 	}
 	return nil
 }
@@ -284,8 +284,10 @@ func (k h2OriginSink) end(trailers h2Fields) error {
 func (k h2OriginSink) reset(code http2.ErrCode) { k.o.cancel(k.s, code) }
 
 // endedBy is why a send on s failed: the origin's reset, when it reset the
-// stream.
-func (s *h2OriginStream) endedBy(err error) error {
+// stream. The reset is filed under o.mu (resetBy).
+func (o *h2Origin) endedBy(s *h2OriginStream, err error) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	if s.reset != nil {
 		return &streamResetError{code: *s.reset}
 	}
@@ -307,7 +309,15 @@ func (h *h2Conn) sendOn(origin *h2Origin, st *h2Stream, pair *Pair, out *h2Reque
 	sp := h.engine.proxy.streamed(pair)
 	d := sp.direction(domain.StreamDirectionRequest, body.framing)
 	_, declared := out.fields.get("content-length")
-	sp.start(domain.StreamDirectionRequest, d, streamedHead{fields: out.fields, declared: declared}, body, h2OriginSink{o: origin, s: s}, &st.carrying)
+	sp.wentOut(d, streamedHead{fields: out.fields, declared: declared})
+	// The origin stream stays open, whenever its response ends, until
+	// the request's carry returned (requestSent).
+	st.carrying.Add(1)
+	go func() {
+		defer st.carrying.Done()
+		defer origin.requestSent(s)
+		sp.carry(domain.StreamDirectionRequest, d, body, h2OriginSink{o: origin, s: s})
+	}()
 	return s, nil
 }
 

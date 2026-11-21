@@ -730,10 +730,23 @@ func (proxy *Proxy) baseResponse(res *http.Response, wire *wireResponse) error {
 	}
 	detachOpaqueUpgrade(pair)
 	if admission := pair.admission; admission != nil {
-		release, generation, err := proxy.admitWork(res.Request.Context(), admission.internal)
+		ctx := res.Request.Context()
+		if sp := pair.stream; sp != nil {
+			// A switch or a shutdown that cancels a streamed pair
+			// ends this wait, so it never waits on its own block
+			// (docs/adr/2026-11-21-project-switch-and-shutdown-cancel-live-streamed-pairs.md).
+			var stop context.CancelFunc
+			ctx, stop = sp.admissionContext(ctx)
+			defer stop()
+		}
+		release, generation, err := proxy.admitWork(ctx, admission.internal)
 		if err != nil {
-			// The client left while a handoff paused admission, or
-			// the instance handed its project to a restart's successor.
+			// The client left while a handoff paused admission, the
+			// instance handed its project to a restart's successor,
+			// or the streamed pair was cancelled.
+			if pair.stream != nil {
+				pair.stream.refuseResponse()
+			}
 			return nil
 		}
 		defer release()
@@ -743,6 +756,11 @@ func (proxy *Proxy) baseResponse(res *http.Response, wire *wireResponse) error {
 			return proxy.passStaleResponse(pair, res)
 		}
 		pair.release = release
+	}
+	if pair.stream != nil {
+		// Admitted in its project: the streamed pair is live before
+		// the admission is released, so a switch waits for it.
+		pair.stream.goLive()
 	}
 	err := proxy.responseModifiers.Modify(proxy, pair)
 	if pair.Dropped() {
@@ -828,20 +846,33 @@ type projectAdmission struct {
 }
 
 // passStaleResponse passes a response whose pair belongs to a project that is
-// no longer open straight to the client. An upgrade cannot be relayed without
-// recording it, so it is refused instead.
+// no longer open straight to the client. An upgrade, or a streamed response,
+// cannot be relayed without recording it, so it is refused instead: neither
+// is carried, hooked or stored in the project now open.
 func (proxy *Proxy) passStaleResponse(pair *Pair, res *http.Response) error {
-	if res.StatusCode != http.StatusSwitchingProtocols {
+	if sp := pair.stream; sp != nil && sp.streams(domain.StreamDirectionResponse) {
+		sp.refuseResponse()
+		pair.fromMarasi = true
+		refuseStaleResponse(res, "the open project changed while the streamed response's head was in flight\n")
 		return nil
 	}
-	if res.Body != nil {
-		res.Body.Close()
+	if res.StatusCode != http.StatusSwitchingProtocols {
+		return nil
 	}
 	if pair.upgradeUpstream != nil {
 		pair.upgradeUpstream.Close()
 		pair.upgradeUpstream = nil
 	}
-	body := "the open project changed while the upgrade handshake was in flight\n"
+	refuseStaleResponse(res, "the open project changed while the upgrade handshake was in flight\n")
+	return nil
+}
+
+// refuseStaleResponse replaces res with Marasi's 502 naming why the response
+// is not relayed, and closes the connection after it.
+func refuseStaleResponse(res *http.Response, body string) {
+	if res.Body != nil {
+		res.Body.Close()
+	}
 	*res = http.Response{
 		Status:        http.StatusText(http.StatusBadGateway),
 		StatusCode:    http.StatusBadGateway,
@@ -854,7 +885,6 @@ func (proxy *Proxy) passStaleResponse(pair *Pair, res *http.Response) error {
 		Close:         true,
 		Request:       res.Request,
 	}
-	return nil
 }
 
 // WithDefaultModifierPipeline adds the default request and response modifiers.

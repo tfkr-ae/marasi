@@ -74,9 +74,22 @@ func (h *h2Conn) carry(st *h2Stream) {
 		}
 		h.resetStream(st.id, http2.ErrCodeCancel)
 		return
-	case streamed != nil && pair.FromMarasi():
-		// The chain answered with a response of Marasi's own.
+	case streamed != nil && pair.stream.refusedResponse() && !pair.FromMarasi():
+		// The response step did not admit the response in its
+		// project: neither leg goes on.
 		streamed.reset(http2.ErrCodeCancel)
+		h.resetStream(st.id, http2.ErrCodeCancel)
+		return
+	case streamed != nil && pair.FromMarasi():
+		// The chain answered with a response of Marasi's own, or the
+		// response step refused a stale project's streamed response
+		// with one (passStaleResponse).
+		streamed.reset(http2.ErrCodeCancel)
+	case streamed != nil && !pair.stream.goLive():
+		// Refused since the checks above: nothing is carried.
+		streamed.reset(http2.ErrCodeCancel)
+		h.resetStream(st.id, http2.ErrCodeCancel)
+		return
 	case streamed != nil:
 		if pair.responseWire != nil {
 			wire = pair.responseWire
@@ -181,13 +194,14 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 	}
 	addr := hostPort(req.URL.Host, defaultPort)
 	h.openOriginFor(req.Context(), addr)
-	if addr != h.originAddr && (h.originDial == nil || addr != h.originDial.target) {
+	dialled := h.originDial.Load()
+	if addr != h.originAddr && (dialled == nil || addr != dialled.target) {
 		return h.sendRedirected(pair, st, addr)
 	}
 	origin := h.originLeg()
 	if origin == nil {
-		if h.originDial != nil {
-			recordTried(req.Context(), h.originDial.route)
+		if dialled != nil {
+			recordTried(req.Context(), dialled.route)
 		}
 		return nil, nil, nil, h.originErr
 	}

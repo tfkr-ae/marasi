@@ -3,6 +3,7 @@ package marasi
 import (
 	"net"
 	"net/http"
+	"strings"
 	"sync/atomic"
 
 	"github.com/tfkr-ae/marasi/listener"
@@ -49,24 +50,33 @@ func (proxy *Proxy) isSelfClientConnection(remoteAddr string) bool {
 }
 
 // targetsListener reports whether req is addressed to the proxy's own
-// listener. localhost and 127.0.0.1 are the same host, and a missing port is
-// the scheme's default.
+// listener. It judges the host the request is sent to, its URL's, which
+// inside a tunnel is the tunnel's origin whatever the Host field says
+// (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md),
+// and falls back to the Host field only when the URL names no host.
+// localhost, in any case, and 127.0.0.1 are the same host, and a missing port
+// is the scheme's default.
 func (proxy *Proxy) targetsListener(req *http.Request) bool {
-	host, port, err := net.SplitHostPort(req.Host)
+	authority := req.Host
+	if req.URL != nil && req.URL.Host != "" {
+		authority = req.URL.Host
+	}
+	host, port, err := net.SplitHostPort(authority)
 	if err != nil {
-		host = req.Host
-		if req.URL.Scheme == "https" || req.TLS != nil {
+		host = authority
+		if (req.URL != nil && req.URL.Scheme == "https") || req.TLS != nil {
 			port = "443"
 		} else {
 			port = "80"
 		}
 	}
-	if host == "localhost" {
-		host = "127.0.0.1"
+	return loopbackAlias(host) == loopbackAlias(proxy.Addr) && port == proxy.Port
+}
+
+// loopbackAlias is host with localhost, in any case, written as 127.0.0.1.
+func loopbackAlias(host string) string {
+	if strings.EqualFold(host, "localhost") {
+		return "127.0.0.1"
 	}
-	listenerAddr := proxy.Addr
-	if listenerAddr == "localhost" {
-		listenerAddr = "127.0.0.1"
-	}
-	return host == listenerAddr && port == proxy.Port
+	return host
 }

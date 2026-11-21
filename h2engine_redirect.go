@@ -33,8 +33,8 @@ import (
 // client's own ALPN list, as the handshake's origin was, or, for a client
 // that sent none (h2c), h2 first as an HTTP/2 client going direct would.
 func (h *h2Conn) redirectedALPN() []string {
-	if h.originDial != nil && len(h.originDial.offered) > 0 {
-		return h.originDial.offered
+	if dialled := h.originDial.Load(); dialled != nil && len(dialled.offered) > 0 {
+		return dialled.offered
 	}
 	return []string{domain.ProtocolHTTP2, domain.ProtocolHTTP1}
 }
@@ -61,8 +61,9 @@ func (h *h2Conn) sendRedirected(pair *Pair, st *h2Stream, addr string) (*http.Re
 	// direct client resetting its only stream would.
 	stop := context.AfterFunc(st.ctx, func() { conn.Close() })
 	var origin *h2Origin
-	// keep is set when a direction is streamed: the connection stays
-	// open until it is carried (h2Conn.dispatch).
+	// keep is set when a direction is streamed or a body passed the
+	// threshold: the connection stays open until it is carried
+	// (h2Conn.dispatch).
 	keep := false
 	release := func() {
 		stop()
@@ -70,6 +71,23 @@ func (h *h2Conn) sendRedirected(pair *Pair, st *h2Stream, addr string) (*http.Re
 			origin.close()
 		}
 		conn.Close()
+	}
+	// keepPassing keeps the connection open while a body that passed the
+	// threshold goes on: the rest of the request after this returns
+	// (awaitRequestPass), or the rest of the response as the client takes
+	// it (writeResponse). Closing the connection stops the rest's read, so
+	// release cuts the rest of the response first.
+	keepPassing := func(wire *wireResponse) {
+		if wire != nil && wire.h2 != nil && wire.h2.rest != nil {
+			keep = true
+			rest := wire.h2.rest
+			stopRest := release
+			release = func() {
+				rest.cut(nil, errPassStopped)
+				stopRest()
+			}
+		}
+		keep = keep || out.rest != nil
 	}
 	defer func() {
 		if keep || pair.stream != nil {
@@ -93,23 +111,12 @@ func (h *h2Conn) sendRedirected(pair *Pair, st *h2Stream, addr string) (*http.Re
 		}
 		res, wire, cut, err := h.awaitResponse(st, req, sent)
 		keep = wire != nil && wire.h2.streamed != nil
+		keepPassing(wire)
 		return res, wire, cut, err
 	}
 	pair.originProtocol = domain.ProtocolHTTP1
 	res, wire, cut, err := h.sendTranslated(st, pair, req, conn, out)
-	if wire != nil && wire.h2.rest != nil {
-		// The rest of the response goes on after this returns; the
-		// connection stays open until it went, and closing it stops
-		// the rest's read.
-		keep = true
-		rest := wire.h2.rest
-		stopRest := release
-		release = func() {
-			rest.cut(nil, errPassStopped)
-			stopRest()
-		}
-	}
-	keep = keep || out.rest != nil
+	keepPassing(wire)
 	return res, wire, cut, err
 }
 

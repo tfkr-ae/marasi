@@ -207,11 +207,6 @@ func (s *h2OriginStream) receive(data []byte, frameLength uint32, end bool, thre
 		s.stall.arrived(func() {
 			s.passMu.Lock()
 			defer s.passMu.Unlock()
-			select {
-			case <-s.done:
-				return
-			default:
-			}
 			if s.pass == nil {
 				s.startPassLocked(threshold, refund)
 			}
@@ -222,7 +217,14 @@ func (s *h2OriginStream) receive(data []byte, frameLength uint32, end bool, thre
 
 // startPassLocked makes the response body pass with what arrived so far,
 // and wakes the stream's wait for its response. The caller holds passMu.
+// A stream that finished passes nothing: finish ended any passing body it
+// found, and one made after it would never end.
 func (s *h2OriginStream) startPassLocked(threshold int64, refund func(uint32)) {
+	select {
+	case <-s.done:
+		return
+	default:
+	}
 	var rest []byte
 	s.response.body, rest = cutAtThreshold(s.response.body, threshold)
 	s.pass = newH2Passing(h2OriginStreamWindow, refund, rest)

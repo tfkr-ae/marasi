@@ -1,6 +1,7 @@
 package marasi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -136,6 +137,17 @@ type streamedPair struct {
 	started bool
 	// response is the response capture WriteResponseModifier deferred.
 	response *domain.ProxyResponse
+	// cancelled is set once the pair was cancelled (cancel): a direction
+	// whose carry starts afterwards is reset as it starts. cancelledCh is
+	// closed then, ending a wait for the response's admission
+	// (admissionContext).
+	cancelled   bool
+	cancelledCh chan struct{}
+	// live is set once the pair is among proxy.streamedPairs (goLive);
+	// refused once its streamed response was not admitted in the project
+	// its request was captured in, so it is never carried.
+	live    bool
+	refused bool
 }
 
 // streamedDirection is one streamed direction's record.
@@ -189,36 +201,108 @@ func (proxy *Proxy) streamed(pair *Pair) *streamedPair {
 		}
 		pair.stream = &streamedPair{
 			proxy: proxy, pair: pair, id: pair.ID, extensionID: pair.ExtensionID, requestName: requestName,
-			limit: limit, directions: make(map[string]*streamedDirection),
+			limit: limit, directions: make(map[string]*streamedDirection), cancelledCh: make(chan struct{}),
 		}
 	}
 	return pair.stream
 }
 
-// direction records that the pair's direction is streamed with framing.
-// The first direction of a stored pair announces the pair started.
+// direction records that the pair's direction is streamed with framing. A
+// request direction, read after the request was admitted, makes the pair
+// live (goLive). A response direction is recorded before the response
+// step, which makes the pair live once it admitted the response in the
+// project the request was captured in (baseResponse), so a response that
+// waits for admission, or arrives after a project switch, is never among
+// the live pairs a switch waits for, nor announced.
 func (sp *streamedPair) direction(name string, framing stream.Framing) *streamedDirection {
 	sp.mu.Lock()
 	d := &streamedDirection{name: name, framing: framing, turn: make(chan struct{}, 1)}
 	sp.directions[name] = d
-	if len(sp.directions) == 1 {
-		sp.proxy.streamedPairs.Store(sp.id, sp)
+	if !sp.started && sp.live && sp.announced() {
+		sp.started = true
+	}
+	sp.mu.Unlock()
+	if name == domain.StreamDirectionRequest {
+		sp.goLive()
+	}
+	return d
+}
+
+// goLive puts the pair among proxy.streamedPairs, for injection, cancel and
+// the drain of a project switch or shutdown (cancelStreamedPairs), and
+// announces a stored pair started. It reports false for a pair whose
+// response was refused, which is never carried. A pair that goes live
+// while the proxy closes is cancelled from the start.
+func (sp *streamedPair) goLive() bool {
+	sp.mu.Lock()
+	if sp.refused {
+		sp.mu.Unlock()
+		return false
+	}
+	if sp.live {
+		sp.mu.Unlock()
+		return true
+	}
+	sp.live = true
+	sp.proxy.streamedPairs.Store(sp.id, sp)
+	if sp.proxy.streamedClosing.Load() && !sp.cancelled {
+		sp.cancelled = true
+		close(sp.cancelledCh)
 	}
 	var started *domain.StreamedPairStarted
 	if !sp.started && sp.announced() {
 		sp.started = true
-	}
-	if sp.started && len(sp.directions) == 1 && sp.proxy.OnStreamedPairStarted != nil {
-		started = &domain.StreamedPairStarted{PairID: sp.id, Framings: make(map[string]string, len(sp.directions))}
-		for name, d := range sp.directions {
-			started.Framings[name] = string(d.framing)
+		if sp.proxy.OnStreamedPairStarted != nil {
+			started = &domain.StreamedPairStarted{PairID: sp.id, Framings: make(map[string]string, len(sp.directions))}
+			for name, d := range sp.directions {
+				started.Framings[name] = string(d.framing)
+			}
 		}
 	}
 	sp.mu.Unlock()
 	if started != nil {
 		sp.proxy.OnStreamedPairStarted(*started)
 	}
-	return d
+	return true
+}
+
+// refuseResponse marks the pair's streamed response as one the response
+// step did not admit in its project: it is not carried, stored or
+// announced. A request direction already live is ended by the engine as
+// it refuses the response.
+func (sp *streamedPair) refuseResponse() {
+	sp.mu.Lock()
+	sp.refused = true
+	sp.mu.Unlock()
+}
+
+// refusedResponse reports whether the pair's streamed response was refused.
+func (sp *streamedPair) refusedResponse() bool {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.refused
+}
+
+// streams reports whether the pair's direction name is streamed.
+func (sp *streamedPair) streams(name string) bool {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.directions[name] != nil
+}
+
+// admissionContext is ctx, ended also once the pair is cancelled, for the
+// wait for the response's admission: a switch or a shutdown that cancels
+// the pair does not wait on a response blocked behind it. stop releases it.
+func (sp *streamedPair) admissionContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-sp.cancelledCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
 }
 
 // announced reports whether the pair's streaming is announced: only a
@@ -240,11 +324,7 @@ type streamedHead struct {
 // to sink: on a goroutine counted by carrying when that is set, and before
 // start returns otherwise.
 func (sp *streamedPair) start(name string, d *streamedDirection, head streamedHead, src streamSource, sink streamSink, carrying *sync.WaitGroup) {
-	sp.headWentOut(d, head.fields)
-	if head.declared {
-		sp.declareLength(d)
-	}
-	sp.bodyEncodings(d, head.bodyIn, head.bodyOut)
+	sp.wentOut(d, head)
 	if carrying == nil {
 		sp.carry(name, d, src, sink)
 		return
@@ -254,6 +334,15 @@ func (sp *streamedPair) start(name string, d *streamedDirection, head streamedHe
 		defer carrying.Done()
 		sp.carry(name, d, src, sink)
 	}()
+}
+
+// wentOut records the head direction d went out with.
+func (sp *streamedPair) wentOut(d *streamedDirection, head streamedHead) {
+	sp.headWentOut(d, head.fields)
+	if head.declared {
+		sp.declareLength(d)
+	}
+	sp.bodyEncodings(d, head.bodyIn, head.bodyOut)
 }
 
 // carry carries direction name from src to sink, a stream message at a
@@ -273,6 +362,9 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 	d.turn <- struct{}{}
 	sp.mu.Lock()
 	d.src, d.sink = src, sink
+	// Read with the legs set, under the lock cancel takes them with: a
+	// cancel either finds the legs or is found here.
+	cancelled := sp.cancelled
 	sp.mu.Unlock()
 	<-d.turn
 	// The carry holds d.turn from the first byte of a message until it
@@ -285,6 +377,12 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 		d.stopped = true
 		<-d.turn
 	}()
+	if cancelled {
+		sp.end(d, streamCancelled, 0)
+		sink.reset(http2.ErrCodeCancel)
+		src.reset(http2.ErrCodeCancel)
+		return
+	}
 	// pass handles a whole message and forwards what comes of it. It
 	// reports false once the carry stops.
 	pass := func(message *stream.Message) bool {
@@ -578,7 +676,11 @@ func (sp *streamedPair) finish() {
 	}
 	sp.mu.Unlock()
 	proxy := sp.proxy
-	proxy.streamedPairs.CompareAndDelete(sp.id, sp)
+	// The pair leaves the live pairs last, once its response is queued
+	// and announced: a drain that finds none live may flush and switch
+	// projects at once (cancelStreamedPairs). Deferred first, so it runs
+	// after OnStreamedPairEnded.
+	defer proxy.streamedPairs.CompareAndDelete(sp.id, sp)
 	if started && proxy.OnStreamedPairEnded != nil {
 		defer proxy.OnStreamedPairEnded(ended)
 	}

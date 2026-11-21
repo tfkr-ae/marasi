@@ -309,7 +309,10 @@ var Catalogue = []Case{
 		},
 	},
 
-	// A request that names the proxy itself.
+	// A request that names the proxy itself. Inside a tunnel it goes to the
+	// tunnel's origin whatever its Host field says
+	// (docs/adr/2026-11-19-requests-inside-a-tunnel-go-to-the-tunnels-origin.md),
+	// so only the absolute form loops back.
 	{
 		ID:       "loop-back",
 		RFC:      "RFC 9110 §7.6 a proxy must not forward a request back to itself",

@@ -38,6 +38,24 @@ const maxVarintLen = 10
 // indentUnit indents a nested message or group by one level.
 const indentUnit = "  "
 
+// maxDepth is how many levels of nested messages and groups the text form
+// shows, protobuf's own default recursion limit. Decode writes a LEN field
+// that would nest deeper as a hex literal, which still encodes to the same
+// bytes, so that a payload of many nested levels costs time and text in
+// proportion to its size rather than its size times its depth. Encode
+// refuses braces nested deeper than this.
+const maxDepth = 100
+
+// maxIndent is the indentation of maxDepth levels. Groups past maxDepth,
+// which do not nest by recursion, are not indented further, so the text of
+// deeply nested groups stays in proportion to their count.
+var maxIndent = strings.Repeat(indentUnit, maxDepth)
+
+// indentAt is the indentation of level, no deeper than maxDepth levels.
+func indentAt(level int) string {
+	return maxIndent[:min(max(level, 0), maxDepth)*len(indentUnit)]
+}
+
 // Decode is payload in the text form: a message's fields one per line,
 // nested messages and groups indented, or a hex literal when payload is
 // not a protobuf message.
@@ -50,7 +68,7 @@ func Decode(payload []byte) string {
 		return hexLiteral(payload) + "\n"
 	}
 	var b strings.Builder
-	writeFields(&b, fields, "")
+	writeFields(&b, fields, 0)
 	return b.String()
 }
 
@@ -155,14 +173,14 @@ func varintLen(v uint64) int {
 	return n
 }
 
-// writeFields writes fields one per line at indent, a group's contents one
+// writeFields writes fields one per line at level, a group's contents one
 // level deeper than its start and end.
-func writeFields(b *strings.Builder, fields []field, indent string) {
+func writeFields(b *strings.Builder, fields []field, level int) {
 	for _, f := range fields {
 		if f.wire == wireEGroup {
-			indent = indent[:len(indent)-len(indentUnit)]
+			level--
 		}
-		b.WriteString(indent)
+		b.WriteString(indentAt(level))
 		writeLongForm(b, f.tagExtra)
 		b.WriteString(strconv.FormatUint(f.number, 10))
 		b.WriteByte(':')
@@ -179,9 +197,9 @@ func writeFields(b *strings.Builder, fields []field, indent string) {
 		case wireLen:
 			b.WriteByte(' ')
 			writeLongForm(b, f.valueExtra)
-			writeLen(b, f.payload, indent)
+			writeLen(b, f.payload, level)
 		case wireSGroup:
-			indent += indentUnit
+			level++
 		}
 		b.WriteByte('\n')
 	}
@@ -204,11 +222,12 @@ func varintText(v uint64) string {
 	return strconv.FormatUint(v, 10)
 }
 
-// writeLen writes a LEN field's contents in braces: as text when it reads
-// as text, as a nested message when it parses as one, as packed varints
-// when it parses as minimal ones, and as a hex literal otherwise. Text
-// comes first because a short string often also parses as a message.
-func writeLen(b *strings.Builder, payload []byte, indent string) {
+// writeLen writes the contents of a LEN field at level in braces: as text
+// when it reads as text, as a nested message when it parses as one, as
+// packed varints when it parses as minimal ones, and as a hex literal
+// otherwise. Text comes first because a short string often also parses as a
+// message. Contents that would nest past maxDepth are a hex literal.
+func writeLen(b *strings.Builder, payload []byte, level int) {
 	if len(payload) == 0 {
 		b.WriteString("{}")
 		return
@@ -217,10 +236,14 @@ func writeLen(b *strings.Builder, payload []byte, indent string) {
 		b.WriteString("{" + quote(payload) + "}")
 		return
 	}
+	if level+1 >= maxDepth {
+		b.WriteString("{" + hexLiteral(payload) + "}")
+		return
+	}
 	if fields, ok := parseMessage(payload); ok {
 		b.WriteString("{\n")
-		writeFields(b, fields, indent+indentUnit)
-		b.WriteString(indent + "}")
+		writeFields(b, fields, level+1)
+		b.WriteString(indentAt(level) + "}")
 		return
 	}
 	if values, ok := packedVarints(payload); ok {

@@ -317,3 +317,67 @@ func TestH2Engine_TranslatedBodyThreshold(t *testing.T) {
 		}
 	})
 }
+
+func TestH2Engine_RedirectedH2BodyThreshold(t *testing.T) {
+	// redirected serves a proxy with threshold that sends /elsewhere to
+	// other, an origin that chooses h2, and returns a client connected to
+	// it and other's side of the redirected connection once it is dialled.
+	redirected := func(t *testing.T, threshold int64) (*h2TestPeer, *h2TestOrigin) {
+		origin := newH2TestOrigin(t)
+		other := newH2TestOrigin(t)
+		addr, _, ca := serveH1EngineMITMProxy(t, true, withBodyThreshold(threshold))
+		proxyOf(t, addr).AddRequestPairModifier(redirectPaths("/elsewhere", other.addr))
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		origin.accept(t)
+		return client, other
+	}
+
+	t.Run("should forward a redirected h2 origin's response body past the threshold to the client as it arrives, then its trailers", func(t *testing.T) {
+		client, other := redirected(t, 8)
+		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", "example.test", ":path", "/elsewhere")
+		upstream := other.accept(t)
+		id := upstream.nthStream(t, 0)
+		upstream.headers(id, false, ":status", "200", "content-type", "text/plain")
+		upstream.data(id, false, "0123456789")
+		client.awaitData(t, 1, 10, 2*time.Second)
+		upstream.data(id, false, "abc")
+		upstream.headers(id, true, "x-sum", "1")
+		response := client.stream(t, 1)
+		if string(response.data) != "0123456789abc" || !equalFields(response.trailers, h2Fields{{"x-sum", "1", false}}) || response.reset != "" {
+			t.Fatalf("the client's response\nwanted:\n%q with x-sum\ngot:\n%q %v, reset %q", "0123456789abc", response.data, response.trailers, response.reset)
+		}
+	})
+
+	t.Run("should forward a redirected h2 origin's response body that stalls after some arrived, then the rest", func(t *testing.T) {
+		client, other := redirected(t, 1<<20)
+		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", "example.test", ":path", "/elsewhere")
+		upstream := other.accept(t)
+		id := upstream.nthStream(t, 0)
+		upstream.headers(id, false, ":status", "200", "content-type", "text/plain")
+		upstream.data(id, false, "first")
+		client.awaitData(t, 1, 5, 4*time.Second)
+		upstream.data(id, true, " second")
+		response := client.stream(t, 1)
+		if string(response.data) != "first second" || response.reset != "" {
+			t.Fatalf("the client's response\nwanted:\n%q\ngot:\n%q, reset %q", "first second", response.data, response.reset)
+		}
+	})
+
+	t.Run("should send all of a request body past the threshold to a redirected h2 origin as it arrives", func(t *testing.T) {
+		client, other := redirected(t, 8)
+		client.headers(1, false, ":method", "POST", ":scheme", "https", ":authority", "example.test", ":path", "/elsewhere")
+		client.data(1, false, "0123456789")
+		upstream := other.accept(t)
+		id := upstream.nthStream(t, 0)
+		upstream.awaitData(t, id, 10, 2*time.Second)
+		// The origin answers before the rest arrives.
+		upstream.headers(id, true, ":status", "204")
+		client.await(t, "the response", func(p *h2TestPeer) bool { return p.streams[1] != nil && len(p.streams[1].headers) == 1 })
+		client.data(1, false, "abc")
+		client.headers(1, true, "x-sum", "1")
+		request := upstream.stream(t, id)
+		if string(request.data) != "0123456789abc" || len(request.trailers) != 1 || request.reset != "" {
+			t.Fatalf("the redirected origin's request\nwanted:\nthe whole body and the trailers\ngot:\n%q %v, reset %q", request.data, request.trailers, request.reset)
+		}
+	})
+}

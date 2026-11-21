@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -215,4 +216,51 @@ func TestProxy_TunnelAdmission(t *testing.T) {
 			t.Fatalf("self-client per request: wanted [true false], got %v (chains saw %v)", self, seen)
 		}
 	})
+}
+
+func TestProxy_TargetsListener(t *testing.T) {
+	proxy := &Proxy{Addr: "127.0.0.1", Port: "8080"}
+	cases := []struct {
+		name string
+		req  *http.Request
+		want bool
+	}{
+		{
+			name: "should detect a CONNECT to the listener whose Host names another host",
+			req:  &http.Request{Method: http.MethodConnect, URL: &url.URL{Host: "127.0.0.1:8080"}, Host: "example.com"},
+			want: true,
+		},
+		{
+			name: "should not detect a CONNECT to another host whose Host names the listener",
+			req:  &http.Request{Method: http.MethodConnect, URL: &url.URL{Host: "example.com:80"}, Host: "127.0.0.1:8080"},
+			want: false,
+		},
+		{
+			name: "should detect a CONNECT to LOCALHOST in upper case",
+			req:  &http.Request{Method: http.MethodConnect, URL: &url.URL{Host: "LOCALHOST:8080"}, Host: "LOCALHOST:8080"},
+			want: true,
+		},
+		{
+			name: "should detect a request in a tunnel to the listener whose Host names another host",
+			req:  &http.Request{Method: http.MethodGet, URL: &url.URL{Scheme: "http", Host: "localhost:8080", Path: "/"}, Host: "example.com"},
+			want: true,
+		},
+		{
+			name: "should fall back to the Host field when the URL names no host",
+			req:  &http.Request{Method: http.MethodGet, URL: &url.URL{Path: "/"}, Host: "Localhost:8080"},
+			want: true,
+		},
+		{
+			name: "should not detect the listener's host on another port",
+			req:  &http.Request{Method: http.MethodConnect, URL: &url.URL{Host: "127.0.0.1:9090"}, Host: "127.0.0.1:9090"},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := proxy.targetsListener(tc.req); got != tc.want {
+				t.Fatalf("\nwanted:\n%v\ngot:\n%v", tc.want, got)
+			}
+		})
+	}
 }

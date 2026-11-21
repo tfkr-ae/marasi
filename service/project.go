@@ -109,7 +109,7 @@ func NewProjectLifecycle(proxy *marasi.Proxy, configDir string, wordlists wordli
 	lifecycle.jobBatch = runJobBatch
 	lifecycle.jobProgressInterval = jobProgressInterval
 	lifecycle.waitReportDelay = waitReportDelay
-	lifecycle.flushOpenProject = proxy.CloseWebSocketsAndFlush
+	lifecycle.flushOpenProject = proxy.CloseLiveTrafficAndFlush
 	_ = proxy.WithOptions(marasi.WithWorkAdmission(lifecycle.gate.admit))
 	return lifecycle
 }
@@ -416,7 +416,7 @@ func (lifecycle *ProjectLifecycle) Shutdown() error {
 		return err
 	}
 	defer unblock()
-	flushErr := lifecycle.proxy.CloseWebSocketsAndFlush()
+	flushErr := lifecycle.proxy.CloseLiveTrafficAndFlush()
 	cleanupErr := closeProject(project)
 	if cleanupErr == nil {
 		lifecycle.setOpen(nil)
@@ -504,7 +504,7 @@ func (lifecycle *ProjectLifecycle) release(ctx context.Context, dropHeld func() 
 		finish()
 	}
 	released := projectRelease{path: path, reopen: reopen, abandon: abandon}
-	flushErr := lifecycle.proxy.CloseWebSocketsAndFlush()
+	flushErr := lifecycle.proxy.CloseLiveTrafficAndFlush()
 	closeErr := closeProject(project)
 	lifecycle.setOpen(nil)
 	return released, errors.Join(flushErr, closeErr)
