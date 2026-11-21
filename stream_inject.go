@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/net/http2"
@@ -91,6 +92,44 @@ func (proxy *Proxy) CancelStreamedPair(pairID uuid.UUID) error {
 	return nil
 }
 
+// streamedDrainInterval is how often cancelStreamedPairs looks again for
+// streamed pairs that have not finished.
+const streamedDrainInterval = 5 * time.Millisecond
+
+// cancelStreamedPairs cancels every streamed pair being carried, and any
+// that starts meanwhile, and returns once each finished
+// (streamedPair.finish): its directions ended and its response capture was
+// queued. Streamed pairs hold no project admission after their heads, so a
+// project switch or a shutdown ends them here, as it closes WebSockets.
+func (proxy *Proxy) cancelStreamedPairs() {
+	for {
+		live := false
+		proxy.streamedPairs.Range(func(_, value any) bool {
+			live = true
+			sp := value.(*streamedPair)
+			sp.mu.Lock()
+			cancelled := sp.cancelled
+			sp.mu.Unlock()
+			if !cancelled {
+				sp.cancel()
+			}
+			return true
+		})
+		if !live {
+			return
+		}
+		time.Sleep(streamedDrainInterval)
+	}
+}
+
+// CloseLiveTrafficAndFlush cancels the streamed pairs being carried and
+// closes live WebSockets, waits until they ended, and flushes what they
+// queued for storage, so none of it reaches the project opened next.
+func (proxy *Proxy) CloseLiveTrafficAndFlush() error {
+	proxy.cancelStreamedPairs()
+	return proxy.CloseWebSocketsAndFlush()
+}
+
 func (proxy *Proxy) liveStreamedPair(pairID uuid.UUID) (*streamedPair, bool) {
 	value, ok := proxy.streamedPairs.Load(pairID)
 	if !ok {
@@ -171,6 +210,7 @@ func injectedMessage(d *streamedDirection, payload []byte, options StreamInjectO
 // direction, so no leg is reset twice. HTTP/1.1 legs are closed.
 func (sp *streamedPair) cancel() {
 	sp.mu.Lock()
+	sp.cancelled = true
 	directions := make([]*streamedDirection, 0, len(sp.directions))
 	for _, d := range sp.directions {
 		directions = append(directions, d)

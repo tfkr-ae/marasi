@@ -136,6 +136,9 @@ type streamedPair struct {
 	started bool
 	// response is the response capture WriteResponseModifier deferred.
 	response *domain.ProxyResponse
+	// cancelled is set once the pair was cancelled (cancel): a direction
+	// whose carry starts afterwards is reset as it starts.
+	cancelled bool
 }
 
 // streamedDirection is one streamed direction's record.
@@ -203,6 +206,11 @@ func (sp *streamedPair) direction(name string, framing stream.Framing) *streamed
 	sp.directions[name] = d
 	if len(sp.directions) == 1 {
 		sp.proxy.streamedPairs.Store(sp.id, sp)
+		// A pair that starts while the proxy closes is cancelled from
+		// the start, so the close does not wait on it.
+		if sp.proxy.streamedClosing.Load() {
+			sp.cancelled = true
+		}
 	}
 	var started *domain.StreamedPairStarted
 	if !sp.started && sp.announced() {
@@ -240,11 +248,7 @@ type streamedHead struct {
 // to sink: on a goroutine counted by carrying when that is set, and before
 // start returns otherwise.
 func (sp *streamedPair) start(name string, d *streamedDirection, head streamedHead, src streamSource, sink streamSink, carrying *sync.WaitGroup) {
-	sp.headWentOut(d, head.fields)
-	if head.declared {
-		sp.declareLength(d)
-	}
-	sp.bodyEncodings(d, head.bodyIn, head.bodyOut)
+	sp.wentOut(d, head)
 	if carrying == nil {
 		sp.carry(name, d, src, sink)
 		return
@@ -254,6 +258,15 @@ func (sp *streamedPair) start(name string, d *streamedDirection, head streamedHe
 		defer carrying.Done()
 		sp.carry(name, d, src, sink)
 	}()
+}
+
+// wentOut records the head direction d went out with.
+func (sp *streamedPair) wentOut(d *streamedDirection, head streamedHead) {
+	sp.headWentOut(d, head.fields)
+	if head.declared {
+		sp.declareLength(d)
+	}
+	sp.bodyEncodings(d, head.bodyIn, head.bodyOut)
 }
 
 // carry carries direction name from src to sink, a stream message at a
@@ -273,6 +286,9 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 	d.turn <- struct{}{}
 	sp.mu.Lock()
 	d.src, d.sink = src, sink
+	// Read with the legs set, under the lock cancel takes them with: a
+	// cancel either finds the legs or is found here.
+	cancelled := sp.cancelled
 	sp.mu.Unlock()
 	<-d.turn
 	// The carry holds d.turn from the first byte of a message until it
@@ -285,6 +301,12 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 		d.stopped = true
 		<-d.turn
 	}()
+	if cancelled {
+		sp.end(d, streamCancelled, 0)
+		sink.reset(http2.ErrCodeCancel)
+		src.reset(http2.ErrCodeCancel)
+		return
+	}
 	// pass handles a whole message and forwards what comes of it. It
 	// reports false once the carry stops.
 	pass := func(message *stream.Message) bool {
