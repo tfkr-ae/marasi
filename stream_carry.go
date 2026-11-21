@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/net/http2"
 
+	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/stream"
 )
@@ -78,6 +79,12 @@ const (
 type streamedPair struct {
 	proxy *Proxy
 	pair  *Pair
+	// id, extensionID and requestName are the pair's, taken when its
+	// streamed state is made, after the request chain: the carry reads them
+	// while the response chain loads the pair's fields again.
+	id          uuid.UUID
+	extensionID uuid.UUID
+	requestName string
 	// limit is the per-message limit in bytes.
 	limit int64
 
@@ -135,7 +142,14 @@ func (proxy *Proxy) streamed(pair *Pair) *streamedPair {
 		if limit <= 0 {
 			limit = stream.DefaultMaxMessageSize
 		}
-		pair.stream = &streamedPair{proxy: proxy, pair: pair, limit: limit, directions: make(map[string]*streamedDirection)}
+		requestName := "request"
+		if req := pair.Request; req != nil && req.URL != nil {
+			requestName = fmt.Sprintf("request %s %s", req.Method, req.URL.Redacted())
+		}
+		pair.stream = &streamedPair{
+			proxy: proxy, pair: pair, id: pair.ID, extensionID: pair.ExtensionID, requestName: requestName,
+			limit: limit, directions: make(map[string]*streamedDirection),
+		}
 	}
 	return pair.stream
 }
@@ -147,14 +161,14 @@ func (sp *streamedPair) direction(name string, framing stream.Framing) *streamed
 	d := &streamedDirection{name: name, framing: framing, turn: make(chan struct{}, 1)}
 	sp.directions[name] = d
 	if len(sp.directions) == 1 {
-		sp.proxy.streamedPairs.Store(sp.pair.ID, sp)
+		sp.proxy.streamedPairs.Store(sp.id, sp)
 	}
 	var started *domain.StreamedPairStarted
 	if !sp.started && sp.announced() {
 		sp.started = true
 	}
 	if sp.started && len(sp.directions) == 1 && sp.proxy.OnStreamedPairStarted != nil {
-		started = &domain.StreamedPairStarted{PairID: sp.pair.ID, Framings: make(map[string]string, len(sp.directions))}
+		started = &domain.StreamedPairStarted{PairID: sp.id, Framings: make(map[string]string, len(sp.directions))}
 		for name, d := range sp.directions {
 			started.Framings[name] = string(d.framing)
 		}
@@ -201,6 +215,32 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 		d.stopped = true
 		<-d.turn
 	}()
+	// pass handles a whole message and forwards what comes of it. It
+	// reports false once the carry stops.
+	pass := func(message *stream.Message) bool {
+		if inflater != nil {
+			inflater.mark()
+		}
+		raw, err := sp.handle(name, d, message, src.cutOff())
+		var undecodable *messageDecodeError
+		if errors.As(err, &undecodable) {
+			code := http2.ErrCodeInternal
+			if undecodable.tooLarge() {
+				code = http2.ErrCodeEnhanceYourCalm
+			}
+			sink.reset(code)
+			src.reset(code)
+			return false
+		}
+		if raw == nil {
+			return true
+		}
+		if err := sink.forward(raw); err != nil {
+			sp.ended(d, err)
+			return false
+		}
+		return true
+	}
 	var lastProgress time.Time
 	for {
 		if holding && splitter.Buffered() == 0 {
@@ -234,25 +274,7 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 				src.reset(http2.ErrCodeEnhanceYourCalm)
 				return
 			case message != nil:
-				if inflater != nil {
-					inflater.mark()
-				}
-				raw, err := sp.handle(name, d, message, src.cutOff())
-				var undecodable *messageDecodeError
-				if errors.As(err, &undecodable) {
-					code := http2.ErrCodeInternal
-					if undecodable.tooLarge() {
-						code = http2.ErrCodeEnhanceYourCalm
-					}
-					sink.reset(code)
-					src.reset(code)
-					return
-				}
-				if raw == nil {
-					continue
-				}
-				if err := sink.forward(raw); err != nil {
-					sp.ended(d, err)
+				if !pass(message) {
 					return
 				}
 			}
@@ -271,12 +293,8 @@ func (sp *streamedPair) carry(name string, d *streamedDirection, src streamSourc
 		// what arrived of a message it ended inside goes on as it came,
 		// and is stored cut short.
 		if errors.Is(readErr, io.EOF) {
-			if last := splitter.Flush(); last != nil {
-				sp.record(name, d, last, nil)
-				if err := sink.forward(last.Raw); err != nil {
-					sp.ended(d, err)
-					return
-				}
+			if last := splitter.Flush(); last != nil && !pass(last) {
+				return
 			}
 		}
 		if partial := splitter.Partial(); partial != nil {
@@ -331,7 +349,7 @@ func (sp *streamedPair) progress(name string, d *streamedDirection, bytes int, l
 	}
 	*last = now
 	sp.proxy.OnStreamMessageProgress(domain.StreamMessageProgress{
-		PairID: sp.pair.ID, Direction: name, Framing: string(d.framing), Bytes: int64(bytes),
+		PairID: sp.id, Direction: name, Framing: string(d.framing), Bytes: int64(bytes),
 	})
 }
 
@@ -401,12 +419,8 @@ func (sp *streamedPair) tooLarge(name string, d *streamedDirection, err *stream.
 	sp.mu.Unlock()
 	sp.store(name, d, nil, nil, map[string]any{"too_large": true, "size_seen": err.Size})
 	sp.end(d, streamReset, http2.ErrCodeEnhanceYourCalm)
-	request := "request"
-	if req := sp.pair.Request; req != nil && req.URL != nil {
-		request = fmt.Sprintf("request %s %s", req.Method, req.URL.Redacted())
-	}
-	entry := fmt.Sprintf("Stream message too large (%s): a %s message of %d bytes is over the %d-byte limit (stream_max_message_size); the stream was reset", request, name, err.Size, err.Limit)
-	_ = sp.proxy.WriteLog("WARN", entry, pairLogOptions(sp.pair)...)
+	entry := fmt.Sprintf("Stream message too large (%s): a %s message of %d bytes is over the %d-byte limit (stream_max_message_size); the stream was reset", sp.requestName, name, err.Size, err.Limit)
+	_ = sp.proxy.WriteLog("WARN", entry, sp.logOptions()...)
 }
 
 // store queues one stream message for storage and announces it.
@@ -427,7 +441,7 @@ func (sp *streamedPair) message(id uuid.UUID, name string, d *streamedDirection,
 		payload = []byte{}
 	}
 	return domain.StreamMessage{
-		ID: id, PairID: sp.pair.ID, Direction: name, Framing: string(d.framing), Flags: flags,
+		ID: id, PairID: sp.id, Direction: name, Framing: string(d.framing), Flags: flags,
 		Payload: payload, CreatedAt: time.Now(), Metadata: metadata,
 	}
 }
@@ -470,7 +484,7 @@ func (sp *streamedPair) finish() {
 	response := sp.response
 	sp.response = nil
 	started := sp.started
-	ended := domain.StreamedPairEnded{PairID: sp.pair.ID, Directions: make(map[string]domain.StreamedDirection, len(sp.directions))}
+	ended := domain.StreamedPairEnded{PairID: sp.id, Directions: make(map[string]domain.StreamedDirection, len(sp.directions))}
 	streamed := make(map[string]any, len(sp.directions))
 	for name, d := range sp.directions {
 		direction := domain.StreamedDirection{Framing: string(d.framing), Messages: d.messages, Ending: d.ending, ResetCode: d.resetCode}
@@ -494,7 +508,7 @@ func (sp *streamedPair) finish() {
 	}
 	sp.mu.Unlock()
 	proxy := sp.proxy
-	proxy.streamedPairs.CompareAndDelete(sp.pair.ID, sp)
+	proxy.streamedPairs.CompareAndDelete(sp.id, sp)
 	if started && proxy.OnStreamedPairEnded != nil {
 		defer proxy.OnStreamedPairEnded(ended)
 	}
@@ -513,4 +527,12 @@ func (sp *streamedPair) finish() {
 	if proxy.OnResponse != nil {
 		proxy.OnResponse(*response)
 	}
+}
+
+// logOptions ties a proxy log to the pair.
+func (sp *streamedPair) logOptions() []func(*domain.Log) error {
+	if sp.id != uuid.Nil {
+		return []func(*domain.Log) error{core.LogWithReqResID(sp.id)}
+	}
+	return nil
 }

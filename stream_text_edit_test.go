@@ -159,7 +159,7 @@ func TestH2Engine_StreamMessageSetText(t *testing.T) {
 		`})
 		message := &stream.LiveMessage{Framing: stream.FramingSSE, ContentType: "text/event-stream", Payload: []byte("data: a\n\n")}
 
-		processStreamMessageExtensions(proxy, nil, message)
+		processStreamMessageExtensions(proxy, uuid.Nil, message)
 
 		own, _ := message.Metadata["rewriter"].(map[string]any)
 		if string(message.Payload) != "data: a\n\n" || own["raised"] != true || !strings.Contains(fmt.Sprint(own["err"]), "no text form") {

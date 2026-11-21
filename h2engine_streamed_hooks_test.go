@@ -108,6 +108,32 @@ func TestH2Engine_StreamMessageHooks(t *testing.T) {
 		}
 	})
 
+	t.Run("should run processStreamMessage on the last NDJSON line, which the end of the body makes whole", func(t *testing.T) {
+		call := startGRPCCall(t, withStreamExtension(t, "rewriter", `
+			function processStreamMessage(message)
+				if message:framing() == "ndjson" then
+					message:set_payload("{\"edited\":true}\n")
+				end
+			end
+		`))
+		call.client.data(1, true, grpcEnvelope(0, "hello"))
+		awaitData(t, call.upstream, "the origin", call.id, grpcEnvelope(0, "hello"))
+		call.upstream.headers(call.id, false, ":status", "200", "content-type", "application/x-ndjson")
+		call.upstream.data(call.id, true, "{\"n\":1}\n{\"n\":2}")
+		awaitData(t, call.client, "the client", 1, "{\"edited\":true}\n{\"edited\":true}\n")
+
+		req, _ := streamedResponse(t, call.captured)
+		var edited int
+		for _, m := range storedMessages(t, call.proxy, req.ID) {
+			if m.Direction == "response" && m.Metadata["edited"] == true {
+				edited++
+			}
+		}
+		if edited != 2 {
+			t.Errorf("stored response messages marked edited\nwanted:\n2\ngot:\n%d", edited)
+		}
+	})
+
 	t.Run("should not forward a message processStreamMessage dropped, and store it as dropped", func(t *testing.T) {
 		call := startGRPCCall(t, withStreamExtension(t, "dropper", `
 			function processStreamMessage(message)
@@ -211,7 +237,7 @@ func TestProcessStreamMessageExtensions(t *testing.T) {
 		)
 		message := &stream.LiveMessage{Framing: stream.FramingGRPC}
 
-		processStreamMessageExtensions(proxy, nil, message)
+		processStreamMessageExtensions(proxy, uuid.Nil, message)
 
 		if string(message.Payload) != "first, second" || message.Dropped {
 			t.Fatalf("\nwanted:\n%q, not dropped\ngot:\n%q, dropped %t", "first, second", message.Payload, message.Dropped)
@@ -229,7 +255,7 @@ func TestProcessStreamMessageExtensions(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			processStreamMessageExtensions(proxy, nil, message)
+			processStreamMessageExtensions(proxy, uuid.Nil, message)
 		}()
 		awaitEntered(t, entered, ext.CancelExecution, done)
 
@@ -244,7 +270,7 @@ func TestProcessStreamMessageExtensions(t *testing.T) {
 		})
 		message := &stream.LiveMessage{Payload: []byte("hello")}
 
-		processStreamMessageExtensions(proxy, nil, message)
+		processStreamMessageExtensions(proxy, uuid.Nil, message)
 
 		if message.Dropped || string(message.Payload) != "hello" {
 			t.Fatalf("\nwanted:\n%q, not dropped\ngot:\n%q, dropped %t", "hello", message.Payload, message.Dropped)

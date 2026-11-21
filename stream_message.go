@@ -43,7 +43,7 @@ func (sp *streamedPair) process(name string, d *streamedDirection, message *stre
 		id = uuid.New()
 	}
 	live := &stream.LiveMessage{
-		ID: id, PairID: sp.pair.ID, Direction: name, Framing: d.framing, ContentType: sp.contentType(d),
+		ID: id, PairID: sp.id, Direction: name, Framing: d.framing, ContentType: sp.contentType(d),
 		Flags: message.Flags, Payload: message.Payload, Encoding: d.encoding, Metadata: metadata,
 	}
 	compressed := live.Compressed()
@@ -56,7 +56,7 @@ func (sp *streamedPair) process(name string, d *streamedDirection, message *stre
 		}
 	}
 	original := live.Payload
-	processStreamMessageExtensions(sp.proxy, sp.pair, live)
+	processStreamMessageExtensions(sp.proxy, sp.extensionID, live)
 	intercept := !live.Dropped && shouldInterceptStreamMessage(sp.proxy, live)
 
 	out := outgoing(d, message, original)
@@ -171,16 +171,16 @@ func (sp *streamedPair) undecodable(name string, d *streamedDirection, id uuid.U
 	row.Compressed = true
 	sp.queue(row)
 	sp.end(d, streamReset, code)
-	entry := fmt.Sprintf("Stream message not decoded (%s): a %s message compressed with %q could not be decoded (%v); the stream was reset", sp.requestName(), name, d.encoding, err)
-	_ = sp.proxy.WriteLog("WARN", entry, pairLogOptions(sp.pair)...)
+	entry := fmt.Sprintf("Stream message not decoded (%s): a %s message compressed with %q could not be decoded (%v); the stream was reset", sp.requestName, name, d.encoding, err)
+	_ = sp.proxy.WriteLog("WARN", entry, sp.logOptions()...)
 	return decodeErr
 }
 
 // readOnlyRefused writes the proxy log for a hook's edit to a message
 // compressed with an encoding the proxy does not decode.
 func (sp *streamedPair) readOnlyRefused(name, encoding string) {
-	entry := fmt.Sprintf("Stream message change ignored (%s): the %s message is compressed with %q, which Marasi does not decode, so it cannot be edited and went out as it came", sp.requestName(), name, encoding)
-	_ = sp.proxy.WriteLog("WARN", entry, pairLogOptions(sp.pair)...)
+	entry := fmt.Sprintf("Stream message change ignored (%s): the %s message is compressed with %q, which Marasi does not decode, so it cannot be edited and went out as it came", sp.requestName, name, encoding)
+	_ = sp.proxy.WriteLog("WARN", entry, sp.logOptions()...)
 }
 
 // headWentOut records the content type and the per-message encoding of d's
@@ -231,28 +231,20 @@ func (sp *streamedPair) lengthRefused(name string, dropped bool) {
 	if dropped {
 		change = "a drop was"
 	}
-	entry := fmt.Sprintf("Stream message change ignored (%s): the %s head declares a length, so %s ignored and the message went out as it came", sp.requestName(), name, change)
-	_ = sp.proxy.WriteLog("WARN", entry, pairLogOptions(sp.pair)...)
-}
-
-// requestName names the pair's request in a proxy log.
-func (sp *streamedPair) requestName() string {
-	if req := sp.pair.Request; req != nil && req.URL != nil {
-		return fmt.Sprintf("request %s %s", req.Method, req.URL.Redacted())
-	}
-	return "request"
+	entry := fmt.Sprintf("Stream message change ignored (%s): the %s head declares a length, so %s ignored and the message went out as it came", sp.requestName, name, change)
+	_ = sp.proxy.WriteLog("WARN", entry, sp.logOptions()...)
 }
 
 // processStreamMessageExtensions runs processStreamMessage in each enabled
 // extension but checkpoint, and not in the extension that sent the pair.
 // A drop or skip stops later extensions. An interrupted hook drops the
 // message; another Lua error leaves it as it was.
-func processStreamMessageExtensions(proxy *Proxy, pair *Pair, message *stream.LiveMessage) {
+func processStreamMessageExtensions(proxy *Proxy, sentBy uuid.UUID, message *stream.LiveMessage) {
 	for _, extension := range proxy.Extensions {
 		if extension == nil || extension.Data == nil || !extension.MetadataSnapshot().Enabled || extension.Data.Name == "checkpoint" {
 			continue
 		}
-		if pair != nil && pair.ExtensionID != uuid.Nil && pair.ExtensionID == extension.Data.ID {
+		if sentBy != uuid.Nil && sentBy == extension.Data.ID {
 			continue
 		}
 		if err := extension.CallStreamMessageHandler(message); err != nil {

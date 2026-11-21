@@ -134,7 +134,7 @@ func (sp *streamedPair) holdTrailers(name string, d *streamedDirection, trailers
 	}
 	item := domain.CheckpointItem{
 		ID: id, Type: domain.CheckpointTypeTrailer, Raw: trailerBlock(trailers),
-		Direction: name, PairID: sp.pair.ID, Framing: string(d.framing), Metadata: map[string]any{},
+		Direction: name, PairID: sp.id, Framing: string(d.framing), Metadata: map[string]any{},
 	}
 	refuse := func(raw []byte, drop bool) error {
 		if drop || raw == nil {

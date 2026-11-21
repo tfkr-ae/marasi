@@ -264,8 +264,8 @@ func (sp *streamedPair) inflateFailed(name string, d *streamedDirection, compres
 	row.Compressed = true
 	sp.queue(row)
 	sp.end(d, streamReset, code)
-	entry := fmt.Sprintf("Stream not inflated (%s): the %s body compressed with %q could not be inflated (%v); the stream was reset", sp.requestName(), name, encoding, err)
-	_ = sp.proxy.WriteLog("WARN", entry, pairLogOptions(sp.pair)...)
+	entry := fmt.Sprintf("Stream not inflated (%s): the %s body compressed with %q could not be inflated (%v); the stream was reset", sp.requestName, name, encoding, err)
+	_ = sp.proxy.WriteLog("WARN", entry, sp.logOptions()...)
 }
 
 // inflatedTooLarge is the inflate error of a stream message that inflates
