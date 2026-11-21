@@ -57,7 +57,7 @@ The source requires Go 1.26 or later. These commands run from the repository roo
 | `make windows-amd64` | Builds `dist/marasi-windows-amd64.exe`. |
 | `make all` | Builds the targets listed by `TARGETS` in [Makefile](Makefile). |
 | `make test` | Runs `go test ./...`. |
-| `make conformance` | Runs the conformance suites in Docker through Marasi and scores each case against its committed direct baseline and deviations file. With no `SUITES`, it runs the four HTTP suites, `h1-origin`, `h1-client`, `h2-client` and `h2-origin`, which all block a merge. It exits non-zero on a new deviation, a known deviation that went away, or a stale deviations entry. |
+| `make conformance` | Runs the conformance suites in Docker through Marasi and scores each case against its committed direct baseline and deviations file. With no `SUITES`, it runs the suites that block a merge: `h1-origin`, `h1-client`, `h2-client`, `h2-origin`, `stream-origin`, `grpc-client` and `connect-client`. It exits non-zero on a new deviation, a known deviation that went away, or a stale deviations entry. |
 | `make conformance-baseline` | Runs the selected cases with no proxy and merges them into the direct baselines. For `h1-origin` it records each case twice and leaves out, with an error, a case whose two recordings differ. |
 | `make conformance-update-known PHASE=<n>` | Runs the selected cases, then rewrites the known entries in `deviations.json` and the suite's `score.json`. |
 | `make autobahn`, `make autobahn-baseline` | `make conformance` and `make conformance-baseline` with `SUITES=autobahn`. |
@@ -121,6 +121,41 @@ suites:
   (`got`), so a case that fails in another way is new. It runs all four
   conformance runs (`make conformance SUITES=h2-client RUNS=proxy` for a
   quick one).
+- `grpc-client` scores gRPC through Marasi with grpc-go's interop client
+  (`google.golang.org/grpc/interop/client`, installed with `go install` at a
+  pinned version so it never enters `go.mod`) against grpc-java's interop
+  server, `io.grpc:grpc-interop-testing` at a pinned version in an image
+  built on base images pinned by digest. A Java server keeps quirks that
+  grpc-go and Marasi share through `x/net/http2` from cancelling out.
+  grpc-go's client has no compressed cases, so grpc-java's interop client
+  runs those. The client speaks h2 with prior knowledge to the shim, and the
+  shim is the TLS client toward the server (`connect-tls`, ALPN `h2`),
+  trusting the harness CA directly and only Marasi's CA through Marasi. A
+  case's recording is the client's verdict (`timed-out` when it gives none
+  within 30 seconds, as a call that deadlocks behind a buffering proxy does)
+  plus every stream as the client received it, decoded from the shim's
+  plaintext capture as `h2-origin` records a stream, without GOAWAY, so a
+  proxy that replaces a status or message differs even when the client
+  passes. grpc-java's server has no `expect_compressed` check, so the client
+  compressed cases fail directly too, as in grpc's own interop matrix. The
+  first run builds the grpc-java image, which takes a minute or two. It runs
+  all four conformance runs (`make conformance SUITES=grpc-client RUNS=proxy`
+  for a quick one).
+- `connect-client` runs the
+  [connectrpc/conformance](https://github.com/connectrpc/conformance) runner
+  v1.0.7, installed with `go install` at a pinned version so it never enters
+  `go.mod`, in client mode: gRPC, gRPC-Web and Connect over HTTP/1.1 and h2c,
+  every stream type, codec and compression, against the runner's own
+  reference servers. The runner has no proxy option, so the client under test
+  is the harness's wrapper (`connectclient/cmd/connectclient-wrapper`), which
+  runs the reference client and rewrites only each case's host and port to a
+  shim that reaches the reference server directly or through Marasi with
+  `CONNECT` (`connect-plain`). A case's recording is the runner's verdict.
+  The runner kills its client when a case gives no result for 20 seconds, so
+  the wrapper answers a case left 15 seconds with an error and the case is
+  `timed-out`, as a full-duplex stream is when Marasi buffers it. TLS cases are
+  not run: the reference client trusts only the runner's own certificate.
+  Marasi runs on the host. It runs all four conformance runs.
 - `h2-origin` sends each h2 origin fixture case's requests as HTTP/2 streams
   inside `CONNECT` over TLS (`connect-tls`), offering ALPN `h2` then
   `http/1.1`, to fixtures that script frames and serve ALPN `h2`. Its
@@ -142,6 +177,22 @@ suites:
   runs. Through Marasi the client trusts only Marasi's CA, so a recorded case
   shows Marasi in the path even if Marasi answered ALPN with `http/1.1` and
   recorded no HTTP/2 traffic. Marasi runs in the same container as for
+  `h1-origin`.
+- `stream-origin` is our own origin fixtures for streamed pairs
+  (`internal/conformance/streamorigin/catalogue.go`). A client and an origin
+  each follow a script: send a head, a stream message or trailers, or wait
+  for the peer's next one. The recording is everything that reached either
+  side, in order: heads, each stream message as its message framing cuts it
+  (a gRPC envelope or a server-sent event, however the wire split it),
+  trailers, the end, a reset, and a side that waited 5 seconds and got
+  nothing. In the wait-for-answer cases each side sends its next stream
+  message only after the peer's last one arrived, so through a proxy that
+  reads a body whole the waiting side times out and the order shows it; a
+  proxy that delivers everything at the end cannot pass. No timing is
+  scored. An h2 case runs on `connect-tls` with ALPN `h2`; an HTTP/1.1 case
+  runs on all three approaches. A server-sent event stream has no request
+  body to answer in, so its client answers the origin in process. It runs
+  all four conformance runs, with Marasi in the same container as for
   `h1-origin`.
 
 For TLS, the harness generates a CA on each run and never writes its key to
@@ -171,7 +222,7 @@ Checkpoint with an auto-resolver that forwards each item unchanged),
 `checkpoint-edit` (the resolver forwards each item as an edit with the same
 bytes), and `extension` (a workshop hook sets each payload or body to itself:
 `processWebSocketMessage` for WebSocket, `processRequest` and
-`processResponse` for HTTP). A suite can also install Lua in every run:
+`processResponse` for HTTP, `processStreamMessage` for each stream message). A suite can also install Lua in every run:
 `h2-origin` installs the rule that redirects its `redirect-to-http1` case. Autobahn runs both modes (`fuzzingclient`, `fuzzingserver`) against
 two peers: Autobahn's strict testee and the harness's lenient echo peer.
 Variables narrow a run:
@@ -231,11 +282,12 @@ Each command scores one suite and one run, the same as one CI job:
 make conformance SUITES=h1-origin RUNS=proxy
 make conformance SUITES=h1-client RUNS=proxy CASES='SMUG-CL-TE-BOTH@*'
 make conformance SUITES=h2-origin RUNS=proxy
+make conformance SUITES=stream-origin RUNS=proxy
 make autobahn EXCLUDE='9.*,12.*,13.*'
 ```
 
 `make conformance` with no `SUITES` runs `h1-origin`, `h1-client`,
-`h2-client` and `h2-origin`, the suites that block a merge. `h1-client` runs only
+`h2-client`, `h2-origin`, `stream-origin`, `grpc-client` and `connect-client`, the suites that block a merge. `h1-client` runs only
 the Http11Probe tests that `CASES` names exactly (`ID@*` covers every
 approach); with a glob in the ID it runs all 213 tests and narrows afterwards.
 A narrowed run (`RUNS`, `CASES` and the like) checks only the entries its cases
@@ -258,8 +310,8 @@ suite. A suite runs when the pull request changes Marasi on the HTTP path (root
 the workflow, or that suite's own package and baselines. A change only to docs,
 reports, Armory, Compass, wordlists or another suite skips it.
 
-- `h1-client (<run>)`, `h1-origin (<run>)`, `h2-client (<run>)` and
-  `h2-origin (<run>)`, one job for each of `proxy`, `checkpoint-forward`,
+- `h1-client (<run>)`, `h1-origin (<run>)`, `h2-client (<run>)`,
+  `h2-origin (<run>)`, `stream-origin (<run>)`, `grpc-client (<run>)` and `connect-client (<run>)`, one job for each of `proxy`, `checkpoint-forward`,
   `checkpoint-edit` and `extension`, are the required checks. When none of a
   suite's paths changed they still run, skip their steps and pass, because a
   skipped matrix job would never report under its check name.

@@ -279,7 +279,7 @@ func TestProjectOpen(t *testing.T) {
 		}()
 		select {
 		case response := <-dropResult:
-			assertControlAPIResponse(t, response, http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false}`+"\n")
+			assertControlAPIResponse(t, response, http.StatusOK, `{"items":[],"intercept":true,"websocket_intercept":false,"stream_intercept":false}`+"\n")
 		case <-time.After(2 * time.Second):
 			t.Fatal("response drop waited for project handoff")
 		}

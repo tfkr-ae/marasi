@@ -96,6 +96,44 @@ jobs:
           path: dist/conformance/
           if-no-files-found: ignore
 
+  # Required checks, as the h1 and h2 jobs are, for the streamed pair
+  # suites: "stream-origin (proxy)", "grpc-client (proxy)" and so on.
+  # grpc-client installs grpc-go's interop client with the Go toolchain
+  # set up here (go install, outside go.mod) and builds grpc-java's
+  # interop image. connect-client installs the connectrpc/conformance
+  # runner and reference client the same way and runs Marasi on the host,
+  # which reaches the reference servers on loopback.
+  streams:
+    name: ${{ matrix.suite }} (${{ matrix.run }})
+    needs: paths
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [stream-origin, grpc-client, connect-client]
+        run: [proxy, checkpoint-forward, checkpoint-edit, extension]
+    env:
+      RUN_SUITE: ${{ needs.paths.outputs.streams }}
+    steps:
+      - if: env.RUN_SUITE != 'true'
+        run: echo 'No streaming path changed; the suite is skipped.'
+      - if: env.RUN_SUITE == 'true'
+        uses: actions/checkout@v4
+      - if: env.RUN_SUITE == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - if: env.RUN_SUITE == 'true'
+        run: make conformance SUITES=${{ matrix.suite }} RUNS=${{ matrix.run }}
+      - if: always() && env.RUN_SUITE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-${{ matrix.suite }}-${{ matrix.run }}
+          path: dist/conformance/
+          if-no-files-found: ignore
+
   # A pull request runs a suite only when it changes a path that suite
   # depends on. The schedule and manual dispatch always run every suite.
   # Each pathspec uses glob magic: * stops at /, ** crosses directories,
@@ -106,6 +144,7 @@ jobs:
     outputs:
       h1: ${{ steps.diff.outputs.h1 }}
       h2: ${{ steps.diff.outputs.h2 }}
+      streams: ${{ steps.diff.outputs.streams }}
       autobahn: ${{ steps.diff.outputs.autobahn }}
     steps:
       - uses: actions/checkout@v4
@@ -117,7 +156,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
-            printf 'h1=true\nh2=true\nautobahn=true\n' >> "$GITHUB_OUTPUT"
+            printf 'h1=true\nh2=true\nautobahn=true\nstreams=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # check NAME PATHSPEC...: sets NAME=true when the pull request
@@ -172,6 +211,14 @@ jobs:
             ':(glob)internal/conformance/h2client/**' \
             ':(glob)internal/conformance/h2origin/**' \
             ':(glob)internal/conformance/baselines/h2-*/**'
+          check streams "${marasi[@]}" "${harness[@]}" \
+            ':(glob)internal/conformance/h2/**' \
+            ':(glob)internal/conformance/streamorigin/**' \
+            ':(glob)internal/conformance/baselines/stream-*/**' \
+            ':(glob)internal/conformance/grpcclient/**' \
+            ':(glob)internal/conformance/baselines/grpc-*/**' \
+            ':(glob)internal/conformance/connectclient/**' \
+            ':(glob)internal/conformance/baselines/connect-client/**'
           # Autobahn takes hours, so its list stays narrow: a relay waits on
           # the database writer's queue, so a slower writer can fail a case
           # (db/, proxy.go); the matrix runs WebSocket modifiers, Checkpoint

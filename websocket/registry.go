@@ -3,6 +3,7 @@ package websocket
 import (
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 
 	"github.com/google/uuid"
@@ -105,7 +106,7 @@ func (r *Registry) CloseAll(code int, reason string) error {
 
 	closeErrors := make([]error, 0)
 	for _, connection := range connections {
-		if err := connection.Close(code, reason); err != nil && !errors.Is(err, ErrConnectionClosed) {
+		if err := connection.Close(code, reason); err != nil && !alreadyClosed(err) {
 			closeErrors = append(
 				closeErrors,
 				fmt.Errorf("closing websocket connection %s: %w", connection.ID, err),
@@ -114,4 +115,24 @@ func (r *Registry) CloseAll(code int, reason string) error {
 	}
 
 	return errors.Join(closeErrors...)
+}
+
+// alreadyClosed reports whether every error in err says the connection was
+// closed already: by an earlier close, or by the relay, which closes its
+// sockets when a peer leaves, so the close frame met a closed socket.
+func alreadyClosed(err error) bool {
+	switch e := err.(type) {
+	case interface{ Unwrap() []error }:
+		for _, inner := range e.Unwrap() {
+			if !alreadyClosed(inner) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		if inner := e.Unwrap(); inner != nil {
+			return alreadyClosed(inner)
+		}
+	}
+	return errors.Is(err, ErrConnectionClosed) || errors.Is(err, net.ErrClosed)
 }

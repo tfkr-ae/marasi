@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/internal/h1"
@@ -168,7 +169,8 @@ type rawResponse struct {
 // internal fields appended to its head, and reads the response to its end.
 // The connection is closed when sendRaw returns, except for a 101, whose
 // connection is returned as the upgrade stream. Cancelling ctx closes the
-// connection, so the proxy sees the client leave.
+// connection, so the proxy sees the client leave; an HTTP/2 launch first
+// resets its stream with CANCEL, which the proxy passes on to the origin.
 //
 // A plain-HTTP request goes in absolute form with the proxy's credentials,
 // as a proxy client sends it. An HTTPS request goes through a CONNECT that
@@ -182,7 +184,13 @@ func (proxy *Proxy) sendRaw(ctx context.Context, r *rawRequest, internal [][2]st
 	if err != nil {
 		return nil, fmt.Errorf("dialing the proxy listener: %w", err)
 	}
-	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	var cancelStream atomic.Pointer[func()]
+	stop := context.AfterFunc(ctx, func() {
+		if reset := cancelStream.Load(); reset != nil {
+			(*reset)()
+		}
+		conn.Close()
+	})
 	defer func() {
 		stop()
 		if ctx.Err() != nil {
@@ -199,7 +207,7 @@ func (proxy *Proxy) sendRaw(ctx context.Context, r *rawRequest, internal [][2]st
 		if err != nil {
 			return nil, err
 		}
-		return sendH2Raw(stream, r, internal)
+		return sendH2Raw(stream, r, internal, func(reset func()) { cancelStream.Store(&reset) })
 	}
 	var stream net.Conn = conn
 	line := r.head.Line

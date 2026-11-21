@@ -114,6 +114,20 @@ type Proxy struct {
 	// OnWebSocketHandshakeEnded is called with websocket.state failed or
 	// dropped for an upgrade that will not open, once that state is stored.
 	OnWebSocketHandshakeEnded func(requestID uuid.UUID, state string)
+	// Streamed pairs (GLOSSARY) are announced for pairs that are stored,
+	// from the goroutines that carry them; the handlers must not block.
+	// OnStreamedPairStarted is called once the first head naming a
+	// message framing is read.
+	OnStreamedPairStarted func(domain.StreamedPairStarted)
+	// OnStreamMessage is called for each stream message once it is whole,
+	// cut short or too large, in the order of each direction.
+	OnStreamMessage func(domain.StreamMessage)
+	// OnStreamMessageProgress is called while a stream message is still
+	// arriving, at most once per streamProgressInterval per direction.
+	OnStreamMessageProgress func(domain.StreamMessageProgress)
+	// OnStreamedPairEnded is called once every streamed direction of a
+	// pair ended, after its response is stored.
+	OnStreamedPairEnded func(domain.StreamedPairEnded)
 	// OnLaunchStarted is called once a launch is accepted, before it is sent.
 	OnLaunchStarted func(domain.Launch)
 	// OnLaunchFinished is called once per launch when it reaches a terminal state.
@@ -136,6 +150,10 @@ type Proxy struct {
 	checkpoint           *checkpointState
 	httpIntercept        atomic.Bool
 	webSocketIntercept   atomic.Bool
+	streamIntercept      atomic.Bool
+	// streamedPairs are the streamed pairs being carried, by pair ID,
+	// for injection and cancel (stream_inject.go).
+	streamedPairs        sync.Map
 	webSocketLifecycleMu sync.RWMutex
 	webSocketSessions    sync.WaitGroup
 	webSocketsClosing    bool
@@ -178,6 +196,7 @@ type Proxy struct {
 	ExtensionRepo domain.ExtensionRepository // Repository for extension data.
 	ReportingRepo domain.ReportingRepository // Repository for reporting data.
 	WebSocketRepo domain.WebSocketRepository // Repository for websocket data
+	StreamRepo    domain.StreamRepository    // Repository for stream messages
 
 	Armory          ArmoryService          // Provides persistence and execution operations for request fuzzing.
 	ReportGenerator domain.ReportGenerator // Generator for report templates and exports.
@@ -378,6 +397,7 @@ func (proxy *Proxy) SetProjectResources(resources ProjectResources) {
 	proxy.ExtensionRepo = resources.Repository
 	proxy.ReportingRepo = resources.Repository
 	proxy.WebSocketRepo = resources.Repository
+	proxy.StreamRepo = resources.Repository
 	proxy.DBCloser = resources.Repository
 	proxy.Extensions = resources.Extensions
 	proxy.Scope = resources.Scope
@@ -721,6 +741,10 @@ func (proxy *Proxy) writeItem(proxyItem any) {
 		if err != nil {
 			log.Println(err)
 		}
+	case *domain.StreamMessage:
+		if err := proxy.StreamRepo.InsertStreamMessage(castItem); err != nil {
+			log.Println(err)
+		}
 	case *domain.Log:
 		err := proxy.LogRepo.InsertLog(castItem)
 		if err != nil {
@@ -1051,7 +1075,8 @@ func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
 func (proxy *Proxy) watchClient(req *http.Request, ending BodyEnding) {
 	// The HTTP/2 engine reads its client connection all along, and ends a
 	// stream's context when the stream or the connection ends.
-	if ending == BodyCutShort || req.ProtoMajor == 2 {
+	// A body forwarded as it arrives is still being read from the client.
+	if ending == BodyCutShort || ending == BodyTooLarge || req.ProtoMajor == 2 {
 		return
 	}
 	conn := proxy.clientConnection(req.RemoteAddr)

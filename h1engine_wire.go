@@ -49,6 +49,10 @@ func outboundRequest(wire *wireRequest, req *http.Request) (outbound[*h1.Request
 		// never goes out to be framed.
 		return outbound[*h1.RequestHead]{head: head}, nil
 	}
+	if wire.passing != nil {
+		// Framed as it came: what arrived goes now, the rest as it does.
+		return outbound[*h1.RequestHead]{head: head, body: wire.passing.arrived, payload: payload}, nil
+	}
 	body := h1.FrameRequestBody(head, wire.body, payload)
 	return outbound[*h1.RequestHead]{head: head, body: body, payload: payload}, nil
 }
@@ -66,6 +70,9 @@ func outboundResponse(wire *wireResponse, res *http.Response) (outbound[*h1.Resp
 		return out, fmt.Errorf("merging the response: %w", err)
 	}
 	head.Header.RemoveConnectionOptions(head.StatusCode == http.StatusSwitchingProtocols)
+	if wire.passing != nil {
+		return outbound[*h1.ResponseHead]{head: head, body: wire.passing.arrived, payload: payload}, nil
+	}
 	method := ""
 	if res.Request != nil {
 		method = res.Request.Method

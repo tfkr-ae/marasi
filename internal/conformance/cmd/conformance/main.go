@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -19,10 +18,13 @@ import (
 
 	"github.com/tfkr-ae/marasi/internal/conformance"
 	"github.com/tfkr-ae/marasi/internal/conformance/autobahn"
+	"github.com/tfkr-ae/marasi/internal/conformance/connectclient"
+	"github.com/tfkr-ae/marasi/internal/conformance/grpcclient"
 	"github.com/tfkr-ae/marasi/internal/conformance/h1client"
 	"github.com/tfkr-ae/marasi/internal/conformance/h1origin"
 	"github.com/tfkr-ae/marasi/internal/conformance/h2client"
 	"github.com/tfkr-ae/marasi/internal/conformance/h2origin"
+	"github.com/tfkr-ae/marasi/internal/conformance/streamorigin"
 )
 
 // narrowing are the flags that select less than every case. With each of
@@ -54,7 +56,6 @@ func main() {
 	flag.StringVar(&exclude, "exclude", "", "comma-separated case ID patterns to skip")
 	flag.StringVar(&approaches, "approaches", "", "comma-separated client approaches (absolute, connect-plain, connect-tls); empty means all")
 	flag.BoolVar(&settings.UpdateKnown, "update-known", false, "rewrite the known entries of deviations.json and score.json from this run")
-	flag.IntVar(&settings.Phase, "phase", 0, "phase recorded on the known entries -update-known writes")
 	flag.BoolVar(&verbose, "verbose", false, "stream tester output")
 	flag.StringVar(&autobahnSuite.Image, "image", autobahn.Image, "autobahn: testsuite image")
 	flag.StringVar(&modes, "modes", "fuzzingclient,fuzzingserver", "autobahn: suite modes")
@@ -65,9 +66,6 @@ func main() {
 	flag.DurationVar(&autobahnSuite.SuiteLimit, "suite-limit", 75*time.Minute, "autobahn: time limit per mode and peer")
 	flag.Parse()
 
-	if settings.UpdateKnown && settings.Phase <= 0 {
-		fail(errors.New("-update-known needs -phase, the phase expected to remove the new known entries"))
-	}
 	// Make passes every flag, so a flag narrows only when its value differs
 	// from the default.
 	settings.AllCases = true
@@ -91,6 +89,10 @@ func main() {
 		switch name {
 		case autobahn.Name:
 			settings.Suites = append(settings.Suites, autobahnSuite)
+		case connectclient.Name:
+			settings.Suites = append(settings.Suites, connectclient.Suite{})
+		case grpcclient.Name:
+			settings.Suites = append(settings.Suites, grpcclient.Suite{})
 		case h1client.Name:
 			settings.Suites = append(settings.Suites, h1client.Suite{})
 		case h1origin.Name:
@@ -99,6 +101,8 @@ func main() {
 			settings.Suites = append(settings.Suites, h2client.Suite{})
 		case h2origin.Name:
 			settings.Suites = append(settings.Suites, h2origin.Suite{})
+		case streamorigin.Name:
+			settings.Suites = append(settings.Suites, streamorigin.Suite{})
 		default:
 			fail(fmt.Errorf("unknown suite %q", name))
 		}

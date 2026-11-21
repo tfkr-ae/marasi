@@ -1,0 +1,609 @@
+{
+  "cancel_after_begin@connect-tls": {
+    "verdict": "passed",
+    "streams": [
+      {
+        "headers": []
+      }
+    ]
+  },
+  "cancel_after_first_response@connect-tls": {
+    "verdict": "passed",
+    "streams": [
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-encoding",
+              "value": "identity"
+            },
+            {
+              "name": "grpc-accept-encoding",
+              "value": "gzip"
+            }
+          ]
+        ],
+        "data_length": 31428,
+        "data_sha256": "ed5c3cc9d3b754fa4581b22e0ac890be5be3d4368ebd2d3bfd487d045a6fde0e"
+      }
+    ]
+  },
+  "client_compressed_streaming@connect-tls": {
+    "verdict": "failed",
+    "error": "java.lang.AssertionError: expected INVALID_ARGUMENT",
+    "streams": [
+      {
+        "headers": []
+      }
+    ]
+  },
+  "client_compressed_unary@connect-tls": {
+    "verdict": "failed",
+    "error": "java.lang.AssertionError: expected INVALID_ARGUMENT",
+    "streams": [
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-encoding",
+              "value": "identity"
+            },
+            {
+              "name": "grpc-accept-encoding",
+              "value": "gzip"
+            }
+          ]
+        ],
+        "data_length": 314172,
+        "data_sha256": "93ed92e7895d76d183b8ff0d4ee8c065129664808e45022a27029064bb3335fe",
+        "trailers": [
+          {
+            "name": "grpc-status",
+            "value": "0"
+          }
+        ],
+        "end_stream": "trailers"
+      }
+    ]
+  },
+  "client_streaming@connect-tls": {
+    "verdict": "passed",
+    "streams": [
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-encoding",
+              "value": "identity"
+            },
+            {
+              "name": "grpc-accept-encoding",
+              "value": "gzip"
+            }
+          ]
+        ],
+        "data": "AAAAAAQIqskE",
+        "trailers": [
+          {
+            "name": "grpc-status",
+            "value": "0"
+          }
+        ],
+        "end_stream": "trailers"
+      }
+    ]
+  },
+  "custom_metadata@connect-tls": {
+    "verdict": "passed",
+    "streams": [
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "x-grpc-test-echo-initial",
+              "value": "test_initial_metadata_value"
+            },
+            {
+              "name": "grpc-encoding",
+              "value": "identity"
+            },
+            {
+              "name": "grpc-accept-encoding",
+              "value": "gzip"
+            }
+          ]
+        ],
+        "data": "AAAAAAUKAxIBAA==",
+        "trailers": [
+          {
+            "name": "x-grpc-test-echo-trailing-bin",
+            "value": "CgsKCwoL"
+          },
+          {
+            "name": "grpc-status",
+            "value": "0"
+          }
+        ],
+        "end_stream": "trailers"
+      },
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "x-grpc-test-echo-initial",
+              "value": "test_initial_metadata_value"
+            },
+            {
+              "name": "grpc-encoding",
+              "value": "identity"
+            },
+            {
+              "name": "grpc-accept-encoding",
+              "value": "gzip"
+            }
+          ]
+        ],
+        "data": "AAAAAAUKAxIBAA==",
+        "trailers": [
+          {
+            "name": "x-grpc-test-echo-trailing-bin",
+            "value": "CgsKCwoL"
+          },
+          {
+            "name": "grpc-status",
+            "value": "0"
+          }
+        ],
+        "end_stream": "trailers"
+      }
+    ]
+  },
+  "empty_stream@connect-tls": {
+    "verdict": "passed",
+    "streams": [
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-status",
+              "value": "0"
+            }
+          ]
+        ],
+        "end_stream": "headers"
+      }
+    ]
+  },
+  "empty_unary@connect-tls": {
+    "verdict": "passed",
+    "streams": [
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-encoding",
+              "value": "identity"
+            },
+            {
+              "name": "grpc-accept-encoding",
+              "value": "gzip"
+            }
+          ]
+        ],
+        "data": "AAAAAAA=",
+        "trailers": [
+          {
+            "name": "grpc-status",
+            "value": "0"
+          }
+        ],
+        "end_stream": "trailers"
+      }
+    ]
+  },
+  "large_unary@connect-tls": {
+    "verdict": "passed",
+    "streams": [
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-encoding",
+              "value": "identity"
+            },
+            {
+              "name": "grpc-accept-encoding",
+              "value": "gzip"
+            }
+          ]
+        ],
+        "data_length": 314172,
+        "data_sha256": "93ed92e7895d76d183b8ff0d4ee8c065129664808e45022a27029064bb3335fe",
+        "trailers": [
+          {
+            "name": "grpc-status",
+            "value": "0"
+          }
+        ],
+        "end_stream": "trailers"
+      }
+    ]
+  },
+  "ping_pong@connect-tls": {
+    "verdict": "passed",
+    "streams": [
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-encoding",
+              "value": "identity"
+            },
+            {
+              "name": "grpc-accept-encoding",
+              "value": "gzip"
+            }
+          ]
+        ],
+        "data_length": 93102,
+        "data_sha256": "c86ce4df50a4d3b54536d40f3fa1caabc79799125a98973670ba2ac3ab01dd85",
+        "trailers": [
+          {
+            "name": "grpc-status",
+            "value": "0"
+          }
+        ],
+        "end_stream": "trailers"
+      }
+    ]
+  },
+  "server_compressed_streaming@connect-tls": {
+    "verdict": "passed",
+    "streams": [
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-encoding",
+              "value": "identity"
+            },
+            {
+              "name": "grpc-accept-encoding",
+              "value": "gzip"
+            }
+          ]
+        ],
+        "data_length": 124094,
+        "data_sha256": "885cb3d10c8990b002449e53ed896acaa1f8112b4225e57e4da0507b1d7de8df",
+        "trailers": [
+          {
+            "name": "grpc-status",
+            "value": "0"
+          }
+        ],
+        "end_stream": "trailers"
+      }
+    ]
+  },
+  "server_compressed_unary@connect-tls": {
+    "verdict": "passed",
+    "streams": [
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-encoding",
+              "value": "gzip"
+            },
+            {
+              "name": "grpc-accept-encoding",
+              "value": "gzip"
+            }
+          ]
+        ],
+        "data": "AQAAAV0fiwgAAAAAAAD/7cExDQAwCACw3ZzDOzY4MIgOkrYxlb8rHwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACXLOgVYW03ywQA",
+        "trailers": [
+          {
+            "name": "grpc-status",
+            "value": "0"
+          }
+        ],
+        "end_stream": "trailers"
+      },
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-encoding",
+              "value": "identity"
+            },
+            {
+              "name": "grpc-accept-encoding",
+              "value": "gzip"
+            }
+          ]
+        ],
+        "data_length": 314172,
+        "data_sha256": "93ed92e7895d76d183b8ff0d4ee8c065129664808e45022a27029064bb3335fe",
+        "trailers": [
+          {
+            "name": "grpc-status",
+            "value": "0"
+          }
+        ],
+        "end_stream": "trailers"
+      }
+    ]
+  },
+  "server_streaming@connect-tls": {
+    "verdict": "passed",
+    "streams": [
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-encoding",
+              "value": "identity"
+            },
+            {
+              "name": "grpc-accept-encoding",
+              "value": "gzip"
+            }
+          ]
+        ],
+        "data_length": 93102,
+        "data_sha256": "c86ce4df50a4d3b54536d40f3fa1caabc79799125a98973670ba2ac3ab01dd85",
+        "trailers": [
+          {
+            "name": "grpc-status",
+            "value": "0"
+          }
+        ],
+        "end_stream": "trailers"
+      }
+    ]
+  },
+  "special_status_message@connect-tls": {
+    "verdict": "passed",
+    "streams": [
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-status",
+              "value": "2"
+            },
+            {
+              "name": "grpc-message",
+              "value": "%09%0Atest with whitespace%0D%0Aand Unicode BMP %E2%98%BA and non-BMP %F0%9F%98%88%09%0A"
+            }
+          ]
+        ],
+        "end_stream": "headers"
+      }
+    ]
+  },
+  "status_code_and_message@connect-tls": {
+    "verdict": "passed",
+    "streams": [
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-status",
+              "value": "2"
+            },
+            {
+              "name": "grpc-message",
+              "value": "test status message"
+            }
+          ]
+        ],
+        "end_stream": "headers"
+      },
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-status",
+              "value": "2"
+            },
+            {
+              "name": "grpc-message",
+              "value": "test status message"
+            }
+          ]
+        ],
+        "end_stream": "headers"
+      }
+    ]
+  },
+  "timeout_on_sleeping_server@connect-tls": {
+    "verdict": "passed",
+    "streams": []
+  },
+  "unimplemented_method@connect-tls": {
+    "verdict": "passed",
+    "streams": [
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-status",
+              "value": "12"
+            },
+            {
+              "name": "grpc-message",
+              "value": "Method grpc.testing.TestService/UnimplementedCall is unimplemented"
+            }
+          ]
+        ],
+        "end_stream": "headers"
+      }
+    ]
+  },
+  "unimplemented_service@connect-tls": {
+    "verdict": "passed",
+    "streams": [
+      {
+        "headers": [
+          [
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-type",
+              "value": "application/grpc"
+            },
+            {
+              "name": "grpc-status",
+              "value": "12"
+            },
+            {
+              "name": "grpc-message",
+              "value": "Method not found: grpc.testing.UnimplementedService/UnimplementedCall"
+            }
+          ]
+        ],
+        "end_stream": "headers"
+      }
+    ]
+  }
+}

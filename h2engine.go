@@ -14,6 +14,8 @@ import (
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
+
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 // Marasi's HTTP/2 engine (docs/adr/2026-11-19-marasi-owns-its-http2-framing.md):
@@ -91,8 +93,12 @@ type h2Conn struct {
 	originEnded bool
 	ended       bool
 	// sent maps each client stream sent to the origin to its origin stream
-	// ID, so an origin GOAWAY can be told to the client in its own IDs.
-	sent map[uint32]uint32
+	// ID, so an origin GOAWAY can be told to the client in its own IDs. It
+	// is recorded as the origin stream's ID is picked, under the origin
+	// leg's lock, so a GOAWAY the origin leg reads afterwards finds it; it
+	// has its own lock, taken inside the origin leg's and h.mu.
+	sentMu sync.Mutex
+	sent   map[uint32]uint32
 	// unsent are the streams dispatched and not yet sent to the origin, in
 	// the order the client opened them (waitTurn).
 	unsent []*h2Stream
@@ -157,6 +163,21 @@ type h2Stream struct {
 	// replaced as it ends.
 	heldSince time.Time
 	holding   chan struct{}
+	// clientReset is the code the client reset the stream with, nil
+	// unless it did.
+	clientReset *http2.ErrCode
+
+	// carrying counts the streamed directions still being carried
+	// (h2engine_streamed.go); release runs once they are done.
+	carrying sync.WaitGroup
+	release  []func()
+	pair     *Pair
+
+	// pass is set once the request body passed the body threshold and the
+	// stream was dispatched with what arrived; stall is the wait after
+	// which a started body passes (h2engine_threshold.go).
+	pass  *h2Passing
+	stall bodyStall
 }
 
 // h2OrderWait bounds how long a stream waits for the streams the client
@@ -324,7 +345,7 @@ func (h *h2Conn) openOrigin() {
 		}
 		return
 	}
-	origin, err := startH2Origin(h.originDial.conn, h.originAddr, h.originGoAway, h.originGone)
+	origin, err := startH2Origin(h.originDial.conn, h.originAddr, h.originGoAway, h.originGone, h.engine.proxy.bodyThreshold())
 	if err != nil {
 		h.originDial.conn.Close()
 		h.originErr = err
@@ -484,6 +505,12 @@ func (h *h2Conn) rstStream(f *http2.RSTStreamFrame) error {
 	switch {
 	case st != nil:
 		code := f.ErrCode
+		h.mu.Lock()
+		st.clientReset = &code
+		h.mu.Unlock()
+		if body := st.request.streamed; body != nil {
+			body.in.close(&streamResetError{code: code})
+		}
 		h.closeStream(st, &code)
 	case idle:
 		return http2.ConnectionError(http2.ErrCodeProtocol)
@@ -512,7 +539,19 @@ func (h *h2Conn) headerBlock() error {
 			h.mu.Unlock()
 			return http2.StreamError{StreamID: id, Code: http2.ErrCodeProtocol}
 		}
-		st.request.trailers, st.ended = fields, true
+		st.ended = true
+		if body := st.request.streamed; body != nil {
+			// A streamed request was dispatched with its head.
+			h.mu.Unlock()
+			body.in.finish(fields)
+		}
+		if st.pass != nil {
+			// The stream already went with what arrived.
+			h.mu.Unlock()
+			st.pass.end(fields)
+			return nil
+		}
+		st.request.trailers = fields
 		h.mu.Unlock()
 		h.dispatch(st)
 		return nil
@@ -546,16 +585,36 @@ func (h *h2Conn) headerBlock() error {
 	h.flow.mu.Lock()
 	st.window.window = h.flow.initial
 	h.flow.mu.Unlock()
+	if framing := streamedFraming(fields, false); framing != stream.FramingNone && !end {
+		// A streamed request goes on with its head; its body follows as
+		// it arrives (h2engine_streamed.go).
+		st.request.streamed = &h2StreamedBody{
+			framing: framing,
+			in: newH2Inbound(h2DefaultWindow, func(n uint32) {
+				h.w.do(func(fr *http2.Framer) error { return fr.WriteWindowUpdate(id, n) })
+			}),
+			resetBy: func(code http2.ErrCode) { h.resetStream(id, code) },
+		}
+	}
 	h.streams[id] = st
+	// A body declared over the threshold goes as it arrives, so the
+	// request goes now.
+	over := !end && st.request.streamed == nil && h2DeclaresOver(fields, h.engine.proxy.bodyThreshold())
+	if over {
+		h.startPass(st)
+	}
 	h.mu.Unlock()
-	if end {
+	if end || over || st.request.streamed != nil {
 		h.dispatch(st)
 	}
 	return nil
 }
 
-// data adds a DATA frame's payload to its stream's request body. Every
-// window is opened again at once: bodies are read whole.
+// data adds a DATA frame's payload to its stream's request body, or once
+// the body passed the threshold, to what follows it. The connection's
+// window is opened again at once, and so is the stream's for a body read
+// whole; a streamed or passed body's stream window opens as its reader
+// takes what arrived (h2Inbound).
 func (h *h2Conn) data(f *http2.DataFrame) error {
 	id, n := f.StreamID, f.Header().Length
 	if n > 0 {
@@ -578,15 +637,46 @@ func (h *h2Conn) data(f *http2.DataFrame) error {
 		h.mu.Unlock()
 		return http2.StreamError{StreamID: id, Code: http2.ErrCodeStreamClosed}
 	}
+	if body := st.request.streamed; body != nil {
+		if f.StreamEnded() {
+			st.ended = true
+		}
+		h.mu.Unlock()
+		if !body.in.put(f.Data(), n) {
+			return http2.StreamError{StreamID: id, Code: http2.ErrCodeFlowControl}
+		}
+		if f.StreamEnded() {
+			body.in.finish(nil)
+		}
+		return nil
+	}
+	if pass := st.pass; pass != nil {
+		// The stream's window opens as the rest goes on (h2Passing).
+		st.ended = f.StreamEnded()
+		h.mu.Unlock()
+		if !pass.push(f.Data(), n, f.StreamEnded()) {
+			return http2.StreamError{StreamID: id, Code: http2.ErrCodeFlowControl}
+		}
+		return nil
+	}
 	st.request.body = append(st.request.body, f.Data()...)
-	if f.StreamEnded() {
+	passes := false
+	switch {
+	case f.StreamEnded():
 		st.ended, st.request.endsOnData = true, true
+		st.stall.stop()
+	case int64(len(st.request.body)) > h.engine.proxy.bodyThreshold():
+		h.startPass(st)
+		passes = true
+	case len(f.Data()) > 0:
+		h.armStall(st)
 	}
 	ended := st.ended
 	h.mu.Unlock()
-	if ended {
+	if ended || passes {
 		h.dispatch(st)
-	} else if n > 0 {
+	}
+	if !ended && n > 0 {
 		h.w.do(func(fr *http2.Framer) error { return fr.WriteWindowUpdate(id, n) })
 	}
 	return nil
@@ -614,7 +704,17 @@ func (h *h2Conn) dispatch(st *h2Stream) {
 	go func() {
 		defer h.streamsWG.Done()
 		h.carry(st)
+		h.awaitRequestPass(st)
 		h.closeStream(st, nil)
+		// A streamed pair is stored once each direction it carries
+		// ended, with how (streamedPair.finish).
+		st.carrying.Wait()
+		for _, release := range st.release {
+			release()
+		}
+		if st.pair != nil && st.pair.stream != nil {
+			st.pair.stream.finish()
+		}
 	}()
 }
 
@@ -656,9 +756,16 @@ func (h *h2Conn) closeStream(st *h2Stream, originCode *http2.ErrCode) {
 	st.gone = true
 	delete(h.streams, st.id)
 	h.closed.add(st.id)
-	originStream, origin, queued := st.origin, h.origin, st.turn != nil
+	originStream, origin, queued, pass := st.origin, h.origin, st.turn != nil, st.pass
+	st.stall.stop()
 	h.mu.Unlock()
+	if pass != nil {
+		pass.cut(nil, errPassStopped)
+	}
 	st.cancel()
+	if body := st.request.streamed; body != nil {
+		body.in.close(errStreamGone)
+	}
 	if queued {
 		h.passTurn(st)
 	}
@@ -699,11 +806,13 @@ func (h *h2Conn) goAway() {
 func (h *h2Conn) originGoAway(last uint32, code http2.ErrCode, debug []byte) {
 	h.mu.Lock()
 	var clientLast uint32
+	h.sentMu.Lock()
 	for clientID, originID := range h.sent {
 		if originID <= last {
 			clientLast = max(clientLast, clientID)
 		}
 	}
+	h.sentMu.Unlock()
 	if h.goingAway {
 		clientLast = min(clientLast, h.goAwayLast)
 	}

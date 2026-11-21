@@ -83,9 +83,9 @@ func recordings(values map[string]int) Recordings {
 
 var (
 	allowB   = Entry{Cases: "b", Runs: []RunName{RunProxy}, Field: "value", Kind: KindAccepted, Reason: "b may differ", RFC: "RFC 9110 §7.6.3"}
-	knownC   = Entry{Cases: "c", Runs: []RunName{RunProxy}, Field: "value", Kind: KindKnown, Reason: "c differs today", Phase: 2}
-	knownE   = Entry{Cases: "e", Runs: []RunName{RunProxy, RunExtension}, Field: "value", Kind: KindKnown, Reason: "e differed", Phase: 2}
-	knownZ   = Entry{Cases: "z*", Runs: []RunName{RunProxy}, Field: "value", Kind: KindKnown, Reason: "no such case", Phase: 2}
+	knownC   = Entry{Cases: "c", Runs: []RunName{RunProxy}, Field: "value", Kind: KindKnown, Reason: "c differs today"}
+	knownE   = Entry{Cases: "e", Runs: []RunName{RunProxy, RunExtension}, Field: "value", Kind: KindKnown, Reason: "e differed"}
+	knownZ   = Entry{Cases: "z*", Runs: []RunName{RunProxy}, Field: "value", Kind: KindKnown, Reason: "no such case"}
 	allowY   = Entry{Cases: "y", Runs: []RunName{RunProxy}, Field: "value", Kind: KindAccepted, Reason: "no such case"}
 	baseline = map[string]int{"a": 1, "b": 1, "c": 1, "d": 1, "e": 1}
 	// a and e match; b is on the allow-list, c is known, d is new; e's known entry went away.
@@ -235,7 +235,7 @@ func TestRunSortsDifferences(t *testing.T) {
 	})
 
 	t.Run("should not report an entry for a client approach that did not run as stale", func(t *testing.T) {
-		plain := Entry{Cases: "a@connect-plain", Runs: []RunName{RunProxy}, Field: "value", Kind: KindKnown, Reason: "a differs", Phase: 2}
+		plain := Entry{Cases: "a@connect-plain", Runs: []RunName{RunProxy}, Field: "value", Kind: KindKnown, Reason: "a differs"}
 		f := newFixture(t, Deviations{plain})
 		f.settings.Approaches = []Approach{ApproachAbsolute}
 		f.suite.approaches = []Approach{ApproachAbsolute, ApproachConnectPlain}
@@ -275,12 +275,15 @@ func TestRunSortsDifferences(t *testing.T) {
 		}
 	})
 
-	t.Run("should refuse a known entry with no phase", func(t *testing.T) {
-		noPhase := knownC
-		noPhase.Phase = 0
-		f := newFixture(t, Deviations{noPhase})
+	t.Run("should refuse an entry with a field it does not know, such as phase", func(t *testing.T) {
+		f := newFixture(t, nil)
+		file := f.settings.DeviationsFile("fake")
+		tagged := `[{"cases": "c", "runs": ["proxy"], "field": "value", "kind": "known", "reason": "c differs today", "phase": 2}]`
+		if err := os.WriteFile(file, []byte(tagged), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := Run(context.Background(), f.settings); err == nil || !strings.Contains(err.Error(), "phase") {
-			t.Fatalf("\nwanted:\nan error about the phase\ngot:\n%v", err)
+			t.Fatalf("\nwanted:\nan error naming the phase field\ngot:\n%v", err)
 		}
 	})
 
@@ -448,7 +451,6 @@ func TestRunUpdateKnown(t *testing.T) {
 	t.Run("should add new differences as known, drop runs that went away and keep accepted entries", func(t *testing.T) {
 		f := newFixture(t, Deviations{allowB, knownC, knownE, allowY})
 		f.settings.UpdateKnown = true
-		f.settings.Phase = 2
 		run(t, f.settings)
 
 		got, err := ReadDeviations(f.settings.DeviationsFile("fake"))
@@ -458,7 +460,7 @@ func TestRunUpdateKnown(t *testing.T) {
 		stillE := knownE
 		stillE.Runs = []RunName{RunExtension}
 		want := Deviations{allowB, knownC, stillE, allowY, {
-			Cases: "d", Runs: []RunName{RunProxy}, Field: "value", Kind: KindKnown, Phase: 2,
+			Cases: "d", Runs: []RunName{RunProxy}, Field: "value", Kind: KindKnown,
 			Reason: `measured by conformance-update-known: baseline "1", got "4"`,
 		}}
 		if !reflect.DeepEqual(got, want) {
@@ -478,7 +480,6 @@ func TestRunUpdateKnown(t *testing.T) {
 		f.suite.got[RunExtension] = recordings(proxied)
 		f.settings.Exclude = []string{"b", "c", "d"}
 		f.settings.UpdateKnown = true
-		f.settings.Phase = 2
 		run(t, f.settings)
 
 		got, err := ReadDeviations(f.settings.DeviationsFile("fake"))
@@ -498,7 +499,6 @@ func TestRunUpdateKnown(t *testing.T) {
 			t.Fatal(err)
 		}
 		f.settings.UpdateKnown = true
-		f.settings.Phase = 2
 		run(t, f.settings)
 
 		got, err := ReadScore(f.settings.ScoreFile("fake"), "fake")
@@ -567,7 +567,7 @@ func TestRunWritesReports(t *testing.T) {
 			}
 			last = at
 		}
-		for _, row := range []string{"| t | - | 2 | 5 |", "| t | d | value | 1 | 4 |", "| e | value | 2 | e differed |", "| t | b | value | 1 | 2 | b may differ | RFC 9110 §7.6.3 |"} {
+		for _, row := range []string{"| t | - | 2 | 5 |", "| t | d | value | 1 | 4 |", "| e | value | e differed |", "| t | b | value | 1 | 2 | b may differ | RFC 9110 §7.6.3 |"} {
 			if !strings.Contains(summary, row) {
 				t.Fatalf("\nwanted row:\n%s\ngot:\n%s", row, summary)
 			}
@@ -639,7 +639,7 @@ func TestRunLegRules(t *testing.T) {
 	})
 
 	t.Run("should pass when the only broken rules are a listed MUST and a SHOULD", func(t *testing.T) {
-		knownMust := Entry{Cases: "b", Runs: []RunName{RunProxy}, Field: "leg:must", Kind: KindKnown, Reason: "forwards Connection today", Phase: 2}
+		knownMust := Entry{Cases: "b", Runs: []RunName{RunProxy}, Field: "leg:must", Kind: KindKnown, Reason: "forwards Connection today"}
 		f := newFixture(t, Deviations{allowB, acceptVia, knownMust})
 		f.suite.legChecks = legChecks()
 		f.settings.Cases = []string{"a", "b"}
@@ -699,7 +699,7 @@ func TestRunLegRules(t *testing.T) {
 		f := newFixture(t, Deviations{allowB, acceptVia})
 		f.suite.legChecks = legChecks()
 		f.settings.Cases = []string{"a", "b"}
-		f.settings.UpdateKnown, f.settings.Phase = true, 2
+		f.settings.UpdateKnown = true
 		run(t, f.settings)
 
 		got, err := ReadDeviations(f.settings.DeviationsFile("fake"))

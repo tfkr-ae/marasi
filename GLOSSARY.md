@@ -107,7 +107,7 @@ The intercept capability of a service instance. It is not stored and has no id.
 _Avoid_: intercept as the product name, using checkpoint as a synonym for the checkpoint extension
 
 **Checkpoint item**:
-An in-flight request, response, or WebSocket message held by Checkpoint. Identified by the request/response pair UUID or the WebSocket message UUID. Not stored in the open project.
+An in-flight request, response, WebSocket message, stream message, or trailer block of a streamed pair held by Checkpoint. Identified by the request/response pair UUID, or by the WebSocket message's, stream message's or trailer block's own UUID. Not stored in the open project.
 _Avoid_: intercepted item, intercept, paused traffic, held flow
 
 **Scope**:
@@ -137,6 +137,26 @@ _Avoid_: message, packet, chunk
 **WebSocket extension**:
 A protocol extension that the client offers and the upstream accepts in the `Sec-WebSocket-Extensions` handshake header. The proxy forwards only permessage-deflate (RFC 7692). It removes any other offer and records the name on the WebSocket connection. Not an Extension.
 _Avoid_: extension on its own, plugin
+
+**Streamed pair**:
+A request/response pair whose head names a message framing, so the body in that direction is carried as stream messages as they arrive instead of being read whole. It is still a request/response pair, with the same UUID; its stored body is empty, and its stream messages hold the content.
+_Avoid_: stream, gRPC call, streaming request, flow
+
+**Body threshold**:
+The size past which an ordinary request/response pair's body stops being read whole and is forwarded as it arrives, as it is too when its head declares more or it stalls for 2 seconds. From then on that body cannot be held or edited, and it is stored up to the threshold, marked too large. 64 MiB unless `body_threshold` sets it.
+_Avoid_: size limit, max body size
+
+**Stream message**:
+One unit of a streamed pair's body in one direction, cut out by its message framing: a gRPC, gRPC-Web or Connect envelope, a server-sent event, or an NDJSON line. Stored in the open project and identified by its own UUID. The frames, chunks or DATA frames that carry it are wire detail with no id.
+_Avoid_: message on its own, frame, chunk, event (which is a service instance notification), WebSocket message
+
+**Message framing**:
+How a streamed pair's body is cut into stream messages: `grpc`, `grpc-web`, `connect`, `sse` or `ndjson`. Each direction of a pair has at most one, read from that direction's head.
+_Avoid_: codec, protocol (which is the HTTP version on a leg), content type
+
+**Protobuf text form**:
+A gRPC, gRPC-Web or Connect stream message's protobuf payload decoded without a schema into protoscope-compatible text that states each field's wire type, so encoding it gives back the exact bytes. Computed on read, never stored. Not the text form of an HTTP/2 pair.
+_Avoid_: prototext, textproto, JSON form, pretty payload
 
 **Waypoint**:
 A pairing of an original host:port with an override host:port, stored in the open project and identified by the original host:port.
@@ -347,5 +367,5 @@ The documented exceptions to transparency that Marasi keeps on purpose, because 
 _Avoid_: ignore list, exemptions, waivers
 
 **Known deviation**:
-A measured difference from the direct baseline that Marasi does not mean to keep, recorded with the phase expected to remove it. Removing one is required once it stops occurring, so the score only improves.
+A measured difference from the direct baseline that Marasi does not mean to keep, recorded while the move off Martian is under way. Removing one is required once it stops occurring, so the score only improves, and none outlives the last phase.
 _Avoid_: expected failure, xfail, allowed deviation

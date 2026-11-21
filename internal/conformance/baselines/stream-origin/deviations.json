@@ -1,0 +1,15 @@
+[
+  {
+    "cases": "sse-gzip-*",
+    "runs": [
+      "proxy",
+      "checkpoint-forward",
+      "checkpoint-edit",
+      "extension"
+    ],
+    "field": "client.coded[0]",
+    "kind": "accepted",
+    "reason": "Marasi terminates a server-sent event or NDJSON body's Content-Encoding on each leg: it inflates the origin's stream and compresses it again with its own compressor, flushed after each event, so the client gets the same events in different compressed bytes and an edit is safe at any point (the 2026-11-20 amendment of docs/adr/2026-10-11-proxy-terminates-permessage-deflate-per-leg.md)",
+    "rfc": "RFC 9110 §8.4.1.3"
+  }
+]

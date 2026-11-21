@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -115,36 +117,40 @@ func TestServiceEvents(t *testing.T) {
 	t.Run("should wait for an idle interval after a publication before heartbeating", func(t *testing.T) {
 		server := newTestServer(nil, func() {})
 		server.heartbeatInterval = 80 * time.Millisecond
-		httpServer := httptest.NewServer(server)
-		defer httpServer.Close()
-		response, reader := connectEventStream(t, httpServer.URL)
-		defer response.Body.Close()
+		// The bubble's clock moves only when every goroutine in it waits, so
+		// the intervals are exact however loaded the machine is.
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			request := httptest.NewRequestWithContext(ctx, http.MethodGet, "/events", nil)
+			stream := &streamRecorder{header: http.Header{}}
+			served := make(chan struct{})
+			go func() {
+				defer close(served)
+				server.serveEvents(stream, request)
+			}()
+			defer func() { cancel(); <-served }()
 
-		time.Sleep(50 * time.Millisecond)
-		server.events.publish("traffic.request", map[string]string{"path": "/active"})
-		if got := readEventFrame(t, reader); got != "event: traffic.request\ndata: {\"path\":\"/active\"}\n\n" {
-			t.Fatalf("\nwanted publication before heartbeat\ngot:\n%s", got)
-		}
-
-		heartbeat := make(chan string, 1)
-		go func() {
-			line, _ := reader.ReadString('\n')
-			blank, _ := reader.ReadString('\n')
-			heartbeat <- line + blank
-		}()
-		select {
-		case got := <-heartbeat:
-			t.Fatalf("\nwanted:\nno heartbeat during the new idle interval\ngot:\n%s", got)
-		case <-time.After(50 * time.Millisecond):
-		}
-		select {
-		case got := <-heartbeat:
-			if got != ": heartbeat\n\n" {
-				t.Fatalf("\nwanted:\n%s\ngot:\n%s", ": heartbeat\\n\\n", got)
+			time.Sleep(50 * time.Millisecond)
+			server.events.publish("traffic.request", map[string]string{"path": "/active"})
+			synctest.Wait()
+			published := "event: traffic.request\ndata: {\"path\":\"/active\"}\n\n"
+			if got := stream.text(); !strings.HasSuffix(got, published) || strings.Contains(got, "heartbeat") {
+				t.Fatalf("\nwanted publication before heartbeat\ngot:\n%s", got)
 			}
-		case <-time.After(100 * time.Millisecond):
-			t.Fatal("heartbeat did not arrive after the idle interval")
-		}
+
+			time.Sleep(80*time.Millisecond - time.Nanosecond)
+			synctest.Wait()
+			if got := stream.text(); strings.Contains(got, "heartbeat") {
+				t.Fatalf("\nwanted:\nno heartbeat during the new idle interval\ngot:\n%s", got)
+			}
+
+			time.Sleep(time.Nanosecond)
+			synctest.Wait()
+			if got := stream.text(); !strings.HasSuffix(got, published+": heartbeat\n\n") {
+				t.Fatalf("\nwanted:\n%s\ngot:\n%s", ": heartbeat\\n\\n after the publication", got)
+			}
+		})
 	})
 
 	t.Run("should send publications in order to concurrent subscribers", func(t *testing.T) {
@@ -819,4 +825,28 @@ func TestEventBroadcaster(t *testing.T) {
 			}
 		}
 	})
+}
+
+// streamRecorder is an http.ResponseWriter and http.Flusher that keeps what
+// was written, safe to read while a handler writes.
+type streamRecorder struct {
+	header http.Header
+	mu     sync.Mutex
+	body   strings.Builder
+}
+
+func (r *streamRecorder) Header() http.Header { return r.header }
+func (r *streamRecorder) WriteHeader(int)     {}
+func (r *streamRecorder) Flush()              {}
+
+func (r *streamRecorder) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.body.Write(p)
+}
+
+func (r *streamRecorder) text() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.body.String()
 }

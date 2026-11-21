@@ -9,3 +9,5 @@ Hop-by-hop fields and framing belong to one connection, so the direct run cannot
 The h1 suites block merges and run on every pull request. The h2 suites are report-only until HTTP/2 is built. Reports go to `dist/conformance/` and the job summary, and are not committed.
 
 **Considered options:** score Marasi against the RFC directly, as Http11Probe and h2spec do for servers; one allow-list holding both accepted and known differences; gate only on the previous score. These were rejected because RFC scoring would fail Marasi for its target's faults, a mixed list stops meaning "accepted on purpose", and a bare score records no reason.
+
+**Amended 2026-11-20 (the last phase):** the move off Martian has four phases: the conformance harness, owning the engine, HTTP/2, and streaming and gRPC. The fourth is the last, so it leaves no known deviation in any `deviations.json`: each is either removed or moved to the allow-list with its reason, and the `phase` tags are dropped. After it, a difference Marasi does not mean to keep is a bug to fix, not a known deviation.

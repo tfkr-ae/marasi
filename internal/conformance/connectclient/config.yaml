@@ -1,0 +1,11 @@
+# Client features the connectrpc/conformance runner selects cases by, for
+# the connect-client suite: HTTP/1.1 and HTTP/2 (h2c by prior knowledge),
+# the three protocols, every codec and compression, and no TLS.
+features:
+  versions: [HTTP_VERSION_1, HTTP_VERSION_2]
+  protocols: [PROTOCOL_CONNECT, PROTOCOL_GRPC, PROTOCOL_GRPC_WEB]
+  codecs: [CODEC_PROTO, CODEC_JSON]
+  compressions: [COMPRESSION_IDENTITY, COMPRESSION_GZIP, COMPRESSION_BR, COMPRESSION_ZSTD, COMPRESSION_DEFLATE, COMPRESSION_SNAPPY]
+  supportsH2c: true
+  supportsTls: false
+  supportsHalfDuplexBidiOverHttp1: true

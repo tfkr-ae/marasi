@@ -231,11 +231,11 @@ const (
 
 var (
 	knownResponseCase = conformance.Entry{Cases: "chunked-trailers@*", Runs: []conformance.RunName{conformance.RunProxy},
-		Field: "client[0].responses[0].fields.name-case", Kind: conformance.KindKnown, Reason: "Martian canonicalises", Phase: 2}
+		Field: "client[0].responses[0].fields.name-case", Kind: conformance.KindKnown, Reason: "Martian canonicalises"}
 	acceptedRequestCase = conformance.Entry{Cases: absolute, Runs: []conformance.RunName{conformance.RunProxy},
 		Field: "origin[0].requests[0].fields.name-case", Kind: conformance.KindAccepted, Reason: "test allow-list entry"}
 	knownGone = conformance.Entry{Cases: "*", Runs: []conformance.RunName{conformance.RunProxy},
-		Field: "client[0].responses[0].body", Kind: conformance.KindKnown, Reason: "never happens", Phase: 2}
+		Field: "client[0].responses[0].body", Kind: conformance.KindKnown, Reason: "never happens"}
 )
 
 func TestBrokenStandIn(t *testing.T) {
@@ -302,7 +302,7 @@ func TestBrokenStandIn(t *testing.T) {
 
 	t.Run("should list nothing new after update-known, keeping accepted entries", func(t *testing.T) {
 		h := newHarness(t, true, conformance.Deviations{acceptedRequestCase, acceptVia})
-		h.settings.UpdateKnown, h.settings.Phase = true, 2
+		h.settings.UpdateKnown = true
 		runHarness(t, h.settings)
 		h.settings.UpdateKnown = false
 

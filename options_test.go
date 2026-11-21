@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -176,6 +177,67 @@ func TestWithConfigDir_WebSocketMaxMessageSize(t *testing.T) {
 		t.Run("should accept "+strings.TrimSpace(yaml), func(t *testing.T) {
 			if _, err := load(t, yaml); err != nil {
 				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+		})
+	}
+}
+
+func TestWithConfigDir_StreamMaxMessageSize(t *testing.T) {
+	load := func(t *testing.T, yaml string) (*Proxy, error) {
+		t.Helper()
+		configDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(configDir, "marasi_config.yaml"), []byte(yaml), 0o600); err != nil {
+			t.Fatalf("writing config: %v", err)
+		}
+		return New(WithConfigDir(configDir))
+	}
+
+	t.Run("should reject a negative limit", func(t *testing.T) {
+		if _, err := load(t, "stream_max_message_size: -1\n"); err == nil || !strings.Contains(err.Error(), "stream_max_message_size") {
+			t.Fatalf("\nwanted:\nan error naming stream_max_message_size\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should read the limit in bytes", func(t *testing.T) {
+		proxy, err := load(t, "stream_max_message_size: 1024\n")
+		if err != nil || proxy.Config.StreamMaxMessageSize != 1024 {
+			t.Fatalf("\nwanted:\n1024\ngot:\n%v, %v", proxy, err)
+		}
+	})
+}
+
+func TestWithConfigDir_BodyThreshold(t *testing.T) {
+	load := func(t *testing.T, yaml string) (*Proxy, error) {
+		t.Helper()
+		configDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(configDir, "marasi_config.yaml"), []byte(yaml), 0o600); err != nil {
+			t.Fatalf("writing config: %v", err)
+		}
+		return New(WithConfigDir(configDir))
+	}
+
+	t.Run("should reject a negative threshold", func(t *testing.T) {
+		if _, err := load(t, "body_threshold: -1\n"); err == nil || !strings.Contains(err.Error(), "body_threshold") {
+			t.Fatalf("\nwanted:\nan error naming body_threshold\ngot:\n%v", err)
+		}
+	})
+
+	tests := []struct {
+		yaml string
+		want int64
+	}{
+		{"", 64 << 20},
+		{"body_threshold: 0\n", 64 << 20},
+		{"body_threshold: 1024\n", 1024},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("should use %d bytes for %q", tt.want, tt.yaml), func(t *testing.T) {
+			proxy, err := load(t, tt.yaml)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			if got := proxy.bodyThreshold(); got != tt.want {
+				t.Fatalf("\nwanted:\n%d\ngot:\n%d", tt.want, got)
 			}
 		})
 	}

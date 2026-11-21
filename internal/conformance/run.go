@@ -33,7 +33,6 @@ type Settings struct {
 	OutDir      string    // reports: <dir>/<suite>/<run>/
 	Launch      Launcher  // starts the proxy for each proxied run
 	UpdateKnown bool      // rewrite the known entries and score.json in BaselineDir
-	Phase       int       // phase given to the known entries UpdateKnown writes
 	Log         io.Writer // progress output
 	Summary     io.Writer // receives every Markdown summary too, such as $GITHUB_STEP_SUMMARY; may be nil
 	// CA is the harness CA every Job gets. Nil means Run generates one; a
@@ -207,7 +206,7 @@ func (s Settings) runSuite(ctx context.Context, suite Suite) (Outcome, error) {
 		return outcome, err
 	}
 	if s.UpdateKnown {
-		updated := updateKnown(deviations, outcome, s.Phase)
+		updated := updateKnown(deviations, outcome)
 		if err := WriteDeviations(s.DeviationsFile(suite.Name()), updated); err != nil {
 			return outcome, err
 		}

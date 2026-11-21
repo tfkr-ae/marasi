@@ -44,6 +44,7 @@ type RepositoryProvider interface {
 	domain.LogRepository
 	domain.ReportingRepository
 	domain.WebSocketRepository
+	domain.StreamRepository
 	io.Closer
 	// RefreshStatisticsIfDue refreshes the planner statistics when captures
 	// have marked them due (docs/adr/2026-10-14-traffic-lists-sort-by-any-ledger-column.md). The database writer calls it when idle.
@@ -294,6 +295,50 @@ func WithWebSocketProgressHandler(handler func(domain.WebSocketMessageProgress) 
 	}
 }
 
+// WithStreamedPairStartedHandler sets OnStreamedPairStarted.
+func WithStreamedPairStartedHandler(handler func(domain.StreamedPairStarted)) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnStreamedPairStarted != nil {
+			return errors.New("proxy already has a streamed pair started handler defined")
+		}
+		proxy.OnStreamedPairStarted = handler
+		return nil
+	}
+}
+
+// WithStreamMessageHandler sets OnStreamMessage.
+func WithStreamMessageHandler(handler func(domain.StreamMessage)) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnStreamMessage != nil {
+			return errors.New("proxy already has a stream message handler defined")
+		}
+		proxy.OnStreamMessage = handler
+		return nil
+	}
+}
+
+// WithStreamMessageProgressHandler sets OnStreamMessageProgress.
+func WithStreamMessageProgressHandler(handler func(domain.StreamMessageProgress)) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnStreamMessageProgress != nil {
+			return errors.New("proxy already has a stream message progress handler defined")
+		}
+		proxy.OnStreamMessageProgress = handler
+		return nil
+	}
+}
+
+// WithStreamedPairEndedHandler sets OnStreamedPairEnded.
+func WithStreamedPairEndedHandler(handler func(domain.StreamedPairEnded)) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnStreamedPairEnded != nil {
+			return errors.New("proxy already has a streamed pair ended handler defined")
+		}
+		proxy.OnStreamedPairEnded = handler
+		return nil
+	}
+}
+
 // WithWebSocketCloseHandler takes a handler function that will be executed when a WebSocket connection closes.
 func WithWebSocketCloseHandler(handler func(domain.WebSocketConnection) error) func(*Proxy) error {
 	return func(proxy *Proxy) error {
@@ -382,6 +427,7 @@ func WithDefaultRepositories(repo RepositoryProvider) func(*Proxy) error {
 			WithWaypointRepository(repo),
 			WithReportingRepository(repo),
 			WithWebSocketRepository(repo),
+			WithStreamRepository(repo),
 			WithDBCloser(repo),
 		)
 	}
@@ -480,6 +526,14 @@ func WithLogRepository(repo domain.LogRepository) func(*Proxy) error {
 func WithReportingRepository(repo domain.ReportingRepository) func(*Proxy) error {
 	return func(proxy *Proxy) error {
 		proxy.ReportingRepo = repo
+		return nil
+	}
+}
+
+// WithStreamRepository injects the stream message repository implementation.
+func WithStreamRepository(repo domain.StreamRepository) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		proxy.StreamRepo = repo
 		return nil
 	}
 }
@@ -670,6 +724,9 @@ func (proxy *Proxy) baseResponse(res *http.Response, wire *wireResponse) error {
 		// still stored, with how it ended.
 		proxy.captureCutShortResponse(pair)
 		return err
+	}
+	if pair.ResponseBodyEnding == BodyTooLarge {
+		markPassedThrough(pair, "response")
 	}
 	detachOpaqueUpgrade(pair)
 	if admission := pair.admission; admission != nil {

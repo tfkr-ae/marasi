@@ -178,9 +178,15 @@ type h1Conn struct {
 	kept bool
 	// hijacked is set once the base pipeline took the connection over.
 	hijacked bool
+	// streams is the streamed state of the pair being carried, nil when
+	// neither direction is streamed (h1engine_streamed.go).
+	streams *h1Streams
 	// origin is this client connection's origin connection, nil until its
 	// first request or after the origin closed it.
 	origin *originConn
+	// lingering is an origin connection whose response ended it while a
+	// passed request body was still being sent on it (h1engine_threshold.go).
+	lingering *originConn
 	// protocol is what the client's TLS handshake negotiated by ALPN, and
 	// handshake the origin dial it made (h1engine_mitm.go); "" and nil
 	// before intercepted TLS.

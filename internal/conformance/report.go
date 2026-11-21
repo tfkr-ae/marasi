@@ -75,10 +75,10 @@ func WriteSummary(w io.Writer, suite string, run RunName, results []Result, went
 		if len(wentAway) == 0 {
 			return false
 		}
-		writeRow(w, "Cases", "Field", "Phase", "Reason")
-		writeRow(w, "---", "---", "---:", "---")
+		writeRow(w, "Cases", "Field", "Reason")
+		writeRow(w, "---", "---", "---")
 		for _, gone := range wentAway {
-			writeRow(w, gone.Entry.Cases, gone.Entry.Field, strconv.Itoa(gone.Entry.Phase), gone.Entry.Reason)
+			writeRow(w, gone.Entry.Cases, gone.Entry.Field, gone.Entry.Reason)
 		}
 		return true
 	})
@@ -87,11 +87,11 @@ func WriteSummary(w io.Writer, suite string, run RunName, results []Result, went
 		for _, result := range results {
 			for _, m := range result.Known {
 				if !wrote {
-					writeRow(w, "Target", "Case", "Field", "Baseline", "Got", "Phase", "Reason")
-					writeRow(w, "---", "---", "---", "---", "---", "---:", "---")
+					writeRow(w, "Target", "Case", "Field", "Baseline", "Got", "Reason")
+					writeRow(w, "---", "---", "---", "---", "---", "---")
 					wrote = true
 				}
-				writeRow(w, result.Target, m.Case, m.Field, m.Want, m.Got, strconv.Itoa(m.Entry.Phase), m.Entry.Reason)
+				writeRow(w, result.Target, m.Case, m.Field, m.Want, m.Got, m.Entry.Reason)
 			}
 		}
 		return wrote
@@ -229,8 +229,7 @@ func writeCaseDiffs(dir string, result *Result, baseline, got Recordings) error 
 				diff.Differences = append(diff.Differences, m.Difference)
 			}
 		}
-		name := strings.NewReplacer("/", "_", string(filepath.Separator), "_").Replace(id) + ".json"
-		if err := writeJSON(filepath.Join(dir, name), diff); err != nil {
+		if err := writeJSON(filepath.Join(dir, diffFileName(id)), diff); err != nil {
 			return err
 		}
 	}
@@ -242,4 +241,16 @@ func orNull(recording json.RawMessage) json.RawMessage {
 		return json.RawMessage("null")
 	}
 	return recording
+}
+
+// diffUnsafe replaces what upload-artifact refuses in a path (it keeps
+// paths valid on NTFS): connect-client case IDs carry colons.
+var diffUnsafe = strings.NewReplacer(
+	"/", "_", `\`, "_", ":", "_", `"`, "_", "<", "_", ">", "_",
+	"|", "_", "*", "_", "?", "_", "\r", "_", "\n", "_",
+)
+
+// diffFileName is the file a case's diff is written to.
+func diffFileName(id string) string {
+	return diffUnsafe.Replace(id) + ".json"
 }

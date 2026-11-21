@@ -22,8 +22,9 @@ const (
 	// BodyCutShort means the peer stopped sending, or the read failed,
 	// before the body was whole.
 	BodyCutShort
-	// BodyTooLarge means the body passed a size limit. No limit applies to
-	// the bodies the proxy reads today, so nothing sets it yet.
+	// BodyTooLarge means the body passed the body threshold, so it was
+	// forwarded as it arrived and only what came before is kept
+	// (body_threshold.go).
 	BodyTooLarge
 )
 
@@ -46,6 +47,10 @@ func (ending BodyEnding) String() string {
 // bytes that arrived and why the read stopped.
 func readBody(body io.ReadCloser) ([]byte, BodyEnding, error) {
 	defer body.Close()
+	if passed, ok := body.(passedBody); ok {
+		data, _ := io.ReadAll(passed)
+		return data, BodyTooLarge, nil
+	}
 	data, err := io.ReadAll(body)
 	if err != nil {
 		return data, BodyCutShort, err

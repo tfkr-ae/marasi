@@ -45,6 +45,9 @@ type wireRequest struct {
 	// h2 is an HTTP/2 request's field list, body and trailers; head and
 	// body are nil then (h2engine_fields.go).
 	h2 *h2Request
+	// passing is set when the body passed the body threshold: body is
+	// then what arrived before it did (h1engine_threshold.go).
+	passing *h1Passing
 }
 
 // wireResponse is a response as it was read from the origin. The pair's
@@ -55,4 +58,7 @@ type wireResponse struct {
 	// h2 is an HTTP/2 response's field list, body and trailers; head and
 	// body are nil then.
 	h2 *h2Response
+	// passing is set when the body passed the body threshold, as for a
+	// request.
+	passing *h1Passing
 }

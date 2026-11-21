@@ -108,6 +108,12 @@ type h2TestPeer struct {
 	order   []uint32
 	goAway  *http2.GoAwayFrame
 	err     error
+	// credit is what WINDOW_UPDATE frames gave, by stream, 0 being the
+	// connection. holdWindow stops the peer giving window back for DATA.
+	credit     map[uint32]int64
+	holdWindow bool
+	// sentOn is what sendWithinWindow sent, by stream.
+	sentOn map[uint32]int64
 }
 
 // h2TestStream is what arrived on one stream.
@@ -121,7 +127,7 @@ type h2TestStream struct {
 }
 
 func newH2TestPeer(conn net.Conn) *h2TestPeer {
-	peer := &h2TestPeer{conn: conn, framer: http2.NewFramer(conn, conn), changed: make(chan struct{}), streams: make(map[uint32]*h2TestStream)}
+	peer := &h2TestPeer{conn: conn, framer: http2.NewFramer(conn, conn), changed: make(chan struct{}), streams: make(map[uint32]*h2TestStream), sentOn: make(map[uint32]int64)}
 	peer.framer.AllowIllegalWrites = true
 	peer.encoder = hpack.NewEncoder(&peer.block)
 	return peer
@@ -201,7 +207,7 @@ func (p *h2TestPeer) read() {
 			s := stream(f.StreamID)
 			s.data = append(s.data, f.Data()...)
 			s.ended = s.ended || f.StreamEnded()
-			if n := f.Header().Length; n > 0 {
+			if n := f.Header().Length; n > 0 && !p.holdWindow {
 				go p.write(func(fr *http2.Framer) error {
 					fr.WriteWindowUpdate(0, n)
 					return fr.WriteWindowUpdate(f.StreamID, n)
@@ -209,6 +215,11 @@ func (p *h2TestPeer) read() {
 			}
 		case *http2.RSTStreamFrame:
 			stream(f.StreamID).reset = f.ErrCode.String()
+		case *http2.WindowUpdateFrame:
+			if p.credit == nil {
+				p.credit = make(map[uint32]int64)
+			}
+			p.credit[f.StreamID] += int64(f.Increment)
 		case *http2.GoAwayFrame:
 			p.goAway = f
 		}
@@ -428,6 +439,48 @@ func TestH2Engine(t *testing.T) {
 		}
 		if second != nil {
 			t.Fatalf("the second stream\nwanted:\nnothing\ngot:\n%+v", *second)
+		}
+	})
+
+	t.Run("should count a stream as processed when the origin's GOAWAY arrives just after its head went out", func(t *testing.T) {
+		// The hook holds the second stream right after its head reached
+		// the origin, until the client has the relayed GOAWAY, so the
+		// GOAWAY is handled in that window every time.
+		relayed := make(chan struct{})
+		h2AfterHeadSent = func(clientID uint32) {
+			if clientID == 3 {
+				select {
+				case <-relayed:
+				case <-time.After(5 * time.Second):
+				}
+			}
+		}
+		t.Cleanup(func() { h2AfterHeadSent = nil })
+		origin := newH2TestOrigin(t)
+		addr, _, ca := serveH1EngineMITMProxy(t, true)
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		upstream := origin.accept(t)
+		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/first")
+		first := upstream.nthStream(t, 0)
+		client.headers(3, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/second")
+		second := upstream.nthStream(t, 1)
+		upstream.write(func(f *http2.Framer) error { return f.WriteGoAway(second, http2.ErrCodeNo, nil) })
+		client.await(t, "GOAWAY", func(p *h2TestPeer) bool { return p.goAway != nil })
+		// The framer reuses the frame on its next read, so take the ID now.
+		client.mu.Lock()
+		last := client.goAway.LastStreamID
+		client.mu.Unlock()
+		close(relayed)
+		upstream.headers(first, false, ":status", "200")
+		upstream.data(first, true, "first")
+		upstream.headers(second, false, ":status", "200")
+		upstream.data(second, true, "second")
+
+		if last != 3 {
+			t.Fatalf("GOAWAY\nwanted:\nlast stream 3, both streams processed\ngot:\nlast stream %d", last)
+		}
+		if response := client.stream(t, 3); string(response.data) != "second" {
+			t.Fatalf("the second stream\nwanted:\n%q\ngot:\n%q", "second", response.data)
 		}
 	})
 

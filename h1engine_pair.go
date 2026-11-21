@@ -18,15 +18,28 @@ import (
 // carryPair carries one request/response pair: it reads the request's body,
 // runs the request step, the round trip and the response step, and writes the
 // response. It reports whether the connection carries another request.
-func (c *h1Conn) carryPair(head *h1.RequestHead) bool {
+func (c *h1Conn) carryPair(head *h1.RequestHead) (keep bool) {
+	c.streams = nil
 	framing, refused := h1.RequestFraming(head)
-	if refused == nil && expectsContinue(head, framing) {
+	threshold := c.engine.proxy.bodyThreshold()
+	if refused == nil && expectsContinue(head, framing) && !h1DeclaresOver(framing, threshold) {
 		// Marasi answers 100 itself, so the chains see the whole request
 		// (docs/adr/2026-11-17-marasi-answers-100-continue-itself.md).
+		// A body declared over the threshold goes as it arrives, so
+		// the origin answers Expect.
 		io.WriteString(c.bw, "HTTP/1.1 100 Continue\r\n\r\n")
 		c.bw.Flush()
 	}
-	body, bodyErr := readWireBody(c.br, framing, &refused)
+	var body *h1.Body
+	var passing *h1Passing
+	var bodyErr error
+	if refused == nil && c.streamedRequest(head, framing) {
+		// The request chain sees the head with an empty body; its
+		// stream messages follow once it goes upstream.
+		body = &h1.Body{Framing: framing}
+	} else {
+		body, passing, bodyErr = readWireBody(c.br, framing, &refused, threshold)
+	}
 	if refused != nil {
 		defer c.drain()
 	}
@@ -40,16 +53,39 @@ func (c *h1Conn) carryPair(head *h1.RequestHead) bool {
 	case refused != nil:
 	case bodyErr != nil:
 		req.Body = cutShortBody(body.Payload(), bodyErr)
+	case passing != nil:
+		kept, _ := cutAtThreshold(body.Payload(), threshold)
+		req.Body = newPassedBody(kept)
 	case framing.Kind != h1.NoBody:
 		req.Body = io.NopCloser(bytes.NewReader(body.Payload()))
 	}
-	if err := c.engine.request(req, c, &wireRequest{head: head, body: body, refused: refused}); err != nil || c.hijacked {
+	// The rest of a passing body is read only as it goes to the origin.
+	// An origin that answered before it ended and keeps its connection
+	// reads the rest, so it goes on before the next request; otherwise a
+	// connection whose request body was not all read carries no other.
+	defer func() {
+		if passing != nil && passing.sent != nil && keep {
+			<-passing.sent
+			keep = passing.sentAll
+		}
+		if c.lingering != nil {
+			passing.linger(c.lingering)
+			c.lingering = nil
+		}
+		if passing.unfinished() {
+			keep = false
+		}
+	}()
+	if err := c.engine.request(req, c, &wireRequest{head: head, body: body, refused: refused, passing: passing}); err != nil || c.hijacked {
 		return false
 	}
 	pair := requestPair(req)
 	if pair == nil {
 		return false
 	}
+	// A streamed pair goes on once both its directions ended
+	// (h1engine_streamed.go).
+	defer func() { keep = c.endStreams(pair, keep) }()
 
 	res, wire := c.roundTrip(pair)
 	if wire == nil && res.Close {
@@ -60,6 +96,12 @@ func (c *h1Conn) carryPair(head *h1.RequestHead) bool {
 		c.closeOrigin()
 	}
 	stream, _ := res.Body.(*originStream)
+	// A streamed response's head runs the response chain with an empty
+	// body; its stream messages follow.
+	var streamed *streamedDirection
+	if c.streams != nil && c.streams.response != nil && wire != nil {
+		streamed = c.engine.proxy.streamed(pair).direction(domain.StreamDirectionResponse, c.streams.response.framing)
+	}
 	err = c.engine.response(res, wire)
 	if stream != nil {
 		// The upgrade handler has returned, having closed it, or the
@@ -69,6 +111,20 @@ func (c *h1Conn) carryPair(head *h1.RequestHead) bool {
 	}
 	if c.hijacked || (stream != nil && res.StatusCode == http.StatusSwitchingProtocols) {
 		return false
+	}
+	if wire == nil && c.streams != nil && c.streams.cancelled.Load() {
+		// Marasi closed both connections of a streamed pair it
+		// cancelled: its answer is stored, not written.
+		return false
+	}
+	if streamed != nil {
+		return c.carryStreamedResponse(pair, res, wire, streamed, keepAlive(head.Proto, &head.Header))
+	}
+	if wire != nil && wire.passing != nil && (res != pair.Response || pair.FromMarasi() || err != nil) {
+		// A passing response the client does not get: its rest is never
+		// read, so its origin connection carries no other.
+		wire.passing.rest.close()
+		c.closeOrigin()
 	}
 	if err != nil && pair.ResponseBodyEnding == BodyCutShort {
 		// No response modifier ran: what arrived goes on as it arrived,
@@ -81,7 +137,7 @@ func (c *h1Conn) carryPair(head *h1.RequestHead) bool {
 		c.bw.Flush()
 		return false
 	}
-	keep := keepAlive(head.Proto, &head.Header)
+	keep = keepAlive(head.Proto, &head.Header)
 	if wire != nil && !pair.FromMarasi() {
 		client, err := encodedForClient(pair, res)
 		if err != nil {
@@ -93,6 +149,17 @@ func (c *h1Conn) carryPair(head *h1.RequestHead) bool {
 		}
 		out.head.WriteTo(c.bw)
 		c.bw.Write(out.body)
+		if wire.passing != nil {
+			// The rest goes as it arrives, then the origin connection
+			// ends as a response read whole would have ended it.
+			if c.bw.Flush() != nil || !wire.passing.forward(c.bw) {
+				c.closeOrigin()
+				return false
+			}
+			if !keepAlive(wire.head.Proto, &wire.head.Header) || wire.body.Framing.Kind == h1.UntilClose {
+				c.endOriginAfterResponse(passing)
+			}
+		}
 		keep = keep && c.origin != nil && wire.body.Framing.Kind != h1.UntilClose
 	} else if pair.storedWire != nil && res == pair.Response {
 		// A browser view: the stored response as stored.
@@ -150,11 +217,25 @@ func (c *h1Conn) roundTrip(pair *Pair) (*http.Response, *wireResponse) {
 		return res, wire
 	}
 	c.closeOrigin()
+	cancelled := c.streams != nil && c.streams.cancelled.Load()
+	if cancelled {
+		// Marasi cancelled the streamed pair while it waited for the
+		// response, and logged why: the proxy error response is
+		// stored with how each direction ended, and never written.
+		err = errStreamedPairCancelled
+	}
 	c.engine.proxy.roundTripFailed(pair.Request, err)
 	c.engine.proxy.respondWithProxyError(pair, http.StatusBadGateway, err)
-	c.engine.proxy.logProxyError(pair, err)
+	if !cancelled {
+		c.engine.proxy.logProxyError(pair, err)
+	}
 	return pair.Response, nil
 }
+
+// errStreamedPairCancelled is the cause of the proxy error response stored
+// for a streamed pair Marasi cancelled before its response came, closing
+// both its connections: a message over the limit, say.
+var errStreamedPairCancelled = errors.New("the streamed pair was cancelled before its response")
 
 // errRouteNotCarried is the cause of the proxy error response to a request
 // the engine cannot carry: a scheme other than http or https.
@@ -175,6 +256,11 @@ func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error)
 	if !ok {
 		return nil, nil, errRouteNotCarried
 	}
+	if c.streams != nil && c.streams.request != nil {
+		// The stream messages follow the head: a body a modifier gave
+		// the view is not sent.
+		req.Body = http.NoBody
+	}
 	out, err := outboundRequest(pair.requestWire, req)
 	if err != nil {
 		return nil, nil, err
@@ -192,16 +278,46 @@ func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error)
 	// A client that leaves while its pair is in flight closes the origin connection, as a
 	// direct client leaving would (docs/adr/2026-11-17-one-origin-connection-per-client-connection.md).
 	stop := context.AfterFunc(pair.Context(), func() { origin.conn.Close() })
-	defer stop()
+	streaming := false
+	defer func() {
+		if !streaming {
+			stop()
+		}
+	}()
+	// stream keeps the watch until the streamed pair ends, and makes the
+	// client's leaving a cancel of the pair.
+	stream := func() {
+		if streaming {
+			return
+		}
+		streaming = true
+		streams := c.streams
+		if !stop() {
+			streams.cancel()
+		}
+		stop = context.AfterFunc(pair.Context(), func() {
+			streams.cancel()
+			origin.conn.Close()
+		})
+		streams.release = append(streams.release, func() { stop() })
+	}
 	out.head.WriteTo(origin.bw)
 	origin.bw.Write(out.body)
 	if err := origin.bw.Flush(); err != nil {
 		return nil, nil, fmt.Errorf("writing the request to the origin: %w", err)
 	}
+	if c.streams != nil && c.streams.request != nil {
+		stream()
+		c.carryStreamedRequest(pair, origin, out.head)
+	} else if passing := pair.requestWire.passing; passing != nil {
+		// The rest of the body goes as it arrives, while the origin's
+		// answer, which may come first, is read.
+		passing.sendRest(origin)
+	}
 
 	head, err := h1.ReadResponseHead(origin.br)
 	for err == nil && head.Interim() {
-		c.relayInterim(req, head)
+		c.relayInterim(req, head, pair.requestWire.passing)
 		head, err = h1.ReadResponseHead(origin.br)
 	}
 	if err != nil {
@@ -222,8 +338,21 @@ func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error)
 		c.origin = nil
 		return res, wire, nil
 	}
-	body, bodyErr := h1.ReadBody(origin.br, framing)
+	if c.streamedResponse(origin, head, framing, res) {
+		// The body is carried after the response chain, and the
+		// client's leaving closes the origin connection until then.
+		stream()
+		return res, wire, nil
+	}
+	body, passing, bodyErr := readBodyOrPass(origin.br, framing, c.engine.proxy.bodyThreshold())
 	wire.body = body
+	if passing != nil {
+		// The rest goes to the client as it arrives (carryPair).
+		wire.passing = passing
+		kept, _ := cutAtThreshold(body.Payload(), c.engine.proxy.bodyThreshold())
+		res.Body = newPassedBody(kept)
+		return res, wire, nil
+	}
 	switch {
 	case bodyErr != nil:
 		res.Body = cutShortBody(body.Payload(), bodyErr)
@@ -232,7 +361,7 @@ func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error)
 		res.Body = io.NopCloser(bytes.NewReader(body.Payload()))
 	}
 	if framing.Kind == h1.UntilClose || !keepAlive(head.Proto, &head.Header) {
-		c.closeOrigin()
+		c.endOriginAfterResponse(pair.requestWire.passing)
 	}
 	return res, wire, nil
 }
@@ -255,10 +384,12 @@ func expectsContinue(head *h1.RequestHead, framing h1.Framing) bool {
 
 // relayInterim writes an origin's interim response to the client as read,
 // less its hop-by-hop fields, as for every message on each leg. A 100 is not
-// relayed: Marasi answers Expect itself. Nor is any 1xx sent to an HTTP/1.0
+// relayed: Marasi answers Expect itself, except for a request that declared
+// a length over the body threshold. Nor is any 1xx sent to an HTTP/1.0
 // client, which did not ask for one (RFC 9110 §15.2).
-func (c *h1Conn) relayInterim(req *http.Request, head *h1.ResponseHead) {
-	if head.StatusCode == http.StatusContinue || !req.ProtoAtLeast(1, 1) {
+func (c *h1Conn) relayInterim(req *http.Request, head *h1.ResponseHead, passing *h1Passing) {
+	answered := passing == nil || !passing.declared
+	if (head.StatusCode == http.StatusContinue && answered) || !req.ProtoAtLeast(1, 1) {
 		return
 	}
 	head = head.Clone()

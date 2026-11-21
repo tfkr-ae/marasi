@@ -7,11 +7,11 @@ import (
 )
 
 // updateKnown returns a suite's deviations with a known entry for every new
-// difference in its outcome, tagged with phase, and without the runs in
+// difference in its outcome, and without the runs in
 // which a known entry went away; an entry left with no runs is removed.
 // Accepted entries are never touched: they are the allow-list, edited only
 // by hand.
-func updateKnown(deviations Deviations, outcome Outcome, phase int) Deviations {
+func updateKnown(deviations Deviations, outcome Outcome) Deviations {
 	updated := make(Deviations, 0, len(deviations))
 	for i, entry := range deviations {
 		if entry.Kind == KindKnown {
@@ -46,7 +46,6 @@ func updateKnown(deviations Deviations, outcome Outcome, phase int) Deviations {
 				Field:  difference.Field,
 				Kind:   KindKnown,
 				Reason: measuredReason(difference),
-				Phase:  phase,
 			}
 			order = append(order, k)
 		}

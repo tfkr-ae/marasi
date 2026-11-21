@@ -21,6 +21,7 @@ var ownedRows = map[string]string{
 	"websocket_connections": `SELECT count(*) FROM websocket_connections WHERE request_id = ?`,
 	"websocket_messages": `SELECT count(*) FROM websocket_messages m
 		JOIN websocket_connections c ON c.id = m.connection_id WHERE c.request_id = ?`,
+	"stream_messages":   `SELECT count(*) FROM stream_messages WHERE request_id = ?`,
 	"logs":              `SELECT count(*) FROM logs WHERE request_id = ?`,
 	"pair_highlight":    `SELECT count(*) FROM pair_highlight WHERE request_id = ?`,
 	"pair_prettified":   `SELECT count(*) FROM pair_prettified WHERE request_id = ?`,
@@ -107,6 +108,12 @@ func captureOwnedPair(t *testing.T, repo *Repository, owners pairOwners, text st
 			}
 			return repo.InsertMessage(&domain.WebSocketMessage{
 				ID: uuid.New(), ConnectionID: conn.ID, RequestID: id, Direction: "client", Opcode: 1,
+				Payload: []byte("hello"), CreatedAt: time.Now(), Metadata: map[string]any{},
+			})
+		},
+		func() error {
+			return repo.InsertStreamMessage(&domain.StreamMessage{
+				ID: uuid.New(), PairID: id, Direction: domain.StreamDirectionRequest, Framing: "grpc",
 				Payload: []byte("hello"), CreatedAt: time.Now(), Metadata: map[string]any{},
 			})
 		},

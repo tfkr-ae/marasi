@@ -26,17 +26,17 @@ const (
 // (a bad chunk size or chunk end) is refused too: *refused is set to its
 // *h1.FramingError, and the body is empty, because the bytes after the head
 // cannot be trusted to be this request's.
-func readWireBody(br *bufio.Reader, framing h1.Framing, refused *error) (*h1.Body, error) {
+func readWireBody(br *bufio.Reader, framing h1.Framing, refused *error, threshold int64) (*h1.Body, *h1Passing, error) {
 	if *refused != nil {
-		return &h1.Body{}, nil
+		return &h1.Body{}, nil, nil
 	}
-	body, err := h1.ReadBody(br, framing)
+	body, passing, err := readBodyOrPass(br, framing, threshold)
 	var framingErr *h1.FramingError
 	if errors.As(err, &framingErr) {
 		*refused = err
-		return &h1.Body{}, nil
+		return &h1.Body{}, nil, nil
 	}
-	return body, err
+	return body, passing, err
 }
 
 // drain half-closes a refused connection and discards what the client still
