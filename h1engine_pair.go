@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 
+	"golang.org/x/net/http2"
+
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/internal/h1"
 )
@@ -115,6 +117,15 @@ func (c *h1Conn) carryPair(head *h1.RequestHead) (keep bool) {
 	if wire == nil && c.streams != nil && c.streams.cancelled.Load() {
 		// Marasi closed both connections of a streamed pair it
 		// cancelled: its answer is stored, not written.
+		return false
+	}
+	if streamed != nil && !pair.FromMarasi() && !pair.stream.goLive() {
+		// The response step did not admit the response in its
+		// project: neither leg goes on. A stale project's streamed
+		// response is refused with Marasi's 502 instead
+		// (passStaleResponse), which carryStreamedResponse writes.
+		c.streams.response.src.reset(http2.ErrCodeCancel)
+		c.closeOrigin()
 		return false
 	}
 	if streamed != nil {

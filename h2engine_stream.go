@@ -74,9 +74,22 @@ func (h *h2Conn) carry(st *h2Stream) {
 		}
 		h.resetStream(st.id, http2.ErrCodeCancel)
 		return
-	case streamed != nil && pair.FromMarasi():
-		// The chain answered with a response of Marasi's own.
+	case streamed != nil && pair.stream.refusedResponse() && !pair.FromMarasi():
+		// The response step did not admit the response in its
+		// project: neither leg goes on.
 		streamed.reset(http2.ErrCodeCancel)
+		h.resetStream(st.id, http2.ErrCodeCancel)
+		return
+	case streamed != nil && pair.FromMarasi():
+		// The chain answered with a response of Marasi's own, or the
+		// response step refused a stale project's streamed response
+		// with one (passStaleResponse).
+		streamed.reset(http2.ErrCodeCancel)
+	case streamed != nil && !pair.stream.goLive():
+		// Refused since the checks above: nothing is carried.
+		streamed.reset(http2.ErrCodeCancel)
+		h.resetStream(st.id, http2.ErrCodeCancel)
+		return
 	case streamed != nil:
 		if pair.responseWire != nil {
 			wire = pair.responseWire

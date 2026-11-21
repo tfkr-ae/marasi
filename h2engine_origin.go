@@ -349,10 +349,8 @@ func (o *h2Origin) headers(decoder *hpack.Decoder) error {
 			o.finish(s, nil)
 		}
 		return nil
-	case s.final && s.passing() != nil:
-		s.passing().end(fields)
 	case s.final:
-		s.response.trailers = fields
+		s.fileTrailers(fields)
 	case len(status) == 3 && status[0] == '1' && status != "101":
 		s.addInterim(fields)
 	default:
@@ -378,6 +376,24 @@ func (o *h2Origin) headers(decoder *hpack.Decoder) error {
 		o.finish(s, nil)
 	}
 	return nil
+}
+
+// fileTrailers files the trailers of s's response. They are filed under
+// passMu, with the stall wait stopped: a stall that fired first made the
+// h2Passing they end, and one that fires after finds them on the response,
+// which its wait then reads (awaitResponse), and finish ends the passing
+// body with them.
+func (s *h2OriginStream) fileTrailers(fields h2Fields) {
+	s.passMu.Lock()
+	s.stall.stop()
+	pass := s.pass
+	if pass == nil {
+		s.response.trailers = fields
+	}
+	s.passMu.Unlock()
+	if pass != nil {
+		pass.end(fields)
+	}
 }
 
 // windowUpdate opens origin stream id's receive window by n.

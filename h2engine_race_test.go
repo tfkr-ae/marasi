@@ -27,7 +27,7 @@ func openBareStream(o *h2Origin) *h2OriginStream {
 }
 
 func TestH2Origin_FinishRacesStall(t *testing.T) {
-	t.Run("should leave no passing response body unended when the stall wait fires as the stream finishes", func(t *testing.T) {
+	t.Run("should leave no passing response body unended, and read the response without a data race, when the stall wait fires as the trailers arrive", func(t *testing.T) {
 		wait := bodyStallWait
 		bodyStallWait = time.Millisecond
 		t.Cleanup(func() { bodyStallWait = wait })
@@ -41,14 +41,22 @@ func TestH2Origin_FinishRacesStall(t *testing.T) {
 			s.response = &h2Response{fields: h2Fields{{Name: ":status", Value: "200"}}}
 			s.passMu.Unlock()
 			s.receive([]byte("partial"), 7, false, 1<<20, func(uint32) {})
+			// The stream's wait reads the response once the body
+			// passed or the stream finished, as awaitResponse does.
+			read := make(chan struct{})
+			go func() {
+				defer close(read)
+				select {
+				case <-s.passed:
+				case <-s.done:
+				}
+				s.response.response()
+			}()
 			// The trailers end the stream around when the stall fires.
 			time.Sleep(time.Duration(i%3) * 500 * time.Microsecond)
-			if pass := s.passing(); pass != nil {
-				pass.end(h2Fields{{Name: "x-end", Value: "yes"}})
-			} else {
-				s.response.trailers = h2Fields{{Name: "x-end", Value: "yes"}}
-			}
+			s.fileTrailers(h2Fields{{Name: "x-end", Value: "yes"}})
 			o.finish(s, nil)
+			<-read
 
 			pass := s.passing()
 			if pass == nil {

@@ -210,7 +210,10 @@ func injectedMessage(d *streamedDirection, payload []byte, options StreamInjectO
 // direction, so no leg is reset twice. HTTP/1.1 legs are closed.
 func (sp *streamedPair) cancel() {
 	sp.mu.Lock()
-	sp.cancelled = true
+	if !sp.cancelled {
+		sp.cancelled = true
+		close(sp.cancelledCh)
+	}
 	directions := make([]*streamedDirection, 0, len(sp.directions))
 	for _, d := range sp.directions {
 		directions = append(directions, d)
