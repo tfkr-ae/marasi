@@ -229,8 +229,7 @@ func writeCaseDiffs(dir string, result *Result, baseline, got Recordings) error 
 				diff.Differences = append(diff.Differences, m.Difference)
 			}
 		}
-		name := strings.NewReplacer("/", "_", string(filepath.Separator), "_").Replace(id) + ".json"
-		if err := writeJSON(filepath.Join(dir, name), diff); err != nil {
+		if err := writeJSON(filepath.Join(dir, diffFileName(id)), diff); err != nil {
 			return err
 		}
 	}
@@ -242,4 +241,16 @@ func orNull(recording json.RawMessage) json.RawMessage {
 		return json.RawMessage("null")
 	}
 	return recording
+}
+
+// diffUnsafe replaces what upload-artifact refuses in a path (it keeps
+// paths valid on NTFS): connect-client case IDs carry colons.
+var diffUnsafe = strings.NewReplacer(
+	"/", "_", `\`, "_", ":", "_", `"`, "_", "<", "_", ">", "_",
+	"|", "_", "*", "_", "?", "_", "\r", "_", "\n", "_",
+)
+
+// diffFileName is the file a case's diff is written to.
+func diffFileName(id string) string {
+	return diffUnsafe.Replace(id) + ".json"
 }
