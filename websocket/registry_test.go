@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bytes"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -295,4 +296,40 @@ func TestRegistry_CloseAll(t *testing.T) {
 	if reason != "shutting down" {
 		t.Fatalf("wanted close reason:\n%q\ngot:\n%q", "shutting down", reason)
 	}
+}
+
+func TestRegistry_CloseAllAfterTeardown(t *testing.T) {
+	t.Run("should not report a connection whose sockets were already closed as a close error", func(t *testing.T) {
+		// The relay closes a connection's sockets when a peer leaves; a
+		// CloseAll that sends its close frame a moment later writes on a
+		// closed socket.
+		closedSocket := func() net.Conn {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			conn, err := net.Dial("tcp", listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			peer, err := listener.Accept()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { peer.Close() })
+			conn.Close()
+			return conn
+		}
+		registry := NewRegistry()
+		client, upstream := closedSocket(), closedSocket()
+		connection := NewConnection(registryTestUUID(t), registryTestUUID(t), client, client, upstream, nil)
+		if err := registry.Add(connection); err != nil {
+			t.Fatalf("Add() returned unexpected error: %v", err)
+		}
+
+		if err := registry.CloseAll(CloseGoingAway, "shutting down"); err != nil {
+			t.Fatalf("\nwanted:\nno error\ngot:\n%v", err)
+		}
+	})
 }
