@@ -10,6 +10,7 @@ import (
 	"net"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -57,10 +58,12 @@ type h2Conn struct {
 	// address the handshake dialled. origin is guarded by mu (originLeg):
 	// with lazyOrigin it is opened by the first stream that needs it
 	// (openOriginFor, under dialMu), which sets the other three.
+	// originDial is read without dialMu by a stream redirected elsewhere,
+	// which does not wait for the dial (redirectedALPN), so it is atomic.
 	origin     *h2Origin
 	originErr  error
 	originAddr string
-	originDial *handshakeDial
+	originDial atomic.Pointer[handshakeDial]
 	lazyOrigin bool
 	dialMu     sync.Mutex
 
@@ -286,7 +289,8 @@ func (c *h1Conn) serveH2() {
 	h.w = newH2Writer(c.bw, h.framer)
 	switch dialled := c.handshake; {
 	case dialled != nil:
-		h.originAddr, h.originErr, h.originDial = dialled.addr, dialled.err, dialled
+		h.originAddr, h.originErr = dialled.addr, dialled.err
+		h.originDial.Store(dialled)
 		h.openOrigin()
 	case h.cleartext() && c.tunnel == "":
 		// h2c straight to the listener: the origin is the first request's
@@ -339,15 +343,16 @@ func (h *h2Conn) serve() {
 
 // openOrigin opens the origin leg on the connection the handshake dialled.
 func (h *h2Conn) openOrigin() {
-	if h.originDial == nil || h.originDial.conn == nil {
+	dialled := h.originDial.Load()
+	if dialled == nil || dialled.conn == nil {
 		if h.originErr == nil {
 			h.originErr = errors.New("no origin connection was dialled for the client's handshake")
 		}
 		return
 	}
-	origin, err := startH2Origin(h.originDial.conn, h.originAddr, h.originGoAway, h.originGone, h.engine.proxy.bodyThreshold())
+	origin, err := startH2Origin(dialled.conn, h.originAddr, h.originGoAway, h.originGone, h.engine.proxy.bodyThreshold())
 	if err != nil {
-		h.originDial.conn.Close()
+		dialled.conn.Close()
 		h.originErr = err
 		return
 	}
@@ -544,6 +549,7 @@ func (h *h2Conn) headerBlock() error {
 			// A streamed request was dispatched with its head.
 			h.mu.Unlock()
 			body.in.finish(fields)
+			return nil
 		}
 		if st.pass != nil {
 			// The stream already went with what arrived.

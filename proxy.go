@@ -152,8 +152,10 @@ type Proxy struct {
 	webSocketIntercept   atomic.Bool
 	streamIntercept      atomic.Bool
 	// streamedPairs are the streamed pairs being carried, by pair ID,
-	// for injection and cancel (stream_inject.go).
+	// for injection and cancel (stream_inject.go). streamedClosing is set
+	// once the proxy closes: a pair that starts afterwards is cancelled.
 	streamedPairs        sync.Map
+	streamedClosing      atomic.Bool
 	webSocketLifecycleMu sync.RWMutex
 	webSocketSessions    sync.WaitGroup
 	webSocketsClosing    bool
@@ -1011,7 +1013,11 @@ func (proxy *Proxy) close(ctx context.Context, closeDatabase bool) error {
 
 	proxy.closeLaunchpadWebSockets()
 	proxy.DropAllCheckpoint()
-	webSocketErr := proxy.CloseWebSocketsAndFlush()
+	// A streamed pair, as an SSE or gRPC stream, can go on for as long as
+	// its peers keep it open; it is cancelled, so the engine's close does
+	// not wait on it.
+	proxy.streamedClosing.Store(true)
+	webSocketErr := proxy.CloseLiveTrafficAndFlush()
 	if proxy.Armory != nil {
 		proxy.Armory.Shutdown()
 	}

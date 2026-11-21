@@ -23,7 +23,8 @@ var ErrSyntax = errors.New("text form syntax error")
 //     may be a float such as 1.5i32 (a bare float is i64);
 //   - a "string" with \n, \t, \r, \", \\ and \xNN escapes, as its bytes;
 //   - a `hex` literal, as its bytes;
-//   - { ... }, its contents prefixed with their length;
+//   - { ... }, its contents prefixed with their length, nested no deeper
+//     than maxDepth;
 //   - long-form:N before a tag, a varint or {, which pads that varint N
 //     bytes past its minimal length;
 //   - # to the end of the line, a comment.
@@ -41,6 +42,8 @@ type encoder struct {
 	text      string
 	pos       int
 	line, col int
+	// depth is how many braces are open.
+	depth int
 }
 
 func (e *encoder) errorf(format string, args ...any) error {
@@ -102,12 +105,19 @@ func (e *encoder) sequence(nested bool) ([]byte, error) {
 		var err error
 		switch c {
 		case '{':
+			// Each brace recurses, so a bound keeps a text of many
+			// braces from exhausting the stack.
+			if e.depth == maxDepth {
+				return nil, e.errorf("braces nested past %d levels", maxDepth)
+			}
 			e.advance(1)
+			e.depth++
 			var contents []byte
 			contents, err = e.sequence(true)
 			if err != nil {
 				return nil, err
 			}
+			e.depth--
 			out, err = e.appendVarint(out, uint64(len(contents)), extra)
 			out = append(out, contents...)
 		case '"':

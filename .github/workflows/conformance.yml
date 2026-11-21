@@ -174,10 +174,11 @@ jobs:
             fi
           }
           # Marasi on the HTTP path: the proxy and its modifiers, Checkpoint
-          # and transport (root *.go), the listener, raw HTTP, the database
-          # writer and migrations (which seed the built-in extensions),
-          # extensions, the service and its control API, the CLI, and the
-          # module and build.
+          # and transport (root *.go), the listener, the h1 codec, raw HTTP,
+          # streamed pairs, the protobuf codec, Compass, the database writer
+          # and migrations (which seed the built-in extensions), extensions,
+          # the service and its control API, the CLI, and the module and
+          # build.
           marasi=(
             ':(glob)*.go'
             ':(glob)go.mod'
@@ -187,7 +188,11 @@ jobs:
             ':(glob)core/**'
             ':(glob)domain/**'
             ':(glob)listener/**'
+            ':(glob)internal/h1/**'
             ':(glob)rawhttp/**'
+            ':(glob)stream/**'
+            ':(glob)protoscope/**'
+            ':(glob)compass/**'
             ':(glob)db/**'
             ':(glob)extensions/**'
             ':(glob)service/**'
@@ -221,8 +226,10 @@ jobs:
             ':(glob)internal/conformance/baselines/connect-client/**'
           # Autobahn takes hours, so its list stays narrow: a relay waits on
           # the database writer's queue, so a slower writer can fail a case
-          # (db/, proxy.go); the matrix runs WebSocket modifiers, Checkpoint
-          # holds and extensions.
+          # (db/, proxy.go); the upgrade is read and relayed by the h1 engine
+          # and its codec (h1engine*.go, internal/h1/, upgrade.go, pair.go,
+          # options.go); the matrix runs WebSocket modifiers, Checkpoint holds
+          # and extensions.
           check autobahn \
             ':(glob)websocket/**' \
             ':(glob)websocket*.go' \
@@ -232,6 +239,11 @@ jobs:
             ':(glob)internal/conformance/baselines/autobahn/**' \
             ':(glob)db/**' \
             ':(glob)proxy.go' \
+            ':(glob)internal/h1/**' \
+            ':(glob)h1engine*.go' \
+            ':(glob)upgrade.go' \
+            ':(glob)pair.go' \
+            ':(glob)options.go' \
             ':(glob)modifiers.go' \
             ':(glob)checkpoint.go' \
             ':(glob)extensions/**' \
