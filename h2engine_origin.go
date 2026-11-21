@@ -359,7 +359,7 @@ func (o *h2Origin) headers(decoder *hpack.Decoder) error {
 		}
 		s.response.fields = fields
 		framing := streamedFraming(fields, true)
-		if framing == stream.FramingNone && !o.block.endStream && declaredOver(fields, o.threshold) {
+		if framing == stream.FramingNone && !o.block.endStream && h2DeclaresOver(fields, o.threshold) {
 			// An ordinary body declared over the threshold goes as it
 			// arrives.
 			s.startPassLocked(o.threshold, o.windowUpdate(s.id))

@@ -75,7 +75,7 @@ func startWirePump(r *h1.WireReader) *wirePump {
 	go func() {
 		defer close(p.chunks)
 		for {
-			buf := make([]byte, wireChunkSize)
+			buf := make([]byte, bodyChunkSize)
 			n, err := r.Read(buf)
 			if r.Ended() {
 				p.ended.Store(true)
@@ -124,7 +124,7 @@ func readBodyOrPass(br *bufio.Reader, framing h1.Framing, threshold int64) (*h1.
 		return body, nil, err
 	}
 	pump := startWirePump(h1.NewWireReader(br, framing))
-	if declaresOver(framing, threshold) {
+	if h1DeclaresOver(framing, threshold) {
 		return &h1.Body{Framing: framing}, &h1Passing{rest: pump, declared: true}, nil
 	}
 	var arrived []byte
@@ -172,7 +172,7 @@ func passedWire(arrived []byte, framing h1.Framing, pump *wirePump) (*h1.Body, *
 // forward writes the rest of the passing body to w as it arrives, flushing
 // each piece, and reports whether all of it went.
 func (p *h1Passing) forward(w *bufio.Writer) bool {
-	buf := make([]byte, wireChunkSize)
+	buf := make([]byte, bodyChunkSize)
 	for {
 		n, err := p.rest.Read(buf)
 		if n > 0 {
@@ -219,12 +219,8 @@ func (p *h1Passing) linger(origin *originConn) {
 	origin.conn.Close()
 }
 
-// declaresOver reports whether a head declares a body longer than
+// h1DeclaresOver reports whether a head declares a body longer than
 // threshold, which goes as it arrives from the start.
-func declaresOver(framing h1.Framing, threshold int64) bool {
+func h1DeclaresOver(framing h1.Framing, threshold int64) bool {
 	return framing.Kind == h1.LengthFramed && lengthOver(framing.Length, threshold)
 }
-
-// wireChunkSize is how much of a passing body's wire bytes is read and
-// forwarded at a time.
-const wireChunkSize = 32 << 10

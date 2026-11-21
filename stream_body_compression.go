@@ -74,7 +74,7 @@ type inflatingSource struct {
 }
 
 func newInflatingSource(src streamSource, encoding string, limit int64) *inflatingSource {
-	return &inflatingSource{streamSource: src, encoding: encoding, limit: limit, buf: make([]byte, 32<<10)}
+	return &inflatingSource{streamSource: src, encoding: encoding, limit: limit, buf: make([]byte, bodyChunkSize)}
 }
 
 // Read is the compressed body as the decoder reads it.

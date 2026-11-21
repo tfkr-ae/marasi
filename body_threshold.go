@@ -21,6 +21,10 @@ import (
 // 64 MiB, the WebSocket message limit.
 const DefaultBodyThreshold = 64 << 20
 
+// bodyChunkSize is how much of a body is read at a time where it goes on
+// in pieces: a passing body's wire bytes, or a compressed streamed body.
+const bodyChunkSize = 32 << 10
+
 // bodyStallWait is how long a body that has started may go without new
 // bytes before it is forwarded as it arrives.
 var bodyStallWait = 2 * time.Second

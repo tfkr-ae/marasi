@@ -115,9 +115,9 @@ func (p *h2Passing) forward(sink streamSink) {
 	}
 }
 
-// declaredOver reports whether fields declare a content-length over
+// h2DeclaresOver reports whether fields declare a content-length over
 // threshold.
-func declaredOver(fields h2Fields, threshold int64) bool {
+func h2DeclaresOver(fields h2Fields, threshold int64) bool {
 	value, ok := fields.get("content-length")
 	if !ok {
 		return false

@@ -22,7 +22,7 @@ func (c *h1Conn) carryPair(head *h1.RequestHead) (keep bool) {
 	c.streams = nil
 	framing, refused := h1.RequestFraming(head)
 	threshold := c.engine.proxy.bodyThreshold()
-	if refused == nil && expectsContinue(head, framing) && !declaresOver(framing, threshold) {
+	if refused == nil && expectsContinue(head, framing) && !h1DeclaresOver(framing, threshold) {
 		// Marasi answers 100 itself, so the chains see the whole request
 		// (docs/adr/2026-11-17-marasi-answers-100-continue-itself.md).
 		// A body declared over the threshold goes as it arrives, so

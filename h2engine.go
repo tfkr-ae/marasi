@@ -599,7 +599,7 @@ func (h *h2Conn) headerBlock() error {
 	h.streams[id] = st
 	// A body declared over the threshold goes as it arrives, so the
 	// request goes now.
-	over := !end && st.request.streamed == nil && declaredOver(fields, h.engine.proxy.bodyThreshold())
+	over := !end && st.request.streamed == nil && h2DeclaresOver(fields, h.engine.proxy.bodyThreshold())
 	if over {
 		h.startPass(st)
 	}
