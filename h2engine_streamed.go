@@ -93,6 +93,9 @@ type h2Inbound struct {
 	trailers h2Fields
 	// gone is closed when the direction is reset or cut off.
 	gone chan struct{}
+	// given is how many bytes at the front of buf the sender's window was
+	// opened by already (preload).
+	given int
 }
 
 func newH2Inbound(window int64, refund func(uint32)) *h2Inbound {
@@ -121,6 +124,20 @@ func (in *h2Inbound) put(data []byte, frameLength uint32) bool {
 		in.give(padding)
 	}
 	return true
+}
+
+// preload puts data ahead of what arrives, data whose window was opened
+// again already: what a passed body read past the threshold while it was
+// read whole.
+func (in *h2Inbound) preload(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	in.mu.Lock()
+	in.buf = append(data[:len(data):len(data)], in.buf...)
+	in.given += len(data)
+	in.mu.Unlock()
+	in.cond.Broadcast()
 }
 
 // give opens the receive window by n.
@@ -196,8 +213,18 @@ func (in *h2Inbound) discard(n int) {
 	if len(in.buf) == 0 {
 		in.buf = nil
 	}
+	given := min(n, in.given)
+	in.given -= given
 	in.mu.Unlock()
-	in.give(uint32(n))
+	in.give(uint32(n - given))
+}
+
+// endTrailers are the trailers the direction ended with, once peek
+// returned io.EOF.
+func (in *h2Inbound) endTrailers() h2Fields {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.trailers
 }
 
 // h2StreamedBody is a streamed direction's body on a wire message: its
@@ -217,11 +244,7 @@ func (b *h2StreamedBody) discard(n int)            { b.in.discard(n) }
 func (b *h2StreamedBody) reset(code http2.ErrCode) { b.resetBy(code) }
 func (b *h2StreamedBody) cutOff() <-chan struct{}  { return b.in.gone }
 
-func (b *h2StreamedBody) trailers() h2Fields {
-	b.in.mu.Lock()
-	defer b.in.mu.Unlock()
-	return b.in.trailers
-}
+func (b *h2StreamedBody) trailers() h2Fields { return b.in.endTrailers() }
 
 // h2ClientSink is a streamed response going to the client on st.
 type h2ClientSink struct {

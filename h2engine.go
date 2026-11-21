@@ -176,8 +176,8 @@ type h2Stream struct {
 	// pass is set once the request body passed the body threshold and the
 	// stream was dispatched with what arrived; stall is the wait after
 	// which a started body passes (h2engine_threshold.go).
-	pass  *h2Pass
-	stall *time.Timer
+	pass  *h2Passing
+	stall bodyStall
 }
 
 // h2OrderWait bounds how long a stream waits for the streams the client
@@ -613,7 +613,7 @@ func (h *h2Conn) headerBlock() error {
 // data adds a DATA frame's payload to its stream's request body, or once
 // the body passed the threshold, to what follows it. The connection's
 // window is opened again at once, and so is the stream's for a body read
-// whole or passed; a streamed body's stream window opens as its reader
+// whole; a streamed or passed body's stream window opens as its reader
 // takes what arrived (h2Inbound).
 func (h *h2Conn) data(f *http2.DataFrame) error {
 	id, n := f.StreamID, f.Header().Length
@@ -650,12 +650,12 @@ func (h *h2Conn) data(f *http2.DataFrame) error {
 		}
 		return nil
 	}
-	if st.pass != nil {
+	if pass := st.pass; pass != nil {
+		// The stream's window opens as the rest goes on (h2Passing).
 		st.ended = f.StreamEnded()
 		h.mu.Unlock()
-		st.pass.push(f.Data(), f.StreamEnded())
-		if !f.StreamEnded() && n > 0 {
-			h.w.do(func(fr *http2.Framer) error { return fr.WriteWindowUpdate(id, n) })
+		if !pass.push(f.Data(), n, f.StreamEnded()) {
+			return http2.StreamError{StreamID: id, Code: http2.ErrCodeFlowControl}
 		}
 		return nil
 	}
@@ -664,9 +664,7 @@ func (h *h2Conn) data(f *http2.DataFrame) error {
 	switch {
 	case f.StreamEnded():
 		st.ended, st.request.endsOnData = true, true
-		if st.stall != nil {
-			st.stall.Stop()
-		}
+		st.stall.stop()
 	case int64(len(st.request.body)) > h.engine.proxy.bodyThreshold():
 		h.startPass(st)
 		passes = true
@@ -759,9 +757,7 @@ func (h *h2Conn) closeStream(st *h2Stream, originCode *http2.ErrCode) {
 	delete(h.streams, st.id)
 	h.closed.add(st.id)
 	originStream, origin, queued, pass := st.origin, h.origin, st.turn != nil, st.pass
-	if st.stall != nil {
-		st.stall.Stop()
-	}
+	st.stall.stop()
 	h.mu.Unlock()
 	if pass != nil {
 		pass.cut(nil, errPassStopped)

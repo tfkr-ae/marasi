@@ -2,9 +2,9 @@ package marasi
 
 import (
 	"errors"
+	"io"
 	"strconv"
 	"sync"
-	"time"
 
 	"golang.org/x/net/http2"
 )
@@ -13,121 +13,105 @@ import (
 // message's body is read whole, unless its content-length declares more
 // than the threshold, the body read passes it, or it stalls for
 // bodyStallWait after some arrived. Then the message goes on with what
-// arrived, cut to the threshold, and the rest follows on an h2Pass as it
+// arrived, cut to the threshold, and the rest follows on an h2Passing as it
 // arrives: DATA, then trailers or END_STREAM, or the reset that cut it.
+//
+// The rest is held in an h2Inbound, as a streamed direction's body is
+// (h2engine_streamed.go): the stream's receive window opens again only by
+// what went on, so a receiver that stops stops the sender, and memory per
+// direction is bounded by the receive window. It goes on through the
+// streamed carry's sinks, h2ClientSink and h2OriginSink.
 
-// h2Pass carries the rest of a passed body from the leg that reads it to
+// h2Passing carries the rest of a passed body from the leg that reads it to
 // the leg that sends it.
-type h2Pass struct {
-	mu   sync.Mutex
-	more chan struct{}
-	data [][]byte
-	// ended is set once the sender ended the body, with trailers when it
-	// sent them; reset when it reset the stream instead, err when the
-	// stream ended otherwise.
-	ended    bool
-	trailers h2Fields
-	reset    *http2.ErrCode
-	err      error
+type h2Passing struct {
+	in *h2Inbound
+	mu sync.Mutex
 	// forwarding is set once forward started; forwarded is closed once
 	// it returned.
 	forwarding bool
 	forwarded  chan struct{}
 }
 
-func newH2Pass() *h2Pass {
-	return &h2Pass{more: make(chan struct{}, 1), forwarded: make(chan struct{})}
+// newH2Passing is the passing body of a stream whose receive window is
+// window, refunded by refund. rest is what arrived past the threshold
+// before the body passed, whose window was given back already.
+func newH2Passing(window int64, refund func(uint32), rest []byte) *h2Passing {
+	p := &h2Passing{in: newH2Inbound(window, refund), forwarded: make(chan struct{})}
+	p.in.preload(rest)
+	return p
 }
 
-func (p *h2Pass) signal() {
-	select {
-	case p.more <- struct{}{}:
-	default:
+// push adds a DATA frame's data, of a frame frameLength long, the last one
+// when end is set. It reports false for a frame past the receive window, a
+// FLOW_CONTROL_ERROR.
+func (p *h2Passing) push(data []byte, frameLength uint32, end bool) bool {
+	if !p.in.put(data, frameLength) {
+		return false
 	}
-}
-
-// push adds a DATA payload, the last one when end is set.
-func (p *h2Pass) push(data []byte, end bool) {
-	p.mu.Lock()
-	if len(data) > 0 {
-		p.data = append(p.data, append([]byte(nil), data...))
+	if end {
+		p.in.finish(nil)
 	}
-	p.ended = p.ended || end
-	p.mu.Unlock()
-	p.signal()
+	return true
 }
 
 // end ends the body with trailers.
-func (p *h2Pass) end(trailers h2Fields) {
-	p.mu.Lock()
-	p.ended, p.trailers = true, trailers
-	p.mu.Unlock()
-	p.signal()
-}
+func (p *h2Passing) end(trailers h2Fields) { p.in.finish(trailers) }
 
-// cut ends the body short: with the sender's reset code, or err.
-func (p *h2Pass) cut(code *http2.ErrCode, err error) {
-	p.mu.Lock()
-	if !p.ended && p.reset == nil && p.err == nil {
-		p.reset, p.err = code, err
+// cut ends the body short, unless it ended: with the sender's reset code,
+// or err. With neither it does nothing.
+func (p *h2Passing) cut(code *http2.ErrCode, err error) {
+	switch {
+	case code != nil:
+		p.in.closeUnlessEnded(&streamResetError{code: *code})
+	case err != nil:
+		p.in.closeUnlessEnded(err)
 	}
-	p.mu.Unlock()
-	p.signal()
 }
 
 // errPassStopped cuts a passed body whose stream ended on the other side.
 var errPassStopped = errors.New("the stream the body goes on ended")
 
-// h2PassSink is where a passed body goes: DATA, then trailers or the end,
-// or a reset.
-type h2PassSink struct {
-	data     func(data []byte, end bool) error
-	trailers func(h2Fields) error
-	reset    func(code *http2.ErrCode)
-}
-
 // take marks the body as being forwarded, before forward runs on another
 // goroutine.
-func (p *h2Pass) take() {
+func (p *h2Passing) take() {
 	p.mu.Lock()
 	p.forwarding = true
 	p.mu.Unlock()
 }
 
 // taken reports whether the body is being forwarded.
-func (p *h2Pass) taken() bool {
+func (p *h2Passing) taken() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.forwarding
 }
 
-// forward sends the rest of the body to sink as it arrives.
-func (p *h2Pass) forward(sink h2PassSink) {
+// forward sends the rest of the body to sink as it arrives, taking from
+// the inbound only what went, then ends the direction as the sender did.
+func (p *h2Passing) forward(sink streamSink) {
 	p.take()
 	defer close(p.forwarded)
 	for {
-		p.mu.Lock()
-		data, ended, trailers, reset, err := p.data, p.ended, p.trailers, p.reset, p.err
-		p.data = nil
-		p.mu.Unlock()
-		for _, d := range data {
-			if sink.data(d, false) != nil {
-				sink.reset(nil)
+		data, err := p.in.peek()
+		if len(data) > 0 {
+			if sink.forward(data) != nil {
+				sink.reset(http2.ErrCodeCancel)
 				return
 			}
+			p.in.discard(len(data))
+			continue
 		}
+		var reset *streamResetError
 		switch {
-		case reset != nil || err != nil:
-			sink.reset(reset)
-			return
-		case ended && len(trailers) > 0:
-			sink.trailers(trailers)
-			return
-		case ended:
-			sink.data(nil, true)
-			return
+		case errors.Is(err, io.EOF):
+			sink.end(p.in.endTrailers())
+		case errors.As(err, &reset):
+			sink.reset(reset.code)
+		default:
+			sink.reset(http2.ErrCodeCancel)
 		}
-		<-p.more
+		return
 	}
 }
 
@@ -139,38 +123,26 @@ func declaredOver(fields h2Fields, threshold int64) bool {
 		return false
 	}
 	n, err := strconv.ParseInt(value, 10, 64)
-	return err == nil && n > threshold
-}
-
-// splitPassed cuts a body that passed threshold: what arrived up to the
-// threshold stays, the rest starts the h2Pass.
-func splitPassed(body []byte, threshold int64) ([]byte, *h2Pass) {
-	pass := newH2Pass()
-	if int64(len(body)) > threshold {
-		pass.push(body[threshold:], false)
-		body = body[:threshold:threshold]
-	}
-	return body, pass
+	return err == nil && lengthOver(n, threshold)
 }
 
 // startPass makes st's request body pass, with what arrived so far; the
 // caller holds h.mu and dispatches st.
 func (h *h2Conn) startPass(st *h2Stream) {
-	st.request.body, st.pass = splitPassed(st.request.body, h.engine.proxy.bodyThreshold())
+	var rest []byte
+	st.request.body, rest = cutAtThreshold(st.request.body, h.engine.proxy.bodyThreshold())
+	id := st.id
+	st.pass = newH2Passing(h2DefaultWindow, func(n uint32) {
+		h.w.do(func(fr *http2.Framer) error { return fr.WriteWindowUpdate(id, n) })
+	}, rest)
 	st.request.rest = st.pass
-	if st.stall != nil {
-		st.stall.Stop()
-	}
+	st.stall.stop()
 }
 
 // armStall starts or restarts the wait after which st's request body,
 // which has started, passes. The caller holds h.mu.
 func (h *h2Conn) armStall(st *h2Stream) {
-	if st.stall != nil {
-		st.stall.Reset(bodyStallWait)
-		return
-	}
-	st.stall = time.AfterFunc(bodyStallWait, func() {
+	st.stall.arrived(func() {
 		h.mu.Lock()
 		if st.ended || st.gone || st.pass != nil {
 			h.mu.Unlock()
@@ -202,53 +174,25 @@ func (h *h2Conn) awaitRequestPass(st *h2Stream) {
 // stream s, after what arrived.
 func (o *h2Origin) forwardRequestPass(s *h2OriginStream, request *h2Request) {
 	defer o.requestSent(s)
-	if err := sendData(o.w, o.flow, &s.window, s.id, request.body, false); err != nil {
+	sink := h2OriginSink{o: o, s: s}
+	if err := sink.forward(request.body); err != nil {
 		request.rest.cut(nil, errPassStopped)
 		close(request.rest.forwarded)
 		return
 	}
-	request.rest.forward(h2PassSink{
-		data: func(data []byte, end bool) error {
-			return sendData(o.w, o.flow, &s.window, s.id, data, end)
-		},
-		trailers: func(trailers h2Fields) error {
-			_, err := o.w.headers(fixedID(s.id), trailers, true, o.flow.frameSize())
-			return err
-		},
-		reset: func(*http2.ErrCode) { o.cancel(s, http2.ErrCodeCancel) },
-	})
+	request.rest.forward(sink)
 }
 
-// forwardResponsePass sends the rest of a passed response body on st, and
-// resets st with the origin's code when the origin reset its stream.
-func (h *h2Conn) forwardResponsePass(st *h2Stream, rest *h2Pass) {
-	rest.forward(h2PassSink{
-		data: func(data []byte, end bool) error {
-			return sendData(h.w, h.flow, &st.window, st.id, data, end)
-		},
-		trailers: func(trailers h2Fields) error {
-			_, err := h.w.headers(fixedID(st.id), trailers, true, h.flow.frameSize())
-			return err
-		},
-		reset: func(code *http2.ErrCode) {
-			if code == nil {
-				cancel := http2.ErrCodeCancel
-				code = &cancel
-			}
-			h.resetStream(st.id, *code)
-		},
-	})
-}
-
-// receive files a DATA payload from the origin on s. Until the response
-// body passes it is read whole; then, and from the moment it passes, the
-// payload goes on the stream's h2Pass, and receive reports true.
-func (s *h2OriginStream) receive(data []byte, end bool, threshold int64) bool {
+// receive files a DATA payload, of a frame frameLength long, from the
+// origin on s. Until the response body passes it is read whole, and
+// receive reports onPass false: the caller gives the window back. Once the
+// body passed, the payload goes on the stream's h2Passing, which gives the
+// window back as it forwards; ok is false for a frame past that window.
+func (s *h2OriginStream) receive(data []byte, frameLength uint32, end bool, threshold int64, refund func(uint32)) (onPass, ok bool) {
 	s.passMu.Lock()
 	defer s.passMu.Unlock()
 	if s.pass != nil {
-		s.pass.push(data, end)
-		return true
+		return true, s.pass.push(data, frameLength, end)
 	}
 	if s.response == nil {
 		s.response = &h2Response{}
@@ -256,47 +200,40 @@ func (s *h2OriginStream) receive(data []byte, end bool, threshold int64) bool {
 	s.response.body = append(s.response.body, data...)
 	switch {
 	case end:
-		if s.stall != nil {
-			s.stall.Stop()
-		}
+		s.stall.stop()
 	case s.final && int64(len(s.response.body)) > threshold:
-		s.startPassLocked(threshold)
-		return true
+		s.startPassLocked(threshold, refund)
 	case s.final && len(data) > 0:
-		if s.stall == nil {
-			s.stall = time.AfterFunc(bodyStallWait, func() {
-				s.passMu.Lock()
-				defer s.passMu.Unlock()
-				select {
-				case <-s.done:
-					return
-				default:
-				}
-				if s.pass == nil {
-					s.startPassLocked(threshold)
-				}
-			})
-		} else {
-			s.stall.Reset(bodyStallWait)
-		}
+		s.stall.arrived(func() {
+			s.passMu.Lock()
+			defer s.passMu.Unlock()
+			select {
+			case <-s.done:
+				return
+			default:
+			}
+			if s.pass == nil {
+				s.startPassLocked(threshold, refund)
+			}
+		})
 	}
-	return false
+	return false, true
 }
 
 // startPassLocked makes the response body pass with what arrived so far,
 // and wakes the stream's wait for its response. The caller holds passMu.
-func (s *h2OriginStream) startPassLocked(threshold int64) {
-	s.response.body, s.pass = splitPassed(s.response.body, threshold)
+func (s *h2OriginStream) startPassLocked(threshold int64, refund func(uint32)) {
+	var rest []byte
+	s.response.body, rest = cutAtThreshold(s.response.body, threshold)
+	s.pass = newH2Passing(h2OriginStreamWindow, refund, rest)
 	s.response.rest = s.pass
-	if s.stall != nil {
-		s.stall.Stop()
-	}
+	s.stall.stop()
 	close(s.passed)
 }
 
-// passing returns the stream's h2Pass, nil while its response body is read
-// whole.
-func (s *h2OriginStream) passing() *h2Pass {
+// passing returns the stream's h2Passing, nil while its response body is
+// read whole.
+func (s *h2OriginStream) passing() *h2Passing {
 	s.passMu.Lock()
 	defer s.passMu.Unlock()
 	return s.pass

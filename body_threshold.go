@@ -34,6 +34,40 @@ func (proxy *Proxy) bodyThreshold() int64 {
 	return DefaultBodyThreshold
 }
 
+// lengthOver reports whether a declared body length is over threshold: such
+// a body goes as it arrives from the start.
+func lengthOver(length, threshold int64) bool { return length > threshold }
+
+// cutAtThreshold cuts the bytes of a body that passed threshold: what is
+// kept for the view and storage, and the rest, which goes on as it arrived.
+func cutAtThreshold(arrived []byte, threshold int64) (kept, rest []byte) {
+	if int64(len(arrived)) <= threshold {
+		return arrived, nil
+	}
+	return arrived[:threshold:threshold], arrived[threshold:]
+}
+
+// bodyStall is the wait after which a body that has started but gets no
+// new bytes for bodyStallWait passes. Its zero value is not started.
+type bodyStall struct{ timer *time.Timer }
+
+// arrived notes that bytes arrived: the wait starts, or starts over, and
+// pass runs once it ends.
+func (s *bodyStall) arrived(pass func()) {
+	if s.timer == nil {
+		s.timer = time.AfterFunc(bodyStallWait, pass)
+		return
+	}
+	s.timer.Reset(bodyStallWait)
+}
+
+// stop stops the wait.
+func (s *bodyStall) stop() {
+	if s.timer != nil {
+		s.timer.Stop()
+	}
+}
+
 // passedBody is the view body of a message whose body passed the threshold:
 // what arrived before it did, up to the threshold. readBody reads it with
 // the too-large ending.
@@ -41,13 +75,10 @@ type passedBody struct{ *bytes.Reader }
 
 func (passedBody) Close() error { return nil }
 
-// newPassedBody is the view body of a passed message that had arrived
-// before it passed, cut to threshold.
-func newPassedBody(arrived []byte, threshold int64) io.ReadCloser {
-	if int64(len(arrived)) > threshold {
-		arrived = arrived[:threshold]
-	}
-	return passedBody{bytes.NewReader(arrived)}
+// newPassedBody is the view body of a passed message: kept, what arrived
+// before it passed, already cut at the threshold (cutAtThreshold).
+func newPassedBody(kept []byte) io.ReadCloser {
+	return passedBody{bytes.NewReader(kept)}
 }
 
 // Metadata fields of a direction whose body passed the threshold:

@@ -54,7 +54,8 @@ func (c *h1Conn) carryPair(head *h1.RequestHead) (keep bool) {
 	case bodyErr != nil:
 		req.Body = cutShortBody(body.Payload(), bodyErr)
 	case passing != nil:
-		req.Body = newPassedBody(body.Payload(), threshold)
+		kept, _ := cutAtThreshold(body.Payload(), threshold)
+		req.Body = newPassedBody(kept)
 	case framing.Kind != h1.NoBody:
 		req.Body = io.NopCloser(bytes.NewReader(body.Payload()))
 	}
@@ -348,7 +349,8 @@ func (c *h1Conn) sendUpstream(pair *Pair) (*http.Response, *wireResponse, error)
 	if passing != nil {
 		// The rest goes to the client as it arrives (carryPair).
 		wire.passing = passing
-		res.Body = newPassedBody(body.Payload(), c.engine.proxy.bodyThreshold())
+		kept, _ := cutAtThreshold(body.Payload(), c.engine.proxy.bodyThreshold())
+		res.Body = newPassedBody(kept)
 		return res, wire, nil
 	}
 	switch {

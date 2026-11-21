@@ -30,7 +30,7 @@ func (h *h2Conn) carry(st *h2Stream) {
 	req := request.request()
 	switch {
 	case request.rest != nil:
-		req.Body = newPassedBody(request.body, int64(len(request.body)))
+		req.Body = newPassedBody(request.body)
 	case len(request.body) > 0:
 		req.Body = io.NopCloser(bytes.NewReader(request.body))
 	}
@@ -270,7 +270,7 @@ func (h *h2Conn) awaitResponse(st *h2Stream, req *http.Request, s *h2OriginStrea
 		wire := s.response
 		res := wire.response()
 		res.Request = req
-		res.Body = newPassedBody(wire.body, int64(len(wire.body)))
+		res.Body = newPassedBody(wire.body)
 		return res, &wireResponse{h2: wire}, nil, nil
 	}
 	switch {
@@ -324,7 +324,7 @@ func (h *h2Conn) writeResponse(st *h2Stream, pair *Pair, res *http.Response, wir
 			if out, err = h2OutboundResponse(base, client); err == nil {
 				if out.rest != nil {
 					h.writeMessage(st, out.fields, out.body, nil, false, false)
-					h.forwardResponsePass(st, out.rest)
+					out.rest.forward(h2ClientSink{h: h, st: st})
 					return
 				}
 				h.writeMessage(st, out.fields, out.body, out.trailers, true, out.endsOnData)

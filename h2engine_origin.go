@@ -94,9 +94,9 @@ type h2OriginStream struct {
 	finished bool
 
 	passMu sync.Mutex
-	pass   *h2Pass
+	pass   *h2Passing
 	passed chan struct{}
-	stall  *time.Timer
+	stall  bodyStall
 }
 
 func newH2OriginStream() *h2OriginStream {
@@ -272,11 +272,15 @@ func (o *h2Origin) frame(frame http2.Frame, decoder *hpack.Decoder) error {
 			o.streamedData(s, f)
 			return nil
 		}
-		if s.receive(f.Data(), f.StreamEnded(), o.threshold) {
+		onPass, ok := s.receive(f.Data(), n, f.StreamEnded(), o.threshold, o.windowUpdate(f.StreamID))
+		switch {
+		case !ok:
+			o.cancel(s, http2.ErrCodeFlowControl)
+			return nil
+		case onPass:
+			// The passing body opens the window as it goes on.
 			if f.StreamEnded() {
 				o.finish(s, nil)
-			} else if n > 0 {
-				o.w.do(func(fr *http2.Framer) error { return fr.WriteWindowUpdate(f.StreamID, n) })
 			}
 			return nil
 		}
@@ -358,7 +362,7 @@ func (o *h2Origin) headers(decoder *hpack.Decoder) error {
 		if framing == stream.FramingNone && !o.block.endStream && declaredOver(fields, o.threshold) {
 			// An ordinary body declared over the threshold goes as it
 			// arrives.
-			s.startPassLocked(o.threshold)
+			s.startPassLocked(o.threshold, o.windowUpdate(s.id))
 		}
 		s.passMu.Unlock()
 		if framing != stream.FramingNone && !o.block.endStream {
@@ -372,6 +376,13 @@ func (o *h2Origin) headers(decoder *hpack.Decoder) error {
 	return nil
 }
 
+// windowUpdate opens origin stream id's receive window by n.
+func (o *h2Origin) windowUpdate(id uint32) func(n uint32) {
+	return func(n uint32) {
+		o.w.do(func(f *http2.Framer) error { return f.WriteWindowUpdate(id, n) })
+	}
+}
+
 // streamResponse carries s's response as stream messages: the head goes on
 // now (headed), and the body as it arrives.
 func (o *h2Origin) streamResponse(s *h2OriginStream, framing stream.Framing, encoding string) {
@@ -379,10 +390,8 @@ func (o *h2Origin) streamResponse(s *h2OriginStream, framing stream.Framing, enc
 	s.response.streamed = &h2StreamedBody{
 		framing:  framing,
 		encoding: encoding,
-		in: newH2Inbound(h2OriginStreamWindow, func(n uint32) {
-			o.w.do(func(f *http2.Framer) error { return f.WriteWindowUpdate(id, n) })
-		}),
-		resetBy: func(code http2.ErrCode) { o.cancel(s, code) },
+		in:       newH2Inbound(h2OriginStreamWindow, o.windowUpdate(id)),
+		resetBy:  func(code http2.ErrCode) { o.cancel(s, code) },
 	}
 	s.streamed.Store(s.response.streamed)
 	close(s.headed)

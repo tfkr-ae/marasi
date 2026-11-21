@@ -1,6 +1,7 @@
 package marasi
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +112,73 @@ func TestH2Engine_BodyThreshold(t *testing.T) {
 
 		metadata, _, raw, _ := expectStored(t, captured)
 		expectPassedThrough(t, "request", "POST / HTTP/2\r\n:scheme: https\r\n:authority: "+origin.addr+"\r\n\r\n01234567", []byte(raw), metadata)
+	})
+
+	t.Run("should stop a passed request body's sender once the origin stops reading, then forward all of it once it reads again", func(t *testing.T) {
+		origin := newH2TestOrigin(t)
+		addr, _, ca := serveH1EngineMITMProxy(t, true, withBodyThreshold(8))
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		upstream := origin.accept(t)
+		upstream.mu.Lock()
+		upstream.holdWindow = true
+		upstream.mu.Unlock()
+
+		client.headers(1, false, ":method", "POST", ":scheme", "https", ":authority", origin.addr, ":path", "/")
+		body := strings.Repeat("x", 8*h2DefaultWindow)
+		sent := sendWithinWindow(t, client, 1, body)
+		// Marasi forwards no more than the origin's window and gives the
+		// client back only what it forwarded.
+		if limit := 2 * h2DefaultWindow; sent > limit {
+			t.Fatalf("bytes the client could send\nwanted:\nat most %d\ngot:\n%d", limit, sent)
+		}
+		id := upstream.nthStream(t, 0)
+		upstream.mu.Lock()
+		upstream.holdWindow = false
+		received := uint32(len(upstream.streams[id].data))
+		upstream.mu.Unlock()
+		upstream.write(func(f *http2.Framer) error {
+			f.WriteWindowUpdate(0, received)
+			return f.WriteWindowUpdate(id, received)
+		})
+		sent += sendWithinWindow(t, client, 1, body[sent:])
+		client.data(1, true, "")
+		if got := upstream.stream(t, id).data; sent != len(body) || string(got) != body {
+			t.Fatalf("the origin's request body once it read again\nwanted:\nall %d bytes\ngot:\n%d sent, %d received", len(body), sent, len(got))
+		}
+		upstream.headers(id, true, ":status", "204")
+		client.stream(t, 1)
+	})
+
+	t.Run("should stop a passed response body's origin once the client stops reading, then forward all of it once it reads again", func(t *testing.T) {
+		origin := newH2TestOrigin(t)
+		addr, _, ca := serveH1EngineMITMProxy(t, true, withBodyThreshold(8))
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		upstream := origin.accept(t)
+		client.mu.Lock()
+		client.holdWindow = true
+		client.mu.Unlock()
+
+		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/")
+		id := upstream.nthStream(t, 0)
+		upstream.headers(id, false, ":status", "200")
+		body := strings.Repeat("y", 8*h2DefaultWindow)
+		sent := sendWithinWindow(t, upstream, id, body)
+		if limit := 2 * h2DefaultWindow; sent > limit {
+			t.Fatalf("bytes the origin could send\nwanted:\nat most %d\ngot:\n%d", limit, sent)
+		}
+		client.mu.Lock()
+		client.holdWindow = false
+		received := uint32(len(client.streams[1].data))
+		client.mu.Unlock()
+		client.write(func(f *http2.Framer) error {
+			f.WriteWindowUpdate(0, received)
+			return f.WriteWindowUpdate(1, received)
+		})
+		sent += sendWithinWindow(t, upstream, id, body[sent:])
+		upstream.data(id, true, "")
+		if got := client.stream(t, 1).data; sent != len(body) || string(got) != body {
+			t.Fatalf("the client's response body once it read again\nwanted:\nall %d bytes\ngot:\n%d sent, %d received", len(body), sent, len(got))
+		}
 	})
 
 	t.Run("should forward a request body that stalls after some arrived", func(t *testing.T) {
