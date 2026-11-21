@@ -58,6 +58,29 @@ func injectOnceCarried(t *testing.T, proxy *Proxy, pair uuid.UUID, direction, pa
 	}
 }
 
+// awaitCarried waits until the pair's direction is carried, so an injection
+// into it is taken.
+func awaitCarried(t *testing.T, proxy *Proxy, pair uuid.UUID, direction string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if v, ok := proxy.streamedPairs.Load(pair); ok {
+			sp := v.(*streamedPair)
+			sp.mu.Lock()
+			d := sp.directions[direction]
+			carried := d != nil && d.src != nil
+			sp.mu.Unlock()
+			if carried {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the pair's %s direction was not carried", direction)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestProxy_InjectStreamMessage(t *testing.T) {
 	t.Run("should send an injected message to the origin between the client's messages, framed, and store it injected", func(t *testing.T) {
 		call := startGRPCCall(t)
@@ -205,6 +228,8 @@ func TestProxy_InjectStreamMessage(t *testing.T) {
 	t.Run("should hold an injected message in Checkpoint, and send it once forwarded", func(t *testing.T) {
 		call := startGRPCCall(t, func(proxy *Proxy) { proxy.SetStreamIntercept(true) })
 		req := callPair(t, call)
+		// The request is captured before its carry starts.
+		awaitCarried(t, call.proxy, req.ID, domain.StreamDirectionRequest)
 		done := make(chan error, 1)
 		go func() {
 			_, err := call.proxy.InjectStreamMessage(context.Background(), req.ID, domain.StreamDirectionRequest, []byte("injected"), StreamInjectOptions{})
