@@ -374,8 +374,8 @@ func TestH2Engine_StreamedPairTranslatedToHTTP1(t *testing.T) {
 			"content-type", "application/grpc", "te", "trailers")
 		client.data(1, true, grpcEnvelope(0, "ping"))
 
-		if got := h1Origin.received(t); !strings.HasSuffix(got, grpcEnvelope(0, "ping")) {
-			t.Fatalf("the HTTP/1.1 origin's request\nwanted:\nthe message\ngot:\n%q", got)
+		if got := h1Origin.received(t); h1Payload(t, got) != grpcEnvelope(0, "ping") {
+			t.Fatalf("the HTTP/1.1 origin's request\nwanted:\nthe message as its body\ngot:\n%q", got)
 		}
 		response := client.stream(t, 1)
 		if status, _ := response.trailers.get("grpc-status"); status != "0" || string(response.data) != grpcEnvelope(0, "pong") {

@@ -1,7 +1,6 @@
 package marasi
 
 import (
-	"errors"
 	"io"
 	"net/http"
 	"sync"
@@ -140,12 +139,28 @@ func (in *h2Inbound) preload(data []byte) {
 	in.cond.Broadcast()
 }
 
+// awaitWindow waits until the receive window is open or the direction
+// ended, and returns how much of n bytes the window lets in: 0 once the
+// direction ended. It is for a sender Marasi reads itself.
+func (in *h2Inbound) awaitWindow(n int) int {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	for in.window <= 0 && in.end == nil {
+		in.cond.Wait()
+	}
+	if in.end != nil {
+		return 0
+	}
+	return int(min(int64(n), in.window))
+}
+
 // give opens the receive window by n.
 func (in *h2Inbound) give(n uint32) {
 	in.mu.Lock()
 	in.window += int64(n)
 	ended := in.end != nil
 	in.mu.Unlock()
+	in.cond.Broadcast()
 	if !ended && n > 0 {
 		in.refund(n)
 	}
@@ -339,15 +354,8 @@ func (h *h2Conn) sendOn(origin *h2Origin, st *h2Stream, pair *Pair, out *h2Reque
 	}
 	sp := h.engine.proxy.streamed(pair)
 	d := sp.direction(domain.StreamDirectionRequest, body.framing)
-	sp.headWentOut(d, out.fields)
-	if _, ok := out.fields.get("content-length"); ok {
-		sp.declareLength(d)
-	}
-	st.carrying.Add(1)
-	go func() {
-		defer st.carrying.Done()
-		sp.carry(domain.StreamDirectionRequest, d, body, h2OriginSink{o: origin, s: s})
-	}()
+	_, declared := out.fields.get("content-length")
+	sp.start(domain.StreamDirectionRequest, d, streamedHead{fields: out.fields, declared: declared}, body, h2OriginSink{o: origin, s: s}, &st.carrying)
 	return s, nil
 }
 
@@ -363,29 +371,8 @@ func (h *h2Conn) carryStreamedResponse(st *h2Stream, pair *Pair, res *http.Respo
 		h.resetStream(st.id, http2.ErrCodeCancel)
 		return
 	}
-	pair.stream.headWentOut(d, out.fields)
 	encoding, _ := out.fields.get("content-encoding")
-	pair.stream.bodyEncodings(d, body.encoding, encoding)
-	if _, ok := out.fields.get("content-length"); ok {
-		pair.stream.declareLength(d)
-	}
-	pair.stream.carry(domain.StreamDirectionResponse, d, body, h2ClientSink{h: h, st: st})
-}
-
-// readStreamedBody reads a streamed request's body whole, for a request
-// translated to HTTP/1.1, which is carried read whole.
-func readStreamedBody(body *h2StreamedBody) ([]byte, h2Fields, error) {
-	var data []byte
-	for {
-		chunk, err := body.peek()
-		if len(chunk) > 0 {
-			data = append(data, chunk...)
-			body.discard(len(chunk))
-			continue
-		}
-		if errors.Is(err, io.EOF) {
-			return data, body.trailers(), nil
-		}
-		return nil, nil, err
-	}
+	_, declared := out.fields.get("content-length")
+	head := streamedHead{fields: out.fields, declared: declared, bodyIn: body.encoding, bodyOut: encoding}
+	pair.stream.start(domain.StreamDirectionResponse, d, head, body, h2ClientSink{h: h, st: st}, nil)
 }

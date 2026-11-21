@@ -1,6 +1,7 @@
 package marasi
 
 import (
+	"bufio"
 	"crypto/tls"
 	"io"
 	"net"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tfkr-ae/marasi/internal/h1"
 )
 
 // newScriptedTLSOrigin is a scriptedOrigin over TLS that offers only
@@ -189,5 +192,128 @@ func TestH2Engine_RedirectedRequest(t *testing.T) {
 			t.Errorf("the pair's protocols\nwanted:\n/elsewhere h2 h2\ngot:\n%s", got)
 		}
 		redirected.await(t, "the redirected connection to close", func(p *h2TestPeer) bool { return p.err != nil })
+	})
+}
+
+// h1Payload is the payload of the HTTP/1.1 request raw, its framing undone.
+func h1Payload(t *testing.T, raw string) string {
+	t.Helper()
+	br := bufio.NewReader(strings.NewReader(raw))
+	head, err := h1.ReadRequestHead(br)
+	if err != nil {
+		t.Fatalf("reading the request head: %v", err)
+	}
+	framing, err := h1.RequestFraming(head)
+	if err != nil {
+		t.Fatalf("reading the request framing: %v", err)
+	}
+	body, err := h1.ReadBody(br, framing)
+	if err != nil {
+		t.Fatalf("reading the request body: %v", err)
+	}
+	return string(body.Payload())
+}
+
+func TestH2Engine_TranslatedBodyThreshold(t *testing.T) {
+	// redirected serves a proxy with threshold that sends /elsewhere to
+	// h1Origin, and a client connected to it.
+	redirected := func(t *testing.T, h1Origin string, threshold int64) *h2TestPeer {
+		origin := newH2TestOrigin(t)
+		addr, _, ca := serveH1EngineMITMProxy(t, true, withBodyThreshold(threshold))
+		proxyOf(t, addr).AddRequestPairModifier(redirectPaths("/elsewhere", h1Origin))
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2", "http/1.1")
+		origin.accept(t)
+		return client
+	}
+
+	t.Run("should forward an HTTP/1.1 origin's response body past the threshold to the client as it arrives", func(t *testing.T) {
+		release := make(chan struct{})
+		h1Origin := newScriptedTLSOrigin(t, func(conn net.Conn) {
+			io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n"+chunk("0123456789")+chunk("abc"))
+			<-release
+			io.WriteString(conn, chunk("def")+"0\r\nX-Sum: 1\r\n\r\n")
+		})
+		client := redirected(t, h1Origin.addr, 8)
+		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", "example.test", ":path", "/elsewhere")
+		client.awaitData(t, 1, 13, 2*time.Second)
+		close(release)
+		response := client.stream(t, 1)
+		if string(response.data) != "0123456789abcdef" || !equalFields(response.trailers, h2Fields{{"x-sum", "1", false}}) {
+			t.Fatalf("the client's response\nwanted:\n%q with x-sum\ngot:\n%q %v", "0123456789abcdef", response.data, response.trailers)
+		}
+	})
+
+	t.Run("should send all of a request body past the threshold to an HTTP/1.1 origin, chunked, as it arrives", func(t *testing.T) {
+		h1Origin := newScriptedTLSOrigin(t, func(conn net.Conn) {
+			io.WriteString(conn, "HTTP/1.1 204 No Content\r\n\r\n")
+		})
+		client := redirected(t, h1Origin.addr, 8)
+		client.headers(1, false, ":method", "POST", ":scheme", "https", ":authority", "example.test", ":path", "/elsewhere")
+		client.data(1, false, "0123456789")
+		client.data(1, true, "abc")
+		got := h1Origin.received(t)
+		if !strings.Contains(got, "transfer-encoding: chunked\r\n") || h1Payload(t, got) != "0123456789abc" {
+			t.Fatalf("the HTTP/1.1 origin's request\nwanted:\nchunked, the whole body\ngot:\n%q", got)
+		}
+		client.stream(t, 1)
+	})
+
+	t.Run("should carry a streamed request to an HTTP/1.1 origin a message at a time, before the client ends it", func(t *testing.T) {
+		issuer, _ := newTestLeafIssuer(t, 24*time.Hour)
+		config := issuer.config("127.0.0.1:443")
+		config.NextProtos = []string{"http/1.1"}
+		l, err := tls.Listen("tcp", "127.0.0.1:0", config)
+		if err != nil {
+			t.Fatalf("listening for the origin: %v", err)
+		}
+		t.Cleanup(func() { l.Close() })
+		first := make(chan string, 1)
+		go func() {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			br := bufio.NewReader(conn)
+			head, err := h1.ReadRequestHead(br)
+			if err != nil {
+				return
+			}
+			framing, _ := h1.RequestFraming(head)
+			body := h1.NewBodyReader(br, framing)
+			var got []byte
+			for len(got) < 10 {
+				data, err := body.Peek()
+				if err != nil {
+					break
+				}
+				got = append(got, data...)
+				body.Discard(len(data))
+			}
+			first <- string(got)
+			for {
+				data, err := body.Peek()
+				if err != nil {
+					break
+				}
+				body.Discard(len(data))
+			}
+			io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nok")
+		}()
+		client := redirected(t, l.Addr().String(), DefaultBodyThreshold)
+		client.headers(1, false, ":method", "POST", ":scheme", "https", ":authority", "example.test", ":path", "/elsewhere", "content-type", "application/grpc")
+		client.data(1, false, grpcEnvelope(0, "hello"))
+		select {
+		case got := <-first:
+			if got != grpcEnvelope(0, "hello") {
+				t.Fatalf("the HTTP/1.1 origin's first message\nwanted:\n%q\ngot:\n%q", grpcEnvelope(0, "hello"), got)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("the HTTP/1.1 origin got no message before the client ended the request")
+		}
+		client.data(1, true, "")
+		if response := client.stream(t, 1); string(response.data) != "ok" {
+			t.Fatalf("the client's response\nwanted:\n%q\ngot:\n%q", "ok", response.data)
+		}
 	})
 }

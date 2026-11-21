@@ -186,6 +186,35 @@ func (sp *streamedPair) announced() bool {
 	return sp.pair.requestCaptured
 }
 
+// streamedHead is a streamed direction's head as it went out: its fields
+// as headWentOut reads them, whether it declares a length, and the
+// whole-body codings of the sender's head and of this one, "" for none.
+type streamedHead struct {
+	fields          h2Fields
+	declared        bool
+	bodyIn, bodyOut string
+}
+
+// start records the head direction d went out with and carries d from src
+// to sink: on a goroutine counted by carrying when that is set, and before
+// start returns otherwise.
+func (sp *streamedPair) start(name string, d *streamedDirection, head streamedHead, src streamSource, sink streamSink, carrying *sync.WaitGroup) {
+	sp.headWentOut(d, head.fields)
+	if head.declared {
+		sp.declareLength(d)
+	}
+	sp.bodyEncodings(d, head.bodyIn, head.bodyOut)
+	if carrying == nil {
+		sp.carry(name, d, src, sink)
+		return
+	}
+	carrying.Add(1)
+	go func() {
+		defer carrying.Done()
+		sp.carry(name, d, src, sink)
+	}()
+}
+
 // carry carries direction name from src to sink, a stream message at a
 // time: each is read whole, up to the limit, then forwarded as it came and
 // stored. It returns once the direction ended, and records how.

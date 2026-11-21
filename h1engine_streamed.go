@@ -247,17 +247,10 @@ func (c *h1Conn) carryStreamedRequest(pair *Pair, origin *originConn, head *h1.R
 	sp := c.engine.proxy.streamed(pair)
 	d := sp.direction(domain.StreamDirectionRequest, body.framing)
 	streams.requestDirection = d
-	sp.headWentOut(d, h1HeadFields(&head.Header))
 	chunked := isChunked(&head.Header)
-	if head.Header.Has("Content-Length") && !chunked {
-		sp.declareLength(d)
-	}
 	sink := &h1Sink{bw: origin.bw, conn: origin.conn, chunked: chunked, streams: streams}
-	streams.carrying.Add(1)
-	go func() {
-		defer streams.carrying.Done()
-		sp.carry(domain.StreamDirectionRequest, d, body.src, sink)
-	}()
+	out := streamedHead{fields: h1HeadFields(&head.Header), declared: head.Header.Has("Content-Length") && !chunked}
+	sp.start(domain.StreamDirectionRequest, d, out, body.src, sink, &streams.carrying)
 }
 
 // streamedResponse makes a response whose head names a message framing a
@@ -320,14 +313,13 @@ func (c *h1Conn) carryStreamedResponse(pair *Pair, res *http.Response, wire *wir
 		body.src.reset(http2.ErrCodeCancel)
 		return false
 	}
-	pair.stream.headWentOut(d, h1HeadFields(&out.head.Header))
 	chunked := isChunked(&out.head.Header)
-	if out.head.Header.Has("Content-Length") && !chunked {
-		pair.stream.declareLength(d)
+	head := streamedHead{
+		fields: h1HeadFields(&out.head.Header), declared: out.head.Header.Has("Content-Length") && !chunked,
+		bodyIn: body.encoding, bodyOut: strings.Join(out.head.Header.Values("Content-Encoding"), ", "),
 	}
-	pair.stream.bodyEncodings(d, body.encoding, strings.Join(out.head.Header.Values("Content-Encoding"), ", "))
 	sink := &h1Sink{bw: c.bw, conn: c.conn, chunked: chunked, streams: streams}
-	pair.stream.carry(domain.StreamDirectionResponse, d, body.src, sink)
+	pair.stream.start(domain.StreamDirectionResponse, d, head, body.src, sink, nil)
 	complete := pair.stream.ending(d) == streamComplete
 	if !originKeeps || !complete {
 		c.closeOrigin()
