@@ -181,10 +181,6 @@ func (c *h1Conn) read(br *bufio.Reader, method string, onHead func()) {
 			break
 		}
 	}
-	if onHead != nil {
-		onHead()
-	}
-
 	body := func(data []byte) {
 		for _, m := range split.write(data) {
 			c.t.add(Arrival{Side: c.side, Kind: KindMessage, Data: m})
@@ -207,9 +203,20 @@ func (c *h1Conn) read(br *bufio.Reader, method string, onHead func()) {
 		}
 	}
 	noBody := status == 204 || status == 304 || method == "HEAD" || status == 101
-	switch {
-	case noBody:
+	// A message with no body has ended once its head is read: record that
+	// before onHead lets the origin's script answer, or the answer can
+	// reach the client and be recorded first.
+	if noBody || (!chunked && hasLength && length == 0) || (c.side == SideOrigin && !chunked && !hasLength) {
 		end()
+		if onHead != nil {
+			onHead()
+		}
+		return
+	}
+	if onHead != nil {
+		onHead()
+	}
+	switch {
 	case chunked:
 		for {
 			line, err := readLine(br)
