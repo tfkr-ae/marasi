@@ -3,7 +3,9 @@ package grpcclient
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -19,8 +21,16 @@ import (
 // the compressed cases.
 const InteropVersion = "1.85.1"
 
-// InteropImage is the tag of the image built from Dockerfile at InteropVersion.
-const InteropImage = "marasi-conformance-grpc-java:" + InteropVersion
+// InteropImage is the tag of the image built from Dockerfile at
+// InteropVersion. It names the Dockerfile's content too, so an image Docker
+// already has is rebuilt when the Dockerfile changes.
+var InteropImage = "marasi-conformance-grpc-java:" + InteropVersion + "-" + dockerfileSum()
+
+// dockerfileSum is the first 12 hex digits of the Dockerfile's SHA-256.
+func dockerfileSum() string {
+	sum := sha256.Sum256(dockerfile)
+	return hex.EncodeToString(sum[:])[:12]
+}
 
 // GoInterop is grpc-go's interop client (Apache-2.0), which the harness
 // installs with go install so it never enters go.mod.
