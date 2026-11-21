@@ -1,7 +1,12 @@
 package streamorigin
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/binary"
+	"strconv"
+
+	"golang.org/x/net/http2"
 
 	"github.com/tfkr-ae/marasi/internal/conformance"
 	"github.com/tfkr-ae/marasi/internal/conformance/h2"
@@ -42,6 +47,7 @@ const (
 	StepTrailers StepKind = "trailers" // send a trailer section, ending the direction
 	StepAwait    StepKind = "await"    // wait for the next arrival of a kind from the peer
 	StepAnswer   StepKind = "answer"   // tell the origin, outside the proxy, what was awaited arrived
+	StepReset    StepKind = "reset"    // reset the stream with Code (h2 only)
 )
 
 // Step is one step of a side's script.
@@ -53,9 +59,10 @@ type Step struct {
 	// "{authority}" replaced by the origin's host:port; on h2 the client
 	// adds :scheme and :authority after :method.
 	Fields []h2.Field
-	Data   string // StepMessage
-	End    bool   // StepHead, StepMessage: the direction ends with this step
-	Await  string // StepAwait: the arrival kind awaited
+	Data   string        // StepMessage
+	End    bool          // StepHead, StepMessage: the direction ends with this step
+	Await  string        // StepAwait: the arrival kind awaited
+	Code   http2.ErrCode // StepReset
 }
 
 // Head sends a header section of name, value pairs.
@@ -79,9 +86,23 @@ func Await(kind string) Step { return Step{Kind: StepAwait, Await: kind} }
 // answer in.
 func Answer() Step { return Step{Kind: StepAnswer} }
 
+// Reset resets the stream with code (RFC 9113 §6.4).
+func Reset(code http2.ErrCode) Step { return Step{Kind: StepReset, Code: code} }
+
 // GRPC is payload in a gRPC Length-Prefixed-Message: an uncompressed
 // flag and a big-endian length. gRPC-Web and Connect messages are the same.
 func GRPC(payload string) string { return envelope(0, payload) }
+
+// GRPCGzip is payload gzipped in a gRPC Length-Prefixed-Message with the
+// Compressed-Flag set (gRPC PROTOCOL-HTTP2.md), as a call whose
+// grpc-encoding is gzip sends it.
+func GRPCGzip(payload string) string {
+	var b bytes.Buffer
+	w := gzip.NewWriter(&b)
+	w.Write([]byte(payload))
+	w.Close()
+	return envelope(1, b.String())
+}
 
 // GRPCWebTrailers is a gRPC-Web trailers frame: the trailer block in an
 // envelope with flag 0x80 (gRPC PROTOCOL-WEB.md).
@@ -353,6 +374,135 @@ var Catalogue = []Case{
 			Message(true, "{\"n\":2}\n"),
 		},
 	},
+	{
+		// A failed call that sent messages first: the status and its
+		// percent-encoded message go in trailers after them.
+		ID:       "grpc-status-message-h2",
+		RFC:      "gRPC PROTOCOL-HTTP2.md Status and Status-Message in Trailers after a response's messages",
+		Protocol: ProtocolH2,
+		Client: []Step{
+			grpcRequest(false, "/conformance.Stream/Fail"),
+			Message(true, GRPC("hello")),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Await(KindEnd),
+			Head(false, ":status", "200", "content-type", "application/grpc"),
+			Message(false, GRPC("partial result")),
+			Trailers("grpc-status", "9", "grpc-message", "precondition%20failed%3A%20%E2%9C%93"),
+		},
+	},
+	{
+		// The origin resets the stream between two messages: the client
+		// gets the message that arrived, then the reset with its code.
+		ID:       "grpc-reset-between-messages-h2",
+		RFC:      "RFC 9113 §6.4 RST_STREAM between gRPC PROTOCOL-HTTP2.md messages",
+		Protocol: ProtocolH2,
+		Client: []Step{
+			grpcRequest(false, "/conformance.Stream/Watch"),
+			Message(true, GRPC("watch")),
+			Await(KindMessage),
+			Answer(),
+			Await(KindReset),
+		},
+		Origin: []Step{
+			Await(KindEnd),
+			Head(false, ":status", "200", "content-type", "application/grpc"),
+			Message(false, GRPC("tick 1")),
+			Await(KindAnswer),
+			Reset(http2.ErrCodeCancel),
+		},
+	},
+	{
+		// The origin resets the stream partway through a message: the
+		// client gets what arrived of it, cut short, then the reset.
+		ID:       "grpc-reset-in-message-h2",
+		RFC:      "RFC 9113 §6.4 RST_STREAM partway through a gRPC PROTOCOL-HTTP2.md message",
+		Protocol: ProtocolH2,
+		Client: []Step{
+			grpcRequest(false, "/conformance.Stream/Watch"),
+			Message(true, GRPC("watch")),
+			Await(KindMessage),
+			Answer(),
+			Await(KindReset),
+		},
+		Origin: []Step{
+			Await(KindEnd),
+			Head(false, ":status", "200", "content-type", "application/grpc"),
+			Message(false, GRPC("tick 1")),
+			Await(KindAnswer),
+			Message(false, GRPC("tick 2")[:8]),
+			Reset(http2.ErrCodeInternal),
+		},
+	},
+	{
+		// Bidirectional streaming with each message gzipped on its own:
+		// the Compressed-Flag is set and grpc-encoding names the coding.
+		ID:       "grpc-gzip-messages-h2",
+		RFC:      "gRPC PROTOCOL-HTTP2.md Compressed-Flag and Message-Encoding (grpc-encoding gzip)",
+		Protocol: ProtocolH2,
+		Client: []Step{
+			Head(false, ":method", "POST", ":path", "/conformance.Stream/PingPong", "content-type", "application/grpc",
+				"te", "trailers", "grpc-encoding", "gzip", "grpc-accept-encoding", "gzip"),
+			Await(KindMessage),
+			Message(false, GRPCGzip("pong 1")),
+			Await(KindMessage),
+			Message(true, GRPCGzip("pong 2")),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Head(false, ":status", "200", "content-type", "application/grpc", "grpc-encoding", "gzip"),
+			Message(false, GRPCGzip("ping 1")),
+			Await(KindMessage),
+			Message(false, GRPCGzip("ping 2")),
+			Await(KindEnd),
+			Trailers("grpc-status", "0"),
+		},
+	},
+	{
+		// A gRPC-Web response whose head declares its length: each
+		// message still goes on as it arrives.
+		ID:       "grpc-web-declared-length-h2",
+		RFC:      "gRPC PROTOCOL-WEB.md with an RFC 9110 §8.6 Content-Length, over RFC 9113 §8.1 HTTP message framing",
+		Protocol: ProtocolH2,
+		Client: []Step{
+			Head(false, ":method", "POST", ":path", "/conformance.Stream/Watch", "content-type", "application/grpc-web+proto",
+				"x-grpc-web", "1", "content-length", strconv.Itoa(len(GRPC("watch")))),
+			Message(true, GRPC("watch")),
+			Await(KindMessage),
+			Answer(),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Await(KindEnd),
+			Head(false, ":status", "200", "content-type", "application/grpc-web+proto", "content-length", declaredWatchLength),
+			Message(false, GRPC("tick 1")),
+			Await(KindAnswer),
+			Message(false, GRPC("tick 2")),
+			Message(true, GRPCWebTrailers("grpc-status: 0\r\n")),
+		},
+	},
+	{
+		ID:       "grpc-web-declared-length-http1",
+		RFC:      "gRPC PROTOCOL-WEB.md over an RFC 9112 §6.2 Content-Length body",
+		Protocol: ProtocolHTTP1,
+		Client: []Step{
+			Head(false, ":method", "POST", ":path", "/conformance.Stream/Watch", "Host", "{authority}",
+				"Content-Type", "application/grpc-web+proto", "X-Grpc-Web", "1", "Content-Length", strconv.Itoa(len(GRPC("watch")))),
+			Message(true, GRPC("watch")),
+			Await(KindMessage),
+			Answer(),
+			Await(KindEnd),
+		},
+		Origin: []Step{
+			Await(KindEnd),
+			Head(false, ":status", "200", "Content-Type", "application/grpc-web+proto", "Content-Length", declaredWatchLength),
+			Message(false, GRPC("tick 1")),
+			Await(KindAnswer),
+			Message(false, GRPC("tick 2")),
+			Message(true, GRPCWebTrailers("grpc-status: 0\r\n")),
+		},
+	},
 	// The stall cases are ordinary pairs: their heads name no message
 	// framing, so Marasi reads each body whole until it stalls for 2
 	// seconds after some arrived, then forwards it as it arrives. The
@@ -430,3 +580,7 @@ var Catalogue = []Case{
 		},
 	},
 }
+
+// declaredWatchLength is the length the declared-length cases' responses
+// declare: two messages and the trailers frame.
+var declaredWatchLength = strconv.Itoa(len(GRPC("tick 1")) + len(GRPC("tick 2")) + len(GRPCWebTrailers("grpc-status: 0\r\n")))

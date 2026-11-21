@@ -224,6 +224,19 @@ func TestDirectRecording(t *testing.T) {
 			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
 		}
 	})
+
+	t.Run("should record an origin's reset partway through a message as the bytes that arrived, then the reset with its code", func(t *testing.T) {
+		got := baselineCase(t, settings, "grpc-reset-in-message-h2@connect-tls").Arrivals
+		last := got[len(got)-3:]
+		want := []streamorigin.Arrival{
+			arrival("origin", "answer", nil, ""),
+			arrival("client", "partial", nil, grpc("tick 2")[:8]),
+			{Side: "client", Kind: "reset", Code: "INTERNAL_ERROR"},
+		}
+		if !reflect.DeepEqual(last, want) {
+			t.Fatalf("\nwanted:\n%+v\ngot:\n%+v", want, got)
+		}
+	})
 }
 
 func TestSplicingRelay(t *testing.T) {

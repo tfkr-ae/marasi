@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 
+	"golang.org/x/net/http2"
+
 	"github.com/tfkr-ae/marasi/internal/conformance/h2"
 )
 
@@ -103,6 +105,9 @@ func (c *h1Conn) message(data []byte, end bool) error {
 	}
 	return nil
 }
+
+// reset closes the connection: HTTP/1.1 has no stream to reset.
+func (c *h1Conn) reset(http2.ErrCode) error { return c.conn.Close() }
 
 // trailers sends the last chunk with a trailer section.
 func (c *h1Conn) trailers(fields []h2.Field) error {

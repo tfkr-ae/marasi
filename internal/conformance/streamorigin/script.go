@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"golang.org/x/net/http2"
+
 	"github.com/tfkr-ae/marasi/internal/conformance/h2"
 )
 
@@ -12,6 +14,7 @@ type sender interface {
 	head(fields []h2.Field, end bool) error
 	message(data []byte, end bool) error
 	trailers(fields []h2.Field) error
+	reset(code http2.ErrCode) error
 }
 
 // runScript runs one side's steps. awaited counts, per kind, the arrivals
@@ -29,6 +32,8 @@ func runScript(t *transcript, side string, steps []Step, s sender, awaited map[s
 			err = s.message([]byte(step.Data), step.End)
 		case StepTrailers:
 			err = s.trailers(step.Fields)
+		case StepReset:
+			err = s.reset(step.Code)
 		case StepAnswer:
 			t.add(Arrival{Side: SideOrigin, Kind: KindAnswer})
 		case StepAwait:

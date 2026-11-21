@@ -189,6 +189,12 @@ func (c *h2Conn) headers(fields []h2.Field, end bool) error {
 	})
 }
 
+func (c *h2Conn) reset(code http2.ErrCode) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.framer.WriteRSTStream(c.stream, code)
+}
+
 func (c *h2Conn) message(data []byte, end bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

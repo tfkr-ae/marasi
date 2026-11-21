@@ -351,6 +351,347 @@
       }
     ]
   },
+  "grpc-gzip-messages-h2@connect-tls": {
+    "client_alpn": "h2",
+    "origin_alpn": [
+      "h2"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":scheme",
+            "value": "https"
+          },
+          {
+            "name": ":authority",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/PingPong"
+          },
+          {
+            "name": "content-type",
+            "value": "application/grpc"
+          },
+          {
+            "name": "te",
+            "value": "trailers"
+          },
+          {
+            "name": "grpc-encoding",
+            "value": "gzip"
+          },
+          {
+            "name": "grpc-accept-encoding",
+            "value": "gzip"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "content-type",
+            "value": "application/grpc"
+          },
+          {
+            "name": "grpc-encoding",
+            "value": "gzip"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AQAAAB4fiwgAAAAAAAD/KsjMS1cwBAQAAP//U8D5fAYAAAA="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AQAAAB4fiwgAAAAAAAD/KsjPS1cwBAQAAP//8zW58wYAAAA="
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AQAAAB4fiwgAAAAAAAD/KsjMS1cwAgQAAP//6ZHw5QYAAAA="
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AQAAAB4fiwgAAAAAAAD/KsjPS1cwAgQAAP//SWSwagYAAAA="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "trailers",
+        "fields": [
+          {
+            "name": "grpc-status",
+            "value": "0"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "grpc-reset-between-messages-h2@connect-tls": {
+    "client_alpn": "h2",
+    "origin_alpn": [
+      "h2"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":scheme",
+            "value": "https"
+          },
+          {
+            "name": ":authority",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/Watch"
+          },
+          {
+            "name": "content-type",
+            "value": "application/grpc"
+          },
+          {
+            "name": "te",
+            "value": "trailers"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAV3YXRjaA=="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "content-type",
+            "value": "application/grpc"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZ0aWNrIDE="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "reset",
+        "code": "CANCEL"
+      }
+    ]
+  },
+  "grpc-reset-in-message-h2@connect-tls": {
+    "client_alpn": "h2",
+    "origin_alpn": [
+      "h2"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":scheme",
+            "value": "https"
+          },
+          {
+            "name": ":authority",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/Watch"
+          },
+          {
+            "name": "content-type",
+            "value": "application/grpc"
+          },
+          {
+            "name": "te",
+            "value": "trailers"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAV3YXRjaA=="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "content-type",
+            "value": "application/grpc"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZ0aWNrIDE="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "partial",
+        "data": "AAAAAAZ0aWM="
+      },
+      {
+        "side": "client",
+        "kind": "reset",
+        "code": "INTERNAL_ERROR"
+      }
+    ]
+  },
+  "grpc-status-message-h2@connect-tls": {
+    "client_alpn": "h2",
+    "origin_alpn": [
+      "h2"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":scheme",
+            "value": "https"
+          },
+          {
+            "name": ":authority",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/Fail"
+          },
+          {
+            "name": "content-type",
+            "value": "application/grpc"
+          },
+          {
+            "name": "te",
+            "value": "trailers"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAVoZWxsbw=="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "content-type",
+            "value": "application/grpc"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAA5wYXJ0aWFsIHJlc3VsdA=="
+      },
+      {
+        "side": "client",
+        "kind": "trailers",
+        "fields": [
+          {
+            "name": "grpc-status",
+            "value": "9"
+          },
+          {
+            "name": "grpc-message",
+            "value": "precondition%20failed%3A%20%E2%9C%93"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
   "grpc-trailers-only@connect-tls": {
     "client_alpn": "h2",
     "origin_alpn": [
@@ -511,6 +852,362 @@
             "value": ""
           }
         ]
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "grpc-web-declared-length-h2@connect-tls": {
+    "client_alpn": "h2",
+    "origin_alpn": [
+      "h2"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":scheme",
+            "value": "https"
+          },
+          {
+            "name": ":authority",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/Watch"
+          },
+          {
+            "name": "content-type",
+            "value": "application/grpc-web+proto"
+          },
+          {
+            "name": "x-grpc-web",
+            "value": "1"
+          },
+          {
+            "name": "content-length",
+            "value": "10"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAV3YXRjaA=="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "content-type",
+            "value": "application/grpc-web+proto"
+          },
+          {
+            "name": "content-length",
+            "value": "43"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZ0aWNrIDE="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZ0aWNrIDI="
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "gAAAABBncnBjLXN0YXR1czogMA0K"
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "grpc-web-declared-length-http1@absolute": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/Watch"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/grpc-web+proto"
+          },
+          {
+            "name": "X-Grpc-Web",
+            "value": "1"
+          },
+          {
+            "name": "Content-Length",
+            "value": "10"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAV3YXRjaA=="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/grpc-web+proto"
+          },
+          {
+            "name": "Content-Length",
+            "value": "43"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZ0aWNrIDE="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZ0aWNrIDI="
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "gAAAABBncnBjLXN0YXR1czogMA0K"
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "grpc-web-declared-length-http1@connect-plain": {
+    "client_alpn": "",
+    "origin_alpn": [
+      ""
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/Watch"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/grpc-web+proto"
+          },
+          {
+            "name": "X-Grpc-Web",
+            "value": "1"
+          },
+          {
+            "name": "Content-Length",
+            "value": "10"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAV3YXRjaA=="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/grpc-web+proto"
+          },
+          {
+            "name": "Content-Length",
+            "value": "43"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZ0aWNrIDE="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZ0aWNrIDI="
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "gAAAABBncnBjLXN0YXR1czogMA0K"
+      },
+      {
+        "side": "client",
+        "kind": "end"
+      }
+    ]
+  },
+  "grpc-web-declared-length-http1@connect-tls": {
+    "client_alpn": "http/1.1",
+    "origin_alpn": [
+      "http/1.1"
+    ],
+    "arrivals": [
+      {
+        "side": "origin",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":method",
+            "value": "POST"
+          },
+          {
+            "name": ":path",
+            "value": "/conformance.Stream/Watch"
+          },
+          {
+            "name": "Host",
+            "value": "origin.test:PORT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/grpc-web+proto"
+          },
+          {
+            "name": "X-Grpc-Web",
+            "value": "1"
+          },
+          {
+            "name": "Content-Length",
+            "value": "10"
+          }
+        ]
+      },
+      {
+        "side": "origin",
+        "kind": "message",
+        "data": "AAAAAAV3YXRjaA=="
+      },
+      {
+        "side": "origin",
+        "kind": "end"
+      },
+      {
+        "side": "client",
+        "kind": "head",
+        "fields": [
+          {
+            "name": ":status",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/grpc-web+proto"
+          },
+          {
+            "name": "Content-Length",
+            "value": "43"
+          }
+        ]
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZ0aWNrIDE="
+      },
+      {
+        "side": "origin",
+        "kind": "answer"
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "AAAAAAZ0aWNrIDI="
+      },
+      {
+        "side": "client",
+        "kind": "message",
+        "data": "gAAAABBncnBjLXN0YXR1czogMA0K"
       },
       {
         "side": "client",
