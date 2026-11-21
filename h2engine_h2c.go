@@ -78,7 +78,7 @@ func (h *h2Conn) openOriginFor(ctx context.Context, addr string) {
 	}
 	h.dialMu.Lock()
 	defer h.dialMu.Unlock()
-	if h.originDial != nil {
+	if h.originDial.Load() != nil {
 		return
 	}
 	h.mu.Lock()
@@ -86,11 +86,12 @@ func (h *h2Conn) openOriginFor(ctx context.Context, addr string) {
 	h.mu.Unlock()
 	if ended {
 		h.originAddr, h.originErr = addr, errH2CClosed
-		h.originDial = &handshakeDial{target: addr, addr: addr, err: errH2CClosed, route: h.engine.proxy.CurrentRoute()}
+		h.originDial.Store(&handshakeDial{target: addr, addr: addr, err: errH2CClosed, route: h.engine.proxy.CurrentRoute()})
 		return
 	}
 	dialled := h.c.dialPriorKnowledgeOrigin(ctx, addr)
-	h.originAddr, h.originErr, h.originDial = dialled.addr, dialled.err, dialled
+	h.originAddr, h.originErr = dialled.addr, dialled.err
+	h.originDial.Store(dialled)
 	h.openOrigin()
 	origin := h.originLeg()
 	if origin == nil {

@@ -181,13 +181,14 @@ func (h *h2Conn) sendUpstream(pair *Pair, st *h2Stream) (*http.Response, *wireRe
 	}
 	addr := hostPort(req.URL.Host, defaultPort)
 	h.openOriginFor(req.Context(), addr)
-	if addr != h.originAddr && (h.originDial == nil || addr != h.originDial.target) {
+	dialled := h.originDial.Load()
+	if addr != h.originAddr && (dialled == nil || addr != dialled.target) {
 		return h.sendRedirected(pair, st, addr)
 	}
 	origin := h.originLeg()
 	if origin == nil {
-		if h.originDial != nil {
-			recordTried(req.Context(), h.originDial.route)
+		if dialled != nil {
+			recordTried(req.Context(), dialled.route)
 		}
 		return nil, nil, nil, h.originErr
 	}

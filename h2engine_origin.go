@@ -341,9 +341,13 @@ func (o *h2Origin) headers(decoder *hpack.Decoder) error {
 	}
 	switch status, _ := fields.get(":status"); {
 	case s.final && s.response.streamed != nil:
-		// A streamed response's trailers end its body, not the
-		// stream: the request may still be going out.
+		// A streamed response's trailers end its body, and the
+		// origin's half of the stream: the request may still be going
+		// out, so finish leaves the stream open for it (requestSent).
 		s.response.streamed.in.finish(fields)
+		if o.block.endStream {
+			o.finish(s, nil)
+		}
 		return nil
 	case s.final && s.passing() != nil:
 		s.passing().end(fields)
@@ -409,6 +413,7 @@ func (o *h2Origin) streamedData(s *h2OriginStream, f *http2.DataFrame) {
 	}
 	if f.StreamEnded() {
 		in.finish(nil)
+		o.finish(s, nil)
 	}
 }
 
@@ -439,17 +444,36 @@ func (o *h2Origin) finish(s *h2OriginStream, err error) {
 		return
 	}
 	s.finished = true
-	sending := err == nil && s.reset == nil && s.sending
+	reset := s.reset
+	sending := err == nil && reset == nil && s.sending
 	if !sending {
 		delete(o.streams, s.id)
 	}
 	o.mu.Unlock()
-	if pass := s.passing(); pass != nil {
+	// The stall wait stops, and done closes, under passMu: a stall that
+	// fires meanwhile either made the h2Passing taken here, or finds
+	// done closed and makes none, so no passing body is left unended.
+	s.passMu.Lock()
+	s.stall.stop()
+	s.err = err
+	pass := s.pass
+	var trailers h2Fields
+	if pass != nil {
+		trailers = s.response.trailers
+	}
+	close(s.done)
+	s.passMu.Unlock()
+	switch {
+	case pass != nil && reset == nil && err == nil:
+		// The stream ended cleanly; a body that passed only as it ended,
+		// its trailers filed on the response, ends with them. One that
+		// ended already stays as it ended.
+		pass.end(trailers)
+	case pass != nil:
 		// The response went with what arrived; how it ends goes after
 		// it.
-		pass.cut(s.reset, err)
+		pass.cut(reset, err)
 	}
-	s.err = err
 	if !sending {
 		o.flow.end(&s.window)
 	}
@@ -461,12 +485,11 @@ func (o *h2Origin) finish(s *h2OriginStream, err error) {
 		}
 		body.in.closeUnlessEnded(err)
 	}
-	close(s.done)
 }
 
-// requestSent notes that the rest of a passed request body was sent on s,
-// or failed to be, and closes the stream when its response finished
-// first.
+// requestSent notes that the rest of a passed request body, or a streamed
+// request's body, was sent on s, or failed to be, and closes the stream
+// when its response finished first.
 func (o *h2Origin) requestSent(s *h2OriginStream) {
 	o.mu.Lock()
 	s.sending = false
@@ -555,9 +578,11 @@ func (o *h2Origin) send(request *h2Request, opened func(id uint32)) (*h2OriginSt
 }
 
 // sendHead opens an origin stream with a streamed request's head, leaving
-// the stream open for its body (h2OriginSink).
+// the stream open for its body (h2OriginSink). The stream is marked as
+// sending until the body's carry returns (requestSent), so a response that
+// ends first leaves it open for the rest of the request.
 func (o *h2Origin) sendHead(fields h2Fields, opened func(id uint32)) (*h2OriginStream, error) {
-	return o.openStream(fields, false, false, opened)
+	return o.openStream(fields, false, true, opened)
 }
 
 // openStream opens an origin stream with a header block. sending marks it,
