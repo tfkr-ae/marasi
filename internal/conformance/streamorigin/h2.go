@@ -115,12 +115,15 @@ func (c *h2Conn) read(onHead func()) {
 			if !interim(f.PseudoValue("status")) {
 				heads++
 			}
+			// A head that ends its stream is recorded as ended before
+			// onHead lets the origin's script answer, or the answer can
+			// reach the client and be recorded first.
+			if f.StreamEnded() {
+				end()
+			}
 			if heads == 1 && !isTrailers && onHead != nil {
 				onHead()
 				onHead = nil
-			}
-			if f.StreamEnded() {
-				end()
 			}
 		case *http2.DataFrame:
 			for _, m := range split.write(f.Data()) {
