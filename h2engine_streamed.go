@@ -12,8 +12,8 @@ import (
 )
 
 // The HTTP/2 engine's streamed carry (stream_carry.go). A direction whose
-// head names a message framing that h2CarriesFraming takes has its DATA put
-// in an h2Inbound instead of its message's body. The direction's one reader
+// head names a message framing it carries streamed (streamedFraming) has
+// its DATA put in an h2Inbound instead of its message's body. The direction's one reader
 // (streamedPair.carry) takes bytes out as it reads each stream message whole,
 // and only then is the stream's receive window opened again by what it took:
 // a message it holds unforwarded, because the other leg's window is shut,
@@ -21,54 +21,6 @@ import (
 // one message and the receive window. The connection's window is opened
 // again at once, as for any stream, so one streamed stream never stalls the
 // others.
-
-// h2CarriesFraming reports whether the HTTP/2 engine carries a direction
-// with framing as stream messages: every message framing. An ordinary body
-// is read whole, as before.
-func h2CarriesFraming(framing stream.Framing) bool {
-	return framing != stream.FramingNone
-}
-
-// h2StreamedFraming is the message framing a head's content-type names, when
-// the engine carries it streamed, and FramingNone otherwise. A gRPC-Web body
-// in base64 (application/grpc-web-text) is read whole, since its messages
-// cannot be cut before it is decoded. A server-sent event or NDJSON body
-// with a Content-Encoding is carried streamed when the coding is gzip or
-// deflate and the head declares no length, since the proxy compresses it
-// again toward the receiver (stream_body_compression.go); otherwise it is
-// read whole.
-func h2StreamedFraming(fields h2Fields, response bool) stream.Framing {
-	contentType, _ := fields.get("content-type")
-	if stream.IsGRPCWebText(contentType) {
-		return stream.FramingNone
-	}
-	framing := stream.FramingOf(contentType, response)
-	if !framing.Enveloped() {
-		contentEncoding, _ := fields.get("content-encoding")
-		encoding, carried := streamedBodyEncoding(contentEncoding)
-		if !carried {
-			return stream.FramingNone
-		}
-		if _, declared := fields.get("content-length"); encoding != "" && declared {
-			return stream.FramingNone
-		}
-	}
-	if h2CarriesFraming(framing) {
-		return framing
-	}
-	return stream.FramingNone
-}
-
-// h2BodyEncoding is the whole-body coding of a streamed head whose framing
-// has no per-message compression, "" for none.
-func h2BodyEncoding(fields h2Fields, framing stream.Framing) string {
-	if framing.Enveloped() {
-		return ""
-	}
-	contentEncoding, _ := fields.get("content-encoding")
-	encoding, _ := streamedBodyEncoding(contentEncoding)
-	return encoding
-}
 
 // h2OriginStreamWindow is the receive window Marasi gives each origin
 // stream (SETTINGS_INITIAL_WINDOW_SIZE), so a streamed response whose reader

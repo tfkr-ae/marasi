@@ -358,7 +358,7 @@ func (o *h2Origin) headers(decoder *hpack.Decoder) error {
 			s.response = &h2Response{}
 		}
 		s.response.fields = fields
-		framing := h2StreamedFraming(fields, true)
+		framing := streamedFraming(fields, true)
 		if framing == stream.FramingNone && !o.block.endStream && declaredOver(fields, o.threshold) {
 			// An ordinary body declared over the threshold goes as it
 			// arrives.
@@ -366,7 +366,7 @@ func (o *h2Origin) headers(decoder *hpack.Decoder) error {
 		}
 		s.passMu.Unlock()
 		if framing != stream.FramingNone && !o.block.endStream {
-			o.streamResponse(s, framing, h2BodyEncoding(fields, framing))
+			o.streamResponse(s, framing, streamedHeadEncoding(fields, framing))
 			return nil
 		}
 	}

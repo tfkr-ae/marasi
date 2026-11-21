@@ -585,7 +585,7 @@ func (h *h2Conn) headerBlock() error {
 	h.flow.mu.Lock()
 	st.window.window = h.flow.initial
 	h.flow.mu.Unlock()
-	if framing := h2StreamedFraming(fields, false); framing != stream.FramingNone && !end {
+	if framing := streamedFraming(fields, false); framing != stream.FramingNone && !end {
 		// A streamed request goes on with its head; its body follows as
 		// it arrives (h2engine_streamed.go).
 		st.request.streamed = &h2StreamedBody{

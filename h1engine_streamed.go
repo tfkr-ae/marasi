@@ -33,14 +33,15 @@ import (
 // close as a cancel.
 
 // h1StreamedFraming is the message framing a head's Content-Type names, when
-// the engine carries it streamed, and FramingNone otherwise: the same rule
-// as the HTTP/2 engine's. A Content-Length a chunked coding overrides
+// the engine carries it streamed, and FramingNone otherwise: the rule both
+// engines share (streamedFraming). A Content-Length a chunked coding overrides
 // declares no length.
 func h1StreamedFraming(header *h1.Header, response bool) stream.Framing {
-	return h2StreamedFraming(h1FramingFields(header), response)
+	return streamedFraming(h1FramingFields(header), response)
 }
 
-// h1FramingFields are the fields of header the streamed framing rule reads.
+// h1FramingFields are the fields of header the streamed framing rule reads,
+// as the field list both engines read heads as.
 func h1FramingFields(header *h1.Header) h2Fields {
 	fields := h2Fields{{Name: "content-type", Value: header.Get("Content-Type")}}
 	if encoding := strings.Join(header.Values("Content-Encoding"), ", "); encoding != "" {
@@ -54,7 +55,7 @@ func h1FramingFields(header *h1.Header) h2Fields {
 
 // h1BodyEncoding is the whole-body coding of a streamed head, "" for none.
 func h1BodyEncoding(header *h1.Header, framing stream.Framing) string {
-	return h2BodyEncoding(h1FramingFields(header), framing)
+	return streamedHeadEncoding(h1FramingFields(header), framing)
 }
 
 // h1HeadFields are a head's fields as headWentOut reads them: the

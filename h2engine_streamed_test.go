@@ -369,30 +369,30 @@ func TestH2Engine_StreamedFramings(t *testing.T) {
 		responsePayloadFirst string // the first response message's stored payload
 	}{
 		{
-			name: "gRPC-Web, its trailers frame a stream message", path: "/test.Echo/Say", requestType: "application/grpc-web+proto",
+			name: "should carry gRPC-Web, its trailers frame a stream message as each message arrives, and store each as its own row", path: "/test.Echo/Say", requestType: "application/grpc-web+proto",
 			requestMessages: []string{grpcEnvelope(0, "hi")}, responseType: "application/grpc-web+proto",
 			responseMessages: []string{grpcEnvelope(0, "one"), grpcEnvelope(0x80, "grpc-status: 0\r\n")},
 			framing:          "grpc-web", request: "grpc-web", responsePayloadFirst: "one",
 		},
 		{
-			name: "Connect streaming, its end-of-stream envelope a stream message", path: "/test.Echo/Say", requestType: "application/connect+json",
+			name: "should carry Connect streaming, its end-of-stream envelope a stream message as each message arrives, and store each as its own row", path: "/test.Echo/Say", requestType: "application/connect+json",
 			requestMessages: []string{grpcEnvelope(0, `{"a":1}`)}, responseType: "application/connect+json",
 			responseMessages: []string{grpcEnvelope(0, `{"b":2}`), grpcEnvelope(0x02, `{}`)},
 			framing:          "connect", request: "connect", responsePayloadFirst: `{"b":2}`,
 		},
 		{
-			name: "server-sent events, one event per message", path: "/events",
+			name: "should carry server-sent events, one event per message as each message arrives, and store each as its own row", path: "/events",
 			responseType: "text/event-stream", responseMessages: []string{"id: 1\ndata: first\n\n", "id: 2\ndata: second\n\n"},
 			framing: "sse", responsePayloadFirst: "id: 1\ndata: first\n\n",
 		},
 		{
-			name: "NDJSON, one line per message", path: "/logs",
+			name: "should carry NDJSON, one line per message as each message arrives, and store each as its own row", path: "/logs",
 			responseType: "application/x-ndjson", responseMessages: []string{"{\"n\":1}\n", "{\"n\":2}\n"},
 			framing: "ndjson", responsePayloadFirst: "{\"n\":1}\n",
 		},
 	}
 	for _, c := range cases {
-		t.Run("should carry "+c.name+" as each message arrives, and store each as its own row", func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			origin := newH2TestOrigin(t)
 			addr, captured, ca := serveH1EngineMITMProxy(t, true)
 			client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
@@ -447,12 +447,12 @@ func TestH2Engine_StreamedFramings(t *testing.T) {
 	}
 
 	ordinary := []struct{ name, path, contentType string }{
-		{"unary Connect with protobuf", "/test.Echo/Say", "application/proto"},
-		{"unary Connect with JSON", "/test.Echo/Say", "application/json"},
-		{"a /pkg.Svc/Method path with JSON", "/pkg.Svc/Method", "application/json"},
+		{"should store unary Connect with protobuf as an ordinary pair, its bodies read whole", "/test.Echo/Say", "application/proto"},
+		{"should store unary Connect with JSON as an ordinary pair, its bodies read whole", "/test.Echo/Say", "application/json"},
+		{"should store a /pkg.Svc/Method path with JSON as an ordinary pair, its bodies read whole", "/pkg.Svc/Method", "application/json"},
 	}
 	for _, c := range ordinary {
-		t.Run("should store "+c.name+" as an ordinary pair, its bodies read whole", func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			origin := newH2TestOrigin(t)
 			addr, captured, ca := serveH1EngineMITMProxy(t, true)
 			client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")

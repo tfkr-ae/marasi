@@ -22,8 +22,49 @@ import (
 // This file is what every engine shares: the carry of one streamed
 // direction from a streamSource on one leg to a streamSink on the other,
 // the storage of its stream messages, and the pair's record of how each
-// direction ended. An engine supplies the source and the sink; the HTTP/2
-// engine's are in h2engine_streamed.go.
+// direction ended. An engine supplies the source and the sink: the HTTP/2
+// engine's are in h2engine_streamed.go, the HTTP/1.1 engine's in
+// h1engine_streamed.go.
+
+// streamedFraming is the message framing a head's content-type names, when
+// the engines carry it streamed, and FramingNone otherwise: every message
+// framing, but for these. Both engines read a head's fields as an h2Fields
+// list (h1FramingFields gives an HTTP/1.1 head's). A gRPC-Web body
+// in base64 (application/grpc-web-text) is read whole, since its messages
+// cannot be cut before it is decoded. A server-sent event or NDJSON body
+// with a Content-Encoding is carried streamed when the coding is gzip or
+// deflate and the head declares no length, since the proxy compresses it
+// again toward the receiver (stream_body_compression.go); otherwise it is
+// read whole.
+func streamedFraming(fields h2Fields, response bool) stream.Framing {
+	contentType, _ := fields.get("content-type")
+	if stream.IsGRPCWebText(contentType) {
+		return stream.FramingNone
+	}
+	framing := stream.FramingOf(contentType, response)
+	if !framing.Enveloped() {
+		contentEncoding, _ := fields.get("content-encoding")
+		encoding, carried := streamedBodyEncoding(contentEncoding)
+		if !carried {
+			return stream.FramingNone
+		}
+		if _, declared := fields.get("content-length"); encoding != "" && declared {
+			return stream.FramingNone
+		}
+	}
+	return framing
+}
+
+// streamedHeadEncoding is the whole-body coding of a streamed head whose framing
+// has no per-message compression, "" for none.
+func streamedHeadEncoding(fields h2Fields, framing stream.Framing) string {
+	if framing.Enveloped() {
+		return ""
+	}
+	contentEncoding, _ := fields.get("content-encoding")
+	encoding, _ := streamedBodyEncoding(contentEncoding)
+	return encoding
+}
 
 // streamSource is one streamed direction as it arrives from its sender. It
 // has one reader, which consumes only what it forwards, so a reader that
