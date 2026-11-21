@@ -333,17 +333,30 @@ func TestH1Engine_MITMLoopBack(t *testing.T) {
 	t.Run("should close the origin connection the handshake dialled before answering a request that loops back", func(t *testing.T) {
 		origin := newRawTLSOrigin(t, originResponse)
 		probe := &answerProbe{origin: origin, ended: make(chan bool, 1)}
+		// A request inside a tunnel goes to the tunnel's origin whatever its
+		// Host field says, so the loop is made by a modifier that sends it
+		// to the listener, as a waypoint would.
+		var listenerAddr atomic.Value
 		addr, _, ca := serveH1EngineMITMProxyOn(t, true, func(l net.Listener) net.Listener {
 			probe.Listener = l
+			listenerAddr.Store(l.Addr().String())
 			return probe
-		}, func(proxy *Proxy) { proxy.AddRequestPairModifier(PreventLoopModifier) })
+		}, func(proxy *Proxy) {
+			proxy.AddRequestPairModifier(func(_ *Proxy, pair *Pair) error {
+				if pair.Request.URL.Path == "/loop" {
+					pair.Request.URL.Host = listenerAddr.Load().(string)
+				}
+				return nil
+			})
+			proxy.AddRequestPairModifier(PreventLoopModifier)
+		})
 		conn, br := dialProxy(t, addr)
 		openTunnel(t, conn, br, origin.addr)
 		tlsConn, tbr := clientTLS(t, conn, br, ca, "127.0.0.1")
 
 		// The next bytes Marasi sends the client are its answer.
 		probe.armed.Store(true)
-		io.WriteString(tlsConn, "GET /loop HTTP/1.1\r\nHost: "+addr+"\r\n\r\n")
+		io.WriteString(tlsConn, "GET /loop HTTP/1.1\r\nHost: "+origin.addr+"\r\n\r\n")
 		res, err := http.ReadResponse(tbr, nil)
 		if err != nil || res.StatusCode != http.StatusBadGateway {
 			t.Fatalf("wanted a 502 proxy error response\ngot: %v, %v", res, err)
