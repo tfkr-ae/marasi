@@ -428,9 +428,25 @@ func (c *Connection) SetShutdownHandler(handler func(uuid.UUID)) {
 
 // Run starts bidirectional frame relay and blocks until the connection closes.
 func (c *Connection) Run() error {
+	return c.RunAfter(nil)
+}
+
+// RunAfter marks the connection as running, runs beforeRelay if non-nil, and
+// then starts bidirectional frame relay and blocks until the connection closes.
+// Marking the connection running first ensures a Close called once beforeRelay
+// publishes the connection lets the relay complete the close handshake instead
+// of shutting both legs down immediately. If beforeRelay returns an error, the
+// relay does not start and that error is returned.
+func (c *Connection) RunAfter(beforeRelay func() error) error {
 	c.started.Store(true)
 	c.running.Store(true)
 	defer c.running.Store(false)
+
+	if beforeRelay != nil {
+		if err := beforeRelay(); err != nil {
+			return err
+		}
+	}
 
 	results := make(chan error, 2)
 

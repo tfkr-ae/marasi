@@ -152,6 +152,8 @@ func (proxy *Proxy) runWebSocketSession(connection *marasiws.Connection, record 
 	return proxy.runWebSocketSessionWithRelease(connection, record, nil)
 }
 
+var errWebSocketsClosing = errors.New("proxy websockets closing")
+
 func (proxy *Proxy) runWebSocketSessionWithRelease(connection *marasiws.Connection, record domain.WebSocketConnection, release func()) error {
 	if connection.ID != record.ID {
 		return fmt.Errorf(
@@ -169,41 +171,53 @@ func (proxy *Proxy) runWebSocketSessionWithRelease(connection *marasiws.Connecti
 		)
 	}
 
-	proxy.webSocketLifecycleMu.RLock()
-	if proxy.webSocketsClosing {
+	var registered bool
+	defer func() {
+		if registered {
+			proxy.WebSocketRegistry.Remove(connection.ID)
+			proxy.webSocketSessions.Done()
+		}
+	}()
+
+	runErr := connection.RunAfter(func() error {
+		proxy.webSocketLifecycleMu.RLock()
+		if proxy.webSocketsClosing {
+			proxy.webSocketLifecycleMu.RUnlock()
+			return errWebSocketsClosing
+		}
+		proxy.webSocketSessions.Add(1)
+		if err := proxy.WebSocketRegistry.Add(connection); err != nil {
+			proxy.webSocketSessions.Done()
+			proxy.webSocketLifecycleMu.RUnlock()
+			return fmt.Errorf("registering websocket connection: %w", err)
+		}
 		proxy.webSocketLifecycleMu.RUnlock()
+		registered = true
+		if release != nil {
+			release()
+		}
+
+		if record.StartedAt.IsZero() {
+			record.StartedAt = time.Now()
+		}
+		record.State = "open"
+		record.ClosedAt = nil
+
+		openRecord := record
+		proxy.DBWriteChannel <- &openRecord
+
+		if proxy.OnWebSocketOpen != nil {
+			_ = proxy.OnWebSocketOpen(openRecord)
+		}
+		return nil
+	})
+	if errors.Is(runErr, errWebSocketsClosing) {
 		_ = connection.Close(marasiws.CloseGoingAway, "Proxy shutting down")
 		return nil
 	}
-	proxy.webSocketSessions.Add(1)
-	if err := proxy.WebSocketRegistry.Add(connection); err != nil {
-		proxy.webSocketSessions.Done()
-		proxy.webSocketLifecycleMu.RUnlock()
-		return fmt.Errorf("registering websocket connection: %w", err)
+	if !registered {
+		return runErr
 	}
-	proxy.webSocketLifecycleMu.RUnlock()
-	if release != nil {
-		release()
-	}
-	defer func() {
-		proxy.WebSocketRegistry.Remove(connection.ID)
-		proxy.webSocketSessions.Done()
-	}()
-
-	if record.StartedAt.IsZero() {
-		record.StartedAt = time.Now()
-	}
-	record.State = "open"
-	record.ClosedAt = nil
-
-	openRecord := record
-	proxy.DBWriteChannel <- &openRecord
-
-	if proxy.OnWebSocketOpen != nil {
-		_ = proxy.OnWebSocketOpen(openRecord)
-	}
-
-	runErr := connection.Run()
 
 	closeCode, closeReason := connection.CloseDetails()
 	closedAt := time.Now()

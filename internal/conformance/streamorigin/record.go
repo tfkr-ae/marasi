@@ -99,6 +99,10 @@ func (s Suite) record(ctx context.Context, c Case, approach conformance.Approach
 		// A send that fails is the proxy's doing, and what arrived shows it.
 		_ = runScript(t, SideClient, steps, client, map[string]int{}, s.timeout(), s.endTimeout())
 	}
+	// Wait for the origin's script when it started (for instance, a case where
+	// the response ends before the client sends the rest of the request), so
+	// taking the snapshot does not race with the origin receiving the request's end.
+	o.waitScript()
 	time.Sleep(s.settle())
 	recording.OriginALPN = o.alpns()
 	recording.Arrivals = t.snapshot(normalise)
@@ -137,10 +141,11 @@ type origin struct {
 	t        *transcript
 	once     sync.Once
 
-	mu    sync.Mutex
-	conns []net.Conn
-	alpn  []string
-	wg    sync.WaitGroup
+	mu         sync.Mutex
+	conns      []net.Conn
+	alpn       []string
+	scriptDone chan struct{}
+	wg         sync.WaitGroup
 }
 
 func (s Suite) startOrigin(c Case, t *transcript, config *tls.Config) (*origin, error) {
@@ -203,10 +208,24 @@ func (o *origin) serve(conn net.Conn, i int) {
 // the origin still answers what the client sends after it.
 func (o *origin) script(s sender) {
 	o.once.Do(func() {
+		done := make(chan struct{})
+		o.mu.Lock()
+		o.scriptDone = done
+		o.mu.Unlock()
 		o.wg.Go(func() {
+			defer close(done)
 			_ = runScript(o.t, SideOrigin, o.c.Origin, s, map[string]int{KindHead: 1}, o.suite.endTimeout(), o.suite.endTimeout())
 		})
 	})
+}
+
+func (o *origin) waitScript() {
+	o.mu.Lock()
+	done := o.scriptDone
+	o.mu.Unlock()
+	if done != nil {
+		<-done
+	}
 }
 
 func (o *origin) alpns() []string {

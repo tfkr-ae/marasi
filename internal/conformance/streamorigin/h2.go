@@ -65,21 +65,11 @@ func newH2Conn(side string, t *transcript, conn net.Conn) *h2Conn {
 func (c *h2Conn) read(onHead func()) {
 	var split splitter
 	heads, ended := 0, false
-	end := func() {
-		for _, a := range split.end(c.side) {
-			c.t.add(a)
-		}
-		ended = true
-		c.t.add(Arrival{Side: c.side, Kind: KindEnd})
-	}
 	for {
 		frame, err := c.framer.ReadFrame()
 		if err != nil {
 			if heads > 0 && !ended {
-				for _, a := range split.end(c.side) {
-					c.t.add(a)
-				}
-				c.t.add(Arrival{Side: c.side, Kind: KindClosed})
+				c.t.add(append(split.end(c.side), Arrival{Side: c.side, Kind: KindClosed})...)
 			}
 			return
 		}
@@ -106,38 +96,45 @@ func (c *h2Conn) read(onHead func()) {
 				}
 			}
 			isTrailers := heads > 0 && !interim(f.PseudoValue("status"))
+			var batch []Arrival
 			if isTrailers {
-				c.t.add(Arrival{Side: c.side, Kind: KindTrailers, Fields: fields})
+				batch = append(batch, Arrival{Side: c.side, Kind: KindTrailers, Fields: fields})
 			} else {
-				c.t.add(Arrival{Side: c.side, Kind: KindHead, Fields: fields})
+				batch = append(batch, Arrival{Side: c.side, Kind: KindHead, Fields: fields})
 				split.head(contentType, fields)
 			}
 			if !interim(f.PseudoValue("status")) {
 				heads++
 			}
-			// A head that ends its stream is recorded as ended before
-			// onHead lets the origin's script answer, or the answer can
-			// reach the client and be recorded first.
+			// A head that ends its stream is recorded as ended together with
+			// the head before onHead lets the origin's script answer, or the
+			// answer can reach the client and be recorded first.
 			if f.StreamEnded() {
-				end()
+				batch = append(batch, split.end(c.side)...)
+				ended = true
+				batch = append(batch, Arrival{Side: c.side, Kind: KindEnd})
 			}
+			c.t.add(batch...)
 			if heads == 1 && !isTrailers && onHead != nil {
 				onHead()
 				onHead = nil
 			}
 		case *http2.DataFrame:
+			var batch []Arrival
 			for _, m := range split.write(f.Data()) {
-				c.t.add(Arrival{Side: c.side, Kind: KindMessage, Data: m})
+				batch = append(batch, Arrival{Side: c.side, Kind: KindMessage, Data: m})
 			}
+			// Record END_STREAM together with the frame's messages so a side
+			// awaiting KindMessage cannot send a reply ahead of KindEnd.
 			if f.StreamEnded() {
-				end()
+				batch = append(batch, split.end(c.side)...)
+				ended = true
+				batch = append(batch, Arrival{Side: c.side, Kind: KindEnd})
 			}
+			c.t.add(batch...)
 		case *http2.RSTStreamFrame:
-			for _, a := range split.end(c.side) {
-				c.t.add(a)
-			}
 			ended = true
-			c.t.add(Arrival{Side: c.side, Kind: KindReset, Code: f.ErrCode.String()})
+			c.t.add(append(split.end(c.side), Arrival{Side: c.side, Kind: KindReset, Code: f.ErrCode.String()})...)
 		}
 	}
 }

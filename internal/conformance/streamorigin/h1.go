@@ -132,12 +132,17 @@ func (c *h1Conn) trailers(fields []h2.Field) error {
 // recorded as closed.
 func (c *h1Conn) read(br *bufio.Reader, method string, onHead func()) {
 	var split splitter
-	closed := func() {
-		for _, a := range split.end(c.side) {
-			c.t.add(a)
+	messages := func(data []byte) []Arrival {
+		var batch []Arrival
+		for _, m := range split.write(data) {
+			batch = append(batch, Arrival{Side: c.side, Kind: KindMessage, Data: m})
 		}
-		c.t.add(Arrival{Side: c.side, Kind: KindClosed})
+		return batch
 	}
+	closed := func() {
+		c.t.add(append(split.end(c.side), Arrival{Side: c.side, Kind: KindClosed})...)
+	}
+	var head Arrival
 	var fields []h2.Field
 	var status int
 	for {
@@ -175,22 +180,12 @@ func (c *h1Conn) read(br *bufio.Reader, method string, onHead func()) {
 				contentType = f.Value
 			}
 		}
-		c.t.add(Arrival{Side: c.side, Kind: KindHead, Fields: fields})
+		head = Arrival{Side: c.side, Kind: KindHead, Fields: fields}
 		split.head(contentType, header)
 		if c.side == SideOrigin || status >= 200 || status == 101 {
 			break
 		}
-	}
-	body := func(data []byte) {
-		for _, m := range split.write(data) {
-			c.t.add(Arrival{Side: c.side, Kind: KindMessage, Data: m})
-		}
-	}
-	end := func() {
-		for _, a := range split.end(c.side) {
-			c.t.add(a)
-		}
-		c.t.add(Arrival{Side: c.side, Kind: KindEnd})
+		c.t.add(head)
 	}
 	length, chunked, hasLength := 0, false, false
 	for _, f := range fields {
@@ -203,16 +198,19 @@ func (c *h1Conn) read(br *bufio.Reader, method string, onHead func()) {
 		}
 	}
 	noBody := status == 204 || status == 304 || method == "HEAD" || status == 101
-	// A message with no body has ended once its head is read: record that
-	// before onHead lets the origin's script answer, or the answer can
-	// reach the client and be recorded first.
+	// A message with no body has ended once its head is read: record both
+	// together before onHead lets the origin's script answer, or the answer
+	// can reach the client and be recorded first.
 	if noBody || (!chunked && hasLength && length == 0) || (c.side == SideOrigin && !chunked && !hasLength) {
-		end()
+		batch := append([]Arrival{head}, split.end(c.side)...)
+		batch = append(batch, Arrival{Side: c.side, Kind: KindEnd})
+		c.t.add(batch...)
 		if onHead != nil {
 			onHead()
 		}
 		return
 	}
+	c.t.add(head)
 	if onHead != nil {
 		onHead()
 	}
@@ -236,19 +234,24 @@ func (c *h1Conn) read(br *bufio.Reader, method string, onHead func()) {
 					closed()
 					return
 				}
+				var batch []Arrival
 				if len(trailers) > 0 {
-					c.t.add(Arrival{Side: c.side, Kind: KindTrailers, Fields: trailers})
+					batch = append(batch, Arrival{Side: c.side, Kind: KindTrailers, Fields: trailers})
 				}
-				end()
+				batch = append(batch, split.end(c.side)...)
+				batch = append(batch, Arrival{Side: c.side, Kind: KindEnd})
+				c.t.add(batch...)
 				return
 			}
 			data := make([]byte, n)
-			if _, err := io.ReadFull(br, data); err != nil {
-				body(data)
-				closed()
+			if nr, err := io.ReadFull(br, data); err != nil {
+				batch := messages(data[:nr])
+				batch = append(batch, split.end(c.side)...)
+				batch = append(batch, Arrival{Side: c.side, Kind: KindClosed})
+				c.t.add(batch...)
 				return
 			}
-			body(data)
+			c.t.add(messages(data)...)
 			if _, err := readLine(br); err != nil {
 				closed()
 				return
@@ -259,24 +262,37 @@ func (c *h1Conn) read(br *bufio.Reader, method string, onHead func()) {
 		for length > 0 {
 			buf := make([]byte, min(length, 32<<10))
 			n, err := br.Read(buf)
-			body(buf[:n])
 			length -= n
-			if err != nil {
-				closed()
+			batch := messages(buf[:n])
+			// Record the last message and the body's end together so a side
+			// awaiting KindMessage cannot send a reply ahead of KindEnd.
+			switch {
+			case length == 0 && (err == nil || errors.Is(err, io.EOF)):
+				batch = append(batch, split.end(c.side)...)
+				batch = append(batch, Arrival{Side: c.side, Kind: KindEnd})
+				c.t.add(batch...)
+				return
+			case err != nil:
+				batch = append(batch, split.end(c.side)...)
+				batch = append(batch, Arrival{Side: c.side, Kind: KindClosed})
+				c.t.add(batch...)
 				return
 			}
+			c.t.add(batch...)
 		}
-		end()
 	default:
 		// A response body that runs until the connection closes.
 		buf := make([]byte, 32<<10)
 		for {
 			n, err := br.Read(buf)
-			body(buf[:n])
+			batch := messages(buf[:n])
 			if err != nil {
-				end()
+				batch = append(batch, split.end(c.side)...)
+				batch = append(batch, Arrival{Side: c.side, Kind: KindEnd})
+				c.t.add(batch...)
 				return
 			}
+			c.t.add(batch...)
 		}
 	}
 }

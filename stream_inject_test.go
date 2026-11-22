@@ -41,21 +41,16 @@ func pairResponse(t *testing.T, call grpcCall) domain.ProxyResponse {
 	}
 }
 
-// injectOnceCarried injects into the pair's direction, retrying while the
-// direction's carry has not started.
+// injectOnceCarried waits until the pair's direction is carried (live in
+// streamedPairs with its carry started), then injects payload into it.
 func injectOnceCarried(t *testing.T, proxy *Proxy, pair uuid.UUID, direction, payload string, options StreamInjectOptions) domain.StreamMessage {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		message, err := proxy.InjectStreamMessage(context.Background(), pair, direction, []byte(payload), options)
-		if err == nil {
-			return message
-		}
-		if !errors.Is(err, ErrStreamDirectionNotStreamed) || time.Now().After(deadline) {
-			t.Fatal(err)
-		}
-		time.Sleep(5 * time.Millisecond)
+	awaitCarried(t, proxy, pair, direction)
+	message, err := proxy.InjectStreamMessage(context.Background(), pair, direction, []byte(payload), options)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return message
 }
 
 // awaitCarried waits until the pair's direction is carried, so an injection

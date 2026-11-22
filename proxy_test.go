@@ -2186,6 +2186,114 @@ func TestProxy_CloseWebSocketsClosesActiveSession(t *testing.T) {
 	}
 }
 
+func TestProxy_CloseWebSocketDuringOpenCompletesCloseHandshake(t *testing.T) {
+	clientConnection, clientPeer := net.Pipe()
+	upstreamConnection, upstreamPeer := net.Pipe()
+	t.Cleanup(func() {
+		clientConnection.Close()
+		clientPeer.Close()
+		upstreamConnection.Close()
+		upstreamPeer.Close()
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	if err := clientPeer.SetDeadline(deadline); err != nil {
+		t.Fatalf("setting client peer deadline: %v", err)
+	}
+	if err := upstreamPeer.SetDeadline(deadline); err != nil {
+		t.Fatalf("setting upstream peer deadline: %v", err)
+	}
+
+	opened := make(chan struct{})
+	closeReturned := make(chan struct{})
+	proxy := &Proxy{
+		WebSocketRegistry: marasiws.NewRegistry(),
+		DBWriteChannel:    make(chan any, 4),
+		OnWebSocketOpen: func(domain.WebSocketConnection) error {
+			close(opened)
+			<-closeReturned
+			return nil
+		},
+	}
+	connection := marasiws.NewConnection(
+		uuid.New(),
+		uuid.New(),
+		clientConnection,
+		clientConnection,
+		upstreamConnection,
+		func(message *marasiws.Message) error {
+			snapshot := message.ToDomain()
+			proxy.DBWriteChannel <- &snapshot
+			return nil
+		},
+	)
+	runResult := make(chan error, 1)
+	go func() {
+		runResult <- proxy.runWebSocketSession(connection, domain.WebSocketConnection{
+			ID:        connection.ID,
+			RequestID: connection.RequestID,
+		})
+	}()
+
+	openItem := receiveSessionDBWrite(t, proxy.DBWriteChannel)
+	if _, ok := openItem.(*domain.WebSocketConnection); !ok {
+		t.Fatalf("wanted websocket open write, got %T", openItem)
+	}
+	<-opened
+
+	clientErr := make(chan error, 1)
+	go func() {
+		_, err := marasiws.ReadFrame(clientPeer)
+		clientErr <- err
+	}()
+	upstreamErr := make(chan error, 1)
+	go func() {
+		frame, err := marasiws.ReadFrame(upstreamPeer)
+		if err == nil {
+			err = marasiws.WriteFrame(upstreamPeer, frame, false)
+		}
+		upstreamErr <- err
+	}()
+
+	// Close while runWebSocketSession is still in OnWebSocketOpen, before the
+	// relay goroutines have started: the close must not tear the sockets down
+	// before the relay can read the upstream's echoed close frame.
+	if err := proxy.CloseWebSocket(connection.RequestID, marasiws.CloseGoingAway, "listener stopped"); err != nil {
+		close(closeReturned)
+		t.Fatalf("CloseWebSocket() returned unexpected error: %v", err)
+	}
+	close(closeReturned)
+
+	select {
+	case err := <-runResult:
+		if err != nil {
+			t.Fatalf("runWebSocketSession() returned unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("active websocket session did not stop")
+	}
+
+	if err := <-clientErr; err != nil {
+		t.Fatalf("reading client close frame: %v", err)
+	}
+	if err := <-upstreamErr; err != nil {
+		t.Fatalf("echoing upstream close frame: %v", err)
+	}
+
+	closes := map[string]*domain.WebSocketMessage{}
+	var sawUpdate bool
+	for len(closes) < 2 || !sawUpdate {
+		item := receiveSessionDBWrite(t, proxy.DBWriteChannel)
+		switch item := item.(type) {
+		case *domain.WebSocketMessage:
+			closes[item.Direction] = item
+		case *domain.WebSocketConnectionUpdate:
+			sawUpdate = true
+		default:
+			t.Fatalf("unexpected DB write %T", item)
+		}
+	}
+}
+
 func TestProxy_ProjectSwitchDoesNotWriteWebSocketUpdateToNewRepository(t *testing.T) {
 	clientConnection, clientPeer := net.Pipe()
 	upstreamConnection, upstreamPeer := net.Pipe()
