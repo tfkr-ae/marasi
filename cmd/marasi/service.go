@@ -702,6 +702,7 @@ func startServiceInstance(ctx context.Context, options serviceOptions, ready fun
 		marasi.WithWebSocketInterceptHandler(serviceServer.HandleWebSocketIntercept),
 		marasi.WithWebSocketHandshakeEndedHandler(serviceServer.HandleWebSocketHandshakeEnded),
 		marasi.WithStreamedPairStartedHandler(serviceServer.HandleStreamedPairStarted),
+		marasi.WithStreamedPairUpdatedHandler(serviceServer.HandleStreamedPairUpdated),
 		marasi.WithStreamMessageHandler(serviceServer.HandleStreamMessage),
 		marasi.WithStreamMessageProgressHandler(serviceServer.HandleStreamMessageProgress),
 		marasi.WithStreamedPairEndedHandler(serviceServer.HandleStreamedPairEnded),

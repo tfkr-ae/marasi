@@ -39,7 +39,7 @@ func TestTrafficGetParts(t *testing.T) {
 			status: http.StatusOK,
 			want: head + "\"request\":{\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"raw\":\"R0VUIC9h\",\"requested_at\":\"2026-01-02T03:04:05Z\"}," +
 				"\"response\":{\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"text/html\",\"length\":\"9\",\"raw\":\"PGI+JjwvYj4=\",\"responded_at\":\"2026-01-02T03:04:06Z\"}," +
-				"\"prettified\":{\"request\":null,\"response\":\"<b>&</b>\"},\"upstream_proxy\":null,\"client_protocol\":\"\",\"origin_protocol\":\"\"}\n",
+				"\"prettified\":{\"request\":null,\"response\":\"<b>&</b>\"},\"upstream_proxy\":null,\"client_protocol\":\"\",\"origin_protocol\":\"\",\"streamed\":null}\n",
 		},
 		{
 			name:   "should leave the prettified copies out with prettified=false",
@@ -47,7 +47,7 @@ func TestTrafficGetParts(t *testing.T) {
 			status: http.StatusOK,
 			want: head + "\"request\":{\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"raw\":\"R0VUIC9h\",\"requested_at\":\"2026-01-02T03:04:05Z\"}," +
 				"\"response\":{\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"text/html\",\"length\":\"9\",\"raw\":\"PGI+JjwvYj4=\",\"responded_at\":\"2026-01-02T03:04:06Z\"}," +
-				"\"prettified\":{\"request\":null,\"response\":null},\"upstream_proxy\":null,\"client_protocol\":\"\",\"origin_protocol\":\"\"}\n",
+				"\"prettified\":{\"request\":null,\"response\":null},\"upstream_proxy\":null,\"client_protocol\":\"\",\"origin_protocol\":\"\",\"streamed\":null}\n",
 		},
 		{
 			name:   "should leave the raw messages out with raw=false",
@@ -55,7 +55,7 @@ func TestTrafficGetParts(t *testing.T) {
 			status: http.StatusOK,
 			want: head + "\"request\":{\"scheme\":\"https\",\"method\":\"GET\",\"host\":\"example.com\",\"path\":\"/a\",\"raw\":null,\"requested_at\":\"2026-01-02T03:04:05Z\"}," +
 				"\"response\":{\"status\":\"200 OK\",\"status_code\":200,\"content_type\":\"text/html\",\"length\":\"9\",\"raw\":null,\"responded_at\":\"2026-01-02T03:04:06Z\"}," +
-				"\"prettified\":{\"request\":null,\"response\":\"<b>&</b>\"},\"upstream_proxy\":null,\"client_protocol\":\"\",\"origin_protocol\":\"\"}\n",
+				"\"prettified\":{\"request\":null,\"response\":\"<b>&</b>\"},\"upstream_proxy\":null,\"client_protocol\":\"\",\"origin_protocol\":\"\",\"streamed\":null}\n",
 		},
 		{
 			name:   "should fail with bad_request when raw is not a bool",

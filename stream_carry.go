@@ -1,6 +1,7 @@
 package marasi
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -183,6 +184,9 @@ type streamedDirection struct {
 	// stopped is set, holding turn, once the carry stopped: nothing more
 	// goes to the sink.
 	stopped bool
+	// recorded is set once the direction's framing was stored on the pair
+	// (goLive).
+	recorded bool
 }
 
 // streamed returns the pair's streamed state, made the first time.
@@ -230,40 +234,90 @@ func (sp *streamedPair) direction(name string, framing stream.Framing) *streamed
 
 // goLive puts the pair among proxy.streamedPairs, for injection, cancel and
 // the drain of a project switch or shutdown (cancelStreamedPairs), and
-// announces a stored pair started. It reports false for a pair whose
-// response was refused, which is never carried. A pair that goes live
-// while the proxy closes is cancelled from the start.
+// announces a stored pair started. Each call also stores the framing of
+// every direction recorded since the last, so the pair's streamed state is
+// in the traffic list while it is live, and announces a direction that
+// became known after the pair started as updated. It reports false for a
+// pair whose response was refused, which is never carried. A pair that
+// goes live while the proxy closes is cancelled from the start.
 func (sp *streamedPair) goLive() bool {
 	sp.mu.Lock()
 	if sp.refused {
 		sp.mu.Unlock()
 		return false
 	}
-	if sp.live {
-		sp.mu.Unlock()
-		return true
-	}
-	sp.live = true
-	sp.proxy.streamedPairs.Store(sp.id, sp)
-	if sp.proxy.streamedClosing.Load() && !sp.cancelled {
-		sp.cancelled = true
-		close(sp.cancelledCh)
+	if !sp.live {
+		sp.live = true
+		sp.proxy.streamedPairs.Store(sp.id, sp)
+		if sp.proxy.streamedClosing.Load() && !sp.cancelled {
+			sp.cancelled = true
+			close(sp.cancelledCh)
+		}
 	}
 	var started *domain.StreamedPairStarted
-	if !sp.started && sp.announced() {
-		sp.started = true
-		if sp.proxy.OnStreamedPairStarted != nil {
-			started = &domain.StreamedPairStarted{PairID: sp.id, Framings: make(map[string]string, len(sp.directions))}
-			for name, d := range sp.directions {
-				started.Framings[name] = string(d.framing)
+	var updated *domain.StreamedPairUpdated
+	var record *domain.StreamedPairRecord
+	if sp.announced() {
+		added := false
+		for _, d := range sp.directions {
+			if !d.recorded {
+				d.recorded, added = true, true
 			}
+		}
+		if added {
+			record = &domain.StreamedPairRecord{PairID: sp.id, State: sp.stateLocked(false)}
+		}
+		switch {
+		case !sp.started:
+			sp.started = true
+			if sp.proxy.OnStreamedPairStarted != nil {
+				started = &domain.StreamedPairStarted{PairID: sp.id, Framings: sp.framingsLocked()}
+			}
+		case added && sp.proxy.OnStreamedPairUpdated != nil:
+			updated = &domain.StreamedPairUpdated{PairID: sp.id, Framings: sp.framingsLocked()}
 		}
 	}
 	sp.mu.Unlock()
+	if record != nil && sp.proxy.DBWriteChannel != nil {
+		sp.proxy.DBWriteChannel <- record
+	}
 	if started != nil {
 		sp.proxy.OnStreamedPairStarted(*started)
 	}
+	if updated != nil {
+		sp.proxy.OnStreamedPairUpdated(*updated)
+	}
 	return true
+}
+
+// framingsLocked maps each streamed direction to its framing. The caller
+// holds sp.mu.
+func (sp *streamedPair) framingsLocked() map[string]string {
+	framings := make(map[string]string, len(sp.directions))
+	for name, d := range sp.directions {
+		framings[name] = string(d.framing)
+	}
+	return framings
+}
+
+// stateLocked is the pair's streamed state, with each direction's ending
+// when ended is set; a direction still going then ended cancelled, as
+// finish records it. The caller holds sp.mu.
+func (sp *streamedPair) stateLocked(ended bool) domain.StreamedState {
+	var state domain.StreamedState
+	for name, d := range sp.directions {
+		direction := &domain.StreamedDirectionState{Framing: string(d.framing)}
+		if ended {
+			direction.Ending = cmp.Or(d.ending, streamCancelled)
+		}
+		switch name {
+		case domain.StreamDirectionRequest:
+			state.Request = direction
+		case domain.StreamDirectionResponse:
+			state.Response = direction
+		}
+	}
+	return state
 }
 
 // refuseResponse marks the pair's streamed response as one the response
@@ -654,6 +708,7 @@ func (sp *streamedPair) finish() {
 	started := sp.started
 	ended := domain.StreamedPairEnded{PairID: sp.id, Directions: make(map[string]domain.StreamedDirection, len(sp.directions))}
 	streamed := make(map[string]any, len(sp.directions))
+	state := sp.stateLocked(true)
 	for name, d := range sp.directions {
 		direction := domain.StreamedDirection{Framing: string(d.framing), Messages: d.messages, Ending: d.ending, ResetCode: d.resetCode}
 		if direction.Ending == "" {
@@ -684,6 +739,11 @@ func (sp *streamedPair) finish() {
 	if started && proxy.OnStreamedPairEnded != nil {
 		defer proxy.OnStreamedPairEnded(ended)
 	}
+	// The endings are stored before the response, so a client that reads
+	// the pair once its response is announced sees them.
+	if started && proxy.DBWriteChannel != nil {
+		proxy.DBWriteChannel <- &domain.StreamedPairRecord{PairID: sp.id, State: state}
+	}
 	if response == nil {
 		return
 	}
@@ -695,6 +755,7 @@ func (sp *streamedPair) finish() {
 	}
 	metadata["streamed"] = streamed
 	response.Metadata = metadata
+	response.Streamed = &state
 	proxy.DBWriteChannel <- response
 	if proxy.OnResponse != nil {
 		proxy.OnResponse(*response)

@@ -306,7 +306,16 @@ const streamMessageEventPayloadLimit = 64 << 10
 type streamedPairStartedEvent struct {
 	PairID   uuid.UUID         `json:"pair_id"`
 	Framings map[string]string `json:"framings"`
+	// Streamed is the pair's streamed state as traffic list items show
+	// it, so a client patches the pair's row with it.
+	Streamed *streamedState `json:"streamed"`
 }
+
+// streamedPairUpdatedEvent is streamed_pair.updated: a direction of a
+// started pair became known, such as a gRPC call's response once its head
+// was admitted. Framings and Streamed are as in streamed_pair.started,
+// with every direction known so far.
+type streamedPairUpdatedEvent = streamedPairStartedEvent
 
 type streamMessageEvent struct {
 	streamMessageResponse
@@ -338,6 +347,9 @@ type streamedDirectionResponse struct {
 type streamedPairEndedEvent struct {
 	PairID     uuid.UUID                            `json:"pair_id"`
 	Directions map[string]streamedDirectionResponse `json:"directions"`
+	// Streamed is the pair's final streamed state, as traffic list items
+	// show it.
+	Streamed *streamedState `json:"streamed"`
 }
 
 // HandleStreamedPairStarted publishes streamed_pair.started.
@@ -346,7 +358,16 @@ func (s *Server) HandleStreamedPairStarted(started domain.StreamedPairStarted) {
 	if framings == nil {
 		framings = map[string]string{}
 	}
-	s.events.publish("streamed_pair.started", streamedPairStartedEvent{PairID: started.PairID, Framings: framings})
+	s.events.publish("streamed_pair.started", streamedPairStartedEvent{PairID: started.PairID, Framings: framings, Streamed: streamedStateFromFramings(framings)})
+}
+
+// HandleStreamedPairUpdated publishes streamed_pair.updated.
+func (s *Server) HandleStreamedPairUpdated(updated domain.StreamedPairUpdated) {
+	framings := updated.Framings
+	if framings == nil {
+		framings = map[string]string{}
+	}
+	s.events.publish("streamed_pair.updated", streamedPairUpdatedEvent{PairID: updated.PairID, Framings: framings, Streamed: streamedStateFromFramings(framings)})
 }
 
 // HandleStreamMessage publishes stream_message, without a payload over
@@ -370,12 +391,20 @@ func (s *Server) HandleStreamMessageProgress(progress domain.StreamMessageProgre
 // HandleStreamedPairEnded publishes streamed_pair.ended.
 func (s *Server) HandleStreamedPairEnded(ended domain.StreamedPairEnded) {
 	directions := make(map[string]streamedDirectionResponse, len(ended.Directions))
+	var state domain.StreamedState
 	for name, d := range ended.Directions {
+		entry := &domain.StreamedDirectionState{Framing: d.Framing, Ending: d.Ending}
+		switch name {
+		case domain.StreamDirectionRequest:
+			state.Request = entry
+		case domain.StreamDirectionResponse:
+			state.Response = entry
+		}
 		direction := streamedDirectionResponse{Framing: d.Framing, Messages: d.Messages, Ending: d.Ending, ResetCode: d.ResetCode}
 		for _, trailer := range d.Trailers {
 			direction.Trailers = append(direction.Trailers, streamTrailerResponse(trailer))
 		}
 		directions[name] = direction
 	}
-	s.events.publish("streamed_pair.ended", streamedPairEndedEvent{PairID: ended.PairID, Directions: directions})
+	s.events.publish("streamed_pair.ended", streamedPairEndedEvent{PairID: ended.PairID, Directions: directions, Streamed: streamedStateFromDomain(&state)})
 }

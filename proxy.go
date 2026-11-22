@@ -119,6 +119,10 @@ type Proxy struct {
 	// OnStreamedPairStarted is called once the first head naming a
 	// message framing is read.
 	OnStreamedPairStarted func(domain.StreamedPairStarted)
+	// OnStreamedPairUpdated is called when a direction of a started
+	// streamed pair becomes known after it started, such as a gRPC call's
+	// response once its head is admitted.
+	OnStreamedPairUpdated func(domain.StreamedPairUpdated)
 	// OnStreamMessage is called for each stream message once it is whole,
 	// cut short or too large, in the order of each direction.
 	OnStreamMessage func(domain.StreamMessage)
@@ -745,6 +749,10 @@ func (proxy *Proxy) writeItem(proxyItem any) {
 		}
 	case *domain.StreamMessage:
 		if err := proxy.StreamRepo.InsertStreamMessage(castItem); err != nil {
+			log.Println(err)
+		}
+	case *domain.StreamedPairRecord:
+		if err := proxy.StreamRepo.RecordStreamedPair(castItem); err != nil {
 			log.Println(err)
 		}
 	case *domain.Log:

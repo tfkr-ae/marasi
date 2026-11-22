@@ -51,6 +51,7 @@ type dbRequestResponse struct {
 	Note      sql.NullString `db:"note"`
 	Highlight sql.NullInt64  `db:"highlight"`
 	dbPrettified
+	dbStreamedState
 }
 
 // dbRequestResponseSummary represents a summarized version of a request and response entry
@@ -84,6 +85,7 @@ type dbRequestResponseSummary struct {
 	// Common
 	Metadata  pairMetadata  `db:"metadata"`
 	Highlight sql.NullInt64 `db:"highlight"`
+	dbStreamedState
 }
 
 type dbNoteSummary struct {
@@ -222,6 +224,7 @@ func toDomainRequestResponseRow(dbReqRes *dbRequestResponse) *domain.RequestResp
 	}
 	row.Highlight = highlightOf(dbReqRes.Highlight)
 	row.Route = routeOf(dbReqRes.UpstreamProxyName, dbReqRes.UpstreamProxyAddress)
+	row.Streamed = dbReqRes.state()
 
 	return row
 }
@@ -287,6 +290,7 @@ func toDomainRequestResponseSummary(dbSummary *dbRequestResponseSummary) *domain
 	}
 	reqResSummary.Highlight = highlightOf(dbSummary.Highlight)
 	reqResSummary.Route = routeOf(dbSummary.UpstreamProxyName, dbSummary.UpstreamProxyAddress)
+	reqResSummary.Streamed = dbSummary.state()
 
 	return reqResSummary
 }
@@ -442,6 +446,7 @@ func (repo *Repository) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResp
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
 			  r.upstream_proxy_name, r.upstream_proxy_address,
 			  r.client_protocol, r.origin_protocol,
+			  r.request_framing, r.response_framing, r.request_stream_ending, r.response_stream_ending,
 			  r.metadata, n.note, h.highlight, pn.number, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
@@ -470,6 +475,7 @@ func (repo *Repository) GetRequestResponseRows(ids []uuid.UUID) ([]*domain.Reque
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
 			  r.upstream_proxy_name, r.upstream_proxy_address,
 			  r.client_protocol, r.origin_protocol,
+			  r.request_framing, r.response_framing, r.request_stream_ending, r.response_stream_ending,
 			  r.metadata, n.note, h.highlight, pn.number, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
@@ -515,6 +521,7 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 			  status, status_code, content_type, length, responded_at,
 			  upstream_proxy_name, upstream_proxy_address,
 			  client_protocol, origin_protocol,
+			  ` + streamedStateColumns + `,
 			  metadata,
 			  pair_highlight.highlight, pair_number.number
 			  FROM request` + highlightJoin + numberJoin + `
@@ -667,6 +674,7 @@ func (repo *Repository) ListNotes(cursor *uuid.UUID, limit int) ([]*domain.Reque
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
 			  r.upstream_proxy_name, r.upstream_proxy_address,
 			  r.client_protocol, r.origin_protocol,
+			  r.request_framing, r.response_framing, r.request_stream_ending, r.response_stream_ending,
 			  r.metadata,
 			  n.note, h.highlight, pn.number
 			  FROM request r
@@ -716,6 +724,7 @@ func (repo *Repository) SearchByMetadata(path string, value any) ([]*domain.Requ
 			  status, status_code, content_type, length, responded_at,
 			  upstream_proxy_name, upstream_proxy_address,
 			  client_protocol, origin_protocol,
+			  ` + streamedStateColumns + `,
 			  metadata,
 			  pair_highlight.highlight, pair_number.number
 			  FROM request` + highlightJoin + numberJoin + `
