@@ -157,19 +157,30 @@ func quote(data []byte) string {
 type transcript struct {
 	mu       sync.Mutex
 	arrivals []Arrival
-	changed  chan struct{} // closed and replaced on every arrival
+	changed  chan struct{} // closed and replaced on every arrival batch
+	updates  int           // number of atomic add commits
 }
 
 func newTranscript() *transcript {
 	return &transcript{changed: make(chan struct{})}
 }
 
-func (t *transcript) add(a Arrival) {
+func (t *transcript) add(arrivals ...Arrival) {
+	if len(arrivals) == 0 {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.arrivals = append(t.arrivals, a)
+	t.arrivals = append(t.arrivals, arrivals...)
+	t.updates++
 	close(t.changed)
 	t.changed = make(chan struct{})
+}
+
+func (t *transcript) updateCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.updates
 }
 
 // count counts the arrivals of kind on side.
