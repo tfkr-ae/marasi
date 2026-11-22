@@ -106,7 +106,7 @@ type h2TestPeer struct {
 	changed chan struct{}
 	streams map[uint32]*h2TestStream
 	order   []uint32
-	goAway  *http2.GoAwayFrame
+	goAway  *h2TestGoAway
 	err     error
 	// credit is what WINDOW_UPDATE frames gave, by stream, 0 being the
 	// connection. holdWindow stops the peer giving window back for DATA.
@@ -114,6 +114,14 @@ type h2TestPeer struct {
 	holdWindow bool
 	// sentOn is what sendWithinWindow sent, by stream.
 	sentOn map[uint32]int64
+}
+
+// h2TestGoAway is a copy of a received GOAWAY frame, detached from the
+// framer's frame state so tests can read it while read keeps running.
+type h2TestGoAway struct {
+	lastStreamID uint32
+	errCode      http2.ErrCode
+	debugData    []byte
 }
 
 // h2TestStream is what arrived on one stream.
@@ -185,7 +193,8 @@ func (p *h2TestPeer) read() {
 			}
 		case *http2.PingFrame:
 			if !f.IsAck() {
-				go p.write(func(fr *http2.Framer) error { return fr.WritePing(true, f.Data) })
+				data := f.Data
+				go p.write(func(fr *http2.Framer) error { return fr.WritePing(true, data) })
 			}
 		case *http2.HeadersFrame:
 			decoded, _ := decoder.DecodeFull(f.HeaderBlockFragment())
@@ -208,9 +217,10 @@ func (p *h2TestPeer) read() {
 			s.data = append(s.data, f.Data()...)
 			s.ended = s.ended || f.StreamEnded()
 			if n := f.Header().Length; n > 0 && !p.holdWindow {
+				id := f.StreamID
 				go p.write(func(fr *http2.Framer) error {
 					fr.WriteWindowUpdate(0, n)
-					return fr.WriteWindowUpdate(f.StreamID, n)
+					return fr.WriteWindowUpdate(id, n)
 				})
 			}
 		case *http2.RSTStreamFrame:
@@ -221,7 +231,11 @@ func (p *h2TestPeer) read() {
 			}
 			p.credit[f.StreamID] += int64(f.Increment)
 		case *http2.GoAwayFrame:
-			p.goAway = f
+			p.goAway = &h2TestGoAway{
+				lastStreamID: f.LastStreamID,
+				errCode:      f.ErrCode,
+				debugData:    bytes.Clone(f.DebugData()),
+			}
 		}
 		close(p.changed)
 		p.changed = make(chan struct{})
@@ -262,6 +276,15 @@ func (p *h2TestPeer) stream(t *testing.T, id uint32) h2TestStream {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return *p.streams[id]
+}
+
+// awaitGoAway waits for a GOAWAY frame and returns a copy of it.
+func (p *h2TestPeer) awaitGoAway(t *testing.T) h2TestGoAway {
+	t.Helper()
+	p.await(t, "GOAWAY", func(p *h2TestPeer) bool { return p.goAway != nil })
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return *p.goAway
 }
 
 // nthStream waits for the n-th stream the peer opened and returns its ID.
@@ -430,15 +453,19 @@ func TestH2Engine(t *testing.T) {
 		if response := client.stream(t, 1); string(response.data) != "first" {
 			t.Fatalf("the first stream\nwanted:\n%q\ngot:\n%q", "first", response.data)
 		}
-		client.await(t, "GOAWAY", func(p *h2TestPeer) bool { return p.goAway != nil })
+		goAway := client.awaitGoAway(t)
 		client.mu.Lock()
-		goAway, second := *client.goAway, client.streams[3]
-		client.mu.Unlock()
-		if goAway.LastStreamID != 1 || goAway.ErrCode != http2.ErrCodeNo {
-			t.Fatalf("GOAWAY\nwanted:\nlast stream 1, NO_ERROR\ngot:\nlast stream %d, %s", goAway.LastStreamID, goAway.ErrCode)
+		var second h2TestStream
+		hasSecond := false
+		if s := client.streams[3]; s != nil {
+			second, hasSecond = *s, true
 		}
-		if second != nil {
-			t.Fatalf("the second stream\nwanted:\nnothing\ngot:\n%+v", *second)
+		client.mu.Unlock()
+		if goAway.lastStreamID != 1 || goAway.errCode != http2.ErrCodeNo {
+			t.Fatalf("GOAWAY\nwanted:\nlast stream 1, NO_ERROR\ngot:\nlast stream %d, %s", goAway.lastStreamID, goAway.errCode)
+		}
+		if hasSecond {
+			t.Fatalf("the second stream\nwanted:\nnothing\ngot:\n%+v", second)
 		}
 	})
 
@@ -465,11 +492,7 @@ func TestH2Engine(t *testing.T) {
 		client.headers(3, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/second")
 		second := upstream.nthStream(t, 1)
 		upstream.write(func(f *http2.Framer) error { return f.WriteGoAway(second, http2.ErrCodeNo, nil) })
-		client.await(t, "GOAWAY", func(p *h2TestPeer) bool { return p.goAway != nil })
-		// The framer reuses the frame on its next read, so take the ID now.
-		client.mu.Lock()
-		last := client.goAway.LastStreamID
-		client.mu.Unlock()
+		last := client.awaitGoAway(t).lastStreamID
 		close(relayed)
 		upstream.headers(first, false, ":status", "200")
 		upstream.data(first, true, "first")
@@ -493,9 +516,8 @@ func TestH2Engine(t *testing.T) {
 		id := upstream.nthStream(t, 0)
 
 		proxyOf(t, addr).engine.routeSwapped(&Route{})
-		client.await(t, "GOAWAY", func(p *h2TestPeer) bool { return p.goAway != nil })
-		if client.goAway.LastStreamID != 1 || client.goAway.ErrCode != http2.ErrCodeNo {
-			t.Fatalf("GOAWAY\nwanted:\nlast stream 1, NO_ERROR\ngot:\nlast stream %d, %s", client.goAway.LastStreamID, client.goAway.ErrCode)
+		if goAway := client.awaitGoAway(t); goAway.lastStreamID != 1 || goAway.errCode != http2.ErrCodeNo {
+			t.Fatalf("GOAWAY\nwanted:\nlast stream 1, NO_ERROR\ngot:\nlast stream %d, %s", goAway.lastStreamID, goAway.errCode)
 		}
 		upstream.headers(id, true, ":status", "200")
 		if status, _ := client.stream(t, 1).headers[0].get(":status"); status != "200" {
@@ -550,4 +572,37 @@ func hasSetting(settings []http2.Setting, id http2.SettingID, val uint32) bool {
 		}
 	}
 	return false
+}
+
+func TestH2TestPeer(t *testing.T) {
+	t.Run("should keep a received GOAWAY safe to read while the reader continues reading frames", func(t *testing.T) {
+		c1, c2 := net.Pipe()
+		defer c1.Close()
+		defer c2.Close()
+
+		peer := newH2TestPeer(c1)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			peer.read()
+		}()
+		go io.Copy(io.Discard, c2)
+
+		sender := http2.NewFramer(c2, c2)
+		if err := sender.WriteGoAway(1, http2.ErrCodeNo, []byte("drain")); err != nil {
+			t.Fatal(err)
+		}
+		// Send another frame so peer.read() runs ReadFrame() again, which
+		// invalidates the previous *http2.GoAwayFrame on the framer.
+		if err := sender.WritePing(true, [8]byte{}); err != nil {
+			t.Fatal(err)
+		}
+		got := peer.awaitGoAway(t)
+		if got.lastStreamID != 1 || got.errCode != http2.ErrCodeNo || string(got.debugData) != "drain" {
+			t.Fatalf("GOAWAY\nwanted:\nlast stream 1, NO_ERROR, %q\ngot:\nlast stream %d, %s, %q", "drain", got.lastStreamID, got.errCode, got.debugData)
+		}
+		c1.Close()
+		c2.Close()
+		<-done
+	})
 }

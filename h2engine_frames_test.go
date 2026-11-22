@@ -76,8 +76,7 @@ func TestH2Engine_HeaderBlocks(t *testing.T) {
 		origin.accept(t)
 
 		go client.floodHeaders(1, h1.MaxHeadBytes+16384)
-		client.await(t, "GOAWAY", func(p *h2TestPeer) bool { return p.goAway != nil })
-		if code := client.goAway.ErrCode; code != http2.ErrCodeEnhanceYourCalm {
+		if code := client.awaitGoAway(t).errCode; code != http2.ErrCodeEnhanceYourCalm {
 			t.Fatalf("GOAWAY\nwanted:\nENHANCE_YOUR_CALM\ngot:\n%s", code)
 		}
 	})
@@ -95,8 +94,7 @@ func TestH2Engine_HeaderBlocks(t *testing.T) {
 			pairs = append(pairs, "x-large", large)
 		}
 		client.headers(1, true, pairs...)
-		client.await(t, "GOAWAY", func(p *h2TestPeer) bool { return p.goAway != nil })
-		if code := client.goAway.ErrCode; code != http2.ErrCodeEnhanceYourCalm {
+		if code := client.awaitGoAway(t).errCode; code != http2.ErrCodeEnhanceYourCalm {
 			t.Fatalf("GOAWAY\nwanted:\nENHANCE_YOUR_CALM\ngot:\n%s", code)
 		}
 	})
@@ -109,8 +107,7 @@ func TestH2Engine_HeaderBlocks(t *testing.T) {
 
 		client.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", origin.addr, ":path", "/")
 		go upstream.floodHeaders(upstream.nthStream(t, 0), h1.MaxHeadBytes+16384)
-		upstream.await(t, "GOAWAY", func(p *h2TestPeer) bool { return p.goAway != nil })
-		if code := upstream.goAway.ErrCode; code != http2.ErrCodeEnhanceYourCalm {
+		if code := upstream.awaitGoAway(t).errCode; code != http2.ErrCodeEnhanceYourCalm {
 			t.Fatalf("the origin's GOAWAY\nwanted:\nENHANCE_YOUR_CALM\ngot:\n%s", code)
 		}
 		if status, _ := client.stream(t, 1).headers[0].get(":status"); status != "502" {
