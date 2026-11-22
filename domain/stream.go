@@ -56,6 +56,59 @@ type StreamRepository interface {
 	// included. The returned cursor is the last message's id when more
 	// remain, nil otherwise. limit must be positive.
 	ListStreamMessages(pairID uuid.UUID, cursor *uuid.UUID, limit int) ([]*StreamMessage, *uuid.UUID, error)
+	// RecordStreamedPair stores how far the pair's streamed directions
+	// have gone, so traffic lists and queries see a streamed pair while it
+	// is live. A direction left nil, and an ending left "", keep what is
+	// stored. A pair that no longer exists is not an error.
+	RecordStreamedPair(record *StreamedPairRecord) error
+}
+
+// StreamedState is a streamed pair's framing per streamed direction, and
+// each direction's ending once it ended. A nil direction is not streamed,
+// or not yet known to be: a response direction is known once its head is
+// admitted.
+type StreamedState struct {
+	Request  *StreamedDirectionState
+	Response *StreamedDirectionState
+}
+
+// StreamedDirectionState is one streamed direction's framing and ending.
+type StreamedDirectionState struct {
+	// Framing is the direction's message framing: grpc, grpc-web,
+	// connect, sse or ndjson.
+	Framing string
+	// Ending is complete, cancelled, reset or cut short once the
+	// direction ended, and "" while it goes on (or when the instance
+	// stopped before it ended).
+	Ending string
+}
+
+// Direction returns the state of direction name, nil when it is not
+// streamed.
+func (s StreamedState) Direction(name string) *StreamedDirectionState {
+	switch name {
+	case StreamDirectionRequest:
+		return s.Request
+	case StreamDirectionResponse:
+		return s.Response
+	}
+	return nil
+}
+
+// StreamedPairRecord is a DB write of a pair's StreamedState.
+type StreamedPairRecord struct {
+	PairID uuid.UUID
+	State  StreamedState
+}
+
+// StreamedPairUpdated announces a direction of a started streamed pair
+// that became known after it started, such as a gRPC call's response once
+// its head is admitted. It is not stored; the pair's StreamedState is.
+type StreamedPairUpdated struct {
+	PairID uuid.UUID
+	// Framings maps each direction known to be streamed to its framing,
+	// the new one included.
+	Framings map[string]string
 }
 
 // StreamedPairStarted announces a streamed pair once the first head naming

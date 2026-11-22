@@ -143,6 +143,9 @@ type trafficResponseEvent struct {
 	// OriginProtocol is the protocol that carried the pair to the origin,
 	// left out when the pair never reached it: the request's stands.
 	OriginProtocol string `json:"origin_protocol,omitempty"`
+	// Streamed is a streamed pair's final streamed state, as traffic list
+	// items show it; left out for any other pair.
+	Streamed *streamedState `json:"streamed,omitempty"`
 }
 
 // newEventBroadcaster returns an empty broadcaster.
@@ -272,6 +275,7 @@ func (b *eventBroadcaster) publishResponse(response domain.ProxyResponse) {
 		RespondedAt:    response.RespondedAt,
 		UpstreamProxy:  trafficRouteFromDomain(response.Route),
 		OriginProtocol: response.OriginProtocol,
+		Streamed:       streamedStateFromDomain(response.Streamed),
 	})
 }
 

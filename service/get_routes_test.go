@@ -81,6 +81,7 @@ var readOnlyGetRoutes = map[string][]string{
 	"GET /traffic/sitemap":                   {"/traffic/sitemap"},
 	"GET /traffic/{id}":                      {"/traffic/0190f0c4-7b6e-7000-8000-000000000001"},
 	"GET /traffic/{id}/metadata":             {"/traffic/0190f0c4-7b6e-7000-8000-000000000001/metadata"},
+	"GET /traffic/{id}/request/joined":       {"/traffic/0190f0c4-7b6e-7000-8000-000000000001/request/joined"},
 	"GET /traffic/{request_id}/websocket":    {"/traffic/0190f0c4-7b6e-7000-8000-000000000001/websocket"},
 	"GET /update":                            {"/update"},
 	"GET /upstream-proxy":                    {"/upstream-proxy"},

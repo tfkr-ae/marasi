@@ -306,6 +306,17 @@ func WithStreamedPairStartedHandler(handler func(domain.StreamedPairStarted)) fu
 	}
 }
 
+// WithStreamedPairUpdatedHandler sets OnStreamedPairUpdated.
+func WithStreamedPairUpdatedHandler(handler func(domain.StreamedPairUpdated)) func(*Proxy) error {
+	return func(proxy *Proxy) error {
+		if proxy.OnStreamedPairUpdated != nil {
+			return errors.New("proxy already has a streamed pair updated handler defined")
+		}
+		proxy.OnStreamedPairUpdated = handler
+		return nil
+	}
+}
+
 // WithStreamMessageHandler sets OnStreamMessage.
 func WithStreamMessageHandler(handler func(domain.StreamMessage)) func(*Proxy) error {
 	return func(proxy *Proxy) error {

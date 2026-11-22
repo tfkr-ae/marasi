@@ -109,3 +109,63 @@ func (repo *Repository) ListStreamMessages(pairID uuid.UUID, cursor *uuid.UUID, 
 	}
 	return items, next, nil
 }
+
+// RecordStreamedPair stores record's streamed state in the pair's
+// request_framing, response_framing, request_stream_ending and
+// response_stream_ending (db/migrations/00031_streamed_pair_state.sql). A
+// nil direction or an empty ending keeps the stored value. A pair deleted
+// meanwhile matches no row, which is not an error.
+func (repo *Repository) RecordStreamedPair(record *domain.StreamedPairRecord) error {
+	var args [4]any
+	for i, d := range []*domain.StreamedDirectionState{record.State.Request, record.State.Response} {
+		if d == nil {
+			continue
+		}
+		args[i] = nullIfEmpty(d.Framing)
+		args[2+i] = nullIfEmpty(d.Ending)
+	}
+	_, err := repo.dbConn.Exec(`UPDATE request SET
+		request_framing = coalesce(?, request_framing),
+		response_framing = coalesce(?, response_framing),
+		request_stream_ending = coalesce(?, request_stream_ending),
+		response_stream_ending = coalesce(?, response_stream_ending)
+		WHERE id = ?`, args[0], args[1], args[2], args[3], record.PairID)
+	if err != nil {
+		return fmt.Errorf("recording streamed pair %s: %w", record.PairID, err)
+	}
+	return nil
+}
+
+// nullIfEmpty is value, or NULL when it is "".
+func nullIfEmpty(value string) sql.NullString {
+	return sql.NullString{String: value, Valid: value != ""}
+}
+
+// dbStreamedState is a pair's streamed state columns.
+type dbStreamedState struct {
+	RequestFraming       sql.NullString `db:"request_framing"`
+	ResponseFraming      sql.NullString `db:"response_framing"`
+	RequestStreamEnding  sql.NullString `db:"request_stream_ending"`
+	ResponseStreamEnding sql.NullString `db:"response_stream_ending"`
+}
+
+// streamedStateColumns are the columns a dbStreamedState reads.
+const streamedStateColumns = `request_framing, response_framing, request_stream_ending, response_stream_ending`
+
+// state returns the streamed state, nil for a pair with no streamed
+// direction.
+func (s dbStreamedState) state() *domain.StreamedState {
+	if !s.RequestFraming.Valid && !s.ResponseFraming.Valid {
+		return nil
+	}
+	direction := func(framing, ending sql.NullString) *domain.StreamedDirectionState {
+		if !framing.Valid {
+			return nil
+		}
+		return &domain.StreamedDirectionState{Framing: framing.String, Ending: ending.String}
+	}
+	return &domain.StreamedState{
+		Request:  direction(s.RequestFraming, s.RequestStreamEnding),
+		Response: direction(s.ResponseFraming, s.ResponseStreamEnding),
+	}
+}

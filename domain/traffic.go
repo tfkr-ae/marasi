@@ -264,6 +264,10 @@ type ProxyResponse struct {
 	// replaces the one stored with the request; empty leaves that as it is,
 	// as for a pair that never reached the origin.
 	OriginProtocol string
+	// Streamed is a streamed pair's final state, for the response's
+	// announcement; nil for any other pair. InsertResponse does not store
+	// it: StreamRepository.RecordStreamedPair does.
+	Streamed *StreamedState
 }
 
 // The protocols a pair can use on each leg, as stored and as queries name
@@ -294,6 +298,9 @@ type RequestResponseRow struct {
 	// Route is the route snapshot written with the response, or nil for a
 	// pair with no response or one captured before snapshots existed.
 	Route *RouteSnapshot
+	// Streamed is the pair's streamed state, nil for a pair that is not a
+	// streamed pair.
+	Streamed *StreamedState
 }
 
 // Prettified holds the prettified copies of a pair's request and response
@@ -328,6 +335,9 @@ type RequestResponseSummary struct {
 	// ClientProtocol and OriginProtocol are as in ProxyRequest.
 	ClientProtocol string
 	OriginProtocol string
+	// Streamed is the pair's streamed state, nil for a pair that is not a
+	// streamed pair.
+	Streamed *StreamedState
 }
 
 // ContentTypeCount is the number of request-response pairs with one response

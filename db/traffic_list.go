@@ -21,6 +21,7 @@ const trafficSummaryColumns = `id, scheme, method, host, path, requested_at,
 	status, status_code, content_type, length, responded_at,
 	upstream_proxy_name, upstream_proxy_address,
 			  client_protocol, origin_protocol,
+	` + streamedStateColumns + `,
 	metadata,
 	pair_highlight.highlight, pair_number.number`
 

@@ -213,6 +213,8 @@ type trafficSummary struct {
 	// ClientProtocol and OriginProtocol are as in trafficDetail.
 	ClientProtocol string `json:"client_protocol"`
 	OriginProtocol string `json:"origin_protocol"`
+	// Streamed is as in trafficDetail.
+	Streamed *streamedState `json:"streamed"`
 }
 
 // trafficDetail is the GET /traffic/{id} response body.
@@ -236,6 +238,80 @@ type trafficDetail struct {
 	// Marasi translated the pair between versions.
 	ClientProtocol string `json:"client_protocol"`
 	OriginProtocol string `json:"origin_protocol"`
+	// Streamed is the pair's streamed state when it is a streamed pair
+	// (GLOSSARY), null otherwise. It is set from the moment the pair's
+	// head is stored, while the pair is live, and read-only.
+	Streamed *streamedState `json:"streamed"`
+}
+
+// streamedState is a streamed pair's message framing per streamed
+// direction, and each direction's ending once the pair ended. A direction
+// is null when it is not streamed, or not yet known to be: a response
+// direction is known once its head is admitted.
+type streamedState struct {
+	Request  *streamedDirectionState `json:"request"`
+	Response *streamedDirectionState `json:"response"`
+}
+
+// streamedDirectionState is one streamed direction of a streamedState.
+type streamedDirectionState struct {
+	// Framing is grpc, grpc-web, connect, sse or ndjson.
+	Framing string `json:"framing"`
+	// Ending is complete, cancelled, reset or cut short once the pair
+	// ended, as in metadata.streamed; null while the pair is live, or for
+	// a pair whose instance stopped before it ended.
+	Ending *string `json:"ending"`
+}
+
+// streamedStateFromDomain returns state's JSON shape, nil for a pair that is
+// not streamed.
+func streamedStateFromDomain(state *domain.StreamedState) *streamedState {
+	if state == nil || (state.Request == nil && state.Response == nil) {
+		return nil
+	}
+	direction := func(d *domain.StreamedDirectionState) *streamedDirectionState {
+		if d == nil {
+			return nil
+		}
+		out := &streamedDirectionState{Framing: d.Framing}
+		if d.Ending != "" {
+			ending := d.Ending
+			out.Ending = &ending
+		}
+		return out
+	}
+	return &streamedState{Request: direction(state.Request), Response: direction(state.Response)}
+}
+
+// streamedStateFromFramings is the streamed state of a live pair whose
+// directions have framings, nil when there are none.
+func streamedStateFromFramings(framings map[string]string) *streamedState {
+	var state domain.StreamedState
+	for name, framing := range framings {
+		d := &domain.StreamedDirectionState{Framing: framing}
+		switch name {
+		case domain.StreamDirectionRequest:
+			state.Request = d
+		case domain.StreamDirectionResponse:
+			state.Response = d
+		}
+	}
+	return streamedStateFromDomain(&state)
+}
+
+// joinedRequest is the GET /traffic/{id}/request/joined response body.
+type joinedRequest struct {
+	ID uuid.UUID `json:"id"`
+	// Raw is the request head and body, ready to launch.
+	Raw []byte `json:"raw"`
+	// Streamed reports that the body was joined from the request's
+	// stream messages; false leaves raw as stored.
+	Streamed bool `json:"streamed"`
+	// Messages is how many request messages the body joins; Omitted how
+	// many stored ones it leaves out (dropped, too large, cut short or not
+	// decoded).
+	Messages int `json:"messages"`
+	Omitted  int `json:"omitted"`
 }
 
 // trafficRoute is a pair's route snapshot: the upstream proxy that carried
@@ -533,6 +609,28 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 		}
 		writeJSON(w, r, http.StatusOK, parts.apply(trafficDetailFromRow(row)))
 	})
+	// GET /traffic/{id}/request/joined is the pair's raw request ready to
+	// launch: a streamed pair's request messages joined into its body in
+	// their envelopes (marasi.Proxy.JoinedRequest), any other pair's raw
+	// request as stored.
+	mux.HandleFunc("GET /traffic/{id}/request/joined", func(w http.ResponseWriter, r *http.Request) {
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
+		joined, err := proxy.JoinedRequest(id)
+		switch {
+		case errors.Is(err, marasi.ErrStreamedRequestOpen):
+			writeRefusal(w, r, http.StatusConflict, "stream_request_open", "the streamed pair's request direction is still being carried; join it once the request ends")
+			return
+		case err != nil:
+			// No open project, or no such pair.
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		writeJSON(w, r, http.StatusOK, joinedRequest{ID: joined.ID, Raw: joined.Raw, Streamed: joined.Streamed, Messages: joined.Messages, Omitted: joined.Omitted})
+	})
 	mux.HandleFunc("GET /traffic/{id}/metadata", func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
@@ -793,6 +891,7 @@ func trafficSummaryFromDomain(item *domain.RequestResponseSummary) trafficSummar
 
 		ClientProtocol: item.ClientProtocol,
 		OriginProtocol: item.OriginProtocol,
+		Streamed:       streamedStateFromDomain(item.Streamed),
 	}
 	return summary
 }
@@ -838,6 +937,7 @@ func trafficDetailFromRow(row *domain.RequestResponseRow) trafficDetail {
 
 		ClientProtocol: row.Request.ClientProtocol,
 		OriginProtocol: row.Request.OriginProtocol,
+		Streamed:       streamedStateFromDomain(row.Streamed),
 	}
 }
 

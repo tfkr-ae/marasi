@@ -33,10 +33,11 @@ func TestStreamedPairEventStream(t *testing.T) {
 		}})
 	}
 
-	wantStarted := `{"pair_id":"` + pairID.String() + `","framings":{"request":"grpc"}}`
+	wantStarted := `{"pair_id":"` + pairID.String() + `","framings":{"request":"grpc"},"streamed":{"request":{"framing":"grpc","ending":null},"response":null}}`
 	wantProgress := `{"pair_id":"` + pairID.String() + `","direction":"response","framing":"grpc","bytes":4096}`
 	wantEnded := `{"pair_id":"` + pairID.String() + `","directions":{"request":{"framing":"grpc","messages":2,"ending":"complete"},` +
-		`"response":{"framing":"grpc","messages":1,"ending":"reset","reset_code":"INTERNAL_ERROR","trailers":[{"name":"grpc-status","value":"13"}]}}}`
+		`"response":{"framing":"grpc","messages":1,"ending":"reset","reset_code":"INTERNAL_ERROR","trailers":[{"name":"grpc-status","value":"13"}]}},` +
+		`"streamed":{"request":{"framing":"grpc","ending":"complete"},"response":{"framing":"grpc","ending":"reset"}}}`
 	message := func(payload string, truncated bool) string {
 		raw, _ := json.Marshal(truncated)
 		return `{"id":"` + messageID.String() + `","pair_id":"` + pairID.String() + `","direction":"response","framing":"grpc","flags":0,` +

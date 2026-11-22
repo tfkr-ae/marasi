@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"unicode/utf8"
 
@@ -47,6 +48,16 @@ number, its # in capture order, then its id.
       Marasi, or between Marasi and the origin: "http/1.1" or "h2", for
       example client_protocol = "h2". They differ only when Marasi
       translated the pair between versions.
+  streamed
+      streamed:* matches streamed pairs, such as gRPC calls, and
+      NOT streamed:* every other pair.
+  request_framing, response_framing
+      = and != against a streamed pair's message framing in that
+      direction: "grpc", "grpc-web", "connect", or in responses "sse" or
+      "ndjson", for example response_framing = "sse". = "*" matches a
+      pair whose direction is streamed; != also matches a pair whose
+      direction is not. A pair matches from the moment its head is
+      stored, while it is still live.
   id
       = and != against the pair's id, a quoted UUID, for example
       id = "01937f5d-351a-7e68-936d-61a7a25661a3".
@@ -142,7 +153,7 @@ func init() {
 	trafficListCmd.Flags().StringVar(&trafficListOrderBy, "order-by", "", "Sort: one field, then optional desc; see Sorting above")
 	trafficMetadataUpdateCmd.Flags().StringVar(&trafficMetadataUpdateFile, "file", "", "Read the metadata JSON from a file instead of stdin")
 	trafficMetadataCmd.AddCommand(trafficMetadataGetCmd, trafficMetadataUpdateCmd)
-	trafficCmd.AddCommand(trafficListCmd, trafficGetCmd, trafficMetadataCmd)
+	trafficCmd.AddCommand(trafficListCmd, trafficGetCmd, trafficRequestCmd, trafficMetadataCmd)
 	rootCmd.AddCommand(trafficCmd)
 }
 
@@ -182,6 +193,47 @@ var trafficGetCmd = &cobra.Command{
 		defer cancel()
 
 		return getTraffic(ctx, endpoint, jsonOutput, args[0], cmd.OutOrStdout())
+	},
+}
+
+var trafficRequestCmd = &cobra.Command{
+	Use:   "request UUID",
+	Short: "Print a pair's raw request ready to launch",
+	Long: `Print a pair's raw request ready to launch with launchpad launch --raw-file.
+A streamed pair's request is stored with an empty body; here its request
+stream messages are joined into the body in their envelopes, as they went
+to the origin. A pair whose request direction is still open is refused with
+stream_request_open. Any other pair's raw request prints as stored.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := serviceIDPath("/traffic/", args[0], "/request/joined")
+		if err != nil {
+			return err
+		}
+		body, err := runControlRequest(cmd, http.MethodGet, path, "getting the request", nil)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(body)
+			return err
+		}
+		var joined struct {
+			Raw      []byte `json:"raw"`
+			Streamed bool   `json:"streamed"`
+			Messages int    `json:"messages"`
+			Omitted  int    `json:"omitted"`
+		}
+		if err := json.Unmarshal(body, &joined); err != nil {
+			return fmt.Errorf("decoding the request: %w", err)
+		}
+		if _, err := cmd.OutOrStdout().Write(joined.Raw); err != nil {
+			return err
+		}
+		if joined.Streamed {
+			_, err = fmt.Fprintf(cmd.ErrOrStderr(), "joined %d request messages, %d left out\n", joined.Messages, joined.Omitted)
+		}
+		return err
 	},
 }
 
@@ -440,6 +492,22 @@ func explainsRefusal(response instanceResponse) bool {
 }
 
 // writeTrafficGetHuman writes one traffic pair as labeled fields and raw HTTP messages.
+// streamedDirectionLine is one direction of a pair's streamed state.
+type streamedDirectionLine struct {
+	Framing string  `json:"framing"`
+	Ending  *string `json:"ending"`
+}
+
+// String is the direction's framing and its ending, or live while it has
+// none: "grpc (complete)".
+func (d streamedDirectionLine) String() string {
+	ending := "live"
+	if d.Ending != nil {
+		ending = *d.Ending
+	}
+	return d.Framing + " (" + ending + ")"
+}
+
 func writeTrafficGetHuman(body []byte, stdout io.Writer) error {
 	var detail struct {
 		ID       string          `json:"id"`
@@ -468,6 +536,10 @@ func writeTrafficGetHuman(body []byte, stdout io.Writer) error {
 		} `json:"upstream_proxy"`
 		ClientProtocol string `json:"client_protocol"`
 		OriginProtocol string `json:"origin_protocol"`
+		Streamed       *struct {
+			Request  *streamedDirectionLine `json:"request"`
+			Response *streamedDirectionLine `json:"response"`
+		} `json:"streamed"`
 	}
 	if err := json.Unmarshal(body, &detail); err != nil {
 		return fmt.Errorf("decoding traffic: %w", err)
@@ -480,6 +552,18 @@ func writeTrafficGetHuman(body []byte, stdout io.Writer) error {
 	if detail.ClientProtocol != "" {
 		fmt.Fprintf(stdout, "client_protocol: %s\n", detail.ClientProtocol)
 		fmt.Fprintf(stdout, "origin_protocol: %s\n", detail.OriginProtocol)
+	}
+	if streamed := detail.Streamed; streamed != nil {
+		var parts []string
+		for _, d := range []struct {
+			name      string
+			direction *streamedDirectionLine
+		}{{"request", streamed.Request}, {"response", streamed.Response}} {
+			if d.direction != nil {
+				parts = append(parts, d.name+" "+d.direction.String())
+			}
+		}
+		fmt.Fprintf(stdout, "streamed: %s\n", strings.Join(parts, ", "))
 	}
 	fmt.Fprintf(stdout, "method: %s\n", detail.Request.Method)
 	fmt.Fprintf(stdout, "host: %s\n", detail.Request.Host)

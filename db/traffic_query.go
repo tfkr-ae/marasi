@@ -55,6 +55,8 @@ const (
 	fieldNumber
 	// fieldID matches a pair's id with = and != against a quoted UUID.
 	fieldID
+	// fieldStreamed matches a streamed pair (GLOSSARY) with :*.
+	fieldStreamed
 )
 
 // member is true for a pair linked to the target bound to its ?. It is an
@@ -99,6 +101,10 @@ const highlightIs = "request.id IN (SELECT request_id FROM pair_highlight WHERE 
 // lookup and a range walks the primary key.
 const numberIs = "request.id IN (SELECT request_id FROM pair_number WHERE number %s ?)"
 
+// streamedPair is true for a streamed pair: one with a streamed direction
+// (db/migrations/00031_streamed_pair_state.sql).
+const streamedPair = "(request_framing IS NOT NULL OR response_framing IS NOT NULL)"
+
 // anyHighlight is true for a pair with a highlight.
 const anyHighlight = "request.id IN (SELECT request_id FROM pair_highlight)"
 
@@ -141,6 +147,14 @@ var trafficFields = map[string]trafficField{
 	// The pair's protocol on each leg, "http/1.1" or "h2".
 	"client_protocol": {kind: fieldExactText, column: "client_protocol", indexed: true},
 	"origin_protocol": {kind: fieldExactText, column: "origin_protocol", indexed: true},
+	// A streamed pair's message framing in each direction (grpc,
+	// grpc-web, connect, sse or ndjson), NULL for a direction that is not
+	// streamed, so = "*" matches a streamed direction and != matches a
+	// direction that is not streamed too.
+	"request_framing":  {kind: fieldExactText, column: "request_framing"},
+	"response_framing": {kind: fieldExactText, column: "response_framing"},
+	// streamed:* is a streamed pair, either direction streamed.
+	"streamed": {kind: fieldStreamed},
 	// In-flight pairs store -1. Treat that as no status code.
 	"status_code": {kind: fieldInteger, column: "nullif(status_code, -1)"},
 	// The size sort's expression, so the length index serves it. A pair
@@ -590,6 +604,14 @@ func (t *queryTranslator) has(e, lhs, rhs *expr.Expr) (string, error) {
 		return anyHighlight, nil
 	case fieldID:
 		return "", t.errorAt(e, "operator : is not supported on id; use = or !=, for example id = \"01937f5d-351a-7e68-936d-61a7a25661a3\"")
+	case fieldStreamed:
+		if len(path) > 0 {
+			return "", t.errorAt(lhs, "field %q has no member %q", name, path[0])
+		}
+		if rhs.GetConstExpr().GetStringValue() != "*" {
+			return "", t.errorAt(e, "operator : on streamed takes only *, as in streamed:*; use request_framing or response_framing = \"grpc\" for one framing")
+		}
+		return streamedPair, nil
 	}
 	return "", t.errorAt(e, "operator : is not supported on %s; use = or another comparison", name)
 }
@@ -848,6 +870,9 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 			return negate(op, fmt.Sprintf(numberIs, "=")), nil
 		}
 		return fmt.Sprintf(numberIs, op), nil
+
+	case fieldStreamed:
+		return "", t.errorAt(e, "operator %s is not supported on streamed; use streamed:* or NOT streamed:*", op)
 
 	case fieldMetadata:
 		if len(path) == 0 {

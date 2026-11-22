@@ -41,7 +41,7 @@ text:
 }
 ```
 
-`traffic get "$PAIR_ID" --json` must show `client_protocol` and `origin_protocol` `h2` and `metadata.streamed.request` and `.response` each `ending` `complete` with `messages` 1.
+`traffic get "$PAIR_ID" --json` must show `client_protocol` and `origin_protocol` `h2`, `metadata.streamed.request` and `.response` each `ending` `complete` with `messages` 1, and `streamed` `{"request":{"framing":"grpc","ending":"complete"},"response":{"framing":"grpc","ending":"complete"}}`. `traffic list -q 'streamed:* AND request_framing = "grpc"' --json` must list the pair. `traffic request "$PAIR_ID" > req.txt` must print the head and the request message in its envelope (stderr `joined 1 request messages, 0 left out`), and `launchpad launch "$LAUNCHPAD_ID" --scheme https --raw-file req.txt` must replay the call with `grpc-status: 0`.
 
 **Hold and edit.** Run `checkpoint stream-intercept on --json` and require `stream_intercept` true. Start the same curl in the background. Retry `checkpoint list --kind stream --json` until it holds one item: `type` `stream`, `direction` `request`, `text` `"2:VARINT 4\n"`, `metadata.intercepted` true. Write `2:VARINT 7` to a file and run `checkpoint forward "$ID" --text --file FILE --json`. The response message is held next (`direction` `response`, `text` with seven zeros), then the response's trailer block (`type` `trailer`, `raw` base64 of `grpc-status: 0` and the other trailer lines); forward each with `checkpoint forward "$ID" --json </dev/null`. Require curl to exit 0, `grpc-status: 0`, and `body.bin` to carry 7 zero bytes (`00 0000000b 0a09 1207 00000000000000`): the origin read the edited message. `stream messages "$PAIR_ID" --json` must show the request message with `payload` `EAc=` and `metadata` `{"edited":true,"intercepted":true}`. Events must carry three `checkpoint.held` and three `checkpoint.forwarded` for that pair. Run `checkpoint stream-intercept off --json` afterwards.
 
@@ -52,5 +52,5 @@ text:
 - `stream get` human output prints `payload: binary N bytes`; read the bytes with `--json` (base64, without the 5-byte envelope).
 - The text form has no schema: bytes that read as packed varints show as `{0 0 0 0}`, not as a bytes literal. The text re-encodes to the same bytes either way.
 - `--text` on a message with no text form (server-sent events, NDJSON) is refused with `invalid_checkpoint_request`, and so is text that does not parse, with its `line L column C`; the item stays held.
-- `streamed_pair.started` names only the directions known at the first head, here the request; the response's framing shows on its `stream_message` and in `streamed_pair.ended`.
+- `streamed_pair.started` names only the directions known at the first head, here the request; the response's framing follows in `streamed_pair.updated` once its head is admitted, and in `streamed_pair.ended`.
 - Stop the interop server by its recorded PID in cleanup. `go run` leaves a child binary: kill the PID that `lsof` shows listening, not only the `go run` process.
