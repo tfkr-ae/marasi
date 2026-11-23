@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 var _ domain.ArmoryRepository = (*Repository)(nil)
@@ -96,13 +97,13 @@ func toDomainArmoryTemplate(template *dbArmoryTemplate) *domain.ArmoryTemplate {
 		Name:        template.Name,
 		Description: template.Description,
 		RawTemplate: template.RawTemplate,
-		Framing:     template.RequestFraming.String,
+		Framing:     stream.Framing(template.RequestFraming.String),
 	}
 }
 
 // nullFraming stores an empty framing as NULL.
-func nullFraming(framing string) sql.NullString {
-	return sql.NullString{String: framing, Valid: framing != ""}
+func nullFraming(framing stream.Framing) sql.NullString {
+	return sql.NullString{String: string(framing), Valid: framing != stream.FramingNone}
 }
 
 // toDomainArmoryRun converts a database run to its domain representation.
@@ -111,7 +112,7 @@ func toDomainArmoryRun(run *dbArmoryRun) *domain.ArmoryRun {
 		ID:               run.ID,
 		TemplateID:       run.TemplateID,
 		TemplateSnapshot: run.TemplateSnapshot,
-		TemplateFraming:  run.TemplateFraming.String,
+		TemplateFraming:  stream.Framing(run.TemplateFraming.String),
 		UseHTTPS:         run.UseHTTPS,
 		Wordlists:        []string(run.Wordlists),
 		Status:           domain.ArmoryRunStatus(run.Status),

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/stream"
 	"github.com/tfkr-ae/marasi/wordlist"
 )
 
@@ -205,7 +206,7 @@ func (manager *Manager) ValidateTemplate(template *domain.ArmoryTemplate) error 
 	if err != nil {
 		return err
 	}
-	if tmpl.framing == "" {
+	if tmpl.framing == stream.FramingNone {
 		return nil
 	}
 	_, err = tmpl.render(nil)

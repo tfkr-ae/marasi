@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/tfkr-ae/marasi/protoscope"
+	"github.com/tfkr-ae/marasi/rawhttp"
 	"github.com/tfkr-ae/marasi/stream"
 )
 
@@ -17,6 +18,18 @@ const (
 	messageSeparator           = "--- message ---"
 	compressedMessageSeparator = "--- message compressed ---"
 )
+
+// separatorLine reports whether line, without its line ending, is a
+// message-form separator, and whether it marks the message compressed.
+func separatorLine(line string) (isSeparator, compressed bool) {
+	switch strings.TrimSuffix(line, "\r") {
+	case messageSeparator:
+		return true, false
+	case compressedMessageSeparator:
+		return true, true
+	}
+	return false, false
+}
 
 // formMessage is one message of a rendered message-form body.
 type formMessage struct {
@@ -29,9 +42,9 @@ type formMessage struct {
 	compressed bool
 }
 
-// supportedFraming reports whether Marasi can send a template that names framing.
-func supportedFraming(framing string) error {
-	switch stream.Framing(framing) {
+// validateFraming reports whether Marasi can send a template that names framing.
+func validateFraming(framing stream.Framing) error {
+	switch framing {
 	case stream.FramingNone, stream.FramingGRPC, stream.FramingGRPCWeb, stream.FramingConnect:
 		return nil
 	}
@@ -84,12 +97,12 @@ func splitMessages(body string, firstLine int) ([]formMessage, error) {
 			whole += "\n"
 		}
 		rest = after
-		if separator := strings.TrimSuffix(content, "\r"); separator == messageSeparator || separator == compressedMessageSeparator {
+		if isSeparator, compressed := separatorLine(content); isSeparator {
 			if current != nil {
 				current.text = text.String()
 				messages = append(messages, *current)
 			}
-			current = &formMessage{line: line + 1, compressed: separator == compressedMessageSeparator}
+			current = &formMessage{line: line + 1, compressed: compressed}
 			text.Reset()
 			continue
 		}
@@ -133,11 +146,11 @@ func messageContentType(contentType string) string {
 
 // namesFraming reports whether contentType names framing, a Connect unary
 // type naming connect.
-func namesFraming(contentType, framing string) bool {
+func namesFraming(contentType string, framing stream.Framing) bool {
 	if _, unary := connectUnaryCodec(contentType); unary {
-		return stream.Framing(framing) == stream.FramingConnect
+		return framing == stream.FramingConnect
 	}
-	return stream.FramingOf(contentType, false) == stream.Framing(framing)
+	return stream.FramingOf(contentType, false) == framing
 }
 
 // encodeMessageForm turns a rendered request whose body is in message form
@@ -147,7 +160,7 @@ func namesFraming(contentType, framing string) bool {
 // Every length is computed here, so payloads of any length give
 // well-formed messages, and an HTTP/1.1 head's Content-Length is set to
 // the body's length.
-func encodeMessageForm(raw, framing string) (string, error) {
+func encodeMessageForm(raw string, framing stream.Framing) (string, error) {
 	head, blank, body := splitHead(raw)
 	if blank == "" {
 		return "", errors.New("a message-form request needs a blank line after its head")
@@ -207,22 +220,24 @@ func encodeMessageForm(raw, framing string) (string, error) {
 }
 
 // withContentLength is an HTTP/1.1 head with every Content-Length value set
-// to n, and one added when it has none and n is not 0. An HTTP/2 head,
-// which carries no length, and a head that uses Transfer-Encoding are
-// returned unchanged.
+// to n, and one added when it has none and n is not 0. A head that uses
+// Transfer-Encoding is returned unchanged. An HTTP/2 head carries no length,
+// so it loses any content-length field it was captured with: the h2 engine
+// sends fields as written, and a captured length would not fit a payload of
+// another length.
 func withContentLength(head string, n int) string {
-	requestLine, _, _ := strings.Cut(head, "\n")
-	if strings.HasSuffix(strings.TrimSuffix(requestLine, "\r"), " HTTP/2") {
-		return head
+	if rawhttp.IsHTTP2Text(head) {
+		return withoutContentLength(head)
 	}
 	if _, chunked := headField(head, "transfer-encoding"); chunked {
 		return head
 	}
+	requestLine, _, _ := strings.Cut(head, "\n")
 	lines := strings.Split(head, "\n")
 	found := false
 	for i, line := range lines[1:] {
-		name, _, ok := strings.Cut(line, ":")
-		if !ok || !strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
+		name, ok := contentLengthLine(line)
+		if !ok {
 			continue
 		}
 		found = true
@@ -242,13 +257,32 @@ func withContentLength(head string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
+// withoutContentLength is head with every Content-Length field line removed.
+func withoutContentLength(head string) string {
+	lines := strings.Split(head, "\n")
+	kept := lines[:1]
+	for _, line := range lines[1:] {
+		if _, ok := contentLengthLine(line); !ok {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+// contentLengthLine reports whether line is a Content-Length field line,
+// and the field name as written.
+func contentLengthLine(line string) (string, bool) {
+	name, _, ok := strings.Cut(line, ":")
+	return name, ok && strings.EqualFold(strings.TrimSpace(name), "Content-Length")
+}
+
 // compressMessage compresses payload, a message under a compressed
 // separator, with the per-message encoding head names for framing:
 // grpc-encoding, or connect-content-encoding for Connect streaming. A head
 // that names no encoding, identity, or one Marasi does not encode is an
 // error.
-func compressMessage(head, framing string, payload []byte) ([]byte, error) {
-	field := stream.EncodingHeader(stream.Framing(framing))
+func compressMessage(head string, framing stream.Framing, payload []byte) ([]byte, error) {
+	field := stream.EncodingHeader(framing)
 	encoding, _ := headField(head, field)
 	if encoding == "" || strings.EqualFold(encoding, "identity") {
 		return nil, fmt.Errorf("a compressed message needs a %s the request names, and it names none", field)
@@ -275,8 +309,12 @@ type TemplateMessage struct {
 // form for the head's content type under a separator, in order, escaped so
 // the template renders back to head and the payloads' bytes. A compressed
 // message goes under a compressed separator. It reports false when the
-// content type gives the messages no text form.
+// content type gives the messages no text form. An HTTP/2 head loses its
+// content-length field, which the render would drop (withContentLength).
 func MessageFormTemplate(head string, messages []TemplateMessage) (string, bool) {
+	if rawhttp.IsHTTP2Text(head) {
+		head = withoutContentLength(head)
+	}
 	headText, _, _ := splitHead(head)
 	contentType, _ := headField(headText, "content-type")
 	contentType = messageContentType(contentType)

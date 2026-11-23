@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 // grpcHead is the head of a native gRPC template written as HTTP/2.
@@ -21,7 +22,7 @@ const grpcHead = "POST /test.Echo/Say HTTP/2\r\n:authority: example.com\r\nconte
 
 // runMessageForm runs a harpoon attack with one wordlist on raw and returns
 // every request the run sent, in order.
-func runMessageForm(t *testing.T, raw, framing string, attack domain.ArmoryAttackType, wordlists map[string][]string) []string {
+func runMessageForm(t *testing.T, raw string, framing stream.Framing, attack domain.ArmoryAttackType, wordlists map[string][]string) []string {
 	t.Helper()
 	sent, _ := runMessageFormAttempts(t, raw, framing, attack, wordlists)
 	return sent
@@ -29,7 +30,7 @@ func runMessageForm(t *testing.T, raw, framing string, attack domain.ArmoryAttac
 
 // runMessageFormAttempts runs raw as runMessageForm does and also returns
 // every failed attempt the run recorded, and every one it announced.
-func runMessageFormAttempts(t *testing.T, raw, framing string, attack domain.ArmoryAttackType, wordlists map[string][]string) ([]string, []*domain.ArmoryFailedAttempt) {
+func runMessageFormAttempts(t *testing.T, raw string, framing stream.Framing, attack domain.ArmoryAttackType, wordlists map[string][]string) ([]string, []*domain.ArmoryFailedAttempt) {
 	t.Helper()
 	run := newTestArmoryRun(t)
 	run.TemplateSnapshot = raw
@@ -68,24 +69,41 @@ func runMessageFormAttempts(t *testing.T, raw, framing string, attack domain.Arm
 	return sent, repository.failedAttempts
 }
 
-// envelopes cuts body into gRPC envelopes, failing unless each length
-// matches the bytes that follow it exactly.
-func envelopes(t *testing.T, body string) [][]byte {
+// envelope is one envelope of a sent body: its flags byte and payload.
+type envelope struct {
+	flags   byte
+	payload []byte
+}
+
+// flaggedEnvelopes cuts body into envelopes, keeping each one's flags,
+// failing unless each length matches the bytes that follow it exactly.
+func flaggedEnvelopes(t *testing.T, body string) []envelope {
 	t.Helper()
-	var out [][]byte
+	var out []envelope
 	for len(body) > 0 {
 		if len(body) < 5 {
 			t.Fatalf("a trailing partial envelope header %q", body)
-		}
-		if body[0] != 0 {
-			t.Fatalf("the envelope flags\nwanted:\n0\ngot:\n%d", body[0])
 		}
 		n := int(binary.BigEndian.Uint32([]byte(body[1:5])))
 		if len(body) < 5+n {
 			t.Fatalf("the envelope declares %d bytes but %d follow", n, len(body)-5)
 		}
-		out = append(out, []byte(body[5:5+n]))
+		out = append(out, envelope{flags: body[0], payload: []byte(body[5 : 5+n])})
 		body = body[5+n:]
+	}
+	return out
+}
+
+// envelopes cuts body into envelopes as flaggedEnvelopes does and returns
+// their payloads, failing unless every envelope's flags are 0.
+func envelopes(t *testing.T, body string) [][]byte {
+	t.Helper()
+	var out [][]byte
+	for _, e := range flaggedEnvelopes(t, body) {
+		if e.flags != 0 {
+			t.Fatalf("the envelope flags\nwanted:\n0\ngot:\n%d", e.flags)
+		}
+		out = append(out, e.payload)
 	}
 	return out
 }
@@ -203,7 +221,7 @@ func TestManager_ValidateTemplate(t *testing.T) {
 	refusals := []struct {
 		name    string
 		raw     string
-		framing string
+		framing stream.Framing
 		want    string
 	}{
 		{
@@ -352,6 +370,20 @@ func TestManager_MessageFormEscaping(t *testing.T) {
 		}
 	})
 
+	t.Run("should keep a position quoted after a captured {{ that the builder escaped in the same string", func(t *testing.T) {
+		built, ok := MessageFormTemplate(grpcHead, []TemplateMessage{{Payload: []byte("\x0a\x05a{{\"b")}})
+		if !ok {
+			t.Fatal("the message has no text form")
+		}
+		raw := strings.Replace(built, "b\"}", "@@b@@\"}", 1)
+
+		sent := runMessageForm(t, raw, "grpc", domain.ArmoryAttackHarpoon, map[string][]string{"words": {`"\`}})
+
+		if got, want := stringField(t, envelopes(t, bodyOf(t, sent[0]))[0]), `a{{""\`; got != want {
+			t.Fatalf("field 1\nwanted:\n%q\ngot:\n%q", want, got)
+		}
+	})
+
 	t.Run("should refuse to save a position that opens inside a quoted string and closes outside it", func(t *testing.T) {
 		raw := grpcHead + "--- message ---\n1:LEN {\"a@@b\"} 2:VARINT 1@@\n"
 
@@ -402,7 +434,7 @@ func TestManager_WebAndConnectFramings(t *testing.T) {
 	framings := []struct {
 		name        string
 		contentType string
-		framing     string
+		framing     stream.Framing
 		message     string
 		// messages cuts a sent body into its messages' payloads.
 		messages func(t *testing.T, body string) [][]byte

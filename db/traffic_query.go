@@ -130,8 +130,9 @@ type trafficField struct {
 	links linkTable
 	// indexed fields have an index on (column, id), so an equality or range
 	// on them can drive a read.
-	indexed bool // present fields match only pairs that have a value, so != leaves
-	// out a pair with none, as every other comparison does.
+	indexed bool
+	// present fields match only pairs that have a value, so != leaves out a
+	// pair with none, as every other comparison does.
 	present bool
 }
 

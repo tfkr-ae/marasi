@@ -21,9 +21,9 @@ const (
 // literal is the template's text with every position at its fallback. A
 // position that opens and closes in different places, such as inside a
 // string and outside it, is refused with its number, line and column.
-func quotedPositions(raw, literal, framing string, positions []markedPosition) ([]bool, error) {
+func quotedPositions(raw, literal string, framing stream.Framing, positions []markedPosition) ([]bool, error) {
 	quoted := make([]bool, len(positions))
-	if framing == "" || len(positions) == 0 {
+	if framing == stream.FramingNone || len(positions) == 0 {
 		return quoted, nil
 	}
 	head, blank, _ := splitHead(literal)
@@ -57,7 +57,7 @@ func stringStates(literal string, bodyStart int) []int {
 	for index := bodyStart; index < len(literal); index++ {
 		if index == bodyStart || literal[index-1] == '\n' {
 			line, _, _ := strings.Cut(literal[index:], "\n")
-			if separator := strings.TrimSuffix(line, "\r"); separator == messageSeparator || separator == compressedMessageSeparator {
+			if isSeparator, _ := separatorLine(line); isSeparator {
 				state, comment, hexLiteral = outsideString, false, false
 			}
 		}

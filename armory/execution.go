@@ -75,7 +75,7 @@ func validateRun(run *domain.ArmoryRun, tmpl *armoryTemplate) error {
 	if err != nil {
 		return err
 	}
-	if head, _, _ := splitHead(raw); isH2Head(head) {
+	if head, _, _ := splitHead(raw); rawhttp.IsHTTP2Text(head) {
 		return validateH2Head(head)
 	}
 	updated, err := rawhttp.RecalculateContentLength([]byte(raw))
@@ -88,16 +88,9 @@ func validateRun(run *domain.ArmoryRun, tmpl *armoryTemplate) error {
 	}
 	request.Body.Close()
 	if request.Host == "" {
-		return errors.New("host header not found or is empty")
+		return rawhttp.ErrMissingHost
 	}
 	return nil
-}
-
-// isH2Head reports whether head's request line names HTTP/2, the text form
-// the proxy sends over HTTP/2 (readH2RawRequest).
-func isH2Head(head string) bool {
-	line, _, _ := strings.Cut(head, "\n")
-	return strings.HasSuffix(strings.TrimSuffix(line, "\r"), " HTTP/2")
 }
 
 // validateH2Head checks a head in the HTTP/2 text form: METHOD target
@@ -123,7 +116,7 @@ func validateH2Head(head string) error {
 	if target := strings.Fields(line)[1]; strings.Contains(target, "://") {
 		return nil
 	}
-	return errors.New("host header not found or is empty")
+	return rawhttp.ErrMissingHost
 }
 
 // ValidateRun validates a draft without persisting or starting it.

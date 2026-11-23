@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tfkr-ae/marasi/stream"
 	"github.com/tfkr-ae/marasi/wordlist"
 )
 
@@ -86,7 +87,7 @@ func TestManager_ProduceHarpoon(t *testing.T) {
 	t.Run("should apply each wordlist entry to each template position in turn", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{entries: []string{"one", "", "two"}}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("username=@@admin@@&password=@@secret@@")
+		tmpl, err := parseFramedTemplate("username=@@admin@@&password=@@secret@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -132,7 +133,7 @@ func TestManager_ProduceHarpoon(t *testing.T) {
 	t.Run("should return an error if the wordlist cannot be opened", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{openErr: errors.New("open failed")}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("value=@@fallback@@")
+		tmpl, err := parseFramedTemplate("value=@@fallback@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -153,7 +154,7 @@ func TestManager_ProduceHarpoon(t *testing.T) {
 	t.Run("should return an error if the wordlist cannot be read", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{readErr: errors.New("read failed")}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("value=@@fallback@@")
+		tmpl, err := parseFramedTemplate("value=@@fallback@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -177,7 +178,7 @@ func TestManager_ProduceHarpoon(t *testing.T) {
 	t.Run("should return an error if the wordlist cannot be closed", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{closeErr: errors.New("close failed")}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("value=@@fallback@@")
+		tmpl, err := parseFramedTemplate("value=@@fallback@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -198,7 +199,7 @@ func TestManager_ProduceHarpoon(t *testing.T) {
 	t.Run("should return an error if the template cannot be rendered", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{entries: []string{"one"}}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate(`{{index "x" 2}}@@value@@`)
+		tmpl, err := parseFramedTemplate(`{{index "x" 2}}@@value@@`, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -222,7 +223,7 @@ func TestManager_ProduceHarpoon(t *testing.T) {
 	t.Run("should stop when the execution is cancelled", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{entries: []string{"one"}}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("value=@@fallback@@")
+		tmpl, err := parseFramedTemplate("value=@@fallback@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -247,7 +248,7 @@ func TestManager_ProduceBroadside(t *testing.T) {
 	t.Run("should apply each wordlist entry to every template position", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{entries: []string{"one", "", "two"}}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("username=@@admin@@&password=@@secret@@")
+		tmpl, err := parseFramedTemplate("username=@@admin@@&password=@@secret@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -288,7 +289,7 @@ func TestManager_ProduceBroadside(t *testing.T) {
 	t.Run("should return an error if the wordlist cannot be opened", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{openErr: errors.New("open failed")}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("value=@@fallback@@")
+		tmpl, err := parseFramedTemplate("value=@@fallback@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -309,7 +310,7 @@ func TestManager_ProduceBroadside(t *testing.T) {
 	t.Run("should return an error if the wordlist cannot be read", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{readErr: errors.New("read failed")}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("value=@@fallback@@")
+		tmpl, err := parseFramedTemplate("value=@@fallback@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -333,7 +334,7 @@ func TestManager_ProduceBroadside(t *testing.T) {
 	t.Run("should return an error if the wordlist cannot be closed", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{closeErr: errors.New("close failed")}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("value=@@fallback@@")
+		tmpl, err := parseFramedTemplate("value=@@fallback@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -354,7 +355,7 @@ func TestManager_ProduceBroadside(t *testing.T) {
 	t.Run("should return an error if the template cannot be rendered", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{entries: []string{"one"}}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate(`{{index "x" 2}}@@value@@`)
+		tmpl, err := parseFramedTemplate(`{{index "x" 2}}@@value@@`, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -378,7 +379,7 @@ func TestManager_ProduceBroadside(t *testing.T) {
 	t.Run("should stop when the execution is cancelled", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{entries: []string{"one"}}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("value=@@fallback@@")
+		tmpl, err := parseFramedTemplate("value=@@fallback@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -408,7 +409,7 @@ func TestManager_ProduceTandem(t *testing.T) {
 			},
 		}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("username=@@admin@@&password=@@secret@@")
+		tmpl, err := parseFramedTemplate("username=@@admin@@&password=@@secret@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -456,7 +457,7 @@ func TestManager_ProduceTandem(t *testing.T) {
 			},
 		}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("username=@@admin@@&password=@@secret@@")
+		tmpl, err := parseFramedTemplate("username=@@admin@@&password=@@secret@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -483,7 +484,7 @@ func TestManager_ProduceTandem(t *testing.T) {
 
 	t.Run("should return an error if no wordlists are provided", func(t *testing.T) {
 		manager := &Manager{wordlists: &testAttackWordlistProvider{}}
-		tmpl, err := parseTemplate("value=@@fallback@@")
+		tmpl, err := parseFramedTemplate("value=@@fallback@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -508,7 +509,7 @@ func TestManager_ProduceTandem(t *testing.T) {
 			},
 		}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("username=@@admin@@&password=@@secret@@")
+		tmpl, err := parseFramedTemplate("username=@@admin@@&password=@@secret@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -532,7 +533,7 @@ func TestManager_ProduceTandem(t *testing.T) {
 	t.Run("should return an error if a wordlist cannot be read", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{readErr: errors.New("read failed")}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("username=@@admin@@&password=@@secret@@")
+		tmpl, err := parseFramedTemplate("username=@@admin@@&password=@@secret@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -558,7 +559,7 @@ func TestManager_ProduceTandem(t *testing.T) {
 	t.Run("should return an error if a wordlist cannot be closed", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{closeErr: errors.New("close failed")}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("username=@@admin@@&password=@@secret@@")
+		tmpl, err := parseFramedTemplate("username=@@admin@@&password=@@secret@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -584,7 +585,7 @@ func TestManager_ProduceTandem(t *testing.T) {
 	t.Run("should return an error if the template cannot be rendered", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{entries: []string{"one"}}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate(`{{index "x" 2}}@@value@@`)
+		tmpl, err := parseFramedTemplate(`{{index "x" 2}}@@value@@`, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -608,7 +609,7 @@ func TestManager_ProduceTandem(t *testing.T) {
 	t.Run("should stop when the execution is cancelled", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{entries: []string{"one"}}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("value=@@fallback@@")
+		tmpl, err := parseFramedTemplate("value=@@fallback@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -638,7 +639,7 @@ func TestManager_ProduceMaelstrom(t *testing.T) {
 			},
 		}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("username=@@admin@@&password=@@secret@@")
+		tmpl, err := parseFramedTemplate("username=@@admin@@&password=@@secret@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -683,7 +684,7 @@ func TestManager_ProduceMaelstrom(t *testing.T) {
 
 	t.Run("should return an error if no wordlists are provided", func(t *testing.T) {
 		manager := &Manager{wordlists: &testAttackWordlistProvider{}}
-		tmpl, err := parseTemplate("value=@@fallback@@")
+		tmpl, err := parseFramedTemplate("value=@@fallback@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -711,7 +712,7 @@ func TestManager_ProduceMaelstrom(t *testing.T) {
 			},
 		}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("username=@@admin@@&password=@@secret@@")
+		tmpl, err := parseFramedTemplate("username=@@admin@@&password=@@secret@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -742,7 +743,7 @@ func TestManager_ProduceMaelstrom(t *testing.T) {
 			},
 		}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("username=@@admin@@&password=@@secret@@")
+		tmpl, err := parseFramedTemplate("username=@@admin@@&password=@@secret@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -775,7 +776,7 @@ func TestManager_ProduceMaelstrom(t *testing.T) {
 			},
 		}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("username=@@admin@@&password=@@secret@@")
+		tmpl, err := parseFramedTemplate("username=@@admin@@&password=@@secret@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -801,7 +802,7 @@ func TestManager_ProduceMaelstrom(t *testing.T) {
 	t.Run("should return an error if the template cannot be rendered", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{entries: []string{"one"}}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate(`{{index "x" 2}}@@value@@`)
+		tmpl, err := parseFramedTemplate(`{{index "x" 2}}@@value@@`, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -825,7 +826,7 @@ func TestManager_ProduceMaelstrom(t *testing.T) {
 	t.Run("should stop when the execution is cancelled", func(t *testing.T) {
 		provider := &testAttackWordlistProvider{entries: []string{"one"}}
 		manager := &Manager{wordlists: provider}
-		tmpl, err := parseTemplate("value=@@fallback@@")
+		tmpl, err := parseFramedTemplate("value=@@fallback@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}

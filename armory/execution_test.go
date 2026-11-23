@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 type testExecutionRepository struct {
@@ -102,7 +103,7 @@ func waitForRunUpdate(t *testing.T, updates <-chan domain.ArmoryRun) domain.Armo
 func TestNewExecution(t *testing.T) {
 	t.Run("should create an execution with initialized runtime state", func(t *testing.T) {
 		run := newTestArmoryRun(t)
-		tmpl, err := parseTemplate(run.TemplateSnapshot)
+		tmpl, err := parseFramedTemplate(run.TemplateSnapshot, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}

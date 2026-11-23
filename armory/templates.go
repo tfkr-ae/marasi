@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/protoscope"
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 // payloadMarker delimits fallback values replaced during an Armory run.
@@ -32,7 +33,7 @@ type armoryTemplate struct {
 	positionCount int
 	// framing is the request framing of a template with a message-form
 	// body, empty for any other template.
-	framing string
+	framing stream.Framing
 }
 
 // Payload returns the value assigned to a position or its original fallback.
@@ -133,16 +134,11 @@ type markedPosition struct {
 	start, end int
 }
 
-// preprocessTemplate converts Armory payload markers into Go template actions.
-func preprocessTemplate(raw string) (string, int, error) {
-	return preprocessFramedTemplate(raw, "")
-}
-
 // preprocessFramedTemplate converts Armory payload markers into Go template
 // actions. When framing is set and the body's messages are protoscope text,
 // a position inside a quoted string has its value escaped as a protoscope
 // string after its function chain, unless the chain ends in raw.
-func preprocessFramedTemplate(raw, framing string) (string, int, error) {
+func preprocessFramedTemplate(raw string, framing stream.Framing) (string, int, error) {
 	// literal is the template's text with escapes read and every position
 	// at its fallback, the text the quoting is read from.
 	var literal strings.Builder
@@ -237,8 +233,8 @@ func preprocessFramedTemplate(raw, framing string) (string, int, error) {
 
 // parseFramedTemplate parses an Armory request template whose body is in
 // message form when framing is set.
-func parseFramedTemplate(raw, framing string) (*armoryTemplate, error) {
-	if err := supportedFraming(framing); err != nil {
+func parseFramedTemplate(raw string, framing stream.Framing) (*armoryTemplate, error) {
+	if err := validateFraming(framing); err != nil {
 		return nil, err
 	}
 	expanded, _, err := preprocessFramedTemplate(raw, framing)
@@ -251,15 +247,6 @@ func parseFramedTemplate(raw, framing string) (*armoryTemplate, error) {
 	}
 	tmpl.framing = framing
 	return tmpl, nil
-}
-
-// parseTemplate preprocesses and parses an Armory request template.
-func parseTemplate(raw string) (*armoryTemplate, error) {
-	expanded, _, err := preprocessTemplate(raw)
-	if err != nil {
-		return nil, err
-	}
-	return parseExpanded(expanded)
 }
 
 // parseExpanded parses a preprocessed Armory request template.
@@ -294,7 +281,7 @@ func (tmpl *armoryTemplate) render(payloads map[int]string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("rendering armory template: %w", err)
 	}
-	if tmpl.framing == "" {
+	if tmpl.framing == stream.FramingNone {
 		return output.String(), nil
 	}
 	raw, err := encodeMessageForm(output.String(), tmpl.framing)
@@ -315,13 +302,26 @@ func (err *messageError) Error() string { return err.err.Error() }
 
 func (err *messageError) Unwrap() error { return err.err }
 
+// escapedActionStart is how EscapeTemplate writes "{{", which would open a
+// Go template action: an action printing it as a raw string. It holds no
+// double quote, so it adds no protoscope string boundary to the text a
+// payload position's quoting is read from (quotedPositions).
+const escapedActionStart = "{{`{{`}}"
+
 // EscapeTemplate escapes raw text so that, as an Armory template, it renders
 // back to exactly raw: `\` becomes `\\` and `@` becomes `\@`, the two bytes
-// the preprocessor reads specially. The result has no payload positions.
+// the preprocessor reads specially, and "{{", which the Go template reads as
+// an action, becomes an action printing it. "}}" outside an action is
+// ordinary text. The result has no payload positions.
 func EscapeTemplate(raw string) string {
 	var escaped strings.Builder
 	escaped.Grow(len(raw))
 	for index := 0; index < len(raw); index++ {
+		if strings.HasPrefix(raw[index:], "{{") {
+			escaped.WriteString(escapedActionStart)
+			index++
+			continue
+		}
 		if raw[index] == '\\' || raw[index] == '@' {
 			escaped.WriteByte('\\')
 		}
@@ -333,7 +333,7 @@ func EscapeTemplate(raw string) string {
 // Render renders an Armory template with every payload position at its
 // fallback value, as the request it sends: a template whose framing is set
 // has its message-form body encoded into envelopes.
-func Render(raw, framing string) (string, error) {
+func Render(raw string, framing stream.Framing) (string, error) {
 	tmpl, err := parseFramedTemplate(raw, framing)
 	if err != nil {
 		return "", err

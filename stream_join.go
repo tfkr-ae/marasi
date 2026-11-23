@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/rawhttp"
 	"github.com/tfkr-ae/marasi/stream"
 )
 
@@ -172,7 +173,7 @@ func withBody(raw, body []byte) []byte {
 		head = raw[:end]
 	}
 	lines := bytes.Split(head, []byte("\r\n"))
-	h2 := isH2Text(string(lines[0]))
+	h2 := rawhttp.IsHTTP2Text(string(lines[0]))
 	length := []byte(strconv.Itoa(len(body)))
 	out := [][]byte{lines[0]}
 	found := false

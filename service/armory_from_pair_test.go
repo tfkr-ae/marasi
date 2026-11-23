@@ -36,8 +36,8 @@ func TestArmoryTemplateFromPair(t *testing.T) {
 
 	// The body holds every sequence the template preprocessor reads
 	// specially, so an unescaped copy renders differently from the capture.
-	captured := "POST /api/notes?q=a@b HTTP/1.1\r\nHost: notes.example\r\nContent-Type: application/json\r\nContent-Length: 42\r\n\r\n" +
-		`{"path":"C:\\temp","at":"\@x","m":"@@y@@"}`
+	captured := "POST /api/notes?q=a@b HTTP/1.1\r\nHost: notes.example\r\nContent-Type: application/json\r\nContent-Length: 61\r\n\r\n" +
+		`{"path":"C:\\temp","at":"\@x","m":"@@y@@","t":"{{.x}} }}{{{"}`
 	pairID, _ := uuid.NewV7()
 	err = repo.InsertRequest(&domain.ProxyRequest{
 		ID: pairID, Scheme: "https", Method: "POST", Host: "notes.example", Path: "/api/notes?q=a@b",
@@ -76,8 +76,8 @@ func TestArmoryTemplateFromPair(t *testing.T) {
 
 	t.Run("should render back to the captured request byte for byte", func(t *testing.T) {
 		template := create(t, pairID.String())
-		want := "POST /api/notes?q=a\\@b HTTP/1.1\r\nHost: notes.example\r\nContent-Type: application/json\r\nContent-Length: 42\r\n\r\n" +
-			`{"path":"C:\\\\temp","at":"\\\@x","m":"\@\@y\@\@"}`
+		want := "POST /api/notes?q=a\\@b HTTP/1.1\r\nHost: notes.example\r\nContent-Type: application/json\r\nContent-Length: 61\r\n\r\n" +
+			`{"path":"C:\\\\temp","at":"\\\@x","m":"\@\@y\@\@","t":"` + "{{`{{`}}.x}} }}{{`{{`}}{\"}"
 		if template.RawTemplate != want {
 			t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, template.RawTemplate)
 		}

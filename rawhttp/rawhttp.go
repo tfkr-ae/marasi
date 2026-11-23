@@ -21,6 +21,16 @@ import (
 // line between its headers and its body.
 var ErrMissingHeaderEnd = errors.New("no blank line ends the headers")
 
+// ErrMissingHost is returned when a raw request names no origin to send it to.
+var ErrMissingHost = errors.New("host header not found or is empty")
+
+// IsHTTP2Text reports whether raw's request line names HTTP/2, the text form
+// the proxy sends over HTTP/2 (docs/adr/2026-11-19-marasi-owns-its-http2-framing.md).
+func IsHTTP2Text(raw string) bool {
+	line, _, _ := strings.Cut(raw, "\n")
+	return strings.HasSuffix(strings.TrimSuffix(line, "\r"), " HTTP/2")
+}
+
 // Prettify will atempt to prettify the body or return an empty byte slice if it fails
 // JSON, XML, HTML can be prettified if it cannot prettify the body it will return an empty string
 func Prettify(bodyBytes []byte) ([]byte, error) {

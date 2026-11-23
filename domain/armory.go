@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 // ErrArmoryTemplateNotFound means no Armory template has the requested ID.
@@ -72,7 +73,7 @@ type ArmoryTemplate struct {
 	RawTemplate string
 	// Framing is the template's request message framing: empty, or grpc,
 	// grpc-web or connect for a template with a message-form body (GLOSSARY).
-	Framing string
+	Framing stream.Framing
 }
 
 // ArmoryRun is an execution of an Armory template with a fixed configuration.
@@ -85,7 +86,7 @@ type ArmoryRun struct {
 	TemplateSnapshot string
 	// TemplateFraming preserves the template's request framing, empty for
 	// a template with no message-form body.
-	TemplateFraming string
+	TemplateFraming stream.Framing
 	// UseHTTPS controls whether generated requests use HTTPS.
 	UseHTTPS bool
 	// Wordlists contains the ordered names of the wordlists used by the run.
