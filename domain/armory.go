@@ -70,6 +70,9 @@ type ArmoryTemplate struct {
 	Description string
 	// RawTemplate contains the Go template used to generate requests.
 	RawTemplate string
+	// Framing is the template's request message framing: empty, or grpc,
+	// grpc-web or connect for a template with a message-form body (GLOSSARY).
+	Framing string
 }
 
 // ArmoryRun is an execution of an Armory template with a fixed configuration.
@@ -80,6 +83,9 @@ type ArmoryRun struct {
 	TemplateID uuid.UUID
 	// TemplateSnapshot preserves the raw template used by this run.
 	TemplateSnapshot string
+	// TemplateFraming preserves the template's request framing, empty for
+	// a template with no message-form body.
+	TemplateFraming string
 	// UseHTTPS controls whether generated requests use HTTPS.
 	UseHTTPS bool
 	// Wordlists contains the ordered names of the wordlists used by the run.

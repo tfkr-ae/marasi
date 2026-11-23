@@ -4,12 +4,16 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/armory"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/wordlist"
 )
 
 // launchH2 launches raw over HTTPS through h and returns the finished launch.
@@ -123,6 +127,75 @@ func TestProxy_LaunchOverH2(t *testing.T) {
 		}
 	})
 
+	t.Run("should send a message-form gRPC Armory template as well-formed envelopes over HTTP/2, stored as a streamed pair", func(t *testing.T) {
+		origin := newH2TestOrigin(t)
+		h := startViewHarness(t, viewHarnessConfig{secureOrigin: true})
+		configDir := t.TempDir()
+		wordlists, err := wordlist.NewManager(configDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload := strings.Repeat("p", 200)
+		if err := os.WriteFile(filepath.Join(configDir, "wordlists", "words.txt"), []byte(payload+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		run := &domain.ArmoryRun{
+			ID:               uuid.Must(uuid.NewV7()),
+			TemplateSnapshot: "POST /test.Echo/Say HTTP/2\r\n:authority: " + origin.addr + "\r\ncontent-type: application/grpc\r\nte: trailers\r\n\r\n--- message ---\n1:LEN {\"@@short@@\"}\n",
+			TemplateFraming:  "grpc",
+			UseHTTPS:         true,
+			Wordlists:        []string{"words.txt"},
+			Status:           domain.ArmoryRunDraft,
+			AttackType:       domain.ArmoryAttackHarpoon,
+			MaxConcurrent:    1,
+		}
+		repo := &wireArmoryRepository{run: run, updates: make(chan domain.ArmoryRunStatus, 4)}
+		manager, err := armory.NewManager(repo, wordlists, h.proxy.SendArmoryRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.StartRun(run.ID); err != nil {
+			t.Fatalf("StartRun() returned unexpected error: %v", err)
+		}
+
+		upstream := origin.accept(t)
+		id := upstream.nthStream(t, 0)
+		request := upstream.stream(t, id)
+		// Field 1, length 200 as the varint c8 01, then the payload, in an
+		// envelope declaring those 203 bytes.
+		message := "\x0a\xc8\x01" + payload
+		if want := grpcEnvelope(0, message); string(request.data) != want {
+			t.Fatalf("the origin's request body\nwanted:\n%q\ngot:\n%q", want, request.data)
+		}
+		upstream.headers(id, false, ":status", "200", "content-type", "application/grpc")
+		upstream.data(id, false, grpcEnvelope(0, ""))
+		upstream.headers(id, true, "grpc-status", "0")
+
+		for status := range repo.updates {
+			if status == domain.ArmoryRunCompleted {
+				break
+			}
+			if status != domain.ArmoryRunInProgress {
+				t.Fatalf("the run\nwanted:\ncomplete\ngot:\n%s", status)
+			}
+		}
+		stored := capturedRequest(t, h)
+		if fmt.Sprint(stored.Metadata["armory_run_id"]) != run.ID.String() {
+			t.Fatalf("the stored request's metadata\nwanted:\narmory_run_id %s\ngot:\n%v", run.ID, stored.Metadata)
+		}
+		messages := storedMessages(t, h.proxy, stored.ID)
+		if len(messages) != 2 || messages[0].Direction != "request" || string(messages[0].Payload) != message || messages[1].Direction != "response" {
+			t.Fatalf("the stored stream messages\nwanted:\nthe request message, then the response's\ngot:\n%+v", messages)
+		}
+		metadata, err := h.proxy.TrafficRepo.GetMetadata(stored.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d := direction(t, metadata, "request"); d["framing"] != "grpc" || d["ending"] != "complete" {
+			t.Fatalf("metadata.streamed.request\nwanted:\ngrpc, complete\ngot:\n%v", d)
+		}
+	})
+
 	t.Run("should answer an HTTP/2 launch with a 502 naming the cause when the origin will not speak HTTP/2", func(t *testing.T) {
 		tests := []struct {
 			name  string
@@ -224,4 +297,20 @@ func TestReadRawRequest_H2(t *testing.T) {
 			t.Fatalf("the request\nwanted:\n%v host example.com\ngot:\n%v host %q", want, r.h2.fields, r.view.Host)
 		}
 	})
+}
+
+// wireArmoryRepository holds one Armory run and reports each status written.
+type wireArmoryRepository struct {
+	domain.ArmoryRepository
+	run     *domain.ArmoryRun
+	updates chan domain.ArmoryRunStatus
+}
+
+func (repo *wireArmoryRepository) GetArmoryRun(uuid.UUID) (*domain.ArmoryRun, error) {
+	return repo.run, nil
+}
+
+func (repo *wireArmoryRepository) UpdateArmoryRun(run *domain.ArmoryRun) error {
+	repo.updates <- run.Status
+	return nil
 }

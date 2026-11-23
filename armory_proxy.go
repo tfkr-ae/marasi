@@ -13,6 +13,7 @@ import (
 type ArmoryService interface {
 	Repo() domain.ArmoryRepository
 	ValidateRun(*domain.ArmoryRun) error
+	ValidateTemplate(*domain.ArmoryTemplate) error
 	StartRun(uuid.UUID) error
 	CancelRun(uuid.UUID) error
 	ActiveRunIDs() []uuid.UUID

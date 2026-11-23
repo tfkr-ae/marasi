@@ -25,6 +25,8 @@ var armoryTemplateCreateFromPair string
 var armoryTemplateUpdateName string
 var armoryTemplateUpdateDescription string
 var armoryTemplateUpdateRawFile string
+var armoryTemplateCreateFraming string
+var armoryTemplateUpdateFraming string
 var armoryRunTemplate string
 var armoryRunListStatuses []string
 var armoryRunAttackType string
@@ -39,6 +41,7 @@ type armoryTemplateRequest struct {
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
 	RawTemplate *string `json:"raw_template,omitempty"`
+	Framing     *string `json:"framing,omitempty"`
 }
 
 type armoryRunRequest struct {
@@ -67,14 +70,17 @@ func init() {
 	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateName, "name", "", "Template name. Required unless --from-pair is set")
 	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateDescription, "description", "", "Template description")
 	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateRawFile, "raw-file", "", "Read the raw template from a file")
-	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateFromPair, "from-pair", "", "Build the template from this captured pair's request, named METHOD host path. Cannot be used with --name, --description or --raw-file")
+	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateFraming, "framing", "", "Request message framing: grpc, for a template whose body is a message-form body. Empty for none")
+	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateFromPair, "from-pair", "", "Build the template from this captured pair's request, named METHOD host path. Cannot be used with --name, --description, --raw-file or --framing")
 	armoryTemplateCreateCmd.MarkFlagsMutuallyExclusive("from-pair", "raw-file")
 	armoryTemplateCreateCmd.MarkFlagsMutuallyExclusive("from-pair", "name")
 	armoryTemplateCreateCmd.MarkFlagsMutuallyExclusive("from-pair", "description")
 	armoryTemplateCreateCmd.MarkFlagsOneRequired("from-pair", "name")
+	armoryTemplateCreateCmd.MarkFlagsMutuallyExclusive("from-pair", "framing")
 	armoryTemplateUpdateCmd.Flags().StringVar(&armoryTemplateUpdateName, "name", "", "Template name")
 	armoryTemplateUpdateCmd.Flags().StringVar(&armoryTemplateUpdateDescription, "description", "", "Template description")
 	armoryTemplateUpdateCmd.Flags().StringVar(&armoryTemplateUpdateRawFile, "raw-file", "", "Read the raw template from a file")
+	armoryTemplateUpdateCmd.Flags().StringVar(&armoryTemplateUpdateFraming, "framing", "", "Request message framing: grpc, for a template whose body is a message-form body. Empty for none")
 	armoryRunListCmd.Flags().StringVar(&armoryRunTemplate, "template", "", "Template UUID. Omit to list every run in the project")
 	armoryRunListCmd.Flags().StringArrayVar(&armoryRunListStatuses, "status", nil, "Only list runs with this status: draft, in_progress, complete, failed, or cancelled. Repeat the flag or separate statuses with commas. Project-wide lists only")
 	addArmoryRunFlags(armoryRunCreateCmd, true)
@@ -146,6 +152,9 @@ var armoryTemplateCreateCmd = &cobra.Command{
 			}
 			request.RawTemplate = &raw
 		}
+		if cmd.Flags().Changed("framing") {
+			request.Framing = &armoryTemplateCreateFraming
+		}
 		return runArmoryCommand(cmd, http.MethodPost, "/armory/template", request, "creating Armory template", nil, "armory template %s created successfully\n")
 	},
 }
@@ -170,8 +179,11 @@ var armoryTemplateUpdateCmd = &cobra.Command{
 			}
 			request.RawTemplate = &raw
 		}
-		if request.Name == nil && request.Description == nil && request.RawTemplate == nil {
-			return errors.New("armory template update requires --name, --description, or --raw-file")
+		if cmd.Flags().Changed("framing") {
+			request.Framing = &armoryTemplateUpdateFraming
+		}
+		if request.Name == nil && request.Description == nil && request.RawTemplate == nil && request.Framing == nil {
+			return errors.New("armory template update requires --name, --description, --raw-file, or --framing")
 		}
 		path, err := serviceIDPath("/armory/template/", args[0], "")
 		if err != nil {
@@ -403,8 +415,9 @@ func controlArmoryRequest(ctx context.Context, asJSON bool, method, path string,
 func writeArmoryTemplateListHuman(body []byte, stdout io.Writer) error {
 	var response struct {
 		Items []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Framing string `json:"framing"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
@@ -415,6 +428,9 @@ func writeArmoryTemplateListHuman(body []byte, stdout io.Writer) error {
 			fmt.Fprintln(stdout)
 		}
 		fmt.Fprintf(stdout, "id: %s\nname: %s\n", item.ID, item.Name)
+		if item.Framing != "" {
+			fmt.Fprintf(stdout, "framing: %s\n", item.Framing)
+		}
 	}
 	return nil
 }
@@ -425,12 +441,18 @@ func writeArmoryTemplateHuman(body []byte, stdout io.Writer) error {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 		RawTemplate string `json:"raw_template"`
+		Framing     string `json:"framing"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		return fmt.Errorf("decoding Armory template: %w", err)
 	}
 	if _, err := fmt.Fprintf(stdout, "id: %s\nname: %s\ndescription: %s\n", response.ID, response.Name, response.Description); err != nil {
 		return err
+	}
+	if response.Framing != "" {
+		if _, err := fmt.Fprintf(stdout, "framing: %s\n", response.Framing); err != nil {
+			return err
+		}
 	}
 	_, err := io.WriteString(stdout, response.RawTemplate)
 	return err

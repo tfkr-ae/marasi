@@ -29,6 +29,9 @@ type armoryTemplate struct {
 	template *template.Template
 	// positionCount is the number of payload positions in the template.
 	positionCount int
+	// framing is the request framing of a template with a message-form
+	// body, empty for any other template.
+	framing string
 }
 
 // Payload returns the value assigned to a position or its original fallback.
@@ -172,6 +175,20 @@ func preprocessTemplate(raw string) (string, int, error) {
 	return expanded.String(), position, nil
 }
 
+// parseFramedTemplate parses an Armory request template whose body is in
+// message form when framing is set.
+func parseFramedTemplate(raw, framing string) (*armoryTemplate, error) {
+	if err := supportedFraming(framing); err != nil {
+		return nil, err
+	}
+	tmpl, err := parseTemplate(raw)
+	if err != nil {
+		return nil, err
+	}
+	tmpl.framing = framing
+	return tmpl, nil
+}
+
 // parseTemplate preprocesses and parses an Armory request template.
 func parseTemplate(raw string) (*armoryTemplate, error) {
 	expanded, _, err := preprocessTemplate(raw)
@@ -207,8 +224,10 @@ func (tmpl *armoryTemplate) render(payloads map[int]string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("rendering armory template: %w", err)
 	}
-
-	return output.String(), nil
+	if tmpl.framing == "" {
+		return output.String(), nil
+	}
+	return encodeMessageForm(output.String(), tmpl.framing)
 }
 
 // EscapeTemplate escapes raw text so that, as an Armory template, it renders
