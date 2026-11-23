@@ -210,6 +210,10 @@ _Avoid_: Intruder template, payload template, request snippet
 A marked slot in an Armory template.
 _Avoid_: insertion point, fuzz point, placeholder
 
+**Message-form body**:
+The body of an Armory template that names a message framing (gRPC, gRPC-Web or Connect), written as the text form of each of its messages under a separator. For every request a run sends, Marasi encodes each message and puts it back in its envelope, so every length follows the payloads. A Connect unary body is a single message with no envelope.
+_Avoid_: joined request (the bytes that went to the origin, not an editable template), stream template, protobuf template
+
 **Attack type**:
 The strategy that maps wordlists onto payload positions for an Armory run. One of harpoon, broadside, tandem, or maelstrom.
 _Avoid_: sniper, battering ram, pitchfork, cluster bomb
