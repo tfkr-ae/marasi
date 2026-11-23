@@ -301,9 +301,10 @@ func addExtensionRoutes(mux routeMux, raw *http.ServeMux, projects *ProjectLifec
 			writeExtensionError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		// Run before storing: the project runs the stored source when it
-		// opens, so source that fails here would stop the project opening.
-		if err := runtime.ExecuteLuaContext(r.Context(), lua); err != nil {
+		// Build a fresh state before storing, as the project does when it
+		// opens: source that fails here would stop the project opening, and
+		// hooks the old source defined must not outlive it.
+		if err := runtime.Reload(r.Context(), lua); err != nil {
 			writeLuaRefusal(w, r, err)
 			return
 		}

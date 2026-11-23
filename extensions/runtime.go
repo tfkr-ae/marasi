@@ -84,6 +84,10 @@ type Runtime struct {
 	// reference is set only while Reference records what registration adds.
 	reference       *APIReference
 	asyncExecutions sync.WaitGroup
+	// service and options are what PrepareState built the state with; Reload
+	// builds the next state with them.
+	service ProxyService
+	options []func(*Runtime) error
 }
 
 // LogSnapshot returns detached entries in print order, even while Lua is running.
@@ -220,21 +224,53 @@ func (extension *Runtime) beginExecution(ctx context.Context) func() {
 // It also disables potentially dangerous Lua functions like `dofile` and `loadfile`
 // to sandbox the extension.
 func (extension *Runtime) PrepareState(proxy ProxyService, options []func(*Runtime) error) error {
+	extension.Mu.Lock()
+	defer extension.Mu.Unlock()
+	extension.service = proxy
+	extension.options = options
+	return extension.buildStateLocked(context.Background(), extension.Data.LuaContent)
+}
+
+// Reload replaces the Lua state with a new one built from code, as opening
+// the project builds it: the options run again, then code, then startup.
+// Nothing the previous source defined survives, so a hook it no longer
+// defines stops being called. On an error the previous state stays in place,
+// untouched. Cancellation of ctx interrupts Lua as in ExecuteLuaContext.
+func (extension *Runtime) Reload(ctx context.Context, code string) error {
+	extension.Mu.Lock()
+	defer extension.Mu.Unlock()
+	if extension.service == nil {
+		return fmt.Errorf("reloading extension %s: its state was never prepared", extension.Data.Name)
+	}
+	previous, onLog, onScopeChange := extension.LuaState, extension.OnLog, extension.OnScopeChange
+	// The options set these handlers and refuse to replace one.
+	extension.OnLog, extension.OnScopeChange = nil, nil
+	if err := extension.buildStateLocked(ctx, code); err != nil {
+		extension.LuaState, extension.OnLog, extension.OnScopeChange = previous, onLog, onScopeChange
+		extension.recordWebComponent()
+		return err
+	}
+	return nil
+}
+
+// buildStateLocked builds a new Lua state running code and its startup. The
+// caller holds Mu.
+func (extension *Runtime) buildStateLocked(ctx context.Context, code string) error {
 	extension.LuaState = lua.NewState()
 	openStandardLibraries(extension.LuaState)
-	registerAPI(extension, proxy)
+	registerAPI(extension, extension.service)
 
-	for _, option := range options {
+	for _, option := range extension.options {
 		err := option(extension)
 		if err != nil {
 			return fmt.Errorf("applying option for extension %s: %w", extension.Data.Name, err)
 		}
 	}
-	if err := extension.ExecuteLua(extension.Data.LuaContent); err != nil {
+	if err := extension.executeLocked(ctx, code); err != nil {
 		return fmt.Errorf("preparing state for extension %s: %w", extension.Data.Name, err)
 	}
 
-	if err := extension.CallFunction(hookStartup); err != nil {
+	if err := extension.callFunctionLocked(ctx, hookStartup); err != nil {
 		return fmt.Errorf("running startup for %s: %w", extension.Data.Name, err)
 	}
 	return nil
@@ -292,6 +328,11 @@ func (extension *Runtime) ExecuteLua(code string) error {
 func (extension *Runtime) ExecuteLuaContext(ctx context.Context, code string) error {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
+	return extension.executeLocked(ctx, code)
+}
+
+// executeLocked runs code in the Lua state. The caller holds Mu.
+func (extension *Runtime) executeLocked(ctx context.Context, code string) error {
 	defer extension.beginExecution(ctx)()
 
 	err := lua.DoString(extension.LuaState, code)
@@ -486,6 +527,11 @@ func (extension *Runtime) CallFunction(name string, args ...any) error {
 func (extension *Runtime) CallFunctionContext(ctx context.Context, name string, args ...any) error {
 	extension.Mu.Lock()
 	defer extension.Mu.Unlock()
+	return extension.callFunctionLocked(ctx, name, args...)
+}
+
+// callFunctionLocked calls the named global Lua function. The caller holds Mu.
+func (extension *Runtime) callFunctionLocked(ctx context.Context, name string, args ...any) error {
 	defer extension.beginExecution(ctx)()
 
 	extension.LuaState.Global(name)

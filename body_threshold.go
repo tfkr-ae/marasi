@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -111,11 +112,38 @@ func (proxy *Proxy) logPassedThrough(pair *Pair, direction, skipped string) {
 		target = fmt.Sprintf("%s to %s %s", direction, req.Method, req.URL.Redacted())
 	}
 	message := fmt.Sprintf("%s skipped for the %s: its body passed the body threshold and is forwarded as it arrives", skipped, target)
-	if pair.ID != uuid.Nil {
-		proxy.WriteLog("WARN", message, core.LogWithContext(map[string]any{"request_id": pair.ID.String()}))
-		return
+	switch {
+	case pair.ID == uuid.Nil:
+		proxy.WriteLog("WARN", message)
+	case pair.requestCaptured:
+		proxy.WriteLog("WARN", message, core.LogWithReqResID(pair.ID))
+	default:
+		// The log's request link is a foreign key, and the request chain
+		// has not stored the request yet: hold the log until it ends.
+		pair.heldLogs = append(pair.heldLogs, heldLog{level: "WARN", message: message})
 	}
-	proxy.WriteLog("WARN", message)
+}
+
+// heldLog is a proxy log about a pair whose request was not yet stored.
+type heldLog struct {
+	level   string
+	message string
+}
+
+// writeHeldLogs writes the logs held while the request chain ran. Each is
+// linked to the request when the chain stored it, and otherwise names the
+// request only in its context.
+func (proxy *Proxy) writeHeldLogs(pair *Pair) {
+	for _, held := range pair.heldLogs {
+		option := core.LogWithContext(map[string]any{"request_id": pair.ID.String()})
+		if pair.requestCaptured {
+			option = core.LogWithReqResID(pair.ID)
+		}
+		if err := proxy.WriteLog(held.level, held.message, option); err != nil {
+			log.Printf("writing a held proxy log: %v", err)
+		}
+	}
+	pair.heldLogs = nil
 }
 
 // keepPassedBody guards a passed body against a Lua hook's edit: call it

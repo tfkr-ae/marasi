@@ -264,8 +264,9 @@ end`)
 		if stored.LuaContent != lua || runtime.Data.LuaContent != lua {
 			t.Fatalf("\nwanted:\npersisted and loaded lua %q\ngot:\nrepo %q runtime %q", lua, stored.LuaContent, runtime.Data.LuaContent)
 		}
-		if got := runtime.GetGlobal("called"); got != float64(1) {
-			t.Fatalf("\nwanted:\nstartup left called at 1\ngot:\n%v", got)
+		// The update builds a fresh state, so the old source's globals are gone.
+		if got := runtime.GetGlobal("called"); got != nil {
+			t.Fatalf("\nwanted:\nthe old source's called gone\ngot:\n%v", got)
 		}
 
 		event := <-subscriber.events
@@ -1667,6 +1668,81 @@ error("after the change")`)
 		got := nextHTTPServiceEvent(t, reader)
 		if got.name != "scope.updated" || !strings.Contains(string(got.data), `{"pattern":"kept\\.test","match_type":"host"}`) {
 			t.Fatalf("\nwanted:\nscope.updated with kept\\.test\ngot:\n%s %s", got.name, got.data)
+		}
+	})
+}
+
+func TestExtensionUpdateReplacesLuaState(t *testing.T) {
+	update := func(t *testing.T, server *Server, path, lua string) *httptest.ResponseRecorder {
+		t.Helper()
+		body, err := json.Marshal(map[string]string{"lua_content": lua})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return requestControlAPI(server, http.MethodPost, path, string(body))
+	}
+
+	t.Run("should stop calling a hook the new source no longer defines", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `function processRequest(request) end
+leftover = "old"`)
+		server := newTestServer(&marasi.Proxy{ExtensionRepo: repo, Extensions: []*extensions.Runtime{runtime}}, func() {})
+		path := "/extension/" + runtime.Data.ID.String()
+
+		response := update(t, server, path, `function processResponse(response) end`)
+		if response.Code != http.StatusOK {
+			t.Fatalf("updating the source: %d %s", response.Code, response.Body.String())
+		}
+		if runtime.HasFunction("processRequest") {
+			t.Fatal("wanted the old source's processRequest gone after the update")
+		}
+		if !runtime.HasFunction("processResponse") {
+			t.Fatal("wanted the new source's processResponse defined")
+		}
+		if got := runtime.GetGlobal("leftover"); got != nil {
+			t.Fatalf("wanted the old source's globals gone, got leftover = %v", got)
+		}
+	})
+
+	t.Run("should run startup as opening the project does", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, "")
+		server := newTestServer(&marasi.Proxy{ExtensionRepo: repo, Extensions: []*extensions.Runtime{runtime}}, func() {})
+		path := "/extension/" + runtime.Data.ID.String()
+
+		response := update(t, server, path, `function startup() started = true end`)
+		if response.Code != http.StatusOK {
+			t.Fatalf("updating the source: %d %s", response.Code, response.Body.String())
+		}
+		if got := runtime.GetGlobal("started"); got != true {
+			t.Fatalf("wanted startup to run on update, got started = %v", got)
+		}
+	})
+
+	t.Run("should keep the previous state whole when the new source fails", func(t *testing.T) {
+		repo, runtime := preparedWorkshop(t, `function processRequest(request) end`)
+		server := newTestServer(&marasi.Proxy{ExtensionRepo: repo, Extensions: []*extensions.Runtime{runtime}}, func() {})
+		path := "/extension/" + runtime.Data.ID.String()
+		before, err := repo.GetExtensionByUUID(runtime.Data.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		response := update(t, server, path, `function processResponse(response) end
+error("boom")`)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "lua_error") {
+			t.Fatalf("wanted the failing source refused with lua_error, got %d %s", response.Code, response.Body.String())
+		}
+		if !runtime.HasFunction("processRequest") {
+			t.Fatal("wanted the previous source's processRequest kept")
+		}
+		if runtime.HasFunction("processResponse") {
+			t.Fatal("wanted nothing from the failed source left in effect")
+		}
+		stored, err := repo.GetExtensionByUUID(runtime.Data.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.LuaContent != before.LuaContent {
+			t.Fatalf("wanted the previous source kept in storage, got %q", stored.LuaContent)
 		}
 	})
 }

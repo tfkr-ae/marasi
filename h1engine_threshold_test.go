@@ -310,6 +310,88 @@ func TestH1Engine_BodyThreshold(t *testing.T) {
 		expectLog(t, logs, "Lua body edit", "response to POST")
 		expectLog(t, logs, "Checkpoint hold", "response to POST")
 	})
+
+	t.Run("should link each skipped hold and edit's proxy log to the stored request", func(t *testing.T) {
+		origin := newBodyOrigin(t, "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n0123456789")
+		proxy, addr, captured := serveFramingProxy(t, func(proxy *Proxy) {
+			withBodyThreshold(4)(proxy)
+			ext := &domain.Extension{Name: "workshop", ID: testExtensions["workshop"].ID, Enabled: true, LuaContent: `
+				function processRequest(request) request:set_body("edited") end
+				function processResponse(response) response:set_body("edited") end
+			`}
+			if err := proxy.WithOptions(WithExtension(ext)); err != nil {
+				t.Fatalf("adding the extension: %v", err)
+			}
+			proxy.AddRequestPairModifier(ExtensionsRequestModifier)
+			proxy.AddResponsePairModifier(ExtensionsResponseModifier)
+			holdEverything(t)(proxy)
+		})
+
+		host := "Host: " + origin.addr + "\r\n"
+		roundTripRaw(t, addr, "POST http://"+origin.addr+"/ HTTP/1.1\r\n"+host+"Content-Length: 10\r\n\r\n0123456789",
+			"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n0123456789")
+		var requestID string
+		select {
+		case req := <-captured.request:
+			requestID = req.ID.String()
+		case <-time.After(5 * time.Second):
+			t.Fatal("the request was not captured")
+		}
+		select {
+		case <-captured.response:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the response was not captured")
+		}
+
+		// A log whose request link fails its foreign key is never stored,
+		// so read them back from the database.
+		want := map[string]bool{
+			"Lua body edit|request": false, "Checkpoint hold|request": false,
+			"Lua body edit|response": false, "Checkpoint hold|response": false,
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			stored, err := proxy.LogRepo.GetLogs()
+			if err != nil {
+				t.Fatalf("reading the proxy logs: %v", err)
+			}
+			for _, entry := range stored {
+				for key := range want {
+					skipped, direction, _ := strings.Cut(key, "|")
+					if strings.Contains(entry.Message, skipped) && strings.Contains(entry.Message, direction+" to POST") &&
+						entry.RequestID != nil && entry.RequestID.String() == requestID {
+						want[key] = true
+					}
+				}
+			}
+			missing := []string{}
+			for key, found := range want {
+				if !found {
+					missing = append(missing, key)
+				}
+			}
+			if len(missing) == 0 {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("wanted these proxy logs stored with request_id %s: %v\ngot:\n%v", requestID, missing, logSummaries(stored))
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+}
+
+// logSummaries prints each stored log's message and request link.
+func logSummaries(logs []*domain.Log) string {
+	var b strings.Builder
+	for _, entry := range logs {
+		link := "<nil>"
+		if entry.RequestID != nil {
+			link = entry.RequestID.String()
+		}
+		b.WriteString(entry.Level + " request_id=" + link + " " + entry.Message + "\n")
+	}
+	return b.String()
 }
 
 // collectLogs gathers the proxy's log messages.
