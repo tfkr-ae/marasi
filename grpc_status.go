@@ -23,16 +23,55 @@ func isGRPCResponse(contentType string) bool {
 }
 
 // responseGRPCStatus is the grpc-status of a response stored whole: from
-// its trailers, else from its head when it is trailers-only. It is nil for
-// a response that is not gRPC or has no whole-number grpc-status.
-func responseGRPCStatus(res *http.Response) *int {
+// its trailers, else from the gRPC-Web trailers frame in its body, else
+// from its head when it is trailers-only. It is nil for a response that is
+// not gRPC or has no whole-number grpc-status.
+func responseGRPCStatus(res *http.Response, body []byte) *int {
 	if res == nil || !isGRPCResponse(res.Header.Get("Content-Type")) {
 		return nil
 	}
 	if status := parseGRPCStatus(res.Trailer.Get(grpcStatusField)); status != nil {
 		return status
 	}
+	if status := bodyGRPCStatus(res.Header.Get("Content-Type"), body); status != nil {
+		return status
+	}
 	return parseGRPCStatus(res.Header.Get(grpcStatusField))
+}
+
+// bodyGRPCStatus is the grpc-status in the trailers frame of a gRPC-Web
+// body read whole, decoded from base64 first for application/grpc-web-text,
+// which is never streamed (streamedFraming). It is nil for any other body,
+// or one with no readable trailers frame.
+func bodyGRPCStatus(contentType string, body []byte) *int {
+	if stream.FramingOf(contentType, true) != stream.FramingGRPCWeb || len(body) == 0 {
+		return nil
+	}
+	if stream.IsGRPCWebText(contentType) {
+		decoded, err := stream.DecodeGRPCWebText(body)
+		if err != nil {
+			return nil
+		}
+		body = decoded
+	}
+	splitter, err := stream.NewSplitter(stream.FramingGRPCWeb, int64(len(body)))
+	if err != nil {
+		return nil
+	}
+	for len(body) > 0 {
+		n, message, err := splitter.Feed(body)
+		if err != nil {
+			return nil
+		}
+		body = body[n:]
+		if message == nil {
+			continue
+		}
+		if status := trailersFrameGRPCStatus(stream.FramingGRPCWeb, message.Flags, message.Payload); status != nil {
+			return status
+		}
+	}
+	return nil
 }
 
 // trailersGRPCStatus is the grpc-status among a streamed direction's

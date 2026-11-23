@@ -1,6 +1,7 @@
 package marasi
 
 import (
+	"encoding/base64"
 	"strconv"
 	"testing"
 
@@ -60,6 +61,28 @@ func TestPairGRPCStatus(t *testing.T) {
 		_, res := streamedResponse(t, captured)
 		if got := grpcStatusString(res); got != "5" {
 			t.Fatalf("the stored grpc-status\nwanted:\n5\ngot:\n%s", got)
+		}
+	})
+
+	t.Run("should record the grpc-status of a gRPC-Web text response's trailers frame", func(t *testing.T) {
+		origin := newH2TestOrigin(t)
+		addr, captured, ca := serveH1EngineMITMProxy(t, true)
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		upstream := origin.accept(t)
+		client.headers(1, false, ":method", "POST", ":scheme", "https", ":authority", origin.addr, ":path", "/test.Echo/Say",
+			"content-type", "application/grpc-web-text")
+		// A text body is read whole, so the request goes on once it ended.
+		client.data(1, true, base64.StdEncoding.EncodeToString([]byte(grpcEnvelope(0, "ping"))))
+		id := upstream.nthStream(t, 0)
+		upstream.headers(id, false, ":status", "200", "content-type", "application/grpc-web-text")
+		// Two base64 chunks joined, the first padded, as a server that
+		// encodes each frame on its own writes them.
+		upstream.data(id, true, base64.StdEncoding.EncodeToString([]byte(grpcEnvelope(0, "pongs")))+
+			base64.StdEncoding.EncodeToString([]byte(grpcEnvelope(0x80, "grpc-status: 9\r\n"))))
+
+		_, res := streamedResponse(t, captured)
+		if got := grpcStatusString(res); got != "9" {
+			t.Fatalf("the stored grpc-status\nwanted:\n9\ngot:\n%s", got)
 		}
 	})
 
