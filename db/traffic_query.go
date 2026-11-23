@@ -130,7 +130,9 @@ type trafficField struct {
 	links linkTable
 	// indexed fields have an index on (column, id), so an equality or range
 	// on them can drive a read.
-	indexed bool
+	indexed bool // present fields match only pairs that have a value, so != leaves
+	// out a pair with none, as every other comparison does.
+	present bool
 }
 
 // trafficFields declares the fields a traffic query can name.
@@ -153,6 +155,10 @@ var trafficFields = map[string]trafficField{
 	// direction that is not streamed too.
 	"request_framing":  {kind: fieldExactText, column: "request_framing"},
 	"response_framing": {kind: fieldExactText, column: "response_framing"},
+	// The grpc-status of a gRPC pair's response, from its trailers or a
+	// trailers-only head (db/migrations/00032_pair_grpc_status.sql). NULL
+	// for any other pair, so no comparison matches it.
+	"grpc_status": {kind: fieldInteger, column: "grpc_status", present: true},
 	// streamed:* is a streamed pair, either direction streamed.
 	"streamed": {kind: fieldStreamed},
 	// In-flight pairs store -1. Treat that as no status code.
@@ -799,7 +805,11 @@ func (t *queryTranslator) comparison(e *expr.Expr, op string, lhs, rhs *expr.Exp
 		if _, ok := value.GetConstantKind().(*expr.Constant_Int64Value); !ok {
 			return "", t.errorAt(rhs, "%s needs a whole number", name)
 		}
-		return t.compare(field.column, op, value.GetInt64Value()), nil
+		cond := t.compare(field.column, op, value.GetInt64Value())
+		if field.present && op == "!=" {
+			cond = "(" + field.column + " IS NOT NULL AND " + cond + ")"
+		}
+		return cond, nil
 
 	case fieldTimestamp:
 		value, err := t.timestamp(rhs, name)

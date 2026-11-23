@@ -667,6 +667,7 @@ func NewProxyResponse(pair *Pair) (*domain.ProxyResponse, error) {
 		// Empty for a pair that never reached the origin, which keeps the
 		// origin protocol stored with the request.
 		OriginProtocol: pair.originProtocol,
+		GRPCStatus:     responseGRPCStatus(res),
 	}
 	return proxyResponse, nil
 }

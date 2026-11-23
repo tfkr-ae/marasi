@@ -292,7 +292,7 @@ func (repo *Repository) ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID,
 		request.status, request.status_code, request.content_type, request.length, request.responded_at,
 		request.upstream_proxy_name, request.upstream_proxy_address,
 			  request.client_protocol, request.origin_protocol,
-		request.request_framing, request.response_framing, request.request_stream_ending, request.response_stream_ending,
+		request.request_framing, request.response_framing, request.request_stream_ending, request.response_stream_ending, request.grpc_status,
 		request.metadata,
 		pair_highlight.highlight, pair_number.number
 		FROM armory_entry

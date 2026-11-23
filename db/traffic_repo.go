@@ -52,6 +52,9 @@ type dbRequestResponse struct {
 	Highlight sql.NullInt64  `db:"highlight"`
 	dbPrettified
 	dbStreamedState
+	// GRPCStatus is NULL for a pair that is not gRPC
+	// (db/migrations/00032_pair_grpc_status.sql).
+	GRPCStatus sql.NullInt64 `db:"grpc_status"`
 }
 
 // dbRequestResponseSummary represents a summarized version of a request and response entry
@@ -86,6 +89,8 @@ type dbRequestResponseSummary struct {
 	Metadata  pairMetadata  `db:"metadata"`
 	Highlight sql.NullInt64 `db:"highlight"`
 	dbStreamedState
+	// GRPCStatus is as in dbRequestResponse.
+	GRPCStatus sql.NullInt64 `db:"grpc_status"`
 }
 
 type dbNoteSummary struct {
@@ -165,6 +170,7 @@ func fromDomainProxyResponse(presp *domain.ProxyResponse) *dbRequestResponse {
 		UpstreamProxyName:    routeName(presp.Route),
 		UpstreamProxyAddress: routeAddress(presp.Route),
 		OriginProtocol:       sql.NullString{String: presp.OriginProtocol, Valid: presp.OriginProtocol != ""},
+		GRPCStatus:           grpcStatusColumn(presp.GRPCStatus),
 		dbPrettified: dbPrettified{Response: sql.NullString{
 			String: prettifiedCopy(presp.Prettified, presp.Metadata, prettifiedResponseKey),
 		}},
@@ -179,6 +185,7 @@ func toDomainProxyResponse(dbReqRes *dbRequestResponse) *domain.ProxyResponse {
 		Raw:        dbReqRes.ResponseRaw,
 		Metadata:   map[string]any(dbReqRes.Metadata),
 		Prettified: dbReqRes.dbPrettified.Response.String,
+		GRPCStatus: grpcStatusOf(dbReqRes.GRPCStatus),
 	}
 
 	if dbReqRes.Status.Valid {
@@ -227,6 +234,23 @@ func toDomainRequestResponseRow(dbReqRes *dbRequestResponse) *domain.RequestResp
 	row.Streamed = dbReqRes.state()
 
 	return row
+}
+
+// grpcStatusColumn stores a grpc-status, NULL when status is nil.
+func grpcStatusColumn(status *int) sql.NullInt64 {
+	if status == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: int64(*status), Valid: true}
+}
+
+// grpcStatusOf returns a read grpc-status, or nil when the pair has none.
+func grpcStatusOf(status sql.NullInt64) *int {
+	if !status.Valid {
+		return nil
+	}
+	v := int(status.Int64)
+	return &v
 }
 
 // routeName and routeAddress store a route snapshot, NULL when route is nil.
@@ -291,6 +315,7 @@ func toDomainRequestResponseSummary(dbSummary *dbRequestResponseSummary) *domain
 	reqResSummary.Highlight = highlightOf(dbSummary.Highlight)
 	reqResSummary.Route = routeOf(dbSummary.UpstreamProxyName, dbSummary.UpstreamProxyAddress)
 	reqResSummary.Streamed = dbSummary.state()
+	reqResSummary.GRPCStatus = grpcStatusOf(dbSummary.GRPCStatus)
 
 	return reqResSummary
 }
@@ -368,6 +393,7 @@ func (repo *Repository) InsertResponse(resp *domain.ProxyResponse) error {
 				upstream_proxy_name = :upstream_proxy_name,
 				upstream_proxy_address = :upstream_proxy_address,
 				origin_protocol = coalesce(:origin_protocol, origin_protocol),
+				grpc_status = :grpc_status,
 				metadata = json_patch(coalesce(metadata, '{}'), :metadata)
 			  WHERE id = :id`
 	err := repo.inTx(func(tx *sqlx.Tx) error {
@@ -446,7 +472,7 @@ func (repo *Repository) GetRequestResponseRow(id uuid.UUID) (*domain.RequestResp
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
 			  r.upstream_proxy_name, r.upstream_proxy_address,
 			  r.client_protocol, r.origin_protocol,
-			  r.request_framing, r.response_framing, r.request_stream_ending, r.response_stream_ending,
+			  r.request_framing, r.response_framing, r.request_stream_ending, r.response_stream_ending, r.grpc_status,
 			  r.metadata, n.note, h.highlight, pn.number, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
@@ -475,7 +501,7 @@ func (repo *Repository) GetRequestResponseRows(ids []uuid.UUID) ([]*domain.Reque
 			  r.status, r.status_code, r.response_raw, r.content_type, r.length, r.responded_at,
 			  r.upstream_proxy_name, r.upstream_proxy_address,
 			  r.client_protocol, r.origin_protocol,
-			  r.request_framing, r.response_framing, r.request_stream_ending, r.response_stream_ending,
+			  r.request_framing, r.response_framing, r.request_stream_ending, r.response_stream_ending, r.grpc_status,
 			  r.metadata, n.note, h.highlight, pn.number, ` + prettifiedColumns + `
 			  FROM request r
 			  LEFT JOIN notes n ON r.id = n.request_id
@@ -521,7 +547,7 @@ func (repo *Repository) GetRequestResponseSummary() ([]*domain.RequestResponseSu
 			  status, status_code, content_type, length, responded_at,
 			  upstream_proxy_name, upstream_proxy_address,
 			  client_protocol, origin_protocol,
-			  ` + streamedStateColumns + `,
+			  ` + streamedStateColumns + `, grpc_status,
 			  metadata,
 			  pair_highlight.highlight, pair_number.number
 			  FROM request` + highlightJoin + numberJoin + `
@@ -674,7 +700,7 @@ func (repo *Repository) ListNotes(cursor *uuid.UUID, limit int) ([]*domain.Reque
 			  r.status, r.status_code, r.content_type, r.length, r.responded_at,
 			  r.upstream_proxy_name, r.upstream_proxy_address,
 			  r.client_protocol, r.origin_protocol,
-			  r.request_framing, r.response_framing, r.request_stream_ending, r.response_stream_ending,
+			  r.request_framing, r.response_framing, r.request_stream_ending, r.response_stream_ending, r.grpc_status,
 			  r.metadata,
 			  n.note, h.highlight, pn.number
 			  FROM request r
@@ -724,7 +750,7 @@ func (repo *Repository) SearchByMetadata(path string, value any) ([]*domain.Requ
 			  status, status_code, content_type, length, responded_at,
 			  upstream_proxy_name, upstream_proxy_address,
 			  client_protocol, origin_protocol,
-			  ` + streamedStateColumns + `,
+			  ` + streamedStateColumns + `, grpc_status,
 			  metadata,
 			  pair_highlight.highlight, pair_number.number
 			  FROM request` + highlightJoin + numberJoin + `
