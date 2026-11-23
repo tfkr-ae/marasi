@@ -24,6 +24,9 @@ type formMessage struct {
 	text string
 	// line is the 1-based line of the request the text starts on.
 	line int
+	// compressed reports that the message sits under a
+	// "--- message compressed ---" separator and is sent compressed.
+	compressed bool
 }
 
 // supportedFraming reports whether Marasi can send a template that names framing.
@@ -81,17 +84,14 @@ func splitMessages(body string, firstLine int) ([]formMessage, error) {
 			whole += "\n"
 		}
 		rest = after
-		switch strings.TrimSuffix(content, "\r") {
-		case messageSeparator:
+		if separator := strings.TrimSuffix(content, "\r"); separator == messageSeparator || separator == compressedMessageSeparator {
 			if current != nil {
 				current.text = text.String()
 				messages = append(messages, *current)
 			}
-			current = &formMessage{line: line + 1}
+			current = &formMessage{line: line + 1, compressed: separator == compressedMessageSeparator}
 			text.Reset()
 			continue
-		case compressedMessageSeparator:
-			return nil, fmt.Errorf("line %d: compressed messages are not supported yet", line)
 		}
 		if current == nil {
 			return nil, fmt.Errorf("line %d: a message-form body must start with a %q line", line, messageSeparator)
@@ -185,10 +185,20 @@ func encodeMessageForm(raw, framing string) (string, error) {
 			return "", fmt.Errorf("message %d: %w", i+1, err)
 		}
 		if unary {
+			if message.compressed {
+				return "", fmt.Errorf("message %d (line %d): a Connect unary message is compressed by the request's Content-Encoding, not under a compressed separator", i+1, message.line-1)
+			}
 			encoded = payload
 			break
 		}
-		encoded = append(encoded, stream.Envelope(0, payload)...)
+		var flags byte
+		if message.compressed {
+			if payload, err = compressMessage(head, framing, payload); err != nil {
+				return "", fmt.Errorf("message %d (line %d): %w", i+1, message.line-1, err)
+			}
+			flags = stream.CompressedFlags(flags)
+		}
+		encoded = append(encoded, stream.Envelope(flags, payload)...)
 	}
 	if stream.IsGRPCWebText(contentType) {
 		encoded = []byte(base64.StdEncoding.EncodeToString(encoded))
@@ -232,23 +242,56 @@ func withContentLength(head string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
+// compressMessage compresses payload, a message under a compressed
+// separator, with the per-message encoding head names for framing:
+// grpc-encoding, or connect-content-encoding for Connect streaming. A head
+// that names no encoding, identity, or one Marasi does not encode is an
+// error.
+func compressMessage(head, framing string, payload []byte) ([]byte, error) {
+	field := stream.EncodingHeader(stream.Framing(framing))
+	encoding, _ := headField(head, field)
+	if encoding == "" || strings.EqualFold(encoding, "identity") {
+		return nil, fmt.Errorf("a compressed message needs a %s the request names, and it names none", field)
+	}
+	if !stream.Decodable(encoding) {
+		return nil, fmt.Errorf("a compressed message cannot be compressed with the %s %q: Marasi compresses gzip and deflate", field, encoding)
+	}
+	return stream.Compress(encoding, payload)
+}
+
+// TemplateMessage is one message MessageFormTemplate puts in a
+// message-form body.
+type TemplateMessage struct {
+	// Payload is the message's uncompressed payload.
+	Payload []byte
+	// Compressed reports that the message was sent compressed, so it goes
+	// under a "--- message compressed ---" separator and is compressed
+	// again when the template renders.
+	Compressed bool
+}
+
 // MessageFormTemplate is an Armory template that sends head followed by
-// payloads as messages: a message-form body with each payload in its text
+// messages: a message-form body with each message's payload in its text
 // form for the head's content type under a separator, in order, escaped so
-// the template renders back to head and the payloads' bytes. It reports
-// false when the content type gives the messages no text form.
-func MessageFormTemplate(head string, payloads [][]byte) (string, bool) {
+// the template renders back to head and the payloads' bytes. A compressed
+// message goes under a compressed separator. It reports false when the
+// content type gives the messages no text form.
+func MessageFormTemplate(head string, messages []TemplateMessage) (string, bool) {
 	headText, _, _ := splitHead(head)
 	contentType, _ := headField(headText, "content-type")
 	contentType = messageContentType(contentType)
 	protoscopeText := stream.HasProtoscopeText(contentType)
 	var body strings.Builder
-	for _, payload := range payloads {
-		text, ok := stream.TextForm(contentType, payload)
+	for _, message := range messages {
+		text, ok := stream.TextForm(contentType, message.Payload)
 		if !ok {
 			return "", false
 		}
-		body.WriteString(messageSeparator + "\n")
+		if message.Compressed {
+			body.WriteString(compressedMessageSeparator + "\n")
+		} else {
+			body.WriteString(messageSeparator + "\n")
+		}
 		body.WriteString(text)
 		// A JSON message's text always gets the line ending encoding
 		// takes off again, so the message renders byte for byte.
@@ -284,5 +327,5 @@ func ConnectUnaryTemplate(raw string) (string, bool) {
 			return "", false
 		}
 	}
-	return MessageFormTemplate(head+blank, [][]byte{[]byte(body)})
+	return MessageFormTemplate(head+blank, []TemplateMessage{{Payload: []byte(body)}})
 }

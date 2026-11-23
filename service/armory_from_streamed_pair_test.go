@@ -149,6 +149,30 @@ func TestArmoryTemplateFromStreamedPair(t *testing.T) {
 		}
 	})
 
+	t.Run("should write a compressed message decompressed under a compressed separator", func(t *testing.T) {
+		gzipHead := strings.Replace(head, "te: trailers", "grpc-encoding: gzip\r\nte: trailers", 1)
+		pair := insertStreamedPair(t, gzipHead, "grpc")
+		id, _ := uuid.NewV7()
+		flags := uint8(1)
+		err := repo.InsertStreamMessage(&domain.StreamMessage{
+			ID: id, PairID: pair, Direction: domain.StreamDirectionRequest, Framing: "grpc", Flags: &flags,
+			Payload: first, Compressed: true, CreatedAt: time.Now(), Metadata: map[string]any{"encoding": "gzip"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		insertMessage(t, pair, domain.StreamDirectionRequest, "grpc", second, nil)
+
+		template := create(t, pair)
+
+		want := gzipHead +
+			"--- message compressed ---\n1:LEN {\"a\\\\\\\\b\"}\n" +
+			"--- message ---\n2:VARINT 7\n"
+		if template.Framing != "grpc" || template.RawTemplate != want {
+			t.Fatalf("\nwanted:\ngrpc %q\ngot:\n%q %q", want, template.Framing, template.RawTemplate)
+		}
+	})
+
 	t.Run("should build a streamed request whose messages have no text form from the joined request as raw text", func(t *testing.T) {
 		thriftHead := strings.Replace(head, "application/grpc", "application/grpc+thrift", 1)
 		pair := insertStreamedPair(t, thriftHead, "grpc")
