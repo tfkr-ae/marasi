@@ -316,9 +316,10 @@ func EscapeTemplate(raw string) string {
 }
 
 // Render renders an Armory template with every payload position at its
-// fallback value.
-func Render(raw string) (string, error) {
-	tmpl, err := parseTemplate(raw)
+// fallback value, as the request it sends: a template whose framing is set
+// has its message-form body encoded into envelopes.
+func Render(raw, framing string) (string, error) {
+	tmpl, err := parseFramedTemplate(raw, framing)
 	if err != nil {
 		return "", err
 	}

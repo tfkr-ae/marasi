@@ -137,3 +137,26 @@ func encodeMessageForm(raw, framing string) (string, error) {
 	}
 	return out.String(), nil
 }
+
+// MessageFormTemplate is an Armory template that sends head followed by
+// payloads as messages: a message-form body with each payload in its text
+// form for the head's content type under a separator, in order, escaped so
+// the template renders back to head and the payloads' bytes. It reports
+// false when the content type gives the messages no text form.
+func MessageFormTemplate(head string, payloads [][]byte) (string, bool) {
+	headText, _, _ := splitHead(head)
+	contentType, _ := headField(headText, "content-type")
+	var body strings.Builder
+	for _, payload := range payloads {
+		text, ok := stream.TextForm(contentType, payload)
+		if !ok {
+			return "", false
+		}
+		body.WriteString(messageSeparator + "\n")
+		body.WriteString(text)
+		if text != "" && !strings.HasSuffix(text, "\n") {
+			body.WriteString("\n")
+		}
+	}
+	return EscapeTemplate(head + body.String()), true
+}

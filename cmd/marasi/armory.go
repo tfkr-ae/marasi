@@ -71,7 +71,7 @@ func init() {
 	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateDescription, "description", "", "Template description")
 	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateRawFile, "raw-file", "", "Read the raw template from a file")
 	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateFraming, "framing", "", "Request message framing: grpc, for a template whose body is a message-form body. Empty for none")
-	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateFromPair, "from-pair", "", "Build the template from this captured pair's request, named METHOD host path. Cannot be used with --name, --description, --raw-file or --framing")
+	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateFromPair, "from-pair", "", "Build the template from this captured pair's request, named METHOD host path. A gRPC call's request messages become a message-form body with the call's framing. Cannot be used with --name, --description, --raw-file or --framing")
 	armoryTemplateCreateCmd.MarkFlagsMutuallyExclusive("from-pair", "raw-file")
 	armoryTemplateCreateCmd.MarkFlagsMutuallyExclusive("from-pair", "name")
 	armoryTemplateCreateCmd.MarkFlagsMutuallyExclusive("from-pair", "description")
