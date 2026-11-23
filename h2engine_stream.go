@@ -37,12 +37,12 @@ func (h *h2Conn) carry(st *h2Stream) {
 	req = h.prepare(req, st)
 	if err := h.engine.request(req, h2NoHijack{}, &wireRequest{h2: &request}); err != nil {
 		// A refused request: its stream is refused, not the connection.
-		h.resetStream(st.id, http2.ErrCodeRefusedStream)
+		h.reset(st, http2.ErrCodeRefusedStream)
 		return
 	}
 	pair := requestPair(req)
 	if pair == nil {
-		h.resetStream(st.id, http2.ErrCodeInternal)
+		h.reset(st, http2.ErrCodeInternal)
 		return
 	}
 	st.pair = pair
@@ -72,13 +72,13 @@ func (h *h2Conn) carry(st *h2Stream) {
 		if streamed != nil {
 			streamed.reset(http2.ErrCodeCancel)
 		}
-		h.resetStream(st.id, http2.ErrCodeCancel)
+		h.reset(st, http2.ErrCodeCancel)
 		return
 	case streamed != nil && pair.stream.refusedResponse() && !pair.FromMarasi():
 		// The response step did not admit the response in its
 		// project: neither leg goes on.
 		streamed.reset(http2.ErrCodeCancel)
-		h.resetStream(st.id, http2.ErrCodeCancel)
+		h.reset(st, http2.ErrCodeCancel)
 		return
 	case streamed != nil && pair.FromMarasi():
 		// The chain answered with a response of Marasi's own, or the
@@ -88,7 +88,7 @@ func (h *h2Conn) carry(st *h2Stream) {
 	case streamed != nil && !pair.stream.goLive():
 		// Refused since the checks above: nothing is carried.
 		streamed.reset(http2.ErrCodeCancel)
-		h.resetStream(st.id, http2.ErrCodeCancel)
+		h.reset(st, http2.ErrCodeCancel)
 		return
 	case streamed != nil:
 		if pair.responseWire != nil {
@@ -101,7 +101,7 @@ func (h *h2Conn) carry(st *h2Stream) {
 		// No response modifier ran: what arrived goes on as it arrived,
 		// then the stream is reset with the origin's code.
 		h.writeMessage(st, wire.h2.fields, wire.h2.body, nil, false, false)
-		h.resetStream(st.id, *cut)
+		h.reset(st, *cut)
 		return
 	}
 	// The response step may have replaced the wire message: a Checkpoint
@@ -293,7 +293,7 @@ func (h *h2Conn) awaitResponse(st *h2Stream, req *http.Request, s *h2OriginStrea
 	case s.err != nil:
 		return nil, nil, nil, s.err
 	case !s.final && s.reset != nil:
-		h.resetStream(st.id, *s.reset)
+		h.reset(st, *s.reset)
 		return nil, nil, nil, errStreamGone
 	case !s.final:
 		return nil, nil, nil, errors.New("the origin ended the stream without a response")

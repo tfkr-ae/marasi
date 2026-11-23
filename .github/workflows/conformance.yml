@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [h1-client, h1-origin]
+        suite: [h1-origin]
         run: [proxy, checkpoint-forward, checkpoint-edit, extension]
     env:
       RUN_SUITE: ${{ needs.paths.outputs.h1 }}
@@ -59,6 +59,93 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: conformance-${{ matrix.suite }}-${{ matrix.run }}
+          path: dist/conformance/
+          if-no-files-found: ignore
+
+  # Build and cache Http11Probe's image once per image definition so the
+  # four h1-client runs load it instead of cloning GitHub and restoring
+  # NuGet packages in parallel.
+  h1-image:
+    name: h1-client (image)
+    needs: paths
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      RUN_SUITE: ${{ needs.paths.outputs.h1 }}
+    steps:
+      - if: env.RUN_SUITE != 'true'
+        run: echo 'No HTTP/1.1 path changed; Http11Probe image build is skipped.'
+      - if: env.RUN_SUITE == 'true'
+        uses: actions/checkout@v4
+      - id: cache
+        if: env.RUN_SUITE == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/h1-client-image.tar.gz
+          key: h1-client-image-${{ runner.arch }}-${{ hashFiles('internal/conformance/h1client/Dockerfile', 'internal/conformance/h1client/docker.go') }}
+          lookup-only: true
+      - if: env.RUN_SUITE == 'true' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - if: env.RUN_SUITE == 'true' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -o pipefail
+          image=$(go run ./internal/conformance/cmd/conformance -suites h1-client -build-images)
+          test -n "$image"
+          docker save "$image" | gzip -1 > /tmp/h1-client-image.tar.gz
+      - if: env.RUN_SUITE == 'true' && steps.cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/h1-client-image.tar.gz
+          key: h1-client-image-${{ runner.arch }}-${{ hashFiles('internal/conformance/h1client/Dockerfile', 'internal/conformance/h1client/docker.go') }}
+
+  # Required checks, as the h1, h2 and streams jobs are, for h1-client:
+  # "h1-client (proxy)", "h1-client (checkpoint-edit)" and so on. Loads
+  # Http11Probe's image from the cache populated by h1-image (falling back
+  # to building it when the cache is absent).
+  h1-client:
+    name: h1-client (${{ matrix.run }})
+    needs: [paths, h1-image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [proxy, checkpoint-forward, checkpoint-edit, extension]
+    env:
+      RUN_SUITE: ${{ needs.paths.outputs.h1 }}
+    steps:
+      - if: env.RUN_SUITE != 'true'
+        run: echo 'No HTTP/1.1 path changed; the suite is skipped.'
+      - if: env.RUN_SUITE == 'true'
+        uses: actions/checkout@v4
+      - if: env.RUN_SUITE == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - if: env.RUN_SUITE == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/h1-client-image.tar.gz
+          key: h1-client-image-${{ runner.arch }}-${{ hashFiles('internal/conformance/h1client/Dockerfile', 'internal/conformance/h1client/docker.go') }}
+      - if: env.RUN_SUITE == 'true'
+        run: |
+          set -o pipefail
+          if [ -f /tmp/h1-client-image.tar.gz ]; then
+            gzip -dc /tmp/h1-client-image.tar.gz | docker load
+          fi
+      - if: env.RUN_SUITE == 'true'
+        run: make conformance SUITES=h1-client RUNS=${{ matrix.run }}
+      - if: always() && env.RUN_SUITE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-h1-client-${{ matrix.run }}
           path: dist/conformance/
           if-no-files-found: ignore
 
@@ -96,13 +183,12 @@ jobs:
           path: dist/conformance/
           if-no-files-found: ignore
 
-  # Required checks, as the h1 and h2 jobs are, for the streamed pair
-  # suites: "stream-origin (proxy)", "grpc-client (proxy)" and so on.
-  # grpc-client installs grpc-go's interop client with the Go toolchain
-  # set up here (go install, outside go.mod) and builds grpc-java's
-  # interop image. connect-client installs the connectrpc/conformance
-  # runner and reference client the same way and runs Marasi on the host,
-  # which reaches the reference servers on loopback.
+  # Required checks, as the h1 and h2 jobs are, for stream-origin and
+  # connect-client: "stream-origin (proxy)", "connect-client (proxy)" and
+  # so on. connect-client installs the connectrpc/conformance runner and
+  # reference client with the Go toolchain set up here (go install,
+  # outside go.mod) and runs Marasi on the host, which reaches the
+  # reference servers on loopback.
   streams:
     name: ${{ matrix.suite }} (${{ matrix.run }})
     needs: paths
@@ -111,7 +197,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [stream-origin, grpc-client, connect-client]
+        suite: [stream-origin, connect-client]
         run: [proxy, checkpoint-forward, checkpoint-edit, extension]
     env:
       RUN_SUITE: ${{ needs.paths.outputs.streams }}
@@ -131,6 +217,95 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: conformance-${{ matrix.suite }}-${{ matrix.run }}
+          path: dist/conformance/
+          if-no-files-found: ignore
+
+  # Build and cache grpc-java's interop image once per image definition so
+  # the four grpc-client runs load it instead of fetching Maven artifacts
+  # in parallel.
+  grpc-image:
+    name: grpc-client (image)
+    needs: paths
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      RUN_SUITE: ${{ needs.paths.outputs.streams }}
+    steps:
+      - if: env.RUN_SUITE != 'true'
+        run: echo 'No streaming path changed; grpc-java image build is skipped.'
+      - if: env.RUN_SUITE == 'true'
+        uses: actions/checkout@v4
+      - id: cache
+        if: env.RUN_SUITE == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/grpc-java-image.tar.gz
+          key: grpc-java-image-${{ runner.arch }}-${{ hashFiles('internal/conformance/grpcclient/Dockerfile', 'internal/conformance/grpcclient/docker.go') }}
+          lookup-only: true
+      - if: env.RUN_SUITE == 'true' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - if: env.RUN_SUITE == 'true' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -o pipefail
+          image=$(go run ./internal/conformance/cmd/conformance -suites grpc-client -build-images)
+          test -n "$image"
+          docker save "$image" | gzip -1 > /tmp/grpc-java-image.tar.gz
+      - if: env.RUN_SUITE == 'true' && steps.cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/grpc-java-image.tar.gz
+          key: grpc-java-image-${{ runner.arch }}-${{ hashFiles('internal/conformance/grpcclient/Dockerfile', 'internal/conformance/grpcclient/docker.go') }}
+
+  # Required checks, as the h1, h2 and streams jobs are, for grpc-client:
+  # "grpc-client (proxy)", "grpc-client (checkpoint-edit)" and so on.
+  # grpc-client installs grpc-go's interop client with the Go toolchain
+  # set up here (go install, outside go.mod) and loads grpc-java's interop
+  # image from the cache populated by grpc-image (falling back to building
+  # it when the cache is absent).
+  grpc:
+    name: grpc-client (${{ matrix.run }})
+    needs: [paths, grpc-image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [proxy, checkpoint-forward, checkpoint-edit, extension]
+    env:
+      RUN_SUITE: ${{ needs.paths.outputs.streams }}
+    steps:
+      - if: env.RUN_SUITE != 'true'
+        run: echo 'No streaming path changed; the suite is skipped.'
+      - if: env.RUN_SUITE == 'true'
+        uses: actions/checkout@v4
+      - if: env.RUN_SUITE == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - if: env.RUN_SUITE == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/grpc-java-image.tar.gz
+          key: grpc-java-image-${{ runner.arch }}-${{ hashFiles('internal/conformance/grpcclient/Dockerfile', 'internal/conformance/grpcclient/docker.go') }}
+      - if: env.RUN_SUITE == 'true'
+        run: |
+          set -o pipefail
+          if [ -f /tmp/grpc-java-image.tar.gz ]; then
+            gzip -dc /tmp/grpc-java-image.tar.gz | docker load
+          fi
+      - if: env.RUN_SUITE == 'true'
+        run: make conformance SUITES=grpc-client RUNS=${{ matrix.run }}
+      - if: always() && env.RUN_SUITE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-grpc-client-${{ matrix.run }}
           path: dist/conformance/
           if-no-files-found: ignore
 

@@ -88,10 +88,11 @@ type h2OriginStream struct {
 	err      error
 
 	// sending is set while the rest of a passed request body is sent,
-	// and finished once the response finished; both guarded by
-	// h2Origin.mu.
-	sending  bool
-	finished bool
+	// finished once the response finished, and cancelled once Marasi sent
+	// RST_STREAM on s; all guarded by h2Origin.mu.
+	sending   bool
+	finished  bool
+	cancelled bool
 
 	passMu sync.Mutex
 	pass   *h2Passing
@@ -496,10 +497,14 @@ func (o *h2Origin) finish(s *h2OriginStream, err error) {
 	if body := s.streamed.Load(); body != nil {
 		// The connection ended, or the stream was given up; a body
 		// that already ended stays as it ended.
-		if err == nil {
-			err = errStreamGone
+		reason := err
+		switch {
+		case reset != nil:
+			reason = &streamResetError{code: *reset}
+		case reason == nil:
+			reason = errStreamGone
 		}
-		body.in.closeUnlessEnded(err)
+		body.in.closeUnlessEnded(reason)
 	}
 }
 
@@ -639,14 +644,16 @@ func (o *h2Origin) openStream(fields h2Fields, endStream, sending bool, opened f
 	return s, nil
 }
 
-// cancel resets stream s with code, as the client reset its own.
+// cancel resets stream s with code once, as the client reset its own.
 func (o *h2Origin) cancel(s *h2OriginStream, code http2.ErrCode) {
 	o.mu.Lock()
 	_, open := o.streams[s.id]
-	o.mu.Unlock()
-	if !open {
+	if !open || s.cancelled {
+		o.mu.Unlock()
 		return
 	}
+	s.cancelled = true
+	o.mu.Unlock()
 	if body := s.streamed.Load(); body != nil {
 		body.in.close(&streamResetError{code: code})
 	}

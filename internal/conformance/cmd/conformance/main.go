@@ -43,6 +43,7 @@ func main() {
 		autobahnSuite            autobahn.Suite
 		modes, peers             string
 		verbose                  bool
+		buildImages              bool
 		container                conformance.ContainerSettings
 	)
 	flag.StringVar(&binary, "marasi", "dist/marasi", "marasi binary")
@@ -57,6 +58,7 @@ func main() {
 	flag.StringVar(&approaches, "approaches", "", "comma-separated client approaches (absolute, connect-plain, connect-tls); empty means all")
 	flag.BoolVar(&settings.UpdateKnown, "update-known", false, "rewrite the known entries of deviations.json and score.json from this run")
 	flag.BoolVar(&verbose, "verbose", false, "stream tester output")
+	flag.BoolVar(&buildImages, "build-images", false, "build the selected suites' tester Docker images, print their tags, and exit")
 	flag.StringVar(&autobahnSuite.Image, "image", autobahn.Image, "autobahn: testsuite image")
 	flag.StringVar(&modes, "modes", "fuzzingclient,fuzzingserver", "autobahn: suite modes")
 	flag.StringVar(&peers, "peers", "strict,lenient", "autobahn: upstream peers")
@@ -106,6 +108,22 @@ func main() {
 		default:
 			fail(fmt.Errorf("unknown suite %q", name))
 		}
+	}
+	if buildImages {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		for _, suite := range settings.Suites {
+			builder, ok := suite.(conformance.ImageBuilder)
+			if !ok {
+				continue
+			}
+			tag, err := builder.BuildImage(ctx, os.Stderr)
+			if err != nil {
+				fail(err)
+			}
+			fmt.Println(tag)
+		}
+		return
 	}
 	if container.Binary == "" {
 		container.Binary = "dist/marasi-linux-" + container.Arch

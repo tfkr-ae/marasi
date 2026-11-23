@@ -8,6 +8,13 @@
 # depends on the filesystem, so where it came first grpc-java's server
 # failed every call it answered with an error (NoSuchMethodError).
 # protobuf-java holds the whole lite runtime.
+#
+# maven-dependency-plugin is invoked by full coordinates (not the unpinned
+# `dependency:` prefix) so Maven never scans every Super POM lifecycle plugin
+# or plugin-group metadata, and `-ntp` replaces `-q` so transfer errors stay
+# visible in the build log. Google's Maven Central mirror is listed ahead of
+# central (which stays as fallback via the Super POM) because Maven Central's
+# CDN rate-limits shared CI runner IPs with HTTP 429/503.
 FROM maven:3.9.11-eclipse-temurin-21@sha256:6fdc855a6ed81d288ca7ca37ac6ff5e9308b612485c0801d70b25a858c83d237 AS fetch
 ARG VERSION
 WORKDIR /fetch
@@ -16,11 +23,21 @@ RUN test -n "$VERSION" \
     '<project xmlns="http://maven.apache.org/POM/4.0.0">' \
     '  <modelVersion>4.0.0</modelVersion>' \
     '  <groupId>marasi.conformance</groupId><artifactId>grpc-interop</artifactId><version>1</version>' \
+    '  <repositories><repository>' \
+    '    <id>google-maven-central</id>' \
+    '    <url>https://maven-central.storage-download.googleapis.com/maven2</url>' \
+    '    <snapshots><enabled>false</enabled></snapshots>' \
+    '  </repository></repositories>' \
+    '  <pluginRepositories><pluginRepository>' \
+    '    <id>google-maven-central</id>' \
+    '    <url>https://maven-central.storage-download.googleapis.com/maven2</url>' \
+    '    <snapshots><enabled>false</enabled></snapshots>' \
+    '  </pluginRepository></pluginRepositories>' \
     '  <dependencies><dependency>' \
     "    <groupId>io.grpc</groupId><artifactId>grpc-interop-testing</artifactId><version>$VERSION</version>" \
     '  </dependency></dependencies>' \
     '</project>' > pom.xml \
- && mvn -q -B dependency:copy-dependencies -DincludeScope=runtime -DexcludeArtifactIds=protobuf-javalite -DoutputDirectory=/interop/lib
+ && mvn -B -ntp org.apache.maven.plugins:maven-dependency-plugin:3.7.0:copy-dependencies -DincludeScope=runtime -DexcludeArtifactIds=protobuf-javalite -DoutputDirectory=/interop/lib
 
 FROM eclipse-temurin:21-jre@sha256:ca73b4d3961703d6d7830a4361f49ef0478f8f28b39defc07bb72f4cc7f834f6
 COPY --from=fetch /interop/lib /interop/lib
