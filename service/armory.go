@@ -129,6 +129,29 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 		writeJSON(w, r, http.StatusOK, response)
 	})
 
+	mux.HandleFunc("POST /armory/template/from-pair/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseArmoryID(w, r)
+		if !ok {
+			return
+		}
+		template, err := proxy.CreateArmoryTemplateFromPair(id)
+		switch {
+		// GetTrafficRepo reports no open project as ErrExtensionRepoNotFound.
+		case errors.Is(err, domain.ErrPairNotFound), errors.Is(err, marasi.ErrArmoryNotFound), errors.Is(err, marasi.ErrArmoryRepoNotFound), errors.Is(err, marasi.ErrExtensionRepoNotFound):
+			writeArmoryError(w, r, http.StatusNotFound, "not_found")
+			return
+		case errors.Is(err, marasi.ErrStreamedRequestOpen):
+			writeRefusal(w, r, http.StatusConflict, "stream_request_open", "the streamed pair's request direction is still being carried; build the template once the request ends")
+			return
+		case err != nil:
+			writeArmoryError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		response := armoryTemplateFromDomain(template)
+		events.publish("armory.template.created", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
+
 	mux.HandleFunc("GET /armory/template/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := parseArmoryID(w, r)
 		if !ok {

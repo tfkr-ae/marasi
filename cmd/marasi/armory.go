@@ -21,6 +21,7 @@ import (
 var armoryTemplateCreateName string
 var armoryTemplateCreateDescription string
 var armoryTemplateCreateRawFile string
+var armoryTemplateCreateFromPair string
 var armoryTemplateUpdateName string
 var armoryTemplateUpdateDescription string
 var armoryTemplateUpdateRawFile string
@@ -63,10 +64,14 @@ type armoryRunResponse struct {
 }
 
 func init() {
-	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateName, "name", "", "Template name. Required")
+	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateName, "name", "", "Template name. Required unless --from-pair is set")
 	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateDescription, "description", "", "Template description")
 	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateRawFile, "raw-file", "", "Read the raw template from a file")
-	armoryTemplateCreateCmd.MarkFlagRequired("name")
+	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateFromPair, "from-pair", "", "Build the template from this captured pair's request, named METHOD host path. Cannot be used with --name, --description or --raw-file")
+	armoryTemplateCreateCmd.MarkFlagsMutuallyExclusive("from-pair", "raw-file")
+	armoryTemplateCreateCmd.MarkFlagsMutuallyExclusive("from-pair", "name")
+	armoryTemplateCreateCmd.MarkFlagsMutuallyExclusive("from-pair", "description")
+	armoryTemplateCreateCmd.MarkFlagsOneRequired("from-pair", "name")
 	armoryTemplateUpdateCmd.Flags().StringVar(&armoryTemplateUpdateName, "name", "", "Template name")
 	armoryTemplateUpdateCmd.Flags().StringVar(&armoryTemplateUpdateDescription, "description", "", "Template description")
 	armoryTemplateUpdateCmd.Flags().StringVar(&armoryTemplateUpdateRawFile, "raw-file", "", "Read the raw template from a file")
@@ -120,6 +125,13 @@ var armoryTemplateGetCmd = &cobra.Command{
 var armoryTemplateCreateCmd = &cobra.Command{
 	Use: "create", Short: "Create an Armory template", Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		if cmd.Flags().Changed("from-pair") {
+			path, err := serviceIDPath("/armory/template/from-pair/", armoryTemplateCreateFromPair, "")
+			if err != nil {
+				return err
+			}
+			return runArmoryCommand(cmd, http.MethodPost, path, nil, "creating Armory template", nil, "armory template %s created successfully\n")
+		}
 		if strings.TrimSpace(armoryTemplateCreateName) == "" {
 			return errors.New("armory template create requires a non-empty --name")
 		}
