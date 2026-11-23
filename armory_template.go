@@ -49,8 +49,8 @@ func (proxy *Proxy) CreateArmoryTemplateFromPair(id uuid.UUID) (*domain.ArmoryTe
 		Name:        fmt.Sprintf("%s %s %s", row.Request.Method, row.Request.Host, row.Request.Path),
 		RawTemplate: armory.EscapeTemplate(string(joined.Raw)),
 	}
-	if framing, payloads, ok := messageFormParts(joined); ok {
-		if raw, ok := armory.MessageFormTemplate(string(joined.head), payloads); ok {
+	if framing, messages, ok := messageFormParts(joined); ok {
+		if raw, ok := armory.MessageFormTemplate(string(joined.head), messages); ok {
 			template.RawTemplate = raw
 			template.Framing = framing
 		}
@@ -61,22 +61,23 @@ func (proxy *Proxy) CreateArmoryTemplateFromPair(id uuid.UUID) (*domain.ArmoryTe
 	return template, nil
 }
 
-// messageFormParts is the framing and payloads of joined's request messages,
+// messageFormParts is the framing and messages of joined's request messages,
+// each uncompressed with its compressed flag,
 // and false when they cannot be held in a message-form body: the request
 // was not streamed, joined no message, or holds a message stored as
 // compressed bytes Marasi does not decode.
-func messageFormParts(joined JoinedRequest) (string, [][]byte, bool) {
+func messageFormParts(joined JoinedRequest) (string, []armory.TemplateMessage, bool) {
 	if !joined.Streamed || len(joined.forwarded) == 0 {
 		return "", nil, false
 	}
 	framing := joined.forwarded[0].Framing
-	payloads := make([][]byte, 0, len(joined.forwarded))
+	messages := make([]armory.TemplateMessage, 0, len(joined.forwarded))
 	for _, message := range joined.forwarded {
 		encoding, _ := message.Metadata["encoding"].(string)
 		if message.Framing != framing || (message.Compressed && !stream.Decodable(encoding)) {
 			return "", nil, false
 		}
-		payloads = append(payloads, message.Payload)
+		messages = append(messages, armory.TemplateMessage{Payload: message.Payload, Compressed: message.Compressed})
 	}
-	return framing, payloads, true
+	return framing, messages, true
 }
