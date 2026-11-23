@@ -1,6 +1,7 @@
 package stream_test
 
 import (
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"strings"
@@ -51,6 +52,31 @@ func TestIsGRPCWebText(t *testing.T) {
 			t.Errorf("IsGRPCWebText(%q)\nwanted:\n%v\ngot:\n%v", contentType, want, got)
 		}
 	}
+}
+
+func TestDecodeGRPCWebText(t *testing.T) {
+	t.Run("should decode padded chunks joined together", func(t *testing.T) {
+		want := envelope(0, "pongs") + envelope(0x80, "grpc-status: 9\r\n")
+		body := base64.StdEncoding.EncodeToString([]byte(envelope(0, "pongs"))) +
+			base64.StdEncoding.EncodeToString([]byte(envelope(0x80, "grpc-status: 9\r\n")))
+		got, err := stream.DecodeGRPCWebText([]byte(body))
+		if err != nil || string(got) != want {
+			t.Fatalf("\nwanted:\n%q\ngot:\n%q, %v", want, got, err)
+		}
+	})
+
+	t.Run("should decode a last chunk sent without padding", func(t *testing.T) {
+		got, err := stream.DecodeGRPCWebText([]byte(base64.RawStdEncoding.EncodeToString([]byte("pongs"))))
+		if err != nil || string(got) != "pongs" {
+			t.Fatalf("\nwanted:\n%q\ngot:\n%q, %v", "pongs", got, err)
+		}
+	})
+
+	t.Run("should fail on a body that is not base64", func(t *testing.T) {
+		if _, err := stream.DecodeGRPCWebText([]byte("not base64!")); err == nil {
+			t.Fatal("\nwanted:\nan error\ngot:\nnil")
+		}
+	})
 }
 
 // envelope is payload in a 5-byte envelope with flags.

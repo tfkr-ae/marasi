@@ -9,6 +9,8 @@
 package stream
 
 import (
+	"encoding/base64"
+	"fmt"
 	"mime"
 	"strings"
 )
@@ -76,4 +78,30 @@ func IsGRPCWebText(contentType string) bool {
 func suffixed(mediaType, base string) bool {
 	rest, ok := strings.CutPrefix(mediaType, base)
 	return ok && (rest == "" || rest[0] == '+')
+}
+
+// base64Quantum is the length of a group of base64 characters that decodes
+// on its own: 4 characters for 3 bytes, the last group padded with "=".
+const base64Quantum = 4
+
+// DecodeGRPCWebText decodes a gRPC-Web base64 body (IsGRPCWebText). A server
+// may encode each frame on its own and join the padded chunks, so the body
+// is decoded one quantum at a time, padding included; a short last group is
+// decoded unpadded.
+func DecodeGRPCWebText(body []byte) ([]byte, error) {
+	decoded := make([]byte, 0, len(body)/base64Quantum*3)
+	for len(body) > 0 {
+		n := min(base64Quantum, len(body))
+		encoding := base64.StdEncoding
+		if n < base64Quantum {
+			encoding = base64.RawStdEncoding
+		}
+		group, err := encoding.DecodeString(string(body[:n]))
+		if err != nil {
+			return nil, fmt.Errorf("decoding the gRPC-Web text body: %w", err)
+		}
+		decoded = append(decoded, group...)
+		body = body[n:]
+	}
+	return decoded, nil
 }
