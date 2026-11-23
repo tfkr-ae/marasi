@@ -644,7 +644,10 @@ func NewProxyResponse(pair *Pair) (*domain.ProxyResponse, error) {
 		}
 	}
 
-	metadata := pair.Metadata
+	// A failed response chain records its proxy error in the pair's metadata
+	// while the database writer may be storing this response, so the
+	// response gets its own copy, as the request does.
+	metadata := maps.Clone(pair.Metadata)
 	if metadata == nil {
 		metadata = make(map[string]any)
 	}
