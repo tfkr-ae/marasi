@@ -229,6 +229,12 @@ func TestChromePaths(t *testing.T) {
 				t.Fatalf("starting helper process: %v", err)
 			}
 			commands[i] = command
+			t.Cleanup(func() {
+				if command.ProcessState == nil {
+					_ = command.Process.Kill()
+					_ = command.Wait()
+				}
+			})
 			deadline := time.Now().Add(5 * time.Second)
 			for {
 				if _, err := os.Stat(ready); err == nil {
@@ -552,9 +558,9 @@ func writeCDPFakeChrome(t *testing.T, dir, devToolsActivePort string) (executabl
 		"  esac\n" +
 		"done\n" +
 		"if [ -n \"$cdp\" ] && [ -n '" + devToolsActivePort + "' ]; then\n" +
-		"  mkdir -p \"$profile\" && printf '" + devToolsActivePort + "' > \"$profile/DevToolsActivePort\"\n" +
+		"  mkdir -p \"$profile\" && printf '" + devToolsActivePort + "' > \"$profile/DevToolsActivePort.$$.tmp\" && mv \"$profile/DevToolsActivePort.$$.tmp\" \"$profile/DevToolsActivePort\"\n" +
 		"fi\n" +
-		"printf '%s\\n' \"$@\" > \"" + argsPath + ".tmp\" && mv \"" + argsPath + ".tmp\" \"" + argsPath + "\"\n"
+		"printf '%s\\n' \"$@\" > \"" + argsPath + ".$$.tmp\" && mv \"" + argsPath + ".$$.tmp\" \"" + argsPath + "\"\n"
 	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
 		t.Fatalf("writing fake Chrome: %v", err)
 	}
