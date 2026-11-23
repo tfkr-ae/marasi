@@ -226,6 +226,10 @@ _Avoid_: job, campaign, attack when referring to the stored record
 An ordinary request/response pair linked to an Armory run rather than copied.
 _Avoid_: result, hit, copy
 
+**Failed attempt**:
+A request an Armory run built from its payloads but did not send, because a payload left one of its messages unable to encode. It is recorded on the run with its payloads and the error, and counted in the run's progress, and the run goes on. It is not an Armory entry, because nothing went on the wire.
+_Avoid_: failed request, error entry, skipped pair
+
 **Test case**:
 An assessment work item recorded in the open project, identified by UUID. It may link to request/response pairs and artifacts. Distinct from a predefined test case.
 _Avoid_: logbook when referring to the record

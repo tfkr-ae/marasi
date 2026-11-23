@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -53,6 +54,31 @@ type dbArmoryRun struct {
 	StartedAt sql.NullTime `db:"started_at"`
 	// FinishedAt is the nullable execution finish time.
 	FinishedAt sql.NullTime `db:"finished_at"`
+	// EntryCount is the number of the run's entries, read with the run.
+	EntryCount int `db:"entry_count"`
+	// FailedAttemptCount is the number of the run's failed attempts, read
+	// with the run.
+	FailedAttemptCount int `db:"failed_attempt_count"`
+}
+
+// armoryRunColumns selects a run with its progress counts.
+const armoryRunColumns = `armory_run.*,
+	(SELECT COUNT(*) FROM armory_entry WHERE armory_entry.run_id = armory_run.id) AS entry_count,
+	(SELECT COUNT(*) FROM armory_failed_attempt WHERE armory_failed_attempt.run_id = armory_run.id) AS failed_attempt_count`
+
+// dbArmoryFailedAttempt represents a stored failed attempt.
+type dbArmoryFailedAttempt struct {
+	ID        uuid.UUID `db:"id"`
+	RunID     uuid.UUID `db:"run_id"`
+	Payloads  string    `db:"payloads"`
+	Error     string    `db:"error"`
+	CreatedAt time.Time `db:"created_at"`
+}
+
+// dbArmoryPayload is one element of a failed attempt's payloads column.
+type dbArmoryPayload struct {
+	Position int    `json:"position"`
+	Value    string `json:"value"`
 }
 
 // dbArmoryEntry represents a stored association between a run and a request.
@@ -92,6 +118,10 @@ func toDomainArmoryRun(run *dbArmoryRun) *domain.ArmoryRun {
 		AttackType:       domain.ArmoryAttackType(run.AttackType),
 		MaxConcurrent:    run.MaxConcurrent,
 		CreatedAt:        run.CreatedAt,
+		Progress: domain.ArmoryRunProgress{
+			Entries:        run.EntryCount,
+			FailedAttempts: run.FailedAttemptCount,
+		},
 	}
 	if domainRun.Wordlists == nil {
 		domainRun.Wordlists = make([]string, 0)
@@ -179,7 +209,7 @@ func (repo *Repository) DeleteArmoryTemplate(id uuid.UUID) error {
 // GetArmoryRun returns an Armory run by ID.
 func (repo *Repository) GetArmoryRun(id uuid.UUID) (*domain.ArmoryRun, error) {
 	var run dbArmoryRun
-	query := `SELECT * FROM armory_run WHERE id = ?`
+	query := `SELECT ` + armoryRunColumns + ` FROM armory_run WHERE id = ?`
 	if err := repo.dbConn.Get(&run, query, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: %s", domain.ErrArmoryRunNotFound, id)
@@ -192,7 +222,7 @@ func (repo *Repository) GetArmoryRun(id uuid.UUID) (*domain.ArmoryRun, error) {
 // GetArmoryRuns returns all runs for a template in creation order.
 func (repo *Repository) GetArmoryRuns(templateID uuid.UUID) ([]*domain.ArmoryRun, error) {
 	var runs []*dbArmoryRun
-	query := `SELECT * FROM armory_run WHERE template_id = ? ORDER BY created_at ASC, id ASC`
+	query := `SELECT ` + armoryRunColumns + ` FROM armory_run WHERE template_id = ? ORDER BY created_at ASC, id ASC`
 	if err := repo.dbConn.Select(&runs, query, templateID); err != nil {
 		return nil, fmt.Errorf("getting armory runs for template %s: %w", templateID, err)
 	}
@@ -353,4 +383,49 @@ func (repo *Repository) CreateArmoryEntry(entry *domain.ArmoryEntry) error {
 		return fmt.Errorf("creating armory entry for run %s: %w", entry.RunID, err)
 	}
 	return nil
+}
+
+// CreateArmoryFailedAttempt records a request an Armory run did not send.
+func (repo *Repository) CreateArmoryFailedAttempt(attempt *domain.ArmoryFailedAttempt) error {
+	payloads := make([]dbArmoryPayload, len(attempt.Payloads))
+	for i, payload := range attempt.Payloads {
+		payloads[i] = dbArmoryPayload{Position: payload.Position, Value: payload.Value}
+	}
+	encoded, err := json.Marshal(payloads)
+	if err != nil {
+		return fmt.Errorf("encoding failed attempt payloads for armory run %s: %w", attempt.RunID, err)
+	}
+	query := `INSERT INTO armory_failed_attempt (id, run_id, payloads, error, created_at) VALUES (?, ?, ?, ?, ?)`
+	if _, err := repo.dbConn.Exec(query, attempt.ID, attempt.RunID, string(encoded), attempt.Error, attempt.CreatedAt); err != nil {
+		return fmt.Errorf("creating failed attempt for armory run %s: %w", attempt.RunID, err)
+	}
+	return nil
+}
+
+// GetArmoryFailedAttempts returns a run's failed attempts, oldest first.
+func (repo *Repository) GetArmoryFailedAttempts(runID uuid.UUID) ([]*domain.ArmoryFailedAttempt, error) {
+	rows := make([]dbArmoryFailedAttempt, 0)
+	query := `SELECT id, run_id, payloads, error, created_at FROM armory_failed_attempt WHERE run_id = ? ORDER BY id ASC`
+	if err := repo.dbConn.Select(&rows, query, runID); err != nil {
+		return nil, fmt.Errorf("getting failed attempts for armory run %s: %w", runID, err)
+	}
+	result := make([]*domain.ArmoryFailedAttempt, len(rows))
+	for i, row := range rows {
+		var payloads []dbArmoryPayload
+		if err := json.Unmarshal([]byte(row.Payloads), &payloads); err != nil {
+			return nil, fmt.Errorf("decoding failed attempt %s payloads: %w", row.ID, err)
+		}
+		attempt := &domain.ArmoryFailedAttempt{
+			ID:        row.ID,
+			RunID:     row.RunID,
+			Payloads:  make([]domain.ArmoryPayload, len(payloads)),
+			Error:     row.Error,
+			CreatedAt: row.CreatedAt,
+		}
+		for j, payload := range payloads {
+			attempt.Payloads[j] = domain.ArmoryPayload{Position: payload.Position, Value: payload.Value}
+		}
+		result[i] = attempt
+	}
+	return result, nil
 }

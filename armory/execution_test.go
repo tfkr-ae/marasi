@@ -23,7 +23,15 @@ type testExecutionRepository struct {
 	finishFailures int
 	finishFailed   chan struct{}
 	updates        chan domain.ArmoryRun
+	failedAttempts []*domain.ArmoryFailedAttempt
 	mu             sync.Mutex
+}
+
+func (repository *testExecutionRepository) CreateArmoryFailedAttempt(attempt *domain.ArmoryFailedAttempt) error {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	repository.failedAttempts = append(repository.failedAttempts, attempt)
+	return nil
 }
 
 type testSentRequest struct {

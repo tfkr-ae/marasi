@@ -35,6 +35,7 @@ var readOnlyGetRoutes = map[string][]string{
 	"GET /armory/run":                        {"/armory/run", "/armory/run?status=in_progress"},
 	"GET /armory/run/{id}":                   {"/armory/run/0190f0c4-7b6e-7000-8000-000000000001"},
 	"GET /armory/run/{id}/traffic":           {"/armory/run/0190f0c4-7b6e-7000-8000-000000000001/traffic"},
+	"GET /armory/run/{id}/failed-attempts":   {"/armory/run/0190f0c4-7b6e-7000-8000-000000000001/failed-attempts"},
 	"GET /armory/template":                   {"/armory/template"},
 	"GET /armory/template/{id}":              {"/armory/template/0190f0c4-7b6e-7000-8000-000000000001"},
 	"GET /armory/template/{id}/run":          {"/armory/template/0190f0c4-7b6e-7000-8000-000000000001/run"},

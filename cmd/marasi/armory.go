@@ -64,6 +64,20 @@ type armoryRunResponse struct {
 	CreatedAt     string                  `json:"created_at"`
 	StartedAt     *string                 `json:"started_at"`
 	FinishedAt    *string                 `json:"finished_at"`
+	Progress      struct {
+		Entries        int `json:"entries"`
+		FailedAttempts int `json:"failed_attempts"`
+	} `json:"progress"`
+}
+
+type armoryFailedAttemptResponse struct {
+	ID       string `json:"id"`
+	Payloads []struct {
+		Position int    `json:"position"`
+		Value    string `json:"value"`
+	} `json:"payloads"`
+	Error     string `json:"error"`
+	CreatedAt string `json:"created_at"`
 }
 
 func init() {
@@ -89,7 +103,7 @@ func init() {
 	armoryRunTrafficCmd.Flags().StringVar(&armoryRunTrafficLimit, "limit", "200", "Maximum number of items to return, from 1 to 500")
 	armoryRunTrafficCmd.Flags().StringVar(&armoryRunTrafficCursor, "cursor", "", "UUID of the last item, used to fetch the next page")
 	armoryTemplateCmd.AddCommand(armoryTemplateListCmd, armoryTemplateGetCmd, armoryTemplateCreateCmd, armoryTemplateUpdateCmd, armoryTemplateDeleteCmd)
-	armoryRunCmd.AddCommand(armoryRunListCmd, armoryRunGetCmd, armoryRunCreateCmd, armoryRunValidateCmd, armoryRunStartCmd, armoryRunCancelCmd, armoryRunDeleteCmd, armoryRunTrafficCmd)
+	armoryRunCmd.AddCommand(armoryRunListCmd, armoryRunGetCmd, armoryRunCreateCmd, armoryRunValidateCmd, armoryRunStartCmd, armoryRunCancelCmd, armoryRunDeleteCmd, armoryRunTrafficCmd, armoryRunFailedAttemptsCmd)
 	armoryCmd.AddCommand(armoryTemplateCmd, armoryRunCmd)
 	rootCmd.AddCommand(armoryCmd)
 }
@@ -319,6 +333,18 @@ var armoryRunTrafficCmd = &cobra.Command{
 	},
 }
 
+var armoryRunFailedAttemptsCmd = &cobra.Command{
+	Use: "failed-attempts UUID", Short: "List the requests an Armory run built but did not send", Args: cobra.ExactArgs(1),
+	Long: "List an Armory run's failed attempts, oldest first: the requests it built but did not send because a payload left a message unable to encode, each with its payloads and the error.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := serviceIDPath("/armory/run/", args[0], "/failed-attempts")
+		if err != nil {
+			return err
+		}
+		return runArmoryCommand(cmd, http.MethodGet, path, nil, "listing Armory run failed attempts", writeArmoryFailedAttemptsHuman, "")
+	},
+}
+
 func armoryRunFlagsRequest(cmd *cobra.Command) (armoryRunRequest, error) {
 	attackType, ok := domain.ParseArmoryAttackType(armoryRunAttackType)
 	if !ok {
@@ -485,8 +511,30 @@ func writeArmoryRunHuman(body []byte, stdout io.Writer) error {
 }
 
 func writeArmoryRunFields(stdout io.Writer, run armoryRunResponse) error {
-	_, err := fmt.Fprintf(stdout, "id: %s\ntemplate_id: %s\nstatus: %s\nattack_type: %s\nuse_https: %t\nmax_concurrent: %d\nwordlists: %s\ncreated_at: %s\nstarted_at: %s\nfinished_at: %s\n", run.ID, run.TemplateID, run.Status, run.AttackType, run.UseHTTPS, run.MaxConcurrent, strings.Join(run.Wordlists, ", "), run.CreatedAt, optionalString(run.StartedAt), optionalString(run.FinishedAt))
+	_, err := fmt.Fprintf(stdout, "id: %s\ntemplate_id: %s\nstatus: %s\nattack_type: %s\nuse_https: %t\nmax_concurrent: %d\nwordlists: %s\ncreated_at: %s\nstarted_at: %s\nfinished_at: %s\nentries: %d\nfailed_attempts: %d\n", run.ID, run.TemplateID, run.Status, run.AttackType, run.UseHTTPS, run.MaxConcurrent, strings.Join(run.Wordlists, ", "), run.CreatedAt, optionalString(run.StartedAt), optionalString(run.FinishedAt), run.Progress.Entries, run.Progress.FailedAttempts)
 	return err
+}
+
+func writeArmoryFailedAttemptsHuman(body []byte, stdout io.Writer) error {
+	var response struct {
+		Items []armoryFailedAttemptResponse `json:"items"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return fmt.Errorf("decoding Armory failed attempts: %w", err)
+	}
+	for index, attempt := range response.Items {
+		if index > 0 {
+			fmt.Fprintln(stdout)
+		}
+		payloads := make([]string, len(attempt.Payloads))
+		for i, payload := range attempt.Payloads {
+			payloads[i] = fmt.Sprintf("%d=%q", payload.Position, payload.Value)
+		}
+		if _, err := fmt.Fprintf(stdout, "id: %s\npayloads: %s\nerror: %s\ncreated_at: %s\n", attempt.ID, strings.Join(payloads, ", "), attempt.Error, attempt.CreatedAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeArmoryValidateHuman(body []byte, stdout io.Writer) error {

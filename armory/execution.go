@@ -279,6 +279,7 @@ func (manager *Manager) finishExecution(execution *execution) {
 		callback := manager.runUpdated
 		manager.mu.Unlock()
 		if callback != nil {
+			manager.readProgress(execution.run)
 			callback(execution.run)
 		}
 		return
