@@ -123,6 +123,18 @@ func TestArmoryTemplateFromStreamedPair(t *testing.T) {
 		}
 	})
 
+	t.Run("should leave a captured content-length out of an HTTP/2 template, since the message lengths are computed when it renders", func(t *testing.T) {
+		lengthHead := "POST /test.Echo/Collect HTTP/2\r\n:authority: grpc.example\r\ncontent-type: application/grpc\r\ncontent-length: 7\r\nte: trailers\r\n\r\n"
+		pair := insertStreamedPair(t, lengthHead, "grpc")
+		insertMessage(t, pair, domain.StreamDirectionRequest, "grpc", second, nil)
+
+		template := create(t, pair)
+		want := "POST /test.Echo/Collect HTTP/2\r\n:authority: grpc.example\r\ncontent-type: application/grpc\r\nte: trailers\r\n\r\n--- message ---\n2:VARINT 7\n"
+		if template.RawTemplate != want {
+			t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, template.RawTemplate)
+		}
+	})
+
 	t.Run("should keep a text form's escapes and non-printable bytes through building", func(t *testing.T) {
 		// A string with a NUL byte decodes as a byte list, and one with a
 		// quote, a backslash and a newline as an escaped string.

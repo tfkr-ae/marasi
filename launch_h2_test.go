@@ -127,7 +127,7 @@ func TestProxy_LaunchOverH2(t *testing.T) {
 		}
 	})
 
-	t.Run("should send a message-form gRPC Armory template as well-formed envelopes over HTTP/2, stored as a streamed pair", func(t *testing.T) {
+	t.Run("should send a message-form gRPC Armory template as well-formed envelopes over HTTP/2 with no stale content-length, stored as a streamed pair", func(t *testing.T) {
 		origin := newH2TestOrigin(t)
 		h := startViewHarness(t, viewHarnessConfig{secureOrigin: true})
 		configDir := t.TempDir()
@@ -141,7 +141,7 @@ func TestProxy_LaunchOverH2(t *testing.T) {
 		}
 		run := &domain.ArmoryRun{
 			ID:               uuid.Must(uuid.NewV7()),
-			TemplateSnapshot: "POST /test.Echo/Say HTTP/2\r\n:authority: " + origin.addr + "\r\ncontent-type: application/grpc\r\nte: trailers\r\n\r\n--- message ---\n1:LEN {\"@@short@@\"}\n",
+			TemplateSnapshot: "POST /test.Echo/Say HTTP/2\r\n:authority: " + origin.addr + "\r\ncontent-type: application/grpc\r\nte: trailers\r\ncontent-length: 12\r\n\r\n--- message ---\n1:LEN {\"@@short@@\"}\n",
 			TemplateFraming:  "grpc",
 			UseHTTPS:         true,
 			Wordlists:        []string{"words.txt"},
@@ -166,6 +166,15 @@ func TestProxy_LaunchOverH2(t *testing.T) {
 		message := "\x0a\xc8\x01" + payload
 		if want := grpcEnvelope(0, message); string(request.data) != want {
 			t.Fatalf("the origin's request body\nwanted:\n%q\ngot:\n%q", want, request.data)
+		}
+		// The captured length no longer fits the rendered body, and an HTTP/2
+		// request carries no length of its own.
+		wantFields := h2Fields{
+			{":method", "POST", false}, {":path", "/test.Echo/Say", false}, {":authority", origin.addr, false}, {":scheme", "https", false},
+			{"content-type", "application/grpc", false}, {"te", "trailers", false},
+		}
+		if len(request.headers) != 1 || !equalFields(request.headers[0], wantFields) {
+			t.Fatalf("the origin's request fields\nwanted:\n%v\ngot:\n%v", wantFields, request.headers)
 		}
 		upstream.headers(id, false, ":status", "200", "content-type", "application/grpc")
 		upstream.data(id, false, grpcEnvelope(0, ""))

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/tfkr-ae/marasi/protoscope"
+	"github.com/tfkr-ae/marasi/rawhttp"
 	"github.com/tfkr-ae/marasi/stream"
 )
 
@@ -207,22 +208,24 @@ func encodeMessageForm(raw, framing string) (string, error) {
 }
 
 // withContentLength is an HTTP/1.1 head with every Content-Length value set
-// to n, and one added when it has none and n is not 0. An HTTP/2 head,
-// which carries no length, and a head that uses Transfer-Encoding are
-// returned unchanged.
+// to n, and one added when it has none and n is not 0. A head that uses
+// Transfer-Encoding is returned unchanged. An HTTP/2 head carries no length,
+// so it loses any content-length field it was captured with: the h2 engine
+// sends fields as written, and a captured length would not fit a payload of
+// another length.
 func withContentLength(head string, n int) string {
-	requestLine, _, _ := strings.Cut(head, "\n")
-	if strings.HasSuffix(strings.TrimSuffix(requestLine, "\r"), " HTTP/2") {
-		return head
+	if rawhttp.IsHTTP2Text(head) {
+		return withoutContentLength(head)
 	}
 	if _, chunked := headField(head, "transfer-encoding"); chunked {
 		return head
 	}
+	requestLine, _, _ := strings.Cut(head, "\n")
 	lines := strings.Split(head, "\n")
 	found := false
 	for i, line := range lines[1:] {
-		name, _, ok := strings.Cut(line, ":")
-		if !ok || !strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
+		name, ok := contentLengthLine(line)
+		if !ok {
 			continue
 		}
 		found = true
@@ -240,6 +243,25 @@ func withContentLength(head string, n int) string {
 		lines = append(lines, "Content-Length: "+strconv.Itoa(n)+eol)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// withoutContentLength is head with every Content-Length field line removed.
+func withoutContentLength(head string) string {
+	lines := strings.Split(head, "\n")
+	kept := lines[:1]
+	for _, line := range lines[1:] {
+		if _, ok := contentLengthLine(line); !ok {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+// contentLengthLine reports whether line is a Content-Length field line,
+// and the field name as written.
+func contentLengthLine(line string) (string, bool) {
+	name, _, ok := strings.Cut(line, ":")
+	return name, ok && strings.EqualFold(strings.TrimSpace(name), "Content-Length")
 }
 
 // compressMessage compresses payload, a message under a compressed
@@ -275,8 +297,12 @@ type TemplateMessage struct {
 // form for the head's content type under a separator, in order, escaped so
 // the template renders back to head and the payloads' bytes. A compressed
 // message goes under a compressed separator. It reports false when the
-// content type gives the messages no text form.
+// content type gives the messages no text form. An HTTP/2 head loses its
+// content-length field, which the render would drop (withContentLength).
 func MessageFormTemplate(head string, messages []TemplateMessage) (string, bool) {
+	if rawhttp.IsHTTP2Text(head) {
+		head = withoutContentLength(head)
+	}
 	headText, _, _ := splitHead(head)
 	contentType, _ := headField(headText, "content-type")
 	contentType = messageContentType(contentType)
