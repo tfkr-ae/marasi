@@ -16,6 +16,7 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
 
+	"github.com/tfkr-ae/marasi/listener"
 	"github.com/tfkr-ae/marasi/stream"
 )
 
@@ -91,10 +92,16 @@ type h2Conn struct {
 	goingAway  bool
 	goAwayLast uint32
 	// clientGone is set once the client sent GOAWAY, originEnded once the
-	// origin leg ended, and ended once the client connection ended.
+	// origin leg ended, finishing once Marasi stopped writing and is draining
+	// the client's close, and ended once the client connection ended.
 	clientGone  bool
 	originEnded bool
+	finishing   bool
 	ended       bool
+	// pendingWrites counts final frames (GOAWAY or RST_STREAM) being written
+	// after a stream or connection transition, so finishIfDone waits for them
+	// to flush before half-closing the write side.
+	pendingWrites int
 	// sent maps each client stream sent to the origin to its origin stream
 	// ID, so an origin GOAWAY can be told to the client in its own IDs. It
 	// is recorded as the origin stream's ID is picked, under the origin
@@ -329,11 +336,34 @@ func (h *h2Conn) serve() {
 		h.fail(http2.ErrCodeProtocol)
 		return
 	}
-	h.conn.SetReadDeadline(time.Time{})
+	// Clear the preface deadline unless finish already set the linger
+	// deadline while the preface was being read.
+	h.mu.Lock()
+	finishing := h.finishing
+	if !finishing {
+		h.conn.SetReadDeadline(time.Time{})
+	}
+	h.mu.Unlock()
+	if finishing {
+		h.drain()
+		return
+	}
 	for {
+		if h.isFinishing() {
+			h.drain()
+			return
+		}
 		frame, err := h.framer.ReadFrame()
+		if h.isFinishing() {
+			h.drain()
+			return
+		}
 		if err == nil {
 			err = h.frame(frame)
+		}
+		if h.isFinishing() {
+			h.drain()
+			return
 		}
 		if err != nil && !h.handle(err) {
 			return
@@ -394,12 +424,14 @@ func (h *h2Conn) handle(err error) bool {
 // the client's own close, for a moment.
 func (h *h2Conn) fail(code http2.ErrCode) {
 	h.mu.Lock()
-	h.goingAway, h.goAwayLast = true, h.maxID
+	already := h.finishing
+	h.goingAway, h.goAwayLast, h.finishing = true, h.maxID, true
 	last := h.maxID
 	h.mu.Unlock()
-	h.w.do(func(f *http2.Framer) error { return f.WriteGoAway(last, code, nil) })
-	h.finish()
-	io.Copy(io.Discard, h.br)
+	if !already {
+		h.w.do(func(f *http2.Framer) error { return f.WriteGoAway(last, code, nil) })
+	}
+	h.drain()
 }
 
 // frame handles one frame from the client (RFC 9113 §5.1, §6).
@@ -574,7 +606,7 @@ func (h *h2Conn) headerBlock() error {
 	}
 	h.maxID = id
 	switch {
-	case h.goingAway && id > h.goAwayLast, h.clientGone:
+	case h.goingAway && id > h.goAwayLast, h.clientGone, h.finishing:
 		h.mu.Unlock()
 		return nil
 	case h.blockSelfDeps:
@@ -780,10 +812,17 @@ func (h *h2Conn) endStream(st *h2Stream, clientCode, originCode *http2.ErrCode) 
 	delete(h.streams, st.id)
 	h.closed.add(st.id)
 	originStream, origin, queued, pass := st.origin, h.origin, st.turn != nil, st.pass
+	sendReset := clientCode != nil && !h.finishing && !h.ended
+	if sendReset {
+		h.pendingWrites++
+	}
 	st.stall.stop()
 	h.mu.Unlock()
-	if clientCode != nil {
+	if sendReset {
 		h.w.do(func(f *http2.Framer) error { return f.WriteRSTStream(st.id, *clientCode) })
+		h.mu.Lock()
+		h.pendingWrites--
+		h.mu.Unlock()
 	}
 	if pass != nil {
 		pass.cut(originCode, errPassStopped)
@@ -818,14 +857,18 @@ func (h *h2Conn) gone(st *h2Stream) bool {
 // and shutdown end a connection so.
 func (h *h2Conn) goAway() {
 	h.mu.Lock()
-	if h.goingAway || h.ended {
+	if h.goingAway || h.finishing || h.ended {
 		h.mu.Unlock()
 		return
 	}
 	h.goingAway, h.goAwayLast = true, h.maxID
+	h.pendingWrites++
 	last := h.maxID
 	h.mu.Unlock()
 	h.w.do(func(f *http2.Framer) error { return f.WriteGoAway(last, http2.ErrCodeNo, nil) })
+	h.mu.Lock()
+	h.pendingWrites--
+	h.mu.Unlock()
 	h.finishIfDone()
 }
 
@@ -853,8 +896,17 @@ func (h *h2Conn) originGoAway(last uint32, code http2.ErrCode, debug []byte) {
 			abandoned = append(abandoned, st)
 		}
 	}
+	sendGoAway := !h.finishing && !h.ended
+	if sendGoAway {
+		h.pendingWrites++
+	}
 	h.mu.Unlock()
-	h.w.do(func(f *http2.Framer) error { return f.WriteGoAway(clientLast, code, debug) })
+	if sendGoAway {
+		h.w.do(func(f *http2.Framer) error { return f.WriteGoAway(clientLast, code, debug) })
+		h.mu.Lock()
+		h.pendingWrites--
+		h.mu.Unlock()
+	}
 	for _, st := range abandoned {
 		h.closeStream(st, nil)
 	}
@@ -872,27 +924,57 @@ func (h *h2Conn) originGone() {
 }
 
 // finishIfDone ends the connection once it is going away and none of its
-// streams is still open.
+// streams or final frames is still in flight.
 func (h *h2Conn) finishIfDone() {
 	h.mu.Lock()
-	done := (h.goingAway || h.clientGone || h.originEnded) && len(h.streams) == 0 && !h.ended
+	done := (h.goingAway || h.clientGone || h.originEnded) && len(h.streams) == 0 && h.pendingWrites == 0 && !h.ended && !h.finishing
+	if done {
+		h.finishing = true
+	}
 	h.mu.Unlock()
 	if done {
 		h.finish()
 	}
 }
 
-// finish ends the client connection gracefully: Marasi stops writing and
-// reads until the client closes too, for a moment at most.
+// isFinishing reports whether Marasi has stopped writing on the client
+// connection and is draining the client's close.
+func (h *h2Conn) isFinishing() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.finishing
+}
+
+// finish ends the client connection gracefully: Marasi stops writing,
+// half-closes the write side, and reads until the client closes too, for a
+// moment at most.
 func (h *h2Conn) finish() {
 	h.finishOnce.Do(func() {
-		if tlsConn, ok := h.conn.(*tls.Conn); ok {
+		if h.w != nil {
 			h.w.mu.Lock()
-			tlsConn.CloseWrite()
+			if h.w.bw != nil {
+				_ = h.w.bw.Flush()
+			}
+			if tlsConn, ok := h.conn.(*tls.Conn); ok {
+				tlsConn.CloseWrite()
+				listener.CloseWrite(tlsConn.NetConn())
+			} else if h.conn != nil {
+				listener.CloseWrite(h.conn)
+			}
 			h.w.mu.Unlock()
 		}
-		h.conn.SetReadDeadline(time.Now().Add(h2LingerTimeout))
+		if h.conn != nil {
+			h.conn.SetReadDeadline(time.Now().Add(h2LingerTimeout))
+		}
 	})
+}
+
+// drain ensures the write side is half-closed and the linger deadline is set,
+// then discards the client's remaining bytes until it closes too, so the final
+// Close does not reset the connection under unread bytes.
+func (h *h2Conn) drain() {
+	h.finish()
+	io.Copy(io.Discard, h.br)
 }
 
 // close ends every stream and the origin leg once the client connection

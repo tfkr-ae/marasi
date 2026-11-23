@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -314,4 +316,278 @@ func TestH2Origin_CancelAndResetStreamed(t *testing.T) {
 			t.Fatalf("the streamed response body's end\nwanted:\nreset ENHANCE_YOUR_CALM\ngot:\n%v", err)
 		}
 	})
+}
+
+func TestH2Conn_Finish(t *testing.T) {
+	t.Run("should drain pipelined frames after client GOAWAY without resetting the TCP connection", func(t *testing.T) {
+		origin := newH2TestOrigin(t)
+		addr, _, ca := serveH1EngineMITMProxy(t, true)
+		conn, br := dialProxy(t, addr)
+		openTunnel(t, conn, br, origin.addr)
+		tlsConn, _ := clientTLS(t, conn, br, ca, "127.0.0.1", "h2")
+		t.Cleanup(func() { tlsConn.Close() })
+		origin.accept(t)
+
+		if _, err := io.WriteString(tlsConn, http2.ClientPreface); err != nil {
+			t.Fatalf("writing preface: %v", err)
+		}
+		framer := http2.NewFramer(tlsConn, tlsConn)
+		if err := framer.WriteSettings(); err != nil {
+			t.Fatalf("writing SETTINGS: %v", err)
+		}
+		// Read the proxy's SETTINGS and SETTINGS ACK before sending GOAWAY.
+		sawSettings, sawAck := false, false
+		tlsConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		for !sawSettings || !sawAck {
+			f, err := framer.ReadFrame()
+			if err != nil {
+				t.Fatalf("reading handshake frames: %v", err)
+			}
+			if sf, ok := f.(*http2.SettingsFrame); ok {
+				if sf.IsAck() {
+					sawAck = true
+				} else {
+					sawSettings = true
+					if err := framer.WriteSettingsAck(); err != nil {
+						t.Fatalf("writing SETTINGS ACK: %v", err)
+					}
+				}
+			}
+		}
+
+		// Send GOAWAY followed immediately by PING frames (as h2spec's
+		// http2/7/1 and generic/3.8/1 do) and a TLS close_notify, coalesced
+		// so unread frames are still buffered when GOAWAY is handled.
+		var burst bytes.Buffer
+		bf := http2.NewFramer(&burst, io.NopCloser(&bytes.Reader{}))
+		if err := bf.WriteGoAway(0, 0xff, nil); err != nil {
+			t.Fatalf("encoding GOAWAY: %v", err)
+		}
+		for range 16 {
+			if err := bf.WritePing(false, [8]byte{'h', '2', 's', 'p', 'e', 'c'}); err != nil {
+				t.Fatalf("encoding PING: %v", err)
+			}
+		}
+		if _, err := tlsConn.Write(burst.Bytes()); err != nil {
+			t.Fatalf("writing GOAWAY and PING burst: %v", err)
+		}
+		if err := tlsConn.CloseWrite(); err != nil {
+			t.Fatalf("sending close_notify: %v", err)
+		}
+
+		// Drain the TLS stream to EOF, then verify the underlying TCP
+		// connection ends with a clean FIN rather than RST.
+		if _, err := io.Copy(io.Discard, tlsConn); err != nil {
+			t.Fatalf("draining TLS stream\nwanted:\nclean EOF\ngot:\n%v", err)
+		}
+		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := io.Copy(io.Discard, conn); err != nil {
+			if errors.Is(err, syscall.ECONNRESET) {
+				t.Fatalf("the underlying TCP connection\nwanted:\nclean FIN\ngot:\nTCP reset (%v)", err)
+			}
+			t.Fatalf("draining the underlying TCP connection\nwanted:\nclean FIN\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should half-close and drain pipelined frames after client GOAWAY over h2c", func(t *testing.T) {
+		origin := newH2COrigin(t)
+		addr, _ := serveH1EngineProxy(t)
+		conn, br := dialProxy(t, addr)
+		openTunnel(t, conn, br, origin)
+
+		if _, err := io.WriteString(conn, http2.ClientPreface); err != nil {
+			t.Fatalf("writing preface: %v", err)
+		}
+		framer := http2.NewFramer(conn, br)
+		if err := framer.WriteSettings(); err != nil {
+			t.Fatalf("writing SETTINGS: %v", err)
+		}
+		sawSettings, sawAck := false, false
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		for !sawSettings || !sawAck {
+			f, err := framer.ReadFrame()
+			if err != nil {
+				t.Fatalf("reading handshake frames: %v", err)
+			}
+			if sf, ok := f.(*http2.SettingsFrame); ok {
+				if sf.IsAck() {
+					sawAck = true
+				} else {
+					sawSettings = true
+					if err := framer.WriteSettingsAck(); err != nil {
+						t.Fatalf("writing SETTINGS ACK: %v", err)
+					}
+				}
+			}
+		}
+
+		var burst bytes.Buffer
+		bf := http2.NewFramer(&burst, io.NopCloser(&bytes.Reader{}))
+		if err := bf.WriteGoAway(0, 0xff, nil); err != nil {
+			t.Fatalf("encoding GOAWAY: %v", err)
+		}
+		for range 16 {
+			if err := bf.WritePing(false, [8]byte{'h', '2', 's', 'p', 'e', 'c'}); err != nil {
+				t.Fatalf("encoding PING: %v", err)
+			}
+		}
+		if _, err := conn.Write(burst.Bytes()); err != nil {
+			t.Fatalf("writing GOAWAY and PING burst: %v", err)
+		}
+
+		// Keep the client's write side open at first: only a TCP half-close
+		// ends the read before h2LingerTimeout.
+		conn.SetReadDeadline(time.Now().Add(h2LingerTimeout / 2))
+		if _, err := io.Copy(io.Discard, br); err != nil {
+			t.Fatalf("waiting for the half-close\nwanted:\nclean EOF before linger\ngot:\n%v", err)
+		}
+		if tcp, ok := conn.(*net.TCPConn); ok {
+			_ = tcp.CloseWrite()
+		}
+	})
+
+	t.Run("should half-close and drain pipelined frames after origin close ends an idle connection", func(t *testing.T) {
+		origin := newH2TestOrigin(t)
+		addr, _, ca := serveH1EngineMITMProxy(t, true)
+		conn, br := dialProxy(t, addr)
+		openTunnel(t, conn, br, origin.addr)
+		tlsConn, _ := clientTLS(t, conn, br, ca, "127.0.0.1", "h2")
+		t.Cleanup(func() { tlsConn.Close() })
+		upstream := origin.accept(t)
+
+		if _, err := io.WriteString(tlsConn, http2.ClientPreface); err != nil {
+			t.Fatalf("writing preface: %v", err)
+		}
+		framer := http2.NewFramer(tlsConn, tlsConn)
+		if err := framer.WriteSettings(); err != nil {
+			t.Fatalf("writing SETTINGS: %v", err)
+		}
+		sawSettings, sawAck := false, false
+		tlsConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		for !sawSettings || !sawAck {
+			f, err := framer.ReadFrame()
+			if err != nil {
+				t.Fatalf("reading handshake frames: %v", err)
+			}
+			if sf, ok := f.(*http2.SettingsFrame); ok {
+				if sf.IsAck() {
+					sawAck = true
+				} else {
+					sawSettings = true
+					if err := framer.WriteSettingsAck(); err != nil {
+						t.Fatalf("writing SETTINGS ACK: %v", err)
+					}
+				}
+			}
+		}
+
+		// Origin closes while idle: Marasi half-closes the client side before
+		// h2LingerTimeout, and drains pipelined frames without resetting TCP.
+		upstream.conn.Close()
+		tlsConn.SetReadDeadline(time.Now().Add(h2LingerTimeout / 2))
+		if _, err := io.Copy(io.Discard, tlsConn); err != nil {
+			t.Fatalf("waiting for EOF after origin close\nwanted:\nclean EOF before linger\ngot:\n%v", err)
+		}
+		if err := framer.WritePing(false, [8]byte{'l', 'a', 't', 'e'}); err != nil {
+			t.Fatalf("writing late PING: %v", err)
+		}
+		if err := tlsConn.CloseWrite(); err != nil {
+			t.Fatalf("sending close_notify: %v", err)
+		}
+		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := io.Copy(io.Discard, conn); err != nil {
+			if errors.Is(err, syscall.ECONNRESET) {
+				t.Fatalf("the underlying TCP connection\nwanted:\nclean FIN\ngot:\nTCP reset (%v)", err)
+			}
+			t.Fatalf("draining the underlying TCP connection\nwanted:\nclean FIN\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should flush GOAWAY before half-closing writes when the last stream ends concurrently", func(t *testing.T) {
+		for range 50 {
+			c := &halfCloseRecorder{}
+			bw := bufio.NewWriter(c)
+			framer := http2.NewFramer(bw, io.NopCloser(&bytes.Reader{}))
+			h := &h2Conn{
+				conn:    c,
+				w:       newH2Writer(bw, framer),
+				flow:    newH2Flow(),
+				streams: make(map[uint32]*h2Stream),
+				sent:    make(map[uint32]uint32),
+				maxID:   1,
+			}
+			st := &h2Stream{id: 1, cancel: func() {}}
+			h.streams[1] = st
+
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				<-start
+				h.goAway()
+			}()
+			go func() {
+				defer wg.Done()
+				<-start
+				h.closeStream(st, nil)
+			}()
+			close(start)
+			wg.Wait()
+
+			if !c.closedWrite {
+				t.Fatal("the write side\nwanted:\nhalf-closed\ngot:\nstill open")
+			}
+			reader := http2.NewFramer(io.Discard, bytes.NewReader(c.bytes()))
+			sawGoAway := false
+			for {
+				f, err := reader.ReadFrame()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					t.Fatalf("reading frames\nwanted:\nvalid frames\ngot:\n%v", err)
+				}
+				if _, ok := f.(*http2.GoAwayFrame); ok {
+					sawGoAway = true
+				}
+			}
+			if !sawGoAway {
+				t.Fatal("GOAWAY\nwanted:\nwritten before CloseWrite\ngot:\nnone")
+			}
+		}
+	})
+}
+
+type halfCloseRecorder struct {
+	mu          sync.Mutex
+	buf         bytes.Buffer
+	closedWrite bool
+}
+
+func (c *halfCloseRecorder) Read([]byte) (int, error) { return 0, io.EOF }
+func (c *halfCloseRecorder) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closedWrite {
+		return 0, net.ErrClosed
+	}
+	return c.buf.Write(p)
+}
+func (c *halfCloseRecorder) CloseWrite() error {
+	c.mu.Lock()
+	c.closedWrite = true
+	c.mu.Unlock()
+	return nil
+}
+func (c *halfCloseRecorder) Close() error                     { return c.CloseWrite() }
+func (c *halfCloseRecorder) LocalAddr() net.Addr              { return nil }
+func (c *halfCloseRecorder) RemoteAddr() net.Addr             { return nil }
+func (c *halfCloseRecorder) SetDeadline(time.Time) error      { return nil }
+func (c *halfCloseRecorder) SetReadDeadline(time.Time) error  { return nil }
+func (c *halfCloseRecorder) SetWriteDeadline(time.Time) error { return nil }
+func (c *halfCloseRecorder) bytes() []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return bytes.Clone(c.buf.Bytes())
 }
