@@ -80,6 +80,8 @@ type Pair struct {
 	// response is queued for storage.
 	requestCaptured  bool
 	responseCaptured bool
+	// heldLogs wait for the request chain to end (writeHeldLogs).
+	heldLogs []heldLog
 
 	// requestWire and responseWire are the messages as the engine read
 	// them from the wire, nil for a pair built outside the engine

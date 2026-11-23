@@ -1699,7 +1699,9 @@ func RegisterRequestBuilderType(extension *Runtime) {
 			if callbackKey != "" {
 				extension.Mu.Lock()
 				defer extension.Mu.Unlock()
-				if ctx.Err() != nil {
+				// A Reload replaced the state that registered the
+				// callback: the source that asked for it is gone.
+				if ctx.Err() != nil || l != extension.LuaState {
 					return
 				}
 				defer extension.beginExecution(ctx)()

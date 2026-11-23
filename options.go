@@ -692,6 +692,7 @@ func (proxy *Proxy) baseRequest(req *http.Request, client clientHijacker, wire *
 		// never goes upstream half-modified.
 		proxy.failRequestChain(pair, err)
 	}
+	proxy.writeHeldLogs(pair)
 	return nil
 }
 
