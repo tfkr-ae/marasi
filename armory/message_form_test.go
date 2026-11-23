@@ -216,3 +216,86 @@ func TestManager_ValidateTemplate(t *testing.T) {
 		}
 	})
 }
+
+func TestManager_MessageFormEscaping(t *testing.T) {
+	t.Run("should send payloads with quotes, backslashes, newlines and non-printable bytes as exactly their bytes", func(t *testing.T) {
+		raw := grpcHead + "--- message ---\n1:LEN {\"@@fallback@@\"}\n"
+		payloads := []string{`a"b`, `a\b`, "\n", "\x00"}
+
+		sent := runMessageForm(t, raw, "grpc", domain.ArmoryAttackHarpoon, map[string][]string{"words": payloads})
+
+		if len(sent) != len(payloads) {
+			t.Fatalf("sent requests\nwanted:\n%d\ngot:\n%d", len(payloads), len(sent))
+		}
+		for i, want := range payloads {
+			if got := stringField(t, envelopes(t, bodyOf(t, sent[i]))[0]); got != want {
+				t.Fatalf("request %d field 1\nwanted:\n%q\ngot:\n%q", i, want, got)
+			}
+		}
+	})
+
+	t.Run("should run a position's function chain before escaping its value", func(t *testing.T) {
+		raw := grpcHead + "--- message ---\n1:LEN {\"@@fallback@@.upper()\"}\n"
+
+		sent := runMessageForm(t, raw, "grpc", domain.ArmoryAttackHarpoon, map[string][]string{"words": {`a"b`}})
+
+		if got := stringField(t, envelopes(t, bodyOf(t, sent[0]))[0]); got != `A"B` {
+			t.Fatalf("field 1\nwanted:\n%q\ngot:\n%q", `A"B`, got)
+		}
+	})
+
+	t.Run("should put a payload in as written when its chain ends in raw, so it can add a field", func(t *testing.T) {
+		raw := grpcHead + "--- message ---\n1:LEN {\"@@x@@.raw()\"}\n"
+
+		sent := runMessageForm(t, raw, "grpc", domain.ArmoryAttackHarpoon, map[string][]string{"words": {`"} 2:LEN {"y`}})
+
+		messages := envelopes(t, bodyOf(t, sent[0]))
+		if want := "\x0a\x00\x12\x01y"; string(messages[0]) != want {
+			t.Fatalf("the message\nwanted:\n% x\ngot:\n% x", want, messages[0])
+		}
+	})
+
+	t.Run("should put a payload on a varint field in as written", func(t *testing.T) {
+		raw := grpcHead + "--- message ---\n2:VARINT @@1@@\n"
+
+		sent := runMessageForm(t, raw, "grpc", domain.ArmoryAttackHarpoon, map[string][]string{"words": {"150"}})
+
+		if want := "\x10\x96\x01"; string(envelopes(t, bodyOf(t, sent[0]))[0]) != want {
+			t.Fatalf("the message\nwanted:\n% x\ngot:\n% x", want, envelopes(t, bodyOf(t, sent[0]))[0])
+		}
+	})
+
+	t.Run("should send a fallback written with protoscope escapes as the bytes it names", func(t *testing.T) {
+		raw := grpcHead + "--- message ---\n1:LEN {\"@@c@@\"}\n--- message ---\n1:LEN {\"" + `@@a\\x00\\"b@@` + "\"}\n"
+
+		sent := runMessageForm(t, raw, "grpc", domain.ArmoryAttackHarpoon, map[string][]string{"words": {"d"}})
+
+		if len(sent) != 2 {
+			t.Fatalf("sent requests\nwanted:\n2\ngot:\n%d", len(sent))
+		}
+		if got := stringField(t, envelopes(t, bodyOf(t, sent[0]))[1]); got != "a\x00\"b" {
+			t.Fatalf("the second message's field 1\nwanted:\n%q\ngot:\n%q", "a\x00\"b", got)
+		}
+	})
+
+	t.Run("should refuse to save a position that opens inside a quoted string and closes outside it", func(t *testing.T) {
+		raw := grpcHead + "--- message ---\n1:LEN {\"a@@b\"} 2:VARINT 1@@\n"
+
+		err := (&Manager{}).ValidateTemplate(&domain.ArmoryTemplate{RawTemplate: raw, Framing: "grpc"})
+
+		want := "payload position 0 at line 7 column 10"
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("\nwanted:\nerror containing %q\ngot:\n%v", want, err)
+		}
+	})
+
+	t.Run("should put a payload in a JSON message in as written", func(t *testing.T) {
+		raw := strings.Replace(grpcHead, "application/grpc", "application/grpc+json", 1) + "--- message ---\n{\"a\":\"@@x@@\"}\n"
+
+		sent := runMessageForm(t, raw, "grpc", domain.ArmoryAttackHarpoon, map[string][]string{"words": {`q\"`}})
+
+		if got, want := string(envelopes(t, bodyOf(t, sent[0]))[0]), "{\"a\":\"q\\\"\"}\n"; got != want {
+			t.Fatalf("the message\nwanted:\n%q\ngot:\n%q", want, got)
+		}
+	})
+}

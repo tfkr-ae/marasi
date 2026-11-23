@@ -233,7 +233,7 @@ func writeLen(b *strings.Builder, payload []byte, level int) {
 		return
 	}
 	if plainText(payload) {
-		b.WriteString("{" + quote(payload) + "}")
+		b.WriteString("{" + Quote(payload) + "}")
 		return
 	}
 	if level+1 >= maxDepth {
@@ -258,7 +258,7 @@ func writeLen(b *strings.Builder, payload []byte, level int) {
 		return
 	}
 	if utf8.Valid(payload) {
-		b.WriteString("{" + quote(payload) + "}")
+		b.WriteString("{" + Quote(payload) + "}")
 		return
 	}
 	b.WriteString("{" + hexLiteral(payload) + "}")
@@ -293,9 +293,11 @@ func packedVarints(payload []byte) ([]uint64, bool) {
 	return values, true
 }
 
-// quote is s as a string literal: printable runes as they are, the rest
-// escaped a byte at a time.
-func quote(s []byte) string {
+// Quote is s as a protoscope string literal, quotes included, as Decode
+// writes one: printable runes as they are, `"` and `\` escaped, newline,
+// tab and carriage return as \n, \t and \r, and the rest as \xNN a byte at
+// a time. Encode reads it back as exactly s.
+func Quote(s []byte) string {
 	var b strings.Builder
 	b.WriteByte('"')
 	for len(s) > 0 {

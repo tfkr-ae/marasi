@@ -51,6 +51,13 @@ func FromText(contentType, text string) ([]byte, error) {
 	return nil, ErrNoTextForm
 }
 
+// HasProtoscopeText reports whether a message for the direction whose head
+// has contentType has the protoscope text form, that is, a gRPC, gRPC-Web
+// or Connect message whose codec is protobuf.
+func HasProtoscopeText(contentType string) bool {
+	return codecOf(contentType) == codecProto
+}
+
 // codec is how a gRPC, gRPC-Web or Connect message's payload is encoded.
 type codec string
 
