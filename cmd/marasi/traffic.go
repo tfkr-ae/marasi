@@ -58,6 +58,12 @@ number, its # in capture order, then its id.
       pair whose direction is streamed; != also matches a pair whose
       direction is not. A pair matches from the moment its head is
       stored, while it is still live.
+  grpc_status
+      = != < <= > >= against the grpc-status a gRPC pair's response
+      ended with, from its trailers or a trailers-only head, for example
+      grpc_status = 3 or grpc_status != 0. Pairs that are not gRPC, and
+      pairs captured before it was recorded, have none and match no
+      comparison.
   id
       = and != against the pair's id, a quoted UUID, for example
       id = "01937f5d-351a-7e68-936d-61a7a25661a3".
@@ -363,6 +369,7 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 
 			ClientProtocol string `json:"client_protocol"`
 			OriginProtocol string `json:"origin_protocol"`
+			GRPCStatus     *int   `json:"grpc_status"`
 		} `json:"items"`
 		NextCursor *string `json:"next_cursor"`
 		PrevCursor *string `json:"prev_cursor"`
@@ -382,7 +389,7 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 		if len(pathRunes) > trafficPathDisplayLimit {
 			path = string(pathRunes[:trafficPathDisplayLimit-3]) + "..."
 		}
-		table.row(item.Number, item.ID, item.Method, item.Host, path, item.StatusCode, item.Length,
+		table.row(item.Number, item.ID, item.Method, item.Host, path, statusCell(item.StatusCode, item.GRPCStatus), item.Length,
 			protocolCell(item.ClientProtocol, item.OriginProtocol))
 	}
 	if err := table.flush(); err != nil {
@@ -401,6 +408,15 @@ func writeTrafficListHuman(body []byte, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stderr, "notice: the traffic index is still building; text results may be incomplete")
 	}
 	return nil
+}
+
+// statusCell is a pair's status code in a list, followed by a gRPC pair's
+// grpc-status.
+func statusCell(statusCode int, grpcStatus *int) string {
+	if grpcStatus == nil {
+		return fmt.Sprint(statusCode)
+	}
+	return fmt.Sprintf("%d (grpc %d)", statusCode, *grpcStatus)
 }
 
 // protocolCell is a pair's protocol in a list: the one protocol when both
@@ -536,6 +552,7 @@ func writeTrafficGetHuman(body []byte, stdout io.Writer) error {
 		} `json:"upstream_proxy"`
 		ClientProtocol string `json:"client_protocol"`
 		OriginProtocol string `json:"origin_protocol"`
+		GRPCStatus     *int   `json:"grpc_status"`
 		Streamed       *struct {
 			Request  *streamedDirectionLine `json:"request"`
 			Response *streamedDirectionLine `json:"response"`
@@ -571,6 +588,9 @@ func writeTrafficGetHuman(body []byte, stdout io.Writer) error {
 	fmt.Fprintf(stdout, "requested_at: %s\n", detail.Request.RequestedAt)
 	fmt.Fprintf(stdout, "status: %s\n", detail.Response.Status)
 	fmt.Fprintf(stdout, "status_code: %d\n", detail.Response.StatusCode)
+	if detail.GRPCStatus != nil {
+		fmt.Fprintf(stdout, "grpc_status: %d\n", *detail.GRPCStatus)
+	}
 	fmt.Fprintf(stdout, "content_type: %s\n", detail.Response.ContentType)
 	fmt.Fprintf(stdout, "length: %s\n", detail.Response.Length)
 	fmt.Fprintf(stdout, "responded_at: %s\n", detail.Response.RespondedAt)
