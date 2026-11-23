@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -194,4 +195,83 @@ func TestArmoryTemplateFromStreamedPair(t *testing.T) {
 			t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, rendered)
 		}
 	})
+
+	t.Run("should build a gRPC-Web pair with framing grpc-web that renders to the captured bytes", func(t *testing.T) {
+		webHead := "POST /test.Echo/Collect HTTP/1.1\r\nHost: grpc.example\r\nContent-Type: application/grpc-web+proto\r\nTransfer-Encoding: chunked\r\n\r\n"
+		pair := insertStreamedPair(t, webHead, "grpc-web")
+		insertMessage(t, pair, domain.StreamDirectionRequest, "grpc-web", first, nil)
+		insertMessage(t, pair, domain.StreamDirectionRequest, "grpc-web", second, nil)
+		template := create(t, pair)
+		if template.Framing != "grpc-web" {
+			t.Fatalf("\nwanted:\ngrpc-web\ngot:\n%q", template.Framing)
+		}
+		rendered, err := armorymanager.Render(template.RawTemplate, template.Framing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "POST /test.Echo/Collect HTTP/1.1\r\nHost: grpc.example\r\nContent-Type: application/grpc-web+proto\r\nContent-Length: 17\r\n\r\n" + envelope(first) + envelope(second)
+		if rendered != want {
+			t.Fatalf("\nwanted:\n%q\ngot:\n%q\nfrom template:\n%q", want, rendered, template.RawTemplate)
+		}
+	})
+
+	t.Run("should build a Connect streaming JSON pair with framing connect whose messages render byte for byte", func(t *testing.T) {
+		connectHead := "POST /test.Echo/Collect HTTP/2\r\n:authority: grpc.example\r\n:scheme: https\r\ncontent-type: application/connect+json\r\n\r\n"
+		pair := insertStreamedPair(t, connectHead, "connect")
+		messages := [][]byte{[]byte(`{"a":"C:\\x@@y"}`), []byte("{\"b\":2}\n")}
+		for _, message := range messages {
+			insertMessage(t, pair, domain.StreamDirectionRequest, "connect", message, nil)
+		}
+		template := create(t, pair)
+		if template.Framing != "connect" {
+			t.Fatalf("\nwanted:\nconnect\ngot:\n%q", template.Framing)
+		}
+		rendered, err := armorymanager.Render(template.RawTemplate, template.Framing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := connectHead + envelope(messages[0]) + envelope(messages[1]); rendered != want {
+			t.Fatalf("\nwanted:\n%q\ngot:\n%q\nfrom template:\n%q", want, rendered, template.RawTemplate)
+		}
+	})
+
+	// insertPair stores a pair that was not streamed, its request raw.
+	insertPair := func(t *testing.T, raw string) uuid.UUID {
+		t.Helper()
+		id, _ := uuid.NewV7()
+		err := repo.InsertRequest(&domain.ProxyRequest{
+			ID: id, Scheme: "https", Method: "POST", Host: "grpc.example", Path: "/test.Echo/Say",
+			Raw: []byte(raw), Metadata: map[string]any{}, RequestedAt: time.Now(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	unary := []struct {
+		name, contentType, body, want string
+	}{
+		{name: "proto", contentType: "application/proto", body: string(third), want: "--- message ---\n1:LEN {\"x\"}\n3:VARINT 300\n"},
+		{name: "JSON", contentType: "application/json", body: `{"q":"a\\b@@c"}`, want: "--- message ---\n{\"q\":\"a\\\\\\\\b\\@\\@c\"}\n"},
+	}
+	for _, tt := range unary {
+		t.Run("should build a Connect unary "+tt.name+" pair with framing connect and one separator that renders to the captured request", func(t *testing.T) {
+			unaryHead := "POST /test.Echo/Say HTTP/1.1\r\nHost: grpc.example\r\nConnect-Protocol-Version: 1\r\nContent-Type: " + tt.contentType + "\r\nContent-Length: " + strconv.Itoa(len(tt.body)) + "\r\n\r\n"
+			template := create(t, insertPair(t, unaryHead+tt.body))
+			if template.Framing != "connect" {
+				t.Fatalf("\nwanted:\nconnect\ngot:\n%q", template.Framing)
+			}
+			if want := unaryHead + tt.want; template.RawTemplate != want {
+				t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, template.RawTemplate)
+			}
+			rendered, err := armorymanager.Render(template.RawTemplate, template.Framing)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := unaryHead + tt.body; rendered != want {
+				t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, rendered)
+			}
+		})
+	}
 }

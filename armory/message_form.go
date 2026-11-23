@@ -1,8 +1,11 @@
 package armory
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"mime"
+	"strconv"
 	"strings"
 
 	"github.com/tfkr-ae/marasi/protoscope"
@@ -29,7 +32,7 @@ type formMessage struct {
 // supportedFraming reports whether Marasi can send a template that names framing.
 func supportedFraming(framing string) error {
 	switch stream.Framing(framing) {
-	case stream.FramingNone, stream.FramingGRPC, stream.FramingConnect:
+	case stream.FramingNone, stream.FramingGRPC, stream.FramingGRPCWeb, stream.FramingConnect:
 		return nil
 	}
 	return fmt.Errorf("armory template framing %q is not supported", framing)
@@ -102,17 +105,55 @@ func splitMessages(body string, firstLine int) ([]formMessage, error) {
 	return append(messages, *current), nil
 }
 
+// connectUnaryCodec is the codec a Connect unary content type names,
+// application/proto or application/json, and false for any other type.
+// A Connect unary request's body is its one message, with no envelope.
+func connectUnaryCodec(contentType string) (string, bool) {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		mediaType, _, _ = strings.Cut(contentType, ";")
+	}
+	switch mediaType = strings.ToLower(strings.TrimSpace(mediaType)); mediaType {
+	case "application/proto", "application/json":
+		return strings.TrimPrefix(mediaType, "application/"), true
+	}
+	return "", false
+}
+
+// messageContentType is the content type a message of a request whose head
+// has contentType is read and written with by stream.TextForm and
+// stream.FromText: a Connect unary type is read as its Connect streaming
+// type, which names the same codec.
+func messageContentType(contentType string) string {
+	if codec, ok := connectUnaryCodec(contentType); ok {
+		return "application/connect+" + codec
+	}
+	return contentType
+}
+
+// namesFraming reports whether contentType names framing, a Connect unary
+// type naming connect.
+func namesFraming(contentType, framing string) bool {
+	if _, unary := connectUnaryCodec(contentType); unary {
+		return stream.Framing(framing) == stream.FramingConnect
+	}
+	return stream.FramingOf(contentType, false) == stream.Framing(framing)
+}
+
 // encodeMessageForm turns a rendered request whose body is in message form
 // into the request to send: the head as rendered and each message encoded
-// for the head's content type, in a new envelope. Every length is computed
-// here, so payloads of any length give well-formed messages.
+// for the head's content type, in a new envelope, the whole body in base64
+// for gRPC-Web text, or a Connect unary request's one message as the body.
+// Every length is computed here, so payloads of any length give
+// well-formed messages, and an HTTP/1.1 head's Content-Length is set to
+// the body's length.
 func encodeMessageForm(raw, framing string) (string, error) {
 	head, blank, body := splitHead(raw)
 	if blank == "" {
 		return "", errors.New("a message-form request needs a blank line after its head")
 	}
 	contentType, _ := headField(head, "content-type")
-	if stream.FramingOf(contentType, false) != stream.Framing(framing) {
+	if !namesFraming(contentType, framing) {
 		return "", fmt.Errorf("the content type %q does not name the template's framing %s", contentType, framing)
 	}
 	bodyLine := strings.Count(head, "\n") + strings.Count(blank, "\n") + 1
@@ -120,18 +161,35 @@ func encodeMessageForm(raw, framing string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var out strings.Builder
-	out.WriteString(head)
-	out.WriteString(blank)
+	_, unary := connectUnaryCodec(contentType)
+	if unary && len(messages) != 1 {
+		return "", fmt.Errorf("a Connect unary body must hold exactly one message, not %d", len(messages))
+	}
+	textType := messageContentType(contentType)
+	protoscopeText := stream.HasProtoscopeText(textType)
+	var encoded []byte
 	for i, message := range messages {
-		payload, err := stream.FromText(contentType, message.text)
+		text := message.text
+		if !protoscopeText {
+			// The line ending before the next separator, or ending the
+			// body, is the separator's, not the JSON text's.
+			text = strings.TrimSuffix(strings.TrimSuffix(text, "\n"), "\r")
+		}
+		payload, err := stream.FromText(textType, text)
 		if errors.Is(err, protoscope.ErrSyntax) {
 			// Encoding again behind the lines before it numbers the error's
 			// line in the whole request; whitespace encodes to nothing.
-			_, err = stream.FromText(contentType, strings.Repeat("\n", message.line-1)+message.text)
+			_, err = stream.FromText(textType, strings.Repeat("\n", message.line-1)+text)
 		}
 		if err != nil {
 			return "", fmt.Errorf("message %d: %w", i+1, err)
+		}
+		if unary {
+			if message.compressed {
+				return "", fmt.Errorf("message %d (line %d): a Connect unary message is compressed by the request's Content-Encoding, not under a compressed separator", i+1, message.line-1)
+			}
+			encoded = payload
+			break
 		}
 		var flags byte
 		if message.compressed {
@@ -140,9 +198,48 @@ func encodeMessageForm(raw, framing string) (string, error) {
 			}
 			flags = stream.CompressedFlags(flags)
 		}
-		out.Write(stream.Envelope(flags, payload))
+		encoded = append(encoded, stream.Envelope(flags, payload)...)
 	}
-	return out.String(), nil
+	if stream.IsGRPCWebText(contentType) {
+		encoded = []byte(base64.StdEncoding.EncodeToString(encoded))
+	}
+	return withContentLength(head, len(encoded)) + blank + string(encoded), nil
+}
+
+// withContentLength is an HTTP/1.1 head with every Content-Length value set
+// to n, and one added when it has none and n is not 0. An HTTP/2 head,
+// which carries no length, and a head that uses Transfer-Encoding are
+// returned unchanged.
+func withContentLength(head string, n int) string {
+	requestLine, _, _ := strings.Cut(head, "\n")
+	if strings.HasSuffix(strings.TrimSuffix(requestLine, "\r"), " HTTP/2") {
+		return head
+	}
+	if _, chunked := headField(head, "transfer-encoding"); chunked {
+		return head
+	}
+	lines := strings.Split(head, "\n")
+	found := false
+	for i, line := range lines[1:] {
+		name, _, ok := strings.Cut(line, ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
+			continue
+		}
+		found = true
+		eol := ""
+		if strings.HasSuffix(line, "\r") {
+			eol = "\r"
+		}
+		lines[i+1] = name + ": " + strconv.Itoa(n) + eol
+	}
+	if !found && n > 0 {
+		eol := ""
+		if strings.HasSuffix(requestLine, "\r") {
+			eol = "\r"
+		}
+		lines = append(lines, "Content-Length: "+strconv.Itoa(n)+eol)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // compressMessage compresses payload, a message under a compressed
@@ -182,6 +279,8 @@ type TemplateMessage struct {
 func MessageFormTemplate(head string, messages []TemplateMessage) (string, bool) {
 	headText, _, _ := splitHead(head)
 	contentType, _ := headField(headText, "content-type")
+	contentType = messageContentType(contentType)
+	protoscopeText := stream.HasProtoscopeText(contentType)
 	var body strings.Builder
 	for _, message := range messages {
 		text, ok := stream.TextForm(contentType, message.Payload)
@@ -194,9 +293,39 @@ func MessageFormTemplate(head string, messages []TemplateMessage) (string, bool)
 			body.WriteString(messageSeparator + "\n")
 		}
 		body.WriteString(text)
-		if text != "" && !strings.HasSuffix(text, "\n") {
+		// A JSON message's text always gets the line ending encoding
+		// takes off again, so the message renders byte for byte.
+		if text != "" && (!protoscopeText || !strings.HasSuffix(text, "\n")) {
 			body.WriteString("\n")
 		}
 	}
 	return EscapeTemplate(head + body.String()), true
+}
+
+// ConnectUnaryTemplate is an Armory template that sends the captured
+// Connect unary request raw: its head and its body as one message under a
+// separator (MessageFormTemplate), for the framing connect. It reports
+// false for any other request. A request is Connect unary when its content
+// type is application/proto, or application/json with a
+// Connect-Protocol-Version field, which an ordinary JSON API does not
+// send. A body with a Content-Encoding or Transfer-Encoding is not read.
+func ConnectUnaryTemplate(raw string) (string, bool) {
+	head, blank, body := splitHead(raw)
+	if blank == "" {
+		return "", false
+	}
+	contentType, _ := headField(head, "content-type")
+	codec, unary := connectUnaryCodec(contentType)
+	if !unary {
+		return "", false
+	}
+	if _, versioned := headField(head, "connect-protocol-version"); codec == "json" && !versioned {
+		return "", false
+	}
+	for _, field := range []string{"content-encoding", "transfer-encoding"} {
+		if value, ok := headField(head, field); ok && !strings.EqualFold(value, "identity") {
+			return "", false
+		}
+	}
+	return MessageFormTemplate(head+blank, []TemplateMessage{{Payload: []byte(body)}})
 }

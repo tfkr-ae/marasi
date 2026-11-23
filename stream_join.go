@@ -40,7 +40,7 @@ type JoinedRequest struct {
 	// decoded.
 	Messages int
 	Omitted  int
-	// head is the stored request head, its blank line included, and
+	// head is the joined request's head, its blank line included, and
 	// forwarded the joined request messages as stored, in order.
 	head      []byte
 	forwarded []*domain.StreamMessage
@@ -130,11 +130,8 @@ func (proxy *Proxy) JoinedRequest(id uuid.UUID) (JoinedRequest, error) {
 		}
 		cursor = next
 	}
-	joined.head = row.Request.Raw
-	if end := bytes.Index(joined.head, []byte("\r\n\r\n")); end >= 0 {
-		joined.head = joined.head[:end+4]
-	}
 	joined.Raw = withBody(row.Request.Raw, body.Bytes())
+	joined.head = joined.Raw[:len(joined.Raw)-body.Len()]
 	joined.Streamed = true
 	return joined, nil
 }
