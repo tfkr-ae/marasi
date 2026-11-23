@@ -69,24 +69,41 @@ func runMessageFormAttempts(t *testing.T, raw string, framing stream.Framing, at
 	return sent, repository.failedAttempts
 }
 
-// envelopes cuts body into gRPC envelopes, failing unless each length
-// matches the bytes that follow it exactly.
-func envelopes(t *testing.T, body string) [][]byte {
+// envelope is one envelope of a sent body: its flags byte and payload.
+type envelope struct {
+	flags   byte
+	payload []byte
+}
+
+// flaggedEnvelopes cuts body into envelopes, keeping each one's flags,
+// failing unless each length matches the bytes that follow it exactly.
+func flaggedEnvelopes(t *testing.T, body string) []envelope {
 	t.Helper()
-	var out [][]byte
+	var out []envelope
 	for len(body) > 0 {
 		if len(body) < 5 {
 			t.Fatalf("a trailing partial envelope header %q", body)
-		}
-		if body[0] != 0 {
-			t.Fatalf("the envelope flags\nwanted:\n0\ngot:\n%d", body[0])
 		}
 		n := int(binary.BigEndian.Uint32([]byte(body[1:5])))
 		if len(body) < 5+n {
 			t.Fatalf("the envelope declares %d bytes but %d follow", n, len(body)-5)
 		}
-		out = append(out, []byte(body[5:5+n]))
+		out = append(out, envelope{flags: body[0], payload: []byte(body[5 : 5+n])})
 		body = body[5+n:]
+	}
+	return out
+}
+
+// envelopes cuts body into envelopes as flaggedEnvelopes does and returns
+// their payloads, failing unless every envelope's flags are 0.
+func envelopes(t *testing.T, body string) [][]byte {
+	t.Helper()
+	var out [][]byte
+	for _, e := range flaggedEnvelopes(t, body) {
+		if e.flags != 0 {
+			t.Fatalf("the envelope flags\nwanted:\n0\ngot:\n%d", e.flags)
+		}
+		out = append(out, e.payload)
 	}
 	return out
 }

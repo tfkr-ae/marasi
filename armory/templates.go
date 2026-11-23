@@ -134,11 +134,6 @@ type markedPosition struct {
 	start, end int
 }
 
-// preprocessTemplate converts Armory payload markers into Go template actions.
-func preprocessTemplate(raw string) (string, int, error) {
-	return preprocessFramedTemplate(raw, "")
-}
-
 // preprocessFramedTemplate converts Armory payload markers into Go template
 // actions. When framing is set and the body's messages are protoscope text,
 // a position inside a quoted string has its value escaped as a protoscope
@@ -252,15 +247,6 @@ func parseFramedTemplate(raw string, framing stream.Framing) (*armoryTemplate, e
 	}
 	tmpl.framing = framing
 	return tmpl, nil
-}
-
-// parseTemplate preprocesses and parses an Armory request template.
-func parseTemplate(raw string) (*armoryTemplate, error) {
-	expanded, _, err := preprocessTemplate(raw)
-	if err != nil {
-		return nil, err
-	}
-	return parseExpanded(expanded)
 }
 
 // parseExpanded parses a preprocessed Armory request template.

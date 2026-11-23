@@ -3,7 +3,6 @@ package armory
 import (
 	"bytes"
 	"compress/gzip"
-	"encoding/binary"
 	"io"
 	"strings"
 	"testing"
@@ -11,31 +10,6 @@ import (
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/stream"
 )
-
-// envelope is one envelope of a sent body: its flags byte and payload.
-type envelope struct {
-	flags   byte
-	payload []byte
-}
-
-// flaggedEnvelopes cuts body into envelopes, keeping each one's flags,
-// failing unless each length matches the bytes that follow it exactly.
-func flaggedEnvelopes(t *testing.T, body string) []envelope {
-	t.Helper()
-	var out []envelope
-	for len(body) > 0 {
-		if len(body) < 5 {
-			t.Fatalf("a trailing partial envelope header %q", body)
-		}
-		n := int(binary.BigEndian.Uint32([]byte(body[1:5])))
-		if len(body) < 5+n {
-			t.Fatalf("the envelope declares %d bytes but %d follow", n, len(body)-5)
-		}
-		out = append(out, envelope{flags: body[0], payload: []byte(body[5 : 5+n])})
-		body = body[5+n:]
-	}
-	return out
-}
 
 // gunzip decodes a gzip-compressed payload, failing if it is not gzip.
 func gunzip(t *testing.T, payload []byte) []byte {
