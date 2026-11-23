@@ -3,6 +3,7 @@ package armory
 import (
 	"context"
 	"encoding/binary"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +19,14 @@ const grpcHead = "POST /test.Echo/Say HTTP/2\r\n:authority: example.com\r\nconte
 // every request the run sent, in order.
 func runMessageForm(t *testing.T, raw, framing string, attack domain.ArmoryAttackType, wordlists map[string][]string) []string {
 	t.Helper()
+	sent, _ := runMessageFormAttempts(t, raw, framing, attack, wordlists)
+	return sent
+}
+
+// runMessageFormAttempts runs raw as runMessageForm does and also returns
+// every failed attempt the run recorded, and every one it announced.
+func runMessageFormAttempts(t *testing.T, raw, framing string, attack domain.ArmoryAttackType, wordlists map[string][]string) ([]string, []*domain.ArmoryFailedAttempt) {
+	t.Helper()
 	run := newTestArmoryRun(t)
 	run.TemplateSnapshot = raw
 	run.TemplateFraming = framing
@@ -29,8 +38,9 @@ func runMessageForm(t *testing.T, raw, framing string, attack domain.ArmoryAttac
 	updates := make(chan domain.ArmoryRun, 4)
 	var mu sync.Mutex
 	var sent []string
+	repository := &testExecutionRepository{run: run, updates: updates}
 	manager := &Manager{
-		repository: &testExecutionRepository{run: run, updates: updates},
+		repository: repository,
 		wordlists:  &testAttackWordlistProvider{entriesByName: wordlists},
 		sendFunc: func(_ context.Context, raw string, _ uuid.UUID, _ bool) error {
 			mu.Lock()
@@ -49,7 +59,9 @@ func runMessageForm(t *testing.T, raw, framing string, attack domain.ArmoryAttac
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	return sent
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	return sent, repository.failedAttempts
 }
 
 // envelopes cuts body into gRPC envelopes, failing unless each length
@@ -99,6 +111,34 @@ func bodyOf(t *testing.T, raw string) string {
 }
 
 func TestManager_MessageFormTemplate(t *testing.T) {
+	t.Run("should record a payload that does not encode as a failed attempt, not send it, and go on", func(t *testing.T) {
+		raw := grpcHead + "--- message ---\n1:VARINT @@1@@\n"
+
+		sent, failed := runMessageFormAttempts(t, raw, "grpc", domain.ArmoryAttackHarpoon, map[string][]string{"words": {"1", "abc", "3"}})
+
+		if len(sent) != 2 {
+			t.Fatalf("sent requests\nwanted:\n2\ngot:\n%d", len(sent))
+		}
+		for i, want := range []string{"\x08\x01", "\x08\x03"} {
+			messages := envelopes(t, bodyOf(t, sent[i]))
+			if len(messages) != 1 || string(messages[0]) != want {
+				t.Fatalf("request %d messages\nwanted:\n[% x]\ngot:\n% x", i, want, messages)
+			}
+		}
+		if len(failed) != 1 {
+			t.Fatalf("failed attempts\nwanted:\n1\ngot:\n%d", len(failed))
+		}
+		if want := []domain.ArmoryPayload{{Position: 0, Value: "abc"}}; !reflect.DeepEqual(failed[0].Payloads, want) {
+			t.Fatalf("the failed attempt's payloads\nwanted:\n%+v\ngot:\n%+v", want, failed[0].Payloads)
+		}
+		if !strings.Contains(failed[0].Error, "message 1: line 7 column 10") {
+			t.Fatalf("the failed attempt's error\nwanted:\ncontaining %q\ngot:\n%q", "message 1: line 7 column 10", failed[0].Error)
+		}
+		if failed[0].ID == uuid.Nil || failed[0].RunID == uuid.Nil || failed[0].CreatedAt.IsZero() {
+			t.Fatalf("the failed attempt\nwanted:\nan ID, its run's ID and a time\ngot:\n%+v", failed[0])
+		}
+	})
+
 	t.Run("should send payloads shorter and longer than the fallback in envelopes whose lengths match", func(t *testing.T) {
 		long := strings.Repeat("A", 300)
 		raw := grpcHead + "--- message ---\n1:LEN {\"@@fallback@@\"}\n"

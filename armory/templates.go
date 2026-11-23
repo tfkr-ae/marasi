@@ -227,8 +227,23 @@ func (tmpl *armoryTemplate) render(payloads map[int]string) (string, error) {
 	if tmpl.framing == "" {
 		return output.String(), nil
 	}
-	return encodeMessageForm(output.String(), tmpl.framing)
+	raw, err := encodeMessageForm(output.String(), tmpl.framing)
+	if err != nil {
+		return "", &messageError{err: err}
+	}
+	return raw, nil
 }
+
+// messageError means the rendered request's messages could not be built
+// for its framing. During a run, that request is a failed attempt: it is
+// recorded and not sent, and the run goes on.
+type messageError struct {
+	err error
+}
+
+func (err *messageError) Error() string { return err.err.Error() }
+
+func (err *messageError) Unwrap() error { return err.err }
 
 // EscapeTemplate escapes raw text so that, as an Armory template, it renders
 // back to exactly raw: `\` becomes `\\` and `@` becomes `\@`, the two bytes

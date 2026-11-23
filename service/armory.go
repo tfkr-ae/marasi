@@ -62,6 +62,31 @@ type armoryRun struct {
 	CreatedAt        time.Time               `json:"created_at"`
 	StartedAt        *time.Time              `json:"started_at"`
 	FinishedAt       *time.Time              `json:"finished_at"`
+	Progress         armoryRunProgress       `json:"progress"`
+}
+
+// armoryRunProgress counts what a run has done: the requests it sent and
+// stored as entries, and the failed attempts it recorded instead of sending.
+type armoryRunProgress struct {
+	Entries        int `json:"entries"`
+	FailedAttempts int `json:"failed_attempts"`
+}
+
+type armoryPayload struct {
+	Position int    `json:"position"`
+	Value    string `json:"value"`
+}
+
+type armoryFailedAttempt struct {
+	ID        uuid.UUID       `json:"id"`
+	RunID     uuid.UUID       `json:"run_id"`
+	Payloads  []armoryPayload `json:"payloads"`
+	Error     string          `json:"error"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+type armoryFailedAttemptList struct {
+	Items []armoryFailedAttempt `json:"items"`
 }
 
 type armoryRunList struct {
@@ -419,6 +444,27 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 		}
 		list := trafficListFromSummaries(items, nextCursor)
 		list.Index = &trafficIndex{Complete: indexComplete}
+		writeJSON(w, r, http.StatusOK, list)
+	})
+
+	mux.HandleFunc("GET /armory/run/{id}/failed-attempts", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseArmoryID(w, r)
+		if !ok {
+			return
+		}
+		if _, ok := getArmoryRun(w, r, proxy, id); !ok {
+			return
+		}
+		repo, _ := armoryRepository(proxy)
+		attempts, err := repo.GetArmoryFailedAttempts(id)
+		if err != nil {
+			writeArmoryError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		list := armoryFailedAttemptList{Items: make([]armoryFailedAttempt, len(attempts))}
+		for i, attempt := range attempts {
+			list.Items[i] = armoryFailedAttemptFromDomain(attempt)
+		}
 		writeJSON(w, r, http.StatusOK, list)
 	})
 
@@ -857,7 +903,36 @@ func armoryRunFromDomain(run *domain.ArmoryRun) armoryRun {
 		CreatedAt:        run.CreatedAt,
 		StartedAt:        run.StartedAt,
 		FinishedAt:       run.FinishedAt,
+		Progress: armoryRunProgress{
+			Entries:        run.Progress.Entries,
+			FailedAttempts: run.Progress.FailedAttempts,
+		},
 	}
+}
+
+func armoryFailedAttemptFromDomain(attempt *domain.ArmoryFailedAttempt) armoryFailedAttempt {
+	payloads := make([]armoryPayload, len(attempt.Payloads))
+	for i, payload := range attempt.Payloads {
+		payloads[i] = armoryPayload{Position: payload.Position, Value: payload.Value}
+	}
+	return armoryFailedAttempt{
+		ID:        attempt.ID,
+		RunID:     attempt.RunID,
+		Payloads:  payloads,
+		Error:     attempt.Error,
+		CreatedAt: attempt.CreatedAt,
+	}
+}
+
+// publishArmoryRunUpdated announces a run's lifecycle write.
+func publishArmoryRunUpdated(events *eventBroadcaster, run *domain.ArmoryRun) {
+	events.publish("armory.run.updated", armoryRunFromDomain(run))
+}
+
+// publishArmoryFailedAttempt announces a failed attempt a run recorded, as
+// the traffic events announce the run's entries.
+func publishArmoryFailedAttempt(events *eventBroadcaster, attempt *domain.ArmoryFailedAttempt) {
+	events.publish("armory.failed_attempt.created", armoryFailedAttemptFromDomain(attempt))
 }
 
 func parseArmoryID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
