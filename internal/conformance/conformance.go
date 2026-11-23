@@ -292,6 +292,14 @@ type Deterministic interface {
 	Deterministic()
 }
 
+// ImageBuilder is a suite that builds a Docker image for its tester before
+// running cases.
+type ImageBuilder interface {
+	// BuildImage ensures the suite's tester image exists in Docker and
+	// returns its tag.
+	BuildImage(ctx context.Context, log io.Writer) (string, error)
+}
+
 // Holder is a proxy that can say how many Checkpoint items it has held and
 // resolved, so a Checkpoint run can show it took the Checkpoint path.
 type Holder interface {

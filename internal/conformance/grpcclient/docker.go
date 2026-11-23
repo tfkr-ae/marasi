@@ -39,6 +39,18 @@ const GoInterop = "google.golang.org/grpc/interop/client@v1.85.0"
 //go:embed Dockerfile
 var dockerfile []byte
 
+// BuildImage builds InteropImage unless Docker already has it and returns
+// its tag.
+func (Suite) BuildImage(ctx context.Context, log io.Writer) (string, error) {
+	if log == nil {
+		log = io.Discard
+	}
+	if err := buildImage(ctx, log); err != nil {
+		return "", err
+	}
+	return InteropImage, nil
+}
+
 // buildImage builds InteropImage unless Docker has it already.
 func buildImage(ctx context.Context, log io.Writer) error {
 	if exec.CommandContext(ctx, "docker", "image", "inspect", InteropImage).Run() == nil {

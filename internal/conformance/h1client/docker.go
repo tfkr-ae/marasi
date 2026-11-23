@@ -3,7 +3,9 @@ package h1client
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -19,10 +21,30 @@ import (
 const ProbeCommit = "d50d818a0e008e9feb3bb9860ad5d9cc40342bc3"
 
 // ProbeImage is the tag of the image built from Dockerfile at ProbeCommit.
-const ProbeImage = "marasi-conformance-http11probe:" + ProbeCommit
+// It names the Dockerfile's content too, so an image Docker already has is
+// rebuilt when the Dockerfile changes.
+var ProbeImage = "marasi-conformance-http11probe:" + ProbeCommit + "-" + dockerfileSum()
+
+// dockerfileSum is the first 12 hex digits of the Dockerfile's SHA-256.
+func dockerfileSum() string {
+	sum := sha256.Sum256(dockerfile)
+	return hex.EncodeToString(sum[:])[:12]
+}
 
 //go:embed Dockerfile
 var dockerfile []byte
+
+// BuildImage builds ProbeImage unless Docker already has it and returns its
+// tag.
+func (Suite) BuildImage(ctx context.Context, log io.Writer) (string, error) {
+	if log == nil {
+		log = io.Discard
+	}
+	if err := buildProbe(ctx, log); err != nil {
+		return "", err
+	}
+	return ProbeImage, nil
+}
 
 // buildProbe builds ProbeImage unless Docker has it already. The first
 // build fetches the source and NuGet packages and takes a few minutes.

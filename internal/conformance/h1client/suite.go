@@ -59,7 +59,10 @@ type Suite struct {
 	Settle time.Duration
 }
 
-var _ conformance.Suite = Suite{}
+var (
+	_ conformance.Suite        = Suite{}
+	_ conformance.ImageBuilder = Suite{}
+)
 
 // Name is "h1-client".
 func (s Suite) Name() string { return Name }
