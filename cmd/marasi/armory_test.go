@@ -42,6 +42,7 @@ func TestArmoryCommands(t *testing.T) {
 		{name: "template list", args: []string{"armory", "template", "list"}, response: `{"items":[{"id":"` + templateID + `","name":"Login","description":"Try variants"}]}` + "\n", method: http.MethodGet, path: "/armory/template", wantStdout: "id: " + templateID + "\nname: Login\n"},
 		{name: "template get", args: []string{"armory", "template", "get", templateID}, response: template, method: http.MethodGet, path: "/armory/template/" + templateID, wantStdout: "id: " + templateID + "\nname: Login\ndescription: Try variants\nGET /@@ HTTP/1.1\r\nHost: example.com\r\n\r\n"},
 		{name: "template create", args: []string{"armory", "template", "create", "--name", "Login", "--description", "Try variants", "--raw-file", rawFile}, response: template, method: http.MethodPost, path: "/armory/template", body: `{"name":"Login","description":"Try variants","raw_template":"GET /@@ HTTP/1.1\r\nHost: example.com\r\n\r\n"}`, wantStderr: "armory template " + templateID + " created successfully\n"},
+		{name: "template create from a pair", args: []string{"armory", "template", "create", "--from-pair", runID}, response: template, method: http.MethodPost, path: "/armory/template/from-pair/" + runID, wantStderr: "armory template " + templateID + " created successfully\n"},
 		{name: "template update", args: []string{"armory", "template", "update", templateID, "--description", ""}, response: template, method: http.MethodPost, path: "/armory/template/" + templateID, body: `{"description":""}`, wantStderr: "armory template " + templateID + " updated successfully\n"},
 		{name: "template delete", args: []string{"armory", "template", "delete", templateID}, response: `{"id":"` + templateID + `"}` + "\n", method: http.MethodDelete, path: "/armory/template/" + templateID, wantStderr: "armory template " + templateID + " deleted successfully\n"},
 		{name: "run list", args: []string{"armory", "run", "list", "--template", templateID}, response: `{"items":[` + strings.TrimSpace(run) + `]}` + "\n", method: http.MethodGet, path: "/armory/template/" + templateID + "/run", wantStdout: armoryRunHuman(runID, templateID)},
@@ -131,6 +132,9 @@ func TestArmoryCommandOptions(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		for _, args := range [][]string{
 			{"armory", "template", "create"},
+			{"armory", "template", "create", "--from-pair", templateID, "--raw-file", "request.raw"},
+			{"armory", "template", "create", "--from-pair", templateID, "--name", "Login"},
+			{"armory", "template", "create", "--from-pair", "not-a-uuid"},
 			{"armory", "template", "update", templateID},
 			{"armory", "run", "list", "--template", templateID, "--status", "draft"},
 			{"armory", "run", "create", "--template", templateID},
