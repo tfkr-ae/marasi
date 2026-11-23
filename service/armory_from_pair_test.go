@@ -81,7 +81,7 @@ func TestArmoryTemplateFromPair(t *testing.T) {
 		if template.RawTemplate != want {
 			t.Fatalf("\nwanted:\n%q\ngot:\n%q", want, template.RawTemplate)
 		}
-		rendered, err := armorymanager.Render(template.RawTemplate)
+		rendered, err := armorymanager.Render(template.RawTemplate, template.Framing)
 		if err != nil {
 			t.Fatal(err)
 		}
