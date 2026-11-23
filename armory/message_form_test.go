@@ -352,6 +352,20 @@ func TestManager_MessageFormEscaping(t *testing.T) {
 		}
 	})
 
+	t.Run("should keep a position quoted after a captured {{ that the builder escaped in the same string", func(t *testing.T) {
+		built, ok := MessageFormTemplate(grpcHead, []TemplateMessage{{Payload: []byte("\x0a\x05a{{\"b")}})
+		if !ok {
+			t.Fatal("the message has no text form")
+		}
+		raw := strings.Replace(built, "b\"}", "@@b@@\"}", 1)
+
+		sent := runMessageForm(t, raw, "grpc", domain.ArmoryAttackHarpoon, map[string][]string{"words": {`"\`}})
+
+		if got, want := stringField(t, envelopes(t, bodyOf(t, sent[0]))[0]), `a{{""\`; got != want {
+			t.Fatalf("field 1\nwanted:\n%q\ngot:\n%q", want, got)
+		}
+	})
+
 	t.Run("should refuse to save a position that opens inside a quoted string and closes outside it", func(t *testing.T) {
 		raw := grpcHead + "--- message ---\n1:LEN {\"a@@b\"} 2:VARINT 1@@\n"
 

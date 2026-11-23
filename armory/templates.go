@@ -315,13 +315,26 @@ func (err *messageError) Error() string { return err.err.Error() }
 
 func (err *messageError) Unwrap() error { return err.err }
 
+// escapedActionStart is how EscapeTemplate writes "{{", which would open a
+// Go template action: an action printing it as a raw string. It holds no
+// double quote, so it adds no protoscope string boundary to the text a
+// payload position's quoting is read from (quotedPositions).
+const escapedActionStart = "{{`{{`}}"
+
 // EscapeTemplate escapes raw text so that, as an Armory template, it renders
 // back to exactly raw: `\` becomes `\\` and `@` becomes `\@`, the two bytes
-// the preprocessor reads specially. The result has no payload positions.
+// the preprocessor reads specially, and "{{", which the Go template reads as
+// an action, becomes an action printing it. "}}" outside an action is
+// ordinary text. The result has no payload positions.
 func EscapeTemplate(raw string) string {
 	var escaped strings.Builder
 	escaped.Grow(len(raw))
 	for index := 0; index < len(raw); index++ {
+		if strings.HasPrefix(raw[index:], "{{") {
+			escaped.WriteString(escapedActionStart)
+			index++
+			continue
+		}
 		if raw[index] == '\\' || raw[index] == '@' {
 			escaped.WriteByte('\\')
 		}
