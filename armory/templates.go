@@ -229,3 +229,28 @@ func (tmpl *armoryTemplate) render(payloads map[int]string) (string, error) {
 	}
 	return encodeMessageForm(output.String(), tmpl.framing)
 }
+
+// EscapeTemplate escapes raw text so that, as an Armory template, it renders
+// back to exactly raw: `\` becomes `\\` and `@` becomes `\@`, the two bytes
+// the preprocessor reads specially. The result has no payload positions.
+func EscapeTemplate(raw string) string {
+	var escaped strings.Builder
+	escaped.Grow(len(raw))
+	for index := 0; index < len(raw); index++ {
+		if raw[index] == '\\' || raw[index] == '@' {
+			escaped.WriteByte('\\')
+		}
+		escaped.WriteByte(raw[index])
+	}
+	return escaped.String()
+}
+
+// Render renders an Armory template with every payload position at its
+// fallback value.
+func Render(raw string) (string, error) {
+	tmpl, err := parseTemplate(raw)
+	if err != nil {
+		return "", err
+	}
+	return tmpl.render(nil)
+}
