@@ -1,9 +1,13 @@
 package armory
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -227,6 +231,36 @@ func TestManager_ValidateTemplate(t *testing.T) {
 			want:    "message 2: line 10 column 12",
 		},
 		{
+			name:    "a gRPC-Web framing whose content type names gRPC",
+			raw:     webHead("application/grpc") + "--- message ---\n1:LEN {\"a\"}\n",
+			framing: "grpc-web",
+			want:    `content type "application/grpc"`,
+		},
+		{
+			name:    "a Connect framing whose content type names gRPC-Web",
+			raw:     webHead("application/grpc-web") + "--- message ---\n1:LEN {\"a\"}\n",
+			framing: "connect",
+			want:    `content type "application/grpc-web"`,
+		},
+		{
+			name:    "a gRPC framing whose content type is Connect unary",
+			raw:     webHead("application/proto") + "--- message ---\n1:LEN {\"a\"}\n",
+			framing: "grpc",
+			want:    `content type "application/proto"`,
+		},
+		{
+			name:    "a Connect unary body with two separators",
+			raw:     webHead("application/proto") + "--- message ---\n1:LEN {\"a\"}\n--- message ---\n1:LEN {\"b\"}\n",
+			framing: "connect",
+			want:    "exactly one message, not 2",
+		},
+		{
+			name:    "a Connect unary body with no separator",
+			raw:     webHead("application/json") + "{\"a\":1}",
+			framing: "connect",
+			want:    "must start with",
+		},
+		{
 			name:    "a framing Marasi does not know",
 			raw:     grpcHead + "--- message ---\n1:LEN {\"a\"}\n",
 			framing: "soap",
@@ -334,8 +368,160 @@ func TestManager_MessageFormEscaping(t *testing.T) {
 
 		sent := runMessageForm(t, raw, "grpc", domain.ArmoryAttackHarpoon, map[string][]string{"words": {`q\"`}})
 
-		if got, want := string(envelopes(t, bodyOf(t, sent[0]))[0]), "{\"a\":\"q\\\"\"}\n"; got != want {
+		if got, want := string(envelopes(t, bodyOf(t, sent[0]))[0]), "{\"a\":\"q\\\"\"}"; got != want {
 			t.Fatalf("the message\nwanted:\n%q\ngot:\n%q", want, got)
+		}
+	})
+}
+
+// webHead is a gRPC-Web, Connect or Connect unary template head written as
+// HTTP/1.1 with contentType and a Content-Length the render must set.
+func webHead(contentType string) string {
+	return "POST /test.Echo/Say HTTP/1.1\r\nHost: example.com\r\nContent-Type: " + contentType + "\r\nContent-Length: 0\r\n\r\n"
+}
+
+// contentLength is the value of raw's Content-Length line, failing unless
+// it has exactly one.
+func contentLength(t *testing.T, raw string) string {
+	t.Helper()
+	head, _, _ := strings.Cut(raw, "\r\n\r\n")
+	var values []string
+	for _, line := range strings.Split(head, "\r\n")[1:] {
+		if name, value, ok := strings.Cut(line, ":"); ok && strings.EqualFold(name, "Content-Length") {
+			values = append(values, strings.TrimSpace(value))
+		}
+	}
+	if len(values) != 1 {
+		t.Fatalf("Content-Length lines\nwanted:\n1\ngot:\n%q", values)
+	}
+	return values[0]
+}
+
+func TestManager_WebAndConnectFramings(t *testing.T) {
+	long := strings.Repeat("A", 300)
+	framings := []struct {
+		name        string
+		contentType string
+		framing     string
+		message     string
+		// messages cuts a sent body into its messages' payloads.
+		messages func(t *testing.T, body string) [][]byte
+		// field reads the fuzzed field out of a message's payload.
+		field func(t *testing.T, message []byte) string
+	}{
+		{
+			name:        "gRPC-Web binary",
+			contentType: "application/grpc-web+proto",
+			framing:     "grpc-web",
+			message:     "1:LEN {\"@@fallback@@\"}\n",
+			messages:    envelopes,
+			field:       stringField,
+		},
+		{
+			name:        "gRPC-Web text",
+			contentType: "application/grpc-web-text",
+			framing:     "grpc-web",
+			message:     "1:LEN {\"@@fallback@@\"}\n",
+			messages: func(t *testing.T, body string) [][]byte {
+				decoded, err := base64.StdEncoding.DecodeString(body)
+				if err != nil {
+					t.Fatalf("decoding the base64 body %q: %v", body, err)
+				}
+				return envelopes(t, string(decoded))
+			},
+			field: stringField,
+		},
+		{
+			name:        "Connect streaming proto",
+			contentType: "application/connect+proto",
+			framing:     "connect",
+			message:     "1:LEN {\"@@fallback@@\"}\n",
+			messages:    envelopes,
+			field:       stringField,
+		},
+		{
+			name:        "Connect streaming JSON",
+			contentType: "application/connect+json",
+			framing:     "connect",
+			message:     "{\"a\":\"@@fallback@@\"}\n",
+			messages:    envelopes,
+			field:       jsonField,
+		},
+		{
+			name:        "Connect unary proto",
+			contentType: "application/proto",
+			framing:     "connect",
+			message:     "1:LEN {\"@@fallback@@\"}\n",
+			messages:    func(_ *testing.T, body string) [][]byte { return [][]byte{[]byte(body)} },
+			field:       stringField,
+		},
+		{
+			name:        "Connect unary JSON",
+			contentType: "application/json",
+			framing:     "connect",
+			message:     "{\"a\":\"@@fallback@@\"}\n",
+			messages:    func(_ *testing.T, body string) [][]byte { return [][]byte{[]byte(body)} },
+			field:       jsonField,
+		},
+	}
+	for _, tt := range framings {
+		t.Run("should send "+tt.name+" payloads shorter and longer than the fallback as a well-formed body with its Content-Length", func(t *testing.T) {
+			head := webHead(tt.contentType)
+			raw := head + "--- message ---\n" + tt.message
+
+			sent := runMessageForm(t, raw, tt.framing, domain.ArmoryAttackHarpoon, map[string][]string{"words": {"x", long}})
+
+			if len(sent) != 2 {
+				t.Fatalf("sent requests\nwanted:\n2\ngot:\n%d", len(sent))
+			}
+			for i, want := range []string{"x", long} {
+				body := bodyOf(t, sent[i])
+				if got := contentLength(t, sent[i]); got != strconv.Itoa(len(body)) {
+					t.Fatalf("request %d Content-Length\nwanted:\n%d\ngot:\n%s", i, len(body), got)
+				}
+				messages := tt.messages(t, body)
+				if len(messages) != 1 {
+					t.Fatalf("request %d messages\nwanted:\n1\ngot:\n%d", i, len(messages))
+				}
+				if got := tt.field(t, messages[0]); got != want {
+					t.Fatalf("request %d field\nwanted:\n%q\ngot:\n%q", i, want, got)
+				}
+			}
+		})
+	}
+}
+
+// jsonField is the value of a JSON message that is exactly {"a":"value"}
+// with nothing after it.
+func jsonField(t *testing.T, message []byte) string {
+	t.Helper()
+	var value struct{ A string }
+	decoder := json.NewDecoder(bytes.NewReader(message))
+	if err := decoder.Decode(&value); err != nil || decoder.InputOffset() != int64(len(message)) {
+		t.Fatalf("the message\nwanted:\nexactly one JSON object\ngot:\n%q (%v)", message, err)
+	}
+	return value.A
+}
+
+func TestManager_WebAndConnectEscaping(t *testing.T) {
+	t.Run("should put a payload in a Connect unary JSON message in as written, with no protoscope escaping", func(t *testing.T) {
+		raw := webHead("application/json") + "--- message ---\n{\"a\":\"@@x@@\"}\n"
+
+		sent := runMessageForm(t, raw, "connect", domain.ArmoryAttackHarpoon, map[string][]string{"words": {`q\"`}})
+
+		if got, want := bodyOf(t, sent[0]), "{\"a\":\"q\\\"\"}"; got != want {
+			t.Fatalf("the body\nwanted:\n%q\ngot:\n%q", want, got)
+		}
+	})
+
+	t.Run("should escape a payload in a quoted string of a Connect unary proto message", func(t *testing.T) {
+		raw := webHead("application/proto") + "--- message ---\n1:LEN {\"@@x@@\"}\n"
+		payload := "q\"\\\n\x00"
+
+		sent := runMessageForm(t, raw, "connect", domain.ArmoryAttackHarpoon, map[string][]string{"words": {payload}})
+
+		if got := stringField(t, []byte(bodyOf(t, sent[0]))); got != payload {
+			t.Fatalf("field 1\nwanted:\n%q\ngot:\n%q", payload, got)
 		}
 	})
 }

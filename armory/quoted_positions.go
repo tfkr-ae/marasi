@@ -30,7 +30,7 @@ func quotedPositions(raw, literal, framing string, positions []markedPosition) (
 	if blank == "" {
 		return quoted, nil
 	}
-	if contentType, _ := headField(head, "content-type"); !stream.HasProtoscopeText(contentType) {
+	if contentType, _ := headField(head, "content-type"); !stream.HasProtoscopeText(messageContentType(contentType)) {
 		return quoted, nil
 	}
 	states := stringStates(literal, len(head)+len(blank))

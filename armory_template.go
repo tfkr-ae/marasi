@@ -16,7 +16,9 @@ import (
 // A streamed request direction is built as a message-form body: each
 // joined request message in its text form under a separator, with the
 // framing the messages were sent in. One whose messages have no text form
-// is built from the joined request as raw text, with no framing.
+// is built from the joined request as raw text, with no framing. A Connect
+// unary request is built as a message-form body of its one message, with
+// the framing connect (armory.ConnectUnaryTemplate).
 // It has no payload positions until the tester adds them. A pair that is
 // not stored returns an error wrapping domain.ErrPairNotFound.
 func (proxy *Proxy) CreateArmoryTemplateFromPair(id uuid.UUID) (*domain.ArmoryTemplate, error) {
@@ -54,6 +56,9 @@ func (proxy *Proxy) CreateArmoryTemplateFromPair(id uuid.UUID) (*domain.ArmoryTe
 			template.RawTemplate = raw
 			template.Framing = framing
 		}
+	} else if raw, ok := armory.ConnectUnaryTemplate(string(joined.Raw)); ok {
+		template.RawTemplate = raw
+		template.Framing = string(stream.FramingConnect)
 	}
 	if err := repo.CreateArmoryTemplate(template); err != nil {
 		return nil, fmt.Errorf("storing the Armory template: %w", err)
