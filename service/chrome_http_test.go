@@ -152,14 +152,26 @@ func TestChromeStartRoute(t *testing.T) {
 		server := newChromeHTTPServer(t, activeListenerStatus("127.0.0.1:43210"))
 		browserPath := "/devtools/browser/5d1c2b9e-0f7a-4f43-8a52-3e7b9c1d2a64"
 		port := startCDPVersionServer(t, browserPath)
-		executable, _ := writeCDPFakeChrome(t, t.TempDir(), port+`\n`+browserPath)
+		executable, argsPath := writeCDPFakeChrome(t, t.TempDir(), port+`\n`+browserPath)
 		pathBody := `{"os":"` + runtime.GOOS + `","path":"` + executable + `"}`
 		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/chrome/path", pathBody), http.StatusOK, `{"items":[{"os":"`+runtime.GOOS+`","path":"`+executable+`"}]}`+"\n")
 		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/chrome/profile", `{"name":"pentest"}`), http.StatusOK, `{"items":[{"name":"pentest"}]}`+"\n")
 
 		want := `{"status":"started","profile":"pentest","cdp":{"http":"http://127.0.0.1:` + port + `","ws":"ws://127.0.0.1:` + port + browserPath + `","reused":false}}` + "\n"
 		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/chrome/start", `{"profile":"pentest","cdp":true}`), http.StatusOK, want)
+		args := readFakeChromeArgs(t, argsPath)
+		if !strings.Contains(args, "--remote-debugging-port=0\n") {
+			t.Fatalf("\nwanted:\n--remote-debugging-port=0 among arguments\ngot:\n%s", args)
+		}
+		if err := os.Remove(argsPath); err != nil {
+			t.Fatalf("removing first fake Chrome arguments: %v", err)
+		}
+
 		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/chrome/start", `{"cdp":false}`), http.StatusOK, `{"status":"started","profile":"default-profile"}`+"\n")
+		args = readFakeChromeArgs(t, argsPath)
+		if strings.Contains(args, "--remote-debugging-port") {
+			t.Fatalf("\nwanted:\nno CDP switch when cdp is false\ngot:\n%s", args)
+		}
 		for _, body := range []string{`{"cdp":null}`, `{"cdp":"true"}`, `{"cdp":1}`, `{"cdp":true,"extra":true}`} {
 			assertChromeError(t, requestChrome(server, http.MethodPost, "/chrome/start", body), http.StatusBadRequest, "invalid_chrome_request")
 		}
@@ -171,12 +183,13 @@ func TestChromeStartRoute(t *testing.T) {
 		}
 		server := newChromeHTTPServer(t, activeListenerStatus("127.0.0.1:43210"))
 		server.chrome.cdpWait = 200 * time.Millisecond
-		executable, _ := writeCDPFakeChrome(t, t.TempDir(), "")
+		executable, argsPath := writeCDPFakeChrome(t, t.TempDir(), "")
 		pathBody := `{"os":"` + runtime.GOOS + `","path":"` + executable + `"}`
 		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/chrome/path", pathBody), http.StatusOK, `{"items":[{"os":"`+runtime.GOOS+`","path":"`+executable+`"}]}`+"\n")
 
 		want := `{"error":"chrome_running_without_cdp","message":"chrome profile default-profile is running without a CDP endpoint; close it and start it again with --cdp"}` + "\n"
 		assertChromeResponse(t, requestChrome(server, http.MethodPost, "/chrome/start", `{"cdp":true}`), http.StatusConflict, want)
+		readFakeChromeArgs(t, argsPath)
 	})
 
 	t.Run("should hide an unavailable executable error and write it to the instance log", func(t *testing.T) {
