@@ -114,8 +114,15 @@ func (sp *streamedPair) process(name string, d *streamedDirection, message *stre
 		}
 	}
 
+	var frameStatus *int
+	if !live.Dropped && !live.ReadOnly {
+		frameStatus = trailersFrameGRPCStatus(d.framing, flagsOut, live.Payload)
+	}
 	sp.mu.Lock()
 	d.messages++
+	if frameStatus != nil {
+		d.frameGRPCStatus = frameStatus
+	}
 	sp.mu.Unlock()
 	var flags *uint8
 	if d.framing.Enveloped() {

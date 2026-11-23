@@ -46,6 +46,21 @@ func trailersGRPCStatus(trailers h2Fields) *int {
 	return nil
 }
 
+// trailersFrameGRPCStatus is the grpc-status in a stream message with flags
+// and its decoded payload when it is a gRPC-Web trailers frame, the trailer
+// block a gRPC-Web response normally ends with inside its body. It is nil
+// for any other message, or a block with no whole-number grpc-status.
+func trailersFrameGRPCStatus(framing stream.Framing, flags byte, payload []byte) *int {
+	if !stream.IsTrailersFrame(framing, flags) {
+		return nil
+	}
+	fields, err := parseTrailerBlock(payload)
+	if err != nil {
+		return nil
+	}
+	return trailersGRPCStatus(fields)
+}
+
 // parseGRPCStatus reads a grpc-status value, nil when it is not a whole
 // number.
 func parseGRPCStatus(value string) *int {
