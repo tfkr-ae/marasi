@@ -238,9 +238,7 @@ func (s h2ClientSink) end(trailers h2Fields) error {
 }
 
 func (s h2ClientSink) reset(code http2.ErrCode) {
-	if !s.h.gone(s.st) {
-		s.h.resetStream(s.st.id, code)
-	}
+	s.h.reset(s.st, code)
 }
 
 // endedBy is why a send on st failed: the client's reset, when it reset
@@ -330,7 +328,7 @@ func (h *h2Conn) carryStreamedResponse(st *h2Stream, pair *Pair, res *http.Respo
 	}
 	if err != nil || h.gone(st) {
 		body.reset(http2.ErrCodeCancel)
-		h.resetStream(st.id, http2.ErrCodeCancel)
+		h.reset(st, http2.ErrCodeCancel)
 		return
 	}
 	encoding, _ := out.fields.get("content-encoding")

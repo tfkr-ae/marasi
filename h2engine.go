@@ -599,7 +599,7 @@ func (h *h2Conn) headerBlock() error {
 			in: newH2Inbound(h2DefaultWindow, func(n uint32) {
 				h.w.do(func(fr *http2.Framer) error { return fr.WriteWindowUpdate(id, n) })
 			}),
-			resetBy: func(code http2.ErrCode) { h.resetStream(id, code) },
+			resetBy: func(code http2.ErrCode) { h.reset(st, code) },
 		}
 	}
 	h.streams[id] = st
@@ -738,22 +738,39 @@ func (h *h2Conn) queue(st *h2Stream) bool {
 	return true
 }
 
-// resetStream sends RST_STREAM with code and ends the stream, resetting its
-// origin stream with CANCEL.
+// reset sends RST_STREAM with code for an open stream st once and ends it,
+// resetting its origin stream with CANCEL. Calling it after st already
+// ended does nothing, so concurrent cancels never send a second RST_STREAM.
+func (h *h2Conn) reset(st *h2Stream, code http2.ErrCode) {
+	cancel := http2.ErrCodeCancel
+	h.endStream(st, &code, &cancel)
+}
+
+// resetStream sends RST_STREAM with code for stream id and ends it when it
+// is open, resetting its origin stream with CANCEL. When id is not an open
+// stream (for example a stream error on a rejected or closed stream ID),
+// RST_STREAM is still sent as RFC 9113 requires.
 func (h *h2Conn) resetStream(id uint32, code http2.ErrCode) {
-	h.w.do(func(f *http2.Framer) error { return f.WriteRSTStream(id, code) })
 	h.mu.Lock()
 	st := h.streams[id]
 	h.mu.Unlock()
 	if st != nil {
-		cancel := http2.ErrCodeCancel
-		h.closeStream(st, &cancel)
+		h.reset(st, code)
+		return
 	}
+	h.w.do(func(f *http2.Framer) error { return f.WriteRSTStream(id, code) })
 }
 
 // closeStream ends st. When originCode is set and its origin stream is
 // open, that is reset with the code.
 func (h *h2Conn) closeStream(st *h2Stream, originCode *http2.ErrCode) {
+	h.endStream(st, nil, originCode)
+}
+
+// endStream ends st once. When clientCode is set, RST_STREAM is sent to the
+// client before finishIfDone may close the write side; when originCode is
+// set, any open body and origin stream end with that code.
+func (h *h2Conn) endStream(st *h2Stream, clientCode, originCode *http2.ErrCode) {
 	h.mu.Lock()
 	if st.gone {
 		h.mu.Unlock()
@@ -765,12 +782,19 @@ func (h *h2Conn) closeStream(st *h2Stream, originCode *http2.ErrCode) {
 	originStream, origin, queued, pass := st.origin, h.origin, st.turn != nil, st.pass
 	st.stall.stop()
 	h.mu.Unlock()
+	if clientCode != nil {
+		h.w.do(func(f *http2.Framer) error { return f.WriteRSTStream(st.id, *clientCode) })
+	}
 	if pass != nil {
-		pass.cut(nil, errPassStopped)
+		pass.cut(originCode, errPassStopped)
 	}
 	st.cancel()
 	if body := st.request.streamed; body != nil {
-		body.in.close(errStreamGone)
+		var reason error = errStreamGone
+		if originCode != nil {
+			reason = &streamResetError{code: *originCode}
+		}
+		body.in.close(reason)
 	}
 	if queued {
 		h.passTurn(st)

@@ -1,7 +1,10 @@
 package marasi
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -158,6 +161,157 @@ func TestH2Conn_LazyOriginDialRace(t *testing.T) {
 		}
 		if dialled := h.originDial.Load(); dialled == nil || !errors.Is(dialled.err, errH2CClosed) {
 			t.Fatalf("the dialled origin\nwanted:\nfiled, closed\ngot:\n%v", dialled)
+		}
+	})
+}
+
+func TestH2Conn_CloseStreamWithOriginCode(t *testing.T) {
+	t.Run("should close a streamed request body with the origin reset code so carry forwards CANCEL instead of INTERNAL_ERROR", func(t *testing.T) {
+		h := &h2Conn{
+			flow:    newH2Flow(),
+			streams: make(map[uint32]*h2Stream),
+		}
+		in := newH2Inbound(1<<20, func(uint32) {})
+		st := &h2Stream{
+			id:     1,
+			cancel: func() {},
+			request: h2Request{
+				streamed: &h2StreamedBody{in: in},
+			},
+		}
+		h.streams[1] = st
+
+		cancel := http2.ErrCodeCancel
+		h.closeStream(st, &cancel)
+
+		_, err := in.peek()
+		var reset *streamResetError
+		if !errors.As(err, &reset) || reset.code != http2.ErrCodeCancel {
+			t.Fatalf("the streamed request body's end\nwanted:\nreset CANCEL\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should cut a threshold-passed request body with the origin reset code so forwarding preserves the client's code", func(t *testing.T) {
+		h := &h2Conn{
+			flow:    newH2Flow(),
+			streams: make(map[uint32]*h2Stream),
+		}
+		pass := newH2Passing(h2DefaultWindow, func(uint32) {}, nil)
+		st := &h2Stream{
+			id:     1,
+			cancel: func() {},
+			pass:   pass,
+		}
+		h.streams[1] = st
+
+		code := http2.ErrCodeInternal
+		h.closeStream(st, &code)
+
+		_, err := pass.in.peek()
+		var reset *streamResetError
+		if !errors.As(err, &reset) || reset.code != http2.ErrCodeInternal {
+			t.Fatalf("the passed request body's end\nwanted:\nreset INTERNAL_ERROR\ngot:\n%v", err)
+		}
+	})
+
+	t.Run("should write at most one RST_STREAM to the client when reset races with itself or closeStream", func(t *testing.T) {
+		var buf bytes.Buffer
+		bw := bufio.NewWriter(&buf)
+		framer := http2.NewFramer(bw, io.NopCloser(&bytes.Reader{}))
+		h := &h2Conn{
+			w:       newH2Writer(bw, framer),
+			flow:    newH2Flow(),
+			streams: make(map[uint32]*h2Stream),
+		}
+		st := &h2Stream{id: 1, cancel: func() {}}
+		h.streams[1] = st
+
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				h.reset(st, http2.ErrCodeCancel)
+			}()
+		}
+		wg.Wait()
+
+		reader := http2.NewFramer(io.Discard, bytes.NewReader(buf.Bytes()))
+		resets := 0
+		for {
+			f, err := reader.ReadFrame()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("reading frames\nwanted:\nvalid frames\ngot:\n%v", err)
+			}
+			if rst, ok := f.(*http2.RSTStreamFrame); ok {
+				resets++
+				if rst.StreamID != 1 || rst.ErrCode != http2.ErrCodeCancel {
+					t.Fatalf("the RST_STREAM frame\nwanted:\nstream 1 CANCEL\ngot:\nstream %d %s", rst.StreamID, rst.ErrCode)
+				}
+			}
+		}
+		if resets != 1 {
+			t.Fatalf("RST_STREAM count\nwanted:\n1\ngot:\n%d", resets)
+		}
+	})
+}
+
+func TestH2Origin_CancelAndResetStreamed(t *testing.T) {
+	t.Run("should write at most one RST_STREAM to the origin when cancel runs concurrently", func(t *testing.T) {
+		var buf bytes.Buffer
+		bw := bufio.NewWriter(&buf)
+		framer := http2.NewFramer(bw, io.NopCloser(&bytes.Reader{}))
+		o := newBareH2Origin()
+		o.w = newH2Writer(bw, framer)
+		s := openBareStream(o)
+
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				o.cancel(s, http2.ErrCodeCancel)
+			}()
+		}
+		wg.Wait()
+
+		reader := http2.NewFramer(io.Discard, bytes.NewReader(buf.Bytes()))
+		resets := 0
+		for {
+			f, err := reader.ReadFrame()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("reading frames\nwanted:\nvalid frames\ngot:\n%v", err)
+			}
+			if rst, ok := f.(*http2.RSTStreamFrame); ok {
+				resets++
+				if rst.StreamID != s.id || rst.ErrCode != http2.ErrCodeCancel {
+					t.Fatalf("the RST_STREAM frame\nwanted:\nstream %d CANCEL\ngot:\nstream %d %s", s.id, rst.StreamID, rst.ErrCode)
+				}
+			}
+		}
+		if resets != 1 {
+			t.Fatalf("RST_STREAM count\nwanted:\n1\ngot:\n%d", resets)
+		}
+	})
+
+	t.Run("should close a streamed response body with the origin's reset code when resetBy finishes the stream", func(t *testing.T) {
+		o := newBareH2Origin()
+		s := openBareStream(o)
+		in := newH2Inbound(h2OriginStreamWindow, func(uint32) {})
+		s.streamed.Store(&h2StreamedBody{in: in})
+
+		o.resetBy(s, http2.ErrCodeEnhanceYourCalm)
+
+		_, err := in.peek()
+		var reset *streamResetError
+		if !errors.As(err, &reset) || reset.code != http2.ErrCodeEnhanceYourCalm {
+			t.Fatalf("the streamed response body's end\nwanted:\nreset ENHANCE_YOUR_CALM\ngot:\n%v", err)
 		}
 	})
 }
