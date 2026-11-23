@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 // envelope is one envelope of a sent body: its flags byte and payload.
@@ -54,7 +55,7 @@ func TestManager_CompressedMessages(t *testing.T) {
 	cases := []struct {
 		name    string
 		head    string
-		framing string
+		framing stream.Framing
 	}{
 		{
 			name:    "gRPC with grpc-encoding",

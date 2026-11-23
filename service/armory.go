@@ -17,21 +17,22 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 type armoryTemplate struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	RawTemplate string    `json:"raw_template"`
-	Framing     string    `json:"framing,omitempty"`
+	ID          uuid.UUID      `json:"id"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	RawTemplate string         `json:"raw_template"`
+	Framing     stream.Framing `json:"framing,omitempty"`
 }
 
 type armoryTemplateSummary struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Framing     string    `json:"framing,omitempty"`
+	ID          uuid.UUID      `json:"id"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Framing     stream.Framing `json:"framing,omitempty"`
 }
 
 type armoryTemplateList struct {
@@ -43,17 +44,17 @@ type armoryID struct {
 }
 
 type armoryTemplateMutation struct {
-	Name        *string `json:"name"`
-	Description *string `json:"description"`
-	RawTemplate *string `json:"raw_template"`
-	Framing     *string `json:"framing"`
+	Name        *string         `json:"name"`
+	Description *string         `json:"description"`
+	RawTemplate *string         `json:"raw_template"`
+	Framing     *stream.Framing `json:"framing"`
 }
 
 type armoryRun struct {
 	ID               uuid.UUID               `json:"id"`
 	TemplateID       uuid.UUID               `json:"template_id"`
 	TemplateSnapshot string                  `json:"template_snapshot"`
-	TemplateFraming  string                  `json:"template_framing,omitempty"`
+	TemplateFraming  stream.Framing          `json:"template_framing,omitempty"`
 	UseHTTPS         bool                    `json:"use_https"`
 	Wordlists        []string                `json:"wordlists"`
 	Status           domain.ArmoryRunStatus  `json:"status"`
@@ -96,7 +97,7 @@ type armoryRunList struct {
 type armoryRunMutation struct {
 	TemplateID    *uuid.UUID
 	RawTemplate   *string
-	Framing       string
+	Framing       stream.Framing
 	AttackType    domain.ArmoryAttackType
 	Wordlists     []string
 	UseHTTPS      bool
@@ -771,7 +772,7 @@ func decodeArmoryRunMutation(r *http.Request, create bool) (armoryRunMutation, e
 	return mutation, nil
 }
 
-func (mutation armoryRunMutation) armoryRun(id uuid.UUID, snapshot, framing string) *domain.ArmoryRun {
+func (mutation armoryRunMutation) armoryRun(id uuid.UUID, snapshot string, framing stream.Framing) *domain.ArmoryRun {
 	return &domain.ArmoryRun{
 		ID:               id,
 		TemplateID:       valueOrZero(mutation.TemplateID),
@@ -849,7 +850,8 @@ func decodeArmoryTemplateMutation(r *http.Request, requireName bool) (armoryTemp
 		case "raw_template":
 			mutation.RawTemplate = &value
 		case "framing":
-			mutation.Framing = &value
+			framing := stream.Framing(value)
+			mutation.Framing = &framing
 		default:
 			return armoryTemplateMutation{}, errInvalidArmoryRequest
 		}

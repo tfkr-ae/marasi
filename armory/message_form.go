@@ -19,6 +19,18 @@ const (
 	compressedMessageSeparator = "--- message compressed ---"
 )
 
+// separatorLine reports whether line, without its line ending, is a
+// message-form separator, and whether it marks the message compressed.
+func separatorLine(line string) (isSeparator, compressed bool) {
+	switch strings.TrimSuffix(line, "\r") {
+	case messageSeparator:
+		return true, false
+	case compressedMessageSeparator:
+		return true, true
+	}
+	return false, false
+}
+
 // formMessage is one message of a rendered message-form body.
 type formMessage struct {
 	// text is the message's text form.
@@ -30,9 +42,9 @@ type formMessage struct {
 	compressed bool
 }
 
-// supportedFraming reports whether Marasi can send a template that names framing.
-func supportedFraming(framing string) error {
-	switch stream.Framing(framing) {
+// validateFraming reports whether Marasi can send a template that names framing.
+func validateFraming(framing stream.Framing) error {
+	switch framing {
 	case stream.FramingNone, stream.FramingGRPC, stream.FramingGRPCWeb, stream.FramingConnect:
 		return nil
 	}
@@ -85,12 +97,12 @@ func splitMessages(body string, firstLine int) ([]formMessage, error) {
 			whole += "\n"
 		}
 		rest = after
-		if separator := strings.TrimSuffix(content, "\r"); separator == messageSeparator || separator == compressedMessageSeparator {
+		if isSeparator, compressed := separatorLine(content); isSeparator {
 			if current != nil {
 				current.text = text.String()
 				messages = append(messages, *current)
 			}
-			current = &formMessage{line: line + 1, compressed: separator == compressedMessageSeparator}
+			current = &formMessage{line: line + 1, compressed: compressed}
 			text.Reset()
 			continue
 		}
@@ -134,11 +146,11 @@ func messageContentType(contentType string) string {
 
 // namesFraming reports whether contentType names framing, a Connect unary
 // type naming connect.
-func namesFraming(contentType, framing string) bool {
+func namesFraming(contentType string, framing stream.Framing) bool {
 	if _, unary := connectUnaryCodec(contentType); unary {
-		return stream.Framing(framing) == stream.FramingConnect
+		return framing == stream.FramingConnect
 	}
-	return stream.FramingOf(contentType, false) == stream.Framing(framing)
+	return stream.FramingOf(contentType, false) == framing
 }
 
 // encodeMessageForm turns a rendered request whose body is in message form
@@ -148,7 +160,7 @@ func namesFraming(contentType, framing string) bool {
 // Every length is computed here, so payloads of any length give
 // well-formed messages, and an HTTP/1.1 head's Content-Length is set to
 // the body's length.
-func encodeMessageForm(raw, framing string) (string, error) {
+func encodeMessageForm(raw string, framing stream.Framing) (string, error) {
 	head, blank, body := splitHead(raw)
 	if blank == "" {
 		return "", errors.New("a message-form request needs a blank line after its head")
@@ -269,8 +281,8 @@ func contentLengthLine(line string) (string, bool) {
 // grpc-encoding, or connect-content-encoding for Connect streaming. A head
 // that names no encoding, identity, or one Marasi does not encode is an
 // error.
-func compressMessage(head, framing string, payload []byte) ([]byte, error) {
-	field := stream.EncodingHeader(stream.Framing(framing))
+func compressMessage(head string, framing stream.Framing, payload []byte) ([]byte, error) {
+	field := stream.EncodingHeader(framing)
 	encoding, _ := headField(head, field)
 	if encoding == "" || strings.EqualFold(encoding, "identity") {
 		return nil, fmt.Errorf("a compressed message needs a %s the request names, and it names none", field)

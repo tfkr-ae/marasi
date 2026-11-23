@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 // grpcHead is the head of a native gRPC template written as HTTP/2.
@@ -21,7 +22,7 @@ const grpcHead = "POST /test.Echo/Say HTTP/2\r\n:authority: example.com\r\nconte
 
 // runMessageForm runs a harpoon attack with one wordlist on raw and returns
 // every request the run sent, in order.
-func runMessageForm(t *testing.T, raw, framing string, attack domain.ArmoryAttackType, wordlists map[string][]string) []string {
+func runMessageForm(t *testing.T, raw string, framing stream.Framing, attack domain.ArmoryAttackType, wordlists map[string][]string) []string {
 	t.Helper()
 	sent, _ := runMessageFormAttempts(t, raw, framing, attack, wordlists)
 	return sent
@@ -29,7 +30,7 @@ func runMessageForm(t *testing.T, raw, framing string, attack domain.ArmoryAttac
 
 // runMessageFormAttempts runs raw as runMessageForm does and also returns
 // every failed attempt the run recorded, and every one it announced.
-func runMessageFormAttempts(t *testing.T, raw, framing string, attack domain.ArmoryAttackType, wordlists map[string][]string) ([]string, []*domain.ArmoryFailedAttempt) {
+func runMessageFormAttempts(t *testing.T, raw string, framing stream.Framing, attack domain.ArmoryAttackType, wordlists map[string][]string) ([]string, []*domain.ArmoryFailedAttempt) {
 	t.Helper()
 	run := newTestArmoryRun(t)
 	run.TemplateSnapshot = raw
@@ -203,7 +204,7 @@ func TestManager_ValidateTemplate(t *testing.T) {
 	refusals := []struct {
 		name    string
 		raw     string
-		framing string
+		framing stream.Framing
 		want    string
 	}{
 		{
@@ -416,7 +417,7 @@ func TestManager_WebAndConnectFramings(t *testing.T) {
 	framings := []struct {
 		name        string
 		contentType string
-		framing     string
+		framing     stream.Framing
 		message     string
 		// messages cuts a sent body into its messages' payloads.
 		messages func(t *testing.T, body string) [][]byte
