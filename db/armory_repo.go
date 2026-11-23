@@ -23,6 +23,8 @@ type dbArmoryTemplate struct {
 	Description string `db:"description"`
 	// RawTemplate contains the raw HTTP Go template.
 	RawTemplate string `db:"raw_template"`
+	// RequestFraming is the template's request message framing, NULL for none.
+	RequestFraming sql.NullString `db:"request_framing"`
 }
 
 // dbArmoryRun represents an Armory run stored in SQLite.
@@ -33,6 +35,8 @@ type dbArmoryRun struct {
 	TemplateID uuid.UUID `db:"template_id"`
 	// TemplateSnapshot preserves the raw template used for the run.
 	TemplateSnapshot string `db:"template_snapshot"`
+	// TemplateFraming preserves the template's request framing, NULL for none.
+	TemplateFraming sql.NullString `db:"template_framing"`
 	// UseHTTPS records whether generated requests use HTTPS.
 	UseHTTPS bool `db:"use_https"`
 	// Wordlists contains the ordered wordlist names as JSON.
@@ -66,7 +70,13 @@ func toDomainArmoryTemplate(template *dbArmoryTemplate) *domain.ArmoryTemplate {
 		Name:        template.Name,
 		Description: template.Description,
 		RawTemplate: template.RawTemplate,
+		Framing:     template.RequestFraming.String,
 	}
+}
+
+// nullFraming stores an empty framing as NULL.
+func nullFraming(framing string) sql.NullString {
+	return sql.NullString{String: framing, Valid: framing != ""}
 }
 
 // toDomainArmoryRun converts a database run to its domain representation.
@@ -75,6 +85,7 @@ func toDomainArmoryRun(run *dbArmoryRun) *domain.ArmoryRun {
 		ID:               run.ID,
 		TemplateID:       run.TemplateID,
 		TemplateSnapshot: run.TemplateSnapshot,
+		TemplateFraming:  run.TemplateFraming.String,
 		UseHTTPS:         run.UseHTTPS,
 		Wordlists:        []string(run.Wordlists),
 		Status:           domain.ArmoryRunStatus(run.Status),
@@ -97,7 +108,7 @@ func toDomainArmoryRun(run *dbArmoryRun) *domain.ArmoryRun {
 // GetArmoryTemplates returns all Armory templates in creation order.
 func (repo *Repository) GetArmoryTemplates() ([]*domain.ArmoryTemplate, error) {
 	var templates []*dbArmoryTemplate
-	query := `SELECT id, name, description, raw_template FROM armory_template ORDER BY id ASC`
+	query := `SELECT id, name, description, raw_template, request_framing FROM armory_template ORDER BY id ASC`
 	if err := repo.dbConn.Select(&templates, query); err != nil {
 		return nil, fmt.Errorf("getting armory templates: %w", err)
 	}
@@ -112,7 +123,7 @@ func (repo *Repository) GetArmoryTemplates() ([]*domain.ArmoryTemplate, error) {
 // GetArmoryTemplate returns an Armory template by ID.
 func (repo *Repository) GetArmoryTemplate(id uuid.UUID) (*domain.ArmoryTemplate, error) {
 	var template dbArmoryTemplate
-	query := `SELECT id, name, description, raw_template FROM armory_template WHERE id = ?`
+	query := `SELECT id, name, description, raw_template, request_framing FROM armory_template WHERE id = ?`
 	if err := repo.dbConn.Get(&template, query, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: %s", domain.ErrArmoryTemplateNotFound, id)
@@ -124,8 +135,8 @@ func (repo *Repository) GetArmoryTemplate(id uuid.UUID) (*domain.ArmoryTemplate,
 
 // CreateArmoryTemplate inserts an Armory template.
 func (repo *Repository) CreateArmoryTemplate(template *domain.ArmoryTemplate) error {
-	query := `INSERT INTO armory_template (id, name, description, raw_template) VALUES (?, ?, ?, ?)`
-	_, err := repo.dbConn.Exec(query, template.ID, template.Name, template.Description, template.RawTemplate)
+	query := `INSERT INTO armory_template (id, name, description, raw_template, request_framing) VALUES (?, ?, ?, ?, ?)`
+	_, err := repo.dbConn.Exec(query, template.ID, template.Name, template.Description, template.RawTemplate, nullFraming(template.Framing))
 	if err != nil {
 		return fmt.Errorf("creating armory template %s: %w", template.Name, err)
 	}
@@ -134,8 +145,8 @@ func (repo *Repository) CreateArmoryTemplate(template *domain.ArmoryTemplate) er
 
 // UpdateArmoryTemplate updates all editable fields of an Armory template.
 func (repo *Repository) UpdateArmoryTemplate(template *domain.ArmoryTemplate) error {
-	query := `UPDATE armory_template SET name = ?, description = ?, raw_template = ? WHERE id = ?`
-	result, err := repo.dbConn.Exec(query, template.Name, template.Description, template.RawTemplate, template.ID)
+	query := `UPDATE armory_template SET name = ?, description = ?, raw_template = ?, request_framing = ? WHERE id = ?`
+	result, err := repo.dbConn.Exec(query, template.Name, template.Description, template.RawTemplate, nullFraming(template.Framing), template.ID)
 	if err != nil {
 		return fmt.Errorf("updating armory template %s: %w", template.ID, err)
 	}
@@ -197,9 +208,9 @@ func (repo *Repository) GetArmoryRuns(templateID uuid.UUID) ([]*domain.ArmoryRun
 func (repo *Repository) CreateArmoryRun(run *domain.ArmoryRun) error {
 	query := `
 		INSERT INTO armory_run (
-			id, template_id, template_snapshot, use_https, wordlists, status,
+			id, template_id, template_snapshot, template_framing, use_https, wordlists, status,
 			attack_type, max_concurrent, created_at, started_at, finished_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	createdAt := run.CreatedAt
 	if createdAt.IsZero() {
@@ -210,6 +221,7 @@ func (repo *Repository) CreateArmoryRun(run *domain.ArmoryRun) error {
 		run.ID,
 		run.TemplateID,
 		run.TemplateSnapshot,
+		nullFraming(run.TemplateFraming),
 		run.UseHTTPS,
 		StringArray(run.Wordlists),
 		run.Status,

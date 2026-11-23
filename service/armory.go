@@ -24,12 +24,14 @@ type armoryTemplate struct {
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
 	RawTemplate string    `json:"raw_template"`
+	Framing     string    `json:"framing,omitempty"`
 }
 
 type armoryTemplateSummary struct {
 	ID          uuid.UUID `json:"id"`
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
+	Framing     string    `json:"framing,omitempty"`
 }
 
 type armoryTemplateList struct {
@@ -44,12 +46,14 @@ type armoryTemplateMutation struct {
 	Name        *string `json:"name"`
 	Description *string `json:"description"`
 	RawTemplate *string `json:"raw_template"`
+	Framing     *string `json:"framing"`
 }
 
 type armoryRun struct {
 	ID               uuid.UUID               `json:"id"`
 	TemplateID       uuid.UUID               `json:"template_id"`
 	TemplateSnapshot string                  `json:"template_snapshot"`
+	TemplateFraming  string                  `json:"template_framing,omitempty"`
 	UseHTTPS         bool                    `json:"use_https"`
 	Wordlists        []string                `json:"wordlists"`
 	Status           domain.ArmoryRunStatus  `json:"status"`
@@ -67,6 +71,7 @@ type armoryRunList struct {
 type armoryRunMutation struct {
 	TemplateID    *uuid.UUID
 	RawTemplate   *string
+	Framing       string
 	AttackType    domain.ArmoryAttackType
 	Wordlists     []string
 	UseHTTPS      bool
@@ -91,7 +96,7 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 		items := make([]armoryTemplateSummary, 0, len(templates))
 		for _, template := range templates {
 			items = append(items, armoryTemplateSummary{
-				ID: template.ID, Name: template.Name, Description: template.Description,
+				ID: template.ID, Name: template.Name, Description: template.Description, Framing: template.Framing,
 			})
 		}
 		writeJSON(w, r, http.StatusOK, armoryTemplateList{Items: items})
@@ -119,6 +124,12 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 		}
 		if mutation.RawTemplate != nil {
 			template.RawTemplate = *mutation.RawTemplate
+		}
+		if mutation.Framing != nil {
+			template.Framing = *mutation.Framing
+		}
+		if !validArmoryTemplate(w, r, proxy, template) {
+			return
 		}
 		if err := repo.CreateArmoryTemplate(template); err != nil {
 			writeArmoryError(w, r, http.StatusInternalServerError, "internal_server_error")
@@ -183,6 +194,12 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 		}
 		if mutation.RawTemplate != nil {
 			template.RawTemplate = *mutation.RawTemplate
+		}
+		if mutation.Framing != nil {
+			template.Framing = *mutation.Framing
+		}
+		if !validArmoryTemplate(w, r, proxy, template) {
+			return
 		}
 		if err := repo.UpdateArmoryTemplate(template); err != nil {
 			writeArmoryRepositoryError(w, r, err)
@@ -311,7 +328,7 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 			writeArmoryError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		run := mutation.armoryRun(id, template.RawTemplate)
+		run := mutation.armoryRun(id, template.RawTemplate, template.Framing)
 		if err := armoryService.ValidateRun(run); err != nil {
 			writeRefusal(w, r, http.StatusBadRequest, "invalid_armory_request", err.Error())
 			return
@@ -336,7 +353,7 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 			writeArmoryError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
-		run := mutation.armoryRun(uuid.Nil, *mutation.RawTemplate)
+		run := mutation.armoryRun(uuid.Nil, *mutation.RawTemplate, mutation.Framing)
 		if err := armoryService.ValidateRun(run); err != nil {
 			writeRefusal(w, r, http.StatusBadRequest, "invalid_armory_request", err.Error())
 			return
@@ -637,6 +654,13 @@ func decodeArmoryRunMutation(r *http.Request, create bool) (armoryRunMutation, e
 				return armoryRunMutation{}, errors.New("raw_template must be a string")
 			}
 			mutation.RawTemplate = &value
+		case "framing":
+			if create {
+				return armoryRunMutation{}, errors.New("framing is not accepted here; the run takes its template's")
+			}
+			if json.Unmarshal(raw, &mutation.Framing) != nil {
+				return armoryRunMutation{}, errors.New("framing must be a string")
+			}
 		case "attack_type":
 			var value string
 			if json.Unmarshal(raw, &value) != nil {
@@ -678,11 +702,12 @@ func decodeArmoryRunMutation(r *http.Request, create bool) (armoryRunMutation, e
 	return mutation, nil
 }
 
-func (mutation armoryRunMutation) armoryRun(id uuid.UUID, snapshot string) *domain.ArmoryRun {
+func (mutation armoryRunMutation) armoryRun(id uuid.UUID, snapshot, framing string) *domain.ArmoryRun {
 	return &domain.ArmoryRun{
 		ID:               id,
 		TemplateID:       valueOrZero(mutation.TemplateID),
 		TemplateSnapshot: snapshot,
+		TemplateFraming:  framing,
 		UseHTTPS:         mutation.UseHTTPS,
 		Wordlists:        mutation.Wordlists,
 		Status:           domain.ArmoryRunDraft,
@@ -754,6 +779,8 @@ func decodeArmoryTemplateMutation(r *http.Request, requireName bool) (armoryTemp
 			mutation.Description = &value
 		case "raw_template":
 			mutation.RawTemplate = &value
+		case "framing":
+			mutation.Framing = &value
 		default:
 			return armoryTemplateMutation{}, errInvalidArmoryRequest
 		}
@@ -770,7 +797,23 @@ func armoryTemplateFromDomain(template *domain.ArmoryTemplate) armoryTemplate {
 		Name:        template.Name,
 		Description: template.Description,
 		RawTemplate: template.RawTemplate,
+		Framing:     template.Framing,
 	}
+}
+
+// validArmoryTemplate reports whether template may be saved, refusing the
+// request with the reason when it may not.
+func validArmoryTemplate(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, template *domain.ArmoryTemplate) bool {
+	service, ok := armoryService(proxy)
+	if !ok {
+		writeArmoryError(w, r, http.StatusNotFound, "not_found")
+		return false
+	}
+	if err := service.ValidateTemplate(template); err != nil {
+		writeRefusal(w, r, http.StatusBadRequest, "invalid_armory_request", err.Error())
+		return false
+	}
+	return true
 }
 
 func armoryRunFromDomain(run *domain.ArmoryRun) armoryRun {
@@ -782,6 +825,7 @@ func armoryRunFromDomain(run *domain.ArmoryRun) armoryRun {
 		ID:               run.ID,
 		TemplateID:       run.TemplateID,
 		TemplateSnapshot: run.TemplateSnapshot,
+		TemplateFraming:  run.TemplateFraming,
 		UseHTTPS:         run.UseHTTPS,
 		Wordlists:        wordlists,
 		Status:           run.Status,

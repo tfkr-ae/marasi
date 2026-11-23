@@ -135,3 +135,23 @@ func (manager *Manager) updateRun(run *domain.ArmoryRun) error {
 	}
 	return nil
 }
+
+// ValidateTemplate checks a template before it is saved: its framing is one
+// Marasi sends, and for a template with a message-form body, the content
+// type names that framing, the body starts with a separator, and every
+// message encodes with the fallback payloads. A template with no framing
+// is checked only as it always was, when a run is created.
+func (manager *Manager) ValidateTemplate(template *domain.ArmoryTemplate) error {
+	if template == nil {
+		return errors.New("armory template is required")
+	}
+	tmpl, err := parseFramedTemplate(template.RawTemplate, template.Framing)
+	if err != nil {
+		return err
+	}
+	if tmpl.framing == "" {
+		return nil
+	}
+	_, err = tmpl.render(nil)
+	return err
+}

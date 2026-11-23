@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -74,6 +75,9 @@ func validateRun(run *domain.ArmoryRun, tmpl *armoryTemplate) error {
 	if err != nil {
 		return err
 	}
+	if head, _, _ := splitHead(raw); isH2Head(head) {
+		return validateH2Head(head)
+	}
 	updated, err := rawhttp.RecalculateContentLength([]byte(raw))
 	if err != nil {
 		return fmt.Errorf("invalid HTTP request: %w", err)
@@ -89,12 +93,45 @@ func validateRun(run *domain.ArmoryRun, tmpl *armoryTemplate) error {
 	return nil
 }
 
+// isH2Head reports whether head's request line names HTTP/2, the text form
+// the proxy sends over HTTP/2 (readH2RawRequest).
+func isH2Head(head string) bool {
+	line, _, _ := strings.Cut(head, "\n")
+	return strings.HasSuffix(strings.TrimSuffix(line, "\r"), " HTTP/2")
+}
+
+// validateH2Head checks a head in the HTTP/2 text form: METHOD target
+// HTTP/2, then fields, one of them naming the origin.
+func validateH2Head(head string) error {
+	line, rest, _ := strings.Cut(head, "\n")
+	if fields := strings.Fields(line); len(fields) != 3 {
+		return fmt.Errorf("invalid HTTP request: the request line %q is not METHOD target HTTP/2", strings.TrimSpace(line))
+	}
+	for _, field := range strings.Split(rest, "\n") {
+		field = strings.TrimSuffix(field, "\r")
+		if field == "" {
+			continue
+		}
+		name, value, ok := strings.Cut(strings.TrimPrefix(field, ":"), ":")
+		if !ok {
+			return fmt.Errorf("invalid HTTP request: the field line %q has no colon", field)
+		}
+		if (strings.EqualFold(name, "authority") && strings.HasPrefix(field, ":") || strings.EqualFold(name, "host")) && strings.TrimSpace(value) != "" {
+			return nil
+		}
+	}
+	if target := strings.Fields(line)[1]; strings.Contains(target, "://") {
+		return nil
+	}
+	return errors.New("host header not found or is empty")
+}
+
 // ValidateRun validates a draft without persisting or starting it.
 func (manager *Manager) ValidateRun(run *domain.ArmoryRun) error {
 	if run == nil {
 		return errors.New("armory run is required")
 	}
-	tmpl, err := parseTemplate(run.TemplateSnapshot)
+	tmpl, err := parseFramedTemplate(run.TemplateSnapshot, run.TemplateFraming)
 	if err != nil {
 		return err
 	}
@@ -108,7 +145,7 @@ func (manager *Manager) StartRun(runID uuid.UUID) error {
 		return err
 	}
 
-	tmpl, err := parseTemplate(run.TemplateSnapshot)
+	tmpl, err := parseFramedTemplate(run.TemplateSnapshot, run.TemplateFraming)
 	if err != nil {
 		return err
 	}

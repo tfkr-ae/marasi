@@ -139,10 +139,12 @@ type stubArmoryService struct {
 	// beforeActive runs at the start of every ActiveRunIDs call.
 	beforeActive func()
 	validate     func(*domain.ArmoryRun) error
-	start        func(uuid.UUID) error
-	cancel       func(uuid.UUID) error
-	validateMu   sync.Mutex
-	validated    []*domain.ArmoryRun
+	// validateTemplate checks a template before it is saved; nil accepts it.
+	validateTemplate func(*domain.ArmoryTemplate) error
+	start            func(uuid.UUID) error
+	cancel           func(uuid.UUID) error
+	validateMu       sync.Mutex
+	validated        []*domain.ArmoryRun
 }
 
 func (service *stubArmoryService) Repo() domain.ArmoryRepository { return service.repo }
@@ -159,6 +161,12 @@ func (service *stubArmoryService) ValidateRun(run *domain.ArmoryRun) error {
 	service.validateMu.Unlock()
 	if service.validate != nil {
 		return service.validate(run)
+	}
+	return nil
+}
+func (service *stubArmoryService) ValidateTemplate(template *domain.ArmoryTemplate) error {
+	if service.validateTemplate != nil {
+		return service.validateTemplate(template)
 	}
 	return nil
 }
