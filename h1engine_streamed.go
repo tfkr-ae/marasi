@@ -87,8 +87,8 @@ type h1Streams struct {
 	// direction is abandoned then.
 	gone     chan struct{}
 	goneOnce sync.Once
-	// requestDirection is the streamed request's record once it is sent.
-	requestDirection *streamedDirection
+	// requestSink is the streamed request's sink once it is sent.
+	requestSink *h1Sink
 	// carrying is the request's carry.
 	carrying sync.WaitGroup
 	release  []func()
@@ -98,6 +98,13 @@ type h1Streams struct {
 func (s *h1Streams) cancel() {
 	s.cancelled.Store(true)
 	s.goneOnce.Do(func() { close(s.gone) })
+}
+
+// framedCleanly reports whether both HTTP/1.1 legs of a carried direction
+// finished their HTTP/1.1 body framing without reset or cancellation, even
+// when a stream message inside the body was cut short.
+func (s *h1Streams) framedCleanly(src *h1Source, sink *h1Sink) bool {
+	return src.eof && sink.ended && !s.cancelled.Load()
 }
 
 // h1StreamedBody is one streamed direction's body: its framing, and its
@@ -119,14 +126,20 @@ type h1Source struct {
 	// client is set on the client's leg, whose close is its cancel. The
 	// origin closing partway through a body cuts it short.
 	client bool
+	// eof is set once body reached the end of its HTTP/1.1 framing.
+	eof bool
 }
 
 // peek is streamSource.peek. A read that fails once Marasi closed a leg, or
 // the client's close, is a cancel.
 func (s *h1Source) peek() ([]byte, error) {
 	data, err := s.body.Peek()
-	if len(data) > 0 || errors.Is(err, io.EOF) {
-		return data, err
+	if len(data) > 0 {
+		return data, nil
+	}
+	if errors.Is(err, io.EOF) {
+		s.eof = true
+		return nil, err
 	}
 	if s.streams.cancelled.Load() || (s.client && errors.Is(err, h1.ErrBodyCutShort)) {
 		return nil, &streamResetError{code: http2.ErrCodeCancel}
@@ -164,6 +177,8 @@ type h1Sink struct {
 	conn    net.Conn
 	chunked bool
 	streams *h1Streams
+	// ended is set once end wrote and flushed the HTTP/1.1 body framing.
+	ended bool
 }
 
 func (s *h1Sink) forward(raw []byte) error {
@@ -184,14 +199,18 @@ func (s *h1Sink) forward(raw []byte) error {
 // nothing to end it.
 func (s *h1Sink) end(trailers h2Fields) error {
 	if !s.chunked {
-		return s.flush()
+		err := s.flush()
+		s.ended = err == nil
+		return err
 	}
 	s.bw.WriteString("0\r\n")
 	for _, f := range trailers {
 		s.bw.WriteString(f.Name + ": " + f.Value + "\r\n")
 	}
 	s.bw.WriteString("\r\n")
-	return s.flush()
+	err := s.flush()
+	s.ended = err == nil
+	return err
 }
 
 func (s *h1Sink) flush() error {
@@ -247,9 +266,9 @@ func (c *h1Conn) carryStreamedRequest(pair *Pair, origin *originConn, head *h1.R
 	body := streams.request
 	sp := c.engine.proxy.streamed(pair)
 	d := sp.direction(domain.StreamDirectionRequest, body.framing)
-	streams.requestDirection = d
 	chunked := isChunked(&head.Header)
 	sink := &h1Sink{bw: origin.bw, conn: origin.conn, chunked: chunked, streams: streams}
+	streams.requestSink = sink
 	out := streamedHead{fields: h1HeadFields(&head.Header), declared: head.Header.Has("Content-Length") && !chunked}
 	sp.start(domain.StreamDirectionRequest, d, out, body.src, sink, &streams.carrying)
 }
@@ -321,26 +340,27 @@ func (c *h1Conn) carryStreamedResponse(pair *Pair, res *http.Response, wire *wir
 	}
 	sink := &h1Sink{bw: c.bw, conn: c.conn, chunked: chunked, streams: streams}
 	pair.stream.start(domain.StreamDirectionResponse, d, head, body.src, sink, nil)
-	complete := pair.stream.ending(d) == streamComplete
-	if !originKeeps || !complete {
+	clean := streams.framedCleanly(body.src, sink)
+	if !originKeeps || !clean {
 		c.closeOrigin()
 	}
-	return keep && c.origin != nil && wire.body.Framing.Kind != h1.UntilClose && complete
+	return keep && c.origin != nil && wire.body.Framing.Kind != h1.UntilClose && clean
 }
 
 // endStreams ends the streamed pair the connection carried, if any, and
 // reports whether the connection carries another request: another, unless
-// a streamed request did not end complete. A connection that does not go on
-// has both legs closed first, so the request's carry ends too. It then waits
-// for the request's carry, releases what the directions held, and stores
-// the pair with how each direction ended.
+// a streamed request did not finish its HTTP/1.1 framing cleanly. A
+// connection that does not go on has both legs closed first, so the
+// request's carry ends too. It then waits for the request's carry, releases
+// what the directions held, and stores the pair with how each direction
+// ended.
 func (c *h1Conn) endStreams(pair *Pair, another bool) bool {
 	streams := c.streams
 	if streams == nil {
 		return another
 	}
 	c.streams = nil
-	if streams.request != nil && (pair.stream == nil || streams.requestDirection == nil) {
+	if streams.request != nil && (pair.stream == nil || streams.requestSink == nil) {
 		// The request's body was never carried, so it is still unread.
 		another = false
 	}
@@ -352,7 +372,7 @@ func (c *h1Conn) endStreams(pair *Pair, another bool) bool {
 		}
 	}
 	streams.carrying.Wait()
-	if streams.requestDirection != nil && pair.stream.ending(streams.requestDirection) != streamComplete {
+	if streams.requestSink != nil && !streams.framedCleanly(streams.request.src, streams.requestSink) {
 		another = false
 	}
 	for _, release := range streams.release {
