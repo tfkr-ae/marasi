@@ -2,7 +2,6 @@ package marasi
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,13 +13,14 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"strconv"
+	"strings"
 	"time"
 
-	"github.com/andybalholm/brotli"
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi/core"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/extensions"
+	"github.com/tfkr-ae/marasi/internal/contentcoding"
 	marasiws "github.com/tfkr-ae/marasi/websocket"
 )
 
@@ -655,16 +655,18 @@ func WebSocketUpgradeHandler(proxy *Proxy, pair *Pair, client, upstream io.ReadW
 	return proxy.runWebSocketSessionWithRelease(connection, record, pair.release)
 }
 
-// CompressedResponseModifier decodes a response whose Content-Encoding is
-// exactly gzip or br, on one field line, so the rest of the chain, Checkpoint
-// and storage see the body decoded with Content-Encoding removed and
-// Content-Length set to the decoded length (when the response is not
-// chunked). Every other coding is left as received. The pair's metadata
-// records the coding in decoded_content_encoding and the length of the
+// CompressedResponseModifier decodes a response whose content codings are
+// all ones Marasi undoes (gzip, x-gzip, deflate, br and zstd, in any case,
+// one or several, on one field line or several), so the rest of the chain,
+// Checkpoint and storage see the body decoded with Content-Encoding removed
+// and Content-Length set to the decoded length (when the response is not
+// chunked). A response with any other coding is left as received. The pair's
+// metadata records the codings in decoded_content_encoding, lower case and in
+// the order they were applied ("gzip" or "gzip, br"), and the length of the
 // encoded body in wire_content_length.
 //
-// On the h1 engine the client still receives the origin's encoded bytes
-// unless the chain changed the decoded body
+// The client still receives the origin's encoded bytes unless the chain
+// changed the decoded body
 // (docs/adr/2026-11-17-compressed-responses-are-transparent-on-the-wire-and-decoded-in-storage.md).
 // A body that does not decode is not something that broke: it is left as
 // received, so the client and storage get the origin's coded bytes, and
@@ -673,13 +675,14 @@ func WebSocketUpgradeHandler(proxy *Proxy, pair *Pair, client, upstream io.ReadW
 // named in a proxy log.
 func CompressedResponseModifier(proxy *Proxy, pair *Pair) error {
 	res := pair.Response
-	codings := res.Header.Values("Content-Encoding")
+	values := res.Header.Values("Content-Encoding")
 	// A passed body is only what arrived before it passed: it goes to
 	// the client and storage as the origin coded it.
 	if pair.ResponseBodyEnding == BodyTooLarge {
 		return nil
 	}
-	if len(codings) != 1 || (codings[0] != "gzip" && codings[0] != "br") {
+	codings := contentcoding.Parse(values)
+	if len(codings) == 0 || !contentcoding.Known(codings) {
 		return nil
 	}
 	if res.Body == nil || res.Body == http.NoBody {
@@ -697,19 +700,20 @@ func CompressedResponseModifier(proxy *Proxy, pair *Pair) error {
 	if pair.Metadata == nil {
 		pair.Metadata = make(map[string]any)
 	}
+	coding := strings.Join(codings, ", ")
 	limit := proxy.bodyThreshold()
-	decoded, err := decodeContent(codings[0], coded, limit)
+	decoded, err := decodeContent(codings, coded, limit)
 	if err != nil {
 		pair.Metadata[contentDecodingErrorMetadataKey] = err.Error()
 		if errors.Is(err, ErrDecodedContentTooLarge) {
-			proxy.logDecodedContentTooLarge(pair, codings[0], limit)
+			proxy.logDecodedContentTooLarge(pair, coding, limit)
 		}
 		return nil
 	}
 	pair.decoded = &decodedResponse{
 		coded:   coded,
 		decoded: decoded,
-		framing: http.Header{"Content-Encoding": codings, "Content-Length": res.Header.Values("Content-Length")},
+		framing: http.Header{"Content-Encoding": values, "Content-Length": res.Header.Values("Content-Length")},
 	}
 	res.Body = io.NopCloser(bytes.NewReader(decoded))
 	res.ContentLength = int64(len(decoded))
@@ -717,13 +721,14 @@ func CompressedResponseModifier(proxy *Proxy, pair *Pair) error {
 		res.Header.Set("Content-Length", strconv.Itoa(len(decoded)))
 	}
 	res.Header.Del("Content-Encoding")
-	pair.Metadata["decoded_content_encoding"] = codings[0]
+	pair.Metadata["decoded_content_encoding"] = coding
 	pair.Metadata["wire_content_length"] = len(coded)
 	return nil
 }
 
-// contentDecodingErrorMetadataKey is the metadata field that holds why a gzip
-// or br body did not decode, so a stored pair whose body is still coded says so.
+// contentDecodingErrorMetadataKey is the metadata field that holds why a
+// coded body did not decode, so a stored pair whose body is still coded says
+// so.
 const contentDecodingErrorMetadataKey = "content_decoding_error"
 
 // decodedResponse is a response body CompressedResponseModifier decoded.
@@ -735,45 +740,20 @@ type decodedResponse struct {
 	framing http.Header
 }
 
-// ErrDecodedContentTooLarge means a gzip or br body decodes to more than
-// the body threshold. Such a body is left coded, as one that does not decode
-// is, so a small compressed body cannot expand into gigabytes of memory.
+// ErrDecodedContentTooLarge means a coded body decodes to more than the body
+// threshold. Such a body is left coded, as one that does not decode is, so a
+// small compressed body cannot expand into gigabytes of memory.
 var ErrDecodedContentTooLarge = errors.New("decoded content is larger than the body threshold")
 
-// decodeContent undoes the content coding gzip or br, reading at most limit
+// decodeContent undoes codings, applied in order, reading at most limit
 // decoded bytes: a body that decodes to more fails with
 // ErrDecodedContentTooLarge.
-func decodeContent(coding string, coded []byte, limit int64) ([]byte, error) {
-	if coding == "br" {
-		decoded, err := readDecodedContent(brotli.NewReader(bytes.NewReader(coded)), limit)
-		if err != nil {
-			return nil, fmt.Errorf("reading brotli content: %w", err)
-		}
-		return decoded, nil
-	}
-	gzipReader, err := gzip.NewReader(bytes.NewReader(coded))
-	if err != nil {
-		return nil, fmt.Errorf("creating gzip reader: %w", err)
-	}
-	defer gzipReader.Close()
-	decoded, err := readDecodedContent(gzipReader, limit)
-	if err != nil {
-		return nil, fmt.Errorf("reading gzip content: %w", err)
-	}
-	return decoded, nil
-}
-
-// readDecodedContent reads all of r up to limit bytes. One byte past limit
-// is read so that a body of exactly limit bytes still decodes.
-func readDecodedContent(r io.Reader, limit int64) ([]byte, error) {
-	decoded, err := io.ReadAll(io.LimitReader(r, limit+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(decoded)) > limit {
+func decodeContent(codings []string, coded []byte, limit int64) ([]byte, error) {
+	decoded, err := contentcoding.Decode(codings, coded, limit)
+	if errors.Is(err, contentcoding.ErrTooLarge) {
 		return nil, ErrDecodedContentTooLarge
 	}
-	return decoded, nil
+	return decoded, err
 }
 
 // logDecodedContentTooLarge names in a proxy log a response left coded
@@ -783,7 +763,7 @@ func (proxy *Proxy) logDecodedContentTooLarge(pair *Pair, coding string, limit i
 	if req := pair.Request; req != nil && req.URL != nil {
 		target = fmt.Sprintf("the response to %s %s", req.Method, req.URL.Redacted())
 	}
-	message := fmt.Sprintf("Left %s %s-coded: it decodes to more than the %d-byte body threshold", target, coding, limit)
+	message := fmt.Sprintf("Left %s coded with %s: it decodes to more than the %d-byte body threshold", target, coding, limit)
 	if pair.ID != uuid.Nil {
 		_ = proxy.WriteLog("WARN", message, core.LogWithReqResID(pair.ID))
 		return
