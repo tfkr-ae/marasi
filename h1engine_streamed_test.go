@@ -2,6 +2,8 @@ package marasi
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"net"
@@ -496,6 +498,217 @@ func TestH1Engine_CheckpointStreamMessages(t *testing.T) {
 		upstream.SetReadDeadline(time.Now().Add(5 * time.Second))
 		if rest, err := io.ReadAll(upstream.br); err != nil {
 			t.Fatalf("the origin connection\nwanted:\nclosed by the proxy\ngot:\n%q, %v", rest, err)
+		}
+	})
+}
+
+func TestH1Engine_StreamedPairKeepAliveAfterCutShortMessage(t *testing.T) {
+	intercepted := make(chan domain.CheckpointItem, 8)
+	proxy, addr, captured := serveFramingProxy(t, func(proxy *Proxy) {
+		proxy.OnIntercept = func(item domain.CheckpointItem) error {
+			intercepted <- item
+			return nil
+		}
+	})
+	forwardNext := func(t *testing.T, wantDirection string) domain.CheckpointItem {
+		t.Helper()
+		select {
+		case item := <-intercepted:
+			if item.Direction != wantDirection {
+				t.Fatalf("held item direction\nwanted:\n%s\ngot:\n%s (%+v)", wantDirection, item.Direction, item)
+			}
+			if err := proxy.ForwardCheckpoint(item.ID, CheckpointForward{}); err != nil {
+				t.Fatalf("forwarding held %s message: %v", wantDirection, err)
+			}
+			return item
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for held %s message", wantDirection)
+			return domain.CheckpointItem{}
+		}
+	}
+
+	for _, tc := range []struct {
+		name     string
+		resHead  string
+		resBody  string
+		wantWire string
+	}{
+		{
+			name:     "chunked Connect response with incomplete envelope",
+			resHead:  "HTTP/1.1 200 OK\r\nContent-Type: application/connect+json\r\nTransfer-Encoding: chunked\r\n\r\n",
+			resBody:  chunk("\x00\x00\x00\x00\x10short") + "0\r\n\r\n",
+			wantWire: chunk("\x00\x00\x00\x00\x10short") + "0\r\n\r\n",
+		},
+		{
+			name:     "length-framed Connect response with incomplete envelope prefix",
+			resHead:  "HTTP/1.1 200 OK\r\nContent-Type: application/connect+json\r\nContent-Length: 3\r\n\r\n",
+			resBody:  "\x00\x00\x00",
+			wantWire: "\x00\x00\x00",
+		},
+	} {
+		t.Run("should keep the connection alive after a "+tc.name+", so the next Connect server-stream call receives its end-of-stream envelope under Checkpoint", func(t *testing.T) {
+			proxy.SetStreamIntercept(true)
+			defer proxy.SetStreamIntercept(false)
+			origin := newH1ScriptedOrigin(t)
+			client, br := dialProxy(t, addr)
+
+			// First call: valid HTTP/1.1 framing carrying a truncated Connect envelope.
+			req1Body := grpcEnvelope(0, "{}")
+			fmt.Fprintf(client, "POST http://%s/connectrpc.conformance.v1.ConformanceService/ServerStream HTTP/1.1\r\nHost: %s\r\nContent-Type: application/connect+json\r\nTransfer-Encoding: chunked\r\n\r\n", origin.addr, origin.addr)
+			io.WriteString(client, chunk(req1Body)+"0\r\n\r\n")
+
+			upstream := origin.accept(t)
+			forwardNext(t, "request")
+			readWithin(t, upstream, upstream.br, "the origin (call 1)", chunk(req1Body)+"0\r\n\r\n")
+
+			io.WriteString(upstream, tc.resHead+tc.resBody)
+			readWithin(t, client, br, "the client (call 1)", tc.resHead+tc.wantWire)
+
+			// Wait for endStreams and finish of call 1 so any erroneous close has already happened.
+			req1, res1 := streamedResponse(t, captured)
+			if d := direction(t, res1.Metadata, "response"); d["ending"] != "cut short" || d["messages"] != float64(1) {
+				t.Fatalf("call 1 metadata.streamed.response\nwanted:\ncut short, 1 message\ngot:\n%v", d)
+			}
+			msgs1 := storedMessages(t, proxy, req1.ID)
+			if len(msgs1) != 2 || msgs1[1].Direction != "response" || msgs1[1].Metadata["cut_short"] != true {
+				t.Fatalf("call 1 stored messages\nwanted:\nrequest message, then cut-short response message\ngot:\n%+v", msgs1)
+			}
+
+			// Second call on the SAME keep-alive connection: Connect server-stream
+			// error response carrying only the 0x02 end-of-stream envelope.
+			req2Body := grpcEnvelope(0, `{"error":{"code":"invalid_argument"}}`)
+			if _, err := fmt.Fprintf(client, "POST http://%s/connectrpc.conformance.v1.ConformanceService/ServerStream HTTP/1.1\r\nHost: %s\r\nContent-Type: application/connect+json\r\nTransfer-Encoding: chunked\r\n\r\n%s0\r\n\r\n", origin.addr, origin.addr, chunk(req2Body)); err != nil {
+				t.Fatalf("writing call 2 on the kept-alive client connection: %v", err)
+			}
+
+			nextHead, err := h1.ReadRequestHead(upstream.br)
+			if err != nil || nextHead.Target != "/connectrpc.conformance.v1.ConformanceService/ServerStream" {
+				t.Fatalf("call 2 on the kept-alive origin connection\nwanted:\nServerStream request\ngot:\n%v, %v", nextHead, err)
+			}
+			forwardNext(t, "request")
+			readWithin(t, upstream, upstream.br, "the origin (call 2)", chunk(req2Body)+"0\r\n\r\n")
+
+			endStreamEnv := grpcEnvelope(0x02, `{"error":{"code":"invalid_argument","message":"bad input"}}`)
+			const res2Head = "HTTP/1.1 200 OK\r\nContent-Type: application/connect+json\r\nTransfer-Encoding: chunked\r\n\r\n"
+			io.WriteString(upstream, res2Head+chunk(endStreamEnv)+"0\r\n\r\n")
+			heldEnd := forwardNext(t, "response")
+			if heldEnd.Flags == nil || *heldEnd.Flags != 0x02 {
+				t.Fatalf("held end-of-stream item\nwanted:\nflags 0x02\ngot:\n%+v", heldEnd)
+			}
+			readWithin(t, client, br, "the client (call 2)", res2Head+chunk(endStreamEnv)+"0\r\n\r\n")
+
+			_, res2 := streamedResponse(t, captured)
+			if d := direction(t, res2.Metadata, "response"); d["ending"] != "complete" || d["messages"] != float64(1) {
+				t.Fatalf("call 2 metadata.streamed.response\nwanted:\ncomplete, 1 message\ngot:\n%v", d)
+			}
+		})
+	}
+
+	t.Run("should keep the connection alive when a cleanly framed streamed request ends inside an incomplete stream message", func(t *testing.T) {
+		origin := newH1ScriptedOrigin(t)
+		client, br := dialProxy(t, addr)
+
+		const partialReq = "\x00\x00\x00\x00\x10short"
+		fmt.Fprintf(client, "POST http://%s/connectrpc.conformance.v1.ConformanceService/ServerStream HTTP/1.1\r\nHost: %s\r\nContent-Type: application/connect+json\r\nTransfer-Encoding: chunked\r\n\r\n%s0\r\n\r\n", origin.addr, origin.addr, chunk(partialReq))
+
+		upstream := origin.accept(t)
+		readWithin(t, upstream, upstream.br, "the origin (partial request)", chunk(partialReq)+"0\r\n\r\n")
+		endStreamEnv := grpcEnvelope(0x02, `{"error":{"code":"invalid_argument"}}`)
+		const resHead = "HTTP/1.1 200 OK\r\nContent-Type: application/connect+json\r\nTransfer-Encoding: chunked\r\n\r\n"
+		io.WriteString(upstream, resHead+chunk(endStreamEnv)+"0\r\n\r\n")
+		readWithin(t, client, br, "the client (call 1)", resHead+chunk(endStreamEnv)+"0\r\n\r\n")
+
+		req1, res1 := streamedResponse(t, captured)
+		if d := direction(t, res1.Metadata, "request"); d["ending"] != "cut short" || d["messages"] != float64(1) {
+			t.Fatalf("call 1 metadata.streamed.request\nwanted:\ncut short, 1 message\ngot:\n%v", d)
+		}
+		msgs1 := storedMessages(t, proxy, req1.ID)
+		if len(msgs1) < 1 || msgs1[0].Direction != "request" || msgs1[0].Metadata["cut_short"] != true {
+			t.Fatalf("call 1 stored request message\nwanted:\ncut_short true\ngot:\n%+v", msgs1)
+		}
+
+		// Both connections must remain usable for the next request.
+		fmt.Fprintf(client, "GET http://%s/next HTTP/1.1\r\nHost: %s\r\n\r\n", origin.addr, origin.addr)
+		nextHead, err := h1.ReadRequestHead(upstream.br)
+		if err != nil || nextHead.Target != "/next" {
+			t.Fatalf("the next request on the origin connection\nwanted:\n/next\ngot:\n%v, %v", nextHead, err)
+		}
+		const okRes = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+		io.WriteString(upstream, okRes)
+		readWithin(t, client, br, "the client (next)", okRes)
+		// Drain the non-streamed /next pair from captured so subsequent subtests see their own pairs.
+		streamedResponse(t, captured)
+	})
+
+	t.Run("should keep the connection alive after cleanly framed gRPC-Web and SSE responses whose final message was cut short", func(t *testing.T) {
+		var gzBuf bytes.Buffer
+		gz := gzip.NewWriter(&gzBuf)
+		gz.Write([]byte("data: partial"))
+		gz.Close()
+
+		for _, tc := range []struct {
+			name     string
+			framing  string
+			resHead  string
+			resBody  string
+			readHTTP bool
+		}{
+			{
+				name:    "gRPC-Web incomplete envelope",
+				framing: "grpc-web",
+				resHead: "HTTP/1.1 200 OK\r\nContent-Type: application/grpc-web+proto\r\nTransfer-Encoding: chunked\r\n\r\n",
+				resBody: chunk("\x00\x00\x00\x00\x09hi") + "0\r\n\r\n",
+			},
+			{
+				name:    "SSE incomplete event without blank line",
+				framing: "sse",
+				resHead: "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
+				resBody: chunk("data: partial") + "0\r\n\r\n",
+			},
+			{
+				name:     "gzipped SSE incomplete event without blank line",
+				framing:  "sse",
+				resHead:  "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n",
+				resBody:  chunk(gzBuf.String()) + "0\r\n\r\n",
+				readHTTP: true,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				origin := newH1ScriptedOrigin(t)
+				client, br := dialProxy(t, addr)
+				fmt.Fprintf(client, "GET http://%s/stream HTTP/1.1\r\nHost: %s\r\n\r\n", origin.addr, origin.addr)
+
+				upstream := origin.accept(t)
+				io.WriteString(upstream, tc.resHead+tc.resBody)
+				if tc.readHTTP {
+					client.SetReadDeadline(time.Now().Add(2 * time.Second))
+					res, err := http.ReadResponse(br, nil)
+					if err != nil {
+						t.Fatalf("reading gzipped response: %v", err)
+					}
+					if _, err := io.ReadAll(res.Body); err != nil {
+						t.Fatalf("reading gzipped body: %v", err)
+					}
+					res.Body.Close()
+				} else {
+					readWithin(t, client, br, "the client (call 1)", tc.resHead+tc.resBody)
+				}
+
+				_, res1 := streamedResponse(t, captured)
+				if d := direction(t, res1.Metadata, "response"); d["framing"] != tc.framing || d["ending"] != "cut short" {
+					t.Fatalf("call 1 metadata.streamed.response\nwanted:\n%s, cut short\ngot:\n%v", tc.framing, d)
+				}
+
+				fmt.Fprintf(client, "GET http://%s/next HTTP/1.1\r\nHost: %s\r\n\r\n", origin.addr, origin.addr)
+				nextHead, err := h1.ReadRequestHead(upstream.br)
+				if err != nil || nextHead.Target != "/next" {
+					t.Fatalf("the next request on the origin connection\nwanted:\n/next\ngot:\n%v, %v", nextHead, err)
+				}
+				const okRes = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+				io.WriteString(upstream, okRes)
+				readWithin(t, client, br, "the client (next)", okRes)
+				streamedResponse(t, captured)
+			})
 		}
 	})
 }
