@@ -1,0 +1,100 @@
+package marasi
+
+import (
+	"encoding/base64"
+	"strconv"
+	"testing"
+
+	"github.com/tfkr-ae/marasi/domain"
+)
+
+// grpcStatusString is a stored response's grpc-status as text, "none" when
+// it has none.
+func grpcStatusString(res domain.ProxyResponse) string {
+	if res.GRPCStatus == nil {
+		return "none"
+	}
+	return strconv.Itoa(*res.GRPCStatus)
+}
+
+func TestPairGRPCStatus(t *testing.T) {
+	t.Run("should record the grpc-status of a gRPC call's trailers", func(t *testing.T) {
+		call := startGRPCCall(t)
+		call.upstream.await(t, "the request head", func(p *h2TestPeer) bool { return len(p.streams[call.id].headers) == 1 })
+		call.client.data(1, true, grpcEnvelope(0, "ping"))
+		call.upstream.headers(call.id, false, ":status", "200", "content-type", "application/grpc")
+		call.upstream.data(call.id, false, grpcEnvelope(0, "pong"))
+		call.upstream.headers(call.id, true, "grpc-status", "3", "grpc-message", "bad")
+
+		_, res := streamedResponse(t, call.captured)
+		if got := grpcStatusString(res); got != "3" {
+			t.Fatalf("the stored grpc-status\nwanted:\n3\ngot:\n%s", got)
+		}
+	})
+
+	t.Run("should record the grpc-status of a trailers-only gRPC response", func(t *testing.T) {
+		call := startGRPCCall(t)
+		call.upstream.await(t, "the request head", func(p *h2TestPeer) bool { return len(p.streams[call.id].headers) == 1 })
+		call.client.data(1, true, grpcEnvelope(0, "ping"))
+		call.upstream.headers(call.id, true, ":status", "200", "content-type", "application/grpc", "grpc-status", "7", "grpc-message", "denied")
+
+		_, res := streamedResponse(t, call.captured)
+		if got := grpcStatusString(res); got != "7" {
+			t.Fatalf("the stored grpc-status\nwanted:\n7\ngot:\n%s", got)
+		}
+	})
+
+	t.Run("should record the grpc-status of a gRPC-Web response's trailers frame", func(t *testing.T) {
+		origin := newH2TestOrigin(t)
+		addr, captured, ca := serveH1EngineMITMProxy(t, true)
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		upstream := origin.accept(t)
+		client.headers(1, false, ":method", "POST", ":scheme", "https", ":authority", origin.addr, ":path", "/test.Echo/Say",
+			"content-type", "application/grpc-web+proto")
+		id := upstream.nthStream(t, 0)
+		upstream.await(t, "the request head", func(p *h2TestPeer) bool { return len(p.streams[id].headers) == 1 })
+		client.data(1, true, grpcEnvelope(0, "ping"))
+		upstream.headers(id, false, ":status", "200", "content-type", "application/grpc-web+proto")
+		upstream.data(id, false, grpcEnvelope(0, "pong"))
+		upstream.data(id, true, grpcEnvelope(0x80, "grpc-status: 5\r\ngrpc-message: missing\r\n"))
+
+		_, res := streamedResponse(t, captured)
+		if got := grpcStatusString(res); got != "5" {
+			t.Fatalf("the stored grpc-status\nwanted:\n5\ngot:\n%s", got)
+		}
+	})
+
+	t.Run("should record the grpc-status of a gRPC-Web text response's trailers frame", func(t *testing.T) {
+		origin := newH2TestOrigin(t)
+		addr, captured, ca := serveH1EngineMITMProxy(t, true)
+		client, _ := dialH2(t, addr, origin.addr, "127.0.0.1", ca, "h2")
+		upstream := origin.accept(t)
+		client.headers(1, false, ":method", "POST", ":scheme", "https", ":authority", origin.addr, ":path", "/test.Echo/Say",
+			"content-type", "application/grpc-web-text")
+		// A text body is read whole, so the request goes on once it ended.
+		client.data(1, true, base64.StdEncoding.EncodeToString([]byte(grpcEnvelope(0, "ping"))))
+		id := upstream.nthStream(t, 0)
+		upstream.headers(id, false, ":status", "200", "content-type", "application/grpc-web-text")
+		// Two base64 chunks joined, the first padded, as a server that
+		// encodes each frame on its own writes them.
+		upstream.data(id, true, base64.StdEncoding.EncodeToString([]byte(grpcEnvelope(0, "pongs")))+
+			base64.StdEncoding.EncodeToString([]byte(grpcEnvelope(0x80, "grpc-status: 9\r\n"))))
+
+		_, res := streamedResponse(t, captured)
+		if got := grpcStatusString(res); got != "9" {
+			t.Fatalf("the stored grpc-status\nwanted:\n9\ngot:\n%s", got)
+		}
+	})
+
+	t.Run("should record no grpc-status for a response that is not gRPC", func(t *testing.T) {
+		call := startGRPCCall(t)
+		call.upstream.await(t, "the request head", func(p *h2TestPeer) bool { return len(p.streams[call.id].headers) == 1 })
+		call.client.data(1, true, grpcEnvelope(0, "ping"))
+		call.upstream.headers(call.id, true, ":status", "200", "content-type", "text/plain", "grpc-status", "7")
+
+		_, res := streamedResponse(t, call.captured)
+		if got := grpcStatusString(res); got != "none" {
+			t.Fatalf("the stored grpc-status\nwanted:\nnone\ngot:\n%s", got)
+		}
+	})
+}

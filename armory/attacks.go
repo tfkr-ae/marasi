@@ -20,17 +20,9 @@ func (manager *Manager) produceHarpoon(execution *execution, tmpl *armoryTemplat
 		for iterator.Scan() {
 			payloads[position] = iterator.Text()
 
-			raw, err := tmpl.render(payloads)
-			if err != nil {
+			if err := manager.queue(execution, tmpl, payloads); err != nil {
 				iterator.Close()
 				return err
-			}
-
-			select {
-			case execution.requests <- raw:
-			case <-execution.ctx.Done():
-				iterator.Close()
-				return execution.ctx.Err()
 			}
 		}
 
@@ -62,17 +54,9 @@ func (manager *Manager) produceBroadside(execution *execution, tmpl *armoryTempl
 			payloads[position] = payload
 		}
 
-		raw, err := tmpl.render(payloads)
-		if err != nil {
+		if err := manager.queue(execution, tmpl, payloads); err != nil {
 			iterator.Close()
 			return err
-		}
-
-		select {
-		case execution.requests <- raw:
-		case <-execution.ctx.Done():
-			iterator.Close()
-			return execution.ctx.Err()
 		}
 	}
 
@@ -127,17 +111,9 @@ func (manager *Manager) produceTandem(execution *execution, tmpl *armoryTemplate
 			payloads[position] = iterator.Text()
 		}
 
-		raw, err := tmpl.render(payloads)
-		if err != nil {
+		if err := manager.queue(execution, tmpl, payloads); err != nil {
 			closeWordlistIterators(iterators, wordlistNames)
 			return err
-		}
-
-		select {
-		case execution.requests <- raw:
-		case <-execution.ctx.Done():
-			closeWordlistIterators(iterators, wordlistNames)
-			return execution.ctx.Err()
 		}
 	}
 }
@@ -174,17 +150,9 @@ func (manager *Manager) produceMaelstrom(execution *execution, tmpl *armoryTempl
 				continue
 			}
 
-			raw, err := tmpl.render(payloads)
-			if err != nil {
+			if err := manager.queue(execution, tmpl, payloads); err != nil {
 				iterator.Close()
 				return err
-			}
-
-			select {
-			case execution.requests <- raw:
-			case <-execution.ctx.Done():
-				iterator.Close()
-				return execution.ctx.Err()
 			}
 		}
 
@@ -201,6 +169,27 @@ func (manager *Manager) produceMaelstrom(execution *execution, tmpl *armoryTempl
 	}
 
 	return generate(0)
+}
+
+// queue renders the request for payloads and queues it for the workers. A
+// request whose messages do not encode is recorded as a failed attempt
+// instead, and queue returns nil so the run goes on. Any other render
+// error, a failed record or a stopped run ends the producer.
+func (manager *Manager) queue(execution *execution, tmpl *armoryTemplate, payloads map[int]string) error {
+	raw, err := tmpl.render(payloads)
+	var unsent *messageError
+	if errors.As(err, &unsent) {
+		return manager.recordFailedAttempt(execution, payloads, unsent)
+	}
+	if err != nil {
+		return err
+	}
+	select {
+	case execution.requests <- raw:
+		return nil
+	case <-execution.ctx.Done():
+		return execution.ctx.Err()
+	}
 }
 
 // closeWordlistIterators closes each iterator and returns the first close error.

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 // ErrArmoryTemplateNotFound means no Armory template has the requested ID.
@@ -70,6 +71,9 @@ type ArmoryTemplate struct {
 	Description string
 	// RawTemplate contains the Go template used to generate requests.
 	RawTemplate string
+	// Framing is the template's request message framing: empty, or grpc,
+	// grpc-web or connect for a template with a message-form body (GLOSSARY).
+	Framing stream.Framing
 }
 
 // ArmoryRun is an execution of an Armory template with a fixed configuration.
@@ -80,6 +84,9 @@ type ArmoryRun struct {
 	TemplateID uuid.UUID
 	// TemplateSnapshot preserves the raw template used by this run.
 	TemplateSnapshot string
+	// TemplateFraming preserves the template's request framing, empty for
+	// a template with no message-form body.
+	TemplateFraming stream.Framing
 	// UseHTTPS controls whether generated requests use HTTPS.
 	UseHTTPS bool
 	// Wordlists contains the ordered names of the wordlists used by the run.
@@ -97,6 +104,43 @@ type ArmoryRun struct {
 	StartedAt *time.Time
 	// FinishedAt is when execution ended, or nil if the run has not finished.
 	FinishedAt *time.Time
+
+	// Progress counts what the run has done so far. It is read with the
+	// run and never written with it.
+	Progress ArmoryRunProgress
+}
+
+// ArmoryRunProgress counts the requests a run has made so far.
+type ArmoryRunProgress struct {
+	// Entries is the number of requests the run sent and stored as pairs.
+	Entries int
+	// FailedAttempts is the number of requests the run built but did not
+	// send, because a message did not encode.
+	FailedAttempts int
+}
+
+// ArmoryPayload is the value a request put at one template position.
+type ArmoryPayload struct {
+	// Position is the zero-based template position.
+	Position int
+	// Value is the payload placed there.
+	Value string
+}
+
+// ArmoryFailedAttempt is a request a run built but did not send, because a
+// payload left one of its messages unable to encode (GLOSSARY: Failed
+// attempt). It is not a pair: nothing went on the wire.
+type ArmoryFailedAttempt struct {
+	// ID uniquely identifies the failed attempt, in the order it was made.
+	ID uuid.UUID
+	// RunID identifies the Armory run.
+	RunID uuid.UUID
+	// Payloads are the request's payloads, ordered by position.
+	Payloads []ArmoryPayload
+	// Error says why the request could not be built.
+	Error string
+	// CreatedAt is when the attempt was made.
+	CreatedAt time.Time
 }
 
 // ArmoryEntry associates a generated proxy request with an Armory run.
@@ -141,4 +185,9 @@ type ArmoryRepository interface {
 	ListArmoryRunTraffic(runID uuid.UUID, cursor *uuid.UUID, limit int) (items []*RequestResponseSummary, nextCursor *uuid.UUID, indexComplete bool, err error)
 	// CreateArmoryEntry links a generated request to a run.
 	CreateArmoryEntry(entry *ArmoryEntry) error
+
+	// CreateArmoryFailedAttempt records a request a run did not send.
+	CreateArmoryFailedAttempt(attempt *ArmoryFailedAttempt) error
+	// GetArmoryFailedAttempts returns a run's failed attempts, oldest first.
+	GetArmoryFailedAttempts(runID uuid.UUID) ([]*ArmoryFailedAttempt, error)
 }

@@ -139,10 +139,12 @@ type stubArmoryService struct {
 	// beforeActive runs at the start of every ActiveRunIDs call.
 	beforeActive func()
 	validate     func(*domain.ArmoryRun) error
-	start        func(uuid.UUID) error
-	cancel       func(uuid.UUID) error
-	validateMu   sync.Mutex
-	validated    []*domain.ArmoryRun
+	// validateTemplate checks a template before it is saved; nil accepts it.
+	validateTemplate func(*domain.ArmoryTemplate) error
+	start            func(uuid.UUID) error
+	cancel           func(uuid.UUID) error
+	validateMu       sync.Mutex
+	validated        []*domain.ArmoryRun
 }
 
 func (service *stubArmoryService) Repo() domain.ArmoryRepository { return service.repo }
@@ -159,6 +161,12 @@ func (service *stubArmoryService) ValidateRun(run *domain.ArmoryRun) error {
 	service.validateMu.Unlock()
 	if service.validate != nil {
 		return service.validate(run)
+	}
+	return nil
+}
+func (service *stubArmoryService) ValidateTemplate(template *domain.ArmoryTemplate) error {
+	if service.validateTemplate != nil {
+		return service.validateTemplate(template)
 	}
 	return nil
 }
@@ -468,7 +476,7 @@ func TestArmoryRunControlAPI(t *testing.T) {
 		if len(repo.runs) != 1 {
 			t.Fatalf("\nwanted:\none persisted run\ngot:\n%d", len(repo.runs))
 		}
-		want := fmt.Sprintf(`{"id":%q,"template_id":%q,"template_snapshot":"GET /?value=@@value@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","use_https":true,"wordlists":["passwords.txt"],"status":"draft","attack_type":"harpoon","max_concurrent":10,"created_at":%q,"started_at":null,"finished_at":null}`+"\n", created.ID, templateID, created.CreatedAt.Format(time.RFC3339Nano))
+		want := fmt.Sprintf(`{"id":%q,"template_id":%q,"template_snapshot":"GET /?value=@@value@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","use_https":true,"wordlists":["passwords.txt"],"status":"draft","attack_type":"harpoon","max_concurrent":10,"created_at":%q,"started_at":null,"finished_at":null,"progress":{"entries":0,"failed_attempts":0}}`+"\n", created.ID, templateID, created.CreatedAt.Format(time.RFC3339Nano))
 		assertControlAPIResponse(t, response, http.StatusOK, want)
 	})
 
@@ -485,8 +493,8 @@ func TestArmoryRunControlAPI(t *testing.T) {
 		server := newArmoryServer(repo)
 
 		response := requestControlAPI(server, http.MethodGet, "/armory/template/"+templateID.String()+"/run", "")
-		olderJSON := fmt.Sprintf(`{"id":%q,"template_id":%q,"template_snapshot":"GET /?value=@@value@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","use_https":true,"wordlists":["passwords.txt"],"status":"draft","attack_type":"harpoon","max_concurrent":10,"created_at":"2026-09-17T10:30:00Z","started_at":null,"finished_at":null}`, olderID, templateID)
-		newerJSON := fmt.Sprintf(`{"id":%q,"template_id":%q,"template_snapshot":"GET /?value=@@value@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","use_https":true,"wordlists":["passwords.txt"],"status":"draft","attack_type":"harpoon","max_concurrent":10,"created_at":"2026-09-17T10:31:00Z","started_at":null,"finished_at":null}`, newerID, templateID)
+		olderJSON := fmt.Sprintf(`{"id":%q,"template_id":%q,"template_snapshot":"GET /?value=@@value@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","use_https":true,"wordlists":["passwords.txt"],"status":"draft","attack_type":"harpoon","max_concurrent":10,"created_at":"2026-09-17T10:30:00Z","started_at":null,"finished_at":null,"progress":{"entries":0,"failed_attempts":0}}`, olderID, templateID)
+		newerJSON := fmt.Sprintf(`{"id":%q,"template_id":%q,"template_snapshot":"GET /?value=@@value@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","use_https":true,"wordlists":["passwords.txt"],"status":"draft","attack_type":"harpoon","max_concurrent":10,"created_at":"2026-09-17T10:31:00Z","started_at":null,"finished_at":null,"progress":{"entries":0,"failed_attempts":0}}`, newerID, templateID)
 		assertControlAPIResponse(t, response, http.StatusOK, fmt.Sprintf(`{"items":[%s,%s]}`+"\n", olderJSON, newerJSON))
 		get := requestControlAPI(server, http.MethodGet, "/armory/run/"+olderID.String(), "")
 		assertControlAPIResponse(t, get, http.StatusOK, olderJSON+"\n")
@@ -561,7 +569,7 @@ func TestArmoryRunControlAPI(t *testing.T) {
 		server := newTestServer(&marasi.Proxy{Armory: armoryService}, func() {})
 
 		started := requestControlAPI(server, http.MethodPost, "/armory/run/"+runID.String()+"/start", "")
-		startedJSON := fmt.Sprintf(`{"id":%q,"template_id":%q,"template_snapshot":"GET /?value=@@value@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","use_https":true,"wordlists":["passwords.txt"],"status":"in_progress","attack_type":"harpoon","max_concurrent":10,"created_at":"2026-09-17T10:30:00Z","started_at":"2026-09-17T10:31:00Z","finished_at":null}`+"\n", runID, templateID)
+		startedJSON := fmt.Sprintf(`{"id":%q,"template_id":%q,"template_snapshot":"GET /?value=@@value@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","use_https":true,"wordlists":["passwords.txt"],"status":"in_progress","attack_type":"harpoon","max_concurrent":10,"created_at":"2026-09-17T10:30:00Z","started_at":"2026-09-17T10:31:00Z","finished_at":null,"progress":{"entries":0,"failed_attempts":0}}`+"\n", runID, templateID)
 		assertControlAPIResponse(t, started, http.StatusOK, startedJSON)
 		assertControlAPIResponse(t, requestControlAPI(server, http.MethodPost, "/armory/run/"+runID.String()+"/start", ""), http.StatusConflict, "{\"error\":\"run_active\"}\n")
 

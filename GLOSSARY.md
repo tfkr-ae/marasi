@@ -210,6 +210,10 @@ _Avoid_: Intruder template, payload template, request snippet
 A marked slot in an Armory template.
 _Avoid_: insertion point, fuzz point, placeholder
 
+**Message-form body**:
+The body of an Armory template that names a message framing (gRPC, gRPC-Web or Connect), written as the text form of each of its messages under a separator. For every request a run sends, Marasi encodes each message and puts it back in its envelope, so every length follows the payloads. A Connect unary body is a single message with no envelope.
+_Avoid_: joined request (the bytes that went to the origin, not an editable template), stream template, protobuf template
+
 **Attack type**:
 The strategy that maps wordlists onto payload positions for an Armory run. One of harpoon, broadside, tandem, or maelstrom.
 _Avoid_: sniper, battering ram, pitchfork, cluster bomb
@@ -221,6 +225,10 @@ _Avoid_: job, campaign, attack when referring to the stored record
 **Armory entry**:
 An ordinary request/response pair linked to an Armory run rather than copied.
 _Avoid_: result, hit, copy
+
+**Failed attempt**:
+A request an Armory run built from its payloads but did not send, because a payload left one of its messages unable to encode. It is recorded on the run with its payloads and the error, and counted in the run's progress, and the run goes on. It is not an Armory entry, because nothing went on the wire.
+_Avoid_: failed request, error entry, skipped pair
 
 **Test case**:
 An assessment work item recorded in the open project, identified by UUID. It may link to request/response pairs and artifacts. Distinct from a predefined test case.

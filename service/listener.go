@@ -224,7 +224,10 @@ func (l *listenerLifecycle) BindProject(projects *ProjectLifecycle) {
 		l.events.publish("log.added", proxyLogFromDomain(entry))
 	}
 	projects.armoryRunUpdated = func(run *domain.ArmoryRun) {
-		l.events.publish("armory.run.updated", armoryRunFromDomain(run))
+		publishArmoryRunUpdated(l.events, run)
+	}
+	projects.armoryFailedAttemptRecorded = func(attempt *domain.ArmoryFailedAttempt) {
+		publishArmoryFailedAttempt(l.events, attempt)
 	}
 }
 

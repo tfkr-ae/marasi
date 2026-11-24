@@ -215,6 +215,8 @@ type trafficSummary struct {
 	OriginProtocol string `json:"origin_protocol"`
 	// Streamed is as in trafficDetail.
 	Streamed *streamedState `json:"streamed"`
+	// GRPCStatus is as in trafficDetail.
+	GRPCStatus *int `json:"grpc_status,omitempty"`
 }
 
 // trafficDetail is the GET /traffic/{id} response body.
@@ -242,6 +244,10 @@ type trafficDetail struct {
 	// (GLOSSARY), null otherwise. It is set from the moment the pair's
 	// head is stored, while the pair is live, and read-only.
 	Streamed *streamedState `json:"streamed"`
+	// GRPCStatus is the grpc-status a gRPC pair's response ended with,
+	// from its trailers or a trailers-only head. It is left out for a
+	// pair that is not gRPC, and for pairs stored before it was recorded.
+	GRPCStatus *int `json:"grpc_status,omitempty"`
 }
 
 // streamedState is a streamed pair's message framing per streamed
@@ -892,6 +898,7 @@ func trafficSummaryFromDomain(item *domain.RequestResponseSummary) trafficSummar
 		ClientProtocol: item.ClientProtocol,
 		OriginProtocol: item.OriginProtocol,
 		Streamed:       streamedStateFromDomain(item.Streamed),
+		GRPCStatus:     item.GRPCStatus,
 	}
 	return summary
 }
@@ -938,6 +945,7 @@ func trafficDetailFromRow(row *domain.RequestResponseRow) trafficDetail {
 		ClientProtocol: row.Request.ClientProtocol,
 		OriginProtocol: row.Request.OriginProtocol,
 		Streamed:       streamedStateFromDomain(row.Streamed),
+		GRPCStatus:     row.Response.GRPCStatus,
 	}
 }
 

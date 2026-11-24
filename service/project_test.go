@@ -35,12 +35,13 @@ import (
 
 type busyArmory struct{}
 
-func (busyArmory) Repo() domain.ArmoryRepository       { return nil }
-func (busyArmory) ValidateRun(*domain.ArmoryRun) error { return nil }
-func (busyArmory) StartRun(uuid.UUID) error            { return nil }
-func (busyArmory) CancelRun(uuid.UUID) error           { return nil }
-func (busyArmory) ActiveRunIDs() []uuid.UUID           { return []uuid.UUID{uuid.Nil} }
-func (busyArmory) Shutdown()                           {}
+func (busyArmory) Repo() domain.ArmoryRepository                 { return nil }
+func (busyArmory) ValidateRun(*domain.ArmoryRun) error           { return nil }
+func (busyArmory) ValidateTemplate(*domain.ArmoryTemplate) error { return nil }
+func (busyArmory) StartRun(uuid.UUID) error                      { return nil }
+func (busyArmory) CancelRun(uuid.UUID) error                     { return nil }
+func (busyArmory) ActiveRunIDs() []uuid.UUID                     { return []uuid.UUID{uuid.Nil} }
+func (busyArmory) Shutdown()                                     {}
 
 func newTestProjectLifecycle(t *testing.T, extensionOptions ...func(*extensions.Runtime) error) (*ProjectLifecycle, *marasi.Proxy, string) {
 	t.Helper()

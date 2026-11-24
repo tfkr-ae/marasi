@@ -21,9 +21,12 @@ import (
 var armoryTemplateCreateName string
 var armoryTemplateCreateDescription string
 var armoryTemplateCreateRawFile string
+var armoryTemplateCreateFromPair string
 var armoryTemplateUpdateName string
 var armoryTemplateUpdateDescription string
 var armoryTemplateUpdateRawFile string
+var armoryTemplateCreateFraming string
+var armoryTemplateUpdateFraming string
 var armoryRunTemplate string
 var armoryRunListStatuses []string
 var armoryRunAttackType string
@@ -38,6 +41,7 @@ type armoryTemplateRequest struct {
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
 	RawTemplate *string `json:"raw_template,omitempty"`
+	Framing     *string `json:"framing,omitempty"`
 }
 
 type armoryRunRequest struct {
@@ -60,16 +64,37 @@ type armoryRunResponse struct {
 	CreatedAt     string                  `json:"created_at"`
 	StartedAt     *string                 `json:"started_at"`
 	FinishedAt    *string                 `json:"finished_at"`
+	Progress      struct {
+		Entries        int `json:"entries"`
+		FailedAttempts int `json:"failed_attempts"`
+	} `json:"progress"`
+}
+
+type armoryFailedAttemptResponse struct {
+	ID       string `json:"id"`
+	Payloads []struct {
+		Position int    `json:"position"`
+		Value    string `json:"value"`
+	} `json:"payloads"`
+	Error     string `json:"error"`
+	CreatedAt string `json:"created_at"`
 }
 
 func init() {
-	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateName, "name", "", "Template name. Required")
+	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateName, "name", "", "Template name. Required unless --from-pair is set")
 	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateDescription, "description", "", "Template description")
 	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateRawFile, "raw-file", "", "Read the raw template from a file")
-	armoryTemplateCreateCmd.MarkFlagRequired("name")
+	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateFraming, "framing", "", "Request message framing: grpc, grpc-web or connect, for a template whose body is a message-form body. Empty for none")
+	armoryTemplateCreateCmd.Flags().StringVar(&armoryTemplateCreateFromPair, "from-pair", "", "Build the template from this captured pair's request, named METHOD host path. A gRPC, gRPC-Web or Connect call's request messages become a message-form body with the call's framing. Cannot be used with --name, --description, --raw-file or --framing")
+	armoryTemplateCreateCmd.MarkFlagsMutuallyExclusive("from-pair", "raw-file")
+	armoryTemplateCreateCmd.MarkFlagsMutuallyExclusive("from-pair", "name")
+	armoryTemplateCreateCmd.MarkFlagsMutuallyExclusive("from-pair", "description")
+	armoryTemplateCreateCmd.MarkFlagsOneRequired("from-pair", "name")
+	armoryTemplateCreateCmd.MarkFlagsMutuallyExclusive("from-pair", "framing")
 	armoryTemplateUpdateCmd.Flags().StringVar(&armoryTemplateUpdateName, "name", "", "Template name")
 	armoryTemplateUpdateCmd.Flags().StringVar(&armoryTemplateUpdateDescription, "description", "", "Template description")
 	armoryTemplateUpdateCmd.Flags().StringVar(&armoryTemplateUpdateRawFile, "raw-file", "", "Read the raw template from a file")
+	armoryTemplateUpdateCmd.Flags().StringVar(&armoryTemplateUpdateFraming, "framing", "", "Request message framing: grpc, grpc-web or connect, for a template whose body is a message-form body. Empty for none")
 	armoryRunListCmd.Flags().StringVar(&armoryRunTemplate, "template", "", "Template UUID. Omit to list every run in the project")
 	armoryRunListCmd.Flags().StringArrayVar(&armoryRunListStatuses, "status", nil, "Only list runs with this status: draft, in_progress, complete, failed, or cancelled. Repeat the flag or separate statuses with commas. Project-wide lists only")
 	addArmoryRunFlags(armoryRunCreateCmd, true)
@@ -78,7 +103,7 @@ func init() {
 	armoryRunTrafficCmd.Flags().StringVar(&armoryRunTrafficLimit, "limit", "200", "Maximum number of items to return, from 1 to 500")
 	armoryRunTrafficCmd.Flags().StringVar(&armoryRunTrafficCursor, "cursor", "", "UUID of the last item, used to fetch the next page")
 	armoryTemplateCmd.AddCommand(armoryTemplateListCmd, armoryTemplateGetCmd, armoryTemplateCreateCmd, armoryTemplateUpdateCmd, armoryTemplateDeleteCmd)
-	armoryRunCmd.AddCommand(armoryRunListCmd, armoryRunGetCmd, armoryRunCreateCmd, armoryRunValidateCmd, armoryRunStartCmd, armoryRunCancelCmd, armoryRunDeleteCmd, armoryRunTrafficCmd)
+	armoryRunCmd.AddCommand(armoryRunListCmd, armoryRunGetCmd, armoryRunCreateCmd, armoryRunValidateCmd, armoryRunStartCmd, armoryRunCancelCmd, armoryRunDeleteCmd, armoryRunTrafficCmd, armoryRunFailedAttemptsCmd)
 	armoryCmd.AddCommand(armoryTemplateCmd, armoryRunCmd)
 	rootCmd.AddCommand(armoryCmd)
 }
@@ -120,6 +145,13 @@ var armoryTemplateGetCmd = &cobra.Command{
 var armoryTemplateCreateCmd = &cobra.Command{
 	Use: "create", Short: "Create an Armory template", Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		if cmd.Flags().Changed("from-pair") {
+			path, err := serviceIDPath("/armory/template/from-pair/", armoryTemplateCreateFromPair, "")
+			if err != nil {
+				return err
+			}
+			return runArmoryCommand(cmd, http.MethodPost, path, nil, "creating Armory template", nil, "armory template %s created successfully\n")
+		}
 		if strings.TrimSpace(armoryTemplateCreateName) == "" {
 			return errors.New("armory template create requires a non-empty --name")
 		}
@@ -133,6 +165,9 @@ var armoryTemplateCreateCmd = &cobra.Command{
 				return err
 			}
 			request.RawTemplate = &raw
+		}
+		if cmd.Flags().Changed("framing") {
+			request.Framing = &armoryTemplateCreateFraming
 		}
 		return runArmoryCommand(cmd, http.MethodPost, "/armory/template", request, "creating Armory template", nil, "armory template %s created successfully\n")
 	},
@@ -158,8 +193,11 @@ var armoryTemplateUpdateCmd = &cobra.Command{
 			}
 			request.RawTemplate = &raw
 		}
-		if request.Name == nil && request.Description == nil && request.RawTemplate == nil {
-			return errors.New("armory template update requires --name, --description, or --raw-file")
+		if cmd.Flags().Changed("framing") {
+			request.Framing = &armoryTemplateUpdateFraming
+		}
+		if request.Name == nil && request.Description == nil && request.RawTemplate == nil && request.Framing == nil {
+			return errors.New("armory template update requires --name, --description, --raw-file, or --framing")
 		}
 		path, err := serviceIDPath("/armory/template/", args[0], "")
 		if err != nil {
@@ -295,6 +333,18 @@ var armoryRunTrafficCmd = &cobra.Command{
 	},
 }
 
+var armoryRunFailedAttemptsCmd = &cobra.Command{
+	Use: "failed-attempts UUID", Short: "List the requests an Armory run built but did not send", Args: cobra.ExactArgs(1),
+	Long: "List an Armory run's failed attempts, oldest first: the requests it built but did not send because a payload left a message unable to encode, each with its payloads and the error.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := serviceIDPath("/armory/run/", args[0], "/failed-attempts")
+		if err != nil {
+			return err
+		}
+		return runArmoryCommand(cmd, http.MethodGet, path, nil, "listing Armory run failed attempts", writeArmoryFailedAttemptsHuman, "")
+	},
+}
+
 func armoryRunFlagsRequest(cmd *cobra.Command) (armoryRunRequest, error) {
 	attackType, ok := domain.ParseArmoryAttackType(armoryRunAttackType)
 	if !ok {
@@ -391,8 +441,9 @@ func controlArmoryRequest(ctx context.Context, asJSON bool, method, path string,
 func writeArmoryTemplateListHuman(body []byte, stdout io.Writer) error {
 	var response struct {
 		Items []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Framing string `json:"framing"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
@@ -403,6 +454,9 @@ func writeArmoryTemplateListHuman(body []byte, stdout io.Writer) error {
 			fmt.Fprintln(stdout)
 		}
 		fmt.Fprintf(stdout, "id: %s\nname: %s\n", item.ID, item.Name)
+		if item.Framing != "" {
+			fmt.Fprintf(stdout, "framing: %s\n", item.Framing)
+		}
 	}
 	return nil
 }
@@ -413,12 +467,18 @@ func writeArmoryTemplateHuman(body []byte, stdout io.Writer) error {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 		RawTemplate string `json:"raw_template"`
+		Framing     string `json:"framing"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		return fmt.Errorf("decoding Armory template: %w", err)
 	}
 	if _, err := fmt.Fprintf(stdout, "id: %s\nname: %s\ndescription: %s\n", response.ID, response.Name, response.Description); err != nil {
 		return err
+	}
+	if response.Framing != "" {
+		if _, err := fmt.Fprintf(stdout, "framing: %s\n", response.Framing); err != nil {
+			return err
+		}
 	}
 	_, err := io.WriteString(stdout, response.RawTemplate)
 	return err
@@ -451,8 +511,30 @@ func writeArmoryRunHuman(body []byte, stdout io.Writer) error {
 }
 
 func writeArmoryRunFields(stdout io.Writer, run armoryRunResponse) error {
-	_, err := fmt.Fprintf(stdout, "id: %s\ntemplate_id: %s\nstatus: %s\nattack_type: %s\nuse_https: %t\nmax_concurrent: %d\nwordlists: %s\ncreated_at: %s\nstarted_at: %s\nfinished_at: %s\n", run.ID, run.TemplateID, run.Status, run.AttackType, run.UseHTTPS, run.MaxConcurrent, strings.Join(run.Wordlists, ", "), run.CreatedAt, optionalString(run.StartedAt), optionalString(run.FinishedAt))
+	_, err := fmt.Fprintf(stdout, "id: %s\ntemplate_id: %s\nstatus: %s\nattack_type: %s\nuse_https: %t\nmax_concurrent: %d\nwordlists: %s\ncreated_at: %s\nstarted_at: %s\nfinished_at: %s\nentries: %d\nfailed_attempts: %d\n", run.ID, run.TemplateID, run.Status, run.AttackType, run.UseHTTPS, run.MaxConcurrent, strings.Join(run.Wordlists, ", "), run.CreatedAt, optionalString(run.StartedAt), optionalString(run.FinishedAt), run.Progress.Entries, run.Progress.FailedAttempts)
 	return err
+}
+
+func writeArmoryFailedAttemptsHuman(body []byte, stdout io.Writer) error {
+	var response struct {
+		Items []armoryFailedAttemptResponse `json:"items"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return fmt.Errorf("decoding Armory failed attempts: %w", err)
+	}
+	for index, attempt := range response.Items {
+		if index > 0 {
+			fmt.Fprintln(stdout)
+		}
+		payloads := make([]string, len(attempt.Payloads))
+		for i, payload := range attempt.Payloads {
+			payloads[i] = fmt.Sprintf("%d=%q", payload.Position, payload.Value)
+		}
+		if _, err := fmt.Fprintf(stdout, "id: %s\npayloads: %s\nerror: %s\ncreated_at: %s\n", attempt.ID, strings.Join(payloads, ", "), attempt.Error, attempt.CreatedAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeArmoryValidateHuman(body []byte, stdout io.Writer) error {

@@ -13,6 +13,7 @@
 package marasi
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/tls"
@@ -643,7 +644,10 @@ func NewProxyResponse(pair *Pair) (*domain.ProxyResponse, error) {
 		}
 	}
 
-	metadata := pair.Metadata
+	// A failed response chain records its proxy error in the pair's metadata
+	// while the database writer may be storing this response, so the
+	// response gets its own copy, as the request does.
+	metadata := maps.Clone(pair.Metadata)
 	if metadata == nil {
 		metadata = make(map[string]any)
 	}
@@ -667,8 +671,17 @@ func NewProxyResponse(pair *Pair) (*domain.ProxyResponse, error) {
 		// Empty for a pair that never reached the origin, which keeps the
 		// origin protocol stored with the request.
 		OriginProtocol: pair.originProtocol,
+		GRPCStatus:     responseGRPCStatus(res, dumpedBody(rawRes)),
 	}
 	return proxyResponse, nil
+}
+
+// dumpedBody is the body of a dumped message: what follows the blank line
+// that ends its head, which every dump (HTTP/1.1 or the HTTP/2 text form)
+// ends with CRLF CRLF.
+func dumpedBody(raw []byte) []byte {
+	_, body, _ := bytes.Cut(raw, []byte("\r\n\r\n"))
+	return body
 }
 
 // dbWriterIdleDelay is how long the database writer must go without an item

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 func TestTemplateCtx_Payload(t *testing.T) {
@@ -62,7 +63,7 @@ func TestPreprocessTemplate(t *testing.T) {
 		raw := "username=@@admin@@&password=@@secret@@"
 		want := `username={{.Payload 0 "admin"}}&password={{.Payload 1 "secret"}}`
 
-		got, positionCount, err := preprocessTemplate(raw)
+		got, positionCount, err := preprocessFramedTemplate(raw, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -78,7 +79,7 @@ func TestPreprocessTemplate(t *testing.T) {
 		raw := "value=@@username@@.upper().reverse()"
 		want := `value={{.Payload 0 "username" | upper | reverse}}`
 
-		got, positionCount, err := preprocessTemplate(raw)
+		got, positionCount, err := preprocessFramedTemplate(raw, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -91,7 +92,7 @@ func TestPreprocessTemplate(t *testing.T) {
 	})
 
 	t.Run("should preserve a non-function suffix", func(t *testing.T) {
-		got, _, err := preprocessTemplate("value=@@username@@.example")
+		got, _, err := preprocessFramedTemplate("value=@@username@@.example", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -101,14 +102,14 @@ func TestPreprocessTemplate(t *testing.T) {
 	})
 
 	t.Run("should reject an undefined chained function", func(t *testing.T) {
-		_, _, err := preprocessTemplate("@@username@@.missing()")
+		_, _, err := preprocessFramedTemplate("@@username@@.missing()", stream.FramingNone)
 		if err == nil || !strings.Contains(err.Error(), "armory function missing is not defined") {
 			t.Fatalf("\nwanted:\nundefined function error\ngot:\n%v", err)
 		}
 	})
 
 	t.Run("should reject a function with an incompatible chain signature", func(t *testing.T) {
-		_, _, err := preprocessTemplate("@@username@@.uuid()")
+		_, _, err := preprocessFramedTemplate("@@username@@.uuid()", stream.FramingNone)
 		if err == nil || !strings.Contains(err.Error(), "armory function uuid cannot be chained") {
 			t.Fatalf("\nwanted:\nincompatible function error\ngot:\n%v", err)
 		}
@@ -118,7 +119,7 @@ func TestPreprocessTemplate(t *testing.T) {
 		raw := `value=\@\@`
 		want := "value=@@"
 
-		got, positionCount, err := preprocessTemplate(raw)
+		got, positionCount, err := preprocessFramedTemplate(raw, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -134,7 +135,7 @@ func TestPreprocessTemplate(t *testing.T) {
 		raw := `email=user\@example.com`
 		want := "email=user@example.com"
 
-		got, positionCount, err := preprocessTemplate(raw)
+		got, positionCount, err := preprocessFramedTemplate(raw, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -150,7 +151,7 @@ func TestPreprocessTemplate(t *testing.T) {
 		raw := `value=\\`
 		want := `value=\`
 
-		got, positionCount, err := preprocessTemplate(raw)
+		got, positionCount, err := preprocessFramedTemplate(raw, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -166,7 +167,7 @@ func TestPreprocessTemplate(t *testing.T) {
 		raw := `value=\\\@\\\@`
 		want := `value=\@\@`
 
-		got, positionCount, err := preprocessTemplate(raw)
+		got, positionCount, err := preprocessFramedTemplate(raw, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -182,7 +183,7 @@ func TestPreprocessTemplate(t *testing.T) {
 		raw := `value=\\@@fallback@@`
 		want := `value=\{{.Payload 0 "fallback"}}`
 
-		got, positionCount, err := preprocessTemplate(raw)
+		got, positionCount, err := preprocessFramedTemplate(raw, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -198,7 +199,7 @@ func TestPreprocessTemplate(t *testing.T) {
 		raw := `value=@@prefix-\@\@-\\-suffix@@`
 		want := `value={{.Payload 0 "prefix-@@-\\-suffix"}}`
 
-		got, positionCount, err := preprocessTemplate(raw)
+		got, positionCount, err := preprocessFramedTemplate(raw, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -213,7 +214,7 @@ func TestPreprocessTemplate(t *testing.T) {
 	t.Run("should preserve unknown escapes", func(t *testing.T) {
 		raw := `value=\n\t\x`
 
-		got, positionCount, err := preprocessTemplate(raw)
+		got, positionCount, err := preprocessFramedTemplate(raw, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -228,7 +229,7 @@ func TestPreprocessTemplate(t *testing.T) {
 	t.Run("should preserve a trailing backslash", func(t *testing.T) {
 		raw := `value=\`
 
-		got, positionCount, err := preprocessTemplate(raw)
+		got, positionCount, err := preprocessFramedTemplate(raw, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -241,7 +242,7 @@ func TestPreprocessTemplate(t *testing.T) {
 	})
 
 	t.Run("should return an error for an unclosed position", func(t *testing.T) {
-		_, _, err := preprocessTemplate("value=@@fallback")
+		_, _, err := preprocessFramedTemplate("value=@@fallback", stream.FramingNone)
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
@@ -253,7 +254,7 @@ func TestPreprocessTemplate(t *testing.T) {
 
 func TestParseTemplate(t *testing.T) {
 	t.Run("should parse a preprocessed request template", func(t *testing.T) {
-		tmpl, err := parseTemplate("username=@@admin@@")
+		tmpl, err := parseFramedTemplate("username=@@admin@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -263,7 +264,7 @@ func TestParseTemplate(t *testing.T) {
 	})
 
 	t.Run("should count direct payload syntax", func(t *testing.T) {
-		tmpl, err := parseTemplate(`username={{.Payload 0 "admin" | printf "%s"}}`)
+		tmpl, err := parseFramedTemplate(`username={{.Payload 0 "admin" | printf "%s"}}`, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -273,7 +274,7 @@ func TestParseTemplate(t *testing.T) {
 	})
 
 	t.Run("should count a nested payload call", func(t *testing.T) {
-		tmpl, err := parseTemplate(`username={{printf "%s" (.Payload 0 "admin")}}`)
+		tmpl, err := parseFramedTemplate(`username={{printf "%s" (.Payload 0 "admin")}}`, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -307,7 +308,7 @@ func TestParseTemplate(t *testing.T) {
 
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
-				tmpl, err := parseTemplate(test.raw)
+				tmpl, err := parseFramedTemplate(test.raw, stream.FramingNone)
 				if err != nil {
 					t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 				}
@@ -319,7 +320,7 @@ func TestParseTemplate(t *testing.T) {
 	})
 
 	t.Run("should count payload calls in defined templates", func(t *testing.T) {
-		tmpl, err := parseTemplate(`{{define "value"}}{{.Payload 0 "admin"}}{{end}}{{template "value"}}`)
+		tmpl, err := parseFramedTemplate(`{{define "value"}}{{.Payload 0 "admin"}}{{end}}{{template "value"}}`, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -329,7 +330,7 @@ func TestParseTemplate(t *testing.T) {
 	})
 
 	t.Run("should count marker and direct payload positions", func(t *testing.T) {
-		tmpl, err := parseTemplate(`username=@@admin@@&password={{.Payload 1 "secret"}}`)
+		tmpl, err := parseFramedTemplate(`username=@@admin@@&password={{.Payload 1 "secret"}}`, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
@@ -339,7 +340,7 @@ func TestParseTemplate(t *testing.T) {
 	})
 
 	t.Run("should return an error for a duplicate payload position", func(t *testing.T) {
-		_, err := parseTemplate(`@@admin@@{{.Payload 0 "secret"}}`)
+		_, err := parseFramedTemplate(`@@admin@@{{.Payload 0 "secret"}}`, stream.FramingNone)
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
@@ -349,7 +350,7 @@ func TestParseTemplate(t *testing.T) {
 	})
 
 	t.Run("should return an error for duplicate direct payload positions", func(t *testing.T) {
-		_, err := parseTemplate(`{{.Payload 0 "admin"}}{{.Payload 0 "secret"}}`)
+		_, err := parseFramedTemplate(`{{.Payload 0 "admin"}}{{.Payload 0 "secret"}}`, stream.FramingNone)
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
@@ -359,7 +360,7 @@ func TestParseTemplate(t *testing.T) {
 	})
 
 	t.Run("should return an error for a missing payload position", func(t *testing.T) {
-		_, err := parseTemplate(`{{.Payload 0 "admin"}}{{.Payload 2 "secret"}}`)
+		_, err := parseFramedTemplate(`{{.Payload 0 "admin"}}{{.Payload 2 "secret"}}`, stream.FramingNone)
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
@@ -369,7 +370,7 @@ func TestParseTemplate(t *testing.T) {
 	})
 
 	t.Run("should return an error for a dynamic payload position", func(t *testing.T) {
-		_, err := parseTemplate(`{{$position := 0}}{{.Payload $position "admin"}}`)
+		_, err := parseFramedTemplate(`{{$position := 0}}{{.Payload $position "admin"}}`, stream.FramingNone)
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
@@ -379,7 +380,7 @@ func TestParseTemplate(t *testing.T) {
 	})
 
 	t.Run("should return an error for missing payload arguments", func(t *testing.T) {
-		_, err := parseTemplate(`{{.Payload 0}}`)
+		_, err := parseFramedTemplate(`{{.Payload 0}}`, stream.FramingNone)
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
@@ -389,7 +390,7 @@ func TestParseTemplate(t *testing.T) {
 	})
 
 	t.Run("should return an error for a negative payload position", func(t *testing.T) {
-		_, err := parseTemplate(`{{.Payload -1 "admin"}}`)
+		_, err := parseFramedTemplate(`{{.Payload -1 "admin"}}`, stream.FramingNone)
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
@@ -399,7 +400,7 @@ func TestParseTemplate(t *testing.T) {
 	})
 
 	t.Run("should return an error for invalid Go template syntax", func(t *testing.T) {
-		_, err := parseTemplate("{{if}}")
+		_, err := parseFramedTemplate("{{if}}", stream.FramingNone)
 		if err == nil {
 			t.Fatal("\nwanted:\nerror\ngot:\nnil")
 		}
@@ -409,7 +410,7 @@ func TestParseTemplate(t *testing.T) {
 	})
 
 	t.Run("should return an error for an undefined manual function", func(t *testing.T) {
-		_, err := parseTemplate(`{{missing "value"}}`)
+		_, err := parseFramedTemplate(`{{missing "value"}}`, stream.FramingNone)
 		if err == nil || !strings.Contains(err.Error(), `function "missing" not defined`) {
 			t.Fatalf("\nwanted:\nundefined function error\ngot:\n%v", err)
 		}
@@ -418,7 +419,7 @@ func TestParseTemplate(t *testing.T) {
 
 func TestArmoryTemplate_Render(t *testing.T) {
 	t.Run("should render assigned payloads and fallbacks", func(t *testing.T) {
-		tmpl, err := parseTemplate("username=@@admin@@&password=@@secret@@")
+		tmpl, err := parseFramedTemplate("username=@@admin@@&password=@@secret@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("parsing template: %v", err)
 		}
@@ -434,7 +435,7 @@ func TestArmoryTemplate_Render(t *testing.T) {
 	})
 
 	t.Run("should render chained payload functions", func(t *testing.T) {
-		tmpl, err := parseTemplate("value=@@fallback@@.upper().reverse()")
+		tmpl, err := parseFramedTemplate("value=@@fallback@@.upper().reverse()", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("parsing template: %v", err)
 		}
@@ -449,7 +450,7 @@ func TestArmoryTemplate_Render(t *testing.T) {
 	})
 
 	t.Run("should expose manual template functions", func(t *testing.T) {
-		tmpl, err := parseTemplate(`value={{" marasi " | trim | upper | replace "MAR" "mar"}}`)
+		tmpl, err := parseFramedTemplate(`value={{" marasi " | trim | upper | replace "MAR" "mar"}}`, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("parsing template: %v", err)
 		}
@@ -464,7 +465,7 @@ func TestArmoryTemplate_Render(t *testing.T) {
 	})
 
 	t.Run("should generate UUIDv7 values", func(t *testing.T) {
-		tmpl, err := parseTemplate(`{{uuid}}`)
+		tmpl, err := parseFramedTemplate(`{{uuid}}`, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("parsing template: %v", err)
 		}
@@ -483,7 +484,7 @@ func TestArmoryTemplate_Render(t *testing.T) {
 	})
 
 	t.Run("should render a formatted direct payload", func(t *testing.T) {
-		tmpl, err := parseTemplate(`value={{.Payload 0 "fallback" | printf "<%s>"}}`)
+		tmpl, err := parseFramedTemplate(`value={{.Payload 0 "fallback" | printf "<%s>"}}`, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("parsing template: %v", err)
 		}
@@ -498,7 +499,7 @@ func TestArmoryTemplate_Render(t *testing.T) {
 	})
 
 	t.Run("should render an assigned empty payload", func(t *testing.T) {
-		tmpl, err := parseTemplate("value=@@fallback@@")
+		tmpl, err := parseFramedTemplate("value=@@fallback@@", stream.FramingNone)
 		if err != nil {
 			t.Fatalf("parsing template: %v", err)
 		}
@@ -513,7 +514,7 @@ func TestArmoryTemplate_Render(t *testing.T) {
 	})
 
 	t.Run("should return an error when rendering fails", func(t *testing.T) {
-		tmpl, err := parseTemplate(`{{index "x" 2}}`)
+		tmpl, err := parseFramedTemplate(`{{index "x" 2}}`, stream.FramingNone)
 		if err != nil {
 			t.Fatalf("parsing template: %v", err)
 		}
@@ -545,7 +546,7 @@ func TestTemplateFunctions(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			tmpl, err := parseTemplate(test.raw)
+			tmpl, err := parseFramedTemplate(test.raw, stream.FramingNone)
 			if err != nil {
 				t.Fatalf("parsing template: %v", err)
 			}

@@ -268,6 +268,10 @@ type ProxyResponse struct {
 	// announcement; nil for any other pair. InsertResponse does not store
 	// it: StreamRepository.RecordStreamedPair does.
 	Streamed *StreamedState
+	// GRPCStatus is the grpc-status of a gRPC pair's response, read from
+	// its trailers or from a trailers-only response head; nil for a pair
+	// that is not gRPC or ended without one.
+	GRPCStatus *int
 }
 
 // The protocols a pair can use on each leg, as stored and as queries name
@@ -338,6 +342,8 @@ type RequestResponseSummary struct {
 	// Streamed is the pair's streamed state, nil for a pair that is not a
 	// streamed pair.
 	Streamed *StreamedState
+	// GRPCStatus is as in ProxyResponse.
+	GRPCStatus *int
 }
 
 // ContentTypeCount is the number of request-response pairs with one response

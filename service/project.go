@@ -78,9 +78,11 @@ type ProjectLifecycle struct {
 	waitReportDelay  time.Duration
 	logAdded         func(*domain.Log)
 	armoryRunUpdated func(*domain.ArmoryRun)
-	extensionOptions []func(*extensions.Runtime) error
-	jobEvents        jobEvents
-	jobBatch         func(ctx context.Context, path string, runner jobRunner, name domain.JobName) (int, bool, error)
+	// armoryFailedAttemptRecorded announces each failed attempt a run stores.
+	armoryFailedAttemptRecorded func(*domain.ArmoryFailedAttempt)
+	extensionOptions            []func(*extensions.Runtime) error
+	jobEvents                   jobEvents
+	jobBatch                    func(ctx context.Context, path string, runner jobRunner, name domain.JobName) (int, bool, error)
 	// jobProgressInterval is the shortest time between two progress
 	// reports for one job.
 	jobProgressInterval time.Duration
@@ -613,6 +615,7 @@ func (lifecycle *ProjectLifecycle) prepareProject(ctx context.Context, path stri
 		return fail(fmt.Errorf("preparing armory manager: %w", err))
 	}
 	armoryManager.SetRunUpdated(lifecycle.armoryRunUpdated)
+	armoryManager.SetFailedAttemptRecorded(lifecycle.armoryFailedAttemptRecorded)
 	resources.Armory = armoryManager
 	return resources, nil
 }

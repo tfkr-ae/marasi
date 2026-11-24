@@ -140,7 +140,10 @@ func NewServer(proxy *marasi.Proxy, listener ListenerLifecycle, projects *Projec
 			events.publish("log.added", proxyLogFromDomain(entry))
 		}
 		projects.armoryRunUpdated = func(run *domain.ArmoryRun) {
-			events.publish("armory.run.updated", armoryRunFromDomain(run))
+			publishArmoryRunUpdated(events, run)
+		}
+		projects.armoryFailedAttemptRecorded = func(attempt *domain.ArmoryFailedAttempt) {
+			publishArmoryFailedAttempt(events, attempt)
 		}
 		projects.jobEvents.install(jobPublisher{
 			progress: func(path string, job db.JobState) {

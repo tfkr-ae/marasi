@@ -162,6 +162,9 @@ type streamedDirection struct {
 	ending      string
 	resetCode   string
 	trailers    h2Fields
+	// frameGRPCStatus is the grpc-status of a gRPC-Web trailers frame the
+	// direction carried in its body, nil when it carried none.
+	frameGRPCStatus *int
 	// declared is set when the direction's head declared a length.
 	declared bool
 	// encoding is the per-message encoding the direction's head names
@@ -709,6 +712,9 @@ func (sp *streamedPair) finish() {
 	ended := domain.StreamedPairEnded{PairID: sp.id, Directions: make(map[string]domain.StreamedDirection, len(sp.directions))}
 	streamed := make(map[string]any, len(sp.directions))
 	state := sp.stateLocked(true)
+	// The response's trailers end a gRPC call with its grpc-status, and a
+	// gRPC-Web response's trailers frame does when it has no trailers.
+	var grpcStatus *int
 	for name, d := range sp.directions {
 		direction := domain.StreamedDirection{Framing: string(d.framing), Messages: d.messages, Ending: d.ending, ResetCode: d.resetCode}
 		if direction.Ending == "" {
@@ -728,6 +734,12 @@ func (sp *streamedPair) finish() {
 		}
 		streamed[name] = entry
 		ended.Directions[name] = direction
+		if name == domain.StreamDirectionResponse {
+			grpcStatus = trailersGRPCStatus(d.trailers)
+			if grpcStatus == nil {
+				grpcStatus = d.frameGRPCStatus
+			}
+		}
 	}
 	sp.mu.Unlock()
 	proxy := sp.proxy
@@ -756,6 +768,9 @@ func (sp *streamedPair) finish() {
 	metadata["streamed"] = streamed
 	response.Metadata = metadata
 	response.Streamed = &state
+	if grpcStatus != nil {
+		response.GRPCStatus = grpcStatus
+	}
 	proxy.DBWriteChannel <- response
 	if proxy.OnResponse != nil {
 		proxy.OnResponse(*response)

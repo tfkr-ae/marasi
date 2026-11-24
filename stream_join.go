@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/rawhttp"
 	"github.com/tfkr-ae/marasi/stream"
 )
 
@@ -40,6 +41,10 @@ type JoinedRequest struct {
 	// decoded.
 	Messages int
 	Omitted  int
+	// head is the joined request's head, its blank line included, and
+	// forwarded the joined request messages as stored, in order.
+	head      []byte
+	forwarded []*domain.StreamMessage
 }
 
 // joinPageSize is how many stream messages JoinedRequest reads at a time.
@@ -119,6 +124,7 @@ func (proxy *Proxy) JoinedRequest(id uuid.UUID) (JoinedRequest, error) {
 			}
 			body.Write(wire)
 			joined.Messages++
+			joined.forwarded = append(joined.forwarded, message)
 		}
 		if next == nil {
 			break
@@ -126,6 +132,7 @@ func (proxy *Proxy) JoinedRequest(id uuid.UUID) (JoinedRequest, error) {
 		cursor = next
 	}
 	joined.Raw = withBody(row.Request.Raw, body.Bytes())
+	joined.head = joined.Raw[:len(joined.Raw)-body.Len()]
 	joined.Streamed = true
 	return joined, nil
 }
@@ -166,7 +173,7 @@ func withBody(raw, body []byte) []byte {
 		head = raw[:end]
 	}
 	lines := bytes.Split(head, []byte("\r\n"))
-	h2 := isH2Text(string(lines[0]))
+	h2 := rawhttp.IsHTTP2Text(string(lines[0]))
 	length := []byte(strconv.Itoa(len(body)))
 	out := [][]byte{lines[0]}
 	found := false

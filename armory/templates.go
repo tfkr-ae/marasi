@@ -12,6 +12,8 @@ import (
 	"text/template"
 
 	"github.com/google/uuid"
+	"github.com/tfkr-ae/marasi/protoscope"
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 // payloadMarker delimits fallback values replaced during an Armory run.
@@ -29,6 +31,9 @@ type armoryTemplate struct {
 	template *template.Template
 	// positionCount is the number of payload positions in the template.
 	positionCount int
+	// framing is the request framing of a template with a message-form
+	// body, empty for any other template.
+	framing stream.Framing
 }
 
 // Payload returns the value assigned to a position or its original fallback.
@@ -44,6 +49,21 @@ func (ctx templateCtx) Payload(position int, fallback string) (string, error) {
 	return value, nil
 }
 
+// rawFunction names the position function that, last in a chain, puts a
+// payload inside a quoted protoscope string in as written.
+const rawFunction = "raw"
+
+// protoscopeStringFunction names the step added to a position inside a
+// quoted protoscope string. A marker's chain cannot name it.
+const protoscopeStringFunction = "protoscopeString"
+
+// protoscopeString is value escaped for the inside of a protoscope string
+// literal, with the quoting the decoder writes.
+func protoscopeString(value string) string {
+	quoted := protoscope.Quote([]byte(value))
+	return quoted[1 : len(quoted)-1]
+}
+
 func templateFunctions() template.FuncMap {
 	return template.FuncMap{
 		"upper":      strings.ToUpper,
@@ -56,6 +76,7 @@ func templateFunctions() template.FuncMap {
 		"urlencode":  url.QueryEscape,
 		"pathescape": url.PathEscape,
 		"replace":    func(old, new, value string) string { return strings.ReplaceAll(value, old, new) },
+		rawFunction:  func(value string) string { return value },
 		"uuid": func() (string, error) {
 			id, err := uuid.NewV7()
 			return id.String(), err
@@ -101,87 +122,140 @@ func functionChain(raw string, index int, functions template.FuncMap) ([]string,
 	return chain, index, nil
 }
 
-// preprocessTemplate converts Armory payload markers into Go template actions.
-func preprocessTemplate(raw string) (string, int, error) {
-	var expanded strings.Builder
-	var fallback strings.Builder
+// markedPosition is one payload position written with @@ markers.
+type markedPosition struct {
+	// fallback is the text between the markers.
+	fallback string
+	// chain is the functions named after the closing marker, in order.
+	chain []string
+	// marker is the offset in the raw template of the opening marker.
+	marker int
+	// start and end bound the fallback in the template's literal text.
+	start, end int
+}
+
+// preprocessFramedTemplate converts Armory payload markers into Go template
+// actions. When framing is set and the body's messages are protoscope text,
+// a position inside a quoted string has its value escaped as a protoscope
+// string after its function chain, unless the chain ends in raw.
+func preprocessFramedTemplate(raw string, framing stream.Framing) (string, int, error) {
+	// literal is the template's text with escapes read and every position
+	// at its fallback, the text the quoting is read from.
+	var literal strings.Builder
+	var positions []markedPosition
 	functions := templateFunctions()
 
-	position := 0
 	inPosition := false
-
-	writeByte := func(value byte) {
-		if inPosition {
-			fallback.WriteByte(value)
-			return
-		}
-
-		expanded.WriteByte(value)
-	}
-
 	for index := 0; index < len(raw); {
 		if raw[index] == '\\' && index+1 < len(raw) {
 			next := raw[index+1]
 			if next == '\\' || next == '@' {
-				writeByte(next)
+				literal.WriteByte(next)
 				index += 2
 				continue
 			}
 		}
 
 		if strings.HasPrefix(raw[index:], payloadMarker) {
-			index += len(payloadMarker)
-
 			if !inPosition {
-				fallback.Reset()
+				positions = append(positions, markedPosition{marker: index, start: literal.Len()})
 				inPosition = true
+				index += len(payloadMarker)
 				continue
 			}
+			index += len(payloadMarker)
 			chain, nextIndex, err := functionChain(raw, index, functions)
 			if err != nil {
 				return "", 0, err
 			}
-
-			expanded.WriteString("{{.Payload ")
-			expanded.WriteString(strconv.Itoa(position))
-			expanded.WriteByte(' ')
-			expanded.WriteString(strconv.Quote(fallback.String()))
-			for _, name := range chain {
-				expanded.WriteString(" | ")
-				expanded.WriteString(name)
-			}
-			expanded.WriteString("}}")
-
-			position++
+			position := &positions[len(positions)-1]
+			position.end = literal.Len()
+			position.fallback = literal.String()[position.start:position.end]
+			position.chain = chain
 			inPosition = false
 			index = nextIndex
 			continue
 		}
 
-		writeByte(raw[index])
+		literal.WriteByte(raw[index])
 		index++
 	}
 
 	if inPosition {
 		return "", 0, fmt.Errorf(
 			"payload position %d is not closed",
-			position,
+			len(positions)-1,
 		)
 	}
 
-	return expanded.String(), position, nil
+	text := literal.String()
+	quoted, err := quotedPositions(raw, text, framing, positions)
+	if err != nil {
+		return "", 0, err
+	}
+
+	var expanded strings.Builder
+	previous := 0
+	for number, position := range positions {
+		expanded.WriteString(text[previous:position.start])
+		previous = position.end
+
+		fallback := position.fallback
+		escape := quoted[number] && (len(position.chain) == 0 || position.chain[len(position.chain)-1] != rawFunction)
+		if escape {
+			// The fallback is written as protoscope string text; the action
+			// takes its bytes, so escaping it again gives the same message.
+			value, err := protoscope.Encode(`"` + fallback + `"`)
+			if err != nil {
+				return "", 0, fmt.Errorf("payload position %d: %w", number, err)
+			}
+			fallback = string(value)
+		}
+
+		expanded.WriteString("{{.Payload ")
+		expanded.WriteString(strconv.Itoa(number))
+		expanded.WriteByte(' ')
+		expanded.WriteString(strconv.Quote(fallback))
+		for _, name := range position.chain {
+			expanded.WriteString(" | ")
+			expanded.WriteString(name)
+		}
+		if escape {
+			expanded.WriteString(" | ")
+			expanded.WriteString(protoscopeStringFunction)
+		}
+		expanded.WriteString("}}")
+	}
+	expanded.WriteString(text[previous:])
+
+	return expanded.String(), len(positions), nil
 }
 
-// parseTemplate preprocesses and parses an Armory request template.
-func parseTemplate(raw string) (*armoryTemplate, error) {
-	expanded, _, err := preprocessTemplate(raw)
+// parseFramedTemplate parses an Armory request template whose body is in
+// message form when framing is set.
+func parseFramedTemplate(raw string, framing stream.Framing) (*armoryTemplate, error) {
+	if err := validateFraming(framing); err != nil {
+		return nil, err
+	}
+	expanded, _, err := preprocessFramedTemplate(raw, framing)
 	if err != nil {
 		return nil, err
 	}
+	tmpl, err := parseExpanded(expanded)
+	if err != nil {
+		return nil, err
+	}
+	tmpl.framing = framing
+	return tmpl, nil
+}
 
+// parseExpanded parses a preprocessed Armory request template.
+func parseExpanded(expanded string) (*armoryTemplate, error) {
+	functions := templateFunctions()
+	functions[protoscopeStringFunction] = protoscopeString
 	parsed, err := template.New("request").
 		Option("missingkey=error").
-		Funcs(templateFunctions()).
+		Funcs(functions).
 		Parse(expanded)
 	if err != nil {
 		return nil, fmt.Errorf("parsing armory template: %w", err)
@@ -207,6 +281,62 @@ func (tmpl *armoryTemplate) render(payloads map[int]string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("rendering armory template: %w", err)
 	}
+	if tmpl.framing == stream.FramingNone {
+		return output.String(), nil
+	}
+	raw, err := encodeMessageForm(output.String(), tmpl.framing)
+	if err != nil {
+		return "", &messageError{err: err}
+	}
+	return raw, nil
+}
 
-	return output.String(), nil
+// messageError means the rendered request's messages could not be built
+// for its framing. During a run, that request is a failed attempt: it is
+// recorded and not sent, and the run goes on.
+type messageError struct {
+	err error
+}
+
+func (err *messageError) Error() string { return err.err.Error() }
+
+func (err *messageError) Unwrap() error { return err.err }
+
+// escapedActionStart is how EscapeTemplate writes "{{", which would open a
+// Go template action: an action printing it as a raw string. It holds no
+// double quote, so it adds no protoscope string boundary to the text a
+// payload position's quoting is read from (quotedPositions).
+const escapedActionStart = "{{`{{`}}"
+
+// EscapeTemplate escapes raw text so that, as an Armory template, it renders
+// back to exactly raw: `\` becomes `\\` and `@` becomes `\@`, the two bytes
+// the preprocessor reads specially, and "{{", which the Go template reads as
+// an action, becomes an action printing it. "}}" outside an action is
+// ordinary text. The result has no payload positions.
+func EscapeTemplate(raw string) string {
+	var escaped strings.Builder
+	escaped.Grow(len(raw))
+	for index := 0; index < len(raw); index++ {
+		if strings.HasPrefix(raw[index:], "{{") {
+			escaped.WriteString(escapedActionStart)
+			index++
+			continue
+		}
+		if raw[index] == '\\' || raw[index] == '@' {
+			escaped.WriteByte('\\')
+		}
+		escaped.WriteByte(raw[index])
+	}
+	return escaped.String()
+}
+
+// Render renders an Armory template with every payload position at its
+// fallback value, as the request it sends: a template whose framing is set
+// has its message-form body encoded into envelopes.
+func Render(raw string, framing stream.Framing) (string, error) {
+	tmpl, err := parseFramedTemplate(raw, framing)
+	if err != nil {
+		return "", err
+	}
+	return tmpl.render(nil)
 }

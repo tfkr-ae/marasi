@@ -17,6 +17,7 @@ import (
 
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/internal/h1"
+	"github.com/tfkr-ae/marasi/rawhttp"
 )
 
 // A launch and an Armory request are sent raw: their text is written as bytes
@@ -47,7 +48,7 @@ func readRawRequest(raw string, useHTTPS bool) (*rawRequest, error) {
 	if useHTTPS {
 		scheme = "https"
 	}
-	if isH2Text(raw) {
+	if rawhttp.IsHTTP2Text(raw) {
 		return readH2RawRequest(raw, scheme)
 	}
 	br := bufio.NewReader(strings.NewReader(raw))
@@ -65,7 +66,7 @@ func readRawRequest(raw string, useHTTPS bool) (*rawRequest, error) {
 		return nil, fmt.Errorf("reading http request: %w", err)
 	}
 	if view.Host == "" {
-		return nil, errors.New("host header not found or is empty")
+		return nil, rawhttp.ErrMissingHost
 	}
 	view.URL.Scheme, view.URL.Host = scheme, view.Host
 	if payload := wireBody(head, body).Payload(); len(payload) > 0 {

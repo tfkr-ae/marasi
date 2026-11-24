@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tfkr-ae/marasi/rawhttp"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
 )
@@ -26,12 +27,6 @@ import (
 // (docs/adr/2026-11-19-marasi-owns-its-http2-framing.md). There is no
 // fallback to HTTP/1.1: the proxy answers a launch whose origin will not
 // speak HTTP/2 with a 502 proxy error response.
-
-// isH2Text reports whether raw's request line names HTTP/2.
-func isH2Text(raw string) bool {
-	line, _, _ := strings.Cut(raw, "\n")
-	return strings.HasSuffix(strings.TrimSuffix(line, "\r"), " HTTP/2")
-}
 
 // readH2RawRequest reads raw in the HTTP/2 text form. A :scheme field is
 // added after the pseudo-header fields when the text has none; everything
@@ -51,7 +46,7 @@ func readH2RawRequest(raw string, scheme string) (*rawRequest, error) {
 	message := &h2Request{fields: fields, body: text.body, endsOnData: len(text.body) > 0}
 	view := message.request()
 	if view.Host == "" {
-		return nil, errors.New("host header not found or is empty")
+		return nil, rawhttp.ErrMissingHost
 	}
 	view.URL.Scheme, view.URL.Host = scheme, view.Host
 	if len(text.body) > 0 {

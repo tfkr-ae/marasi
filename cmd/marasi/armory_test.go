@@ -26,7 +26,8 @@ func TestArmoryCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	template := `{"id":"` + templateID + `","name":"Login","description":"Try variants","raw_template":"GET /@@ HTTP/1.1\r\nHost: example.com\r\n\r\n"}` + "\n"
-	run := `{"id":"` + runID + `","template_id":"` + templateID + `","template_snapshot":"GET /@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","use_https":false,"wordlists":["users","passwords"],"status":"draft","attack_type":"tandem","max_concurrent":4,"created_at":"2026-01-02T03:04:05Z","started_at":null,"finished_at":null}` + "\n"
+	run := `{"id":"` + runID + `","template_id":"` + templateID + `","template_snapshot":"GET /@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","use_https":false,"wordlists":["users","passwords"],"status":"draft","attack_type":"tandem","max_concurrent":4,"created_at":"2026-01-02T03:04:05Z","started_at":null,"finished_at":null,"progress":{"entries":2,"failed_attempts":1}}` + "\n"
+	failedAttempts := `{"items":[{"id":"` + templateID + `","run_id":"` + runID + `","payloads":[{"position":0,"value":"abc"},{"position":1,"value":"a\nb"}],"error":"message 1: line 7 column 10: bad","created_at":"2026-01-02T03:04:05Z"}]}` + "\n"
 
 	for _, test := range []struct {
 		name       string
@@ -42,7 +43,12 @@ func TestArmoryCommands(t *testing.T) {
 		{name: "template list", args: []string{"armory", "template", "list"}, response: `{"items":[{"id":"` + templateID + `","name":"Login","description":"Try variants"}]}` + "\n", method: http.MethodGet, path: "/armory/template", wantStdout: "id: " + templateID + "\nname: Login\n"},
 		{name: "template get", args: []string{"armory", "template", "get", templateID}, response: template, method: http.MethodGet, path: "/armory/template/" + templateID, wantStdout: "id: " + templateID + "\nname: Login\ndescription: Try variants\nGET /@@ HTTP/1.1\r\nHost: example.com\r\n\r\n"},
 		{name: "template create", args: []string{"armory", "template", "create", "--name", "Login", "--description", "Try variants", "--raw-file", rawFile}, response: template, method: http.MethodPost, path: "/armory/template", body: `{"name":"Login","description":"Try variants","raw_template":"GET /@@ HTTP/1.1\r\nHost: example.com\r\n\r\n"}`, wantStderr: "armory template " + templateID + " created successfully\n"},
+		{name: "template create from a pair", args: []string{"armory", "template", "create", "--from-pair", runID}, response: template, method: http.MethodPost, path: "/armory/template/from-pair/" + runID, wantStderr: "armory template " + templateID + " created successfully\n"},
 		{name: "template update", args: []string{"armory", "template", "update", templateID, "--description", ""}, response: template, method: http.MethodPost, path: "/armory/template/" + templateID, body: `{"description":""}`, wantStderr: "armory template " + templateID + " updated successfully\n"},
+		{name: "template list with framing", args: []string{"armory", "template", "list"}, response: `{"items":[{"id":"` + templateID + `","name":"Say","description":"","framing":"grpc"}]}` + "\n", method: http.MethodGet, path: "/armory/template", wantStdout: "id: " + templateID + "\nname: Say\nframing: grpc\n"},
+		{name: "template get with framing", args: []string{"armory", "template", "get", templateID}, response: `{"id":"` + templateID + `","name":"Say","description":"","raw_template":"POST / HTTP/2\r\n\r\n--- message ---\n","framing":"grpc"}` + "\n", method: http.MethodGet, path: "/armory/template/" + templateID, wantStdout: "id: " + templateID + "\nname: Say\ndescription: \nframing: grpc\nPOST / HTTP/2\r\n\r\n--- message ---\n"},
+		{name: "template create with framing", args: []string{"armory", "template", "create", "--name", "Login", "--raw-file", rawFile, "--framing", "grpc"}, response: template, method: http.MethodPost, path: "/armory/template", body: `{"name":"Login","raw_template":"GET /@@ HTTP/1.1\r\nHost: example.com\r\n\r\n","framing":"grpc"}`, wantStderr: "armory template " + templateID + " created successfully\n"},
+		{name: "template update clearing framing", args: []string{"armory", "template", "update", templateID, "--framing", ""}, response: template, method: http.MethodPost, path: "/armory/template/" + templateID, body: `{"framing":""}`, wantStderr: "armory template " + templateID + " updated successfully\n"},
 		{name: "template delete", args: []string{"armory", "template", "delete", templateID}, response: `{"id":"` + templateID + `"}` + "\n", method: http.MethodDelete, path: "/armory/template/" + templateID, wantStderr: "armory template " + templateID + " deleted successfully\n"},
 		{name: "run list", args: []string{"armory", "run", "list", "--template", templateID}, response: `{"items":[` + strings.TrimSpace(run) + `]}` + "\n", method: http.MethodGet, path: "/armory/template/" + templateID + "/run", wantStdout: armoryRunHuman(runID, templateID)},
 		{name: "project run list", args: []string{"armory", "run", "list"}, response: `{"items":[` + strings.TrimSpace(run) + `]}` + "\n", method: http.MethodGet, path: "/armory/run", wantStdout: armoryRunHuman(runID, templateID)},
@@ -53,6 +59,7 @@ func TestArmoryCommands(t *testing.T) {
 		{name: "run start", args: []string{"armory", "run", "start", runID}, response: run, method: http.MethodPost, path: "/armory/run/" + runID + "/start", wantStderr: "armory run " + runID + " started successfully\n"},
 		{name: "run cancel", args: []string{"armory", "run", "cancel", runID}, response: run, method: http.MethodPost, path: "/armory/run/" + runID + "/cancel", wantStderr: "armory run " + runID + " cancelled successfully\n"},
 		{name: "run delete", args: []string{"armory", "run", "delete", runID}, response: `{"id":"` + runID + `"}` + "\n", method: http.MethodDelete, path: "/armory/run/" + runID, wantStderr: "armory run " + runID + " deleted successfully\n"},
+		{name: "run failed attempts", args: []string{"armory", "run", "failed-attempts", runID}, response: failedAttempts, method: http.MethodGet, path: "/armory/run/" + runID + "/failed-attempts", wantStdout: "id: " + templateID + "\npayloads: 0=\"abc\", 1=\"a\\nb\"\nerror: message 1: line 7 column 10: bad\ncreated_at: 2026-01-02T03:04:05Z\n"},
 		{name: "run traffic", args: []string{"armory", "run", "traffic", runID, "--limit", "10", "--cursor", templateID}, response: `{"items":[{"id":"` + templateID + `","method":"GET","host":"example.com","path":"/login","status_code":200,"length":"12"}],"next_cursor":"` + runID + `","index":{"complete":false}}` + "\n", method: http.MethodGet, path: "/armory/run/" + runID + "/traffic", query: "cursor=" + templateID + "&limit=10", wantStdout: "#  ID                                    METHOD  HOST         PATH    STATUS  LENGTH  PROTOCOL\n" +
 			"0  " + templateID + "  GET     example.com  /login  200     12      \n" +
 			"#  ID                                    METHOD  HOST         PATH    STATUS  LENGTH  PROTOCOL\n"},
@@ -131,6 +138,9 @@ func TestArmoryCommandOptions(t *testing.T) {
 		configDir := serviceConfigDir(t)
 		for _, args := range [][]string{
 			{"armory", "template", "create"},
+			{"armory", "template", "create", "--from-pair", templateID, "--raw-file", "request.raw"},
+			{"armory", "template", "create", "--from-pair", templateID, "--name", "Login"},
+			{"armory", "template", "create", "--from-pair", "not-a-uuid"},
 			{"armory", "template", "update", templateID},
 			{"armory", "run", "list", "--template", templateID, "--status", "draft"},
 			{"armory", "run", "create", "--template", templateID},
@@ -181,7 +191,7 @@ func TestArmoryCommandOptions(t *testing.T) {
 }
 
 func armoryRunHuman(runID, templateID string) string {
-	return "id: " + runID + "\ntemplate_id: " + templateID + "\nstatus: draft\nattack_type: tandem\nuse_https: false\nmax_concurrent: 4\nwordlists: users, passwords\ncreated_at: 2026-01-02T03:04:05Z\nstarted_at: \nfinished_at: \n"
+	return "id: " + runID + "\ntemplate_id: " + templateID + "\nstatus: draft\nattack_type: tandem\nuse_https: false\nmax_concurrent: 4\nwordlists: users, passwords\ncreated_at: 2026-01-02T03:04:05Z\nstarted_at: \nfinished_at: \nentries: 2\nfailed_attempts: 1\n"
 }
 
 func TestArmoryCommandLifecycle(t *testing.T) {

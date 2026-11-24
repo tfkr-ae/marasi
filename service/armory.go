@@ -17,19 +17,22 @@ import (
 	"github.com/google/uuid"
 	"github.com/tfkr-ae/marasi"
 	"github.com/tfkr-ae/marasi/domain"
+	"github.com/tfkr-ae/marasi/stream"
 )
 
 type armoryTemplate struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	RawTemplate string    `json:"raw_template"`
+	ID          uuid.UUID      `json:"id"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	RawTemplate string         `json:"raw_template"`
+	Framing     stream.Framing `json:"framing,omitempty"`
 }
 
 type armoryTemplateSummary struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
+	ID          uuid.UUID      `json:"id"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Framing     stream.Framing `json:"framing,omitempty"`
 }
 
 type armoryTemplateList struct {
@@ -41,15 +44,17 @@ type armoryID struct {
 }
 
 type armoryTemplateMutation struct {
-	Name        *string `json:"name"`
-	Description *string `json:"description"`
-	RawTemplate *string `json:"raw_template"`
+	Name        *string         `json:"name"`
+	Description *string         `json:"description"`
+	RawTemplate *string         `json:"raw_template"`
+	Framing     *stream.Framing `json:"framing"`
 }
 
 type armoryRun struct {
 	ID               uuid.UUID               `json:"id"`
 	TemplateID       uuid.UUID               `json:"template_id"`
 	TemplateSnapshot string                  `json:"template_snapshot"`
+	TemplateFraming  stream.Framing          `json:"template_framing,omitempty"`
 	UseHTTPS         bool                    `json:"use_https"`
 	Wordlists        []string                `json:"wordlists"`
 	Status           domain.ArmoryRunStatus  `json:"status"`
@@ -58,6 +63,31 @@ type armoryRun struct {
 	CreatedAt        time.Time               `json:"created_at"`
 	StartedAt        *time.Time              `json:"started_at"`
 	FinishedAt       *time.Time              `json:"finished_at"`
+	Progress         armoryRunProgress       `json:"progress"`
+}
+
+// armoryRunProgress counts what a run has done: the requests it sent and
+// stored as entries, and the failed attempts it recorded instead of sending.
+type armoryRunProgress struct {
+	Entries        int `json:"entries"`
+	FailedAttempts int `json:"failed_attempts"`
+}
+
+type armoryPayload struct {
+	Position int    `json:"position"`
+	Value    string `json:"value"`
+}
+
+type armoryFailedAttempt struct {
+	ID        uuid.UUID       `json:"id"`
+	RunID     uuid.UUID       `json:"run_id"`
+	Payloads  []armoryPayload `json:"payloads"`
+	Error     string          `json:"error"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+type armoryFailedAttemptList struct {
+	Items []armoryFailedAttempt `json:"items"`
 }
 
 type armoryRunList struct {
@@ -67,6 +97,7 @@ type armoryRunList struct {
 type armoryRunMutation struct {
 	TemplateID    *uuid.UUID
 	RawTemplate   *string
+	Framing       stream.Framing
 	AttackType    domain.ArmoryAttackType
 	Wordlists     []string
 	UseHTTPS      bool
@@ -91,7 +122,7 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 		items := make([]armoryTemplateSummary, 0, len(templates))
 		for _, template := range templates {
 			items = append(items, armoryTemplateSummary{
-				ID: template.ID, Name: template.Name, Description: template.Description,
+				ID: template.ID, Name: template.Name, Description: template.Description, Framing: template.Framing,
 			})
 		}
 		writeJSON(w, r, http.StatusOK, armoryTemplateList{Items: items})
@@ -120,7 +151,36 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 		if mutation.RawTemplate != nil {
 			template.RawTemplate = *mutation.RawTemplate
 		}
+		if mutation.Framing != nil {
+			template.Framing = *mutation.Framing
+		}
+		if !validArmoryTemplate(w, r, proxy, template) {
+			return
+		}
 		if err := repo.CreateArmoryTemplate(template); err != nil {
+			writeArmoryError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		response := armoryTemplateFromDomain(template)
+		events.publish("armory.template.created", response)
+		writeJSON(w, r, http.StatusOK, response)
+	})
+
+	mux.HandleFunc("POST /armory/template/from-pair/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseArmoryID(w, r)
+		if !ok {
+			return
+		}
+		template, err := proxy.CreateArmoryTemplateFromPair(id)
+		switch {
+		// GetTrafficRepo reports no open project as ErrExtensionRepoNotFound.
+		case errors.Is(err, domain.ErrPairNotFound), errors.Is(err, marasi.ErrArmoryNotFound), errors.Is(err, marasi.ErrArmoryRepoNotFound), errors.Is(err, marasi.ErrExtensionRepoNotFound):
+			writeArmoryError(w, r, http.StatusNotFound, "not_found")
+			return
+		case errors.Is(err, marasi.ErrStreamedRequestOpen):
+			writeRefusal(w, r, http.StatusConflict, "stream_request_open", "the streamed pair's request direction is still being carried; build the template once the request ends")
+			return
+		case err != nil:
 			writeArmoryError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
@@ -183,6 +243,12 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 		}
 		if mutation.RawTemplate != nil {
 			template.RawTemplate = *mutation.RawTemplate
+		}
+		if mutation.Framing != nil {
+			template.Framing = *mutation.Framing
+		}
+		if !validArmoryTemplate(w, r, proxy, template) {
+			return
 		}
 		if err := repo.UpdateArmoryTemplate(template); err != nil {
 			writeArmoryRepositoryError(w, r, err)
@@ -311,7 +377,7 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 			writeArmoryError(w, r, http.StatusInternalServerError, "internal_server_error")
 			return
 		}
-		run := mutation.armoryRun(id, template.RawTemplate)
+		run := mutation.armoryRun(id, template.RawTemplate, template.Framing)
 		if err := armoryService.ValidateRun(run); err != nil {
 			writeRefusal(w, r, http.StatusBadRequest, "invalid_armory_request", err.Error())
 			return
@@ -336,7 +402,7 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 			writeArmoryError(w, r, http.StatusNotFound, "not_found")
 			return
 		}
-		run := mutation.armoryRun(uuid.Nil, *mutation.RawTemplate)
+		run := mutation.armoryRun(uuid.Nil, *mutation.RawTemplate, mutation.Framing)
 		if err := armoryService.ValidateRun(run); err != nil {
 			writeRefusal(w, r, http.StatusBadRequest, "invalid_armory_request", err.Error())
 			return
@@ -379,6 +445,27 @@ func addArmoryRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaster
 		}
 		list := trafficListFromSummaries(items, nextCursor)
 		list.Index = &trafficIndex{Complete: indexComplete}
+		writeJSON(w, r, http.StatusOK, list)
+	})
+
+	mux.HandleFunc("GET /armory/run/{id}/failed-attempts", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseArmoryID(w, r)
+		if !ok {
+			return
+		}
+		if _, ok := getArmoryRun(w, r, proxy, id); !ok {
+			return
+		}
+		repo, _ := armoryRepository(proxy)
+		attempts, err := repo.GetArmoryFailedAttempts(id)
+		if err != nil {
+			writeArmoryError(w, r, http.StatusInternalServerError, "internal_server_error")
+			return
+		}
+		list := armoryFailedAttemptList{Items: make([]armoryFailedAttempt, len(attempts))}
+		for i, attempt := range attempts {
+			list.Items[i] = armoryFailedAttemptFromDomain(attempt)
+		}
 		writeJSON(w, r, http.StatusOK, list)
 	})
 
@@ -637,6 +724,13 @@ func decodeArmoryRunMutation(r *http.Request, create bool) (armoryRunMutation, e
 				return armoryRunMutation{}, errors.New("raw_template must be a string")
 			}
 			mutation.RawTemplate = &value
+		case "framing":
+			if create {
+				return armoryRunMutation{}, errors.New("framing is not accepted here; the run takes its template's")
+			}
+			if json.Unmarshal(raw, &mutation.Framing) != nil {
+				return armoryRunMutation{}, errors.New("framing must be a string")
+			}
 		case "attack_type":
 			var value string
 			if json.Unmarshal(raw, &value) != nil {
@@ -678,11 +772,12 @@ func decodeArmoryRunMutation(r *http.Request, create bool) (armoryRunMutation, e
 	return mutation, nil
 }
 
-func (mutation armoryRunMutation) armoryRun(id uuid.UUID, snapshot string) *domain.ArmoryRun {
+func (mutation armoryRunMutation) armoryRun(id uuid.UUID, snapshot string, framing stream.Framing) *domain.ArmoryRun {
 	return &domain.ArmoryRun{
 		ID:               id,
 		TemplateID:       valueOrZero(mutation.TemplateID),
 		TemplateSnapshot: snapshot,
+		TemplateFraming:  framing,
 		UseHTTPS:         mutation.UseHTTPS,
 		Wordlists:        mutation.Wordlists,
 		Status:           domain.ArmoryRunDraft,
@@ -754,6 +849,9 @@ func decodeArmoryTemplateMutation(r *http.Request, requireName bool) (armoryTemp
 			mutation.Description = &value
 		case "raw_template":
 			mutation.RawTemplate = &value
+		case "framing":
+			framing := stream.Framing(value)
+			mutation.Framing = &framing
 		default:
 			return armoryTemplateMutation{}, errInvalidArmoryRequest
 		}
@@ -770,7 +868,23 @@ func armoryTemplateFromDomain(template *domain.ArmoryTemplate) armoryTemplate {
 		Name:        template.Name,
 		Description: template.Description,
 		RawTemplate: template.RawTemplate,
+		Framing:     template.Framing,
 	}
+}
+
+// validArmoryTemplate reports whether template may be saved, refusing the
+// request with the reason when it may not.
+func validArmoryTemplate(w http.ResponseWriter, r *http.Request, proxy *marasi.Proxy, template *domain.ArmoryTemplate) bool {
+	service, ok := armoryService(proxy)
+	if !ok {
+		writeArmoryError(w, r, http.StatusNotFound, "not_found")
+		return false
+	}
+	if err := service.ValidateTemplate(template); err != nil {
+		writeRefusal(w, r, http.StatusBadRequest, "invalid_armory_request", err.Error())
+		return false
+	}
+	return true
 }
 
 func armoryRunFromDomain(run *domain.ArmoryRun) armoryRun {
@@ -782,6 +896,7 @@ func armoryRunFromDomain(run *domain.ArmoryRun) armoryRun {
 		ID:               run.ID,
 		TemplateID:       run.TemplateID,
 		TemplateSnapshot: run.TemplateSnapshot,
+		TemplateFraming:  run.TemplateFraming,
 		UseHTTPS:         run.UseHTTPS,
 		Wordlists:        wordlists,
 		Status:           run.Status,
@@ -790,7 +905,36 @@ func armoryRunFromDomain(run *domain.ArmoryRun) armoryRun {
 		CreatedAt:        run.CreatedAt,
 		StartedAt:        run.StartedAt,
 		FinishedAt:       run.FinishedAt,
+		Progress: armoryRunProgress{
+			Entries:        run.Progress.Entries,
+			FailedAttempts: run.Progress.FailedAttempts,
+		},
 	}
+}
+
+func armoryFailedAttemptFromDomain(attempt *domain.ArmoryFailedAttempt) armoryFailedAttempt {
+	payloads := make([]armoryPayload, len(attempt.Payloads))
+	for i, payload := range attempt.Payloads {
+		payloads[i] = armoryPayload{Position: payload.Position, Value: payload.Value}
+	}
+	return armoryFailedAttempt{
+		ID:        attempt.ID,
+		RunID:     attempt.RunID,
+		Payloads:  payloads,
+		Error:     attempt.Error,
+		CreatedAt: attempt.CreatedAt,
+	}
+}
+
+// publishArmoryRunUpdated announces a run's lifecycle write.
+func publishArmoryRunUpdated(events *eventBroadcaster, run *domain.ArmoryRun) {
+	events.publish("armory.run.updated", armoryRunFromDomain(run))
+}
+
+// publishArmoryFailedAttempt announces a failed attempt a run recorded, as
+// the traffic events announce the run's entries.
+func publishArmoryFailedAttempt(events *eventBroadcaster, attempt *domain.ArmoryFailedAttempt) {
+	events.publish("armory.failed_attempt.created", armoryFailedAttemptFromDomain(attempt))
 }
 
 func parseArmoryID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
