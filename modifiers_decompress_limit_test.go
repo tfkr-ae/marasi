@@ -23,6 +23,7 @@ func TestCompressedResponseModifier_DecompressLimit(t *testing.T) {
 	}{
 		{name: "gzip", coding: "gzip", body: testGzipBody},
 		{name: "brotli", coding: "br", body: testBrotliBody},
+		{name: "zstd", coding: "zstd", body: testZstdBody},
 	}
 	for _, tc := range cases {
 		t.Run("should leave a "+tc.name+" body that decodes past the body threshold coded and log it", func(t *testing.T) {
@@ -84,4 +85,10 @@ func TestCompressedResponseModifier_DecompressLimit(t *testing.T) {
 			}
 		})
 	}
+}
+
+func testZstdBody(t *testing.T, content string) (io.ReadCloser, int) {
+	t.Helper()
+	coded := codedWith(t, []string{"zstd"}, content)
+	return io.NopCloser(strings.NewReader(coded)), len(coded)
 }

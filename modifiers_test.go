@@ -2210,8 +2210,8 @@ func TestCompressedResponseModifier(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if got, _ := pair.Metadata["content_decoding_error"].(string); !strings.Contains(got, "creating gzip reader") {
-			t.Fatalf("\nwanted:\ncontent_decoding_error containing %q\ngot:\n%v", "creating gzip reader", pair.Metadata)
+		if got, _ := pair.Metadata["content_decoding_error"].(string); !strings.Contains(got, "decoding gzip") {
+			t.Fatalf("\nwanted:\ncontent_decoding_error containing %q\ngot:\n%v", "decoding gzip", pair.Metadata)
 		}
 	})
 
@@ -2234,8 +2234,8 @@ func TestCompressedResponseModifier(t *testing.T) {
 		if res.Header.Get("Content-Encoding") != "gzip" || pair.decoded != nil {
 			t.Fatalf("\nwanted:\nthe response untouched\ngot:\n%v, %v", res.Header, pair.decoded)
 		}
-		if got, _ := pair.Metadata["content_decoding_error"].(string); !strings.Contains(got, "reading gzip content") {
-			t.Fatalf("\nwanted:\ncontent_decoding_error containing %q\ngot:\n%v", "reading gzip content", pair.Metadata)
+		if got, _ := pair.Metadata["content_decoding_error"].(string); !strings.Contains(got, "decoding gzip") {
+			t.Fatalf("\nwanted:\ncontent_decoding_error containing %q\ngot:\n%v", "decoding gzip", pair.Metadata)
 		}
 		if _, ok := pair.Metadata["decoded_content_encoding"]; ok {
 			t.Fatalf("\nwanted:\nno decoded_content_encoding\ngot:\n%v", pair.Metadata)
@@ -2289,8 +2289,8 @@ func TestCompressedResponseModifier(t *testing.T) {
 		if err != nil {
 			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
 		}
-		if got, _ := pair.Metadata["content_decoding_error"].(string); !strings.Contains(got, "reading brotli content") {
-			t.Fatalf("\nwanted:\ncontent_decoding_error containing %q\ngot:\n%v", "reading brotli content", pair.Metadata)
+		if got, _ := pair.Metadata["content_decoding_error"].(string); !strings.Contains(got, "decoding br") {
+			t.Fatalf("\nwanted:\ncontent_decoding_error containing %q\ngot:\n%v", "decoding br", pair.Metadata)
 		}
 	})
 

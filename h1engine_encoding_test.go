@@ -3,6 +3,7 @@ package marasi
 import (
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 	"github.com/tfkr-ae/marasi/db"
 	"github.com/tfkr-ae/marasi/domain"
 	"github.com/tfkr-ae/marasi/rawhttp"
@@ -182,9 +184,47 @@ func TestH1Engine_CompressedResponses(t *testing.T) {
 		wantDecodingMetadata(t, res, "gzip", len(coded))
 	})
 
-	t.Run("should send and store any other coding as received", func(t *testing.T) {
+	t.Run("should send each coding Marasi decodes to the client as the origin sent it and store it decoded", func(t *testing.T) {
+		cases := []struct {
+			name    string
+			lines   []string
+			applied []string
+			coding  string
+		}{
+			{name: "zstd", lines: []string{"zstd"}, applied: []string{"zstd"}, coding: "zstd"},
+			{name: "deflate", lines: []string{"deflate"}, applied: []string{"deflate"}, coding: "deflate"},
+			{name: "x-gzip", lines: []string{"x-gzip"}, applied: []string{"gzip"}, coding: "x-gzip"},
+			{name: "GZIP", lines: []string{"GZIP"}, applied: []string{"gzip"}, coding: "gzip"},
+			{name: "Br", lines: []string{"Br"}, applied: []string{"br"}, coding: "br"},
+			{name: "stacked on one line", lines: []string{"gzip, br"}, applied: []string{"gzip", "br"}, coding: "gzip, br"},
+			{name: "stacked on two lines", lines: []string{"gzip", "zstd"}, applied: []string{"gzip", "zstd"}, coding: "gzip, zstd"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				coded := codedWith(t, tc.applied, text)
+				var head strings.Builder
+				for _, line := range tc.lines {
+					fmt.Fprintf(&head, "Content-Encoding: %s\r\n", line)
+				}
+				response := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n%sContent-Length: %d\r\n\r\n%s", head.String(), len(coded), coded)
+				origin := newRawOrigin(t, response)
+				_, addr, stored := serveEncodingProxy(t)
+
+				roundTripThrough(t, addr, origin, response)
+
+				res := storedResponse(t, stored)
+				want := "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 12\r\n\r\n" + text
+				if string(res.Raw) != want {
+					t.Fatalf("wanted the stored response:\n%q\ngot:\n%q", want, res.Raw)
+				}
+				wantDecodingMetadata(t, res, tc.coding, len(coded))
+			})
+		}
+	})
+
+	t.Run("should send and store a response with a coding Marasi does not decode as received", func(t *testing.T) {
 		coded := gzipped(t, text)
-		for _, coding := range []string{"x-gzip", "GZIP", "deflate", "gzip, br"} {
+		for _, coding := range []string{"compress", "gzip, compress", "exi"} {
 			t.Run(coding, func(t *testing.T) {
 				response := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Encoding: %s\r\nContent-Length: %d\r\n\r\n%s", coding, len(coded), coded)
 				origin := newRawOrigin(t, response)
@@ -199,22 +239,43 @@ func TestH1Engine_CompressedResponses(t *testing.T) {
 				if _, ok := res.Metadata["decoded_content_encoding"]; ok {
 					t.Fatalf("wanted no decoded_content_encoding\ngot: %v", res.Metadata)
 				}
+				if _, ok := res.Metadata["content_decoding_error"]; ok {
+					t.Fatalf("wanted no content_decoding_error\ngot: %v", res.Metadata)
+				}
 			})
 		}
 	})
+}
 
-	t.Run("should send and store two Content-Encoding lines as received", func(t *testing.T) {
-		coded := gzipped(t, text)
-		response := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Encoding: gzip\r\nContent-Length: %d\r\n\r\n%s", len(coded), coded)
-		origin := newRawOrigin(t, response)
-		_, addr, stored := serveEncodingProxy(t)
-
-		roundTripThrough(t, addr, origin, response)
-
-		if res := storedResponse(t, stored); !strings.HasSuffix(string(res.Raw), coded) {
-			t.Fatalf("wanted the stored body as received\ngot:\n%q", res.Raw)
+// codedWith is text with each of codings applied in order.
+func codedWith(t *testing.T, codings []string, text string) string {
+	t.Helper()
+	for _, coding := range codings {
+		var b bytes.Buffer
+		var w io.WriteCloser
+		switch coding {
+		case "gzip":
+			w = gzip.NewWriter(&b)
+		case "deflate":
+			w = zlib.NewWriter(&b)
+		case "br":
+			w = brotli.NewWriter(&b)
+		case "zstd":
+			zw, err := zstd.NewWriter(&b)
+			if err != nil {
+				t.Fatalf("creating the zstd writer: %v", err)
+			}
+			w = zw
+		default:
+			t.Fatalf("no encoder for %q", coding)
 		}
-	})
+		io.WriteString(w, text)
+		if err := w.Close(); err != nil {
+			t.Fatalf("closing the %s writer: %v", coding, err)
+		}
+		text = b.String()
+	}
+	return text
 }
 
 // storedBody is the body of a stored raw message.

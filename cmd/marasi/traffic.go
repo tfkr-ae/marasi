@@ -77,8 +77,9 @@ number, its # in capture order, then its id.
       = != < <= > >= against the stored response body's length in bytes,
       for example length > 100000. It counts the body as stored, so a
       chunked response or one with no Content-Length has its real length,
-      and a gzip or br response its decoded length. A response with no
-      body has length 0. A pair with no response yet has no length.
+      and a gzip, x-gzip, deflate, br or zstd response its decoded length.
+      A response with no body has length 0. A pair with no response yet
+      has no length.
   requested_at, responded_at
       = != < <= > >= against an RFC 3339 timestamp, for example
       requested_at > "2024-01-02T15:04:05Z".
