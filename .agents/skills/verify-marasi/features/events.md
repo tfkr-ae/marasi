@@ -6,7 +6,7 @@ Users subscribe to a running instance and print named events until the stream en
 
 - Subscribe with `events`.
 - Print `traffic.request` and `traffic.response` for proxied exchanges.
-- Print listener, project, launchpad, test-case, finding, artifact, note, metadata, checkpoint, Chrome path/profile, waypoint, wordlist, Armory template/run, extension, WebSocket, report-template, and log (`log.added`) events from those CLI operations.
+- Print listener, project, launchpad, test-case, finding, artifact, note, metadata, checkpoint, Chrome path/profile, waypoint, wordlist, Armory template/run/failed attempt, extension, WebSocket, report-template, and log (`log.added`) events from those CLI operations.
 - Print `streamed_pair.started`, `streamed_pair.updated`, `stream_message`, `stream_message.progress`, and `streamed_pair.ended` for a streamed pair such as a gRPC call; see [streamed pair](streamed-pair.md).
 - Print `extension.log`, `extension.gui.rendered`, and `extension.gui.updated` when an enabled extension's Lua prints or calls `marasi.gui`; see [extension](extension.md).
 - Print `traffic.changed` for each `traffic bulk` command, and `sitemap.changed` after `traffic bulk delete` and `jobs rebuild sitemap`.
