@@ -130,6 +130,7 @@ func TestServiceRestart(t *testing.T) {
 
 		logPath := filepath.Join(configDir, "instances", "work.log")
 		stdout, stderr, err := runMarasi(cli, "--json", "--config-dir", configDir, "--instance", "work", "service", "restart")
+		assertJSONCommandError(t, stdout, stderr, err, "broken build")
 		assertJSONCommandError(t, stdout, stderr, err, "successor log: "+logPath)
 
 		name, data := readEventNamed(t, events, "service.restarting")
@@ -142,8 +143,8 @@ func TestServiceRestart(t *testing.T) {
 			Error    string `json:"error"`
 			Log      string `json:"log"`
 		}
-		if err := json.Unmarshal([]byte(data), &failed); err != nil || failed.Instance != "work" || failed.Log != logPath || failed.Error == "" {
-			t.Fatalf("\nwanted:\nservice.restart_failed for work with log %s\ngot:\n%s %s", logPath, name, data)
+		if err := json.Unmarshal([]byte(data), &failed); err != nil || failed.Instance != "work" || failed.Log != logPath || !strings.Contains(failed.Error, "broken build") || strings.Contains(failed.Error, "EOF") {
+			t.Fatalf("\nwanted:\nservice.restart_failed for work with broken build and log %s\ngot:\n%s %s", logPath, name, data)
 		}
 		logContents, err := os.ReadFile(logPath)
 		if err != nil || !strings.Contains(string(logContents), "broken build") {
@@ -288,8 +289,8 @@ func TestServiceRestart(t *testing.T) {
 		installBuild(t, broken, binary)
 
 		status, _, body := networkRequest(t, http.MethodPost, address, "/service/restart", "Bearer "+password)
-		if status != http.StatusInternalServerError || !strings.Contains(body, `"error":"restart_failed"`) {
-			t.Fatalf("\nwanted:\n500 restart_failed\ngot:\n%d %s", status, body)
+		if status != http.StatusInternalServerError || !strings.Contains(body, `"error":"restart_failed"`) || !strings.Contains(body, "exit status 1") || strings.Contains(body, "EOF") {
+			t.Fatalf("\nwanted:\n500 restart_failed with exit status 1\ngot:\n%d %s", status, body)
 		}
 
 		if got := controlAddressOf(t, cli, configDir, "work"); got == nil || *got != address {
@@ -299,6 +300,85 @@ func TestServiceRestart(t *testing.T) {
 		var after restartedStatus
 		if err := json.Unmarshal([]byte(body), &after); err != nil || status != http.StatusOK || after.Version != "old-build" {
 			t.Fatalf("\nwanted:\n200 from old-build at %s with the same password\ngot:\n%d %s", address, status, body)
+		}
+	})
+
+	t.Run("should retry without listener socket flags when the installed build rejects --proxy-listener-fd", func(t *testing.T) {
+		binary := buildMarasiVersion(t, "old-build")
+		next := buildMarasiVersion(t, "legacy-build")
+		cli := copyBuild(t, binary)
+		configDir := serviceConfigDir(t)
+		t.Cleanup(func() { runMarasi(cli, "--config-dir", configDir, "--instance", "work", "service", "stop") })
+		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
+		socketPath := filepath.Join(configDir, "instances", "work.sock")
+		before := readInstanceStatus(t, socketPath)
+		controlAddress := *controlAddressOf(t, cli, configDir, "work")
+
+		// Stand in for an older marasi binary that predates --proxy-listener-fd
+		// and --control-listener-fd: reject them like Cobra, otherwise exec next.
+		wrapper := filepath.Join(t.TempDir(), "legacy-marasi")
+		script := "#!/bin/sh\n" +
+			"for arg in \"$@\"; do\n" +
+			"  case \"$arg\" in\n" +
+			"    --proxy-listener-fd|--control-listener-fd)\n" +
+			"      printf 'Error: unknown flag: %s\\n' \"$arg\" >&2\n" +
+			"      exit 1\n" +
+			"      ;;\n" +
+			"  esac\n" +
+			"done\n" +
+			"exec \"" + next + "\" \"$@\"\n"
+		if err := os.WriteFile(wrapper, []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		installBuild(t, wrapper, binary)
+
+		stdout, stderr, err := runMarasi(cli, "--json", "--config-dir", configDir, "--instance", "work", "service", "restart")
+		if err != nil || stderr != "" {
+			t.Fatalf("\nwanted:\nsuccessful fallback restart\ngot:\nstdout %q, stderr %q, error %v", stdout, stderr, err)
+		}
+		after := readInstanceStatus(t, socketPath)
+		if after.Version != "legacy-build" || after.Project != before.Project || after.ProxyListener == nil || *after.ProxyListener != *before.ProxyListener {
+			t.Fatalf("\nwanted:\nlegacy-build serving %s at %s\ngot:\n%+v", before.Project, *before.ProxyListener, after)
+		}
+		if got := controlAddressOf(t, cli, configDir, "work"); got == nil || *got != controlAddress {
+			t.Fatalf("\nwanted:\ncontrol listener network address %s\ngot:\n%v", controlAddress, got)
+		}
+		getViaProxy(t, *before.ProxyListener, "http://127.0.0.1:1/")
+	})
+
+	t.Run("should report pre-startup validation and flag errors from a service child over stdout instead of EOF", func(t *testing.T) {
+		binary := buildMarasi(t)
+		configDir := serviceConfigDir(t)
+		project := filepath.Join(configDir, "child-error.marasi")
+		missingProject := filepath.Join(configDir, "missing", "child-error.marasi")
+		for _, tc := range []struct {
+			name string
+			args []string
+			want string
+		}{
+			{
+				name: "non-loopback control address without password or --no-password",
+				args: []string{"--config-dir", configDir, "--instance", "work", "service", "start", "--project", project, "--service-child", "--address", "127.0.0.1", "--port", "0", "--control-address", "0.0.0.0:0"},
+				want: "is beyond loopback: set a control password with --password, or pass --no-password to run without one",
+			},
+			{
+				name: "pre-run project path resolution error",
+				args: []string{"--config-dir", configDir, "--instance", "work", "service", "start", "--project", missingProject, "--service-child", "--address", "127.0.0.1", "--port", "0"},
+				want: "resolving project parent directory",
+			},
+			{
+				name: "unknown flag",
+				args: []string{"--config-dir", configDir, "--instance", "work", "service", "start", "--project", project, "--service-child", "--unknown-child-flag"},
+				want: "unknown flag: --unknown-child-flag",
+			},
+		} {
+			stdout, _, err := runMarasiEnv(binary, nil, tc.args...)
+			if exitCode(err) != 1 {
+				t.Fatalf("\n%s:\nwanted:\nexit 1\ngot:\n%v", tc.name, err)
+			}
+			if !strings.HasPrefix(stdout, string(startupError)) || !strings.Contains(stdout[1:], tc.want) {
+				t.Fatalf("\n%s:\nwanted:\nstdout starting with %q containing %q\ngot:\n%q", tc.name, string(startupError), tc.want, stdout)
+			}
 		}
 	})
 }

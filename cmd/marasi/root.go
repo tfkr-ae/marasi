@@ -36,6 +36,8 @@ var rootCmd = &cobra.Command{
 func executeCommand(args []string) error {
 	rootCmd.SetArgs(args)
 	streamConnected = false
+	childStartupReported = false
+	serviceChild = false
 	jsonOutput = recognizedJSONMode(args)
 	command, _, _ := rootCmd.Find(args)
 	streamingJSON := jsonOutput && (command == eventsCmd || command == updateInstallCmd || command == updateReinstallCmd)
@@ -54,6 +56,10 @@ func executeCommand(args []string) error {
 		if jsonOutput && !streamingJSON {
 			_, err = io.Copy(stdout, &output)
 		}
+		return err
+	}
+	if !childStartupReported && isServiceChildArgs(command, args) {
+		reportChildStartupError(stdout, err)
 		return err
 	}
 	if jsonOutput {

@@ -368,6 +368,7 @@ func (s successorStarter) start(ctx context.Context, handover service.Handover) 
 		return service.Successor{}, &service.RestartError{Log: logPath, Err: err}
 	}
 	defer logFile.Close()
+	logOffset := fileSize(logFile)
 
 	if err := s.claim.handOver(); err != nil {
 		return fail(err)
@@ -389,15 +390,28 @@ func (s successorStarter) start(ctx context.Context, handover service.Handover) 
 	case startup = <-startupResult:
 	case <-timer.C:
 		_ = command.Process.Kill()
-		stopChild(childInput, processResult)
+		_ = stopChild(childInput, processResult)
 		return fail(fmt.Errorf("successor did not become ready within %s", s.readyTimeout))
 	}
 	if startup.err != nil {
-		stopChild(childInput, processResult)
-		return fail(fmt.Errorf("successor failed to start: %w", startup.err))
+		waitErr := stopChild(childInput, processResult)
+		stderrOutput := readLogSince(logPath, logOffset)
+		cause := describeChildEOF(startup.err, waitErr, stderrOutput)
+		if len(sockets) > 0 && (isUnknownListenerFDFlag(startup.err.Error()) || isUnknownListenerFDFlag(stderrOutput)) {
+			// Signal the server to close its kept socket duplicates and retry
+			// without fd flags once the instance name has been reclaimed.
+			if reclaimErr := s.claim.reclaim(); reclaimErr != nil {
+				return service.Successor{}, &service.RestartError{Log: logPath, Err: errors.Join(
+					fmt.Errorf("successor failed to start: %w", cause),
+					wrapError("reclaiming instance", reclaimErr),
+				)}
+			}
+			return service.Successor{}, &service.RestartError{Log: logPath, Err: service.ErrSocketHandoverRejected}
+		}
+		return fail(fmt.Errorf("successor failed to start: %w", cause))
 	}
 	if _, err := childInput.Write([]byte{detachChild}); err != nil {
-		stopChild(childInput, processResult)
+		_ = stopChild(childInput, processResult)
 		return fail(fmt.Errorf("detaching successor: %w", err))
 	}
 	_ = childInput.Close()
@@ -419,4 +433,41 @@ func (s successorStarter) start(ctx context.Context, handover service.Handover) 
 		}
 	}
 	return successor, nil
+}
+
+// fileSize returns file's current length, or 0 if it cannot be read.
+func fileSize(file *os.File) int64 {
+	info, err := file.Stat()
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+// readLogSince reads up to maxErrorBodySize bytes appended to path after
+// offset, so a successor that exited before reporting status still yields its
+// stderr output.
+func readLogSince(path string, offset int64) string {
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	if offset > 0 {
+		if _, err := file.Seek(offset, io.SeekStart); err != nil {
+			return ""
+		}
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxErrorBodySize))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// isUnknownListenerFDFlag reports whether message says the successor did not
+// recognize the hidden flags that pass handed-over listener sockets.
+func isUnknownListenerFDFlag(message string) bool {
+	return strings.Contains(message, "unknown flag: --proxy-listener-fd") ||
+		strings.Contains(message, "unknown flag: --control-listener-fd")
 }

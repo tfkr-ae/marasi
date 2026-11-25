@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/spf13/cobra"
 	"github.com/tfkr-ae/marasi/service"
 )
 
@@ -23,6 +24,7 @@ const (
 )
 
 var serviceChild bool
+var childStartupReported bool
 
 // childStartup is the child's first message to its parent.
 type childStartup struct {
@@ -73,25 +75,25 @@ func startServiceProcess(ctx context.Context, options serviceOptions, stdout, st
 	select {
 	case startup := <-startupResult:
 		if startup.err != nil {
-			stopChild(childInput, processResult)
-			return startup.err
+			waitErr := stopChild(childInput, processResult)
+			return describeChildEOF(startup.err, waitErr, "")
 		}
 		if err := ctx.Err(); err != nil {
-			stopChild(childInput, processResult)
+			_ = stopChild(childInput, processResult)
 			return err
 		}
 		if err := writeStartOutput(stdout, stderr, asJSON, instanceName, options, startup); err != nil {
-			stopChild(childInput, processResult)
+			_ = stopChild(childInput, processResult)
 			return err
 		}
 		if _, err := childInput.Write([]byte{detachChild}); err != nil {
-			stopChild(childInput, processResult)
+			_ = stopChild(childInput, processResult)
 			return fmt.Errorf("detaching service child: %w", err)
 		}
 		_ = childInput.Close()
 		return nil
 	case <-ctx.Done():
-		stopChild(childInput, processResult)
+		_ = stopChild(childInput, processResult)
 		return ctx.Err()
 	}
 }
@@ -225,9 +227,58 @@ func readChildStartup(reader *bufio.Reader) childStartup {
 }
 
 // stopChild closes the child's stdin and waits for the process to exit.
-func stopChild(input io.WriteCloser, processResult <-chan error) {
+func stopChild(input io.WriteCloser, processResult <-chan error) error {
 	_ = input.Close()
-	<-processResult
+	return <-processResult
+}
+
+// isServiceChildArgs reports whether args invoke `service start --service-child`.
+// Checking args catches flag-parsing failures before Cobra sets serviceChild.
+func isServiceChildArgs(command *cobra.Command, args []string) bool {
+	if command != startCmd {
+		return false
+	}
+	if serviceChild {
+		return true
+	}
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if arg == "--service-child" || arg == "--service-child=true" {
+			return true
+		}
+	}
+	return false
+}
+
+// reportChildStartupError writes err over the child startup channel so the
+// parent receives the cause instead of EOF when startup fails early.
+func reportChildStartupError(stdout io.Writer, err error) {
+	childStartupReported = true
+	_, _ = fmt.Fprintf(stdout, "%c%v", startupError, err)
+	if stdout == os.Stdout {
+		_ = os.Stdout.Close()
+	}
+}
+
+// describeChildEOF replaces an unexpected EOF on the child startup channel
+// with the child's exit error and any stderr it wrote before exiting.
+func describeChildEOF(startupErr, waitErr error, stderrOutput string) error {
+	if !errors.Is(startupErr, io.EOF) {
+		return startupErr
+	}
+	detail := strings.TrimPrefix(strings.TrimSpace(stderrOutput), "Error: ")
+	switch {
+	case detail != "" && waitErr != nil:
+		return fmt.Errorf("%w: %s", waitErr, detail)
+	case detail != "":
+		return errors.New(detail)
+	case waitErr != nil:
+		return waitErr
+	default:
+		return startupErr
+	}
 }
 
 // runServiceChild runs the in-process service and reports ready or error on stdout.
@@ -247,11 +298,11 @@ func runServiceChild(ctx context.Context, options serviceOptions) error {
 			return fmt.Errorf("reporting service startup: %w", err)
 		}
 		ready = true
+		childStartupReported = true
 		return os.Stdout.Close()
 	})
 	if !ready {
-		_, _ = fmt.Fprintf(os.Stdout, "%c%v", startupError, err)
-		_ = os.Stdout.Close()
+		reportChildStartupError(os.Stdout, err)
 	}
 	return err
 }

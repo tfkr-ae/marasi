@@ -19,6 +19,11 @@ type Successor struct {
 	ProxyListener *string // successor's proxy listener, nil when stopped
 }
 
+// ErrSocketHandoverRejected means the successor build does not recognize the
+// flags for handed-over listener sockets, so a restart closes those sockets
+// and retries by address.
+var ErrSocketHandoverRejected = errors.New("successor does not support handed-over listener sockets")
+
 // RestartError is a successor that failed or did not become ready in time.
 type RestartError struct {
 	Log string // log file the successor wrote to
@@ -189,6 +194,21 @@ func (s *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 			handover.AllowedOrigins = s.control.AllowedOrigins()
 		}
 		successor, stepErr = start(ctx, handover)
+		if errors.Is(stepErr, ErrSocketHandoverRejected) && (proxySocket != nil || controlSocket != nil) {
+			// An older installed build predates socket handover flags; release
+			// the bound duplicates so the successor can bind the addresses.
+			closeSocket(proxySocket)
+			proxySocket = nil
+			if s.control != nil {
+				if err := s.control.endHandover(); err != nil {
+					fmt.Fprintln(s.control.logWriter, err)
+				}
+			}
+			controlSocket = nil
+			handover.ProxyListenerSocket = nil
+			handover.ControlListenerSocket = nil
+			successor, stepErr = start(ctx, handover)
+		}
 	}
 	if stepErr != nil {
 		s.rollBackRestart(ctx, w, r, release, proxyListener, proxySocket, stepErr)
