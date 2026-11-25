@@ -180,4 +180,59 @@ func TestServiceRestartKeepsListenerSockets(t *testing.T) {
 			t.Fatalf("\nwanted:\n200 after the successor started\ngot:\n%d %s", response.Code, response.Body.String())
 		}
 	})
+
+	t.Run("should release handed-over sockets and retry by address when the successor rejects socket handover", func(t *testing.T) {
+		var restart *socketRestart
+		attempts := 0
+		restart = newSocketRestart(t, func(_ context.Context, handover Handover) (Successor, error) {
+			attempts++
+			if attempts == 1 {
+				if handover.ProxyListenerSocket == nil || handover.ControlListenerSocket == nil {
+					t.Fatalf("\nwanted:\nboth listener sockets on the first attempt\ngot:\n%+v", handover)
+				}
+				return Successor{}, &RestartError{Log: "successor.log", Err: ErrSocketHandoverRejected}
+			}
+			if handover.ProxyListenerSocket != nil || handover.ControlListenerSocket != nil {
+				t.Fatalf("\nwanted:\nno listener sockets on the retry\ngot:\n%+v", handover)
+			}
+			for _, endpoint := range []string{*handover.ProxyListener, *handover.ControlListener} {
+				listener, err := net.Listen("tcp", endpoint)
+				if err != nil {
+					t.Fatalf("\nwanted:\n%s released for the retry to bind\ngot:\n%v", endpoint, err)
+				}
+				listener.Close()
+			}
+			return Successor{Version: "30.10.2026", ProxyListener: handover.ProxyListener}, nil
+		})
+
+		response := requestUpdate(restart.server, http.MethodPost, "/service/restart", "")
+
+		if response.Code != http.StatusOK || attempts != 2 {
+			t.Fatalf("\nwanted:\n200 after 2 attempts\ngot:\n%d after %d attempts: %s", response.Code, attempts, response.Body.String())
+		}
+	})
+
+	t.Run("should rebind both addresses on rollback when the retry after rejected socket handover fails", func(t *testing.T) {
+		var restart *socketRestart
+		attempts := 0
+		restart = newSocketRestart(t, func(_ context.Context, handover Handover) (Successor, error) {
+			attempts++
+			if attempts == 1 {
+				return Successor{}, &RestartError{Log: "successor.log", Err: ErrSocketHandoverRejected}
+			}
+			return Successor{}, &RestartError{Log: "successor.log", Err: errors.New("successor failed to start: exit status 1: broken build")}
+		})
+
+		response := requestUpdate(restart.server, http.MethodPost, "/service/restart", "")
+
+		if response.Code != http.StatusInternalServerError || attempts != 2 {
+			t.Fatalf("\nwanted:\n500 after 2 attempts\ngot:\n%d after %d attempts: %s", response.Code, attempts, response.Body.String())
+		}
+		if status := restart.listener.Status(); status.ProxyListener == nil || *status.ProxyListener != restart.proxy {
+			t.Fatalf("\nwanted:\nproxy listener active on %s\ngot:\n%+v", restart.proxy, status)
+		}
+		if code := statusCode(t, restart.control, "/service/status"); code != http.StatusOK {
+			t.Fatalf("\nwanted:\n200 from the rebound control listener network address %s\ngot:\n%d", restart.control, code)
+		}
+	})
 }
