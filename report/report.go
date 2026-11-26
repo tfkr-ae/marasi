@@ -3,8 +3,8 @@
 // Reports are rendered using Go's text/template package and a
 // domain.ReportPayload. Templates have access to helper functions for common
 // reporting operations, including sorting and counting findings, retrieving
-// captured HTTP request-response pairs, truncating and sanitizing raw data,
-// and embedding image artifacts as data URIs.
+// captured HTTP request-response pairs and a streamed pair's stream
+// messages, truncating and sanitizing raw data, and embedding image artifacts as data URIs.
 //
 // A Generator manages the report templates stored in the application's
 // configuration directory. WithConfigDir creates the templates directory and
@@ -13,7 +13,8 @@
 //
 // Some template functions require access to persisted assessment data.
 // Generator therefore uses a Repository to retrieve request-response rows,
-// WebSocket transcripts, and artifact contents while rendering a report.
+// WebSocket transcripts, stream messages, and artifact contents while
+// rendering a report.
 //
 // Template execution uses missingkey=error, so references to missing map keys
 // cause rendering to fail rather than silently producing empty output.
@@ -68,7 +69,13 @@ type Repository interface {
 	GetConnectionByRequestID(requestID uuid.UUID) (*domain.WebSocketConnection, error)
 	// GetMessagesByRequestID retrieves WebSocket messages by their HTTP upgrade request ID.
 	GetMessagesByRequestID(requestID uuid.UUID) ([]*domain.WebSocketMessage, error)
+	// ListStreamMessages retrieves a page of a streamed pair's stream messages in the order they arrived.
+	ListStreamMessages(pairID uuid.UUID, cursor *uuid.UUID, limit int) ([]*domain.StreamMessage, *uuid.UUID, error)
 }
+
+// streamMessagePage is how many stream messages getStreamMessages reads at a
+// time.
+const streamMessagePage = 500
 
 // WebSocketTranscript contains a persisted WebSocket connection and its messages.
 type WebSocketTranscript struct {
@@ -476,8 +483,8 @@ func RestoreDefaultTemplate(generator domain.ReportGenerator) error {
 
 // FuncMap returns the functions made available to report templates.
 //
-// Some functions retrieve request-response rows, WebSocket transcripts, and
-// artifact data through the Generator's Repository. Template authors should
+// Some functions retrieve request-response rows, WebSocket transcripts,
+// stream messages, and artifact data through the Generator's Repository. Template authors should
 // therefore expect those functions to return execution errors when repository
 // operations fail.
 func (g *Generator) FuncMap() template.FuncMap {
@@ -564,6 +571,21 @@ func (g *Generator) FuncMap() template.FuncMap {
 				Connection: connection,
 				Messages:   messages,
 			}, nil
+		},
+		"getStreamMessages": func(pairID uuid.UUID) ([]*domain.StreamMessage, error) {
+			var messages []*domain.StreamMessage
+			var cursor *uuid.UUID
+			for {
+				page, next, err := g.repo.ListStreamMessages(pairID, cursor, streamMessagePage)
+				if err != nil {
+					return nil, fmt.Errorf("getting stream messages for pair %s: %w", pairID, err)
+				}
+				messages = append(messages, page...)
+				if next == nil {
+					return messages, nil
+				}
+				cursor = next
+			}
 		},
 		"artifactDataURI": func(metadata *domain.ArtifactMetadata) (string, error) {
 			if !strings.HasPrefix(metadata.MimeType, "image/") {

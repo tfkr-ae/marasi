@@ -1831,3 +1831,182 @@ func TestGeneratorValidate(t *testing.T) {
 		}
 	})
 }
+
+// pagedStreamRepo lists stream messages one at a time, so getStreamMessages
+// has to follow the cursor to read them all.
+type pagedStreamRepo struct {
+	*db.Repository
+}
+
+func (r pagedStreamRepo) ListStreamMessages(pairID uuid.UUID, cursor *uuid.UUID, _ int) ([]*domain.StreamMessage, *uuid.UUID, error) {
+	return r.Repository.ListStreamMessages(pairID, cursor, 1)
+}
+
+func insertTestStreamedPair(t *testing.T, repo *db.Repository, now time.Time) (uuid.UUID, []uuid.UUID) {
+	t.Helper()
+
+	pairID := testRequest(t, repo, nil)
+	insertTestResponseAndGet(t, repo, pairID, nil)
+	err := repo.RecordStreamedPair(&domain.StreamedPairRecord{
+		PairID: pairID,
+		State: domain.StreamedState{
+			Request:  &domain.StreamedDirectionState{Framing: "grpc", Ending: "complete"},
+			Response: &domain.StreamedDirectionState{Framing: "grpc"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+
+	flags := uint8(0)
+	var ids []uuid.UUID
+	for i, message := range []*domain.StreamMessage{
+		{Direction: domain.StreamDirectionRequest, Payload: []byte(`{"name":"marasi"}`), Metadata: map[string]any{"edited": true}},
+		{Direction: domain.StreamDirectionResponse, Payload: []byte{0x00, 0xff}, Compressed: true, Metadata: map[string]any{}},
+		{Direction: domain.StreamDirectionResponse, Payload: []byte("gone"), Metadata: map[string]any{"dropped": true}},
+	} {
+		message.ID, err = uuid.NewV7()
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		message.PairID = pairID
+		message.Framing = "grpc"
+		message.Flags = &flags
+		message.CreatedAt = now.Add(time.Duration(i+1) * time.Second)
+		if err := repo.InsertStreamMessage(message); err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		ids = append(ids, message.ID)
+	}
+	return pairID, ids
+}
+
+func TestGetStreamMessages(t *testing.T) {
+	t.Run("should return every stream message across pages in arrival order", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		pairID, want := insertTestStreamedPair(t, repo, time.Now())
+
+		generator, err := NewGenerator(pagedStreamRepo{repo})
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		fn := generator.FuncMap()["getStreamMessages"].(func(uuid.UUID) ([]*domain.StreamMessage, error))
+		messages, err := fn(pairID)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+
+		var got []uuid.UUID
+		for _, message := range messages {
+			got = append(got, message.ID)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("\nwanted:\n%v\ngot:\n%v", want, got)
+		}
+	})
+
+	t.Run("should return no messages for a pair that is not streamed", func(t *testing.T) {
+		repo, teardown := setupTestDB(t)
+		defer teardown()
+
+		pairID := testRequest(t, repo, nil)
+
+		generator, err := NewGenerator(repo)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		fn := generator.FuncMap()["getStreamMessages"].(func(uuid.UUID) ([]*domain.StreamMessage, error))
+		messages, err := fn(pairID)
+		if err != nil {
+			t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+		}
+		if len(messages) != 0 {
+			t.Fatalf("\nwanted:\n0 messages\ngot:\n%#v", messages)
+		}
+	})
+}
+
+func TestDefaultTemplateStreamMessages(t *testing.T) {
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+
+	now := time.Date(2026, time.November, 26, 12, 0, 0, 0, time.UTC)
+	pairID, _ := insertTestStreamedPair(t, repo, now)
+	plainID := testRequest(t, repo, nil)
+	insertTestResponseAndGet(t, repo, plainID, nil)
+
+	generator, err := NewGenerator(repo)
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	payload := &domain.ReportPayload{
+		Metadata: domain.ReportMetadata{
+			Title:     "gRPC Assessment",
+			Client:    "Test Client",
+			Type:      "Assessment",
+			Scope:     "marasi.app",
+			Assessor:  "Tester",
+			Start:     now,
+			End:       now.Add(time.Hour),
+			CreatedAt: now,
+		},
+		Findings: []*domain.Finding{
+			{
+				Title:     "gRPC authorization bypass",
+				Severity:  "High",
+				Requests:  []uuid.UUID{pairID, plainID},
+				Artifacts: []*domain.ArtifactMetadata{},
+			},
+		},
+		TestCases: []*domain.TestCase{
+			{
+				Title:    "gRPC authorization test",
+				Requests: []uuid.UUID{pairID},
+			},
+		},
+	}
+
+	out, err := generator.Execute([]byte(defaultTemplate), payload)
+	if err != nil {
+		t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+	}
+	report := string(out)
+
+	for _, want := range []string{
+		"##### Streamed Pair",
+		"| request | grpc | complete |",
+		"| response | grpc | open |",
+		"[Appendix B: Stream Messages](#stream-appendix-finding-1-request-1)",
+		"[Appendix B: Stream Messages](#stream-appendix-test-case-1-request-1)",
+		"# Appendix B: Stream Messages",
+		`<a id="stream-appendix-finding-1-request-1"></a>`,
+		`<a id="stream-appendix-test-case-1-request-1"></a>`,
+		"## Finding 1 - Request 1",
+		"## Test Case 1 - Request 1",
+		"| request | grpc | false |",
+		"| response | grpc | true |",
+		`{"name":"marasi"}`,
+		`\x00\xFF`,
+		"### ~~Message 3~~",
+		`"edited": true`,
+		`"dropped": true`,
+	} {
+		if !strings.Contains(report, want) {
+			t.Errorf("rendered report does not contain %q:\n%s", want, report)
+		}
+	}
+	if count := strings.Count(report, "# Appendix B: Stream Messages"); count != 1 {
+		t.Errorf("rendered report contains %d stream appendix headings, wanted 1:\n%s", count, report)
+	}
+	if count := strings.Count(report, "##### Streamed Pair"); count != 2 {
+		t.Errorf("rendered report contains %d streamed pair sections, wanted 2 (the plain pair has none):\n%s", count, report)
+	}
+	if strings.Contains(report, "Finding 1 - Request 2") {
+		t.Errorf("rendered report lists stream messages for a pair that is not streamed:\n%s", report)
+	}
+	if strings.Contains(report, "&#34;") {
+		t.Errorf("rendered report HTML-escapes stream payloads:\n%s", report)
+	}
+}
