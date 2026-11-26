@@ -57,8 +57,9 @@ func (w weighted) pick(rng *rand.Rand) int {
 // pairs of sessions, and are set so that, with the bursts, error pages,
 // redirects and excluded stretches added, the whole project comes to about
 // 40% JSON, 12% HTML, 15% JS, 5% CSS, 15% images, 3% fonts, 2% octet-stream
-// and 3% text. Redirects are all text/plain, as the proxy records them, so
-// text comes out higher.
+// and 3% text. Headerless 3xx responses (such as 304) fall back to text/plain,
+// while redirects with a Content-Type keep their own type (typically text/html
+// or text/plain).
 var contentTypes, contentTypeWeights = buildContentTypes()
 
 func buildContentTypes() ([]contentType, weighted) {
@@ -476,10 +477,14 @@ func (p *planner) planSessionPair(plan *pairPlan, i int, host int32, outage bool
 
 	switch {
 	case plan.status >= 300 && plan.status < 400:
-		// The proxy records every redirect as text/plain.
+		// 304 has no Content-Type and falls back to text/plain; redirects with a
+		// body store their own type, typically text/html or text/plain.
 		plan.ctype = contentTypeIndex("text/plain")
 		if plan.status != 304 {
 			plan.respSize = rng.IntN(200)
+			if plan.respSize%2 == 0 {
+				plan.ctype = contentTypeIndex("text/html")
+			}
 		}
 		plan.path = p.path(contentTypeIndex("text/html"), host)
 	case plan.status >= 400:
