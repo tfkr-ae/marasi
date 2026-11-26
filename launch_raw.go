@@ -198,7 +198,20 @@ func (proxy *Proxy) sendRaw(ctx context.Context, r *rawRequest, internal [][2]st
 			err = errors.Join(ctx.Err(), err)
 		}
 		if err != nil || res.upgrade == nil {
+			var client *clientConnection
+			if ctx.Err() == nil {
+				client = proxy.clientConnection(conn.LocalAddr().String())
+			}
 			conn.Close()
+			if client != nil {
+				// Wait for the proxy's handler of this connection to return,
+				// so a streamed pair has finished and queued its deferred
+				// response capture before a launch or Armory request ends.
+				select {
+				case <-client.served:
+				case <-ctx.Done():
+				}
+			}
 		}
 	}()
 

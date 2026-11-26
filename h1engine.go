@@ -83,8 +83,11 @@ func (engine *h1Engine) serve(l net.Listener) error {
 			return err
 		}
 		engine.handlers.Add(1)
+		remoteAddr := conn.RemoteAddr().String()
+		client := engine.proxy.claimClientConnection(remoteAddr)
 		go func() {
 			defer engine.handlers.Done()
+			defer engine.proxy.finishClientConnection(remoteAddr, client)
 			newH1Conn(engine, conn).serve()
 		}()
 	}
