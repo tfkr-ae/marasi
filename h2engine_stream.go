@@ -288,7 +288,18 @@ func (h *h2Conn) awaitResponse(st *h2Stream, req *http.Request, s *h2OriginStrea
 		return res, &wireResponse{h2: wire}, nil, nil
 	}
 	switch {
-	case errors.Is(s.err, errStreamGone), h.gone(st):
+	case h.gone(st):
+		return nil, nil, nil, errStreamGone
+	case s.err == errStreamGone:
+		// Only h2Origin.cancel finishes a stream with errStreamGone
+		// itself: Marasi reset the origin stream before its response, as
+		// a cancelled streamed pair does. The client's stream is reset
+		// with the same code; closing it instead would leave the client
+		// waiting, and the reset the canceller sends after would find it
+		// gone.
+		h.reset(st, s.cancelCode)
+		return nil, nil, nil, errStreamGone
+	case errors.Is(s.err, errStreamGone):
 		return nil, nil, nil, errStreamGone
 	case s.err != nil:
 		return nil, nil, nil, s.err

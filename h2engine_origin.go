@@ -89,10 +89,13 @@ type h2OriginStream struct {
 
 	// sending is set while the rest of a passed request body is sent,
 	// finished once the response finished, and cancelled once Marasi sent
-	// RST_STREAM on s; all guarded by h2Origin.mu.
-	sending   bool
-	finished  bool
-	cancelled bool
+	// RST_STREAM on s, with cancelCode; all guarded by h2Origin.mu.
+	// cancelCode is set before cancel finishes s with errStreamGone, so
+	// it can be read without the lock once done closed with that error.
+	sending    bool
+	finished   bool
+	cancelled  bool
+	cancelCode http2.ErrCode
 
 	passMu sync.Mutex
 	pass   *h2Passing
@@ -652,7 +655,7 @@ func (o *h2Origin) cancel(s *h2OriginStream, code http2.ErrCode) {
 		o.mu.Unlock()
 		return
 	}
-	s.cancelled = true
+	s.cancelled, s.cancelCode = true, code
 	o.mu.Unlock()
 	if body := s.streamed.Load(); body != nil {
 		body.in.close(&streamResetError{code: code})

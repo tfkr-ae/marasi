@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/net/http2"
 
 	"github.com/tfkr-ae/marasi/domain"
 )
@@ -303,6 +304,31 @@ func TestProxy_CancelStreamedPairWhoseOnlyDirectionEnded(t *testing.T) {
 		call.upstream.await(t, "the origin's reset", func(p *h2TestPeer) bool { return p.streams[call.id].reset != "" })
 		if client, origin := arrived(call.client, 1).reset, arrived(call.upstream, call.id).reset; client != "CANCEL" || origin != "CANCEL" {
 			t.Fatalf("the resets\nwanted:\nCANCEL to the client and the origin\ngot:\n%q to the client, %q to the origin", client, origin)
+		}
+	})
+
+	// The canceller resets the origin leg before the client's. The client's
+	// stream, still waiting for a response, must be reset by the origin
+	// leg's reset alone, or it is closed with nothing sent before the
+	// client's reset arrives.
+	t.Run("should reset the client's stream when only the origin leg of a call awaiting its response is reset", func(t *testing.T) {
+		call := startGRPCCall(t)
+		req := callPair(t, call)
+		call.client.data(1, true, grpcEnvelope(0, "only"))
+		call.upstream.await(t, "the request to end", func(p *h2TestPeer) bool { return p.streams[call.id].ended })
+
+		sp, ok := call.proxy.liveStreamedPair(req.ID)
+		if !ok {
+			t.Fatal("the pair is not live")
+		}
+		sp.mu.Lock()
+		sink := sp.directions[domain.StreamDirectionRequest].sink
+		sp.mu.Unlock()
+		sink.reset(http2.ErrCodeCancel)
+
+		call.client.await(t, "the client's reset", func(p *h2TestPeer) bool { return p.streams[1] != nil && p.streams[1].reset != "" })
+		if client := arrived(call.client, 1).reset; client != "CANCEL" {
+			t.Fatalf("the client's reset\nwanted:\nCANCEL\ngot:\n%q", client)
 		}
 	})
 }
