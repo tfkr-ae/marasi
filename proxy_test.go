@@ -3492,3 +3492,103 @@ func TestProxy_WriteToDBRefreshesStatisticsWhenIdle(t *testing.T) {
 		}
 	})
 }
+
+func TestNewProxyResponse_ContentType(t *testing.T) {
+	cases := []struct {
+		name        string
+		statusCode  int
+		status      string
+		contentType string
+		want        string
+	}{
+		{
+			name:        "should store parsed content type for 302 redirect with charset parameter",
+			statusCode:  http.StatusFound,
+			status:      "302 Found",
+			contentType: "text/html; charset=iso-8859-1",
+			want:        "text/html",
+		},
+		{
+			name:        "should lowercase parsed content type for 3xx redirect",
+			statusCode:  http.StatusTemporaryRedirect,
+			status:      "307 Temporary Redirect",
+			contentType: "Application/JSON; charset=UTF-8",
+			want:        "application/json",
+		},
+		{
+			name:       "should fall back to text/plain for 301 redirect with no Content-Type header",
+			statusCode: http.StatusMovedPermanently,
+			status:     "301 Moved Permanently",
+			want:       "text/plain",
+		},
+		{
+			name:        "should fall back to text/plain for 3xx redirect with unparseable Content-Type header",
+			statusCode:  http.StatusFound,
+			status:      "302 Found",
+			contentType: "text/html; =bad",
+			want:        "text/plain",
+		},
+		{
+			name:       "should fall back to text/plain for 304 response with no Content-Type header",
+			statusCode: http.StatusNotModified,
+			status:     "304 Not Modified",
+			want:       "text/plain",
+		},
+		{
+			name:        "should store parsed content type for 200 response",
+			statusCode:  http.StatusOK,
+			status:      "200 OK",
+			contentType: "text/html; charset=utf-8",
+			want:        "text/html",
+		},
+		{
+			name:       "should fall back to application/octet-stream for 200 response with no Content-Type header",
+			statusCode: http.StatusOK,
+			status:     "200 OK",
+			want:       "application/octet-stream",
+		},
+		{
+			name:        "should fall back to application/octet-stream for 200 response with unparseable Content-Type header",
+			statusCode:  http.StatusOK,
+			status:      "200 OK",
+			contentType: "application/json; =bad",
+			want:        "application/octet-stream",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://example.com/resource", nil)
+			res := &http.Response{
+				Proto:      "HTTP/1.1",
+				ProtoMajor: 1,
+				ProtoMinor: 1,
+				StatusCode: tc.statusCode,
+				Status:     tc.status,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    req,
+			}
+			if tc.contentType != "" {
+				res.Header.Set("Content-Type", tc.contentType)
+			}
+			pair := &Pair{
+				ID:       uuid.Must(uuid.NewV7()),
+				Request:  req,
+				Response: res,
+				Timing: PairTiming{
+					Requested: time.Now(),
+					Responded: time.Now(),
+				},
+			}
+
+			got, err := NewProxyResponse(pair)
+			if err != nil {
+				t.Fatalf("\nwanted:\nnil\ngot:\n%v", err)
+			}
+			if got.ContentType != tc.want {
+				t.Fatalf("\nwanted:\n%q\ngot:\n%q", tc.want, got.ContentType)
+			}
+		})
+	}
+}

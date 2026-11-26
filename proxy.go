@@ -628,19 +628,17 @@ func NewProxyResponse(pair *Pair) (*domain.ProxyResponse, error) {
 		return nil, fmt.Errorf("dumping response %s: %w", requestId, err)
 	}
 
-	// Handle redirects specifically
-	var contentType string
+	// Default content type when the response has no valid Content-Type header:
+	// text/plain for 3xx responses, application/octet-stream otherwise.
+	contentType := "application/octet-stream"
 	if res.StatusCode >= 300 && res.StatusCode < 400 {
-		contentType = "text/plain" // Redirects are just text
-	} else {
-		// Default for non-redirects
-		contentType = "application/octet-stream"
-		if ct := res.Header.Get("Content-Type"); ct != "" {
-			if parsedType, err := parseContentType(ct); err == nil {
-				contentType = parsedType
-			} else {
-				log.Printf("warning: %v, using default", err)
-			}
+		contentType = "text/plain"
+	}
+	if ct := res.Header.Get("Content-Type"); ct != "" {
+		if parsedType, err := parseContentType(ct); err == nil {
+			contentType = parsedType
+		} else {
+			log.Printf("warning: %v, using default", err)
 		}
 	}
 

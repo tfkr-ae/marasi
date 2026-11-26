@@ -477,7 +477,7 @@ func (b *builder) capturedPair(i int) *captured {
 	}
 	if plan.status == 101 {
 		head.WriteString("Connection: Upgrade\r\nUpgrade: websocket\r\nSec-Websocket-Accept: " + hexString(rng, 27) + "=\r\n")
-	} else {
+	} else if plan.status != 304 {
 		typeHeader := ct.name
 		if ct.kind != bodyBinary && rng.Float64() < 0.5 {
 			typeHeader += "; charset=utf-8"
