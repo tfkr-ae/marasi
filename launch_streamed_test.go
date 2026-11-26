@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -198,6 +199,180 @@ func TestProxy_LaunchStreamedPair(t *testing.T) {
 
 		if launch := waitLaunch(t, done); launch.Status != domain.LaunchFailed {
 			t.Fatalf("the launch\nwanted:\nfailed\ngot:\n%+v", launch)
+		}
+	})
+
+	// A streamed pair queues its deferred response capture in streamedPair.finish,
+	// after the final frame has already gone to the client. SendArmoryRequest and
+	// LaunchSync must not return before the server-side handler has finished and
+	// queued that response, or callers reading metadata.streamed right after see
+	// only the request's metadata.
+	t.Run("should wait for the streamed pair to finish before SendArmoryRequest returns", func(t *testing.T) {
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		unblock := func() { releaseOnce.Do(func() { close(release) }) }
+		defer unblock()
+		beforeStreamedPairFinish = func() {
+			close(entered)
+			<-release
+		}
+		t.Cleanup(func() { beforeStreamedPairFinish = nil })
+
+		origin := newH2TestOrigin(t)
+		h := startViewHarness(t, viewHarnessConfig{secureOrigin: true})
+		runID := uuid.Must(uuid.NewV7())
+		raw := "POST /test.Echo/Say HTTP/2\r\n:authority: " + origin.addr + "\r\ncontent-type: application/grpc\r\nte: trailers\r\n\r\n" + grpcEnvelope(0, "hello")
+
+		sent := make(chan error, 1)
+		go func() { sent <- h.proxy.SendArmoryRequest(context.Background(), raw, runID, true) }()
+
+		upstream := origin.accept(t)
+		sid := upstream.nthStream(t, 0)
+		upstream.stream(t, sid)
+		upstream.headers(sid, false, ":status", "200", "content-type", "application/grpc")
+		upstream.data(sid, false, grpcEnvelope(0, "world"))
+		upstream.headers(sid, true, "grpc-status", "0")
+
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for streamedPair.finish")
+		}
+		select {
+		case err := <-sent:
+			t.Fatalf("SendArmoryRequest returned before streamedPair.finish queued the response (err=%v)", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		unblock()
+		if err := <-sent; err != nil {
+			t.Fatalf("SendArmoryRequest() returned unexpected error: %v", err)
+		}
+		stored := capturedRequest(t, h)
+		if err := h.proxy.flushDBWrites(); err != nil {
+			t.Fatal(err)
+		}
+		metadata, err := h.proxy.TrafficRepo.GetMetadata(stored.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d := direction(t, metadata, "request"); d["framing"] != "grpc" || d["ending"] != "complete" {
+			t.Fatalf("metadata.streamed.request\nwanted:\ngrpc, complete\ngot:\n%v", d)
+		}
+	})
+
+	t.Run("should wait for the streamed pair to finish before LaunchSync returns over HTTP/2", func(t *testing.T) {
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		unblock := func() { releaseOnce.Do(func() { close(release) }) }
+		defer unblock()
+		beforeStreamedPairFinish = func() {
+			close(entered)
+			<-release
+		}
+		t.Cleanup(func() { beforeStreamedPairFinish = nil })
+
+		origin := newH2TestOrigin(t)
+		h := startViewHarness(t, viewHarnessConfig{secureOrigin: true})
+		raw := "POST /test.Echo/Collect HTTP/2\r\n:authority: " + origin.addr + "\r\ncontent-type: application/grpc\r\nte: trailers\r\n\r\n" + grpcEnvelope(0, "one")
+
+		done := launchH2(t, h, raw)
+		upstream := origin.accept(t)
+		sid := upstream.nthStream(t, 0)
+		upstream.stream(t, sid)
+		upstream.headers(sid, false, ":status", "200", "content-type", "application/grpc")
+		upstream.data(sid, false, grpcEnvelope(0, "reply"))
+		upstream.headers(sid, true, "grpc-status", "0")
+
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for streamedPair.finish")
+		}
+		select {
+		case launch := <-done:
+			t.Fatalf("LaunchSync returned before streamedPair.finish queued the response (%+v)", launch)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		unblock()
+		launch := waitLaunch(t, done)
+		if launch.Status != domain.LaunchCompleted {
+			t.Fatalf("the launch\nwanted:\ncompleted\ngot:\n%+v", launch)
+		}
+		metadata, err := h.proxy.TrafficRepo.GetMetadata(launch.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d := direction(t, metadata, "response"); d["framing"] != "grpc" || d["ending"] != "complete" {
+			t.Errorf("metadata.streamed.response\nwanted:\ngrpc, complete\ngot:\n%v", d)
+		}
+		if outcome, _ := metadata["launch"].(map[string]any); outcome["status"] != "completed" {
+			t.Errorf("metadata.launch\nwanted:\ncompleted\ngot:\n%v", metadata["launch"])
+		}
+	})
+
+	t.Run("should wait for the streamed pair to finish before LaunchSync returns over HTTP/1.1 when the connection closes", func(t *testing.T) {
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		unblock := func() { releaseOnce.Do(func() { close(release) }) }
+		defer unblock()
+		beforeStreamedPairFinish = func() {
+			close(entered)
+			<-release
+		}
+		t.Cleanup(func() { beforeStreamedPairFinish = nil })
+
+		origin := newH1ScriptedOrigin(t)
+		h := startViewHarness(t, viewHarnessConfig{})
+		launchpad, err := h.repository.CreateLaunchpad("grpc-web-close", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := grpcEnvelope(0, "one")
+		raw := "POST /test.Echo/Collect HTTP/1.1\r\nHost: " + origin.addr + "\r\nConnection: close\r\nContent-Type: application/grpc-web+proto\r\n\r\n" + body
+
+		done := make(chan domain.Launch, 1)
+		go func() {
+			launch, err := h.proxy.LaunchSync(context.Background(), raw, launchpad.String(), false)
+			if err != nil {
+				t.Errorf("LaunchSync() returned unexpected error: %v", err)
+			}
+			done <- launch
+		}()
+		upstream := origin.accept(t)
+		io.ReadFull(upstream.br, make([]byte, len(body)))
+		io.WriteString(upstream, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/grpc-web+proto\r\nTransfer-Encoding: chunked\r\n\r\n"+
+			chunk(grpcEnvelope(0, "reply"))+chunk(grpcEnvelope(0x80, "grpc-status: 0\r\n"))+"0\r\n\r\n")
+
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for streamedPair.finish")
+		}
+		select {
+		case launch := <-done:
+			t.Fatalf("LaunchSync returned before streamedPair.finish queued the response (%+v)", launch)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		unblock()
+		launch := waitLaunch(t, done)
+		if launch.Status != domain.LaunchCompleted {
+			t.Fatalf("the launch\nwanted:\ncompleted\ngot:\n%+v", launch)
+		}
+		metadata, err := h.proxy.TrafficRepo.GetMetadata(launch.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d := direction(t, metadata, "response"); d["framing"] != "grpc-web" || d["ending"] != "complete" {
+			t.Errorf("metadata.streamed.response\nwanted:\ngrpc-web, complete\ngot:\n%v", d)
+		}
+		if outcome, _ := metadata["launch"].(map[string]any); outcome["status"] != "completed" {
+			t.Errorf("metadata.launch\nwanted:\ncompleted\ngot:\n%v", metadata["launch"])
 		}
 	})
 }

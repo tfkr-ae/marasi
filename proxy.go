@@ -1064,9 +1064,12 @@ func (proxy *Proxy) close(ctx context.Context, closeDatabase bool) error {
 // Inbound sockets are watched and indexed by client address so a client disconnect can cancel its request.
 func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
 	var client *clientConnection
-	clientAddress := conn.RemoteAddr().String()
+	clientAddress := canonicalClientAddr(conn.RemoteAddr().String())
 	if inbound {
-		client = &clientConnection{WatchedConn: listener.NewWatchedConnection(conn)}
+		client = &clientConnection{
+			WatchedConn: listener.NewWatchedConnection(conn),
+			served:      make(chan struct{}),
+		}
 		conn = client.WatchedConn
 	}
 	proxy.connectionMu.Lock()
@@ -1083,10 +1086,14 @@ func (proxy *Proxy) trackConnection(conn net.Conn, inbound bool) net.Conn {
 	return listener.NewTrackedConnection(conn, func() {
 		proxy.connectionMu.Lock()
 		delete(proxy.connections, conn)
-		if inbound && proxy.clientConnections[clientAddress] == client {
+		unclaimed := inbound && !client.serving
+		if unclaimed && proxy.clientConnections[clientAddress] == client {
 			delete(proxy.clientConnections, clientAddress)
 		}
 		proxy.connectionMu.Unlock()
+		if unclaimed {
+			client.markServed()
+		}
 		if inbound {
 			proxy.connectionSessions.Done()
 		}
@@ -1118,7 +1125,36 @@ func (proxy *Proxy) watchClient(req *http.Request, ending BodyEnding) {
 func (proxy *Proxy) clientConnection(remoteAddr string) *clientConnection {
 	proxy.connectionMu.Lock()
 	defer proxy.connectionMu.Unlock()
-	return proxy.clientConnections[remoteAddr]
+	return proxy.clientConnections[canonicalClientAddr(remoteAddr)]
+}
+
+// claimClientConnection hands ownership of the tracked client connection at
+// remoteAddr to the engine's connection handler, so it stays indexed and its
+// served channel stays open until the handler returns.
+func (proxy *Proxy) claimClientConnection(remoteAddr string) *clientConnection {
+	proxy.connectionMu.Lock()
+	defer proxy.connectionMu.Unlock()
+	client := proxy.clientConnections[canonicalClientAddr(remoteAddr)]
+	if client != nil {
+		client.serving = true
+	}
+	return client
+}
+
+// finishClientConnection removes a claimed client connection from the index
+// and signals that its engine handler has returned, after every stream and
+// streamed pair on it has finished and queued its capture.
+func (proxy *Proxy) finishClientConnection(remoteAddr string, client *clientConnection) {
+	if client == nil {
+		return
+	}
+	clientAddress := canonicalClientAddr(remoteAddr)
+	proxy.connectionMu.Lock()
+	if proxy.clientConnections[clientAddress] == client {
+		delete(proxy.clientConnections, clientAddress)
+	}
+	proxy.connectionMu.Unlock()
+	client.markServed()
 }
 
 func (proxy *Proxy) dialTransport(ctx context.Context, network, address string) (net.Conn, error) {

@@ -693,11 +693,19 @@ func (pair *Pair) deferResponse(response *domain.ProxyResponse) bool {
 	return true
 }
 
+// beforeStreamedPairFinish, when set, runs at the start of streamedPair.finish.
+// Only tests set it, to hold a streamed pair open right before it queues its
+// deferred response capture.
+var beforeStreamedPairFinish func()
+
 // finish stores the deferred response capture with each streamed
 // direction's framing, message count, ending and trailers in
 // metadata.streamed, then announces the pair ended. The engine calls it
 // once both directions ended.
 func (sp *streamedPair) finish() {
+	if beforeStreamedPairFinish != nil {
+		beforeStreamedPairFinish()
+	}
 	sp.mu.Lock()
 	response := sp.response
 	sp.response = nil
