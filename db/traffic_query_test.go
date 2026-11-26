@@ -150,6 +150,13 @@ func TestTrafficRepo_ListTrafficQuery(t *testing.T) {
 		{query: `status_code <= 404`, want: "ca"},
 		{query: `status_code > 404`, want: "db"},
 		{query: `status_code >= 500`, want: "db"},
+		{query: `status_code = -1`, want: ""},
+		{query: `status_code != -1`, want: "edcba"},
+		{query: `status_code:*`, want: "dcba"},
+		{query: `NOT status_code:*`, want: "e"},
+		{query: `-status_code:*`, want: "e"},
+		{query: `status_code:* AND method = "GET"`, want: "ca"},
+		{query: `NOT status_code:* AND method = "GET"`, want: "e"},
 
 		{query: `requested_at >= "2024-01-01T10:30:00Z"`, want: "edcb"},
 		{query: `requested_at < "2024-01-01T14:30:00+04:00"`, want: "a"},
@@ -276,6 +283,11 @@ func invalidTrafficQueries() []invalidTrafficQuery {
 		{query: `host = 5`, message: `host needs a text value`, position: 8},
 		{query: `status_code = "x"`, message: `status_code needs a whole number`, position: 15},
 		{query: `status_code = 1.5`, message: `status_code needs a whole number`, position: 15},
+		{query: `status_code:200`, message: `operator : on status_code takes only *, as in status_code:*`, position: 1},
+		{query: `status_code:"200"`, message: `operator : on status_code takes only *, as in status_code:*`, position: 1},
+		{query: `status_code:ok`, message: `operator : on status_code takes only *, as in status_code:*`, position: 1},
+		{query: `host = "a" AND status_code:200`, message: `operator : on status_code takes only *, as in status_code:*`, position: 16},
+		{query: `status_code.x:*`, message: `field "status_code" has no member "x"`, position: 1},
 		{query: `requested_at > "yesterday"`, message: `"yesterday" is not an RFC 3339 timestamp`, position: 16},
 		{query: `requested_at > 5`, message: `requested_at needs an RFC 3339 timestamp`, position: 16},
 		{query: `metadata = "x"`, message: `compare a metadata key`, position: 1},
@@ -436,6 +448,47 @@ func TestTrafficRepo_ListTrafficQueryMetadataHasKey(t *testing.T) {
 			}
 			if got := idsOf(items); !reflect.DeepEqual(got, want) {
 				t.Fatalf("\nwanted:\n%v\ngot:\n%v", namesOf(ids, want), namesOf(ids, got))
+			}
+		})
+	}
+}
+
+func TestTrafficRepo_StatusCodePresenceCountAndSelection(t *testing.T) {
+	t.Parallel()
+	repo, teardown := setupTestDB(t)
+	defer teardown()
+	ids := seedQueryPairs(t, repo, queryTestPairs())
+	all := []uuid.UUID{ids["a"], ids["b"], ids["c"], ids["d"], ids["e"]}
+
+	for _, test := range []struct {
+		query string
+		want  string // names in order of all
+	}{
+		{query: `status_code:*`, want: "abcd"},
+		{query: `NOT status_code:*`, want: "e"},
+		{query: `-status_code:*`, want: "e"},
+		{query: `status_code = -1`, want: ""},
+	} {
+		t.Run(test.query, func(t *testing.T) {
+			count, err := repo.CountTraffic(domain.TrafficCountQuery{Text: test.query})
+			if err != nil {
+				t.Fatalf("CountTraffic(%q): %v", test.query, err)
+			}
+			if count.Count != len(test.want) {
+				t.Fatalf("CountTraffic(%q)\nwanted:\n%d\ngot:\n%d", test.query, len(test.want), count.Count)
+			}
+
+			sel := domain.Selection{Query: &domain.SelectionQuery{Text: test.query, AsOf: ids["e"]}}
+			got, err := repo.SelectionIncludes(sel, all)
+			if err != nil {
+				t.Fatalf("SelectionIncludes(%q): %v", test.query, err)
+			}
+			want := make([]uuid.UUID, 0, len(test.want))
+			for _, name := range test.want {
+				want = append(want, ids[string(name)])
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("SelectionIncludes(%q)\nwanted:\n%v\ngot:\n%v", test.query, namesOf(ids, want), namesOf(ids, got))
 			}
 		})
 	}

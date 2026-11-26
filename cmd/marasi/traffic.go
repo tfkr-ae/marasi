@@ -72,7 +72,9 @@ number, its # in capture order, then its id.
       example number = 10 or number > 500. Numbers start at 1, never
       change and are never reused, so deleted pairs leave gaps.
   status_code
-      = != < <= > >=, for example status_code >= 500.
+      = != < <= > >=, for example status_code >= 500. status_code:*
+      matches pairs that have a response, and NOT status_code:* matches
+      in-flight pairs.
   length
       = != < <= > >= against the stored response body's length in bytes,
       for example length > 100000. It counts the body as stored, so a

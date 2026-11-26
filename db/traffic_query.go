@@ -32,7 +32,8 @@ const (
 	// fieldExactText fields compare with = and !=, keep exact case, and allow
 	// a * wildcard at the start or end of the value.
 	fieldExactText trafficFieldKind = iota
-	// fieldInteger fields compare with = != < <= > >=.
+	// fieldInteger fields compare with = != < <= > >=, and with :* when
+	// hasPresence is set.
 	fieldInteger
 	// fieldTimestamp fields compare with = != < <= > >= against RFC 3339 values.
 	fieldTimestamp
@@ -134,6 +135,8 @@ type trafficField struct {
 	// present fields match only pairs that have a value, so != leaves out a
 	// pair with none, as every other comparison does.
 	present bool
+	// hasPresence fields accept :* to match pairs that have a value.
+	hasPresence bool
 }
 
 // trafficFields declares the fields a traffic query can name.
@@ -162,8 +165,9 @@ var trafficFields = map[string]trafficField{
 	"grpc_status": {kind: fieldInteger, column: "grpc_status", present: true},
 	// streamed:* is a streamed pair, either direction streamed.
 	"streamed": {kind: fieldStreamed},
-	// In-flight pairs store -1. Treat that as no status code.
-	"status_code": {kind: fieldInteger, column: "nullif(status_code, -1)"},
+	// In-flight pairs store -1. Treat that as no status code; status_code:*
+	// matches pairs with a response.
+	"status_code": {kind: fieldInteger, column: "nullif(status_code, -1)", hasPresence: true},
 	// The size sort's expression, so the length index serves it. A pair
 	// with no response has a NULL length.
 	"length":       {kind: fieldInteger, column: lengthKey},
@@ -555,13 +559,26 @@ func (t *queryTranslator) indexDriven(e *expr.Expr) bool {
 	}
 }
 
-// has translates field:value, which searches one indexed text part.
+// has translates field:value, which searches one indexed text part or checks
+// presence with :*.
 func (t *queryTranslator) has(e, lhs, rhs *expr.Expr) (string, error) {
 	name, field, path, err := t.field(lhs)
 	if err != nil {
 		return "", err
 	}
 	switch field.kind {
+	case fieldInteger:
+		if !field.hasPresence {
+			break
+		}
+		if len(path) > 0 {
+			return "", t.errorAt(lhs, "field %q has no member %q", name, path[0])
+		}
+		// The parser reads status_code:* as the string "*".
+		if rhs.GetConstExpr().GetStringValue() != "*" {
+			return "", t.errorAt(e, "operator : on %s takes only *, as in %s:*; use = or another comparison", name, name)
+		}
+		return field.column + " IS NOT NULL", nil
 	case fieldIndexedText:
 		if len(path) > 0 {
 			return "", t.errorAt(lhs, "field %q has no member %q", name, path[0])
