@@ -89,6 +89,22 @@ created: {{.Metadata.CreatedAt.Format "2006-01-02 15:04:05"}}
 WebSocket messages are included in [Appendix A: WebSocket Messages](#appendix-finding-{{ inc $index }}-request-{{ inc $reqIndex }}).
 {{- end }} {{/* websocket if */}}
 
+{{- if $row.Streamed }}
+
+##### Streamed Pair
+
+| Direction | Framing | Ending |
+|-|-|-|
+{{- if $row.Streamed.Request }}
+| request | {{ $row.Streamed.Request.Framing }} | {{ or $row.Streamed.Request.Ending "open" }} |
+{{- end }}
+{{- if $row.Streamed.Response }}
+| response | {{ $row.Streamed.Response.Framing }} | {{ or $row.Streamed.Response.Ending "open" }} |
+{{- end }}
+
+A streamed direction's body is carried as stream messages, so the raw request or response above holds only its head. The messages are included in [Appendix B: Stream Messages](#stream-appendix-finding-{{ inc $index }}-request-{{ inc $reqIndex }}).
+{{- end }} {{/* streamed if */}}
+
 {{- end }} {{/* requests range */}}
 {{- end }} {{/* requests if */}}
 
@@ -171,6 +187,22 @@ WebSocket messages are included in [Appendix A: WebSocket Messages](#appendix-fi
 
 WebSocket messages are included in [Appendix A: WebSocket Messages](#appendix-test-case-{{ inc $testCaseIndex }}-request-{{ inc $reqIndex }}).
 {{- end }} {{/* test case websocket if */}}
+
+{{- if $row.Streamed }}
+
+##### Streamed Pair
+
+| Direction | Framing | Ending |
+|-|-|-|
+{{- if $row.Streamed.Request }}
+| request | {{ $row.Streamed.Request.Framing }} | {{ or $row.Streamed.Request.Ending "open" }} |
+{{- end }}
+{{- if $row.Streamed.Response }}
+| response | {{ $row.Streamed.Response.Framing }} | {{ or $row.Streamed.Response.Ending "open" }} |
+{{- end }}
+
+A streamed direction's body is carried as stream messages, so the raw request or response above holds only its head. The messages are included in [Appendix B: Stream Messages](#stream-appendix-test-case-{{ inc $testCaseIndex }}-request-{{ inc $reqIndex }}).
+{{- end }} {{/* test case streamed if */}}
 
 {{- end }} {{/* test case requests range */}}
 {{- end }} {{/* test case requests if */}}
@@ -279,3 +311,88 @@ No WebSocket messages were captured.
 {{- end }} {{/* test case websocket if */}}
 {{- end }} {{/* test case requests range */}}
 {{- end }} {{/* appendix test cases range */}}
+
+{{- $streamAppendixStarted := false }}
+{{- range $findingIndex, $finding := .Findings }}
+{{- range $requestIndex, $row := ($finding.Requests | getRows) }}
+{{- if $row.Streamed }}
+{{- if not $streamAppendixStarted }}
+
+# Appendix B: Stream Messages
+{{- $streamAppendixStarted = true }}
+{{- end }}
+
+<a id="stream-appendix-finding-{{ inc $findingIndex }}-request-{{ inc $requestIndex }}"></a>
+
+## Finding {{ inc $findingIndex }} - Request {{ inc $requestIndex }}
+
+{{- range $messageIndex, $message := (getStreamMessages $row.Request.ID) }}
+{{- $dropped := index $message.Metadata "dropped" }}
+
+### {{ if $dropped }}~~Message {{ inc $messageIndex }}~~{{ else }}Message {{ inc $messageIndex }}{{ end }}
+
+| Time | Direction | Framing | Compressed |
+|-|-|-|:-:|
+| {{ $message.CreatedAt.Local.Format "2006-01-02 15:04:05.000" }} | {{ $message.Direction }} | {{ $message.Framing }} | {{ $message.Compressed }} |
+
+```text
+{{ truncate $message.Payload $.Metadata.TruncateLength | cleanPrint }}
+```
+
+{{- if $message.Metadata }}
+
+#### Metadata
+
+```json
+{{ toJSON $message.Metadata }}
+```
+{{- end }}
+{{- else }}
+
+No stream messages were captured.
+{{- end }} {{/* finding stream messages range */}}
+{{- end }} {{/* finding streamed if */}}
+{{- end }} {{/* finding stream requests range */}}
+{{- end }} {{/* stream appendix findings range */}}
+
+{{- range $testCaseIndex, $testCase := .TestCases }}
+{{- range $requestIndex, $row := ($testCase.Requests | getRows) }}
+{{- if $row.Streamed }}
+{{- if not $streamAppendixStarted }}
+
+# Appendix B: Stream Messages
+{{- $streamAppendixStarted = true }}
+{{- end }}
+
+<a id="stream-appendix-test-case-{{ inc $testCaseIndex }}-request-{{ inc $requestIndex }}"></a>
+
+## Test Case {{ inc $testCaseIndex }} - Request {{ inc $requestIndex }}
+
+{{- range $messageIndex, $message := (getStreamMessages $row.Request.ID) }}
+{{- $dropped := index $message.Metadata "dropped" }}
+
+### {{ if $dropped }}~~Message {{ inc $messageIndex }}~~{{ else }}Message {{ inc $messageIndex }}{{ end }}
+
+| Time | Direction | Framing | Compressed |
+|-|-|-|:-:|
+| {{ $message.CreatedAt.Local.Format "2006-01-02 15:04:05.000" }} | {{ $message.Direction }} | {{ $message.Framing }} | {{ $message.Compressed }} |
+
+```text
+{{ truncate $message.Payload $.Metadata.TruncateLength | cleanPrint }}
+```
+
+{{- if $message.Metadata }}
+
+#### Metadata
+
+```json
+{{ toJSON $message.Metadata }}
+```
+{{- end }}
+{{- else }}
+
+No stream messages were captured.
+{{- end }} {{/* test case stream messages range */}}
+{{- end }} {{/* test case streamed if */}}
+{{- end }} {{/* test case stream requests range */}}
+{{- end }} {{/* stream appendix test cases range */}}
