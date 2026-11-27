@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -636,6 +637,36 @@ func addTrafficRoutes(mux routeMux, proxy *marasi.Proxy, events *eventBroadcaste
 			return
 		}
 		writeJSON(w, r, http.StatusOK, joinedRequest{ID: joined.ID, Raw: joined.Raw, Streamed: joined.Streamed, Messages: joined.Messages, Omitted: joined.Omitted})
+	})
+	// GET /traffic/{id}/response/joined streams an ended SSE response: the
+	// stored response head followed by its forwarded decoded SSE events in
+	// stream order (marasi.Proxy.OpenJoinedSSEResponse).
+	mux.HandleFunc("GET /traffic/{id}/response/joined", func(w http.ResponseWriter, r *http.Request) {
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeJSON(w, r, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
+		joined, err := proxy.OpenJoinedSSEResponse(id)
+		switch {
+		case errors.Is(err, marasi.ErrStreamedResponseOpen):
+			writeRefusal(w, r, http.StatusConflict, "stream_response_open", "the streamed pair's SSE response direction is still being carried; join it once the response ends")
+			return
+		case errors.Is(err, marasi.ErrResponseNotSSE):
+			writeRefusal(w, r, http.StatusNotFound, "response_not_sse", "the pair has no SSE response")
+			return
+		case errors.Is(err, domain.ErrPairNotFound), errors.Is(err, marasi.ErrExtensionRepoNotFound):
+			writeJSON(w, r, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		case err != nil:
+			writeJSON(w, r, http.StatusInternalServerError, map[string]string{"error": "internal_server_error"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		if _, err := joined.WriteToContext(r.Context(), w); err != nil && r.Context().Err() == nil {
+			fmt.Fprintf(os.Stderr, "streaming joined SSE response %s: %v\n", id, err)
+		}
 	})
 	mux.HandleFunc("GET /traffic/{id}/metadata", func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(r.PathValue("id"))
