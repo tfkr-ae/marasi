@@ -146,9 +146,11 @@ type streamedPair struct {
 	cancelledCh chan struct{}
 	// live is set once the pair is among proxy.streamedPairs (goLive);
 	// refused once its streamed response was not admitted in the project
-	// its request was captured in, so it is never carried.
-	live    bool
-	refused bool
+	// its request was captured in, so it is never carried; finished once
+	// finish queued the final streamed state and deferred response capture.
+	live     bool
+	refused  bool
+	finished bool
 }
 
 // streamedDirection is one streamed direction's record.
@@ -758,6 +760,7 @@ func (sp *streamedPair) finish() {
 		proxy.DBWriteChannel <- &domain.StreamedPairRecord{PairID: sp.id, State: state}
 	}
 	if response == nil {
+		sp.markFinished()
 		return
 	}
 	// The map the chain left is shared with the request capture: the
@@ -773,9 +776,19 @@ func (sp *streamedPair) finish() {
 		response.GRPCStatus = grpcStatus
 	}
 	proxy.DBWriteChannel <- response
+	sp.markFinished()
 	if proxy.OnResponse != nil {
 		proxy.OnResponse(*response)
 	}
+}
+
+// markFinished records that finish has queued the pair's final streamed state
+// and deferred response capture for storage, before the response and end
+// events fire.
+func (sp *streamedPair) markFinished() {
+	sp.mu.Lock()
+	sp.finished = true
+	sp.mu.Unlock()
 }
 
 // logOptions ties a proxy log to the pair.
