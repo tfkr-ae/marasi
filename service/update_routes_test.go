@@ -1,6 +1,10 @@
 package service
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -12,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -27,13 +32,16 @@ type installGitHub struct {
 	server *httptest.Server
 	public string
 
-	mu        sync.Mutex
-	private   minisign.PrivateKey
-	release   map[string]any
-	build     []byte
-	gate      chan struct{}
-	started   chan struct{}
-	downloads int
+	mu             sync.Mutex
+	private        minisign.PrivateKey
+	release        map[string]any
+	assets         map[string][]byte
+	releaseStatus  int
+	releaseHeaders http.Header
+	gate           chan struct{}
+	started        chan struct{}
+	downloads      int
+	downloaded     []string
 }
 
 func installAssetName() string {
@@ -42,6 +50,54 @@ func installAssetName() string {
 		name += ".exe"
 	}
 	return name
+}
+
+func installArchiveName() string {
+	base := "marasi-" + runtime.GOOS + "-" + runtime.GOARCH
+	if runtime.GOOS == "linux" {
+		return base + ".tar.gz"
+	}
+	return base + ".zip"
+}
+
+func makePlatformArchive(t *testing.T, content []byte) []byte {
+	t.Helper()
+	entryName := "marasi"
+	if runtime.GOOS == "windows" {
+		entryName = "marasi.exe"
+	}
+	var buf bytes.Buffer
+	if runtime.GOOS == "linux" {
+		gz := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(gz)
+		if err := tw.WriteHeader(&tar.Header{Name: entryName, Mode: 0o755, Size: int64(len(content)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(content); err != nil {
+			t.Fatal(err)
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := gz.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	zw := zip.NewWriter(&buf)
+	hdr := &zip.FileHeader{Name: entryName, Method: zip.Deflate}
+	hdr.SetMode(0o755)
+	w, err := zw.CreateHeader(hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 func newInstallGitHub(t *testing.T) *installGitHub {
@@ -63,20 +119,53 @@ func newInstallGitHub(t *testing.T) *installGitHub {
 // publish makes tag the latest release, with build as its asset for this
 // platform.
 func (g *installGitHub) publish(tag, build string) {
+	g.publishAssets(tag, map[string][]byte{installAssetName(): []byte(build)})
+}
+
+func (g *installGitHub) publishAssets(tag string, files map[string][]byte) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.build = []byte(build)
+	g.releaseStatus = 0
+	g.releaseHeaders = nil
+	g.assets = map[string][]byte{}
 	base := g.server.URL + "/download/" + tag + "/"
+	assets := []map[string]any{
+		{"name": "checksums.txt", "browser_download_url": base + "checksums.txt", "size": 100},
+		{"name": "checksums.txt.minisig", "browser_download_url": base + "checksums.txt.minisig", "size": 100},
+	}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		content := files[name]
+		g.assets[name] = content
+		assets = append(assets, map[string]any{
+			"name":                 name,
+			"browser_download_url": base + "asset/" + name,
+			"size":                 len(content),
+		})
+	}
 	g.release = map[string]any{
 		"tag_name": tag, "name": tag, "body": "notes for " + tag,
 		"html_url":     "https://github.com/tfkr-ae/marasi/releases/tag/" + tag,
 		"published_at": time.Date(2026, 10, 18, 6, 0, 0, 0, time.UTC),
-		"assets": []map[string]any{
-			{"name": "checksums.txt", "browser_download_url": base + "checksums.txt", "size": 100},
-			{"name": "checksums.txt.minisig", "browser_download_url": base + "checksums.txt.minisig", "size": 100},
-			{"name": installAssetName(), "browser_download_url": base + "build", "size": len(build)},
-		},
+		"assets":       assets,
 	}
+}
+
+func (g *installGitHub) failRelease(status int, headers http.Header) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.releaseStatus = status
+	g.releaseHeaders = headers
+}
+
+func (g *installGitHub) downloadedNames() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]string(nil), g.downloaded...)
 }
 
 // hold makes build downloads wait after half the build until the returned
@@ -97,15 +186,31 @@ func (g *installGitHub) downloadCount() int {
 }
 
 func (g *installGitHub) checksums() []byte {
-	sum := sha256.Sum256(g.build)
-	return []byte(hex.EncodeToString(sum[:]) + "  " + installAssetName() + "\n")
+	names := make([]string, 0, len(g.assets))
+	for name := range g.assets {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	var b strings.Builder
+	for _, name := range names {
+		sum := sha256.Sum256(g.assets[name])
+		fmt.Fprintf(&b, "%s  %s\n", hex.EncodeToString(sum[:]), name)
+	}
+	return []byte(b.String())
 }
 
 func (g *installGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
-	release, build, gate := g.release, g.build, g.gate
+	release, gate, releaseStatus, releaseHeaders := g.release, g.gate, g.releaseStatus, g.releaseHeaders
 	g.mu.Unlock()
 	switch {
+	case r.URL.Path == "/releases/latest" && releaseStatus != 0:
+		for k, vals := range releaseHeaders {
+			for _, v := range vals {
+				w.Header().Add(k, v)
+			}
+		}
+		http.Error(w, http.StatusText(releaseStatus), releaseStatus)
 	case r.URL.Path == "/releases/latest" && release != nil:
 		_ = json.NewEncoder(w).Encode(release)
 	case strings.HasSuffix(r.URL.Path, "/checksums.txt"):
@@ -118,14 +223,23 @@ func (g *installGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		signature := minisign.Sign(g.private, g.checksums())
 		g.mu.Unlock()
 		_, _ = w.Write(signature)
-	case strings.HasSuffix(r.URL.Path, "/build"):
+	case strings.Contains(r.URL.Path, "/asset/"):
+		_, name, _ := strings.Cut(r.URL.Path, "/asset/")
 		g.mu.Lock()
-		g.downloads++
+		content, ok := g.assets[name]
+		if ok {
+			g.downloads++
+			g.downloaded = append(g.downloaded, name)
+		}
 		g.mu.Unlock()
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
 		g.started <- struct{}{}
-		w.Header().Set("Content-Length", fmt.Sprint(len(build)))
-		half := len(build) / 2
-		_, _ = w.Write(build[:half])
+		w.Header().Set("Content-Length", fmt.Sprint(len(content)))
+		half := len(content) / 2
+		_, _ = w.Write(content[:half])
 		if gate != nil {
 			w.(http.Flusher).Flush()
 			select {
@@ -134,7 +248,7 @@ func (g *installGitHub) serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		_, _ = w.Write(build[half:])
+		_, _ = w.Write(content[half:])
 	default:
 		http.NotFound(w, r)
 	}
@@ -530,5 +644,88 @@ func TestUpdateInstallIsRefusedOnceTheInstanceStops(t *testing.T) {
 	}
 	if got := github.downloadCount(); got != 0 {
 		t.Fatalf("\nwanted:\nno download\ngot:\n%d", got)
+	}
+}
+
+func TestUpdateInstallAcceptsArchiveOnlyRelease(t *testing.T) {
+	github := newInstallGitHub(t)
+	archive := makePlatformArchive(t, []byte("archive-only build 18.10.2026"))
+	github.publishAssets("18.10.2026", map[string][]byte{
+		installArchiveName(): archive,
+	})
+	target := installedBuildFile(t)
+	server := newUpdateServer(t, t.TempDir(), target, "work", github)
+	events := server.events.subscribe()
+
+	response := requestUpdate(server, http.MethodPost, "/update/install", "")
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("\nwanted:\n202\ngot:\n%d %s", response.Code, response.Body.String())
+	}
+	nextUpdateEvent(t, events, "update.installed")
+	if got := readFile(t, target); got != "archive-only build 18.10.2026" {
+		t.Fatalf("\nwanted:\narchive-only build 18.10.2026\ngot:\n%q", got)
+	}
+	if got := github.downloadedNames(); len(got) != 1 || got[0] != installArchiveName() {
+		t.Fatalf("\nwanted:\n[%s]\ngot:\n%v", installArchiveName(), got)
+	}
+}
+
+func TestUpdateInstallPrefersArchiveWhenBothAssetsArePublished(t *testing.T) {
+	github := newInstallGitHub(t)
+	archive := makePlatformArchive(t, []byte("archived build 18.10.2026"))
+	github.publishAssets("18.10.2026", map[string][]byte{
+		installAssetName():   []byte("bare build 18.10.2026"),
+		installArchiveName(): archive,
+	})
+	target := installedBuildFile(t)
+	server := newUpdateServer(t, t.TempDir(), target, "work", github)
+	events := server.events.subscribe()
+
+	response := requestUpdate(server, http.MethodPost, "/update/install", "")
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("\nwanted:\n202\ngot:\n%d %s", response.Code, response.Body.String())
+	}
+	nextUpdateEvent(t, events, "update.installed")
+	if got := readFile(t, target); got != "archived build 18.10.2026" {
+		t.Fatalf("\nwanted:\narchived build 18.10.2026\ngot:\n%q", got)
+	}
+	if got := github.downloadedNames(); len(got) != 1 || got[0] != installArchiveName() {
+		t.Fatalf("\nwanted:\n[%s]\ngot:\n%v", installArchiveName(), got)
+	}
+}
+
+func TestUpdateInstallRefusesReleaseWithNoPlatformBuild(t *testing.T) {
+	github := newInstallGitHub(t)
+	github.publishAssets("18.10.2026", map[string][]byte{
+		"marasi-plan9-386": []byte("wrong platform"),
+	})
+	target := installedBuildFile(t)
+	server := newUpdateServer(t, t.TempDir(), target, "work", github)
+
+	response := requestUpdate(server, http.MethodPost, "/update/install", "")
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"error":"no_build"`) {
+		t.Fatalf("\nwanted:\n409 no_build\ngot:\n%d %s", response.Code, response.Body.String())
+	}
+	if got := github.downloadCount(); got != 0 {
+		t.Fatalf("\nwanted:\nno download\ngot:\n%d", got)
+	}
+}
+
+func TestUpdateRoutesSurfaceGitHubRateLimit(t *testing.T) {
+	github := newInstallGitHub(t)
+	github.failRelease(http.StatusForbidden, http.Header{
+		"X-RateLimit-Remaining": {"0"},
+		"X-RateLimit-Reset":     {"1795665600"},
+	})
+	target := installedBuildFile(t)
+	server := newUpdateServer(t, t.TempDir(), target, "work", github)
+
+	check := requestUpdate(server, http.MethodPost, "/update/check", "")
+	if check.Code != http.StatusOK || !strings.Contains(check.Body.String(), "GitHub rate limit exceeded") || !strings.Contains(check.Body.String(), "2026-11-26T04:00:00Z") {
+		t.Fatalf("\nwanted:\n200 with rate-limit error in last_check\ngot:\n%d %s", check.Code, check.Body.String())
+	}
+	install := requestUpdate(server, http.MethodPost, "/update/install", "")
+	if install.Code != http.StatusBadGateway || !strings.Contains(install.Body.String(), `"error":"check_failed"`) || !strings.Contains(install.Body.String(), "GitHub rate limit exceeded") {
+		t.Fatalf("\nwanted:\n502 check_failed with rate-limit message\ngot:\n%d %s", install.Code, install.Body.String())
 	}
 }
