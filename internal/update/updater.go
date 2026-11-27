@@ -39,13 +39,14 @@ type Config struct {
 // Updater finds, verifies and installs updates for one installed build. It
 // holds no state between calls and is safe for concurrent use.
 type Updater struct {
-	installed Build
-	key       minisign.PublicKey
-	baseURL   string
-	client    *http.Client
-	goos      string
-	goarch    string
-	team      TeamReader
+	installed    Build
+	key          minisign.PublicKey
+	baseURL      string
+	client       *http.Client
+	goos         string
+	goarch       string
+	team         TeamReader
+	maxBuildSize int64 // overrides maxBuildSize in tests when > 0
 }
 
 // New returns an Updater for the build cfg describes. It returns ErrDevBuild
@@ -93,7 +94,7 @@ func New(cfg Config) (*Updater, error) {
 // Installed is the installed build.
 func (u *Updater) Installed() Build { return u.installed }
 
-// AssetName is the release asset this platform installs, such as
+// AssetName is the bare executable asset this platform installs, such as
 // "marasi-linux-amd64" or "marasi-windows-amd64.exe".
 func (u *Updater) AssetName() string {
 	name := "marasi-" + u.goos + "-" + u.goarch
@@ -101,6 +102,46 @@ func (u *Updater) AssetName() string {
 		name += ".exe"
 	}
 	return name
+}
+
+// ArchiveAssetName is the single-file archive asset this platform prefers,
+// such as "marasi-linux-amd64.tar.gz", "marasi-darwin-arm64.zip", or
+// "marasi-windows-amd64.zip" (scripts/archive-cli.sh). It is "" for platforms
+// without a published archive format.
+func (u *Updater) ArchiveAssetName() string {
+	base := "marasi-" + u.goos + "-" + u.goarch
+	switch u.goos {
+	case "darwin", "windows":
+		return base + ".zip"
+	case "linux":
+		return base + ".tar.gz"
+	default:
+		return ""
+	}
+}
+
+// BuildAsset returns the preferred release asset for this platform present in
+// c: the single-file archive when published, otherwise the bare executable.
+func (u *Updater) BuildAsset(c Candidate) (Asset, bool) {
+	if a, ok := u.archiveAsset(c); ok {
+		return a, true
+	}
+	return c.Asset(u.AssetName())
+}
+
+func (u *Updater) archiveAsset(c Candidate) (Asset, bool) {
+	name := u.ArchiveAssetName()
+	if name == "" {
+		return Asset{}, false
+	}
+	return c.Asset(name)
+}
+
+func (u *Updater) buildSizeLimit() int64 {
+	if u.maxBuildSize > 0 {
+		return u.maxBuildSize
+	}
+	return maxBuildSize
 }
 
 // Latest returns the latest build on channel, even when it is older than

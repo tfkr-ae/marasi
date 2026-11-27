@@ -410,7 +410,7 @@ func (s *Server) startInstall(w http.ResponseWriter, r *http.Request, c update.C
 		writeUpdateError(w, r, http.StatusInternalServerError, "install_failed", "the installed build could not be found")
 		return
 	}
-	if _, ok := c.Asset(updater.AssetName()); !ok {
+	if _, ok := updater.BuildAsset(c); !ok {
 		writeJSON(w, r, http.StatusConflict, updateErrorBody{Error: "no_build", Message: fmt.Sprintf("no build for this platform (%s)", updater.AssetName()), Page: c.Page})
 		return
 	}

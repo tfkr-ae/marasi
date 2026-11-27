@@ -141,10 +141,10 @@ func (in *install) run(ctx context.Context, target string) error {
 	if err := CheckWritable(target); err != nil {
 		return &Error{Kind: KindPermissions, Step: StepInstall, Err: err}
 	}
-	name := in.u.AssetName()
-	build, ok := in.c.Asset(name)
-	if !ok {
-		return fail(KindNoBuild, StepDownload, "no build for this platform (%s)", name)
+	archiveAsset, hasArchive := in.u.archiveAsset(in.c)
+	bareAsset, hasBare := in.c.Asset(in.u.AssetName())
+	if !hasArchive && !hasBare {
+		return fail(KindNoBuild, StepDownload, "no build for this platform (%s)", in.u.AssetName())
 	}
 	checksumsURL, okSums := in.c.Asset(checksumsAsset)
 	signatureURL, okSig := in.c.Asset(signatureAsset)
@@ -152,7 +152,11 @@ func (in *install) run(ctx context.Context, target string) error {
 		return fail(KindSignature, StepVerify, "the release is not signed: it has no %s and %s", checksumsAsset, signatureAsset)
 	}
 
-	in.total = build.Size
+	if hasArchive {
+		in.total = archiveAsset.Size
+	} else {
+		in.total = bareAsset.Size
+	}
 	in.enter(StepDownload)
 	checksums, err := in.u.downloadSmall(ctx, checksumsURL)
 	if err != nil {
@@ -167,21 +171,22 @@ func (in *install) run(ctx context.Context, target string) error {
 	if !minisign.Verify(in.u.key, checksums, signature) {
 		return fail(KindSignature, StepVerify, "the release's checksums are not signed by the Marasi signing key")
 	}
-	want, ok := parseChecksums(checksums)[name]
-	if !ok {
-		return fail(KindChecksum, StepVerify, "the signed checksums do not list %s", name)
+	build, want, isArchive, err := pickBuildAsset(parseChecksums(checksums), archiveAsset, hasArchive, bareAsset, hasBare)
+	if err != nil {
+		return err
 	}
+	in.total = build.Size
 
 	dir := filepath.Dir(target)
 	temp, err := os.CreateTemp(dir, ".marasi-update-*")
 	if err != nil {
 		return fail(KindInstall, StepDownload, "making room for the download beside %s: %w", target, err)
 	}
-	swapped := false
+	downloadPath := temp.Name()
+	keepDownload := false
 	defer func() {
-		if !swapped {
-			temp.Close()
-			os.Remove(temp.Name())
+		if !keepDownload {
+			os.Remove(downloadPath)
 		}
 	}()
 	got, err := in.downloadBuild(ctx, build, temp)
@@ -194,10 +199,40 @@ func (in *install) run(ctx context.Context, target string) error {
 
 	in.enter(StepVerify)
 	if got != want {
-		return fail(KindChecksum, StepVerify, "the downloaded %s does not match its signed checksum", name)
+		return fail(KindChecksum, StepVerify, "the downloaded %s does not match its signed checksum", build.Name)
 	}
+
+	stagedPath := downloadPath
+	keepStaged := &keepDownload
+	extractedSwapped := false
+	if isArchive {
+		extracted, err := os.CreateTemp(dir, ".marasi-update-*")
+		if err != nil {
+			return fail(KindInstall, StepVerify, "making room to extract %s beside %s: %w", build.Name, target, err)
+		}
+		extractedPath := extracted.Name()
+		defer func() {
+			if !extractedSwapped {
+				os.Remove(extractedPath)
+			}
+		}()
+		extractErr := extractArchive(downloadPath, build.Name, expectedEntryName(in.u.goos), extracted, in.u.buildSizeLimit())
+		closeErr := extracted.Close()
+		if extractErr != nil {
+			return fail(KindInstall, StepVerify, "extracting %s: %w", build.Name, extractErr)
+		}
+		if closeErr != nil {
+			return fail(KindInstall, StepVerify, "writing the extracted build from %s: %w", build.Name, closeErr)
+		}
+		// Remove the downloaded archive before the swap so it never lingers
+		// beside target once the install succeeds.
+		_ = os.Remove(downloadPath)
+		stagedPath = extractedPath
+		keepStaged = &extractedSwapped
+	}
+
 	if in.u.goos == "darwin" {
-		if err := in.u.checkTeam(ctx, target, temp.Name()); err != nil {
+		if err := in.u.checkTeam(ctx, target, stagedPath); err != nil {
 			return err
 		}
 	}
@@ -210,14 +245,38 @@ func (in *install) run(ctx context.Context, target string) error {
 	if info, err := os.Stat(target); err == nil {
 		mode = info.Mode().Perm() | 0o111
 	}
-	if err := os.Chmod(temp.Name(), mode); err != nil {
+	if err := os.Chmod(stagedPath, mode); err != nil {
 		return fail(KindInstall, StepInstall, "marking the new build executable: %w", err)
 	}
-	if err := replace(in.u.goos, temp.Name(), target); err != nil {
+	if err := replace(in.u.goos, stagedPath, target); err != nil {
 		return fail(KindInstall, StepInstall, "replacing %s: %w", target, err)
 	}
-	swapped = true
+	*keepStaged = true
 	return nil
+}
+
+// pickBuildAsset prefers the platform archive when the release publishes it
+// and the verified signed checksums list it, falling back to the bare
+// executable for older releases without an archive.
+func pickBuildAsset(sums map[string]string, archive Asset, hasArchive bool, bare Asset, hasBare bool) (asset Asset, want string, isArchive bool, err error) {
+	if hasArchive {
+		if sum, ok := sums[archive.Name]; ok {
+			return archive, sum, true, nil
+		}
+	}
+	if hasBare {
+		if sum, ok := sums[bare.Name]; ok {
+			return bare, sum, false, nil
+		}
+	}
+	switch {
+	case hasArchive && hasBare:
+		return Asset{}, "", false, fail(KindChecksum, StepVerify, "the signed checksums do not list %s or %s", archive.Name, bare.Name)
+	case hasArchive:
+		return Asset{}, "", false, fail(KindChecksum, StepVerify, "the signed checksums do not list %s", archive.Name)
+	default:
+		return Asset{}, "", false, fail(KindChecksum, StepVerify, "the signed checksums do not list %s", bare.Name)
+	}
 }
 
 // downloadSmall fetches a small release asset such as checksums.txt.
@@ -248,14 +307,15 @@ func (in *install) downloadBuild(ctx context.Context, asset Asset, dst io.Writer
 	if size > 0 {
 		in.total = size
 	}
+	limit := in.u.buildSizeLimit()
 	hash := sha256.New()
 	counter := &progressWriter{in: in, last: -1}
-	n, err := io.Copy(io.MultiWriter(dst, hash, counter), io.LimitReader(body, maxBuildSize+1))
+	n, err := io.Copy(io.MultiWriter(dst, hash, counter), io.LimitReader(body, limit+1))
 	if err != nil {
 		return "", fail(KindNetwork, StepDownload, "downloading %s: %w", asset.Name, err)
 	}
-	if n > maxBuildSize {
-		return "", fail(KindChecksum, StepVerify, "%s is larger than %d bytes", asset.Name, maxBuildSize)
+	if n > limit {
+		return "", fail(KindChecksum, StepVerify, "%s is larger than %d bytes", asset.Name, limit)
 	}
 	if in.total <= 0 {
 		in.total = n
@@ -294,7 +354,7 @@ func (u *Updater) getURL(ctx context.Context, url string) (io.ReadCloser, int64,
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, 0, errors.New(resp.Status)
+		return nil, 0, httpStatusError(resp)
 	}
 	return resp.Body, resp.ContentLength, nil
 }

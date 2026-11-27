@@ -60,9 +60,13 @@ type fakeGitHub struct {
 	// routes records, per download, "api" or "browser".
 	routes []string
 	// apiStatus and browserStatus, when set, fail that route's asset
-	// requests with the status.
-	apiStatus     int
-	browserStatus int
+	// requests with the status. releaseStatus fails release metadata requests.
+	releaseStatus  int
+	releaseHeaders http.Header
+	apiStatus      int
+	apiHeaders     http.Header
+	browserStatus  int
+	browserHeaders http.Header
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
@@ -94,6 +98,20 @@ func (g *fakeGitHub) failRoutes(api, browser int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.apiStatus, g.browserStatus = api, browser
+	g.apiHeaders, g.browserHeaders = nil, nil
+}
+
+func (g *fakeGitHub) failRoutesWithHeaders(api int, apiHeaders http.Header, browser int, browserHeaders http.Header) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.apiStatus, g.apiHeaders = api, apiHeaders
+	g.browserStatus, g.browserHeaders = browser, browserHeaders
+}
+
+func (g *fakeGitHub) failRelease(status int, headers http.Header) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.releaseStatus, g.releaseHeaders = status, headers
 }
 
 // downloadRoutes returns, per download so far, "api" or "browser".
@@ -115,12 +133,20 @@ func (g *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	defer g.mu.Unlock()
 	switch {
 	case r.URL.Path == "/repos/tfkr-ae/marasi/releases/latest":
+		if g.releaseStatus != 0 {
+			writeStatusWithHeaders(w, g.releaseStatus, g.releaseHeaders)
+			return
+		}
 		g.writeRelease(w, g.latest)
 	case r.URL.Path == "/repos/tfkr-ae/marasi/releases/tags/nightly":
+		if g.releaseStatus != 0 {
+			writeStatusWithHeaders(w, g.releaseStatus, g.releaseHeaders)
+			return
+		}
 		g.writeRelease(w, g.nightly)
 	case strings.HasPrefix(r.URL.Path, "/repos/tfkr-ae/marasi/releases/assets/"):
 		if g.apiStatus != 0 {
-			http.Error(w, http.StatusText(g.apiStatus), g.apiStatus)
+			writeStatusWithHeaders(w, g.apiStatus, g.apiHeaders)
 			return
 		}
 		key := strings.TrimPrefix(r.URL.Path, "/repos/tfkr-ae/marasi/releases/assets/")
@@ -132,7 +158,7 @@ func (g *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/storage/api/"+key, http.StatusFound)
 	case strings.HasPrefix(r.URL.Path, "/download/"):
 		if g.browserStatus != 0 {
-			http.Error(w, http.StatusText(g.browserStatus), g.browserStatus)
+			writeStatusWithHeaders(w, g.browserStatus, g.browserHeaders)
 			return
 		}
 		http.Redirect(w, r, "/storage/browser/"+strings.TrimPrefix(r.URL.Path, "/download/"), http.StatusFound)
@@ -207,4 +233,13 @@ func signedAssets(key signingKey, builds map[string][]byte) map[string][]byte {
 	assets["checksums.txt"] = []byte(checksums.String())
 	assets["checksums.txt.minisig"] = minisign.Sign(key.private, assets["checksums.txt"])
 	return assets
+}
+
+func writeStatusWithHeaders(w http.ResponseWriter, status int, headers http.Header) {
+	for k, vals := range headers {
+		for _, v := range vals {
+			w.Header().Add(k, v)
+		}
+	}
+	http.Error(w, http.StatusText(status), status)
 }

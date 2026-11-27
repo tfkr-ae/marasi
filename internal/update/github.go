@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,11 @@ const maxMetadataSize = 4 << 20
 // ErrNotPublished reports that GitHub has no build on the channel: no
 // release yet, or no nightly while the nightly workflow republishes it.
 var ErrNotPublished = errors.New("no build is published on this channel right now; try again in a few minutes")
+
+// ErrRateLimited reports that GitHub refused a request because this network's
+// unauthenticated rate limit is spent (403 with X-RateLimit-Remaining: 0 or
+// Retry-After, or 429).
+var ErrRateLimited = errors.New("GitHub rate limit exceeded")
 
 // Candidate is the latest build published on a channel.
 type Candidate struct {
@@ -124,7 +130,7 @@ func (u *Updater) fetchRelease(ctx context.Context, path string, channel Channel
 		return Candidate{}, ErrNotPublished
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Candidate{}, fmt.Errorf("checking GitHub for the latest %s: %s", channel, resp.Status)
+		return Candidate{}, fmt.Errorf("checking GitHub for the latest %s: %w", channel, httpStatusError(resp))
 	}
 	var gh githubRelease
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxMetadataSize)).Decode(&gh); err != nil {
@@ -168,4 +174,47 @@ func nightlyNotes(body string) string {
 		break
 	}
 	return strings.Join(lines[:end], "\n")
+}
+
+// httpStatusError turns a non-200 GitHub response into an error, recognizing
+// rate-limit responses so shared-IP networks get an actionable message rather
+// than a raw 403 Forbidden.
+func httpStatusError(resp *http.Response) error {
+	if isRateLimited(resp) {
+		return rateLimitError(resp)
+	}
+	return errors.New(resp.Status)
+}
+
+func isRateLimited(resp *http.Response) bool {
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		if strings.TrimSpace(resp.Header.Get("X-RateLimit-Remaining")) == "0" {
+			return true
+		}
+		if strings.TrimSpace(resp.Header.Get("Retry-After")) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func rateLimitError(resp *http.Response) error {
+	if reset := strings.TrimSpace(resp.Header.Get("X-RateLimit-Reset")); reset != "" {
+		if unix, err := strconv.ParseInt(reset, 10, 64); err == nil && unix > 0 {
+			when := time.Unix(unix, 0).UTC().Format(time.RFC3339)
+			return fmt.Errorf("%w (unauthenticated requests from this IP are rate-limited); try again after %s or install the release by hand", ErrRateLimited, when)
+		}
+	}
+	if retry := strings.TrimSpace(resp.Header.Get("Retry-After")); retry != "" {
+		if secs, err := strconv.Atoi(retry); err == nil && secs > 0 {
+			return fmt.Errorf("%w (unauthenticated requests from this IP are rate-limited); try again in %ds or install the release by hand", ErrRateLimited, secs)
+		}
+		if when, err := http.ParseTime(retry); err == nil {
+			return fmt.Errorf("%w (unauthenticated requests from this IP are rate-limited); try again after %s or install the release by hand", ErrRateLimited, when.UTC().Format(time.RFC3339))
+		}
+	}
+	return fmt.Errorf("%w (unauthenticated requests from this IP are rate-limited); try again later or install the release by hand", ErrRateLimited)
 }
