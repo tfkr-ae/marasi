@@ -460,8 +460,8 @@ func TestRemoteStop(t *testing.T) {
 func TestRemoteAPILevelWarning(t *testing.T) {
 	t.Parallel()
 
-	instance := startRemoteInstance(t, buildMarasiVersion(t, "old-build"))
-	cli := buildMarasiVersion(t, "new-build")
+	instance := startRemoteInstance(t, sharedBuild(t, "old-build"))
+	cli := sharedBuild(t, "new-build")
 	localStatus, _, err := instance.local("service", "status")
 	if err != nil {
 		t.Fatal(err)

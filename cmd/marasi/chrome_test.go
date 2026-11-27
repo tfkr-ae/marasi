@@ -376,9 +376,7 @@ func TestChromeCommandLifecycle(t *testing.T) {
 	}
 
 	fakeChrome := filepath.Join(t.TempDir(), "chrome")
-	if err := os.WriteFile(fakeChrome, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("writing fake Chrome executable: %v", err)
-	}
+	writeExecutable(t, fakeChrome, "#!/bin/sh\nexit 0\n")
 
 	_, stderr, err := runMarasi(binary, "--config-dir", configDir, "--instance", "work", "chrome", "path", "add", "--path", fakeChrome)
 	if err != nil || stderr != "chrome path added\n" {

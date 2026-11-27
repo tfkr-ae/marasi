@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -96,12 +97,21 @@ func sharedBuild(t *testing.T, v string) string {
 	return build.path
 }
 
-// copyBuild copies the shared build at source into a fresh file under the
-// test's temporary directory, for a test that renames over or replaces its
-// binary.
+// copyBuild places the shared build at source at a fresh path under the test's
+// temporary directory, for a test that renames over or replaces its binary.
+//
+// It prefers a hard link so the test process never opens a writable file
+// descriptor to the executable: on Linux, a writable descriptor held while
+// another parallel test forks a subprocess can stay open in that child until
+// execve and cause exec of the copy to fail with ETXTBSY ("text file busy").
+// Replacing the linked path with os.Rename swaps the directory entry without
+// touching source.
 func copyBuild(t *testing.T, source string) string {
 	t.Helper()
 	binary := filepath.Join(t.TempDir(), filepath.Base(source))
+	if err := os.Link(source, binary); err == nil {
+		return binary
+	}
 	in, err := os.Open(source)
 	if err != nil {
 		t.Fatalf("\nwanted:\nopened shared build\ngot:\n%v", err)
@@ -119,4 +129,41 @@ func copyBuild(t *testing.T, source string) string {
 		t.Fatalf("\nwanted:\nclosed build copy\ngot:\n%v", err)
 	}
 	return binary
+}
+
+// writeExecutable writes a Unix shell script at path from a child process so
+// the test process never holds a writable descriptor to it across a parallel
+// test's fork/exec, avoiding Linux ETXTBSY ("text file busy") failures.
+func writeExecutable(t *testing.T, path, content string) {
+	t.Helper()
+	command := exec.Command("sh", "-c", `cat > "$1" && chmod 0755 "$1"`, "_", path)
+	command.Stdin = strings.NewReader(content)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("\nwanted:\nwrote executable %s\ngot:\n%v\n%s", path, err, output)
+	}
+}
+
+func TestCopyBuild(t *testing.T) {
+	t.Parallel()
+
+	source := filepath.Join(t.TempDir(), "marasi")
+	if err := os.WriteFile(source, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copied := copyBuild(t, source)
+	replacement := filepath.Join(t.TempDir(), "next")
+	if err := os.WriteFile(replacement, []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, copied); err != nil {
+		t.Fatal(err)
+	}
+	gotSource, err := os.ReadFile(source)
+	if err != nil || string(gotSource) != "old" {
+		t.Fatalf("\nwanted:\nsource preserved as %q\ngot:\n%q (%v)", "old", gotSource, err)
+	}
+	gotCopied, err := os.ReadFile(copied)
+	if err != nil || string(gotCopied) != "new" {
+		t.Fatalf("\nwanted:\ncopy replaced with %q\ngot:\n%q (%v)", "new", gotCopied, err)
+	}
 }

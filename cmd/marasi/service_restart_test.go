@@ -106,14 +106,7 @@ func TestServiceRestart(t *testing.T) {
 	t.Run("should keep the old build serving when the successor exits at start", func(t *testing.T) {
 		binary := buildMarasiVersion(t, "old-build")
 		// The CLI runs from a copy, since the installed build becomes a broken one.
-		cli := filepath.Join(t.TempDir(), "marasi")
-		contents, err := os.ReadFile(binary)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(cli, contents, 0700); err != nil {
-			t.Fatal(err)
-		}
+		cli := copyBuild(t, binary)
 		configDir := serviceConfigDir(t)
 		t.Cleanup(func() { runMarasi(cli, "--config-dir", configDir, "--instance", "work", "service", "stop") })
 		proxyAddress := startNamedInstance(t, binary, configDir, "work", "--project-name", "restart")
@@ -123,9 +116,7 @@ func TestServiceRestart(t *testing.T) {
 		defer closeEvents()
 
 		broken := filepath.Join(t.TempDir(), "broken")
-		if err := os.WriteFile(broken, []byte("#!/bin/sh\necho broken build >&2\nexit 1\n"), 0700); err != nil {
-			t.Fatal(err)
-		}
+		writeExecutable(t, broken, "#!/bin/sh\necho broken build >&2\nexit 1\n")
 		installBuild(t, broken, binary)
 
 		logPath := filepath.Join(configDir, "instances", "work.log")
@@ -269,23 +260,14 @@ func TestServiceRestart(t *testing.T) {
 
 	t.Run("should take the network address back with the same password when the successor exits at start", func(t *testing.T) {
 		binary := buildMarasiVersion(t, "old-build")
-		cli := filepath.Join(t.TempDir(), "marasi")
-		contents, err := os.ReadFile(binary)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(cli, contents, 0700); err != nil {
-			t.Fatal(err)
-		}
+		cli := copyBuild(t, binary)
 		configDir := serviceConfigDir(t)
 		t.Cleanup(func() { runMarasi(cli, "--config-dir", configDir, "--instance", "work", "service", "stop") })
 		startControlAddressInstance(t, binary, configDir, "work", "127.0.0.1:0")
 		address := *controlAddressOf(t, cli, configDir, "work")
 		password := testControlPassword
 		broken := filepath.Join(t.TempDir(), "broken")
-		if err := os.WriteFile(broken, []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
-			t.Fatal(err)
-		}
+		writeExecutable(t, broken, "#!/bin/sh\nexit 1\n")
 		installBuild(t, broken, binary)
 
 		status, _, body := networkRequest(t, http.MethodPost, address, "/service/restart", "Bearer "+password)
@@ -327,9 +309,7 @@ func TestServiceRestart(t *testing.T) {
 			"  esac\n" +
 			"done\n" +
 			"exec \"" + next + "\" \"$@\"\n"
-		if err := os.WriteFile(wrapper, []byte(script), 0700); err != nil {
-			t.Fatal(err)
-		}
+		writeExecutable(t, wrapper, script)
 		installBuild(t, wrapper, binary)
 
 		stdout, stderr, err := runMarasi(cli, "--json", "--config-dir", configDir, "--instance", "work", "service", "restart")
