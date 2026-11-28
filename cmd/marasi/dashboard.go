@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/spf13/cobra"
 )
@@ -18,11 +19,13 @@ func init() {
 
 var dashboardCmd = &cobra.Command{
 	Use:   "dashboard",
-	Short: "Show the open project's pair, note, launchpad and intercepted counts",
+	Short: "Show the open project's pair, note, launchpad and intercepted counts and its size",
 	Long: `Show the open project's counts: pairs, notes, launchpads and intercepted
 pairs. The project keeps them as pairs are written, so the command does not
 scan traffic. Until the intercepted_count job is complete, the intercepted
-count leaves out the pairs it has not reached, and a notice says so on stderr.`,
+count leaves out the pairs it has not reached, and a notice says so on stderr.
+project_bytes is the project's size on disk in bytes, with its write-ahead log and
+shared-memory files, or - when the instance cannot read it.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		body, err := runControlRequest(cmd, http.MethodGet, "/dashboard", "reading dashboard", nil)
@@ -40,6 +43,7 @@ count leaves out the pairs it has not reached, and a notice says so on stderr.`,
 			InterceptedCount struct {
 				Complete bool `json:"complete"`
 			} `json:"intercepted_count"`
+			ProjectBytes *int64 `json:"project_bytes"`
 		}
 		if err := json.Unmarshal(body, &counts); err != nil {
 			return fmt.Errorf("decoding dashboard: %w", err)
@@ -47,6 +51,11 @@ count leaves out the pairs it has not reached, and a notice says so on stderr.`,
 		table := newTableWriter(cmd.OutOrStdout())
 		fmt.Fprintf(table, "pairs\t%d\nnotes\t%d\nlaunchpads\t%d\nintercepted\t%d\n",
 			counts.Pairs, counts.Notes, counts.Launchpads, counts.Intercepted)
+		size := "-"
+		if counts.ProjectBytes != nil {
+			size = strconv.FormatInt(*counts.ProjectBytes, 10)
+		}
+		fmt.Fprintf(table, "project_bytes\t%s\n", size)
 		if err := table.Flush(); err != nil {
 			return err
 		}
